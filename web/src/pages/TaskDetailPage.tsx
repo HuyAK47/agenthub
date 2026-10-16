@@ -21,6 +21,7 @@ import { parseApiTime } from '../lib/time';
 import { CheckResults } from '../components/CheckResults';
 import { StatusBadge } from '../components/StatusBadge';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
+import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import {
   ArrowLeft,
@@ -586,7 +587,9 @@ export const TaskDetailPage: React.FC = () => {
                   <tr key={r.id}>
                     <td className="px-6 py-3 font-mono text-xs">{r.id}</td>
                     <td className="px-6 py-3 font-medium uppercase text-xs">{r.engine}</td>
-                    <td className="px-6 py-3 font-mono text-xs text-[var(--t-text-3)]">{r.model}</td>
+                    <td className="px-6 py-3 whitespace-nowrap">
+                      <ModelBadge model={r.model} engine={r.engine} />
+                    </td>
                     <td className="px-6 py-3 font-medium">{r.profileName}</td>
                     <td className="px-6 py-3">
                       <span className="text-xs px-2 py-0.5 rounded font-mono bg-[var(--t-surface-2)]">

@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { AgentHubConfig } from './config.js';
 import {
   TaskRepo,
@@ -10,6 +13,8 @@ import {
 } from './db/index.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { getModelFamily } from './quota/index.js';
+
+const execFileAsync = promisify(execFile);
 
 export interface CodexTokenParseResult {
   tokens: number | null;
@@ -73,6 +78,116 @@ export function parseShortstat(output: string): {
     linesAdded: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
     linesDeleted: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0,
   };
+}
+
+/**
+ * Measures line changes between baseRef and branch in the project root git repository.
+ * Returns null if the branch does not exist or if git diff fails, so caller can preserve existing metrics.
+ */
+export async function measureTaskLines(
+  projectPath: string,
+  baseRef: string,
+  branch: string,
+): Promise<{ filesChanged: number; linesAdded: number; linesDeleted: number } | null> {
+  if (!projectPath || !fs.existsSync(projectPath)) {
+    return null;
+  }
+
+  // Check if branch exists
+  let branchFound = false;
+  try {
+    const branchRef = branch.startsWith('refs/heads/') ? branch : `refs/heads/${branch}`;
+    await execFileAsync('git', ['-C', projectPath, 'rev-parse', '--verify', '--quiet', branchRef], { timeout: 5000 });
+    branchFound = true;
+  } catch {
+    try {
+      await execFileAsync('git', ['-C', projectPath, 'rev-parse', '--verify', '--quiet', `${branch}^{commit}`], { timeout: 5000 });
+      branchFound = true;
+    } catch {
+      branchFound = false;
+    }
+  }
+
+  if (!branchFound) {
+    return null;
+  }
+
+  // Execute git diff --shortstat
+  let stdout = '';
+  try {
+    const res = await execFileAsync(
+      'git',
+      ['-C', projectPath, 'diff', '--shortstat', `${baseRef}...${branch}`],
+      { timeout: 15_000 },
+    );
+    stdout = res.stdout;
+  } catch {
+    try {
+      const res = await execFileAsync(
+        'git',
+        ['-C', projectPath, 'diff', '--shortstat', `origin/${baseRef}...${branch}`],
+        { timeout: 15_000 },
+      );
+      stdout = res.stdout;
+    } catch {
+      return null;
+    }
+  }
+
+  return parseShortstat(stdout);
+}
+
+/**
+ * Recalculates lines added/deleted for a task using the project git repository.
+ * If the branch no longer exists, preserves existing numbers and returns null.
+ */
+export async function recalculateTaskLines(
+  taskRepo: TaskRepo,
+  projectRepo: ProjectRepo,
+  runRepo: RunRepo,
+  runMetricsRepo: RunMetricsRepo,
+  taskId: string,
+): Promise<{ filesChanged: number; linesAdded: number; linesDeleted: number } | null> {
+  const task = taskRepo.get(taskId);
+  if (!task) return null;
+
+  const project = projectRepo.get(task.projectId);
+  if (!project || !project.path) return null;
+
+  const baseRef = task.baseRef || project.defaultBranch || 'main';
+  const branch = task.branch || `agenthub/${task.slug}`;
+
+  const stats = await measureTaskLines(project.path, baseRef, branch);
+  if (stats === null) {
+    return null;
+  }
+
+  const runs = runRepo.getByTask(taskId);
+  const targetRun = runs[runs.length - 1];
+  if (targetRun) {
+    const existing = runMetricsRepo.get(targetRun.id);
+    if (existing) {
+      runMetricsRepo.updateLines(targetRun.id, stats.linesAdded, stats.linesDeleted, stats.filesChanged);
+    } else {
+      runMetricsRepo.upsert({
+        runId: targetRun.id,
+        taskId: task.id,
+        engine: targetRun.engine,
+        model: targetRun.model,
+        profileName: targetRun.profileName,
+        tokensUsed: null,
+        usageBefore: null,
+        usageAfter: null,
+        linesAdded: stats.linesAdded,
+        linesDeleted: stats.linesDeleted,
+        filesChanged: stats.filesChanged,
+        durationMs: null,
+      });
+    }
+    runMetricsRepo.clearOtherRunsLines(taskId, targetRun.id);
+  }
+
+  return stats;
 }
 
 /**
@@ -427,5 +542,39 @@ export class SavingsService {
       byDay,
       tasks: taskItems,
     };
+  }
+
+  async recalculateTaskLines(taskId: string): Promise<{ filesChanged: number; linesAdded: number; linesDeleted: number } | null> {
+    return recalculateTaskLines(
+      this.taskRepo,
+      this.projectRepo,
+      this.runRepo,
+      this.runMetricsRepo,
+      taskId,
+    );
+  }
+
+  async backfillLines(projectId?: string): Promise<{
+    updated: { taskId: string; linesAdded: number; linesDeleted: number; filesChanged: number }[];
+    skipped: { taskId: string; reason: string }[];
+  }> {
+    let tasks = this.taskRepo.getAll();
+    if (projectId) {
+      tasks = tasks.filter((t) => t.projectId === projectId);
+    }
+
+    const updated: { taskId: string; linesAdded: number; linesDeleted: number; filesChanged: number }[] = [];
+    const skipped: { taskId: string; reason: string }[] = [];
+
+    for (const task of tasks) {
+      const stats = await this.recalculateTaskLines(task.id);
+      if (stats !== null) {
+        updated.push({ taskId: task.id, ...stats });
+      } else {
+        skipped.push({ taskId: task.id, reason: 'branch_not_found_or_no_project' });
+      }
+    }
+
+    return { updated, skipped };
   }
 }

@@ -27,7 +27,7 @@ import { QuotaUsageService } from '../quota/usage.js';
 import { CheckRunner, getCheckResults } from '../checks.js';
 import { parseDbTime } from '../db/time.js';
 import type Database from 'better-sqlite3';
-import { parseCodexTokens, parseShortstat } from '../savings.js';
+import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLines } from '../savings.js';
 
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
@@ -323,6 +323,15 @@ export class Scheduler {
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
     } else {
       this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null });
+      if (this.runMetricsRepo) {
+        await recalculateTaskLines(
+          this.taskRepo,
+          this.projectRepo,
+          this.runRepo,
+          this.runMetricsRepo,
+          taskId,
+        );
+      }
       this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
     }
     if (!this.stopped) this.triggerTick();
@@ -604,18 +613,25 @@ export class Scheduler {
 
     // Measure diff stats if moving to review
     let diffStats = { linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
-    if (markers.done && task.worktreePath && fs.existsSync(task.worktreePath)) {
+    if (markers.done) {
       const project = this.projectRepo.get(task.projectId);
       const baseRef = task.baseRef || project?.defaultBranch || 'main';
       const branch = task.branch || `agenthub/${task.slug}`;
-      try {
-        const { stdout } = await execFileAsync('git', ['diff', '--shortstat', `${baseRef}...${branch}`], {
-          cwd: task.worktreePath,
-          timeout: 10_000,
-        });
-        diffStats = parseShortstat(stdout);
-      } catch {
-        // ignore
+      if (project?.path) {
+        const stats = await measureTaskLines(project.path, baseRef, branch);
+        if (stats) diffStats = stats;
+      }
+      if (diffStats.filesChanged === 0 && task.worktreePath && fs.existsSync(task.worktreePath)) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--shortstat', `${baseRef}...${branch}`], {
+            cwd: task.worktreePath,
+            timeout: 10_000,
+          });
+          const parsed = parseShortstat(stdout);
+          if (parsed.filesChanged > 0) diffStats = parsed;
+        } catch {
+          // ignore
+        }
       }
     }
 
@@ -1382,6 +1398,15 @@ export class Scheduler {
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback: feedback || null, actor: by });
       if (by !== 'codex-reviewer') this.resetReviewerEscalation(taskId);
       this.taskRepo.updateStatus(taskId, 'done');
+      if (this.runMetricsRepo) {
+        recalculateTaskLines(
+          this.taskRepo,
+          this.projectRepo,
+          this.runRepo,
+          this.runMetricsRepo,
+          taskId,
+        ).catch(() => {});
+      }
       this.eventBus.emit('task.done', taskId, by ? { by, verdict } : undefined);
     } else {
       if (!feedback || feedback.trim() === '') {

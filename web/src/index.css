@@ -379,3 +379,38 @@ i, em, .italic {
 .xterm-screen {
   background-color: var(--t-bg) !important;
 }
+
+/* Model badge styles */
+.badge-model-gemini {
+  background-color: color-mix(in srgb, var(--t-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--t-accent) 28%, transparent);
+  color: var(--t-accent-hover);
+}
+.dark .badge-model-gemini {
+  color: var(--t-accent);
+}
+
+.badge-model-codex {
+  background-color: color-mix(in srgb, var(--t-ok) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--t-ok) 28%, transparent);
+  color: var(--t-ok);
+}
+.dark .badge-model-codex {
+  color: var(--t-ok);
+}
+
+.badge-model-claude {
+  background-color: color-mix(in srgb, var(--t-claude) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--t-claude) 30%, transparent);
+  color: #a84b2c;
+}
+.dark .badge-model-claude {
+  color: var(--t-claude);
+}
+
+.badge-model-other {
+  background-color: var(--t-surface-2);
+  border: 1px solid var(--t-border);
+  color: var(--t-text-2);
+}
+

@@ -245,6 +245,7 @@ Cách dùng:
   agenthub task add|list|show|log     Quản lý task
   agenthub brain <act> "<detail>" [--task id] Cập nhật trạng thái Claude
   agenthub savings import-legacy [dir] Nhập lịch sử token từ log cũ
+  agenthub savings backfill-lines [--project x] Tính lại số dòng cho các task có nhánh còn tồn tại
   agenthub claude-sessions --summary  Tóm tắt phiên Claude và chi phí 24 giờ qua
 `);
   }
@@ -801,8 +802,25 @@ export async function cmdSavings(
       break;
     }
 
+    case 'backfill-lines': {
+      const projectFlag = getArg(extraArgs, '--project') || getArg(extraArgs, '-p');
+      console.log(`Bắt đầu tính lại số dòng cho các task${projectFlag ? ` thuộc project "${projectFlag}"` : ''}...`);
+
+      const res = await ctx.savingsService.backfillLines(projectFlag);
+
+      for (const item of res.updated) {
+        console.log(`✓ Đã tính lại ${item.taskId}: +${item.linesAdded}/-${item.linesDeleted} (${item.filesChanged} file)`);
+      }
+      for (const item of res.skipped) {
+        console.log(`- Bỏ qua ${item.taskId}: Nhánh không tồn tại hoặc project không hợp lệ`);
+      }
+
+      console.log(`\nHoàn thành: ${res.updated.length} task được cập nhật, ${res.skipped.length} task bỏ qua.`);
+      break;
+    }
+
     default:
-      console.log('Cách dùng: agenthub savings import-legacy <dir>');
+      console.log('Cách dùng: agenthub savings import-legacy <dir> | backfill-lines [--project x]');
       break;
   }
 
