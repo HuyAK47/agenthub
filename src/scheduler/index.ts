@@ -1540,18 +1540,11 @@ export class Scheduler {
 
       if (now - updatedAt >= thresholdMs) {
         const project = this.projectRepo.get(task.projectId);
-        if (project) {
-          try {
-            this.worktreeService.remove(project.path, task.worktreePath);
-          } catch {
-            // ignore
-          }
-        } else {
-          try {
-            fs.rmSync(task.worktreePath, { recursive: true, force: true });
-          } catch {
-            // ignore
-          }
+        try {
+          // remove() refuses anything outside worktreesDir or overlapping a project root.
+          this.worktreeService.remove(project?.path ?? null, task.worktreePath);
+        } catch {
+          // ignore
         }
 
         this.taskRepo.update(task.id, { worktreePath: null, slot: null });

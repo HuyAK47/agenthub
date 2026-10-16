@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z, ZodError } from 'zod';
 import { AgentHubConfig, saveConfig, updateConfigInMemory } from '../config.js';
@@ -28,6 +28,7 @@ import { BrainService } from '../brain.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
 import { getDiskSpaceSync } from '../disk.js';
+import { WorktreeService } from '../worktrees/index.js';
 import { parseAuthState } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
@@ -1263,21 +1264,14 @@ export class AppService {
 
     if (task.worktreePath) {
       const project = this.projectRepo.get(task.projectId);
-      if (project && fs.existsSync(project.path)) {
-        try {
-          execFileSync('git', ['worktree', 'remove', '--force', task.worktreePath], {
-            cwd: project.path,
-          });
-        } catch {
-          // ignore
-        }
-      }
-      if (fs.existsSync(task.worktreePath)) {
-        try {
-          fs.rmSync(task.worktreePath, { recursive: true, force: true });
-        } catch {
-          // ignore
-        }
+      // Chỉ xóa đường dẫn nằm hẳn trong worktreesDir và không phải gốc project (sự cố 16/10).
+      const removed = new WorktreeService(this.config).remove(project?.path ?? null, task.worktreePath);
+      if (!removed) {
+        throw new HttpError(
+          422,
+          'unprocessable_entity',
+          `Từ chối xóa ${task.worktreePath}: nằm ngoài ${this.config.worktreesDir} hoặc là thư mục project`,
+        );
       }
       this.taskRepo.update(taskId, { worktreePath: null, slot: null });
     }

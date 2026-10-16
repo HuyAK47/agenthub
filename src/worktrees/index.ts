@@ -8,6 +8,39 @@ export interface WorktreeInfo {
   slot: number;
 }
 
+function resolveReal(target: string): string {
+  const resolved = path.resolve(target);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+/**
+ * A path may only be deleted by AgentHub if it lies strictly inside the hub's worktrees
+ * directory and is neither a project root nor an ancestor of one.
+ *
+ * Sự cố 16/10: task import từ thời agy-run có worktreePath = thư mục gốc repo; `git worktree
+ * remove` từ chối worktree chính và nhánh fallback rmSync đã xóa cả repo (kèm .git).
+ */
+export function isDeletableWorktreePath(
+  worktreesDir: string,
+  target: string | null | undefined,
+  protectedPaths: Array<string | null | undefined> = [],
+): boolean {
+  if (!target) return false;
+  const base = resolveReal(worktreesDir);
+  const resolved = resolveReal(target);
+  if (!resolved.startsWith(base + path.sep)) return false;
+  for (const p of protectedPaths) {
+    if (!p) continue;
+    const prot = resolveReal(p);
+    if (resolved === prot || prot.startsWith(resolved + path.sep)) return false;
+  }
+  return true;
+}
+
 export class WorktreeService {
   constructor(private config: AgentHubConfig) {}
 
@@ -47,12 +80,7 @@ export class WorktreeService {
 
     // Remove existing worktree if present
     if (fs.existsSync(worktreePath)) {
-      try {
-        execFileSync('git', ['-C', opts.projectPath, 'worktree', 'remove', '--force', worktreePath]);
-      } catch {
-        // try manual cleanup
-        fs.rmSync(worktreePath, { recursive: true, force: true });
-      }
+      this.remove(opts.projectPath, worktreePath);
     }
 
     // Create worktree
@@ -140,17 +168,24 @@ export class WorktreeService {
   /**
    * Remove a worktree
    */
-  remove(projectPath: string, worktreePath: string): void {
-    try {
-      execFileSync('git', ['-C', projectPath, 'worktree', 'remove', '--force', worktreePath], {
-        timeout: 30000,
-      });
-    } catch {
-      // manual cleanup
-      if (fs.existsSync(worktreePath)) {
-        fs.rmSync(worktreePath, { recursive: true, force: true });
+  remove(projectPath: string | null | undefined, worktreePath: string): boolean {
+    if (!isDeletableWorktreePath(this.config.worktreesDir, worktreePath, [projectPath, this.config.hubHome])) {
+      console.error(`[worktree] REFUSED to remove ${worktreePath}: outside ${this.config.worktreesDir} or a project root`);
+      return false;
+    }
+    if (projectPath && fs.existsSync(projectPath)) {
+      try {
+        execFileSync('git', ['-C', projectPath, 'worktree', 'remove', '--force', worktreePath], {
+          timeout: 30000,
+        });
+      } catch {
+        // fall through to manual cleanup (path already verified to be inside worktreesDir)
       }
     }
+    if (fs.existsSync(worktreePath)) {
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+    }
+    return true;
   }
 
   /**
