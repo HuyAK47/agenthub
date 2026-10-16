@@ -1,0 +1,344 @@
+import React, { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { createProject, deleteProject, getProjects, updateProject } from '../api/client';
+import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code } from 'lucide-react';
+import { useLocale } from '../context/LocaleContext';
+
+export const ProjectsPage: React.FC = () => {
+  const { t } = useLocale();
+  const queryClient = useQueryClient();
+
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [name, setName] = useState('');
+  const [path, setPath] = useState('');
+  const [defaultBranch, setDefaultBranch] = useState('main');
+  const [maxParallel, setMaxParallel] = useState(3);
+  const [envTemplate, setEnvTemplate] = useState('');
+  const [checksJson, setChecksJson] = useState('');
+  const [projectChecks, setProjectChecks] = useState<Record<string, string>>({});
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const { data: projects = [], isLoading, error } = useQuery({
+    queryKey: ['projects'],
+    queryFn: getProjects,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: createProject,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      setShowAddForm(false);
+      resetForm();
+    },
+    onError: (err: any) => {
+      setFormError(err.message || t('projects.createError'));
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteProject,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, checks }: { id: string; checks: string }) => updateProject(id, { checks: checks.trim() ? JSON.parse(checks) : null }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  });
+
+  const resetForm = () => {
+    setName('');
+    setPath('');
+    setDefaultBranch('main');
+    setMaxParallel(3);
+    setEnvTemplate('');
+    setChecksJson('');
+    setJsonError(null);
+    setFormError(null);
+  };
+
+  const handleEnvTemplateChange = (val: string) => {
+    setEnvTemplate(val);
+    if (!val.trim()) {
+      setJsonError(null);
+      return;
+    }
+    try {
+      JSON.parse(val);
+      setJsonError(null);
+    } catch (err: any) {
+      setJsonError(t('projects.invalidJson', { error: err.message }));
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+
+    if (!name.trim()) {
+      setFormError(t('projects.nameRequired'));
+      return;
+    }
+    if (!path.trim()) {
+      setFormError(t('projects.pathRequired'));
+      return;
+    }
+
+    if (envTemplate.trim()) {
+      try {
+        JSON.parse(envTemplate);
+      } catch (err: any) {
+        setJsonError(t('projects.invalidJson', { error: err.message }));
+        return;
+      }
+    }
+    let checks: unknown = null;
+    if (checksJson.trim()) {
+      try {
+        checks = JSON.parse(checksJson);
+        if (!Array.isArray(checks)) throw new Error('checks must be an array');
+      } catch (err: any) {
+        setFormError(t('projects.invalidChecks', { error: err.message }));
+        return;
+      }
+    }
+
+    createMutation.mutate({
+      name: name.trim(),
+      path: path.trim(),
+      defaultBranch: defaultBranch.trim() || 'main',
+      maxParallel: Number(maxParallel) || 3,
+      envTemplate: envTemplate.trim() ? envTemplate.trim() : null,
+      checks: checks as any,
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">{t('projects.title')}</h1>
+          <p className="text-sm text-[var(--t-text-3)]">
+            {t('projects.subtitle')}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            resetForm();
+            setShowAddForm(!showAddForm);
+          }}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold shadow-xs cursor-pointer"
+        >
+          <Plus className="w-4 h-4" />
+          <span>{showAddForm ? t('projects.closeFormBtn') : t('projects.registerBtn')}</span>
+        </button>
+      </div>
+
+      {/* Registration Form */}
+      {showAddForm && (
+        <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 shadow-xs space-y-4">
+          <h2 className="text-base font-bold">{t('projects.formTitle')}</h2>
+
+          {formError && (
+            <div className="p-3 rounded-lg bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] text-xs">
+              {formError}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('projects.nameLabel')}
+                </label>
+                <input
+                  type="text"
+                  placeholder={t('projects.namePlaceholder')}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('projects.pathLabel')}
+                </label>
+                <input
+                  type="text"
+                  placeholder={t('projects.pathPlaceholder')}
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('projects.branchLabel')}
+                </label>
+                <input
+                  type="text"
+                  placeholder="main"
+                  value={defaultBranch}
+                  onChange={(e) => setDefaultBranch(e.target.value)}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('projects.maxParallelLabel')}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={maxParallel}
+                  onChange={(e) => setMaxParallel(parseInt(e.target.value, 10) || 1)}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+              </div>
+            </div>
+
+            {/* envTemplate JSON with Validation */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)]">
+                  {t('projects.envLabel')}
+                </label>
+                {envTemplate.trim() && !jsonError && (
+                  <span className="text-xs text-[var(--t-ok)] font-medium flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> {t('projects.validJson')}
+                  </span>
+                )}
+              </div>
+              <textarea
+                data-testid="env-template-textarea"
+                rows={4}
+                placeholder={'{\n  "PORT": 3000,\n  "DATABASE_URL": "postgres://..."\n}'}
+                value={envTemplate}
+                onChange={(e) => handleEnvTemplateChange(e.target.value)}
+                className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] focus:outline-none focus:ring-2 ${
+                  jsonError
+                    ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
+                    : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
+                }`}
+              />
+              {jsonError && (
+                <p data-testid="json-error-msg" className="text-xs text-[var(--t-crit)] mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  {jsonError}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">{t('extra.checks')}</label>
+              <textarea rows={3} value={checksJson} onChange={(e) => setChecksJson(e.target.value)} placeholder={'[{"name":"lint","cmd":["npm","run","lint"]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)]" />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAddForm(false)}
+                className="px-4 py-2 rounded-lg text-xs font-medium border border-[var(--t-border)] hover:bg-[var(--t-surface-2)] cursor-pointer"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="submit"
+                disabled={!!jsonError || createMutation.isPending}
+                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {createMutation.isPending ? t('projects.savingBtn') : t('projects.saveBtn')}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Projects List */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {isLoading ? (
+          <div className="col-span-2 flex items-center justify-center p-12">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
+          </div>
+        ) : error ? (
+          <div className="col-span-2 p-8 text-center text-[var(--t-crit)] text-sm">
+            {t('projects.loadError')}
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="col-span-2 p-8 text-center text-[var(--t-text-3)] text-sm">
+            {t('projects.empty')}
+          </div>
+        ) : (
+          projects.map((proj) => (
+            <div
+              key={proj.id}
+              className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 shadow-xs space-y-3"
+            >
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-[var(--t-text)] flex items-center gap-2">
+                    <FolderGit2 className="w-4 h-4 text-[var(--t-accent)]" />
+                    <span>{proj.name}</span>
+                    <span className="text-xs font-mono font-normal text-[var(--t-text-3)]">({proj.id})</span>
+                  </h3>
+                  <p className="text-xs font-mono text-[var(--t-text-3)] mt-1 break-all">{proj.path}</p>
+                </div>
+
+                <button
+                  type="button"
+                  title={t('extra.deleteProject')}
+                  onClick={() => {
+                    if (confirm(t('projects.confirmDelete', { name: proj.name }))) {
+                      deleteMutation.mutate(proj.id);
+                    }
+                  }}
+                  className="p-1.5 rounded-lg text-[var(--t-text-3)] hover:text-[var(--t-crit)] hover:bg-[var(--t-surface-2)] cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[var(--t-border)] text-xs">
+                <div>
+                  <span className="text-[var(--t-text-3)]">{t('projects.defaultBranchText')}</span>
+                  <span className="font-mono font-medium">{proj.defaultBranch}</span>
+                </div>
+                <div>
+                  <span className="text-[var(--t-text-3)]">{t('projects.maxParallelText')}</span>
+                  <span className="font-mono font-medium">{proj.maxParallel}</span>
+                </div>
+              </div>
+
+              {proj.envTemplate && (
+                <div className="pt-2">
+                  <div className="flex items-center gap-1 text-[11px] font-semibold text-[var(--t-text-3)] mb-1">
+                    <Code className="w-3.5 h-3.5" />
+                    <span>envTemplate:</span>
+                  </div>
+                  <pre className="text-[11px] font-mono p-2 rounded bg-[var(--t-surface-2)] overflow-x-auto text-[var(--t-text)]">
+                    {proj.envTemplate}
+                  </pre>
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-[var(--t-border)]">
+                <label className="block text-[11px] font-semibold text-[var(--t-text-3)] mb-1">{t('extra.checks')}</label>
+                <textarea rows={2} value={projectChecks[proj.id] ?? (typeof proj.checks === 'string' ? proj.checks : proj.checks ? JSON.stringify(proj.checks) : '')} onChange={(e) => setProjectChecks((current) => ({ ...current, [proj.id]: e.target.value }))} className="w-full text-[11px] font-mono rounded border border-[var(--t-border)] p-2 bg-[var(--t-surface-2)]" />
+                <button type="button" onClick={() => updateMutation.mutate({ id: proj.id, checks: projectChecks[proj.id] ?? '' })} disabled={updateMutation.isPending} className="mt-1 px-2 py-1 rounded bg-[var(--t-surface-2)] text-[11px]">{t('extra.saveChecks')}</button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};

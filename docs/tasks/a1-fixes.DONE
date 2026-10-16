@@ -1,0 +1,82 @@
+# Task a1-fixes – Báo cáo nghiệm thu hoàn thành
+
+## 1. Tóm tắt việc đã làm
+1. **[NGHIÊM TRỌNG] Lỗ hổng gọi API không cần token bằng URL mã hóa / obfuscated:**
+   - Đã chuyển xác thực token sang hook `preHandler` của Fastify (chạy sau khi route đã được giải mã và khớp route mẫu). Dựa vào `request.routeOptions.url` (mẫu route đã khớp) hoặc đường dẫn chuẩn hóa bắt đầu bằng `/api` theo nguyên tắc default-deny.
+   - Tại hook `onRequest`, chặn ngay lập tức mọi request có URL path chứa `%2f`, `%2F`, `%5c`, `%5C` hoặc các segment path traversal `.` / `..` sau khi giải mã với mã lỗi `400` (`bad_request`).
+   - Các route WebSocket (`/api/pty/:sessionId`) và SSE (`/api/events`) tiếp tục nhận token qua query parameter `?token=` hoặc header `Authorization`.
+   - Bổ sung test tự động kiểm tra toàn bộ danh sách URL mã hóa/traversal và test quét toàn bộ route API được đăng ký (`server.printRoutes()`), khẳng định mọi route `/api*` đều trả 401 khi không có token.
+
+2. **[CAO] Dashboard không hiển thị khi daemon chạy dưới dạng service (cwd là `/`):**
+   - Viết hàm `resolveWebDistDir()` xác định đường dẫn thư mục web build theo vị trí của module runtime (`import.meta.url`) thay vì dựa vào `process.cwd()`.
+   - Hỗ trợ ghi đè linh hoạt bằng biến môi trường `AGENTHUB_WEB_DIR`.
+   - Bổ sung test `test/web.test.ts` kiểm chứng việc phục vụ `index.html` của bản build khi `process.chdir('/')`.
+
+3. **[TRUNG BÌNH] Route `/api/...` không tồn tại trả về HTML với mã 200:**
+   - Chuẩn hóa `setNotFoundHandler`:
+     - Nếu URL bắt đầu bằng `/api`: sau khi xác thực token thành công, trả `404 { "error": "not_found", "message": ... }` dạng JSON. Nếu token thiếu hoặc không hợp lệ, trả `401 { "error": "unauthorized" }`.
+     - Fallback SPA chỉ áp dụng cho request `GET` hoặc `HEAD` non-API khi header `Accept` chứa `text/html` (hoặc truy cập root `/`). Mọi request khác không khớp route đều trả về `404 { "error": "not_found" }` dạng JSON.
+
+4. **[THẤP] shell string concatenation trong `cli.ts`:**
+   - Thay thế `exec(\`xdg-open "${url}"\`)` bằng `execFile('xdg-open', [url])` tránh shell injection.
+
+---
+
+## 2. Kết quả kiểm tra (lint / typecheck / test / build)
+- **Lint:** `npm run lint` đạt (0 errors, 0 warnings).
+- **Typecheck:** `npm run typecheck` đạt (0 errors).
+- **Build:** `npm run build` đạt.
+- **Số lượng test:**
+  - **Trước khi sửa:** 9 test files, 71 tests passed.
+  - **Sau khi sửa:** 10 test files, 78 tests passed (+7 tests mới, 100% pass).
+
+---
+
+## 3. Nghiệm thu trên daemon thật (fake engine, AGENTHUB_PORT=7792, AGENTHUB_HOME tạm)
+
+### 3.1 Danh sách curl kiểm thử bảo mật với `--path-as-is`
+Chạy trên daemon thật tại cổng 7792 (`AGENTHUB_FAKE_ENGINE=1`):
+
+| Lệnh curl | Mã HTTP | 80 ký tự đầu của body |
+|---|---|---|
+| `curl --path-as-is http://127.0.0.1:7792/%61pi/status` | `401` | `{"error":"unauthorized","message":"Missing authentication token"}` |
+| `curl --path-as-is http://127.0.0.1:7792/%61%70%69/status` | `401` | `{"error":"unauthorized","message":"Missing authentication token"}` |
+| `curl --path-as-is http://127.0.0.1:7792//api/status` | `401` | `{"error":"unauthorized","message":"Missing authentication token"}` |
+| `curl --path-as-is http://127.0.0.1:7792/api%2fstatus` | `400` | `{"error":"bad_request","message":"Encoded slash or backslash not allowed"}` |
+| `curl --path-as-is http://127.0.0.1:7792/./api/status` | `400` | `{"error":"bad_request","message":"Path traversal segments not allowed"}` |
+| `curl --path-as-is http://127.0.0.1:7792/api/../api/status` | `400` | `{"error":"bad_request","message":"Path traversal segments not allowed"}` |
+| `curl --path-as-is http://127.0.0.1:7792/API/status` | `401` | `{"error":"unauthorized","message":"Missing authentication token"}` |
+| `curl --path-as-is http://127.0.0.1:7792/%61pi/events` | `401` | `{"error":"unauthorized","message":"Missing authentication token"}` |
+| `curl --path-as-is -X POST http://127.0.0.1:7792/%61pi/projects` | `401` | `{"error":"unauthorized","message":"Missing authentication token"}` |
+
+*Ghi chú: Tuyệt đối không có endpoint nào trả về dữ liệu API (mã 200) khi không có token.*
+
+### 3.2 Kiểm tra `GET /` khi daemon chạy từ cwd `/`
+Khởi động daemon với thư mục làm việc là `/` (`cd / && node /path/to/dist/cli.js daemon`):
+```
+$ curl -i -s http://127.0.0.1:7793/
+HTTP/1.1 200 OK
+accept-ranges: bytes
+cache-control: public, max-age=0
+content-type: text/html; charset=utf-8
+content-length: 64
+
+<!DOCTYPE html><html><body>Dashboard Web App Test</body></html>
+```
+Kết quả: `GET /` trả về đúng nội dung `index.html` của bản build web, không bị rơi vào trang "chưa build web".
+
+### 3.3 Tắt daemon
+Toàn bộ process daemon thử nghiệm trên cổng 7792 và 7793 đã được tắt hoàn toàn và giải phóng cổng.
+
+---
+
+## 4. Việc chưa làm được và lý do
+Không có. Toàn bộ các yêu cầu của đề bài và tiêu chí nghiệm thu đều hoàn thành 100%.
+
+---
+
+## 5. Danh sách commit
+1. `7a056aa` - `fix(auth): enforce default-deny in preHandler and block traversal URL paths`
+2. `ffd2d4f` - `fix(server): resolve web dist directory relative to module and support AGENTHUB_WEB_DIR`
+3. `fa9fa59` - `fix(server): return 404 json for nonexistent /api routes and restrict SPA fallback`
+4. `9230c62` - `fix(cli): use execFile instead of exec for xdg-open`

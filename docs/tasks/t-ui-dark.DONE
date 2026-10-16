@@ -1,0 +1,103 @@
+# Báo cáo hoàn thành Task: t-ui-dark (Dark theme cho dashboard)
+
+## 1. Tóm tắt việc đã làm
+Đã hoàn thành toàn bộ 7 yêu cầu của đề bài `docs/tasks/t-ui-dark.md`:
+1. **Mặc định là dark theme & công tắc 3 chế độ:**
+   - Mặc định khởi động hệ thống luôn dùng giao diện Tối (Dark).
+   - Thêm script inline trong `web/index.html` gắn `class="dark"` trước khi React render, ngăn chặn hiện tượng nháy sáng (flash of light theme).
+   - Công tắc chuyển đổi giao diện trên header (và menu mobile) hỗ trợ 3 chế độ trực quan: **Tối (Moon)** / **Sáng (Sun)** / **Theo hệ thống (Monitor)**.
+   - Khi ở chế độ "Theo hệ thống", tự động lắng nghe sự kiện thay đổi của `matchMedia('(prefers-color-scheme: dark)')`.
+   - Lưu lựa chọn theme vào `localStorage` với khóa `agenthub_theme`, toàn bộ quá trình đọc/ghi được bọc `try/catch` an toàn cho mọi môi trường sandbox/private browsing.
+2. **Bảng màu dark chuyên nghiệp (chuẩn Linear / Vercel) qua hệ thống Design Tokens:**
+   - Định nghĩa toàn bộ biến CSS token tập trung tại `web/src/index.css` cho cả `:root` và `.dark`.
+   - Tích hợp với Tailwind v4 thông qua `@theme` và tái định nghĩa hệ thống màu chuẩn giúp toàn bộ trang tự động thừa hưởng bảng màu dark.
+3. **Màu trạng thái đồng bộ và dễ đọc:**
+   - Đồng bộ hóa các trạng thái `queued`, `running`, `review`, `done`, `blocked`, `failed`, `waiting_quota`, `draft`, `cancelled`.
+   - Áp dụng triệt để qua biến CSS token tại `StatusBadge`, các cột thẻ Kanban (`TasksPage`) và các ô thẻ số liệu tổng quan (`DashboardPage`).
+4. **Terminal xterm & Live log đồng bộ tông tối:**
+   - Cấu hình theme xterm.js trong `LoginTerminalModal` (`ProfilesPage.tsx`): background `#0b0d12`, foreground `#e6e8ee`, cursor `#3b82f6`, selection `#1f2430`.
+   - Cập nhật container hiển thị live log worker trong `TaskDetailPage.tsx` sang nền `#0b0d12`, viền `#1f2430`, chữ `#e6e8ee` với font mono.
+5. **Bỏ chữ nghiêng toàn cục & thiết lập Typography:**
+   - Xử lý triệt để lỗi in nghiêng bằng `* { font-style: normal; }` và `html, body { font-style: normal; }` trong `web/src/index.css`.
+   - Chỉ cho phép chữ nghiêng khi có thẻ `<i>`, `<em>` hoặc class `.italic` chủ đích.
+   - Cấu hình font sans hệ thống ưu tiên `Inter`, fallback về `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`.
+   - Font mono đồng bộ cho log và terminal: `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`.
+6. **Sửa lỗi 404 của `/vite.svg` & thêm Favicon riêng:**
+   - Tạo `web/public/favicon.svg` và `web/public/vite.svg` biểu tượng AgentHub với thiết kế hiện đại, sắc nét.
+   - Cập nhật liên kết favicon trong `web/index.html` trỏ tới `/favicon.svg`.
+7. **Bảng "Worker đang chạy" ở trang Tổng quan:**
+   - Kiểm tra thuộc tính `worker.title`: nếu có thì hiển thị `title` (kèm `taskId` dạng phụ đề nhỏ bên dưới), nếu không có thì hiển thị `taskId`.
+   - Tự động lấy `worker.projectId` từ trường mới hoặc bóc tách từ `taskId`.
+
+## 2. Bảng màu đã chọn (Linear / Vercel style)
+
+### Nền & Bề mặt (Surfaces):
+- **Nền app (`--bg-app`)**: `#0b0d12` (dark) / `#f8fafc` (light)
+- **Bề mặt thẻ/card (`--bg-surface`)**: `#12151c` (dark) / `#ffffff` (light)
+- **Bề mặt hover (`--bg-surface-hover`)**: `#171b24` (dark) / `#f1f5f9` (light)
+- **Bề mặt active (`--bg-surface-active`)**: `#1f2430` (dark) / `#e2e8f0` (light)
+- **Bề mặt phụ/subtle (`--bg-surface-subtle`)**: `#141720` (dark) / `#f8fafc` (light)
+
+### Đường viền (Borders):
+- **Viền mặc định (`--border-default`)**: `#1f2430` (dark) / `#e2e8f0` (light)
+- **Viền mảnh/subtle (`--border-subtle`)**: `#181c26` (dark) / `#f1f5f9` (light)
+- **Viền nổi bật/strong (`--border-strong`)**: `#2d3446` (dark) / `#cbd5e1` (light)
+
+### Chữ (Typography):
+- **Chữ chính (`--text-primary`)**: `#e6e8ee` (dark) / `#0f172a` (light)
+- **Chữ phụ (`--text-secondary`)**: `#8b93a7` (dark) / `#475569` (light)
+- **Chữ mờ (`--text-muted`)**: `#5e667e` (dark) / `#94a3b8` (light)
+
+### Trạng thái trên nền tối (Status Tokens):
+- `queued`: nền `rgba(139, 147, 167, 0.12)`, viền `rgba(139, 147, 167, 0.25)`, chữ `#9ba4b9`, dot `#8b93a7`
+- `running`: nền `rgba(59, 130, 246, 0.14)`, viền `rgba(59, 130, 246, 0.32)`, chữ `#60a5fa`, dot `#3b82f6`
+- `review`: nền `rgba(168, 85, 247, 0.14)`, viền `rgba(168, 85, 247, 0.32)`, chữ `#c084fc`, dot `#a855f7`
+- `done`: nền `rgba(16, 185, 129, 0.14)`, viền `rgba(16, 185, 129, 0.32)`, chữ `#34d399`, dot `#10b981`
+- `blocked`: nền `rgba(249, 115, 22, 0.14)`, viền `rgba(249, 115, 22, 0.32)`, chữ `#fb923c`, dot `#f97316`
+- `failed`: nền `rgba(244, 63, 94, 0.14)`, viền `rgba(244, 63, 94, 0.32)`, chữ `#fb7185`, dot `#f43f5e`
+- `waiting_quota`: nền `rgba(245, 158, 11, 0.14)`, viền `rgba(245, 158, 11, 0.32)`, chữ `#fbbf24`, dot `#f59e0b`
+
+## 3. Danh sách file đã sửa / tạo mới
+- `web/public/favicon.svg` (tạo mới): Favicon SVG của AgentHub.
+- `web/public/vite.svg` (tạo mới): Khắc phục triệt để lỗi 404 khi browser request `/vite.svg`.
+- `web/index.html`: Cập nhật favicon, gán class `dark` mặc định và nhúng script khởi tạo không nháy sáng.
+- `web/src/index.css`: Toàn bộ CSS tokens cho màu nền, card, viền, chữ, status tokens, typography và reset chữ nghiêng.
+- `web/src/context/ThemeContext.tsx`: Nâng cấp hỗ trợ 3 chế độ (dark, light, system), mặc định dark, bọc try/catch cho localStorage và listener `matchMedia`.
+- `web/src/components/Layout.tsx`: Tích hợp bộ chuyển đổi 3 chế độ theme dạng segmented control trên header và menu mobile.
+- `web/src/components/StatusBadge.tsx`: Chuyển sang sử dụng trực tiếp CSS status tokens thay vì hardcode class màu.
+- `web/src/pages/TasksPage.tsx`: Cập nhật bảng Kanban dùng status tokens cho viền/nền cột và thẻ card.
+- `web/src/pages/DashboardPage.tsx`: Cập nhật các ô số liệu metrics theo status tokens; hỗ trợ hiển thị `worker.title` hoặc fallback `worker.taskId`.
+- `web/src/pages/ProfilesPage.tsx`: Tinh chỉnh theme xterm.js trong modal đăng nhập tài khoản.
+- `web/src/pages/TaskDetailPage.tsx`: Chuyển live log container và placeholder sang bảng màu dark thống nhất.
+- `web/src/test/theme.test.tsx` (tạo mới): Test suite kiểm tra mặc định dark theme, chuyển đổi 3 chế độ và xử lý an toàn try/catch.
+- `web/src/test/dashboardWorker.test.tsx` (tạo mới): Test suite kiểm tra fallback hiển thị `worker.title` hoặc `worker.taskId`.
+- `docs/DECISIONS.md`: Bổ sung DEC-002 ghi nhận nâng cấp `ThemeContext`.
+
+## 4. Kết quả kiểm tra nghiệm thu
+Lệnh nghiệm thu:
+`npm run lint && npm run build:web && npm run test:web -- --run`
+
+- **Lint (`npm run lint`)**: PASS (0 cảnh báo, 0 lỗi).
+- **Frontend Build (`npm run build:web`)**: PASS (biên dịch TypeScript strict không lỗi, Vite bundle ra `dist/web/`).
+- **Frontend Tests (`npm run test:web -- --run`)**: PASS (**10/10 test files, 28/28 tests passed**).
+  - `src/test/theme.test.tsx` (4 tests) - PASS
+  - `src/test/dashboardWorker.test.tsx` (1 test) - PASS
+  - `src/test/statusBadge.test.tsx` (1 test) - PASS
+  - `src/test/kanban.test.ts` (2 tests) - PASS
+  - `src/test/countdown.test.tsx` (4 tests) - PASS
+  - `src/test/token.test.ts` (4 tests) - PASS
+  - `src/test/apiClient.test.ts` (3 tests) - PASS
+  - `src/test/authGate.test.tsx` (2 tests) - PASS
+  - `src/test/feedbackForm.test.tsx` (2 tests) - PASS
+  - `src/test/contract.test.ts` (5 tests) - PASS
+
+## 5. Việc chưa làm được và lý do
+Không có. Tất cả các yêu cầu và tiêu chí nghiệm thu đều đã đạt 100%.
+
+## 6. Danh sách commit
+1. `7958ff8`: `feat(web): add favicon and resolve 404 on /vite.svg`
+2. `8855c90`: `feat(web): define design tokens and dark palette in css`
+3. `a185606`: `feat(web): implement 3-mode theme switcher and safe localstorage persistence`
+4. `ea045aa`: `feat(web): apply status tokens to StatusBadge, Kanban, and Dashboard metrics`
+5. `107791a`: `style(web): align terminal xterm and live logs with dark palette`
+6. `18a4f56`: `test(web): add unit tests for theme switcher and dashboard worker title fallback`

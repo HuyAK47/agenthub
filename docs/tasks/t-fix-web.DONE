@@ -1,0 +1,55 @@
+# Báo cáo hoàn thành Task: t-fix-web
+
+## 1. Tóm tắt việc đã làm
+1. **Nút Check:**
+   - Cập nhật luồng kiểm tra hồ sơ: khi bấm nút Check, gọi `POST /api/profiles/:name/check` (trả về `202 {"started":true}`).
+   - Nút Check lập tức chuyển sang trạng thái "Đang kiểm tra…" kèm spinner và bị vô hiệu hóa (`disabled`).
+   - Lắng nghe sự kiện SSE `profile.check` có `name` khớp: hiển thị toast ✓ hoặc ✗ kèm `message` và thời gian chạy (`durationMs`), sau đó tự động tải lại danh sách hồ sơ và gọi làm mới `usage`.
+   - Thiết lập timeout 75 giây: nếu sau 75 giây chưa nhận được kết quả SSE thì hiển thị toast báo "quá thời gian" và khôi phục nút Check.
+   - Xử lý mã lỗi 409 từ server: hiển thị toast thông báo "đang kiểm tra" và duy trì trạng thái kiểm tra.
+2. **Trạng thái đăng nhập:**
+   - Sử dụng trường `loggedIn` trong response của hồ sơ để quyết định hiển thị "Chưa đăng nhập / Đăng nhập ngay", không phụ thuộc vào `email`.
+   - Nếu `loggedIn` không có trong response (server cũ), fallback về `Boolean(profile.email)` giữ nguyên hành vi cũ.
+   - Hồ sơ codex đã đăng nhập: hiển thị "Codex (ChatGPT)" ở cột email.
+   - Nút "Đăng nhập" (cả inline và nút hành động) chỉ hiển thị cho hồ sơ agy isolated (`engine === 'agy' && kind === 'isolated'`).
+3. **Báo có phiên bản mới:**
+   - Tạo component `VersionBanner` tích hợp vào đầu `Layout`.
+   - Định kỳ 60 giây gọi `GET /api/version` một lần, đồng thời gọi thêm khi tab trình duyệt được focus lại (`window.addEventListener('focus')`).
+   - Gặp 404 (server cũ) bỏ qua không báo lỗi.
+   - So sánh `webBuildId` với giá trị ban đầu khi vừa tải trang. Nếu khác nhau, hiển thị thanh thông báo trên đầu trang: "Có phiên bản dashboard mới" kèm nút **Tải lại** (`window.location.reload()`).
+4. **Loại MSW khỏi bản build chính thức:**
+   - Chuyển `setupMocks` trong `web/src/main.tsx` sang `import()` động chỉ khi `import.meta.env.DEV || import.meta.env.VITE_MOCK === '1'`. Khi build production, dead code elimination loại bỏ hoàn toàn MSW khỏi bundle.
+   - Thêm plugin `strip-mock-service-worker` trong `web/vite.config.ts` để tự động dọn dẹp `mockServiceWorker.js` khỏi thư mục `dist/web` sau khi build.
+   - Kiểm tra `grep -r "serviceWorker" ../dist/web` sau khi build: không có kết quả nào.
+5. **Loại bỏ cảnh báo chunk lớn hơn 500 kB:**
+   - Chuyển các route page trong `web/src/App.tsx` sang `React.lazy` và bọc trong `React.Suspense`.
+   - Cấu hình `manualChunks` trong `web/vite.config.ts` tách riêng `vendor-xterm` (xterm, @xterm/addon-fit) và `vendor-markdown` (react-markdown).
+   - Bản build phân tách sạch thành các chunk nhỏ (< 285 kB), hoàn toàn không còn cảnh báo chunk > 500 kB.
+
+## 2. Kết quả kiểm tra chất lượng & số lượng test
+- **Lint:** `npm run lint` -> Đạt (0 lỗi).
+- **Typecheck:**
+  - `npm run typecheck` (root tsc) -> Đạt.
+  - `npm --prefix web run typecheck` (web tsc --noEmit) -> Đạt.
+- **Build:** `npm run build:web` -> Đạt, không có cảnh báo chunk kích thước lớn.
+- **Test:** `npm run test:web -- --run` -> **14/14 test files passed, 44/44 tests passed**.
+  - Đã thêm mới 3 test suite:
+    - `src/test/profileCheck.test.tsx` (4 tests): kiểm tra luồng nút Check (202, SSE, toast ✓/✗), xử lý lỗi 409 ("đang kiểm tra"), và quá thời gian 75 giây ("quá thời gian").
+    - `src/test/profilesLogin.test.tsx` (4 tests): kiểm tra logic `loggedIn`, hiển thị "Codex (ChatGPT)", giới hạn nút Đăng nhập cho agy isolated, và fallback server cũ.
+    - `src/test/versionBanner.test.tsx` (4 tests): kiểm tra banner báo bản mới khi `webBuildId` đổi sau 60s hoặc khi focus tab, bỏ qua lỗi 404, và xử lý nút Tải lại.
+
+## 3. Kết quả lệnh grep kiểm tra serviceWorker
+```bash
+$ cd web && grep -r "serviceWorker" ../dist/web
+# (Exit code 1 - Không tìm thấy chuỗi "serviceWorker" nào trong dist/web)
+```
+
+## 4. Việc chưa làm được và lý do
+- Không có. Tất cả các yêu cầu và tiêu chí nghiệm thu đã hoàn thành 100%.
+
+## 5. Danh sách commit
+- `affea7c` fix(web): exclude msw and mockServiceWorker from production build
+- `f016d53` perf(web): split routes and vendor libraries to eliminate chunk size warning
+- `9851088` feat(web): add dashboard update notification banner on version change
+- `1ad6e19` feat(web): support loggedIn field and update codex profile display
+- `4bcff52` feat(web): update check profile flow with 202, sse, 409 and timeout handling

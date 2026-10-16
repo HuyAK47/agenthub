@@ -1,0 +1,411 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { loadConfig } from '../src/config.js';
+import { createContext } from '../src/daemon.js';
+import { createServer } from '../src/api/server.js';
+import { getOrCreateToken } from '../src/auth.js';
+import { FakeEngine, Engine } from '../src/engines/index.js';
+import {
+  parseCodexTokens,
+  parseShortstat,
+  calculateAgyTokens,
+  calculateSavingsRatio,
+} from '../src/savings.js';
+
+describe('Savings calculation functions', () => {
+  describe('parseCodexTokens', () => {
+    it('parses tokens with dot separator: 117.250', () => {
+      const log = 'Starting task...\nProcessing...\ntokens used\n117.250\nDone.';
+      expect(parseCodexTokens(log)).toBe(117250);
+    });
+
+    it('parses tokens with comma separator: 117,250', () => {
+      const log = 'Some initial output...\ntokens used\n117,250\nCompleted.';
+      expect(parseCodexTokens(log)).toBe(117250);
+    });
+
+    it('parses tokens without separator: 117250', () => {
+      const log = 'Run finished.\ntokens used\n117250';
+      expect(parseCodexTokens(log)).toBe(117250);
+    });
+
+    it('parses tokens with colon: tokens used:\n50,000', () => {
+      const log = 'tokens used:\n50,000';
+      expect(parseCodexTokens(log)).toBe(50000);
+    });
+
+    it('returns the last token count if multiple appear in log', () => {
+      const log = 'tokens used\n10,000\nre-evaluating...\ntokens used\n150.000\nall finished';
+      expect(parseCodexTokens(log)).toBe(150000);
+    });
+
+    it('returns null if tokens used header is not found or empty', () => {
+      expect(parseCodexTokens('')).toBeNull();
+      expect(parseCodexTokens('Just regular output without token counts')).toBeNull();
+      expect(parseCodexTokens('tokens used\nnot_a_number')).toBeNull();
+    });
+  });
+
+  describe('parseShortstat', () => {
+    it('parses insertions and deletions', () => {
+      const stat = ' 3 files changed, 120 insertions(+), 45 deletions(-)';
+      expect(parseShortstat(stat)).toEqual({
+        filesChanged: 3,
+        linesAdded: 120,
+        linesDeleted: 45,
+      });
+    });
+
+    it('parses insertions only', () => {
+      const stat = ' 1 file changed, 50 insertions(+)';
+      expect(parseShortstat(stat)).toEqual({
+        filesChanged: 1,
+        linesAdded: 50,
+        linesDeleted: 0,
+      });
+    });
+
+    it('parses deletions only', () => {
+      const stat = ' 2 files changed, 30 deletions(-)';
+      expect(parseShortstat(stat)).toEqual({
+        filesChanged: 2,
+        linesAdded: 0,
+        linesDeleted: 30,
+      });
+    });
+
+    it('returns 0 for empty or unparseable input', () => {
+      expect(parseShortstat('')).toEqual({
+        filesChanged: 0,
+        linesAdded: 0,
+        linesDeleted: 0,
+      });
+    });
+  });
+
+  describe('calculateAgyTokens', () => {
+    it('calculates tokens correctly for single run with quota reduction', () => {
+      const res = calculateAgyTokens({
+        usageBefore: 100,
+        usageAfter: 90, // 10% used
+        bucketTokens: 5_000_000,
+        concurrentRuns: 1,
+      });
+      expect(res.tokens).toBe(500_000);
+      expect(res.estimated).toBe(false);
+    });
+
+    it('marks estimated: true when concurrent runs > 1 and divides tokens evenly', () => {
+      const res = calculateAgyTokens({
+        usageBefore: 100,
+        usageAfter: 80, // 20% used = 1_000_000
+        bucketTokens: 5_000_000,
+        concurrentRuns: 2,
+      });
+      expect(res.tokens).toBe(500_000);
+      expect(res.estimated).toBe(true);
+    });
+
+    it('marks estimated: true and returns 0 tokens when diff <= 0 (e.g. quota reset)', () => {
+      const res = calculateAgyTokens({
+        usageBefore: 80,
+        usageAfter: 85, // Quota increased / reset
+        bucketTokens: 5_000_000,
+        concurrentRuns: 1,
+      });
+      expect(res.tokens).toBe(0);
+      expect(res.estimated).toBe(true);
+    });
+
+    it('marks estimated: true when usageBefore or usageAfter is missing', () => {
+      const res1 = calculateAgyTokens({
+        usageBefore: null,
+        usageAfter: 90,
+        bucketTokens: 5_000_000,
+      });
+      expect(res1.estimated).toBe(true);
+      expect(res1.tokens).toBe(0);
+
+      const res2 = calculateAgyTokens({
+        usageBefore: 100,
+        usageAfter: null,
+        bucketTokens: 5_000_000,
+      });
+      expect(res2.estimated).toBe(true);
+      expect(res2.tokens).toBe(0);
+    });
+  });
+
+  describe('calculateSavingsRatio', () => {
+    it('calculates ratio: saved / (saved + cost)', () => {
+      expect(calculateSavingsRatio(90_000, 10_000)).toBeCloseTo(0.9);
+      expect(calculateSavingsRatio(50_000, 50_000)).toBeCloseTo(0.5);
+    });
+
+    it('returns 0 when saved is 0', () => {
+      expect(calculateSavingsRatio(0, 40_000)).toBe(0);
+    });
+
+    it('returns 0 when both saved and cost are 0', () => {
+      expect(calculateSavingsRatio(0, 0)).toBe(0);
+    });
+  });
+});
+
+describe('SavingsService and GET /api/savings integration', () => {
+  let tmpDir: string;
+  let config: ReturnType<typeof loadConfig>;
+  let ctx: ReturnType<typeof createContext>;
+  let server: ReturnType<typeof createServer>;
+  let token: string;
+
+  beforeEach(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-savings-test-'));
+    const agyHomesDir = path.join(tmpDir, 'agy-homes');
+    fs.mkdirSync(agyHomesDir, { recursive: true });
+
+    process.env.AGENTHUB_HOME = tmpDir;
+    process.env.AGENTHUB_AGY_HOMES = agyHomesDir;
+    process.env.AGENTHUB_DEFAULT_LOG_DIR = path.resolve(__dirname, 'fixtures', 'fake-gemini-log');
+    process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-login.mjs');
+    const webDir = path.join(tmpDir, 'web');
+    fs.mkdirSync(webDir, { recursive: true });
+    process.env.AGENTHUB_WEB_DIR = webDir;
+
+    config = loadConfig(tmpDir);
+    config.agyHomesDir = agyHomesDir;
+    config.port = 7788;
+    token = getOrCreateToken(config.tokenPath);
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
+
+    ctx = createContext(config, engines);
+    server = await createServer(ctx.service, config);
+    await server.ready();
+  });
+
+  afterEach(async () => {
+    ctx.scheduler.stop();
+    await server.close();
+    ctx.db.close();
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    delete process.env.AGENTHUB_HOME;
+    delete process.env.AGENTHUB_AGY_HOMES;
+    delete process.env.AGENTHUB_DEFAULT_LOG_DIR;
+    delete process.env.AGENTHUB_AGY_BIN;
+    delete process.env.AGENTHUB_WEB_DIR;
+  });
+
+  function authHeaders() {
+    return {
+      host: '127.0.0.1:7788',
+      authorization: `Bearer ${token}`,
+    };
+  }
+
+  it('returns empty savings report when no tasks exist', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/savings',
+      headers: authHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.summary).toEqual({
+      totalWorkerTokens: 0,
+      claudeSavedTokens: 0,
+      claudeCostTokens: 0,
+      savingsRatio: 0,
+      totalLinesAdded: 0,
+      totalLinesDeleted: 0,
+      totalLinesChanged: 0,
+      tasksApprovedCount: 0,
+      avgReviewRounds: 0,
+    });
+    expect(body.tasks).toEqual([]);
+    expect(body.byDay).toEqual([]);
+  });
+
+  it('calculates savings across done tasks and codex / agy runs', async () => {
+    // 1. Seed project
+    ctx.db.prepare(
+      `INSERT INTO projects (id, name, path, defaultBranch) VALUES ('proj-a', 'Project A', '/tmp/repo', 'main')`,
+    ).run();
+
+    // 2. Seed task 1 (done, agy engine with 10% quota usage)
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, status)
+       VALUES ('proj-a/t-1', 'proj-a', 't-1', 'Agy Task', 'done')`,
+    ).run();
+
+    // Run for task 1
+    const run1Id = 'run-1';
+    ctx.db.prepare(
+      `INSERT INTO runs (id, taskId, engine, model, profileName, startedAt, endedAt, outcome)
+       VALUES (?, 'proj-a/t-1', 'agy', 'gemini-3.8-flash-high', 'p1', '2026-10-15T10:00:00.000Z', '2026-10-15T10:30:00.000Z', 'done')`,
+    ).run(run1Id);
+
+    // Run metric for run 1: 100% down to 90% in 5h window => 10% * 5_000_000 = 500,000 tokens
+    ctx.db.prepare(
+      `INSERT INTO run_metrics (runId, taskId, engine, model, profileName, tokensUsed, usageBefore, usageAfter, linesAdded, linesDeleted, filesChanged, durationMs)
+       VALUES (?, 'proj-a/t-1', 'agy', 'gemini-3.8-flash-high', 'p1', NULL, 100, 90, 150, 20, 4, 1800000)`,
+    ).run(run1Id);
+
+    // 3. Seed task 2 (done, codex engine with 120,000 tokens parsed, 1 review round)
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, status)
+       VALUES ('proj-a/t-2', 'proj-a', 't-2', 'Codex Task', 'done')`,
+    ).run();
+
+    const run2Id = 'run-2';
+    ctx.db.prepare(
+      `INSERT INTO runs (id, taskId, engine, model, profileName, startedAt, endedAt, outcome)
+       VALUES (?, 'proj-a/t-2', 'codex', 'codex:gpt-5.6-luna', 'p1', '2026-10-15T11:00:00.000Z', '2026-10-15T11:45:00.000Z', 'done')`,
+    ).run(run2Id);
+
+    ctx.db.prepare(
+      `INSERT INTO run_metrics (runId, taskId, engine, model, profileName, tokensUsed, usageBefore, usageAfter, linesAdded, linesDeleted, filesChanged, durationMs)
+       VALUES (?, 'proj-a/t-2', 'codex', 'codex:gpt-5.6-luna', 'p1', 120000, NULL, NULL, 80, 10, 2, 2700000)`,
+    ).run(run2Id);
+
+    // Add 1 changes_requested review for task 2
+    ctx.db.prepare(
+      `INSERT INTO reviews (taskId, verdict, createdAt)
+       VALUES ('proj-a/t-2', 'changes_requested', '2026-10-15T11:20:00.000Z')`,
+    ).run();
+
+    // Call GET /api/savings
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/savings',
+      headers: authHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+
+    // Total worker tokens = 500,000 (agy) + 120,000 (codex) = 620,000
+    expect(body.summary.totalWorkerTokens).toBe(620_000);
+    // Claude saved = 620,000 * 0.9 = 558,000
+    expect(body.summary.claudeSavedTokens).toBe(558_000);
+
+    // Claude cost:
+    // Task 1: 0 reviews => 40,000 * (1 + 0) = 40,000
+    // Task 2: 1 review => 40,000 * (1 + 1) = 80,000
+    // Total cost = 120,000
+    expect(body.summary.claudeCostTokens).toBe(120_000);
+
+    // Savings ratio = 558,000 / (558,000 + 120,000) = 0.823...
+    expect(body.summary.savingsRatio).toBeCloseTo(558000 / 678000, 3);
+
+    // Lines code
+    expect(body.summary.totalLinesAdded).toBe(230);
+    expect(body.summary.totalLinesDeleted).toBe(30);
+    expect(body.summary.tasksApprovedCount).toBe(2);
+    expect(body.summary.avgReviewRounds).toBe(0.5); // (0 + 1) / 2 = 0.5
+
+    // byEngine
+    expect(body.byEngine['agy'].tokens).toBe(500_000);
+    expect(body.byEngine['codex'].tokens).toBe(120_000);
+
+    // byDay has 2026-10-15
+    expect(body.byDay.length).toBe(1);
+    expect(body.byDay[0].date).toBe('2026-10-15');
+    expect(body.byDay[0].geminiTokens).toBe(500_000);
+    expect(body.byDay[0].codexTokens).toBe(120_000);
+
+    // Tasks list
+    expect(body.tasks.length).toBe(2);
+  });
+
+  it('filters savings report by project and since date', async () => {
+    // Seed project A and B
+    ctx.db.prepare(`INSERT INTO projects (id, name, path) VALUES ('p-a', 'Proj A', '/tmp/a')`).run();
+    ctx.db.prepare(`INSERT INTO projects (id, name, path) VALUES ('p-b', 'Proj B', '/tmp/b')`).run();
+
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, status, createdAt, updatedAt)
+       VALUES ('p-a/t-1', 'p-a', 't-1', 'Task A', 'done', '2026-10-10T10:00:00.000Z', '2026-10-10T10:30:00.000Z')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO runs (id, taskId, engine, model, profileName, startedAt, endedAt, outcome)
+       VALUES ('run-a', 'p-a/t-1', 'codex', 'm1', 'p1', '2026-10-10T10:00:00.000Z', '2026-10-10T10:30:00.000Z', 'done')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO run_metrics (runId, taskId, engine, model, profileName, tokensUsed)
+       VALUES ('run-a', 'p-a/t-1', 'codex', 'm1', 'p1', 50000)`,
+    ).run();
+
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, status, createdAt, updatedAt)
+       VALUES ('p-b/t-2', 'p-b', 't-2', 'Task B', 'done', '2026-10-15T10:00:00.000Z', '2026-10-15T10:30:00.000Z')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO runs (id, taskId, engine, model, profileName, startedAt, endedAt, outcome)
+       VALUES ('run-b', 'p-b/t-2', 'codex', 'm1', 'p1', '2026-10-15T10:00:00.000Z', '2026-10-15T10:30:00.000Z', 'done')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO run_metrics (runId, taskId, engine, model, profileName, tokensUsed)
+       VALUES ('run-b', 'p-b/t-2', 'codex', 'm1', 'p1', 75000)`,
+    ).run();
+
+    // Filter project=p-a
+    const resA = await server.inject({
+      method: 'GET',
+      url: '/api/savings?project=p-a',
+      headers: authHeaders(),
+    });
+    const bodyA = JSON.parse(resA.body);
+    expect(bodyA.summary.totalWorkerTokens).toBe(50000);
+    expect(bodyA.tasks.length).toBe(1);
+    expect(bodyA.tasks[0].taskId).toBe('p-a/t-1');
+
+    // Filter since=2026-10-12
+    const resSince = await server.inject({
+      method: 'GET',
+      url: '/api/savings?since=2026-10-12',
+      headers: authHeaders(),
+    });
+    const bodySince = JSON.parse(resSince.body);
+    expect(bodySince.summary.totalWorkerTokens).toBe(75000);
+    expect(bodySince.tasks.length).toBe(1);
+    expect(bodySince.tasks[0].taskId).toBe('p-b/t-2');
+  });
+
+  it('imports legacy codex logs and attaches tokens to matching task', async () => {
+    const { cmdSavings } = await import('../src/cli.js');
+
+    // Seed task with slug t-legacy
+    ctx.db.prepare(`INSERT INTO projects (id, name, path) VALUES ('proj-leg', 'Legacy Proj', '/tmp/leg')`).run();
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, status)
+       VALUES ('proj-leg/t-legacy', 'proj-leg', 't-legacy', 'Legacy Task', 'done')`,
+    ).run();
+
+    // Create a mock legacy log directory structure:
+    // legacy-logs/t-legacy/2026-10-14_run_codex.log
+    const legacyDir = path.join(tmpDir, 'legacy-logs');
+    const taskLogDir = path.join(legacyDir, 't-legacy');
+    fs.mkdirSync(taskLogDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(taskLogDir, '2026-10-14_run_codex.log'),
+      'Starting worker execution...\nGenerating code...\ntokens used\n117.250\nComplete.',
+    );
+
+    await cmdSavings(config, 'import-legacy', [legacyDir]);
+
+    // Verify task metric is recorded
+    const metrics = ctx.runMetricsRepo.getByTask('proj-leg/t-legacy');
+    expect(metrics.length).toBe(1);
+    expect(metrics[0].tokensUsed).toBe(117250);
+    expect(metrics[0].engine).toBe('codex');
+  });
+});

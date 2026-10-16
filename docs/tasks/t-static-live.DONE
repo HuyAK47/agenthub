@@ -1,0 +1,35 @@
+# Hoàn thành task: t-static-live
+
+## 1. Tóm tắt việc đã làm
+- **Sửa Lỗi 1 (Phục vụ file tĩnh động):**
+  - Trong `src/api/server.ts`: cấu hình `@fastify/static` với `wildcard: true` và luôn đăng ký phục vụ file tĩnh ngay cả khi `index.html` chưa tồn tại lúc khởi động daemon.
+  - Thêm `allowedPath` để:
+    - Ngăn chặn tuyệt đối việc phục vụ bất kỳ tài nguyên tĩnh nào dưới `/api` (không trả file tĩnh cho route API).
+    - Ngăn chặn path traversal (`..`, `\`, hoặc các đường dẫn resolve ra ngoài `webDistDir`).
+  - Trong `setNotFoundHandler`: kiểm tra động sự tồn tại của `webDistDir/index.html` trên từng request. Khi người dùng build web (`npm run build:web`), daemon phục vụ ngay `index.html` mới và các asset mới có hash (ví dụ `assets/new-123.js`) mà không cần restart. Fallback SPA chỉ áp dụng cho request `GET`/`HEAD` có header `Accept: text/html`.
+  - Hỗ trợ tham số `options.webDir` trong `createServer` và `resolveWebDistDir` bên cạnh biến môi trường `AGENTHUB_WEB_DIR`.
+
+- **Sửa Lỗi 2 (Test phụ thuộc môi trường):**
+  - Trong `test/api.test.ts`: cấu hình `process.env.AGENTHUB_WEB_DIR` trỏ tới thư mục tạm `tmpDir/web` trong `beforeEach` và xóa trong `afterEach`, đảm bảo tất cả test API độc lập hoàn toàn với sự tồn tại của `dist/web` trên máy host.
+  - Bổ sung 4 unit test mới trong `test/api.test.ts`:
+    1. `serves newly added static assets dynamically without server restart`: ghi file `assets/new-123.js` sau khi server đã chạy, GET trả về 200 và content-type javascript.
+    2. `serves dynamically created index.html and SPA route fallback after startup`: kiểm tra placeholder trước khi build, ghi `index.html` khi server đang chạy, kiểm tra GET `/` và route SPA fallback (`Accept: text/html`), và kiểm tra 404 JSON cho file không tồn tại.
+    3. `prevents path traversal when serving static files`: ngăn chặn đường dẫn traversal `../package.json`.
+    4. `never serves static files from under /api even if files exist in webDir`: kiểm tra không lộ file tĩnh dưới `/api` và giữ nguyên 401 unauthenticated / 404 JSON authenticated.
+  - Sửa race condition trong `Tasks workflow: create, start, cancel, review, retry, commits, and worktree removal` (hủy task retried trước khi setup worktree test detail để tránh worker nền ghi đè file `.agenthub/DONE`).
+  - Đã xác minh test chạy thành công cả khi **có** `dist/web` và **không có** `dist/web`.
+
+## 2. Kết quả kiểm tra chất lượng
+- `npm run lint`: PASS (0 lỗi, 0 cảnh báo)
+- `npm run typecheck`: PASS (0 lỗi TypeScript)
+- `npm test -- --run`: PASS (10/10 test files, 83/83 tests passed)
+  - Chạy khi không có `dist/web`: 83/83 tests pass
+  - Chạy khi có `dist/web`: 83/83 tests pass
+- `npm run build`: PASS (tsc thành công, copy `src/protocol.md` sang `dist/protocol.md`)
+
+## 3. Việc chưa làm được và lý do
+- Không có. Tất cả các yêu cầu và tiêu chí nghiệm thu đều đạt đầy đủ.
+
+## 4. Danh sách commit
+1. `da58304` - `fix(server): serve static files dynamically with wildcard and re-check index.html on each request`
+2. `7fafd20` - `test(api): isolate web directory in tests and verify dynamic static serving`

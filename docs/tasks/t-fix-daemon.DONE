@@ -1,0 +1,32 @@
+# t-fix-daemon – DONE
+
+## Tóm tắt
+
+- Chuyển profile check sang chạy nền: agy dùng `agy -p /usage` qua `QuotaUsageService`, lưu usage, timeout 60 giây; Codex dùng `codex --version`, timeout 20 giây. Route trả `202 {started:true}`, chống check trùng bằng `409`, và phát SSE `profile.check` khi hoàn tất.
+- Thêm `GET /api/version` với `webBuildId` là mtime của web build; tách logic resolve web directory thành hàm thuần. Test web chỉ dùng thư mục tạm; safety check bảo vệ checksum `dist/web/index.html`.
+- Scheduler dùng slot thật của profile, hỗ trợ `slotsPerAgyProfile` (mặc định 2) qua config/API; bổ sung test 1 profile chạy đồng thời 2/3 task.
+- Bổ sung `loggedIn` cho profile agy/codex bằng kiểm tra tồn tại file theo yêu cầu, không đọc nội dung token/auth.
+
+Nguyên nhân check bị treo là route cũ `await` một worker agy với prompt thật `OK` trước khi trả response HTTP. Vì vậy HTTP bị giữ đến khi worker kết thúc, thay vì dùng lệnh `/usage` nhanh và chạy nền.
+
+## Kiểm tra
+
+- Trước sửa: 123 test được khai báo trong bộ test hiện tại.
+- Sau sửa: 12 test files, 123/123 tests passed.
+- `npm run lint`: đạt.
+- `npm run typecheck`: đạt.
+- `npm test -- --run`: đạt, 123/123.
+- `npm run build`: đạt.
+- `npm run build:web`: đạt.
+- Chạy lại `npm test -- --run` sau `build:web`: đạt, 123/123.
+- Checksum `dist/web/index.html` trước/sau lần test cuối không đổi: `210a6d0ece5791a204b8b0daa9f6ecde6c7a729e4c7735f042ac0ce288a4bdfa`.
+
+## Việc chưa làm được
+
+Không còn việc nào trong phạm vi task chưa làm được.
+
+## Commit
+
+- Lỗi check profile, version API và `loggedIn`: `42c2ca9`.
+- Test web dùng thư mục tạm và safety checksum: `6078057`.
+- Scheduler nhiều slot và cấu hình `slotsPerAgyProfile`: `0f5122d`.

@@ -1,0 +1,32 @@
+# Hoàn thành task: t-sse-format – Thống nhất định dạng sự kiện SSE
+
+## 1. Tóm tắt việc đã làm
+1. **Thống nhất SSE Envelope phía backend (`src/api/sse.ts`)**:
+   - Mọi sự kiện SSE dùng chung một envelope: `{ type, ts, taskId?, payload }`.
+   - Chuẩn hóa sự kiện `run.output` với `payload = { runId, chunk }`.
+   - SSE field `event:` gửi đúng `type`, thêm `id:` tăng dần theo `events.id` cho các sự kiện bus.
+   - Hỗ trợ header `Last-Event-ID` (và query fallback `lastEventId`): gửi bù các sự kiện bus bị lỡ từ bảng `events` (`WHERE id > lastId ORDER BY id`), tối đa 200 sự kiện. Không gửi bù `run.output`.
+2. **Cập nhật Web client (`web/src/api/sse.ts`)**:
+   - Parse các sự kiện theo envelope mới `{ type, ts, taskId?, payload }`, đồng thời giữ tương thích ngược với format cũ.
+   - Hàm `handleRunOutput`: nối `chunk` vào log của đúng run (`getRunLog(runId)` và react-query cache `['runLog', runId]`, `['taskLog', taskId]`), đồng thời thông báo qua `subscribeToRunOutput`.
+   - `EventSource` tự kết nối lại với cơ chế exponential backoff (1s, 2s, 4s, ..., tối đa 30s) và lưu trữ / gửi lại `Last-Event-ID`.
+3. **Cập nhật tài liệu hợp đồng (`web/CONTRACT.md`)**:
+   - Ghi định dạng chính thức vào mục 2.1 và mục 4.2 (chuyển đề xuất thành "Đã áp dụng" cho task `t-sse-format`).
+4. **Viết test bổ sung**:
+   - `test/sse.test.ts`: kiểm tra unified envelope, `id:` header, `Last-Event-ID` replay các bus events, giới hạn tối đa 200 sự kiện, và stream `run.output`.
+   - `web/src/test/sse.test.ts`: kiểm tra parse envelope, tích lũy log của run qua các chunk liên tiếp, tính toán exponential backoff, và khôi phục kết nối với `Last-Event-ID`.
+
+## 2. Kết quả kiểm tra
+- **Lint**: `npm run lint` đạt (0 lỗi, 0 cảnh báo).
+- **Typecheck**: `npm run typecheck` và `npm --prefix web run typecheck` đạt (0 lỗi).
+- **Root Tests**: `npm test -- --run` đạt 10/10 test files, 81/81 tests passed.
+- **Web Tests**: `npm run test:web -- --run` đạt 9/9 test files, 27/27 tests passed.
+- **Build**: `npm run build` và `npm run build:web` thành công.
+
+## 3. Việc chưa làm được và lý do
+- Không có. Toàn bộ yêu cầu và tiêu chí nghiệm thu đã được hoàn thành đầy đủ.
+
+## 4. Danh sách commit
+- `d34ea81`: `feat(api): unify SSE event envelope and add Last-Event-ID replay`
+- `8e3c09a`: `feat(web): update SSE parser for unified envelope and add backoff reconnect`
+- `6c63bc8`: `docs(contract): document unified SSE envelope and Last-Event-ID replay`

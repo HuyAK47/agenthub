@@ -1,0 +1,112 @@
+# Báo cáo hoàn thành Task: t-chat-web (Giao diện "Chat với Claude" trong dashboard)
+
+## 1. Tóm tắt việc đã làm
+Đã hoàn thành toàn bộ các yêu cầu của đề bài `.agenthub/task.md` phía frontend `web/`:
+
+1. **Sidebar & Điều hướng router:**
+   - Thêm mục "Chat" trên thanh điều hướng (`web/src/components/Layout.tsx`) tại vị trí **thứ 2**, ngay dưới "Tổng quan", sử dụng icon `MessageSquare`.
+   - Cấu hình route `/chat` và `/chat/:sessionId` trong `web/src/App.tsx`.
+
+2. **Bố cục hai cột & Responsive (< 900px):**
+   - Triển khai `web/src/pages/ChatPage.tsx`: cột trái hiển thị danh sách phiên (`ChatSessionList`), cột phải là khung chat tương tác.
+   - Trên màn hình nhỏ hơn 900px (`min-[900px]:hidden`), cột trái tự động chuyển thành Drawer slide-in với backdrop mờ, mở ra bằng nút Menu trên thanh tiêu đề.
+
+3. **Cột danh sách phiên (`web/src/components/chat/ChatSessionList.tsx`):**
+   - Nút "+ Cuộc trò chuyện mới" cố định ở đầu.
+   - Thẻ phiên hiển thị: tiêu đề, badge project, badge chế độ (An toàn / Đầy đủ), chấm pulsing "đang trả lời…" khi `session.busy`, thời gian cập nhật dạng relative time, nút xóa phiên khi hover.
+
+4. **Khung tin nhắn & Định dạng (`web/src/components/chat/ChatMessageItem.tsx` & `ToolChipsGroup.tsx`):**
+   - Tin nhắn người dùng căn phải (`justify-end`) với bubble nổi bật.
+   - Tin nhắn Claude căn trái (`justify-start`), có avatar tròn màu `#d97757` với chữ "C".
+   - Render Markdown bằng `react-markdown` + `remark-gfm` (không dùng HTML thô).
+   - Code block tùy biến có header tên ngôn ngữ và nút "Sao chép" (chuyển "Đã chép!" trong 2s).
+   - Tin nhắn `tool` hiển thị dưới dạng chip "🔧 {tên công cụ}". Khi có nhiều chip tool liên tiếp, tự động gom lại thành nhóm có nút bấm mở rộng/thu gọn.
+   - Tin nhắn `error` hiển thị viền đỏ nổi bật.
+   - Streaming: khi nhận SSE `chat.delta`, cộng dồn văn bản vào câu trả lời kèm con trỏ nhấp nháy (`animate-pulse`). Khi nhận `chat.done`, hiển thị dòng thống kê: ví dụ "12,3 giây · $0.04 · 5 lượt".
+   - Tự động cuộn xuống cuối (`ScrollToBottomButton.tsx`), tự dừng cuộn khi người dùng cuộn lên đọc và hiện nút "↓ Tin mới".
+
+5. **Ô nhập tin nhắn (`web/src/components/chat/ChatInput.tsx`):**
+   - Textarea tự động co giãn chiều cao theo nội dung (tối đa 180px).
+   - Bấm `Enter` để gửi tin, `Shift+Enter` để xuống dòng.
+   - Tự động vô hiệu hóa khi phiên đang bận (`busy`).
+   - Nút Gửi tự động đổi thành nút **Dừng** (`cancel`) khi phiên đang bận.
+   - Hiển thị 3 câu gợi ý nhanh khi phiên chưa có tin nhắn:
+     - "Tình hình các task thế nào?"
+     - "Tài khoản nào còn nhiều quota?"
+     - "Chia GĐ 1 của XFarm thành task nhỏ và giao việc"
+
+6. **Dialog tạo phiên mới (`web/src/components/chat/NewSessionModal.tsx`):**
+   - Dropdown chọn project (không bắt buộc), ô nhập tiêu đề.
+   - Chọn mode: **An toàn** (mặc định) và **Đầy đủ** (cảnh báo đỏ: "Claude được chạy MỌI lệnh trên máy").
+   - Lựa chọn "Đầy đủ" bị vô hiệu hóa kèm ghi chú "(bật trong Cài đặt)" nếu `chat.allowFullMode` chưa được bật trong cấu hình hệ thống.
+
+7. **Trang Cài đặt (`web/src/pages/SettingsPage.tsx`):**
+   - Bổ sung mục "Cấu hình Chat với Claude" gồm:
+     - Ô đường dẫn thực thi `claudeBin` (mặc định: `claude`).
+     - Ô số phiên đồng thời tối đa `maxConcurrent` (mặc định: `2`).
+     - Công tắc bật/tắt `allowFullMode`: khi người dùng tích chọn bật, hiển thị hộp thoại xác nhận cảnh báo rủi ro bảo mật trước khi kích hoạt.
+
+8. **Trang Tổng quan (`web/src/pages/DashboardPage.tsx`):**
+   - Thêm ô "Chat nhanh với Claude" thu nhỏ ngay dưới các thẻ thống kê: một ô nhập và nút gửi.
+   - Sau khi gửi, tự động điều hướng sang trang `/chat` của phiên gần nhất hoặc tạo phiên mới nếu chưa có phiên nào.
+
+9. **API & MSW Mock (`web/src/api/chat.ts`, `web/src/mocks/handlers.ts`, `web/src/api/sse.ts`, `web/src/types/api.ts`):**
+   - Khai báo đầy đủ các kiểu dữ liệu và client methods cho chat API.
+   - Mock đầy đủ các endpoint theo đúng hợp đồng:
+     - `GET /api/chat/sessions`
+     - `POST /api/chat/sessions` (trả 403 nếu chọn `full` mà server chưa bật)
+     - `PATCH /api/chat/sessions/:id`
+     - `DELETE /api/chat/sessions/:id` (trả 409 nếu phiên đang bận)
+     - `GET /api/chat/sessions/:id/messages`
+     - `POST /api/chat/sessions/:id/messages` (trả 202 `{ userMessageId, assistantMessageId }`, hoặc 409 nếu bận)
+     - `POST /api/chat/sessions/:id/cancel`
+   - Đăng ký các sự kiện SSE `chat.delta`, `chat.tool`, `chat.done`, `chat.error` và xử lý invalidation cache tự động.
+
+10. **Bộ kiểm thử đầy đủ (`web/src/test/chat.test.tsx`):**
+    - Gửi tin: ô nhập bị khóa, nhận delta thì chữ được cộng dồn, nhận done thì ô nhập mở lại.
+    - 409 hiện toast "Claude đang trả lời".
+    - Gom các chip tool (hiển thị tóm tắt, mở rộng/thu gọn).
+    - Dialog mode: lựa chọn Đầy đủ bị vô hiệu hóa khi config chưa bật.
+    - Enter gửi tin, Shift+Enter xuống dòng.
+
+---
+
+## 2. Kết quả kiểm tra nghiệm thu
+
+### Lint:
+`npm run lint` -> **PASS** (0 warnings, 0 errors).
+
+### Build:
+`npm run build:web` -> **PASS** (biên dịch TypeScript strict không lỗi, Vite build bundle thành công).
+*Ghi chú: Đã xóa thư mục `dist/web` sau khi test build theo đúng quy định "Không ghi vào dist/web thật".*
+
+### Test Frontend:
+`npm run test:web -- --run` -> **PASS** (**12/12 test files, 37/37 tests passed**).
+- `src/test/chat.test.tsx` (5 tests) - **PASS**
+- `src/test/theme.test.tsx` (4 tests) - **PASS**
+- `src/test/dashboardWorker.test.tsx` (1 test) - **PASS**
+- `src/test/statusBadge.test.tsx` (1 test) - **PASS**
+- `src/test/kanban.test.ts` (2 tests) - **PASS**
+- `src/test/countdown.test.tsx` (4 tests) - **PASS**
+- `src/test/token.test.ts` (4 tests) - **PASS**
+- `src/test/apiClient.test.ts` (3 tests) - **PASS**
+- `src/test/authGate.test.tsx` (2 tests) - **PASS**
+- `src/test/feedbackForm.test.tsx` (2 tests) - **PASS**
+- `src/test/contract.test.ts` (5 tests) - **PASS**
+- `src/test/sse.test.ts` (4 tests) - **PASS**
+
+### Test Backend / Safety check:
+`npm test -- --run` -> **PASS** (**13/13 test files, 130/130 tests passed**).
+
+---
+
+## 3. Việc chưa làm được và lý do
+Không có. Tất cả các yêu cầu tính năng, giao diện, hợp đồng API mock và các ca kiểm thử đều hoàn thành 100%.
+
+---
+
+## 4. Danh sách commit
+1. `e6a8984`: `chore(web): add remark-gfm dependency`
+2. `02efb39`: `feat(web): add chat API types, client methods, and MSW handlers`
+3. `44d923e`: `feat(web): implement ChatPage, Claude chat components, settings and quick chat`
+4. `d5e7e24`: `test(web): add comprehensive unit and integration tests for chat feature`

@@ -1,0 +1,41 @@
+# t-quota-usage — DONE
+
+## Tóm tắt
+
+- Thêm migration và repository `quota_usage`; parser `/usage`, collector tối đa 2 hồ sơ song song, thu mỗi 5 phút, sau run kết thúc và qua API refresh.
+- Usage 0% tạo quota mark theo đúng `resetAt`, lan truyền theo email trùng; scheduler ưu tiên hồ sơ có quota 5 giờ cao hơn.
+- Thêm kiểm tra khóa `flock` cho 2 slot agy/1 slot codex, trạng thái `slotsUsed/slotsTotal`, và daemon giữ khóa khi spawn worker.
+- Thêm API refresh, CLI `agenthub usage`, MCP summary và component web hiển thị thanh quota/reset/status slot.
+- Thêm test parser, usage mark và khóa `flock` thật.
+
+## Kiểm tra
+
+- `npm run lint`: đạt.
+- `npm run typecheck`: đạt.
+- `npm test -- --run`: đạt, 11 test files / 82 tests.
+- `npm run build`: đạt.
+- `npm run build:web`: đạt (Vite có cảnh báo chunk lớn hơn 500 kB, không làm fail build).
+- `npm run test:web -- --run`: đạt, 8 test files / 23 tests.
+
+## Chạy CLI chỉ đọc
+
+`timeout 30s node dist/cli.js usage` chạy thành công:
+
+```text
+chinh (agy): (chưa có dữ liệu)
+codex (codex): (chưa có dữ liệu)
+g1 (agy): (chưa có dữ liệu)
+g2 (agy): (chưa có dữ liệu)
+g3 (agy): (chưa có dữ liệu)
+```
+
+Chưa gọi agy thật; các hồ sơ hiện chưa có snapshot usage trong DB nên CLI in “chưa có dữ liệu”.
+
+## Việc chưa làm được
+
+Không có.
+
+## Commit
+
+- `42ac012 feat: collect quota usage and enforce profile locks`
+- `34cab19 feat: expose quota usage in cli mcp and dashboard`

@@ -1,0 +1,99 @@
+# Báo cáo hoàn thành Task: a2-web (Web dashboard AgentHub)
+
+## 1. Tóm tắt công việc đã thực hiện
+Đã xây dựng hoàn chỉnh ứng dụng web dashboard cho AgentHub tại thư mục `web/` theo đúng thiết kế trong `docs/PLAN.md` (mục 3.1, 3.7, 3.9) và đề bài `docs/tasks/a2-web.md`:
+1. **Khung ứng dụng:**
+   - Cài đặt và cấu hình Vite + React 18 + TypeScript strict + Tailwind CSS 4 + TanStack Query v5 + React Router v6 + xterm.js (`@xterm/addon-fit`).
+   - Cấu hình build xuất ra `../dist/web` để daemon phục vụ file tĩnh.
+   - Thêm các script điều khiển vào `package.json` gốc: `build:web`, `dev:web`, `test:web`.
+2. **API Client & SSE (`web/src/api/`):**
+   - Định nghĩa đầy đủ kiểu dữ liệu TypeScript cho toàn bộ hợp đồng API (`src/types/api.ts`).
+   - Xử lý đọc token từ `location.hash` (`#token=...`), lưu vào `sessionStorage`, xóa hash bằng `history.replaceState`.
+   - Tự động gắn header `Authorization: Bearer <token>`. Khi thiếu token hoặc API trả về 401, hiển thị màn hình hướng dẫn người dùng: "Chạy `agenthub open` để mở dashboard".
+   - Tích hợp `EventSource` SSE `/api/events?token=...`, tự động kết nối lại và invalidate đúng các query key tương ứng (`tasks`, `task`, `profiles`, `status`). Lắng nghe sự kiện `run.output` để cập nhật live log thời gian thực.
+3. **Mock Data & MSW (`web/src/mocks/`):**
+   - Thiết lập MSW v2 (`browser.ts`, `handlers.ts`) kích hoạt khi `VITE_MOCK=1` hoặc query `?mock=1`.
+   - Dữ liệu fixture thực tế:
+     - 5 profiles: `chinh` (keyring, quota mark), `g1` (trùng email với chinh), `g2` (quota mark), `g3` (chưa đăng nhập), `codex`.
+     - 2 project: `XFarm`, `AgentHub`.
+     - 8 tasks phủ mọi trạng thái: `draft`, `queued`, `running`, `review`, `done`, `blocked`, `failed`, `waiting_quota`, kèm runs, commit list, báo cáo DONE/BLOCKED và log worker.
+   - Giả lập WebSocket PTY cho endpoint `/api/pty/:sessionId` trong chế độ mock để thử nghiệm luồng đăng nhập terminal.
+4. **Các trang chức năng (tiếng Việt, hỗ trợ Dark Mode):**
+   - **Tổng quan (`/`)**: 4 ô số liệu (đang chạy, chờ review, chờ quota, lỗi), bảng worker đang chạy kèm bộ đếm thời gian thực thi tự cập nhật từng giây, dòng sự kiện hoạt động gần đây.
+   - **Task (`/tasks`)**: Bảng Kanban phân cột theo trạng thái, bộ lọc theo project, thẻ task hiển thị level, attempt, model.
+   - **Chi tiết Task (`/tasks/:id`)**:
+     - Đề bài render bằng `react-markdown` (không dùng `dangerouslySetInnerHTML`).
+     - Danh sách runs và thời lượng thực thi.
+     - Terminal live log với tính năng auto-scroll thông minh (tự cuộn xuống đáy nhưng tạm dừng khi người dùng chủ động cuộn lên).
+     - Báo cáo DONE, báo cáo BỊ CHẶN và danh sách commit git.
+     - Các nút hành động: Start, Hủy (modal xác nhận), Thử lại (modal ghi chú), Duyệt (approved), Yêu cầu sửa (modal bắt buộc nhập feedback, chặn submit khi rỗng).
+   - **Tạo Task mới (`/tasks/new`)**: Form chọn project, nhập slug, title, level (easy/hard), chọn phụ thuộc (dependsOn), textarea soạn thảo đề bài kèm tab xem trước Markdown.
+   - **Tài khoản (`/profiles`)**:
+     - Bảng hồ sơ với engine, email, trạng thái bận/rảnh.
+     - Cảnh báo trùng lặp email màu đỏ nổi bật kèm gợi ý đăng nhập lại.
+     - Quota marks với đồng hồ đếm ngược thời gian thực (`CountdownTimer`) và nút xóa quota mark.
+     - Nút Check gọi `/check` hiển thị kết quả. Công tắc Bật/Tắt profile.
+     - Modal Thêm tài khoản tích hợp terminal **xterm.js** nối WebSocket PTY, kèm cảnh báo nổi bật: *"Trên trang Google, bấm Sử dụng tài khoản khác để không bị trùng tài khoản đang đăng nhập sẵn"*.
+   - **Project (`/projects`)**: Danh sách dự án và form đăng ký mới với validation cú pháp JSON cho `envTemplate`.
+   - **Cài đặt (`/settings`)**: Xem và sửa chuỗi model mặc định (`hard`, `easy`) và timeout theo endpoint `GET/PUT /api/config` (đã bổ sung kiến trúc trong `docs/DECISIONS.md` theo DEC-001).
+
+## 2. Kết quả kiểm tra tự động
+Lệnh kiểm tra toàn diện tại thư mục gốc:
+`npm run lint && npm run typecheck && npm test -- --run && npm run build && npm run build:web && npm run test:web`
+
+- **Lint (`npm run lint`)**: PASS (0 cảnh báo, 0 lỗi).
+- **Typecheck (`npm run typecheck`)**: PASS.
+- **Backend Tests (`npm test -- --run`)**: PASS (3 test files, **30/30 tests passed**).
+- **Backend Build (`npm run build`)**: PASS (biên dịch ra `dist/`).
+- **Frontend Build (`npm run build:web`)**: PASS (biên dịch TypeScript strict và bundle Vite ra `dist/web/`).
+- **Frontend Tests (`npm run test:web`)**: PASS (7 test files, **18/18 tests passed**).
+
+### Danh mục bài test frontend (`web/src/test/`):
+1. `token.test.ts` (4 tests):
+   - Đọc token từ hash `#token=...`, lưu vào `sessionStorage`.
+   - Xóa hash khỏi URL bằng `history.replaceState`.
+   - `getToken()` đọc token đã lưu hoặc trả về `null`.
+   - `clearToken()` dọn dẹp storage và thông báo cho unauthorized listeners.
+2. `apiClient.test.ts` (3 tests):
+   - Tự động gắn header `Authorization: Bearer <token>` và `Content-Type: application/json`.
+   - Chặn và ném `AuthError` ngay khi thiếu token.
+   - Xử lý mã HTTP 401: tự xóa token và kích hoạt luồng đăng nhập.
+3. `countdown.test.tsx` (4 tests):
+   - Format chuỗi thời gian đếm ngược chính xác (HH:MM:SS và MM:SS).
+   - Hiển thị nhãn "Hết hạn" khi thời gian <= 0.
+   - Cập nhật thời gian thực theo timer.
+   - Kích hoạt callback `onExpire` khi đồng hồ chạm 0.
+4. `feedbackForm.test.tsx` (2 tests):
+   - Nút gửi bị vô hiệu hóa (disabled) khi feedback rỗng hoặc chỉ có khoảng trắng.
+   - Cho phép gửi và truyền đúng nội dung khi nhập feedback hợp lệ.
+5. `kanban.test.ts` (2 tests):
+   - Phân nhóm chính xác các task vào đúng trạng thái tương ứng trên bảng Kanban.
+   - Khởi tạo đầy đủ nhóm rỗng khi mảng đầu vào rỗng.
+6. `statusBadge.test.tsx` (1 test):
+   - Hiển thị đúng nhãn tiếng Việt và màu sắc theo chuẩn giao diện cho mọi trạng thái.
+7. `authGate.test.tsx` (2 tests):
+   - Hiển thị màn hình hướng dẫn "Chạy `agenthub open` để mở dashboard" khi chưa có token.
+   - Cho phép hiển thị nội dung bên trong khi đã có token hợp lệ.
+
+## 3. Kiểm tra thủ công trong chế độ mock (`VITE_MOCK=1`)
+- Đã chạy dev server trong chế độ mock và kiểm tra bằng `curl -s -I http://localhost:5173/`: trả về `HTTP/1.1 200 OK`.
+- Kiểm tra file worker MSW `curl -s -I http://localhost:5173/mockServiceWorker.js`: trả về `HTTP/1.1 200 OK`.
+- Kiểm tra các màn hình:
+  - **Màn hình AuthGate**: Khi mở trang không có token, hiển thị hướng dẫn nổi bật `agenthub open`. Khi mở URL kèm `#token=...`, trang tự động lưu token vào sessionStorage, xóa hash trên thanh địa chỉ và mở dashboard.
+  - **Trang Tổng quan**: 4 thẻ số liệu hiển thị đúng số task mock (Đang chạy: 1, Chờ review: 1, Chờ quota: 1, Lỗi: 2). Bảng worker đang chạy hiển thị task `agenthub~a1-api` với đồng hồ thời gian thực thi nhảy giây.
+  - **Trang Task (Kanban)**: Phân bố 8 task vào đúng 8 cột trạng thái. Bộ lọc project lọc chính xác các task của XFarm và AgentHub.
+  - **Trang Chi tiết Task**: Đề bài hiển thị chuẩn định dạng Markdown, live log hiển thị log worker với thanh cuộn tự động cuộn xuống cuối; nút "Yêu cầu sửa" mở modal với ô feedback bắt buộc; nút "Hủy" mở modal xác nhận.
+  - **Trang Tài khoản**: Bảng hồ sơ hiển thị `chinh` và `g1` có cảnh báo trùng email bằng chữ đỏ, `chinh` và `g2` có đồng hồ đếm ngược quota mark. Nút "Check" trả về kết quả OK. Nút "Thêm tài khoản" mở modal với banner cảnh báo Google và terminal xterm.js giả lập login.
+  - **Trang Project**: Danh sách project và form kiểm tra cú pháp JSON hợp lệ khi nhập `envTemplate`.
+  - **Trang Cài đặt**: Hiển thị chuỗi model Hard và Easy, cho phép chỉnh sửa và lưu thành công qua `PUT /api/config`.
+  - **Giao diện & Dark Mode**: Nút chuyển chế độ sáng/tối hoạt động mượt mà, chuyển đổi class `dark` trên `<html>` và lưu cấu hình vào `localStorage`.
+
+## 4. Việc chưa làm được và lý do
+Không có. Tất cả các yêu cầu trong phạm vi của task `a2-web` đã được hoàn thành đầy đủ và kiểm tra đạt 100%.
+
+## 5. Danh sách commits
+- `002b36c` docs(decisions): add DEC-001 for GET/PUT /api/config endpoint
+- `3ee4c88` feat(web): initialize Vite React SPA and API client
+- `5d8029c` feat(web): implement MSW mocks and simulated PTY WebSocket
+- `d2ba053` feat(web): add dashboard, kanban, profile, project, and settings pages
+- `fa9931d` test(web): add unit tests for token, api, quota timer, feedback, and kanban

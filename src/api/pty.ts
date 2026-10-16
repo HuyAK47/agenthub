@@ -1,0 +1,260 @@
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import pty from 'node-pty';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { WebSocket } from 'ws';
+import { AppService, HttpError } from '../services/index.js';
+
+interface PtySession {
+  id: string;
+  profileName: string;
+  process: pty.IPty;
+  sockets: Set<WebSocket>;
+  timer: NodeJS.Timeout;
+  recentBuffer: string;
+}
+
+export class PtyManager {
+  private sessions = new Map<string, PtySession>(); // sessionId -> PtySession
+  private profileToSession = new Map<string, string>(); // profileName -> sessionId
+  private emailRefreshTimers = new Set<NodeJS.Timeout>();
+
+  constructor(private service: AppService) {}
+
+  createSession(profileName: string): string {
+    let profile = this.service.profileRepo.get(profileName);
+    if (!profile) {
+      // Create isolated profile if not yet created
+      profile = this.service.createProfile({ name: profileName });
+    }
+
+    // Enforce max 1 session per profile
+    const existingSessionId = this.profileToSession.get(profileName);
+    if (existingSessionId) {
+      this.closeSession(existingSessionId);
+    }
+
+    const sessionId = crypto.randomUUID();
+    const home = profile.home || path.join(this.service.config.agyHomesDir, profile.name);
+
+    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    if (profile.kind === 'isolated') {
+      env.HOME = home;
+      env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
+    }
+
+    // agy binary path (can be overridden by AGENTHUB_AGY_BIN for tests)
+    const agyBin = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+
+    const ptyProcess = pty.spawn(agyBin, [], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: home,
+      env,
+    });
+
+    // Auto-close session after 15 minutes (PLAN 4)
+    const timer = setTimeout(() => {
+      this.closeSession(sessionId);
+    }, 15 * 60 * 1000);
+
+    const session: PtySession = {
+      id: sessionId,
+      profileName,
+      process: ptyProcess,
+      sockets: new Set(),
+      timer,
+      recentBuffer: '',
+    };
+
+    ptyProcess.onData((data: string) => {
+      // Keep last 16KB for new connections
+      session.recentBuffer = (session.recentBuffer + data).slice(-16384);
+      for (const socket of session.sockets) {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(data);
+        }
+      }
+    });
+
+    ptyProcess.onExit(() => {
+      this.handleProcessExit(sessionId, profileName, home);
+    });
+
+    this.sessions.set(sessionId, session);
+    this.profileToSession.set(profileName, sessionId);
+
+    return sessionId;
+  }
+
+  stop(): void {
+    for (const timer of this.emailRefreshTimers) {
+      clearTimeout(timer);
+    }
+    this.emailRefreshTimers.clear();
+    for (const sessionId of [...this.sessions.keys()]) {
+      this.closeSession(sessionId);
+    }
+  }
+
+  getSession(sessionId: string): PtySession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  private scheduleEmailRefresh(profileName: string): void {
+    this.service.refreshProfileEmail(profileName);
+
+    const timer = setTimeout(() => {
+      this.emailRefreshTimers.delete(timer);
+      this.service.refreshProfileEmail(profileName);
+    }, 2000);
+    timer.unref?.();
+    this.emailRefreshTimers.add(timer);
+  }
+
+  closeSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    clearTimeout(session.timer);
+    try {
+      session.process.kill();
+    } catch {
+      // ignore
+    }
+
+    for (const socket of session.sockets) {
+      try {
+        socket.close(1000, 'Session closed');
+      } catch {
+        // ignore
+      }
+    }
+    session.sockets.clear();
+
+    const profileName = session.profileName;
+    this.sessions.delete(sessionId);
+    this.profileToSession.delete(profileName);
+
+    this.scheduleEmailRefresh(profileName);
+  }
+
+  private handleProcessExit(sessionId: string, profileName: string, _home: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      clearTimeout(session.timer);
+      for (const socket of session.sockets) {
+        try {
+          socket.close(1000, 'Process exited');
+        } catch {
+          // ignore
+        }
+      }
+      this.sessions.delete(sessionId);
+      this.profileToSession.delete(profileName);
+    }
+
+    this.scheduleEmailRefresh(profileName);
+
+    const profile = this.service.profileRepo.get(profileName);
+    const dupes = this.service.coreProfileService.getDuplicateEmails();
+    const duplicateWarning = profile?.email ? dupes.has(profile.email) : false;
+
+    this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
+      name: profileName,
+      email: profile?.email || null,
+      duplicateWarning,
+    });
+
+    // Move waiting_quota tasks to queued
+    this.service.scheduler.wakeWaitingQuotaTasks('profile_login');
+  }
+
+  attachSocket(sessionId: string, socket: WebSocket): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      socket.close(1008, 'Session not found');
+      return;
+    }
+
+    session.sockets.add(socket);
+
+    // Send recent buffer to client
+    if (session.recentBuffer.length > 0) {
+      socket.send(session.recentBuffer);
+    }
+
+    socket.on('message', (raw: Buffer | string) => {
+      try {
+        const text = raw.toString();
+        const parsed = JSON.parse(text);
+        if (parsed.type === 'input' && typeof parsed.data === 'string') {
+          session.process.write(parsed.data);
+        } else if (
+          parsed.type === 'resize' &&
+          typeof parsed.cols === 'number' &&
+          typeof parsed.rows === 'number'
+        ) {
+          session.process.resize(parsed.cols, parsed.rows);
+        } else {
+          session.process.write(text);
+        }
+      } catch {
+        session.process.write(raw.toString());
+      }
+    });
+
+    socket.on('close', () => {
+      session.sockets.delete(socket);
+      this.scheduleEmailRefresh(session.profileName);
+    });
+  }
+}
+
+export function registerPtyRoutes(
+  fastify: FastifyInstance,
+  service: AppService,
+  ptyManager: PtyManager,
+): void {
+  fastify.addHook('onClose', async () => {
+    ptyManager.stop();
+  });
+
+  // Start login session
+  fastify.post('/api/profiles/:name/login', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { name } = req.params as { name: string };
+    try {
+      const sessionId = ptyManager.createSession(name);
+      return { sessionId };
+    } catch (err: unknown) {
+      if (err instanceof HttpError) {
+        return reply.status(err.statusCode).send({ error: err.error, message: err.message });
+      }
+      return reply.status(500).send({
+        error: 'internal_server_error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // WebSocket for PTY session
+  fastify.get(
+    '/api/pty/:sessionId',
+    { websocket: true },
+    (socket: WebSocket, req: FastifyRequest) => {
+      let sessionId = (req.params as { sessionId?: string } | undefined)?.sessionId;
+      if (!sessionId) {
+        const rawUrl = req.raw.url || req.url;
+        const match = rawUrl?.match(/\/api\/pty\/([^?#/]+)/);
+        if (match) sessionId = match[1];
+      }
+      if (sessionId) {
+        ptyManager.attachSocket(sessionId, socket);
+      } else {
+        socket.close(1008, 'Missing session ID');
+      }
+    },
+  );
+}

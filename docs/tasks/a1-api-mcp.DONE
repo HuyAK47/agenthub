@@ -1,0 +1,128 @@
+# Báo cáo hoàn thành Task: a1-api-mcp
+
+## 1. Tóm tắt việc đã làm
+Đã hoàn thành toàn bộ các yêu cầu của task `a1-api-mcp` theo `docs/PLAN.md` và `docs/tasks/a1-api-mcp.md`:
+
+1. **Core & Config (Mục 0):**
+   - Cập nhật chuỗi model mặc định: `hard` (`gemini-3.8-flash-high` → `codex:gpt-5.6-luna`), `easy` (`gemini-3.8-flash-medium` → `codex:gpt-5.6-luna`).
+   - Cập nhật prompt gửi worker bổ sung yêu cầu: không dùng subagent, tự làm tuần tự, tránh đọc lại file lớn không cần thiết.
+   - Thêm endpoint `GET /api/config` và `PUT /api/config` có zod validation model và lưu trực tiếp `config.json` không cần restart daemon.
+   - Cơ chế đánh thức tự động chuyển toàn bộ task `waiting_quota` sang `queued` khi thêm hồ sơ, đăng nhập xong qua PTY, xóa quota mark, hoặc bật lại một hồ sơ.
+
+2. **HTTP API & Tầng Service (Mục 1 & PLAN 3.7):**
+   - Thiết kế tầng service `AppService` tách biệt để dùng chung giữa HTTP API, MCP và CLI.
+   - Triển khai đầy đủ tất cả các endpoint trong hợp đồng PLAN 3.7 (status, projects, profiles, tasks, retry, review, cancel, log tail, worktree cleanup).
+   - `GET /api/tasks/:id` trả kèm nội dung `.agenthub/DONE`, `.agenthub/BLOCKED`, danh sách commit qua `git log --oneline` (chạy qua `execFile` có mảng đối số an toàn), và `worktreePath`.
+   - `GET /api/tasks/:id/log?tail=N` đọc N KB cuối (tối đa 512KB).
+   - Tích hợp phục vụ static file SPA `dist/web` tại `/` với fallback `index.html` hoặc thông báo "chưa build web" nếu chưa có build.
+
+3. **Bảo mật (Mục 2 & PLAN 3.1):**
+   - Daemon chỉ bind `127.0.0.1`, hỗ trợ cấu hình port qua `AGENTHUB_PORT`.
+   - Quản lý token 32 byte tại `~/.agenthub/token` với quyền 600, so sánh an toàn bằng `crypto.timingSafeEqual`.
+   - Hook kiểm tra xác thực Bearer token cho `/api/*` và query param `?token=` cho SSE và WebSocket.
+   - Allowlist kiểm tra `Host` và `Origin`, chặn các domain giả mạo với mã 403.
+   - Bộ test bảo mật đầy đủ 8 ca kiểm thử trong `test/security.test.ts`.
+
+4. **SSE `/api/events` (Mục 3):**
+   - Stream sự kiện thời gian thực từ `EventBus` (`task.*`, `run.*`, `profile.*`, `quota.*`, `config.*`).
+   - Hỗ trợ sự kiện `run.output` quét log file của các task đang chạy mỗi 1s (tối đa 4KB/s/run).
+   - Heartbeat ping định kỳ 20s.
+   - Tự động dọn dẹp listener khi client disconnect, không rò rỉ listener.
+
+5. **PTY Đăng nhập (Mục 4):**
+   - Triển khai `PtyManager` quản lý phiên interactive terminal bằng `node-pty`.
+   - Hạn chế tối đa 1 phiên login/hồ sơ, tự đóng sau 15 phút.
+   - WebSocket `/api/pty/:sessionId?token=` hỗ trợ gửi input và resize terminal.
+   - Tự động cập nhật email hồ sơ, phát sự kiện và wake task `waiting_quota` khi PTY thoát.
+
+6. **MCP Server (Mục 5 & PLAN 3.8):**
+   - Xây dựng MCP server stdio transport dựa trên `@modelcontextprotocol/sdk`.
+   - Cung cấp đầy đủ các tool: `hub_status`, `hub_projects`, `hub_register_project`, `hub_profiles`, `hub_mark_quota`, `hub_tasks`, `hub_create_task`, `hub_task`, `hub_task_log`, `hub_review`, `hub_retry`, `hub_cancel`, `hub_wait`.
+   - Xử lý thông báo rõ ràng khi daemon chưa chạy.
+   - Output định dạng text súc tích, tối ưu cho LLM Context.
+
+7. **CLI & Cài đặt (Mục 6):**
+   - Viết CLI commands: `open` (hỗ trợ cờ `--no-browser`), `install-service` (sinh systemd user service file với cờ `--print`), `mcp-install` (sinh lệnh đăng ký claude mcp với cờ `--print`), `link` (tạo symlink vào `~/.local/bin/agenthub`).
+   - Viết wrapper script `bin/agenthub` hỗ trợ nvm node 22.
+
+8. **Nghiệm thu (End-to-End Acceptance Test):**
+   - Hỗ trợ biến môi trường `AGENTHUB_FAKE_ENGINE=1` cho daemon.
+   - Khởi chạy daemon thật trên port 7790 với thư mục tạm, chạy qua quy trình curl: đăng ký project, tạo task, start task, worker hoàn thành task sinh DONE marker, task chuyển sang `review`, approve task sang `done`, kiểm tra SSE nhận đầy đủ chuỗi sự kiện.
+
+---
+
+## 2. Kết quả kiểm tra
+- **Lint**: Đạt (`npm run lint` không có lỗi hay cảnh báo).
+- **Typecheck**: Đạt (`npm run typecheck` không có lỗi).
+- **Test**: Đạt 71/71 test suites (`npm test -- --run`):
+  - `test/engines.test.ts`: 15 passed
+  - `test/scheduler.test.ts`: 20 passed
+  - `test/mcp.test.ts`: 9 passed
+  - `test/security.test.ts`: 8 passed
+  - `test/api.test.ts`: 6 passed
+  - `test/cli.test.ts`: 6 passed
+  - `test/sse.test.ts`: 3 passed
+  - `test/profiles.test.ts`: 3 passed
+  - `test/pty.test.ts`: 1 passed
+- **Build**: Đạt (`npm run build` sinh `dist/cli.js` và bundle các assets).
+
+---
+
+## 3. Log nghiệm thu thực tế (Daemon + Curl + SSE)
+```text
+Setting up temporary git repository...
+Initialized empty Git repository in /tmp/agenthub-acc-LhtPhd/test-repo/.git/
+[master (root-commit) a7a9d75] chore: initial commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+Starting AgentHub daemon on port 7790...
+Waiting for daemon /health...
+Daemon is healthy!
+Token: 4695c0c0...
+Starting SSE listener...
+1. Registering project...
+Project created: {"id":"test-project","name":"test-project","path":"/tmp/agenthub-acc-LhtPhd/test-repo","defaultBranch":"main","envTemplate":null,"maxParallel":1,"createdAt":"2026-10-15 06:42:43"}
+2. Creating task...
+Task created: {"id":"test-project/task-1","projectId":"test-project","slug":"task-1","title":"Acceptance Task 1","body":"Do something","level":"easy","modelChain":null,"baseRef":null,"branch":null,"worktreePath":null,"status":"draft","dependsOn":"[]","attempt":0,"resume":0,"createdAt":"2026-10-15 06:42:43","updatedAt":"2026-10-15 06:42:43","notBefore":null,"transientRetries":0,"slot":null}
+3. Starting task...
+Task started: {"id":"test-project/task-1","projectId":"test-project","slug":"task-1","title":"Acceptance Task 1","body":"Do something","level":"easy","modelChain":null,"baseRef":null,"branch":"agenthub/task-1","worktreePath":"/tmp/agenthub-acc-LhtPhd/agenthub/worktrees/test-project/task-1","status":"running","dependsOn":"[]","attempt":0,"resume":0,"createdAt":"2026-10-15 06:42:43","updatedAt":"2026-10-15 06:42:43","notBefore":null,"transientRetries":0,"slot":1}
+4. Waiting for task to transition to review...
+  Current status: running
+  Current status: review
+Task reached review status!
+5. Approving task...
+Review response: {"id":"test-project/task-1","projectId":"test-project","slug":"task-1","title":"Acceptance Task 1","body":"Do something","level":"easy","modelChain":null,"baseRef":null,"branch":"agenthub/task-1","worktreePath":"/tmp/agenthub-acc-LhtPhd/agenthub/worktrees/test-project/task-1","status":"done","dependsOn":"[]","attempt":0,"resume":0,"createdAt":"2026-10-15 06:42:43","updatedAt":"2026-10-15 06:42:44","notBefore":null,"transientRetries":0,"slot":1}
+Final task status: done
+
+=== SSE Events Captured ===
+event: task.queued
+data: {"type":"task.queued","taskId":"test-project/task-1","ts":"2026-10-15T06:42:43.473Z"}
+
+event: task.running
+data: {"type":"task.running","taskId":"test-project/task-1","payload":{"runId":"d818343d-9024-4f99-a18d-00336b77cf3f","model":"gemini-3.8-flash-medium","profile":"chinh"},"ts":"2026-10-15T06:42:43.489Z"}
+
+event: run.output
+data: {"runId":"d818343d-9024-4f99-a18d-00336b77cf3f","taskId":"test-project/task-1","data":"Fake agent: completing task...\nFake agent: done\n"}
+
+event: task.review_ready
+data: {"type":"task.review_ready","taskId":"test-project/task-1","ts":"2026-10-15T06:42:44.012Z"}
+
+event: task.done
+data: {"type":"task.done","taskId":"test-project/task-1","ts":"2026-10-15T06:42:44.025Z"}
+
+=== Acceptance Test Completed Successfully ===
+```
+
+---
+
+## 4. Việc chưa làm được và lý do
+Không có việc tồn đọng. Tất cả các tiêu chí nghiệm thu của task `a1-api-mcp` đều đã được thực hiện và kiểm chứng đầy đủ.
+
+---
+
+## 5. Danh sách commit trên nhánh a1-api-mcp
+- `60573cd`: feat(core): update default model chains, worker prompt, and waiting_quota wakeups
+- `bdb6146`: feat(api): implement security, service layer, HTTP API, SSE, and PTY login
+- `23a0e1f`: feat(mcp): implement MCP server with stdio transport and hub_* tools
+- `99515cd`: feat(cli): implement CLI commands and installation scripts
+- `19e5b95`: feat(daemon): support AGENTHUB_FAKE_ENGINE environment variable

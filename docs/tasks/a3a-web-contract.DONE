@@ -1,0 +1,57 @@
+# Task a3a-web-contract: Hoàn thành
+
+## Tóm tắt việc đã làm
+1. **So sánh hợp đồng API và Web (`web/CONTRACT.md`)**:
+   - Đối chiếu toàn bộ 14 endpoint HTTP REST giữa `web/src/api/client.ts` và backend Fastify thật tại `../a1-api-mcp/src/api/server.ts` & `../a1-api-mcp/src/services/index.ts`.
+   - Đối chiếu các sự kiện SSE (`run.output`, `task.*`, `profile.*`, `quota.*`, `config.updated`) và payload tương ứng giữa `web/src/api/sse.ts` và `../a1-api-mcp/src/api/sse.ts`.
+   - Đối chiếu WebSocket PTY (`/api/tasks/:projectId/:slug/pty`) giữa `TaskDetailPage.tsx` và `../a1-api-mcp/src/api/pty.ts`.
+   - Ghi nhận mục "Đề xuất sửa API" vào cuối `web/CONTRACT.md` (chuẩn hóa response status, error format, update config schema).
+2. **Cập nhật TypeScript types (`web/src/types/api.ts`)**:
+   - Khớp `Profile`: `busy: boolean` (thay vì `status: 'idle'|'busy'`), thêm `duplicateWarning?: string`.
+   - Khớp `Task`: `dependsOn?: string[]`, `modelChain?: string[]`.
+   - Khớp `TaskDetail`: `commits: string[]` (thay vì `gitCommits`), chuẩn hóa `id` (`project/slug`).
+   - Khớp `HubStatus`: `{ tasks: Task[], profiles: ProfileSummary[], running: RunningWorker[] }`.
+   - Khớp `SystemConfig`: `{ modelChainHard: string[], modelChainEasy: string[], defaultTimeout: number }`.
+   - Khớp `CheckProfileResponse`: `{ ok: boolean, output?: string, email?: string, error?: string }`.
+   - Cập nhật `UpdateProjectInput`: loại bỏ `path`.
+3. **Cập nhật API Client (`web/src/api/client.ts`)**:
+   - `startTask`, `cancelTask`, `reviewTask`, `retryTask` trả về kiểu `Promise<Task>`.
+   - Xử lý lỗi trong `apiFetch`: trích xuất `errJson.message` từ response lỗi Fastify `{ error, message }`.
+4. **Cập nhật SSE Client (`web/src/api/sse.ts`)**:
+   - Đăng ký `addEventListener` cho các named SSE events (`run.output`, `task.*`, `profile.*`, `quota.*`, `config.updated`).
+   - Sửa payload xử lý của `run.output`: trích xuất log chunk từ `data.data` (`{ runId, taskId, data }`).
+   - Chuẩn hóa so sánh `taskId` giữa định dạng `/` và `~`.
+5. **Cấm bật mock bằng `?mock=1` trên production (`web/src/mocks/browser.ts`)**:
+   - `isMockEnabled()` chỉ bật khi `import.meta.env.DEV` hoặc `import.meta.env.VITE_MOCK === '1'`.
+6. **Khớp MSW mock fixtures (`web/src/mocks/handlers.ts`)**:
+   - Khớp các profile, tasks, config với schema thật.
+   - Các task action mutations trả về task row thay vì `{ ok: true }`.
+7. **Cập nhật các trang UI**:
+   - `DashboardPage.tsx`: hiển thị tasks từ `status.tasks`, running workers từ `status.running`, nhận live updates qua SSE.
+   - `ProfilesPage.tsx`: hiển thị badge `busy` và cảnh báo trùng lặp `duplicateWarning`.
+   - `TaskDetailPage.tsx`: hiển thị git commits từ `task.commits`, chuẩn hóa `taskId` cho live log buffer.
+   - `SettingsPage.tsx`: chuyển đổi qua lại giữa giây (API `defaultTimeout`) và giờ (UI).
+8. **Viết unit tests mới (`web/src/test/contract.test.ts`)**:
+   - 5 tests mới kiểm tra việc trả về `Task` object, cấu hình timeout, trích xuất message lỗi, cơ chế mock toggle an toàn, và xử lý SSE event `run.output`.
+
+## Kết quả kiểm tra
+- **Lint**: `npm run lint` -> Passed (0 errors, 0 warnings).
+- **Typecheck**: `npm run typecheck` -> Passed (0 errors).
+- **Build Web**: `npm run build:web` -> Passed (vite build thành công).
+- **Test Web**: `npm run test:web -- --run` -> Passed:
+  - 8 test files passed.
+  - 23 tests passed (bao gồm 5 test mới trong `src/test/contract.test.ts`).
+- **Root Tests**: `npm test` -> Passed (3 test files, 36 tests passed).
+
+## Việc chưa làm được và lý do
+- Không có. Đã hoàn thành 100% tất cả yêu cầu nghiệm thu của task.
+
+## Danh sách commit
+- `a782445` docs(contract): add contract comparison between web and api in CONTRACT.md
+- `5378b4c` refactor(web): update api types to match real api schema
+- `ca91ae7` fix(web): align api client methods and return types with real server
+- `bb3edc3` fix(web): support named sse events and correct run.output payload
+- `8ffe27b` fix(web): disable ?mock=1 on production builds in browser mock setup
+- `9fac106` test(web): align msw mock fixtures with real api responses
+- `925238d` fix(web): update dashboard, profiles, task detail and settings pages to match api contract
+- `fde8d8c` test(web): add unit tests for aligned contract client and sse handling

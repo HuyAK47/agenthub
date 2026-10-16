@@ -1,0 +1,42 @@
+# a0-core hoàn tất
+
+## Tóm tắt
+
+- Hoàn thiện package TypeScript ESM, cấu hình strict TypeScript, ESLint flat, Prettier, Vitest và README.
+- Thêm SQLite schema/migrations và repository cho project, profile, quota, task, run, review, event.
+- Thêm ProfileService: tự đăng ký `chinh`, Codex, các profile `~/.agy-homes`, đọc email từ log, import quota state và phát hiện email trùng.
+- Thêm engine agy/codex/fake, nhận diện quota/transient error, worktree/env generation và protocol worker.
+- Thêm Scheduler với dependency, maxParallel, profile lock, quota fallback/waiting, resume/review, timeout/hủy và crash recovery.
+- Thêm daemon health endpoint và CLI tối thiểu cho daemon/status/profile/project/task.
+
+## Kiểm tra
+
+- `npm run lint`: đạt, 0 lỗi.
+- `npm run typecheck`: đạt.
+- `npm test -- --run`: đạt, 3 test files, 30 tests.
+- `npm run build`: đạt; `src/protocol.md` được copy vào `dist/protocol.md`.
+- Nghiệm thu chạy thật:
+
+  ```text
+  AGENTHUB_HOME=$(mktemp -d) node dist/cli.js profile list
+  === Hồ sơ ===
+
+    chinh: engine=agy, kind=keyring, email=ducanh19020217@gmail.com ...
+    codex: engine=codex, kind=codex, email=(chưa có)
+    g1: engine=agy, kind=isolated, email=ducanh19020217@gmail.com ...
+    g2: engine=agy, kind=isolated, email=ducanh20176919@gmail.com ...
+    g3: engine=agy, kind=isolated, email=(chưa có)
+
+  ⚠️  Cảnh báo trùng email:
+    ducanh19020217@gmail.com: chinh, g1
+  ```
+
+  Lệnh trên dùng `AGENTHUB_HOME` tạm và không ghi thay đổi vào `~/.agy-homes`.
+
+## Việc chưa làm được
+
+Không còn việc nào trong phạm vi `a0-core`. HTTP API đầy đủ, MCP và web dashboard thuộc các task tiếp theo theo kế hoạch.
+
+## Commit
+
+- `0883e51 feat(core): implement AgentHub core services`

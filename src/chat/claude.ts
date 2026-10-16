@@ -1,0 +1,336 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execFileSync, execSync, spawn, ChildProcess } from 'node:child_process';
+import { findProjectRoot } from '../cli.js';
+
+export const BRAIN_PROMPT =
+  'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. Với yêu cầu lớn (lên kế hoạch hoặc chia nhiều task): đề xuất kế hoạch ngắn và chờ người dùng xác nhận trước khi tạo task. Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task, sau đó review.';
+
+export interface HubSnapshotInput {
+  projects: Array<{ id: string; name: string; path: string; defaultBranch: string }>;
+  tasks: Array<{ id: string; projectId: string; title: string; status: string }>;
+  runs?: Array<{ taskId: string; model: string; outcome: string | null }>;
+  profiles: Array<{ name: string; engine: string; email: string | null; authState?: string | null }>;
+  quotaUsage: Array<{ profileName: string; grp: string; window: string; remainingPct: number }>;
+  quotaMarks: Array<{ profileName: string; family: string; until: number }>;
+  currentProject?: { id: string; path: string } | null;
+  memory?: string;
+  planHeadings?: string[];
+  gitLog?: string[];
+  capturedAt?: string;
+  eventUpdate?: string;
+}
+
+function maskEmail(email: string | null): string {
+  if (!email) return 'chưa xác thực';
+  const [local, domain] = email.split('@');
+  if (!domain) return '***';
+  return `${local.slice(0, 2)}***@${domain}`;
+}
+
+export function buildHubSnapshot(input: HubSnapshotInput): string {
+  const snapshotEpoch = input.capturedAt ? Math.floor(Date.parse(input.capturedAt) / 1000) : 0;
+  const projectLines = input.projects.map((p) => {
+    const tasks = input.tasks.filter((task) => task.projectId === p.id);
+    const counts = [...new Set(tasks.map((task) => task.status))]
+      .map((status) => `${status}:${tasks.filter((task) => task.status === status).length}`)
+      .join(', ');
+    const notable = tasks.filter((task) => ['running', 'review', 'failed'].includes(task.status)).map((task) => {
+      const model = input.runs?.find((run) => run.taskId === task.id && !run.outcome)?.model || '-';
+      return `${task.id} ${task.title} (${task.status}, ${model})`;
+    });
+    return `- ${p.name} · ${p.path} · nhánh ${p.defaultBranch} · task ${counts || '0'}${notable.length ? ` · ${notable.join('; ')}` : ''}`;
+  });
+  const profileLines = input.profiles.map((profile) => {
+    const usage = input.quotaUsage.filter((row) => row.profileName === profile.name && row.window === '5h')
+      .map((row) => `${row.grp}:${row.remainingPct}%`).join(', ');
+    const marks = input.quotaMarks.filter((mark) => mark.profileName === profile.name && mark.until > snapshotEpoch)
+      .map((mark) => `${mark.family} tới ${new Date(mark.until * 1000).toISOString()}`).join(', ');
+    return `- ${profile.name} · ${profile.engine} · ${maskEmail(profile.email)} · ${profile.authState || 'unknown'} · quota ${usage || 'chưa có'}${marks ? ` · mark ${marks}` : ''}`;
+  });
+  const sections = [
+    'ẢNH CHỤP HUB',
+    `Chụp lúc: ${input.capturedAt || new Date().toISOString()}`,
+    input.eventUpdate ? `Cập nhật hub: ${input.eventUpdate}` : '',
+    'Projects:\n' + (projectLines.join('\n') || '- không có'),
+    'Profiles:\n' + (profileLines.join('\n') || '- không có'),
+  ];
+  if (input.currentProject) {
+    sections.push(`Project đang chat: ${input.currentProject.path}`);
+    sections.push(`5 commit gần nhất:\n${(input.gitLog || []).join('\n') || '- không đọc được'}`);
+    sections.push(`Heading ## trong PLAN.md:\n${(input.planHeadings || []).join('\n') || '- không có'}`);
+    sections.push(`MEMORY.md:\n${(input.memory || 'không có').slice(0, 3000)}`);
+  }
+  return sections.filter(Boolean).join('\n').slice(0, 9000);
+}
+
+export interface HubSnapshotFs {
+  existsSync(path: string): boolean;
+  readFileSync(path: string, encoding: 'utf8'): string;
+}
+
+export function readHubSnapshotFiles(projectPath: string, home = os.homedir(), fsApi: HubSnapshotFs = fs): Pick<HubSnapshotInput, 'memory' | 'planHeadings' | 'gitLog'> {
+  const memoryPath = path.join(home, '.claude', 'projects', projectPath.replace(/[^a-zA-Z0-9]/g, '-'), 'memory', 'MEMORY.md');
+  const planPath = path.join(projectPath, 'docs', 'PLAN.md');
+  let memory = '';
+  let planHeadings: string[] = [];
+  try { if (fsApi.existsSync(memoryPath)) memory = fsApi.readFileSync(memoryPath, 'utf8').slice(0, 3000); } catch { /* optional */ }
+  try {
+    if (fsApi.existsSync(planPath)) planHeadings = fsApi.readFileSync(planPath, 'utf8').split('\n').filter((line) => /^##\s+/.test(line)).slice(0, 30);
+  } catch { /* optional */ }
+  let gitLog: string[] = [];
+  try {
+    gitLog = execFileSync('git', ['log', '--oneline', '-5'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim().split('\n').filter(Boolean);
+  } catch { /* optional */ }
+  return { memory, planHeadings, gitLog };
+}
+
+const partialSupportCache = new Map<string, boolean>();
+const streamJsonSupportCache = new Map<string, boolean>();
+
+export function clearPartialSupportCache(): void {
+  partialSupportCache.clear();
+  streamJsonSupportCache.clear();
+}
+
+export function findClaudeBin(configuredBin?: string): string | null {
+  // 1. Config chat.claudeBin
+  if (configuredBin) {
+    const resolved = path.resolve(configuredBin);
+    if (fs.existsSync(resolved)) {
+      return resolved;
+    }
+    if (fs.existsSync(configuredBin)) {
+      return configuredBin;
+    }
+  }
+
+  // 2. Latest VS Code Claude Code native binary.
+  const extensionsDir = path.join(os.homedir(), '.vscode', 'extensions');
+  try {
+    const versions = fs.readdirSync(extensionsDir).filter((entry) => entry.startsWith('anthropic.claude-code-'))
+      .map((entry) => ({ entry, bin: path.join(extensionsDir, entry, 'resources', 'native-binary', 'claude') }))
+      .filter(({ bin }) => fs.existsSync(bin));
+    versions.sort((a, b) => b.entry.slice('anthropic.claude-code-'.length).localeCompare(a.entry.slice('anthropic.claude-code-'.length), undefined, { numeric: true }));
+    if (versions[0]) return versions[0].bin;
+  } catch { /* ignore */ }
+
+  // 3. claude in PATH
+  try {
+    const stdout = execSync('which claude', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (stdout && fs.existsSync(stdout)) {
+      return stdout;
+    }
+  } catch {
+    // not in PATH
+  }
+
+  // 4. ~/.local/bin/claude
+  const localBin = path.join(os.homedir(), '.local', 'bin', 'claude');
+  if (fs.existsSync(localBin)) {
+    return localBin;
+  }
+
+  // 5. ~/.nvm/versions/node/*/bin/claude (latest version)
+  const nvmNodeDir = path.join(os.homedir(), '.nvm', 'versions', 'node');
+  if (fs.existsSync(nvmNodeDir)) {
+    try {
+      const versions = fs.readdirSync(nvmNodeDir).filter((v) => {
+        const binPath = path.join(nvmNodeDir, v, 'bin', 'claude');
+        return fs.existsSync(binPath);
+      });
+
+      if (versions.length > 0) {
+        // Sort descending (e.g. v22.21.1 > v20.10.0 > v18.20.8)
+        versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+        return path.join(nvmNodeDir, versions[0], 'bin', 'claude');
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+export function getClaudeVersion(claudeBin?: string): string | null {
+  const resolved = findClaudeBin(claudeBin);
+  if (!resolved) return null;
+  try {
+    return execFileSync(resolved, ['--version'], { encoding: 'utf8', timeout: 5000 }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function checkClaudePartialSupport(claudeBin: string): boolean {
+  if (partialSupportCache.has(claudeBin)) {
+    return partialSupportCache.get(claudeBin)!;
+  }
+
+  try {
+    const stdout = execSync(`"${claudeBin}" --help`, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    });
+    const supported = stdout.includes('--include-partial-messages');
+    partialSupportCache.set(claudeBin, supported);
+    return supported;
+  } catch {
+    partialSupportCache.set(claudeBin, false);
+    return false;
+  }
+}
+
+export function checkClaudeStreamJsonSupport(claudeBin: string): boolean {
+  if (streamJsonSupportCache.has(claudeBin)) return streamJsonSupportCache.get(claudeBin)!;
+  try {
+    const stdout = execSync(`"${claudeBin}" --help`, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    });
+    const supported = stdout.includes('--input-format') && stdout.includes('stream-json');
+    streamJsonSupportCache.set(claudeBin, supported);
+    return supported;
+  } catch {
+    streamJsonSupportCache.set(claudeBin, false);
+    return false;
+  }
+}
+
+export function ensureChatMcpConfig(hubHome?: string): string {
+  const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
+  const mcpConfigFile = path.join(targetHome, 'chat-mcp.json');
+
+  if (!fs.existsSync(targetHome)) {
+    fs.mkdirSync(targetHome, { recursive: true, mode: 0o700 });
+  }
+
+  const projectRoot = findProjectRoot();
+  const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
+  const nodePath = process.execPath;
+
+  const content = {
+    mcpServers: {
+      agenthub: {
+        command: nodePath,
+        args: [cliPath, 'mcp'],
+      },
+    },
+  };
+
+  fs.writeFileSync(mcpConfigFile, JSON.stringify(content, null, 2), 'utf-8');
+  return mcpConfigFile;
+}
+
+export interface BuildClaudeArgsOptions {
+  text?: string;
+  claudeSessionId?: string | null;
+  mode?: 'safe' | 'full';
+  mcpConfigPath: string;
+  supportsPartial?: boolean;
+  persistent?: boolean;
+  model?: string | null;
+  hubSnapshot?: string;
+}
+
+export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
+  const args: string[] = [
+    '-p',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+  ];
+
+  if (opts.persistent) args.splice(1, 0, '--input-format', 'stream-json');
+
+  if (opts.claudeSessionId) {
+    args.push('--resume', opts.claudeSessionId);
+  }
+
+  if (opts.supportsPartial) {
+    args.push('--include-partial-messages');
+  }
+
+  if (opts.model) args.push('--model', opts.model);
+
+  args.push('--append-system-prompt', BRAIN_PROMPT);
+  if (opts.hubSnapshot) args.push('--append-system-prompt', opts.hubSnapshot);
+  args.push('--mcp-config', opts.mcpConfigPath);
+
+  if (opts.mode === 'full') {
+    args.push('--permission-mode', 'bypassPermissions');
+  } else {
+    args.push(
+      '--permission-mode',
+      'default',
+      '--allowedTools',
+      'Read,Grep,Glob,LS,mcp__agenthub,Bash(git status:*),Bash(git log:*),Bash(npm test:*),Bash(npm run lint:*),Bash(npm run typecheck:*)',
+    );
+  }
+
+  return args;
+}
+
+export function spawnClaude(
+  claudeBin: string,
+  args: string[],
+  cwd: string,
+  stdinText?: string,
+  options: { disableToolSearch?: boolean } = {},
+): ChildProcess {
+  const child = spawn(claudeBin, args, {
+    cwd,
+    detached: true,
+    env: {
+      ...process.env,
+      ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  if (child.stdin) {
+    child.stdin.on('error', () => {
+      // ignore broken pipe if child exits early
+    });
+    if (stdinText !== undefined) {
+      child.stdin.write(stdinText);
+      child.stdin.end();
+    }
+  }
+
+  return child;
+}
+
+export function streamJsonMessage(text: string): string {
+  return JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text }] },
+  }) + '\n';
+}
+
+export function interruptProcess(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGINT');
+  } catch {
+    try { process.kill(pid, 'SIGINT'); } catch { /* already dead */ }
+  }
+}
+
+export function killProcessGroup(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // process already dead
+    }
+  }
+}

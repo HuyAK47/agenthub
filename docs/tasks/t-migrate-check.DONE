@@ -1,0 +1,67 @@
+# Hoàn thành task: t-migrate-check – Autocheck kiểm tra migration trên bản sao DB thật
+
+## 1. Tóm tắt việc đã làm
+
+1. **Tạo và hoàn thiện script kiểm tra migration trên bản sao DB thật (`scripts/check-migrations-live.mjs`)**:
+   - Tự động nhận diện đường dẫn DB thật `~/.agenthub/hub.db` (hỗ trợ `AGENTHUB_DB_PATH`, `AGENTHUB_HOME`, `os.homedir()` và `os.userInfo().homedir` khi chạy dưới profile cô lập).
+   - Nếu không có DB thật: in thông báo bỏ qua và `process.exit(0)`.
+   - Nếu có DB thật: mở DB ở chế độ `readonly: true`, đọc số dòng của các bảng `tasks`, `runs`, `profiles`.
+   - Sử dụng phương thức `.backup()` của `better-sqlite3` để sao lưu an toàn ra một thư mục tạm thời. Hỗ trợ linh hoạt danh sách thư mục tạm ứng viên (`AGENTHUB_TEMP_DIR`, `TMPDIR`, `os.tmpdir()`, `/tmp`, `/var/tmp`) để tránh lỗi phân quyền hoặc môi trường sandbox giới hạn. Đóng kết nối DB thật ngay sau khi hoàn tất sao lưu để đảm bảo tuyệt đối không ghi vào DB thật.
+   - Nạp `openDatabase` từ `dist/db/index.js` (yêu cầu chạy sau `npm run build`), mở bản sao và thực hiện các bước migration đang chờ.
+   - Thực hiện kiểm tra an toàn sau migration:
+     - `PRAGMA foreign_key_check` phải rỗng (không có vi phạm khóa ngoại).
+     - `PRAGMA integrity_check` phải là `ok`.
+     - Số lượng dòng trong các bảng `tasks`, `runs`, `profiles` không được giảm so với trước khi migrate.
+   - In kết quả chi tiết từng tiêu chí, thoát với exit code 1 nếu có lỗi, dọn dẹp thư mục tạm và đóng kết nối an toàn trong khối `finally`.
+
+2. **Cập nhật `package.json`**:
+   - Thêm npm script `"check:migrate": "node scripts/check-migrations-live.mjs"`.
+
+3. **Cập nhật tài liệu `docs/USAGE.md` (mục dành cho người review)**:
+   - Thêm mục `3.6 Cấu hình autocheck kiểm tra migration trên DB thật (dành cho người review)`.
+   - Hướng dẫn cấu hình qua API `PATCH /api/projects/agenthub` với `checks` bổ sung `{name: 'migrate-live', cmd: ['npm', 'run', 'check:migrate']}` đặt ngay sau bước `build`.
+
+4. **Nghiệm thu trên máy**:
+   - Đã chạy thực tế `npm run build && npm run check:migrate` với DB thật (`/home/ducanh/.agenthub/hub.db`), kết quả đạt mọi tiêu chí.
+   - Chạy toàn bộ test suite `npm run test -- --run`: Đạt 21/21 test files, 184/184 tests passed.
+
+## 2. Kết quả kiểm tra & nghiệm thu
+
+### Kiểm tra tĩnh & Test suite:
+- `npm run lint`: Đạt (0 errors, 0 warnings).
+- `npm run typecheck`: Đạt (0 errors).
+- `npm run test -- --run`: Đạt 21/21 test files, 184/184 tests passed.
+- `npm run build`: Đạt (biên dịch TypeScript và sao chép protocol.md thành công).
+
+### Kết quả chạy nghiệm thu live check (`npm run build && npm run check:migrate`):
+```text
+> agenthub@0.1.0 build
+> tsc && cp src/protocol.md dist/protocol.md
+
+> agenthub@0.1.0 check:migrate
+> node scripts/check-migrations-live.mjs
+
+[check:migrate] Tìm thấy DB thật: /home/ducanh/.agenthub/hub.db
+[check:migrate] Số dòng trước migrate: tasks=52, runs=76, profiles=5
+[check:migrate] Đang sao lưu DB ra thư mục tạm (/tmp/agenthub-migrate-live-mFWVz2/hub.db) bằng .backup()...
+[check:migrate] Đang mở bản sao và thực hiện migration bằng openDatabase...
+[check:migrate] Số dòng sau migrate: tasks=52, runs=76, profiles=5
+[check:migrate] Kết quả kiểm tra:
+  - foreign_key_check: OK (rỗng)
+  - integrity_check: OK (ok)
+  - tasks: 52 -> 52 (OK)
+  - runs: 76 -> 76 (OK)
+  - profiles: 5 -> 5 (OK)
+[check:migrate] ✓ Kiểm tra migration THÀNH CÔNG trên bản sao DB thật.
+```
+
+## 3. Việc chưa làm được và lý do
+
+- Không có. Mọi yêu cầu trong đề bài đã được hoàn thành đầy đủ, chính xác và kiểm chứng thực tế.
+
+## 4. Danh sách commit
+
+1. `53ad1f8` - `feat(scripts): add check-migrations-live script to verify migrations on live db backup`
+2. `d04ad04` - `feat(package): add check:migrate npm script`
+3. `9d598a1` - `docs(usage): document live migration check configuration for reviewers`
+4. `2e3a8d1` - `fix(scripts): support configurable and fallback candidate temp directories`

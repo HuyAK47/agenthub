@@ -1,0 +1,35 @@
+# Báo cáo hoàn thành: t-status-enrich
+
+## 1. Tóm tắt việc đã làm
+1. **Bổ sung thông tin cho `running` trong `GET /api/status`**:
+   - Thêm `title`, `projectId`, `slug`, `worktreePath` vào từng phần tử worker đang chạy trong mảng `running`.
+   - Cập nhật interface `RunningWorker` trong `web/src/types/api.ts` (các trường đều optional).
+2. **Thêm `recentEvents` vào `GET /api/status`**:
+   - Lấy 30 sự kiện mới nhất từ bảng `events` (theo `id DESC`).
+   - Mỗi phần tử gồm `{ id, ts, type, taskId, summary }`.
+   - Viết hàm `formatEventSummary` sinh câu tiếng Việt ngắn gọn dựa trên `type` và `payload` (ví dụ: "a1 chuyển sang chờ review", "g2 hết quota claude tới 16:35").
+   - Cập nhật interface `EventItem` trong `web/src/types/api.ts` bổ sung `summary?: string`.
+3. **Thêm `tasksByProject` vào `GET /api/status`**:
+   - Thống kê số lượng task theo từng trạng thái (đầy đủ 9 trạng thái), tách riêng theo từng project đã đăng ký hoặc có task.
+   - Cập nhật interface `HubStatus` trong `web/src/types/api.ts` bổ sung `tasksByProject?: Record<string, Record<string, number>>`.
+4. **Cập nhật MCP `hub_status`**:
+   - Hiển thị thêm tiêu đề task dạng `(${r.title})` ở dòng của worker đang chạy.
+5. **Viết test đầy đủ**:
+   - Tạo bộ test chuyên biệt `test/status.test.ts` kiểm tra running task enrichment, formatEventSummary (unit test các trường hợp mẫu), recentEvents (30 events, thứ tự, cấu trúc fields) và tasksByProject.
+   - Bổ sung test kiểm tra hiển thị tiêu đề task trong `test/mcp.test.ts`.
+
+## 2. Kết quả lint / typecheck / test / build
+- `npm run lint`: Đạt (0 errors, 0 warnings).
+- `npm run typecheck`: Đạt (0 errors).
+- `npm test -- --run`: Đạt 11/11 test files, 86/86 tests passed.
+- `npm run build`: Đạt (tsc && copy protocol.md thành công).
+- `npm run test:web -- --run`: Đạt 8/8 test files, 23/23 tests passed.
+
+## 3. Việc chưa làm được
+- Không có. Tất cả các yêu cầu và tiêu chí nghiệm thu đã hoàn thành đầy đủ.
+
+## 4. Danh sách commit
+- `f9fe0dd` feat(api): enrich running tasks in getStatus with title, projectId, slug, and worktreePath
+- `978b71f` feat(api): add summary and recentEvents to getStatus
+- `f4d473f` feat(api): add tasksByProject breakdown to getStatus
+- `625dbea` feat(mcp): display task title in hub_status running worker lines

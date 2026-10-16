@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+!test/fixtures/**/*.log
+.env
+coverage/
+.agenthub/

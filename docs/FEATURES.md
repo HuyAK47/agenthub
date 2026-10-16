@@ -1,0 +1,271 @@
+# Tính năng của AgentHub
+
+Tài liệu này mô tả chi tiết các tính năng chính của AgentHub dành cho người dùng và người quản trị hệ thống. Mỗi tính năng được trình bày gồm: **Làm gì**, **Dùng thế nào** và **Mẹo hoặc lỗi thường gặp**.
+
+---
+
+## 1. Chat với Claude (Điều phối viên)
+
+### Làm gì
+Tính năng Chat cho phép bạn trò chuyện trực tiếp với **Claude Code** ngay trên giao diện Web Dashboard (thông qua bảng điều khiển hoặc biểu tượng Brain). Claude đóng vai trò là "bộ não điều phối" của AgentHub: nắm rõ toàn bộ trạng thái hệ thống qua các công cụ MCP `hub_*` (tạo task, xem log, review, retry, hủy task, xem quota...). Thay vì tự viết code trực tiếp, Claude sẽ phân tích yêu cầu của bạn, chia nhỏ thành các task độc lập và giao việc cho các AI worker (Gemini/Codex) thực thi.
+
+### Dùng thế nào
+1. Nhấp vào mục **Trò chuyện** (Chat) trên thanh điều hướng hoặc biểu tượng avatar Claude.
+2. **Chọn Model**: Bạn có thể chọn model Claude mong muốn cho phiên trò chuyện:
+   - Mặc định: Theo cấu hình hệ thống (`chat.model`, thường là `sonnet`).
+   - `sonnet`: Cân bằng giữa tốc độ và khả năng suy luận logic sâu.
+   - `haiku`: Tốc độ phản hồi cực nhanh, tiết kiệm chi phí token cho các câu hỏi nhanh.
+3. **Chế độ hoạt động (Mode)**:
+   - **Chế độ An toàn (`safe` - Mặc định)**: Claude chạy với quyền hạn mặc định (`--permission-mode default`), chỉ được phép dùng các công cụ MCP an toàn (`mcp__agenthub`) và các lệnh đọc kiểm tra (như `git status`, `git log`, `npm test`, `npm run lint`, `npm run typecheck`). Tránh các lệnh ghi phá hoại vào repository.
+   - **Chế độ Đầy đủ (`full`)**: Claude được cấp quyền thực thi tự do (`--permission-mode bypassPermissions`). Chỉ dùng khi bạn muốn Claude có toàn quyền can thiệp vào máy. Chế độ này yêu cầu được kích hoạt trước trong cấu hình hệ thống (`chat.allowFullMode: true`).
+4. **Tiến trình chạy liên tục (Persistent Process)**:
+   - Nếu CLI `claude` của bạn hỗ trợ stream-json (`--input-format stream-json`), AgentHub tự động duy trì một tiến trình Claude chạy nền liên tục cho phiên chat.
+   - Giao tiếp qua luồng JSON hai chiều giúp phản hồi tức thì mà không cần khởi động lại tiến trình ở từng lượt chat.
+   - Tiến trình tự động tắt sau khoảng thời gian nhàn rỗi `idleTimeoutSec` (mặc định 600 giây = 10 phút) để giải phóng tài nguyên RAM.
+
+### Mẹo hoặc lỗi thường gặp
+- **Lỗi 403 Forbidden khi chọn Full Mode**: Nếu bạn chọn chế độ Đầy đủ mà hệ thống báo lỗi 403, nghĩa là file cấu hình `~/.agenthub/config.json` chưa cho phép `chat.allowFullMode = true`. Đây là cơ chế bảo vệ chủ động để tránh thao tác ngoài ý muốn.
+- **Hủy lượt chat**: Khi một lượt phản hồi bị treo hoặc bạn muốn dừng sớm, hãy bấm nút **Hủy** (Cancel). Hệ thống sẽ gửi tín hiệu ngắt `SIGINT` nhã nhặn trước, và nếu sau 3 giây tiến trình chưa dừng mới cưỡng chế đóng nhóm tiến trình.
+- **Không tìm thấy lệnh `claude`**: Đảm bảo bạn đã cài đặt Claude Code (`npm i -g @anthropic-ai/claude-code`) và lệnh `claude` có trong `$PATH` (hoặc kiểm tra đường dẫn trong `chat.claudeBin`).
+
+---
+
+## 2. Reviewer dự phòng bằng Codex & Trạng thái "Chờ người duyệt"
+
+### Làm gì
+Để quy trình phát triển không bị gián đoạn khi Claude hết hạn mức (quota exhaustion), AgentHub tích hợp cơ chế **Reviewer dự phòng tự động bằng OpenAI Codex CLI** (mặc định model `codex:gpt-5.6-luna`). Codex reviewer chạy hoàn toàn ở chế độ chỉ đọc (`readOnly: true`), sử dụng lock slot riêng để đánh giá mã nguồn dựa trên đề bài và kết quả autocheck.
+
+### Dùng thế nào
+- **Kích hoạt tự động**: Khi Claude gặp lỗi hết quota trong lúc chat hoặc review, trạng thái failover của hệ thống sẽ tự động bật. Bất kỳ task nào hoàn thành và chuyển sang trạng thái `review` sẽ được scheduler tự động giao cho Codex reviewer phụ trách.
+- Codex đọc diff của git, xem kết quả autocheck và trả về một trong hai kết luận:
+  - `approved` (Chấp thuận): Mã nguồn đạt yêu cầu, task chuyển sang `done`.
+  - `changes_requested` (Yêu cầu sửa đổi): Kèm theo góp ý chi tiết (`feedback`), đưa task quay lại hàng đợi `queued` để worker tự sửa tiếp.
+
+### Mẹo hoặc lỗi thường gặp
+- **Trạng thái "Chờ người duyệt" (`reviewerEscalated: 1`)**:
+  - Task hiển thị huy hiệu màu cam nổi bật **"Chờ người duyệt"** và được ưu tiên xếp lên đầu hàng đợi review trong các trường hợp sau:
+    1. **Vượt quá số lần yêu cầu sửa đổi (`reviewer_changes_limit`)**: Codex reviewer đã yêu cầu sửa đổi vượt quá ngưỡng `maxChangesRequested` (mặc định 2 lần) mà worker vẫn chưa đạt. Hệ thống tạm dừng tự động review để tránh vòng lặp tốn quota.
+    2. **Lỗi do môi trường chỉ đọc (`reviewer_environment`)**: Codex reviewer báo lỗi do hệ thống file chỉ đọc (EROFS, permission denied) chứ không phải lỗi của worker.
+    3. **Thiếu kết quả autocheck (`missing_autocheck_results`)**: Task chưa có kết quả kiểm tra tự động hợp lệ đã lưu.
+- **Cách xử lý khi task "Chờ người duyệt"**:
+  - Trên Dashboard hoặc trang chi tiết Task, bạn có thể bấm nút **"Chạy lại reviewer"** (Retry reviewer) để cho Codex thử review lại.
+  - Hoặc bạn (hoặc Claude) có thể trực tiếp review thủ công: xem git diff trên worktree và bấm nút Duyệt (`approved`) hoặc Yêu cầu chỉnh sửa (`changes_requested`).
+- **Lỗi Uncommitted Changes**: Nếu Codex reviewer định chấp thuận nhưng git worktree còn sót lại file chưa commit (`git status` không sạch), hệ thống sẽ đánh dấu run review là lỗi để đảm bảo worker commit toàn bộ mã nguồn trước khi hoàn tất.
+
+---
+
+## 3. Autocheck, Trạng thái "Đang kiểm tra" & Lệnh `npm run check:migrate`
+
+### Làm gì
+Trước khi chuyển giao kết quả cho reviewer, AgentHub tự động chạy một bộ kiểm tra mã nguồn (autocheck) trên worktree của task. Trong thời gian này, task mang trạng thái **`checking` ("Đang kiểm tra")** với màu xanh ngọc (teal) và hiệu ứng nhấp nháy. Nếu phát hiện lỗi và cấu hình cho phép, worker sẽ được tự động kích hoạt lại để sửa lỗi trước khi người dùng cần can thiệp.
+
+### Dùng thế nào
+1. **Quy trình chuyển trạng thái**:
+   - Khi worker tạo marker `.agenthub/DONE`, task lập tức chuyển sang `checking`.
+   - Scheduler chạy tuần tự các lệnh kiểm tra đã đăng ký trong project (ví dụ: `lint`, `typecheck`, `test`, `build`, `migrate-live`).
+   - Nếu **tất cả vượt qua**: Task chuyển sang `review` kèm kết quả kiểm tra thành công.
+   - Nếu **thất bại**: Nếu `autoFixOnFail: true` và số lần sửa `checkFixAttempts < 2`, hệ thống tự động đưa task trở lại `queued` với cờ `resume: 1`, trích xuất 60 dòng log lỗi cuối cùng chèn vào `.agenthub/task.md` để worker đọc và tự sửa tiếp.
+2. **Lệnh kiểm tra migration an toàn (`npm run check:migrate`)**:
+   - Đây là autocheck chuyên biệt dành cho các project có cơ sở dữ liệu SQLite (`~/.agenthub/hub.db`).
+   - Script `scripts/check-migrations-live.mjs` sẽ:
+     - Mở DB thật ở chế độ chỉ đọc (`readonly: true`) để đếm số dòng ban đầu của các bảng (`tasks`, `runs`, `profiles`).
+     - Dùng cơ chế `.backup()` của SQLite để sao lưu toàn bộ DB ra một thư mục tạm thời trong `/tmp`.
+     - Mở bản sao DB tạm bằng hàm `openDatabase` (thực thi toàn bộ migration mới).
+     - Kiểm tra toàn vẹn bằng `PRAGMA foreign_key_check` và `PRAGMA integrity_check`.
+     - Đối chiếu số dòng dữ liệu để đảm bảo migration không làm mất mát bản ghi.
+
+### Mẹo hoặc lỗi thường gặp
+- **An toàn tuyệt đối cho DB thật**: `npm run check:migrate` không bao giờ ghi trực tiếp vào `hub.db`. Nếu môi trường không có DB thật (ví dụ trong CI/CD), script sẽ tự động in thông báo bỏ qua và trả về mã thành công 0.
+- **Quên build trước khi check migrate**: Script kiểm tra migration yêu cầu `dist/db/index.js` đã được biên dịch sẵn. Vì vậy, trong cấu hình autocheck, bước `migrate-live` phải luôn được đặt **ngay sau bước `build`**.
+- **Giới hạn tự sửa (Auto-fix limit)**: Worker chỉ được tự sửa lỗi autocheck tối đa 2 lần. Nếu sau 2 lần mà kiểm tra vẫn thất bại, task sẽ chuyển sang `review` với cảnh báo lỗi kiểm tra để người review quyết định.
+
+---
+
+## 4. Watchdog (Chống kẹt), Codex 2 Slot & Chuỗi Model (Model Chain)
+
+### Làm gì
+- **Watchdog**: Giám sát tiến trình worker theo thời gian thực dựa trên đa nguồn hoạt động (log, conversation database của agy, và git worktree) để phát hiện và xử lý kịp thời các trường hợp worker bị treo máy, chờ lệnh interactive (như hỏi mật khẩu) hoặc chạy lệnh nền không hồi kết.
+- **Codex 2 Slot**: Cho phép một hồ sơ Codex CLI chạy song song tối đa 2 tác vụ độc lập mà không xung đột file lock.
+- **Chuỗi Model (Model Chain)**: Tự động thử nghiệm danh sách các model theo thứ tự ưu tiên khi model trước đó hết quota.
+
+### Dùng thế nào
+1. **Cơ chế Watchdog đa nguồn hoạt động**:
+   - **Đa nguồn giám sát**: Scheduler theo dõi 3 nguồn hoạt động để xác định mốc thời gian hoạt động mới nhất (`lastActivityAt`) và nguồn tương ứng (`activitySource`):
+     - **File log (`log`)**: Mốc mtime của file log hiện tại (`run.logPath`).
+     - **Conversation DB của agy (`conversation`)**: Mốc mtime mới nhất của các file SQLite DB cuộc hội thoại Antigravity (`*.db`, `*.db-wal`) trong thư mục `<HOME>/.gemini/antigravity-cli/conversations/`. Thư mục `<HOME>` được xác định theo từng profile (profile dạng `keyring` dùng `$HOME` thật của hệ thống, profile có thư mục riêng dùng `profile.home` ví dụ `~/.agy-homes/<tên_hồ_sơ>`). Chỉ xét các file thay đổi sau thời điểm run bắt đầu (`rt.startTime`). (Với engine không phải `agy`, nguồn này trả về 0).
+       - *Vì sao cần nguồn conversation*: Khi chạy không tương tác (`agy -p`), Antigravity có thể không in bất kỳ stdout/stderr nào ra file log giữa các lượt gọi công cụ (tool call) trong khi agent vẫn đang suy nghĩ hoặc đợi tool hoàn tất. Nếu chỉ giám sát file log, watchdog sẽ lầm tưởng worker bị treo và diệt nhầm (kill nhầm) tiến trình worker Gemini đang chạy bình thường.
+     - **Git worktree (`worktree`)**: Mốc mtime của file `.git/index` hoặc quét đệ quy các file trong worktree của task (`task.worktreePath`, tối đa 5.000 file/thư mục, bỏ qua `node_modules`, `.git/objects`, `dist`).
+   - **Tối ưu hiệu năng & Cache**: Scheduler tick kiểm tra định kỳ mỗi 2 giây, nhưng việc quét đệ quy worktree và conversation tốn I/O đĩa. Vì vậy, kết quả mtime conversation và worktree được cache tối đa 30 giây trên từng run. Mỗi lần kiểm tra luôn đọc mtime log ngay, sau 30 giây mới quét lại conversation và `.git/index`, và chỉ đệ quy worktree khi cần (đồng thời dừng sớm ngay khi tìm thấy file có mtime mới hơn cache).
+   - **Ngưỡng cấu hình và điều kiện coi là kẹt (`isStalled`)**:
+     - **Ngưỡng mặc định**: `watchdog.stallMinutes = 20` (thời gian im lặng tối đa tính trên cả 3 nguồn) và `watchdog.waitingMinutes = 15`. Có thể tùy chỉnh các ngưỡng này bằng API `PUT /api/config` (truyền object `watchdog: { stallMinutes, waitingMinutes }`) hoặc thông qua trang Cài đặt trên Web dashboard.
+     - **Kẹt do im lặng toàn diện**: Khi thời gian im lặng `silentMs = Date.now() - lastActivityAt` vượt quá `stallMinutes` (20 phút mà không có bất kỳ cập nhật nào từ cả log, conversation lẫn worktree).
+     - **Kẹt khi chờ tác vụ nền (`waiting up to`)**: Khi `silentMs > waitingMinutes` (15 phút) VÀ 20 dòng cuối của file log có chứa chuỗi `"waiting up to"` (dấu hiệu worker gọi lệnh nền chờ đợi), trường hợp này **chỉ bị coi là kẹt khi cả log lẫn conversation cùng im lặng** quá `waitingMinutes` (với engine khác ngoài agy, chỉ cần log im lặng quá `waitingMinutes`).
+   - **Quy trình xử lý khi bị kẹt (`handleStall`)**:
+     - Watchdog tự động diệt toàn bộ nhóm tiến trình (`killProcessGroup`), giải phóng lock slot của profile, cập nhật run thành `crashed` với lý do `stalled` (`runs.reason = 'stalled'`), và phát sự kiện `run.stalled`.
+     - Tự động đưa task quay lại hàng đợi `queued` với cờ `resume: 1` và bổ sung ghi chú vào nội dung đề bài: *"Lượt trước bị kẹt khi chờ tác vụ nền. Chạy lệnh trực tiếp với timeout."*
+     - Giới hạn thử lại: Tối đa 2 lần (`stalledCount <= 2`). Nếu bị kẹt đến lần thứ 3 (`stalledCount > 2`), task sẽ chuyển sang `failed` với lý do `stalled_limit`.
+   - **Trường `activitySource` và `lastActivityAt` trong API Task (`currentRun`)**:
+     - Khi gọi API lấy task (`GET /api/tasks` hoặc `GET /api/tasks/:id`), đối tượng `currentRun` của task đang chạy trả về các trường phản ánh trạng thái giám sát:
+       - `startedAt`: Thời điểm bắt đầu lượt chạy hiện tại (ISO string).
+       - `lastOutputAt`: Thời điểm có output log mới nhất (ISO string).
+       - `lastActivityAt`: Mốc thời gian hoạt động mới nhất ghi nhận được từ nguồn gần nhất trong 3 nguồn (ISO string).
+       - `activitySource`: Nguồn hoạt động gần nhất mang lại mtime cho `lastActivityAt`, nhận một trong ba giá trị: `'log'` (output log), `'conversation'` (cơ sở dữ liệu hội thoại agy), hoặc `'worktree'` (thay đổi file/index trong git worktree).
+2. **Codex chạy 2 Slot**:
+   - Cấu hình qua `slotsPerCodexProfile` (mặc định là 2).
+   - Hệ thống quản lý thông qua hai file lock riêng biệt: `codex.lock` (slot 1) và `codex.lock2` (slot 2) tại thư mục `.state`.
+   - Nhờ đó, một tài khoản Codex có thể đảm nhiệm đồng thời 2 task worker, hoặc 1 task worker và 1 task reviewer cùng lúc.
+3. **Chuỗi Model (Model Chain)**:
+   - Cấu hình chuỗi model mặc định theo độ khó:
+     - Task khó (`hard`): `['codex:gpt-5.6-luna', 'gemini-3.8-flash-high']`
+     - Task dễ (`easy`): `['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna']`
+   - Khi tạo task, bạn cũng có thể chỉ định riêng mảng `modelChain: ["model-1", "model-2"]`. Khi `model-1` hết quota, scheduler tự động chuyển sang `model-2`. Chỉ khi tất cả model trong chuỗi đều hết quota, task mới chuyển sang `waiting_quota`.
+
+### Mẹo hoặc lỗi thường gặp
+- **Tránh chạy lệnh nền trong worker**: Đề bài cho AI worker luôn cần nhắc nhở: *Không chạy test hoặc server ở chế độ nền (background) rồi chờ; luôn chạy trực tiếp (foreground) kèm bọc `timeout 300` và cờ `--run`*.
+- **Giới hạn khi hai slot dùng chung một profile**: Khi cấu hình một profile Antigravity chạy đồng thời 2 slot, do hệ thống chưa lưu ID cuộc hội thoại riêng cho từng lượt chạy, scheduler sẽ dùng file conversation DB mới nhất trong thư mục `conversations` của profile đó. Vì vậy, hoạt động của slot này có thể được tính chung cho slot kia, làm mới mốc hoạt động của cả hai.
+- **Giới hạn số lần thử lại khi kẹt**: Watchdog chỉ cho phép thử lại tối đa 2 lần. Nếu task bị kẹt đến lần thứ 3, task sẽ chuyển sang `failed` với lý do `stalled_limit`.
+
+---
+
+## 5. Chặn khi Ổ đĩa gần đầy, Tự dọn `node_modules` & Lệnh `agenthub clean`
+
+### Làm gì
+Các dự án lớn khi phân nhánh thành nhiều git worktree và cài đặt dependencies (`node_modules`) có thể tiêu tốn hàng chục gigabyte dung lượng ổ cứng. AgentHub trang bị cơ chế tự động bảo vệ ổ đĩa và dọn dẹp dung lượng thông minh.
+
+### Dùng thế nào
+1. **Chặn khởi chạy khi ổ đĩa gần đầy**:
+   - Cấu hình qua `disk.minFreeGB` (mặc định là 3 GB).
+   - Trước khi tạo worktree hoặc khởi chạy task mới, scheduler kiểm tra dung lượng còn trống tại thư mục chứa worktrees.
+   - Nếu dung lượng trống `< minFreeGB`: Hệ thống tạm dừng task (chuyển sang `waiting_quota` với lý do `disk`), phát sự kiện `disk.low` và gửi thông báo desktop cảnh báo người dùng.
+   - Khi ổ đĩa được giải phóng `>= minFreeGB`, scheduler tự động tiếp tục đưa các task vào hàng đợi chạy (`disk_ready`).
+2. **Tự động dọn `node_modules` khi task hoàn tất**:
+   - Cấu hình qua `cleanup.nodeModulesOnDone: true` (mặc định bật).
+   - Ngay khi task chuyển sang trạng thái `done` hoặc `cancelled`, AgentHub tự động xóa các thư mục `node_modules` và `web/node_modules` bên trong worktree của task.
+   - Cấu hình `cleanup.worktreeOnDoneAfterHours` (mặc định 24 giờ): Sau 24 giờ kể từ khi task `done`, toàn bộ thư mục worktree sẽ được dọn sạch hoàn toàn.
+3. **Lệnh CLI `agenthub clean`**:
+   - Dọn dẹp thủ công các thư mục `node_modules` của toàn bộ task đã hoàn thành:
+     ```bash
+     # Xem trước các thư mục sẽ xóa và dung lượng dự kiến giải phóng (an toàn)
+     agenthub clean --dry-run
+
+     # Thực hiện dọn dẹp thật
+     agenthub clean
+     ```
+
+### Mẹo hoặc lỗi thường gặp
+- **Dọn dẹp Monorepo**: Lệnh clean tự động quét cả thư mục `node_modules` ở gốc worktree lẫn thư mục con `web/node_modules`.
+- **Chủ động xóa worktree**: Nếu muốn giải phóng dung lượng ngay lập tức mà không cần đợi sau 24h, bạn chỉ cần bấm nút **"Xóa worktree"** trên thẻ task tại Dashboard.
+
+---
+
+## 6. Hạn mức thật (`/usage`), Trạng thái Đăng nhập & Xác minh Tài khoản
+
+### Làm gì
+Thay vì chỉ ước lượng số lượng token đã dùng, AgentHub trực tiếp thu thập dữ liệu hạn mức thực tế mà Google cấp cho từng tài khoản Antigravity (`agy`), đồng thời tự động phát hiện các tài khoản bị mất phiên đăng nhập hoặc cần xác minh danh tính.
+
+### Dùng thế nào
+1. **Thu thập hạn mức thật (`/usage`)**:
+   - Định kỳ mỗi 5 phút hoặc ngay sau khi worker kết thúc một phiên chạy, AgentHub gọi lệnh `agy -p /usage` trong môi trường cách ly riêng biệt của từng tài khoản (`HOME=~/.agy-homes/<tên_hồ_sơ>`).
+   - Dữ liệu thu thập gồm tỷ lệ phần trăm còn lại (`remainingPct`) và thời điểm reset (`resetAt`) cho hai chu kỳ:
+     - **Cửa sổ 5 giờ (`5h`)**: Giới hạn tốc độ ngắn hạn.
+     - **Cửa sổ tuần (`week`)**: Hạn mức tổng cộng trong tuần.
+   - Phân loại rõ ràng theo hai nhóm: `Gemini Models` và `Claude and GPT models`.
+2. **Các trạng thái xác thực (`authState`)**:
+   - `ok`: Tài khoản đăng nhập bình thường, kết nối quota ổn định.
+   - `not_logged_in`: Chưa đăng nhập hoặc phiên xác thực đã hết hạn.
+   - `needs_verification`: Tài khoản Google yêu cầu xác minh bảo mật (gặp lỗi `Eligibility check failed`, `Verify your account` hoặc `not eligible`).
+   - `error`: Lỗi kết nối máy chủ hoặc lỗi thực thi CLI.
+
+### Mẹo hoặc lỗi thường gặp
+- **Tài khoản báo "Cần xác minh" (`needs_verification`)**:
+  - Khi gặp lỗi này, AgentHub tự động bóc tách link xác minh của Google (dạng `https://accounts.google.com/...`) từ output dòng lệnh và gắn vào tài khoản.
+  - Trên Dashboard, bạn chỉ cần nhấp trực tiếp vào đường link hoặc nút xác minh để mở trình duyệt và hoàn tất xác thực tài khoản Google.
+- **Tránh trùng tài khoản khi đăng nhập lại**:
+  - Khi chạy `agenthub profile login <tên_hồ_sơ>`, trình duyệt có thể tự dùng lại tài khoản Google cũ. Bạn **bắt buộc phải nhấp chọn "Sử dụng tài khoản khác" (Use another account)** trên trang Google OAuth để đăng nhập đúng tài khoản dự kiến.
+
+---
+
+## 7. Trang Hiệu quả Ủy quyền (Savings Page)
+
+### Làm gì
+Trang **Hiệu quả** (Savings) lượng hóa giá trị thực tế của hệ thống bằng cách tính toán số lượng token Claude được tiết kiệm khi bạn giao việc cho các worker giá rẻ (Gemini Flash, Codex) làm thay, đồng thời so sánh với chi phí token Claude đã dùng để điều phối và review.
+
+### Dùng thế nào
+Truy cập mục **Hiệu quả** trên thanh điều hướng Web Dashboard. Bạn có thể lọc báo cáo theo từng dự án hoặc mốc thời gian (`since`).
+
+#### Ý nghĩa các chỉ số tổng quan:
+1. **Worker Tokens**: Tổng số token mà các AI worker (Gemini, Codex) đã tiêu thụ.
+2. **Claude Tiết kiệm (`claudeSavedTokens`)**: Số token Claude tiết kiệm được nhờ không phải tự viết code.
+3. **Chi phí Claude (`claudeCostTokens`)**: Số token Claude tiêu tốn để đọc đề bài, giao việc và thực hiện review mã nguồn.
+4. **Tỷ lệ Tiết kiệm (`savingsRatio`)**: Tỷ lệ phần trăm hiệu quả ủy quyền.
+5. **Tổng dòng thay đổi (+/-)**: Số dòng mã nguồn thêm mới (`linesAdded`) và xóa bỏ (`linesDeleted`) do worker thực hiện, đo lường trực tiếp từ `git diff --shortstat`.
+6. **Số task hoàn thành**: Số lượng task đã đạt trạng thái `done` sau khi được review chấp thuận.
+7. **Số vòng review trung bình (`avgReviewRounds`)**: Số lần yêu cầu chỉnh sửa (`changes_requested`) trung bình trên mỗi task hoàn thành.
+
+#### Công thức tính toán và các hệ số:
+- **Token của Codex**: Đọc trực tiếp từ dòng tổng kết `"tokens used: <số>"` ở cuối log thực thi.
+- **Token của Antigravity (Gemini)**:
+  $$\text{tokens} = \frac{(\text{usageBefore} - \text{usageAfter}) \times \text{bucketTokens}}{100 \times \text{concurrentRunsCount}}$$
+  *(Nếu có nhiều tiến trình chạy đồng thời trên cùng tài khoản hoặc số liệu sụt giảm $\le 0$, số token sẽ được đánh dấu là ước tính $\sim$)*.
+- **Hệ số cấu hình mặc định trong `config.json`**:
+  - `bucketTokens.gemini`: 5.000.000 tokens (dung lượng tương đương 100% quota 5h của Gemini).
+  - `bucketTokens.claude`: 5.000.000 tokens.
+  - `claudeFactor`: **0.9** (Nghĩa là 1 token worker tương đương 0.9 token Claude nếu Claude tự viết mã: $\text{claudeSavedTokens} = \text{taskTokens} \times 0.9$, chỉ tính cho task `done`).
+  - `claudeOverheadPerTask`: **40.000 tokens** (Chi phí Claude đọc bối cảnh và giao việc cho 1 task).
+    $$\text{taskClaudeCost} = \text{claudeOverheadPerTask} \times (1 + \text{reviewRounds})$$
+  - **Công thức tỷ lệ tiết kiệm**:
+    $$\text{savingsRatio} = \frac{\text{claudeSavedTokens}}{\text{claudeSavedTokens} + \text{claudeCostTokens}}$$
+
+### Mẹo hoặc lỗi thường gặp
+- **Chỉ task `done` mới tính tiết kiệm**: Các task đang chạy, thất bại hoặc bị hủy sẽ không được tính vào số token tiết kiệm, đảm bảo số liệu báo cáo luôn trung thực và phản ánh đúng giá trị code thực tế đã được nghiệm thu.
+- **Dấu ngã $\sim$ trước số token**: Thể hiện số token được ước tính (estimated) do thiếu mốc snapshot quota trước/sau hoặc có nhiều worker cùng chạy trên một tài khoản.
+
+---
+
+## 8. Giao diện Sáng/Tối & Song ngữ Tiếng Việt / Tiếng Anh
+
+### Làm gì
+AgentHub hỗ trợ tùy biến giao diện toàn diện với chế độ màu Sáng/Tối (Light/Dark Theme) bảo vệ mắt và hỗ trợ song ngữ (i18n) hoàn chỉnh giữa Tiếng Việt và Tiếng Anh.
+
+### Dùng thế nào
+- **Chuyển đổi Theme**: Nhấp vào biểu tượng Mặt Trời / Mặt Trăng trên thanh điều hướng trên cùng. Bạn có thể chọn:
+  - **Tối (Dark)**: Giao diện nền tối mặc định của hệ thống.
+  - **Sáng (Light)**: Giao diện nền sáng tương phản cao.
+  - **Hệ thống (System)**: Tự động đổi theo cấu hình giao diện của hệ điều hành.
+- **Chuyển đổi Ngôn ngữ**: Nhấp vào nút `VI` / `EN` trên thanh điều hướng để đổi tức thì toàn bộ nhãn, bảng thống kê và thông báo sang Tiếng Việt hoặc Tiếng Anh.
+
+### Mẹo hoặc lỗi thường gặp
+- **Đồng bộ màu sắc với Terminal**: Khi đổi theme, cửa sổ dòng lệnh xterm tương tác (như màn hình đăng nhập profile) cũng tự động cập nhật bảng màu nền, chữ và con trỏ tương thích ngay lập tức.
+- **Lưu cấu hình tự động**: Lựa chọn theme và ngôn ngữ được tự động lưu vào `localStorage` của trình duyệt (`agenthub_theme` và `agenthub_locale`) để giữ nguyên cấu hình ở các lần truy cập sau.
+- **Định dạng số theo quốc gia**: Các con số thống kê (token, dung lượng đĩa, ngày giờ) tự động định dạng chuẩn theo ngôn ngữ được chọn (`vi-VN` dùng dấu chấm phân tách hàng nghìn, `en-US` dùng dấu phẩy).
+
+---
+
+## 9. Thông báo Desktop (Desktop Notifications)
+
+### Làm gì
+Hệ thống tự động phát các thông báo nổi trên màn hình desktop (OS notifications) khi có sự kiện quan trọng phát sinh, giúp bạn có thể thu nhỏ trình duyệt để làm việc khác mà vẫn nắm bắt kịp thời tiến độ thực hiện task.
+
+### Dùng thế nào
+AgentHub sử dụng công cụ tiêu chuẩn `notify-send` trên Linux để phát thông báo cho các sự kiện:
+- `task.review_ready`: Task đã code xong và autocheck hoàn tất, sẵn sàng chờ review (kèm biểu tượng `✓` hoặc `✗` checks).
+- `task.failed` / `task.blocked`: Task gặp lỗi không thể tiếp tục hoặc worker tạo báo cáo bị chặn.
+- `review.escalated`: Task rơi vào trạng thái "Cần người duyệt".
+- `quota.exhausted`: Hồ sơ AI worker hết quota kèm thời gian mở khóa dự kiến.
+- `disk.low` / `disk.ok`: Cảnh báo dung lượng ổ đĩa gần đầy hoặc thông báo ổ đĩa đã đủ chỗ để tiếp tục chạy task.
+
+Các thông báo đều được thiết lập:
+- Gắn cờ định danh ứng dụng `-a AgentHub` để hệ điều hành dễ dàng phân loại và gom nhóm.
+- Tự động đóng sau 10 giây (`-t 10000`).
+- Cơ chế chống spam (debounce): Tự động chặn lặp lại thông báo có cùng nội dung trong vòng 30 giây.
+
+### Mẹo hoặc lỗi thường gặp
+- **Tắt thông báo**: Nếu không muốn nhận thông báo nổi, bạn có thể tắt bằng cách sửa cấu hình `~/.agenthub/config.json`:
+  ```json
+  {
+    "notifications": {
+      "desktop": false
+    }
+  }
+  ```
+- **Thông báo không tự tắt trên một số desktop Linux**: Nếu bạn dùng các trình quản lý thông báo tối giản (như một số phiên bản cũ của `dunst` hoặc `mako`) không hỗ trợ tham số timeout `-t`, thông báo có thể lưu lại trên màn hình. Bạn có thể kiểm tra cấu hình timeout trong file cấu hình của notification daemon trên máy hoặc khởi động lại daemon thông báo (`pkill dunst && dunst &`).

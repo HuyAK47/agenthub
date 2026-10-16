@@ -1,0 +1,61 @@
+# t-chat-api – DONE
+
+## Tóm tắt việc đã làm
+
+1. **Bảng dữ liệu & Repository (`src/db/index.ts`):**
+   - Bổ sung Migration 3 định nghĩa các bảng `chat_sessions` và `chat_messages` với ràng buộc chế độ (`safe`, `full`), vai trò (`user`, `assistant`, `tool`, `error`), trường `busy`, `meta` JSON và foreign key cascade delete.
+   - Hiện thực hóa `ChatSessionRepo` và `ChatMessageRepo` với đầy đủ CRUD, sắp xếp phiên theo thời gian cập nhật mới nhất, lấy tin nhắn theo thứ tự cũ trước, `resetAllBusy()` khi khởi động và đếm phiên đang bận.
+
+2. **Cấu hình Chat (`src/config.ts`, `src/services/index.ts`):**
+   - Thêm cấu hình `chat` (`claudeBin`, `allowFullMode: false`, `maxConcurrent: 2`) vào `AgentHubConfig`.
+   - Cập nhật các hàm `loadConfig`, `saveConfig`, `updateConfigInMemory`, `getConfig()` và schema `UpdateConfigSchema` để hỗ trợ xem và điều chỉnh qua `GET/PUT /api/config`.
+
+3. **Parser stream-json & Tool Formatter (`src/chat/parse.ts`):**
+   - Hiện thực parser an toàn bỏ qua các dòng lỗi cú pháp.
+   - Phân tích khối `system.init` để lưu `session_id`, `stream_event` và `assistant.content` block `text` để phát `chat.delta`, block `tool_use` để phát `chat.tool` với tóm tắt ngắn (`formatToolSummary`), khối `result` trích xuất `total_cost_usd`, `duration_ms`, `num_turns`, phát `chat.done` hoặc `chat.error`.
+
+4. **Claude Code CLI Runner & MCP Config (`src/chat/claude.ts`):**
+   - Tìm kiếm nhị phân `claude` theo thứ tự ưu tiên: config `chat.claudeBin` → `which claude` → `~/.local/bin/claude` → `~/.nvm/versions/node/*/bin/claude`.
+   - Tự động kiểm tra và cache cờ `--include-partial-messages`.
+   - Sinh file cấu hình `~/.agenthub/chat-mcp.json` trỏ tới `dist/cli.js mcp`.
+   - Xây dựng danh sách tham số argv cho chế độ `safe` (giới hạn tool và cờ Bash) và chế độ `full` (`bypassPermissions`, yêu cầu `chat.allowFullMode === true`).
+   - Khởi tạo tiến trình qua `child_process.spawn` với `detached: true` và cung cấp cơ chế hủy `killProcessGroup(-pid, 'SIGTERM')`.
+   - Nhúng `BRAIN_PROMPT` tiếng Việt chuẩn định vị Claude là bộ não điều phối chia việc cho worker qua `hub_create_task`.
+
+5. **ChatService, Lifecycle & Hàng đợi (`src/chat/service.ts`):**
+   - Quản lý hàng đợi lượt chat toàn cục (tối đa `maxConcurrent = 2`), chống chạy đồng thời trên cùng một phiên (`busy` flag).
+   - Thiết lập giới hạn thời gian (timeout) 15 phút cho mỗi lượt chạy.
+   - Tích hợp phát sự kiện SSE qua `EventBus.emitEphemeral` (không làm đầy bảng lịch sử `events`).
+   - Tương thích động với module `brain.js` (`talking` / `idle`) nếu có.
+   - Đăng ký đầy đủ các endpoint REST theo hợp đồng: `GET /api/chat/sessions`, `POST /api/chat/sessions` (kiểm tra 403 nếu full mode bị tắt), `PATCH /api/chat/sessions/:id`, `DELETE /api/chat/sessions/:id` (409 nếu busy), `GET /api/chat/sessions/:id/messages`, `POST /api/chat/sessions/:id/messages` (giới hạn 20.000 ký tự, 202 accepted, 409 nếu busy), `POST /api/chat/sessions/:id/cancel`.
+
+6. **Tích hợp Server & Daemon (`src/api/server.ts`, `src/daemon.ts`, `src/services/index.ts`):**
+   - Gắn `chatService` vào `DaemonContext` và khởi tạo kết nối route `/api/chat/*` trên Express server.
+   - Tự động gọi `chatSessionRepo.resetAllBusy()` khi daemon khởi động.
+
+7. **Kiểm thử toàn diện (`test/fixtures/fake-claude.mjs`, `test/chat.test.ts`):**
+   - Giả lập CLI Claude phản hồi stream-json đa kịch bản.
+   - Bao phủ 11 trường hợp kiểm thử cho unit parse, REST API, mode safe/full, full streaming flow, resume session, 409 busy conflict, kill process group khi cancel, parse lỗi, giới hạn ký tự và queueing.
+
+## Kết quả kiểm tra
+
+- `npm run lint`: Đạt (0 lỗi).
+- `npm run typecheck`: Đạt (0 lỗi).
+- `npm test -- --run`: Đạt, 14/14 test files passed, 141/141 tests passed.
+- `npm run build`: Đạt.
+
+## Việc chưa làm được
+
+- Không có. Mọi yêu cầu trong hợp đồng API, schema dữ liệu, cơ chế thực thi tiến trình và bộ test đều đã hoàn thành chính xác.
+
+## Danh sách commit
+
+- `ca98161`: `feat(db): add chat_sessions and chat_messages migration and repositories`
+- `01a040d`: `feat(config): add chat configuration support to config and settings API`
+- `ee32e5c`: `feat(chat): implement stream-json parser and tool summary formatter`
+- `fa20058`: `feat(chat): implement Claude CLI runner, argument builder, and process management`
+- `1ce315a`: `feat(chat): implement ChatService with session lifecycle, queueing, and routes`
+- `95ec370`: `feat(api): connect chat routes and chat service into server and daemon context`
+- `50aa55b`: `test(chat): add end-to-end unit and integration tests for chat API`
+- `81101a6`: `feat(services): expose chatService on AppService`
+- `06faa90`: `fix(chat): add stop method to ChatService and safe db handling on process close`

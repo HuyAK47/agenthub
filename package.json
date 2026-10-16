@@ -1,0 +1,49 @@
+{
+  "name": "agenthub",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "agenthub": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && cp src/protocol.md dist/protocol.md",
+    "build:web": "npm --prefix web run build",
+    "check:migrate": "node scripts/check-migrations-live.mjs",
+    "dev": "tsx --watch src/cli.ts",
+    "dev:web": "npm --prefix web run dev",
+    "lint": "eslint src/ test/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:web": "npm --prefix web run test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.6",
+    "@fastify/websocket": "^11.3.4",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "better-sqlite3": "^11.7.0",
+    "fastify": "^5.2.1",
+    "node-pty": "^1.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.16.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.2",
+    "eslint": "^9.16.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^2.1.8"
+  },
+  "msw": {
+    "workerDirectory": [
+      "web/public"
+    ]
+  }
+}

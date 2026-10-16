@@ -1,0 +1,267 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { ProfileRepo, QuotaMarkRepo, ProfileRow } from '../db/index.js';
+import { AgentHubConfig } from '../config.js';
+import { CodexEngine } from '../engines/index.js';
+
+// Symlinks to create in isolated HOME per PLAN 2.1
+const SYMLINK_TARGETS = [
+  '.nvm',
+  '.gitconfig',
+  '.docker',
+  '.npmrc',
+  '.npm',
+  '.cache',
+  '.local',
+  '.config',
+  '.bashrc',
+  '.profile',
+  '.bash_profile',
+];
+
+export class ProfileService {
+  constructor(
+    private config: AgentHubConfig,
+    private profileRepo: ProfileRepo,
+    private quotaMarkRepo: QuotaMarkRepo,
+  ) {}
+
+  /**
+   * Register all profiles on startup:
+   * - "chinh" (keyring, agy engine)
+   * - "codex" if Codex CLI found
+   * - All subdirectories in ~/.agy-homes/ (except .state)
+   */
+  registerAll(): void {
+    // Register "chinh" profile (keyring-based)
+    this.profileRepo.upsert({
+      name: 'chinh',
+      engine: 'agy',
+      kind: 'keyring',
+      home: os.homedir(),
+      email: this.readEmailFromLog(this.config.defaultLogDir),
+      enabled: 1,
+    });
+
+    // Register "codex" if found
+    const codexPath = CodexEngine.findCodexPath();
+    if (codexPath) {
+      this.profileRepo.upsert({
+        name: 'codex',
+        engine: 'codex',
+        kind: 'codex',
+        home: os.homedir(),
+        email: null,
+        enabled: 1,
+      });
+    }
+
+    // Register agy-homes profiles
+    const agyHomesDir = this.config.agyHomesDir;
+    if (fs.existsSync(agyHomesDir)) {
+      const entries = fs.readdirSync(agyHomesDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name === '.state') continue;
+        const fullPath = path.join(agyHomesDir, entry.name);
+        // Check if it's a directory (or symlink to directory)
+        let isDir = false;
+        try {
+          const stat = fs.statSync(fullPath);
+          isDir = stat.isDirectory();
+        } catch {
+          continue;
+        }
+        if (!isDir) continue;
+
+        const logDir = path.join(fullPath, '.gemini', 'antigravity-cli', 'log');
+        const email = this.readEmailFromLog(logDir);
+
+        this.profileRepo.upsert({
+          name: entry.name,
+          engine: 'agy',
+          kind: 'isolated',
+          home: fullPath,
+          email,
+          enabled: 1,
+        });
+      }
+    }
+
+    // Import quota marks from ~/.agy-homes/.state/*.exhausted
+    this.importQuotaMarks();
+  }
+
+  /**
+   * Read email from agy log files.
+   * Look for "authenticated successfully as <email>" pattern.
+   */
+  readEmailFromLog(logDir: string): string | null {
+    if (!fs.existsSync(logDir)) return null;
+
+    try {
+      const files = fs.readdirSync(logDir).filter((f) => f.endsWith('.log'));
+      if (files.length === 0) return null;
+
+      // Sort to get the most recent log file
+      files.sort();
+
+      // Search from newest to oldest
+      for (let i = files.length - 1; i >= 0; i--) {
+        const content = fs.readFileSync(path.join(logDir, files[i]), 'utf-8');
+        const match = content.match(/authenticated successfully as (\S+)/i);
+        if (match) {
+          return match[1];
+        }
+      }
+    } catch {
+      // ignore errors reading logs
+    }
+
+    return null;
+  }
+
+  /**
+   * Import quota marks from ~/.agy-homes/.state/*.exhausted
+   * File format: <name>@<family>.exhausted, content is epoch timestamp
+   */
+  importQuotaMarks(): void {
+    const stateDir = path.join(this.config.agyHomesDir, '.state');
+    if (!fs.existsSync(stateDir)) return;
+
+    try {
+      const files = fs.readdirSync(stateDir).filter((f) => f.endsWith('.exhausted'));
+      for (const file of files) {
+        const basename = file.replace('.exhausted', '');
+        const atIndex = basename.lastIndexOf('@');
+        if (atIndex <= 0) continue;
+
+        const profileName = basename.substring(0, atIndex);
+        const family = basename.substring(atIndex + 1);
+
+        try {
+          const content = fs.readFileSync(path.join(stateDir, file), 'utf-8').trim();
+          const until = parseInt(content, 10);
+          if (isNaN(until)) continue;
+
+          const now = Math.floor(Date.now() / 1000);
+          if (until <= now) continue; // expired, skip
+
+          // Legacy state can outlive a removed profile. Do not let that stale
+          // file prevent the rest of the profiles from being imported.
+          if (!this.profileRepo.get(profileName)) continue;
+
+          this.quotaMarkRepo.mark(profileName, family, until, 'imported from legacy state');
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Create a new isolated agy profile
+   */
+  createProfile(name: string): void {
+    const homeDir = path.join(this.config.agyHomesDir, name);
+    if (!fs.existsSync(homeDir)) {
+      fs.mkdirSync(homeDir, { recursive: true });
+    }
+
+    // Create symlinks
+    const realHome = os.homedir();
+    for (const target of SYMLINK_TARGETS) {
+      const src = path.join(realHome, target);
+      const dest = path.join(homeDir, target);
+      if (fs.existsSync(src) && !fs.existsSync(dest)) {
+        try {
+          fs.symlinkSync(src, dest);
+        } catch {
+          // ignore symlink errors
+        }
+      }
+    }
+
+    // Symlink .gemini/config
+    const geminiConfigSrc = path.join(realHome, '.gemini', 'config');
+    const geminiDir = path.join(homeDir, '.gemini');
+    if (!fs.existsSync(geminiDir)) fs.mkdirSync(geminiDir, { recursive: true });
+    const geminiConfigDest = path.join(geminiDir, 'config');
+    if (fs.existsSync(geminiConfigSrc) && !fs.existsSync(geminiConfigDest)) {
+      try {
+        fs.symlinkSync(geminiConfigSrc, geminiConfigDest);
+      } catch {
+        // ignore
+      }
+    }
+
+    this.profileRepo.upsert({
+      name,
+      engine: 'agy',
+      kind: 'isolated',
+      home: homeDir,
+      email: null,
+      enabled: 1,
+    });
+  }
+
+  /**
+   * Mark quota for a profile and all profiles with the same email
+   */
+  markQuota(profileName: string, family: string, resetSeconds: number, reason?: string): void {
+    const until = Math.floor(Date.now() / 1000) + resetSeconds;
+    this.quotaMarkRepo.mark(profileName, family, until, reason);
+
+    // Propagate to profiles with same email
+    const profile = this.profileRepo.get(profileName);
+    if (profile?.email) {
+      const allProfiles = this.profileRepo.getAll();
+      for (const p of allProfiles) {
+        if (p.name !== profileName && p.email === profile.email) {
+          this.quotaMarkRepo.mark(p.name, family, until, reason);
+        }
+      }
+    }
+  }
+
+  /**
+   * Detect duplicate emails across profiles
+   */
+  getDuplicateEmails(): Map<string, string[]> {
+    const profiles = this.profileRepo.getAll();
+    const emailMap = new Map<string, string[]>();
+    for (const p of profiles) {
+      if (!p.email) continue;
+      const existing = emailMap.get(p.email) || [];
+      existing.push(p.name);
+      emailMap.set(p.email, existing);
+    }
+    // Only return those with duplicates
+    const result = new Map<string, string[]>();
+    for (const [email, names] of emailMap) {
+      if (names.length > 1) {
+        result.set(email, names);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Check if a profile is currently busy (has a running task)
+   */
+  isProfileBusy(profileName: string, runningRuns: { profileName: string }[]): boolean {
+    return runningRuns.some((r) => r.profileName === profileName);
+  }
+
+  getAll(): ProfileRow[] {
+    return this.profileRepo.getAll();
+  }
+}
+
+export function isProfileLoggedIn(profile: ProfileRow): boolean {
+  if (profile.engine === 'codex') return fs.existsSync(path.join(profile.home || os.homedir(), '.codex', 'auth.json'));
+  if (profile.kind === 'keyring') return true;
+  return !!profile.home && fs.existsSync(path.join(profile.home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'));
+}

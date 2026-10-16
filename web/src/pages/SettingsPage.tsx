@@ -1,0 +1,417 @@
+import React, { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { getConfig, updateConfig } from '../api/client';
+import { Save, CheckCircle2, AlertCircle, Info, MessageSquare } from 'lucide-react';
+import { useLocale } from '../context/LocaleContext';
+
+export const SettingsPage: React.FC = () => {
+  const { t } = useLocale();
+  const queryClient = useQueryClient();
+
+  const [hardChain, setHardChain] = useState<string>('');
+  const [easyChain, setEasyChain] = useState<string>('');
+  const [timeoutHours, setTimeoutHours] = useState<number>(3);
+  const [claudeBin, setClaudeBin] = useState<string>('claude');
+  const [allowFullMode, setAllowFullMode] = useState<boolean>(false);
+  const [chatModel, setChatModel] = useState<'' | 'sonnet' | 'haiku'>('sonnet');
+  const [maxConcurrent, setMaxConcurrent] = useState<number>(2);
+  const [bucketGemini, setBucketGemini] = useState<number>(5_000_000);
+  const [bucketClaude, setBucketClaude] = useState<number>(5_000_000);
+  const [claudeFactor, setClaudeFactor] = useState<number>(0.9);
+  const [claudeOverhead, setClaudeOverhead] = useState<number>(40_000);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const { data: config, isLoading, error } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+  });
+
+  useEffect(() => {
+    if (config) {
+      const hardList = config.modelChainHard || config.modelChains?.hard || [];
+      const easyList = config.modelChainEasy || config.modelChains?.easy || [];
+      const timeoutSec =
+        config.defaultTimeout !== undefined
+          ? config.defaultTimeout
+          : config.runTimeoutHours
+          ? config.runTimeoutHours * 3600
+          : 10800;
+      setHardChain(hardList.join('\n'));
+      setEasyChain(easyList.join('\n'));
+      setTimeoutHours(Math.max(1, Math.round(timeoutSec / 3600)));
+      setClaudeBin(config.chat?.claudeBin || 'claude');
+      setAllowFullMode(Boolean(config.chat?.allowFullMode));
+      setChatModel(config.chat?.model === 'haiku' ? 'haiku' : 'sonnet');
+      setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
+      if (config.savings) {
+        if (config.savings.bucketTokens?.gemini !== undefined) {
+          setBucketGemini(config.savings.bucketTokens.gemini);
+        }
+        if (config.savings.bucketTokens?.claude !== undefined) {
+          setBucketClaude(config.savings.bucketTokens.claude);
+        }
+        if (config.savings.claudeFactor !== undefined) {
+          setClaudeFactor(config.savings.claudeFactor);
+        }
+        if (config.savings.claudeOverheadPerTask !== undefined) {
+          setClaudeOverhead(config.savings.claudeOverheadPerTask);
+        }
+      }
+    }
+  }, [config]);
+
+  const mutation = useMutation({
+    mutationFn: updateConfig,
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['config'], updated);
+      setSaveSuccess(true);
+      setSaveError(null);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    },
+    onError: (err: any) => {
+      setSaveError(err.message || t('settings.saveError'));
+      setSaveSuccess(false);
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaveSuccess(false);
+    setSaveError(null);
+
+    const hardModels = hardChain
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const easyModels = easyChain
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (hardModels.length === 0) {
+      setSaveError(t('settings.hardChainRequired'));
+      return;
+    }
+    if (easyModels.length === 0) {
+      setSaveError(t('settings.easyChainRequired'));
+      return;
+    }
+
+    const hours = Number(timeoutHours) || 3;
+    const defaultTimeout = hours * 3600;
+
+    mutation.mutate({
+      modelChainHard: hardModels,
+      modelChainEasy: easyModels,
+      defaultTimeout,
+      modelChains: {
+        hard: hardModels,
+        easy: easyModels,
+      },
+      runTimeoutHours: hours,
+      chat: {
+        claudeBin: claudeBin.trim() || 'claude',
+        allowFullMode,
+        maxConcurrent: Number(maxConcurrent) || 2,
+        model: chatModel,
+      },
+      savings: {
+        bucketTokens: {
+          gemini: Number(bucketGemini) || 5_000_000,
+          claude: Number(bucketClaude) || 5_000_000,
+        },
+        claudeFactor: Number(claudeFactor) || 0.9,
+        claudeOverheadPerTask: Number(claudeOverhead) || 40_000,
+      },
+    });
+  };
+
+  const handleToggleFullMode = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    if (checked) {
+      const confirmed = window.confirm(
+        t('extra.fullModeConfirm'),
+      );
+      if (confirmed) {
+        setAllowFullMode(true);
+      } else {
+        setAllowFullMode(false);
+      }
+    } else {
+      setAllowFullMode(false);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">{t('settings.title')}</h1>
+        <p className="text-sm text-[var(--t-text-3)]">
+          {t('extra.settingsSubtitle')}
+        </p>
+      </div>
+
+      {saveSuccess && (
+        <div className="p-4 rounded-xl bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] border border-[var(--t-ok)] text-[var(--t-ok)] text-sm flex items-center gap-2">
+          <CheckCircle2 className="w-5 h-5 text-[var(--t-ok)] shrink-0" />
+          <span>{t('settings.saveSuccess')}</span>
+        </div>
+      )}
+
+      {saveError && (
+        <div className="p-4 rounded-xl bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] border border-[var(--t-crit)] text-[var(--t-crit)] text-sm flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 text-[var(--t-crit)] shrink-0" />
+          <span>{saveError}</span>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center p-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
+        </div>
+      ) : error ? (
+        <div className="p-8 text-center text-[var(--t-crit)] text-sm">{t('settings.loadError')}</div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
+            {/* Info notice */}
+            <div className="p-4 rounded-lg bg-[var(--t-accent-bg)] border border-[var(--t-accent)] text-[var(--t-accent)] text-xs flex items-start gap-2.5">
+              <Info className="w-4 h-4 shrink-0 mt-0.5" />
+              <div>
+                {t('settings.infoChain')}
+              </div>
+            </div>
+
+            {/* Hard chain */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                {t('settings.hardChainLabel')}
+              </label>
+              <textarea
+                rows={4}
+                value={hardChain}
+                onChange={(e) => setHardChain(e.target.value)}
+                placeholder="claude-opus-4-6-thinking&#10;codex:gpt-5.6-luna&#10;gemini-3.8-flash-high"
+                className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+              />
+              <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                {t('settings.hardChainHint')}
+              </p>
+            </div>
+
+            {/* Easy chain */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                {t('settings.easyChainLabel')}
+              </label>
+              <textarea
+                rows={3}
+                value={easyChain}
+                onChange={(e) => setEasyChain(e.target.value)}
+                placeholder="gemini-3.8-flash-medium&#10;codex:gpt-5.6-luna"
+                className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+              />
+              <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                {t('settings.easyChainHint')}
+              </p>
+            </div>
+
+            {/* Timeout */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                {t('settings.timeoutLabel')}
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={24}
+                value={timeoutHours}
+                onChange={(e) => setTimeoutHours(parseInt(e.target.value, 10) || 1)}
+                className="w-32 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+              />
+            </div>
+
+            {/* Claude Chat section */}
+            <div className="pt-6 border-t border-[var(--t-border)] space-y-4">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-[var(--t-accent)]" />
+                <h3 className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('extra.chatSettings')}
+                </h3>
+              </div>
+
+              {/* claudeBin field */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('extra.claudeBin')}
+                </label>
+                <input
+                  type="text"
+                  value={claudeBin}
+                  onChange={(e) => setClaudeBin(e.target.value)}
+                  placeholder={t('settings.claudeBinPlaceholder')}
+                  className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                  {t('extra.claudeBinHint')}
+                </p>
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                  {t('extra.claudeVersion')}: {config?.chat?.claudeVersion || t('extra.unknown')}
+                </p>
+              </div>
+
+              {/* maxConcurrent field */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('extra.maxConcurrent')}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={maxConcurrent}
+                  onChange={(e) => setMaxConcurrent(parseInt(e.target.value, 10) || 1)}
+                  className="w-32 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+              </div>
+
+              {/* allowFullMode selector */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">{t('extra.chatModel')}</label>
+                <select value={chatModel} onChange={(e) => setChatModel(e.target.value as '' | 'sonnet' | 'haiku')} className="w-full max-w-sm text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-3 py-2 text-[var(--t-text)]">
+                  <option value="">{t('extra.claudeDefault')}</option>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="haiku">Haiku</option>
+                </select>
+              </div>
+
+              {/* allowFullMode toggle */}
+              <div className="pt-2">
+                <label className="flex items-start gap-3 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-pointer hover:bg-[var(--t-surface-2)] transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={allowFullMode}
+                    onChange={handleToggleFullMode}
+                    className="mt-0.5 rounded text-[var(--t-crit)] focus:ring-[var(--t-crit)] w-4 h-4 cursor-pointer"
+                  />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-[var(--t-text)]">
+                        {t('extra.allowFullMode')}
+                      </span>
+                      {allowFullMode && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] font-bold border border-[var(--t-crit)]">
+                          {t('extra.enabled')}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-[var(--t-crit)] mt-1">
+                      {t('extra.fullModeWarning')}
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Savings config block */}
+          <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 space-y-6 shadow-xs">
+            <div>
+              <h2 className="text-base font-semibold text-[var(--text-primary)]">
+                {t('settings.savingsSectionTitle')}
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {t('extra.savingsSettings')}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                  {t('settings.geminiBucketLabel')}
+                </label>
+                <input
+                  type="number"
+                  min={100_000}
+                  step={100_000}
+                  value={bucketGemini}
+                  onChange={(e) => setBucketGemini(Number(e.target.value))}
+                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {t('extra.geminiBucketHint')}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                  {t('settings.claudeBucketLabel')}
+                </label>
+                <input
+                  type="number"
+                  min={100_000}
+                  step={100_000}
+                  value={bucketClaude}
+                  onChange={(e) => setBucketClaude(Number(e.target.value))}
+                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {t('extra.claudeBucketHint')}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                  {t('extra.claudeFactor')}
+                </label>
+                <input
+                  type="number"
+                  min={0.1}
+                  max={2.0}
+                  step={0.05}
+                  value={claudeFactor}
+                  onChange={(e) => setClaudeFactor(parseFloat(e.target.value) || 0.9)}
+                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {t('extra.claudeFactorHint')}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                  {t('extra.claudeOverhead')}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step={5_000}
+                  value={claudeOverhead}
+                  onChange={(e) => setClaudeOverhead(Number(e.target.value) || 0)}
+                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {t('extra.claudeOverheadHint')}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={mutation.isPending}
+              className="px-5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" />
+              <span>{mutation.isPending ? t('common.loading') : t('settings.saveConfigBtn')}</span>
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+};

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -e
+
+# Load NVM and use Node 22 if available
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+  export NVM_DIR="$HOME/.nvm"
+  # shellcheck source=/dev/null
+  . "$NVM_DIR/nvm.sh"
+  nvm use 22 >/dev/null 2>&1 || true
+fi
+
+# Resolve symlink to get root directory
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SCRIPT_SOURCE" ]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd)"
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+  [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+ROOT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")/.." >/dev/null 2>&1 && pwd)"
+CLI_PATH="$ROOT_DIR/dist/cli.js"
+
+if [ ! -f "$CLI_PATH" ]; then
+  echo "Error: $CLI_PATH not found. Run 'npm run build' first in $ROOT_DIR." >&2
+  exit 1
+fi
+
+exec node "$CLI_PATH" "$@"

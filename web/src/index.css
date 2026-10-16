@@ -1,0 +1,381 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  /* Design System Color Tokens */
+  --color-t-bg: var(--t-bg);
+  --color-t-surface: var(--t-surface);
+  --color-t-surface-2: var(--t-surface-2);
+  --color-t-hover: var(--t-hover);
+  --color-t-selected: var(--t-selected);
+  --color-t-border: var(--t-border);
+  --color-t-border-strong: var(--t-border-strong);
+  --color-t-text: var(--t-text);
+  --color-t-text-2: var(--t-text-2);
+  --color-t-text-3: var(--t-text-3);
+  --color-t-accent: var(--t-accent);
+  --color-t-accent-hover: var(--t-accent-hover);
+  --color-t-accent-bg: var(--t-accent-bg);
+  --color-t-chip: var(--t-chip);
+  --color-t-crit: var(--t-crit);
+  --color-t-crit-fill: var(--t-crit-fill);
+  --color-t-warn: var(--t-warn);
+  --color-t-warn-fill: var(--t-warn-fill);
+  --color-t-ok: var(--t-ok);
+  --color-t-ok-fill: var(--t-ok-fill);
+  --color-t-purple: var(--t-purple);
+  --color-t-checking: var(--t-checking);
+  --color-t-claude: var(--t-claude);
+
+  /* Semantic shortcuts */
+  --color-surface: var(--t-surface);
+  --color-surface-2: var(--t-surface-2);
+  --color-muted: var(--t-text-3);
+  --color-default: var(--t-border);
+  --color-border-default: var(--t-border);
+  --color-border-strong: var(--t-border-strong);
+  --color-accent: var(--t-accent);
+  --color-accent-hover: var(--t-accent-hover);
+  --color-accent-bg: var(--t-accent-bg);
+  --color-hover: var(--t-hover);
+  --color-selected: var(--t-selected);
+  --color-ok: var(--t-ok);
+  --color-warn: var(--t-warn);
+  --color-crit: var(--t-crit);
+  --color-purple: var(--t-purple);
+  --color-checking: var(--t-checking);
+
+  /* Legacy semantic color tokens */
+  --color-bg-app: var(--bg-app);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-surface-hover: var(--bg-surface-hover);
+  --color-bg-surface-active: var(--bg-surface-active);
+  --color-bg-surface-subtle: var(--bg-surface-subtle);
+  --color-bg-surface-elevated: var(--bg-surface-elevated);
+
+  --color-border-subtle: var(--border-subtle);
+
+  --color-text-main: var(--text-primary);
+  --color-text-sub: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+}
+
+:root {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-style: normal;
+  color-scheme: light;
+
+  /* Light Theme */
+  --t-bg: #ffffff;
+  --t-surface: #ffffff;
+  --t-surface-2: #f6f7f8;
+  --t-hover: hsla(229, 15%, 50%, 8%);
+  --t-selected: #e0edff;
+  --t-border: hsla(229, 15%, 6%, 12%);
+  --t-border-strong: #c4c7d4;
+  --t-text: #21232c;
+  --t-text-2: #21232c;
+  --t-text-3: #6c7393;
+  --t-accent: #0066ff;
+  --t-accent-hover: #005ce6;
+  --t-accent-bg: #edf3ff;
+  --t-chip: #dce7ff;
+  --t-crit: #c91a03;
+  --t-crit-fill: #fc4d36;
+  --t-warn: #a86b00;
+  --t-warn-fill: #ffa100;
+  --t-ok: #367d1c;
+  --t-ok-fill: #50bc29;
+  --t-purple: hsl(277, 72%, 50%);
+  --t-checking: #14b8a6;
+  --t-claude: #d97757;
+
+  /* Backward Compatibility Aliases */
+  --bg: var(--t-bg);
+  --bg-app: var(--t-bg);
+  --surface: var(--t-surface);
+  --bg-surface: var(--t-surface);
+  --surface-2: var(--t-surface-2);
+  --bg-surface-hover: var(--t-hover);
+  --bg-surface-active: var(--t-selected);
+  --bg-surface-subtle: var(--t-surface-2);
+  --bg-surface-elevated: var(--t-surface);
+
+  --border: var(--t-border);
+  --border-subtle: var(--t-border);
+  --border-default: var(--t-border);
+  --border-strong: var(--t-border-strong);
+
+  --text-primary: var(--t-text);
+  --text-secondary: var(--t-text-2);
+  --text-muted: var(--t-text-3);
+
+  /* Status Tokens (Light) */
+  --status-queued-color: var(--t-text-3);
+  --status-queued-bg: color-mix(in srgb, var(--t-text-3) 15%, transparent);
+  --status-queued-text: var(--t-text-3);
+  --status-queued-border: color-mix(in srgb, var(--t-text-3) 25%, transparent);
+  --status-queued-dot: var(--t-text-3);
+
+  --status-running-color: var(--t-accent);
+  --status-running-bg: color-mix(in srgb, var(--t-accent) 15%, transparent);
+  --status-running-text: var(--t-accent);
+  --status-running-border: color-mix(in srgb, var(--t-accent) 25%, transparent);
+  --status-running-dot: var(--t-accent);
+
+  --status-checking-color: var(--t-checking);
+  --status-checking-bg: color-mix(in srgb, var(--t-checking) 15%, transparent);
+  --status-checking-text: var(--t-checking);
+  --status-checking-border: color-mix(in srgb, var(--t-checking) 25%, transparent);
+  --status-checking-dot: var(--t-checking);
+
+  --status-review-color: var(--t-purple);
+  --status-review-bg: color-mix(in srgb, var(--t-purple) 15%, transparent);
+  --status-review-text: var(--t-purple);
+  --status-review-border: color-mix(in srgb, var(--t-purple) 25%, transparent);
+  --status-review-dot: var(--t-purple);
+
+  --status-done-color: var(--t-ok);
+  --status-done-bg: color-mix(in srgb, var(--t-ok) 15%, transparent);
+  --status-done-text: var(--t-ok);
+  --status-done-border: color-mix(in srgb, var(--t-ok) 25%, transparent);
+  --status-done-dot: var(--t-ok);
+
+  --status-blocked-color: var(--t-warn);
+  --status-blocked-bg: color-mix(in srgb, var(--t-warn) 15%, transparent);
+  --status-blocked-text: var(--t-warn);
+  --status-blocked-border: color-mix(in srgb, var(--t-warn) 25%, transparent);
+  --status-blocked-dot: var(--t-warn);
+
+  --status-failed-color: var(--t-crit);
+  --status-failed-bg: color-mix(in srgb, var(--t-crit) 15%, transparent);
+  --status-failed-text: var(--t-crit);
+  --status-failed-border: color-mix(in srgb, var(--t-crit) 25%, transparent);
+  --status-failed-dot: var(--t-crit);
+
+  --status-waiting_quota-color: var(--t-warn);
+  --status-waiting_quota-bg: color-mix(in srgb, var(--t-warn) 10%, transparent);
+  --status-waiting_quota-text: var(--t-warn);
+  --status-waiting_quota-border: color-mix(in srgb, var(--t-warn) 25%, transparent);
+  --status-waiting_quota-dot: var(--t-warn);
+
+  --status-draft-color: var(--t-text-3);
+  --status-draft-bg: color-mix(in srgb, var(--t-text-3) 12%, transparent);
+  --status-draft-text: var(--t-text-3);
+  --status-draft-border: color-mix(in srgb, var(--t-text-3) 25%, transparent);
+  --status-draft-dot: var(--t-text-3);
+
+  --status-cancelled-color: var(--t-text-3);
+  --status-cancelled-bg: color-mix(in srgb, var(--t-text-3) 10%, transparent);
+  --status-cancelled-text: var(--t-text-3);
+  --status-cancelled-border: color-mix(in srgb, var(--t-text-3) 25%, transparent);
+  --status-cancelled-dot: var(--t-text-3);
+}
+
+.dark {
+  /* Dark Theme (Default) */
+  --t-bg: #1a1c23;
+  --t-surface: #1e2029;
+  --t-surface-2: #23252f;
+  --t-hover: hsla(229, 15%, 50%, 16%);
+  --t-selected: #001f4d;
+  --t-border: #2a2d39;
+  --t-border-strong: #303341;
+  --t-text: #dcdfe8;
+  --t-text-2: #c4c7d4;
+  --t-text-3: #8a8fa8;
+  --t-accent: #4d94ff;
+  --t-accent-hover: #0f66ee;
+  --t-accent-bg: #001f4d;
+  --t-chip: #00317a;
+  --t-crit: #e8705c;
+  --t-crit-fill: #e8705c;
+  --t-warn: #e0a95e;
+  --t-warn-fill: #e0a95e;
+  --t-ok: #50bc29;
+  --t-ok-fill: #50bc29;
+  --t-purple: hsl(277, 60%, 65%);
+  --t-checking: #2dd4bf;
+  --t-claude: #d97757;
+  color-scheme: dark;
+
+  /* Backward Compatibility Aliases */
+  --bg: var(--t-bg);
+  --bg-app: var(--t-bg);
+  --surface: var(--t-surface);
+  --bg-surface: var(--t-surface);
+  --surface-2: var(--t-surface-2);
+  --bg-surface-hover: var(--t-hover);
+  --bg-surface-active: var(--t-selected);
+  --bg-surface-subtle: var(--t-surface-2);
+  --bg-surface-elevated: var(--t-surface);
+
+  --border: var(--t-border);
+  --border-subtle: var(--t-border);
+  --border-default: var(--t-border);
+  --border-strong: var(--t-border-strong);
+
+  --text-primary: var(--t-text);
+  --text-secondary: var(--t-text-2);
+  --text-muted: var(--t-text-3);
+
+  /* Status Tokens (Dark) */
+  --status-queued-color: var(--t-text-3);
+  --status-queued-bg: color-mix(in srgb, var(--t-text-3) 15%, transparent);
+  --status-queued-text: var(--t-text-3);
+  --status-queued-border: color-mix(in srgb, var(--t-text-3) 25%, transparent);
+  --status-queued-dot: var(--t-text-3);
+
+  --status-running-color: var(--t-accent);
+  --status-running-bg: color-mix(in srgb, var(--t-accent) 15%, transparent);
+  --status-running-text: var(--t-accent);
+  --status-running-border: color-mix(in srgb, var(--t-accent) 25%, transparent);
+  --status-running-dot: var(--t-accent);
+
+  --status-checking-color: var(--t-checking);
+  --status-checking-bg: color-mix(in srgb, var(--t-checking) 15%, transparent);
+  --status-checking-text: var(--t-checking);
+  --status-checking-border: color-mix(in srgb, var(--t-checking) 25%, transparent);
+  --status-checking-dot: var(--t-checking);
+
+  --status-review-color: var(--t-purple);
+  --status-review-bg: color-mix(in srgb, var(--t-purple) 15%, transparent);
+  --status-review-text: var(--t-purple);
+  --status-review-border: color-mix(in srgb, var(--t-purple) 25%, transparent);
+  --status-review-dot: var(--t-purple);
+
+  --status-done-color: var(--t-ok);
+  --status-done-bg: color-mix(in srgb, var(--t-ok) 15%, transparent);
+  --status-done-text: var(--t-ok);
+  --status-done-border: color-mix(in srgb, var(--t-ok) 25%, transparent);
+  --status-done-dot: var(--t-ok);
+
+  --status-blocked-color: var(--t-warn);
+  --status-blocked-bg: color-mix(in srgb, var(--t-warn) 15%, transparent);
+  --status-blocked-text: var(--t-warn);
+  --status-blocked-border: color-mix(in srgb, var(--t-warn) 25%, transparent);
+  --status-blocked-dot: var(--t-warn);
+
+  --status-failed-color: var(--t-crit);
+  --status-failed-bg: color-mix(in srgb, var(--t-crit) 15%, transparent);
+  --status-failed-text: var(--t-crit);
+  --status-failed-border: color-mix(in srgb, var(--t-crit) 25%, transparent);
+  --status-failed-dot: var(--t-crit);
+
+  --status-waiting_quota-color: var(--t-warn);
+  --status-waiting_quota-bg: color-mix(in srgb, var(--t-warn) 10%, transparent);
+  --status-waiting_quota-text: var(--t-warn);
+  --status-waiting_quota-border: color-mix(in srgb, var(--t-warn) 25%, transparent);
+  --status-waiting_quota-dot: var(--t-warn);
+
+  --status-draft-color: var(--t-text-3);
+  --status-draft-bg: color-mix(in srgb, var(--t-text-3) 12%, transparent);
+  --status-draft-text: var(--t-text-3);
+  --status-draft-border: color-mix(in srgb, var(--t-text-3) 25%, transparent);
+  --status-draft-dot: var(--t-text-3);
+
+  --status-cancelled-color: var(--t-text-3);
+  --status-cancelled-bg: color-mix(in srgb, var(--t-text-3) 10%, transparent);
+  --status-cancelled-text: var(--t-text-3);
+  --status-cancelled-border: color-mix(in srgb, var(--t-text-3) 25%, transparent);
+  --status-cancelled-dot: var(--t-text-3);
+
+  /* Remap standard tailwind gray colors to dark palette */
+  --color-gray-950: #1a1c23;
+  --color-gray-900: #1e2029;
+  --color-gray-850: #23252f;
+  --color-gray-800: #2a2d39;
+  --color-gray-700: #303341;
+  --color-gray-100: #dcdfe8;
+  --color-gray-200: #c4c7d4;
+  --color-gray-300: #8a8fa8;
+  --color-gray-400: #6c7393;
+  --color-gray-500: #8a8fa8;
+}
+
+html, body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-style: normal;
+  background-color: var(--t-bg);
+  color: var(--t-text);
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+.theme-transition,
+.theme-transition * {
+  transition: background-color .2s ease, color .2s ease, border-color .2s ease,
+    fill .2s ease, stroke .2s ease !important;
+}
+
+/* Eliminate unintended global italic */
+* {
+  font-style: normal;
+}
+
+i, em, .italic {
+  font-style: italic;
+}
+
+/* Reusable token utility classes */
+.bg-app {
+  background-color: var(--t-bg);
+}
+.bg-surface {
+  background-color: var(--t-surface);
+}
+.bg-surface-2 {
+  background-color: var(--t-surface-2);
+}
+.bg-hover:hover {
+  background-color: var(--t-hover);
+}
+.bg-selected {
+  background-color: var(--t-selected);
+}
+.bg-accent {
+  background-color: var(--t-accent);
+}
+.bg-accent-hover:hover {
+  background-color: var(--t-accent-hover);
+}
+.bg-accent-bg {
+  background-color: var(--t-accent-bg);
+}
+.border-default {
+  border-color: var(--t-border);
+}
+.border-subtle {
+  border-color: var(--t-border);
+}
+.border-strong {
+  border-color: var(--t-border-strong);
+}
+.text-main {
+  color: var(--t-text);
+}
+.text-sub {
+  color: var(--t-text-2);
+}
+.text-muted {
+  color: var(--t-text-3);
+}
+.text-accent {
+  color: var(--t-accent);
+}
+
+/* xterm & terminal styling matching theme */
+.xterm {
+  padding: 8px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+}
+.xterm-viewport {
+  background-color: var(--t-bg) !important;
+}
+.xterm-screen {
+  background-color: var(--t-bg) !important;
+}

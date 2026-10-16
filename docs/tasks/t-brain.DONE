@@ -1,0 +1,61 @@
+# Hoàn thành task: t-brain – Hiển thị Claude (bộ não điều phối) trên dashboard
+
+## 1. Tóm tắt việc đã làm
+
+1. **Backend (`src/brain.ts` & Migration 3)**:
+   - Thêm migration 3 tạo bảng `brain_status` với ràng buộc 1 dòng (`id = 1`) lưu `{ activity, detail, taskId?, updatedAt }` và chèn bản ghi khởi tạo.
+   - Định nghĩa `BrainRepo`, `BrainService`, và Zod schema `UpdateBrainSchema` ràng buộc 8 trạng thái hoạt động: `planning`, `dispatching`, `reviewing`, `merging`, `deploying`, `waiting`, `idle`, `talking`, detail tối đa 300 ký tự.
+   - Thêm API:
+     - `GET /api/brain`: trả về trạng thái hiện tại kèm `stale: true` nếu `updatedAt` đã quá 15 phút.
+     - `PUT /api/brain`: nhận `{ activity, detail, taskId? }`, cập nhật DB, ghi nhận sự kiện vào bảng `events` và phát sự kiện SSE `brain.status` qua EventBus.
+     - Thêm trường `brain` vào phản hồi của `GET /api/status`.
+
+2. **MCP (`src/mcp/index.ts`)**:
+   - Thêm MCP tool `hub_brain { activity, detail, taskId? }` cho phép Claude trực tiếp cập nhật trạng thái hoạt động.
+   - Tự động cập nhật trạng thái brain khi gọi:
+     - `hub_create_task`: tự cập nhật `dispatching <slug>`.
+     - `hub_review`: tự cập nhật `reviewing <taskId>`.
+
+3. **CLI (`src/cli.ts`)**:
+   - Thêm lệnh CLI `agenthub brain <activity> "<detail>" [--task id]`.
+   - Hỗ trợ gọi qua daemon HTTP API nếu daemon đang chạy (kích hoạt SSE ngay lập tức) hoặc cập nhật trực tiếp DB nếu daemon đang dừng.
+
+4. **Web Frontend (`web/src/components/BrainCard.tsx`, `web/src/components/ReviewQueue.tsx`, `web/src/pages/DashboardPage.tsx`)**:
+   - Component **`BrainCard`** đặt trên cùng trang Tổng quan:
+     - Avatar Claude hình tròn màu cam đất `#d97757` với chữ `C`, nhãn "Claude · Điều phối viên".
+     - Dịch cả 8 trạng thái sang tiếng Việt: Đang lập kế hoạch, Đang giao việc, Đang review, Đang ghép code, Đang triển khai, Đang chờ worker, Rảnh, Đang trao đổi với bạn.
+     - Hiển thị `detail`, liên kết tới task nếu có `taskId`, và nhãn "cập nhật X phút trước" / "vừa xong".
+     - Trạng thái stale (> 15 phút): hiển thị mờ (`opacity-60`) kèm nhãn cảnh báo "Claude chưa cập nhật trong 15 phút".
+   - Component **`ReviewQueue`**:
+     - Hiển thị danh sách task đang ở trạng thái `review` kèm ghi chú "chờ Claude review".
+     - Task trùng với `brain.taskId` được đánh dấu nổi bật với nhãn "Claude đang xem".
+   - Dòng sự kiện (Event Feed):
+     - Sự kiện `brain.status` và các sự kiện review / done do Claude tạo (`payload.by === 'claude-review'`) hiển thị icon Claude cam đất `#d97757`.
+   - Sử dụng hoàn toàn biến CSS của dark theme (`--bg-surface`, `--text-primary`, `--border-default`, ...), không hardcode màu nền.
+   - Đồng bộ cache SSE thời gian thực khi nhận sự kiện `brain.status`.
+
+5. **Test**:
+   - Backend tests (`test/brain-api.test.ts`, `test/mcp.test.ts`, `test/cli.test.ts`): kiểm tra PUT dữ liệu sai trả 400, PUT hợp lệ phát SSE và ghi event, GET khi stale trả `stale: true`, tool `hub_brain`, auto-update khi tạo task và review, lệnh CLI.
+   - Web tests (`web/src/test/brain.test.tsx`): kiểm tra render `BrainCard` cho cả 8 hoạt động, render trạng thái stale, `ReviewQueue` đánh dấu đúng task "Claude đang xem", hiển thị icon Claude trong dòng sự kiện.
+
+## 2. Kết quả kiểm tra & nghiệm thu
+
+- `npm run lint`: Đạt (0 errors, 0 warnings).
+- `npm run typecheck`: Đạt (0 errors).
+- `npm test -- --run`: Đạt 13/13 test files, 133/133 tests passed.
+- `npm run test:web -- --run`: Đạt 12/12 test files, 45/45 tests passed.
+- `npm run build`: Đạt (biên dịch TypeScript và protocol.md thành công).
+- `npm run build:web`: Đạt (biên dịch Vite + Tailwind thành công, không ghi đè bất hợp lệ trong test).
+
+**Tổng số test:** 178 tests passed (133 backend + 45 web).
+
+## 3. Việc chưa làm được và lý do
+
+Không có. Toàn bộ các yêu cầu của đề bài và tiêu chí nghiệm thu đều đã hoàn thành đầy đủ.
+
+## 4. Danh sách commit
+
+1. `93b212e`: `feat(brain): add brain status persistence, API routes and migration`
+2. `5ad7e00`: `feat(mcp): add hub_brain tool and auto-update on task creation and review`
+3. `361421d`: `feat(cli): add agenthub brain command`
+4. `803b282`: `feat(web): add BrainCard, ReviewQueue and Claude event icon to dashboard`

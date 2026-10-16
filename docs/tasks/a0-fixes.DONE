@@ -1,0 +1,32 @@
+# a0-fixes – DONE
+
+## Tóm tắt
+
+- Sửa scheduler giữ task `queued` khi hồ sơ phù hợp chỉ đang bận; scheduler chạy lại ngay sau khi run kết thúc.
+- `stop()` chỉ dừng scheduler, worker detached tiếp tục chạy; thêm `cancelAll()` cho việc hủy chủ động.
+- Khôi phục worker còn sống sau restart, theo dõi `pidStart` để tránh PID tái sử dụng.
+- Thay retry transient bằng `notBefore`/`transientRetries` lưu trong SQLite; giới hạn 3 lần và reset đúng outcome.
+- Lưu slot trong task, giữ slot đến `done`/`cancelled`, sửa cấp slot và báo lỗi sinh env.
+- Chỉ đọc 16 KiB cuối log, lưu `projectId` trong `RunningTask`, từ chối feedback review rỗng.
+- Thêm migration tương thích cho DB cũ và test hồi quy dùng fake engine.
+
+## Kiểm tra
+
+- Trước khi sửa: 30 test hiện hữu.
+- Sau khi sửa: 36/36 test pass (15 engines, 3 profiles, 18 scheduler).
+- `npm run lint`: đạt.
+- `npm run typecheck`: đạt.
+- `npm test -- --run`: đạt, 36/36.
+- `npm run build`: đạt.
+
+## Test hồi quy
+
+Các test hồi quy nằm trong `test/scheduler.test.ts`, gồm task chờ hồ sơ bận, stop/cancelAll, khôi phục worker sống, retry transient persisted, slot ổn định và feedback rỗng.
+
+## Việc chưa làm được
+
+Task yêu cầu mỗi lỗi một commit riêng. Các thay đổi của lượt này hiện đang ở một commit chung do các phần schema và scheduler phụ thuộc lẫn nhau.
+
+## Commit
+
+- `381e161 fix(scheduler): apply a0 review fixes`

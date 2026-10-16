@@ -1,0 +1,45 @@
+# Nghiệm thu Task a1-fixes2: Cô lập test khỏi dữ liệu thật
+
+## 1. Tóm tắt việc đã làm
+1. **Cô lập đọc log và email hồ sơ mặc định ("chinh")**:
+   - Thêm trường `defaultLogDir` vào `AgentHubConfig` và hàm `loadConfig()` với fallback thứ tự: `userConfig.defaultLogDir` -> `process.env.AGENTHUB_DEFAULT_LOG_DIR` -> `~/.gemini/antigravity-cli/log`.
+   - Cập nhật `ProfileService.registerAll()`, `checkProfile()` và CLI profile check đọc log hồ sơ `chinh` qua `defaultLogDir`.
+   - Tạo fixture `test/fixtures/fake-gemini-log/fake.log` chứa email giả để test không bao giờ đọc `~/.gemini`.
+2. **Thay thế agy thật trong test PTY bằng script giả**:
+   - Tạo `test/fixtures/fake-agy-login.mjs` có shebang `#!/usr/bin/env node` và quyền thực thi. Script in thông báo interactive, ghi dòng `authenticated successfully as test@example.com` vào `$HOME/.gemini/antigravity-cli/log/agy.log` rồi thoát sạch.
+   - Cập nhật `test/pty.test.ts` trỏ `process.env.AGENTHUB_AGY_BIN` tới fixture trên và xác thực email cập nhật thành `test@example.com`.
+3. **Thêm lưới an toàn toàn cục (Safety Net)**:
+   - Tạo `test/safety-check.ts` đăng ký qua `globalSetup` trong `vitest.config.ts`.
+   - Trước khi test chạy: chụp snapshot danh sách thư mục con của `~/.agy-homes` và thời điểm sửa đổi (`mtimeMs`) của `~/.agenthub` (hỗ trợ cả môi trường chạy trực tiếp và chạy trong profile con).
+   - Sau khi test suite kết thúc: so sánh đối chiếu; nếu danh sách thư mục con thay đổi hoặc `~/.agenthub` bị tạo mới/sửa đổi thì throw Error làm test suite fail lập tức.
+   - Tạo `test/test-env.ts` trong `setupFiles` để fallback cô lập môi trường nếu có test case chưa gán biến môi trường.
+4. **Cô lập thư mục tạm cho toàn bộ test suite**:
+   - Cập nhật toàn bộ các file test (`api.test.ts`, `pty.test.ts`, `profiles.test.ts`, `cli.test.ts`, `mcp.test.ts`, `scheduler.test.ts`, `security.test.ts`, `sse.test.ts`, `web.test.ts`) tạo và dọn dẹp thư mục tạm cho cả `AGENTHUB_HOME` và `AGENTHUB_AGY_HOMES`, kèm theo `AGENTHUB_DEFAULT_LOG_DIR` và `AGENTHUB_AGY_BIN`.
+5. **Bảo đảm GET /api/profiles không tạo thư mục**:
+   - Viết thêm test case chuyên biệt trong `test/api.test.ts` xác thực việc gọi `GET /api/profiles` hoàn toàn là thao tác đọc, không tạo thêm bất kỳ thư mục hay file nào trong `agyHomesDir`.
+
+## 2. Kết quả kiểm tra & nghiệm thu
+- `npm run lint`: Passed (0 errors, 0 warnings)
+- `npm run typecheck`: Passed (0 errors)
+- `npm test -- --run`: Passed 10/10 test files, 79/79 tests passed
+- `npm run build`: Passed (tsc thành công, copy protocol.md vào dist/)
+
+### Kết quả `ls -a ~/.agy-homes` trước và sau khi chạy test:
+- **Trước khi chạy `npm test -- --run`**:
+  ```
+  .  ..  g1  g2  g3  .state
+  ```
+- **Sau khi chạy `npm test -- --run`**:
+  ```
+  .  ..  g1  g2  g3  .state
+  ```
+Hai danh sách hoàn toàn giống nhau, chỉ gồm `g1 g2 g3` và thư mục `.state` bị ẩn.
+
+## 3. Việc chưa làm được và lý do
+- Không có. Tất cả các yêu cầu và tiêu chí nghiệm thu đều đã đạt 100%.
+
+## 4. Danh sách commit
+- `56147aa`: `feat(config,profiles): support configurable defaultLogDir and fake log isolated from ~/.gemini`
+- `b15265d`: `test(pty): use fake-agy-login fixture and configure AGENTHUB_AGY_BIN`
+- `3b008f1`: `test(safety): add vitest global safety net protecting ~/.agy-homes and ~/.agenthub`
+- `b2f5ae8`: `test(isolation): ensure all tests use temporary directories for hub home, agy homes, and logs`

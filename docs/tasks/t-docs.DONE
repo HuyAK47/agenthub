@@ -1,0 +1,47 @@
+# Báo cáo hoàn thành Task: t-docs – Cập nhật tài liệu
+
+## 1. Tóm tắt việc đã làm
+
+Đã thực hiện cập nhật và hoàn thiện toàn bộ tài liệu theo yêu cầu của `docs/tasks/t-docs.md`, không sửa đổi code:
+
+1. **`docs/PLAN.md`**:
+   - **Mục 3.5 (Scheduler)**: Cập nhật chuỗi model mặc định hiện tại (`hard`: `gemini-3.8-flash-high` → `codex:gpt-5.6-luna`; `easy`: `gemini-3.8-flash-medium` → `codex:gpt-5.6-luna`). Quy định model Opus (`claude-opus-4-6-thinking`) chỉ dùng khi được chỉ định rõ trên task. Bổ sung quy tắc thực thi: worker không được dùng subagent / agent con / chạy song song nhiều agent; mỗi hồ sơ agy chạy tối đa 2 agent đồng thời.
+   - **Mục 3.7 (HTTP API)**: Bổ sung endpoint `GET/PUT /api/config` với schema phẳng `{modelChainHard, modelChainEasy, defaultTimeout}` (đơn vị timeout là giây), tham chiếu chính xác tới `UpdateConfigSchema` trong `src/services/index.ts`. Bổ sung ghi chú *"định dạng sự kiện SSE: xem web/CONTRACT.md 4.2"*.
+   - **Mục 2.4 (Kiến thức kiểm chứng)**: Bổ sung bài học thực tế "Lỗi do crash máy" ghi nhận hiện tượng file đang ghi dở bị rỗng (0 bytes), object git rỗng/hỏng khi máy crash hoặc mất nguồn; kèm cách kiểm tra và rà soát bằng lệnh `git fsck` và `find -size 0`.
+
+2. **`README.md`**:
+   - Viết phần giới thiệu ngắn gọn, súc tích về vai trò của AgentHub.
+   - Hướng dẫn cài đặt chuẩn với Node 22: `npm ci`, `npm --prefix web ci`, `npm run build`, `npm run build:web`.
+   - Tài liệu hóa đầy đủ các lệnh CLI chính: `agenthub daemon`, `agenthub open`, `agenthub doctor`, `agenthub install-service`, `agenthub mcp-install`, `agenthub link` và các lệnh bổ trợ (`status`, `profile`, `project`, `task`).
+   - Liên kết trực tiếp sang `docs/USAGE.md` và `docs/PLAN.md`.
+
+3. **`docs/USAGE.md`** (Tài liệu hướng dẫn mới cho người dùng bằng tiếng Việt):
+   - Hướng dẫn thêm và quản lý tài khoản Gemini/Antigravity trên Web Dashboard và qua CLI (`agenthub profile login`), đặc biệt làm nổi bật mẹo chọn **"Sử dụng tài khoản khác"** để không bị Google tự động đăng nhập tài khoản có sẵn dẫn đến trùng email.
+   - Hướng dẫn đọc Dashboard chi tiết: ý nghĩa và màu sắc của từng trạng thái task (`draft`, `queued`, `running`, `review`, `done`, `blocked`, `failed`, `waiting_quota`, `cancelled`) và trạng thái tài khoản (`busy`, Quota Marks đếm ngược, cảnh báo trùng email).
+   - Mô tả quy trình làm việc chuẩn cùng Claude Code: Claude tạo task qua MCP → scheduler phân phối và worker chạy trên git worktree riêng → Claude review diff và DONE report → duyệt (`approved`) hoặc yêu cầu sửa đổi (`changes_requested`).
+   - Hướng dẫn xử lý các sự cố thường gặp: hết quota (429), lỗi 503 / Eligibility check failed, trùng tài khoản, dashboard trắng trang (cách build lại web `npm run build:web`), sự cố crash máy/mất điện.
+
+---
+
+## 2. Kết quả kiểm tra chất lượng (Lint / Typecheck / Test / Build)
+
+- **Lint**: `npm run lint` → **PASSED** (0 lỗi, 0 cảnh báo).
+- **Typecheck**: `npm run typecheck` → **PASSED** (0 lỗi).
+- **Backend Tests**: `npm test` → **PASSED** (10/10 test files, 79/79 tests passed).
+- **Frontend Tests**: `npm run test:web` → **PASSED** (8/8 test files, 23/23 tests passed).
+- **Backend Build**: `npm run build` → **PASSED** (`dist/cli.js`, `dist/protocol.md` đã sinh đầy đủ).
+- **Frontend Build**: `npm run build:web` → **PASSED** (`dist/web/index.html` và assets đã sinh đầy đủ).
+
+---
+
+## 3. Việc chưa làm được và lý do
+
+Không có. Toàn bộ các yêu cầu của task `t-docs` đã được hoàn thành đúng quy định.
+
+---
+
+## 4. Danh sách commit
+
+- `c2ad6a3` docs(plan): update model chains, config api, and crash recovery notes
+- `fa087df` docs(readme): update installation, commands reference, and usage link
+- `e3aff22` docs(usage): add user guide covering profile setup, dashboard, claude workflow, and troubleshooting

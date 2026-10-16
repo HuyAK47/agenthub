@@ -1,0 +1,825 @@
+#!/usr/bin/env node
+
+import { fileURLToPath } from 'node:url';
+import { loadConfig, AgentHubConfig } from './config.js';
+import { createContext } from './daemon.js';
+import { startDaemon } from './daemon.js';
+import { runMcpServer } from './mcp/index.js';
+import { getOrCreateToken, getTokenPath } from './auth.js';
+import { spawnSync, execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import { AgyEngine } from './engines/index.js';
+import { runDoctor, formatDoctorText, formatDoctorJson, DoctorReport } from './doctor.js';
+import { cmdBrain } from './brain.js';
+import { WorktreeService } from './worktrees/index.js';
+import { parseCodexTokens } from './savings.js';
+import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
+
+const args = process.argv.slice(2);
+const command = args[0];
+const subcommand = args[1];
+
+export function findProjectRoot(startDir = path.dirname(fileURLToPath(import.meta.url))): string {
+  let curr = startDir;
+  while (curr !== path.dirname(curr)) {
+    if (fs.existsSync(path.join(curr, 'package.json'))) {
+      return curr;
+    }
+    curr = path.dirname(curr);
+  }
+  return path.resolve(startDir, '..');
+}
+
+export type OpenFn = (file: string, args: string[], callback?: (err: Error | null) => void) => void;
+
+export async function cmdOpen(
+  config: AgentHubConfig,
+  extraArgs: string[] = [],
+  openFn?: OpenFn,
+): Promise<string> {
+  const token = getOrCreateToken(config.tokenPath || getTokenPath());
+  const port = config.port;
+  const url = `http://127.0.0.1:${port}/#token=${token}`;
+  console.log(`AgentHub UI URL:\n${url}`);
+  const noBrowser = extraArgs.includes('--no-browser') || process.env.AGENTHUB_NO_BROWSER === '1';
+  if (!noBrowser) {
+    try {
+      if (openFn) {
+        openFn('xdg-open', [url]);
+      } else {
+        const { execFile } = await import('node:child_process');
+        execFile('xdg-open', [url], () => {});
+      }
+    } catch {
+      // Ignore in headless environments
+    }
+  }
+  return url;
+}
+
+export async function cmdInstallService(extraArgs: string[]): Promise<string> {
+  const isPrint = extraArgs.includes('--print');
+  const projectRoot = findProjectRoot();
+  const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
+  const nodePath = process.execPath;
+  const currentPath = process.env.PATH || '';
+
+  const serviceContent = `[Unit]
+Description=AgentHub Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${nodePath} ${cliPath} daemon
+Restart=on-failure
+Environment=PATH=${currentPath}
+
+[Install]
+WantedBy=default.target
+`;
+
+  const serviceDir = path.join(os.homedir(), '.config', 'systemd', 'user');
+  const serviceFile = path.join(serviceDir, 'agenthub.service');
+
+  if (isPrint) {
+    const output = `File: ${serviceFile}\n\n${serviceContent}\nCác lệnh kích hoạt:\n  systemctl --user daemon-reload\n  systemctl --user enable --now agenthub`;
+    console.log(output);
+    return output;
+  }
+
+  fs.mkdirSync(serviceDir, { recursive: true });
+  fs.writeFileSync(serviceFile, serviceContent, 'utf-8');
+  console.log(`✓ Đã tạo service file tại ${serviceFile}`);
+
+  const { execSync } = await import('node:child_process');
+  execSync('systemctl --user daemon-reload && systemctl --user enable --now agenthub', {
+    stdio: 'inherit',
+  });
+  console.log('✓ Đã bật và khởi chạy service agenthub');
+  return serviceContent;
+}
+
+export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
+  const isPrint = extraArgs.includes('--print');
+  const projectRoot = findProjectRoot();
+  const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
+  const nodePath = process.execPath;
+
+  const command = `claude mcp add --scope user agenthub -- ${nodePath} ${cliPath} mcp`;
+
+  if (isPrint) {
+    console.log(`Lệnh đăng ký MCP:\n  ${command}`);
+    return command;
+  }
+
+  const { execSync } = await import('node:child_process');
+  execSync(command, { stdio: 'inherit' });
+  console.log('✓ Đã đăng ký MCP server với Claude Code');
+  return command;
+}
+
+export async function cmdLink(): Promise<string> {
+  const projectRoot = findProjectRoot();
+  const wrapperPath = path.resolve(projectRoot, 'bin', 'agenthub');
+  const targetDir = path.join(os.homedir(), '.local', 'bin');
+  const targetPath = path.join(targetDir, 'agenthub');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  try {
+    if (fs.existsSync(targetPath) || fs.lstatSync(targetPath).isSymbolicLink()) {
+      fs.unlinkSync(targetPath);
+    }
+  } catch {
+    // ignore
+  }
+
+  fs.symlinkSync(wrapperPath, targetPath);
+  console.log(`✓ Đã tạo symlink: ${targetPath} -> ${wrapperPath}`);
+  return targetPath;
+}
+
+export async function cmdDoctor(
+  config: AgentHubConfig,
+  extraArgs: string[] = [],
+  doctorDeps?: Parameters<typeof runDoctor>[0],
+): Promise<DoctorReport> {
+  const isJson = extraArgs.includes('--json');
+  const report = await runDoctor(doctorDeps);
+  if (isJson) {
+    console.log(formatDoctorJson(report));
+  } else {
+    console.log(formatDoctorText(report));
+  }
+  if (!report.ok) {
+    process.exitCode = 1;
+  }
+  return report;
+}
+
+async function main() {
+  const config = loadConfig();
+
+  switch (command) {
+    case 'daemon':
+      await startDaemon(config);
+      break;
+
+    case 'mcp':
+      await runMcpServer();
+      break;
+
+    case 'open':
+      await cmdOpen(config, args.slice(1));
+      break;
+
+    case 'install-service':
+      await cmdInstallService(args.slice(1));
+      break;
+
+    case 'mcp-install':
+      await cmdMcpInstall(args.slice(1));
+      break;
+
+    case 'link':
+      await cmdLink();
+      break;
+
+    case 'doctor':
+      await cmdDoctor(config, args.slice(1));
+      break;
+
+    case 'status':
+      await cmdStatus(config);
+      break;
+
+    case 'clean':
+      await cmdClean(config, args.slice(1));
+      break;
+
+    case 'usage':
+      await cmdUsage(config);
+      break;
+
+    case 'profile':
+      await cmdProfile(config, subcommand, args.slice(2));
+      break;
+
+    case 'project':
+      await cmdProject(config, subcommand, args.slice(2));
+      break;
+
+    case 'task':
+      await cmdTask(config, subcommand, args.slice(2));
+      break;
+
+    case 'brain':
+      await cmdBrain(config, args.slice(1));
+      break;
+    case 'savings':
+      await cmdSavings(config, subcommand, args.slice(2));
+      break;
+
+    case 'claude-sessions':
+      await cmdClaudeSessions(config, args.slice(1));
+      break;
+
+    default:
+      console.log(`AgentHub - Quản lý worker AI
+
+Cách dùng:
+  agenthub daemon                     Chạy daemon AgentHub
+  agenthub mcp                        Chạy MCP server (stdio transport)
+  agenthub open                       Mở giao diện web trong trình duyệt
+  agenthub install-service [--print]  Cài đặt systemd user service
+  agenthub mcp-install [--print]      Đăng ký MCP server với Claude Code
+  agenthub link                       Tạo symlink vào ~/.local/bin/agenthub
+  agenthub doctor [--json]            Kiểm tra môi trường và cấu hình hệ thống
+  agenthub status                     Xem trạng thái
+  agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
+  agenthub usage                      Xem usage quota các hồ sơ
+  agenthub profile list|check|login   Quản lý hồ sơ
+  agenthub project add <name> <path>  Thêm project
+  agenthub task add|list|show|log     Quản lý task
+  agenthub brain <act> "<detail>" [--task id] Cập nhật trạng thái Claude
+  agenthub savings import-legacy [dir] Nhập lịch sử token từ log cũ
+  agenthub claude-sessions --summary  Tóm tắt phiên Claude và chi phí 24 giờ qua
+`);
+  }
+}
+
+async function cmdClaudeSessions(config: ReturnType<typeof loadConfig>, extraArgs: string[]): Promise<void> {
+  if (!extraArgs.includes('--summary')) return;
+  const ctx = createContext(config);
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const sessions = ctx.db.prepare('SELECT COUNT(*) count FROM claude_sessions').get() as { count: number };
+  const total = ctx.db.prepare('SELECT COALESCE(SUM(effective),0) effectiveTokens FROM claude_usage WHERE ts >= ?').get(since) as { effectiveTokens: number };
+  const tasks = ctx.db.prepare('SELECT ctu.taskId, SUM(ctu.effectiveTokens) effectiveTokens FROM claude_task_usage ctu JOIN (SELECT DISTINCT sessionId,turnId FROM claude_usage WHERE ts >= ?) cu ON cu.sessionId=ctu.sessionId AND cu.turnId=ctu.turnId GROUP BY ctu.taskId ORDER BY effectiveTokens DESC LIMIT 5').all(since) as Array<{ taskId: string; effectiveTokens: number }>;
+  console.log(`Phiên Claude: ${sessions.count}`);
+  console.log(`Token hiệu dụng 24 giờ qua: ${Number(total.effectiveTokens).toLocaleString()}`);
+  console.log('Task tốn nhiều nhất:');
+  for (const task of tasks) console.log(`  ${task.taskId}: ${Math.round(task.effectiveTokens).toLocaleString()}`);
+  ctx.db.close();
+}
+
+async function cmdUsage(config: ReturnType<typeof loadConfig>) {
+  const ctx = createContext(config);
+  ctx.profileService.registerAll();
+  for (const p of ctx.profileRepo.getAll()) {
+    const rows = ctx.usageService.getForProfile(p.name);
+    console.log(`${p.name} (${p.engine}): ${rows.length ? rows.map((r) => `${r.grp} ${r.window} ${r.remainingPct}% reset ${new Date(r.resetAt * 1000).toISOString()}`).join(' · ') : '(chưa có dữ liệu)'}`);
+  }
+  ctx.db.close();
+}
+
+async function cmdStatus(config: ReturnType<typeof loadConfig>) {
+  const ctx = createContext(config);
+  ctx.profileService.registerAll();
+
+  const profiles = ctx.profileRepo.getAll();
+  const tasks = ctx.taskRepo.getAll();
+  const quotaMarks = ctx.quotaMarkRepo.getActive();
+
+  const byStatus: Record<string, number> = {};
+  for (const t of tasks) {
+    byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+  }
+
+  console.log('=== AgentHub Status ===\n');
+  console.log(`Hồ sơ: ${profiles.length}`);
+  console.log(`Quota marks đang hoạt động: ${quotaMarks.length}`);
+  console.log(`\nTask:`);
+  for (const [status, count] of Object.entries(byStatus)) {
+    console.log(`  ${status}: ${count}`);
+  }
+  if (Object.keys(byStatus).length === 0) {
+    console.log('  (không có task)');
+  }
+
+  ctx.db.close();
+}
+
+export async function cmdClean(
+  config: ReturnType<typeof loadConfig>,
+  extraArgs: string[] = [],
+): Promise<{ tasks: number; removed: number; freedBytes: number; deduplicated?: number; savedBytes?: number }> {
+  const dryRun = extraArgs.includes('--dry-run');
+  const dedupe = extraArgs.includes('--dedupe');
+  const ctx = createContext(config);
+  const worktrees = new WorktreeService(config);
+  let tasks = 0;
+  let removed = 0;
+  let freedBytes = 0;
+  let deduplicated = 0;
+  let savedBytes = 0;
+
+  try {
+    if (dedupe) {
+      const worktreePaths = new Set<string>();
+      for (const task of ctx.taskRepo.getAll()) {
+        if (task.worktreePath && fs.existsSync(task.worktreePath)) {
+          worktreePaths.add(task.worktreePath);
+        }
+      }
+      if (fs.existsSync(config.worktreesDir)) {
+        try {
+          for (const projId of fs.readdirSync(config.worktreesDir)) {
+            const projDir = path.join(config.worktreesDir, projId);
+            if (fs.statSync(projDir).isDirectory()) {
+              for (const slug of fs.readdirSync(projDir)) {
+                const wtDir = path.join(projDir, slug);
+                if (fs.existsSync(wtDir) && fs.statSync(wtDir).isDirectory()) {
+                  worktreePaths.add(wtDir);
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      for (const wtPath of worktreePaths) {
+        tasks++;
+        const targetDirs = [wtPath, path.join(wtPath, 'web')];
+        for (const dir of targetDirs) {
+          const lockInfo = getLockFileInfo(dir);
+          const nmDir = path.join(dir, 'node_modules');
+          if (!lockInfo || !fs.existsSync(nmDir)) continue;
+
+          const lockHash = hashFile(lockInfo.path);
+          const cacheEntryDir = path.join(config.cacheDir, lockHash);
+          let cacheNm = getCacheNodeModulesDir(cacheEntryDir);
+
+          // If cache doesn't have it, populate cache from this worktree's node_modules
+          if (!cacheNm && !dryRun) {
+            fs.mkdirSync(cacheEntryDir, { recursive: true });
+            const targetCacheNm = path.join(cacheEntryDir, 'node_modules');
+            try {
+              execFileSync('cp', ['-al', nmDir, targetCacheNm]);
+              cacheNm = targetCacheNm;
+            } catch {
+              continue;
+            }
+          }
+          if (!cacheNm) continue;
+
+          // Check if already hard-linked
+          if (areDirectoriesHardLinked(nmDir, cacheNm)) {
+            continue;
+          }
+
+          const size = worktrees.getDirectorySize(nmDir);
+          if (!dryRun) {
+            fs.rmSync(nmDir, { recursive: true, force: true });
+            execFileSync('cp', ['-al', cacheNm, nmDir]);
+
+            const isWeb = path.basename(dir) === 'web';
+            const wtRoot = isWeb ? path.dirname(dir) : dir;
+            const agentHubDir = path.join(wtRoot, '.agenthub');
+            fs.mkdirSync(agentHubDir, { recursive: true });
+            fs.writeFileSync(path.join(agentHubDir, isWeb ? 'web-lock.hash' : 'root-lock.hash'), lockHash, 'utf8');
+            await verifyNativeModules(dir);
+          }
+
+          savedBytes += size;
+          deduplicated++;
+          console.log(`${dir}: ${dryRun ? 'có thể dedupe' : 'đã dedupe'} bằng hard-link từ cache — tiết kiệm ${size} bytes`);
+        }
+      }
+
+      console.log(`Dedupe: ${deduplicated} thư mục node_modules, tiết kiệm ${savedBytes} bytes (${(savedBytes / (1024 * 1024)).toFixed(1)} MB)${dryRun ? ' (dự kiến)' : ''}`);
+      return { tasks, removed: 0, freedBytes: 0, deduplicated, savedBytes };
+    }
+
+    for (const task of ctx.taskRepo.getAll()) {
+      if (task.status !== 'done' && task.status !== 'cancelled') continue;
+      if (!task.worktreePath || !fs.existsSync(task.worktreePath)) continue;
+      tasks++;
+
+      const dirs = [
+        path.join(task.worktreePath, 'node_modules'),
+        path.join(task.worktreePath, 'web', 'node_modules'),
+      ];
+      const existing = dirs.filter((dir) => fs.existsSync(dir));
+      const size = existing.reduce((total, dir) => total + worktrees.getDirectorySize(dir), 0);
+      freedBytes += size;
+      removed += existing.length;
+
+      if (dryRun) {
+        console.log(`${task.id}: ${existing.length ? existing.join(', ') : '(không có node_modules)'} — ${size} bytes`);
+      } else {
+        const result = worktrees.cleanNodeModules(task.worktreePath);
+        console.log(`${task.id}: đã xóa ${result.removed.length} thư mục — giải phóng ${result.freedBytes} bytes`);
+      }
+    }
+  } finally {
+    ctx.db.close();
+  }
+
+  console.log(`${dryRun ? 'Tổng dự kiến' : 'Tổng'}: ${removed} thư mục, ${freedBytes} bytes${dryRun ? '' : ' đã giải phóng'}`);
+  return { tasks, removed, freedBytes };
+}
+
+async function cmdProfile(
+  config: ReturnType<typeof loadConfig>,
+  sub: string | undefined,
+  extraArgs: string[],
+) {
+  const ctx = createContext(config);
+  ctx.profileService.registerAll();
+
+  switch (sub) {
+    case 'list': {
+      const profiles = ctx.profileRepo.getAll();
+      const quotaMarks = ctx.quotaMarkRepo.getActive();
+      const dupes = ctx.profileService.getDuplicateEmails();
+
+      console.log('=== Hồ sơ ===\n');
+      for (const p of profiles) {
+        const marks = quotaMarks.filter((m) => m.profileName === p.name);
+        const markStr = marks.length > 0
+          ? ` [QUOTA: ${marks.map((m) => `${m.family} until ${new Date(m.until * 1000).toLocaleString()}`).join(', ')}]`
+          : '';
+        const enabledStr = p.enabled ? '' : ' (tắt)';
+        console.log(
+          `  ${p.name}: engine=${p.engine}, kind=${p.kind}, email=${p.email || '(chưa có)'}${enabledStr}${markStr}`,
+        );
+      }
+
+      if (dupes.size > 0) {
+        console.log('\n⚠️  Cảnh báo trùng email:');
+        for (const [email, names] of dupes) {
+          console.log(`  ${email}: ${names.join(', ')}`);
+        }
+      }
+      break;
+    }
+
+    case 'check': {
+      const name = extraArgs[0];
+      const profiles = name ? [ctx.profileRepo.get(name)] : ctx.profileRepo.getAll();
+      for (const p of profiles) {
+        if (!p) {
+          console.error(`Hồ sơ "${name}" không tồn tại`);
+          process.exitCode = 1;
+          continue;
+        }
+        if (p.engine !== 'agy') continue;
+        console.log(`Checking ${p.name}...`);
+        const logPath = path.join(config.logsDir, 'profile-check', `${p.name}-${crypto.randomUUID()}.log`);
+        const child = new AgyEngine().spawn({
+          profile: p,
+          model: 'gemini-3.8-flash-low',
+          cwd: process.cwd(),
+          prompt: 'OK',
+          logPath,
+        });
+        await new Promise<void>((resolve) => child.once('close', () => resolve()));
+        const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').trim() : '';
+        const logDir = p.name === 'chinh'
+          ? config.defaultLogDir
+          : path.join(p.home || os.homedir(), '.gemini', 'antigravity-cli', 'log');
+        const email = ctx.profileService.readEmailFromLog(logDir);
+        console.log(`  Email: ${email || '(không tìm thấy)'}`);
+        console.log(`  Kết quả: ${output || '(không có output)'}`);
+      }
+      break;
+    }
+
+    case 'login': {
+      const name = extraArgs[0];
+      if (!name) {
+        console.error('Cần chỉ định tên hồ sơ: agenthub profile login <tên>');
+        process.exit(1);
+      }
+      let profile = ctx.profileRepo.get(name);
+      if (!profile) {
+        // Create new profile
+        ctx.profileService.createProfile(name);
+        profile = ctx.profileRepo.get(name)!;
+      }
+
+      // Run agy interactively with profile's environment
+      const agyPath = path.join(os.homedir(), '.gemini', 'bin', 'agy');
+      const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+
+      if (profile.kind === 'isolated' && profile.home) {
+        env.HOME = profile.home;
+        env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
+      }
+
+      console.log(`Đăng nhập hồ sơ "${name}"...`);
+      console.log('Chọn "Sử dụng tài khoản khác" nếu muốn dùng tài khoản Google khác.');
+      console.log('Sau khi đăng nhập xong, gõ /exit hoặc Ctrl+C để thoát.\n');
+
+      spawnSync(agyPath, [], {
+        env,
+        stdio: 'inherit',
+      });
+
+      // Re-read email
+      const logDir = path.join(
+        profile.home || os.homedir(),
+        '.gemini',
+        'antigravity-cli',
+        'log',
+      );
+      const email = ctx.profileService.readEmailFromLog(logDir);
+      if (email) {
+        ctx.profileRepo.upsert({ ...profile, email });
+        console.log(`\n✓ Đã đăng nhập: ${email}`);
+      } else {
+        console.log('\n⚠ Không tìm thấy email trong log.');
+      }
+      break;
+    }
+
+    default:
+      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>');
+  }
+
+  ctx.db.close();
+}
+
+async function cmdProject(
+  config: ReturnType<typeof loadConfig>,
+  sub: string | undefined,
+  extraArgs: string[],
+) {
+  const ctx = createContext(config);
+
+  switch (sub) {
+    case 'add': {
+      const name = extraArgs[0];
+      const projectPath = extraArgs[1];
+      if (!name || !projectPath) {
+        console.error('Cách dùng: agenthub project add <name> <path>');
+        process.exit(1);
+      }
+      const resolvedPath = path.resolve(projectPath);
+      ctx.projectRepo.insert({
+        id: name,
+        name,
+        path: resolvedPath,
+        defaultBranch: 'main',
+        envTemplate: null,
+        maxParallel: 3,
+      });
+      console.log(`✓ Đã thêm project "${name}" tại ${resolvedPath}`);
+      break;
+    }
+
+    default:
+      console.log('Cách dùng: agenthub project add <name> <path>');
+  }
+
+  ctx.db.close();
+}
+
+async function cmdTask(
+  config: ReturnType<typeof loadConfig>,
+  sub: string | undefined,
+  extraArgs: string[],
+) {
+  const ctx = createContext(config);
+
+  switch (sub) {
+    case 'add': {
+      const projectId = extraArgs[0];
+      const slug = extraArgs[1];
+      if (!projectId || !slug) {
+        console.error('Cách dùng: agenthub task add <project> <slug> --title "..." --level easy|hard [--body-file ...]');
+        process.exit(1);
+      }
+
+      const title = getArg(extraArgs, '--title') || slug;
+      const level = getArg(extraArgs, '--level') || 'easy';
+      const bodyFile = getArg(extraArgs, '--body-file');
+      const depends = getArg(extraArgs, '--depends');
+      const shouldStart = extraArgs.includes('--start');
+
+      let body = title;
+      if (bodyFile) {
+        const fs = await import('node:fs');
+        body = fs.readFileSync(bodyFile, 'utf-8');
+      }
+
+      const taskId = `${projectId}/${slug}`;
+      const dependsOn = depends ? depends.split(',').map((d) => d.trim()) : [];
+
+      ctx.taskRepo.insert({
+        id: taskId,
+        projectId,
+        slug,
+        title,
+        body,
+        level,
+        dependsOn,
+        status: shouldStart ? 'queued' : 'draft',
+      });
+
+      console.log(`✓ Đã tạo task "${taskId}" (${shouldStart ? 'queued' : 'draft'})`);
+      break;
+    }
+
+    case 'list': {
+      const tasks = ctx.taskRepo.getAll();
+      if (tasks.length === 0) {
+        console.log('Không có task nào.');
+        break;
+      }
+      console.log('=== Tasks ===\n');
+      for (const t of tasks) {
+        console.log(`  ${t.id}: ${t.title} [${t.status}] level=${t.level} attempt=${t.attempt}`);
+      }
+      break;
+    }
+
+    case 'show': {
+      const taskId = extraArgs[0];
+      if (!taskId) {
+        console.error('Cách dùng: agenthub task show <id>');
+        process.exit(1);
+      }
+      const task = ctx.taskRepo.get(taskId);
+      if (!task) {
+        console.error(`Task "${taskId}" không tồn tại`);
+        process.exit(1);
+      }
+      console.log(`Task: ${task.id}`);
+      console.log(`  Title: ${task.title}`);
+      console.log(`  Status: ${task.status}`);
+      console.log(`  Level: ${task.level}`);
+      console.log(`  Attempt: ${task.attempt}`);
+      console.log(`  Branch: ${task.branch || '(chưa tạo)'}`);
+      console.log(`  Worktree: ${task.worktreePath || '(chưa tạo)'}`);
+      console.log(`  Dependencies: ${task.dependsOn}`);
+
+      const runs = ctx.runRepo.getByTask(taskId);
+      if (runs.length > 0) {
+        console.log(`\n  Runs:`);
+        for (const r of runs) {
+          console.log(
+            `    ${r.id}: model=${r.model} profile=${r.profileName} outcome=${r.outcome || 'running'}`,
+          );
+        }
+      }
+      break;
+    }
+
+    case 'log': {
+      const taskId = extraArgs[0];
+      if (!taskId) {
+        console.error('Cách dùng: agenthub task log <id>');
+        process.exit(1);
+      }
+      const runs = ctx.runRepo.getByTask(taskId);
+      const lastRun = runs[runs.length - 1];
+      if (!lastRun?.logPath) {
+        console.error('Không có log');
+        break;
+      }
+      const fs = await import('node:fs');
+      if (fs.existsSync(lastRun.logPath)) {
+        console.log(fs.readFileSync(lastRun.logPath, 'utf-8'));
+      } else {
+        console.error(`Log file không tồn tại: ${lastRun.logPath}`);
+      }
+      break;
+    }
+
+    default:
+      console.log('Cách dùng: agenthub task add|list|show|log');
+  }
+
+  ctx.db.close();
+}
+
+export async function cmdSavings(
+  config: ReturnType<typeof loadConfig>,
+  sub: string | undefined,
+  extraArgs: string[],
+): Promise<void> {
+  const ctx = createContext(config);
+
+  switch (sub) {
+    case 'import-legacy': {
+      const targetDir = extraArgs[0]
+        ? path.resolve(extraArgs[0])
+        : path.join(os.homedir(), '.gemini', 'agy-run-logs');
+
+      if (!fs.existsSync(targetDir)) {
+        console.log(`Thư mục log không tồn tại: ${targetDir}`);
+        ctx.db.close();
+        return;
+      }
+
+      console.log(`Đang quét log Codex trong: ${targetDir}...`);
+
+      function scanDir(dir: string, depth = 0): string[] {
+        const results: string[] = [];
+        if (depth > 4) return results;
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              results.push(...scanDir(fullPath, depth + 1));
+            } else if (entry.isFile() && entry.name.endsWith('.log') && /codex/i.test(entry.name)) {
+              results.push(fullPath);
+            }
+          }
+        } catch {
+          // ignore
+        }
+        return results;
+      }
+
+      const logFiles = scanDir(targetDir);
+      if (logFiles.length === 0) {
+        console.log('Không tìm thấy log Codex nào.');
+        ctx.db.close();
+        return;
+      }
+
+      let importedCount = 0;
+      for (const filePath of logFiles) {
+        try {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          const tokens = parseCodexTokens(content);
+          if (tokens == null) continue;
+
+          // The slug is the name of the directory containing the log file
+          const slug = path.basename(path.dirname(filePath));
+          const allTasks = ctx.taskRepo.getAll();
+          const task = allTasks.find((t) => t.slug === slug);
+          if (!task) {
+            console.log(`- Bỏ qua: Không tìm thấy task có slug "${slug}" cho log ${path.basename(filePath)}`);
+            continue;
+          }
+
+          const runs = ctx.runRepo.getByTask(task.id);
+          const targetRun = runs.find((r) => r.engine === 'codex') || runs[0];
+          const runId = targetRun ? targetRun.id : crypto.randomUUID();
+
+          if (!targetRun) {
+            ctx.runRepo.insert({
+              id: runId,
+              taskId: task.id,
+              engine: 'codex',
+              model: 'gpt-5.6-luna',
+              profileName: 'codex',
+            });
+          }
+
+          ctx.runMetricsRepo.upsert({
+            runId,
+            taskId: task.id,
+            engine: 'codex',
+            model: targetRun?.model || 'gpt-5.6-luna',
+            profileName: targetRun?.profileName || 'codex',
+            tokensUsed: tokens,
+            usageBefore: null,
+            usageAfter: null,
+            linesAdded: 0,
+            linesDeleted: 0,
+            filesChanged: 0,
+            durationMs: null,
+          });
+
+          console.log(`✓ Đã nhập ${tokens.toLocaleString()} tokens cho task "${task.id}" từ ${path.basename(filePath)}`);
+          importedCount++;
+        } catch (err) {
+          console.error(`Lỗi đọc ${filePath}: ${err}`);
+        }
+      }
+
+      console.log(`\nHoàn thành nhập lịch sử: đã gắn token cho ${importedCount} lượt chạy.`);
+      break;
+    }
+
+    default:
+      console.log('Cách dùng: agenthub savings import-legacy <dir>');
+      break;
+  }
+
+  ctx.db.close();
+}
+
+function getArg(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  if (idx >= 0 && idx + 1 < args.length) {
+    return args[idx + 1];
+  }
+  return undefined;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
