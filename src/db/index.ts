@@ -1003,5 +1003,25 @@ export class RunMetricsRepo {
         row.durationMs ?? null,
       );
   }
+
+  updateLines(runId: string, linesAdded: number, linesDeleted: number, filesChanged: number): void {
+    this.db
+      .prepare(
+        `UPDATE run_metrics
+         SET linesAdded = ?, linesDeleted = ?, filesChanged = ?
+         WHERE runId = ?`,
+      )
+      .run(linesAdded, linesDeleted, filesChanged, runId);
+  }
+
+  clearOtherRunsLines(taskId: string, keepRunId: string): void {
+    this.db
+      .prepare(
+        `UPDATE run_metrics
+         SET linesAdded = 0, linesDeleted = 0, filesChanged = 0
+         WHERE taskId = ? AND runId != ?`,
+      )
+      .run(taskId, keepRunId);
+  }
 }
 
