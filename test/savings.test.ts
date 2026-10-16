@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
@@ -12,6 +13,7 @@ import {
   parseShortstat,
   calculateAgyTokens,
   calculateSavingsRatio,
+  recalculateTaskLines,
 } from '../src/savings.js';
 
 describe('Savings calculation functions', () => {
@@ -407,5 +409,160 @@ describe('SavingsService and GET /api/savings integration', () => {
     expect(metrics.length).toBe(1);
     expect(metrics[0].tokensUsed).toBe(117250);
     expect(metrics[0].engine).toBe('codex');
+  });
+
+  it('recalculates line diff with a temporary git repo with 2 commits (+N/-M), and keeps old lines if branch deleted', async () => {
+    // 1. Create a temporary git repo
+    const testRepoDir = path.join(tmpDir, 'test-repo');
+    fs.mkdirSync(testRepoDir, { recursive: true });
+    execFileSync('git', ['init'], { cwd: testRepoDir });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: testRepoDir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: testRepoDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: testRepoDir });
+
+    // Initial commit on main
+    fs.writeFileSync(path.join(testRepoDir, 'app.txt'), 'line 1\nline 2\nline 3\nline 4\nline 5\n');
+    execFileSync('git', ['add', '.'], { cwd: testRepoDir });
+    execFileSync('git', ['commit', '-m', 'initial commit'], { cwd: testRepoDir });
+
+    // Create branch agenthub/task-diff
+    execFileSync('git', ['checkout', '-b', 'agenthub/task-diff'], { cwd: testRepoDir });
+
+    // Commit 1 on branch: add 3 lines to app.txt, add helper.txt with 4 lines
+    fs.appendFileSync(path.join(testRepoDir, 'app.txt'), 'line 6\nline 7\nline 8\n');
+    fs.writeFileSync(path.join(testRepoDir, 'helper.txt'), 'h1\nh2\nh3\nh4\n');
+    execFileSync('git', ['add', '.'], { cwd: testRepoDir });
+    execFileSync('git', ['commit', '-m', 'feature step 1'], { cwd: testRepoDir });
+
+    // Commit 2 on branch: delete 2 lines from app.txt
+    const content = fs.readFileSync(path.join(testRepoDir, 'app.txt'), 'utf-8').replace('line 1\nline 2\n', '');
+    fs.writeFileSync(path.join(testRepoDir, 'app.txt'), content);
+    execFileSync('git', ['add', '.'], { cwd: testRepoDir });
+    execFileSync('git', ['commit', '-m', 'feature step 2'], { cwd: testRepoDir });
+
+    // Switch back to main so branch is not checked out
+    execFileSync('git', ['checkout', 'main'], { cwd: testRepoDir });
+
+    // Seed project and task in AgentHub DB
+    ctx.db.prepare(`INSERT INTO projects (id, name, path, defaultBranch) VALUES ('proj-git', 'Git Proj', ?, 'main')`).run(testRepoDir);
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, branch, status)
+       VALUES ('proj-git/task-diff', 'proj-git', 'task-diff', 'Task Diff', 'agenthub/task-diff', 'review')`,
+    ).run();
+
+    const runId = 'run-diff-1';
+    ctx.db.prepare(
+      `INSERT INTO runs (id, taskId, engine, model, profileName, startedAt, endedAt, outcome)
+       VALUES (?, 'proj-git/task-diff', 'agy', 'gemini-3.8-flash-high', 'p1', '2026-10-15T10:00:00.000Z', '2026-10-15T10:30:00.000Z', 'done')`,
+    ).run(runId);
+
+    // Initial metrics had 0 lines
+    ctx.db.prepare(
+      `INSERT INTO run_metrics (runId, taskId, engine, model, profileName, tokensUsed, usageBefore, usageAfter, linesAdded, linesDeleted, filesChanged)
+       VALUES (?, 'proj-git/task-diff', 'agy', 'gemini-3.8-flash-high', 'p1', NULL, NULL, NULL, 0, 0, 0)`,
+    ).run(runId);
+
+    // Call recalculateTaskLines
+    const stats = await recalculateTaskLines(
+      ctx.taskRepo,
+      ctx.projectRepo,
+      ctx.runRepo,
+      ctx.runMetricsRepo,
+      'proj-git/task-diff',
+    );
+
+    expect(stats).toEqual({
+      linesAdded: 7,
+      linesDeleted: 2,
+      filesChanged: 2,
+    });
+
+    const metricsAfter = ctx.runMetricsRepo.getByTask('proj-git/task-diff');
+    expect(metricsAfter[0].linesAdded).toBe(7);
+    expect(metricsAfter[0].linesDeleted).toBe(2);
+    expect(metricsAfter[0].filesChanged).toBe(2);
+
+    // Delete branch and verify it DOES NOT overwrite with 0
+    execFileSync('git', ['branch', '-D', 'agenthub/task-diff'], { cwd: testRepoDir });
+
+    const statsDeleted = await recalculateTaskLines(
+      ctx.taskRepo,
+      ctx.projectRepo,
+      ctx.runRepo,
+      ctx.runMetricsRepo,
+      'proj-git/task-diff',
+    );
+    expect(statsDeleted).toBeNull();
+
+    const metricsPreserved = ctx.runMetricsRepo.getByTask('proj-git/task-diff');
+    expect(metricsPreserved[0].linesAdded).toBe(7);
+    expect(metricsPreserved[0].linesDeleted).toBe(2);
+    expect(metricsPreserved[0].filesChanged).toBe(2);
+  });
+
+  it('agenthub savings backfill-lines calculates lines for existing branches and skips deleted ones', async () => {
+    const { cmdSavings } = await import('../src/cli.js');
+
+    const testRepoDir = path.join(tmpDir, 'test-backfill-repo');
+    fs.mkdirSync(testRepoDir, { recursive: true });
+    execFileSync('git', ['init'], { cwd: testRepoDir });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: testRepoDir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: testRepoDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: testRepoDir });
+
+    fs.writeFileSync(path.join(testRepoDir, 'main.txt'), 'init\n');
+    execFileSync('git', ['add', '.'], { cwd: testRepoDir });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: testRepoDir });
+
+    // Branch 1: exists
+    execFileSync('git', ['checkout', '-b', 'agenthub/t-exist'], { cwd: testRepoDir });
+    fs.writeFileSync(path.join(testRepoDir, 'feature.txt'), 'feat1\nfeat2\n');
+    execFileSync('git', ['add', '.'], { cwd: testRepoDir });
+    execFileSync('git', ['commit', '-m', 'feature'], { cwd: testRepoDir });
+    execFileSync('git', ['checkout', 'main'], { cwd: testRepoDir });
+
+    ctx.db.prepare(`INSERT INTO projects (id, name, path, defaultBranch) VALUES ('proj-bf', 'Backfill Proj', ?, 'main')`).run(testRepoDir);
+
+    // Task 1: branch exists, lines currently 0
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, branch, status)
+       VALUES ('proj-bf/t-exist', 'proj-bf', 't-exist', 'Task Existing', 'agenthub/t-exist', 'done')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO runs (id, taskId, engine, model, profileName)
+       VALUES ('run-bf-1', 'proj-bf/t-exist', 'agy', 'gemini-3.8-flash-high', 'p1')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO run_metrics (runId, taskId, engine, model, profileName, linesAdded, linesDeleted, filesChanged)
+       VALUES ('run-bf-1', 'proj-bf/t-exist', 'agy', 'gemini-3.8-flash-high', 'p1', 0, 0, 0)`,
+    ).run();
+
+    // Task 2: branch does not exist, lines currently 50
+    ctx.db.prepare(
+      `INSERT INTO tasks (id, projectId, slug, title, branch, status)
+       VALUES ('proj-bf/t-gone', 'proj-bf', 't-gone', 'Task Gone', 'agenthub/t-gone', 'done')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO runs (id, taskId, engine, model, profileName)
+       VALUES ('run-bf-2', 'proj-bf/t-gone', 'codex', 'codex:gpt-5.6-luna', 'p1')`,
+    ).run();
+    ctx.db.prepare(
+      `INSERT INTO run_metrics (runId, taskId, engine, model, profileName, linesAdded, linesDeleted, filesChanged)
+       VALUES ('run-bf-2', 'proj-bf/t-gone', 'codex', 'codex:gpt-5.6-luna', 'p1', 50, 10, 1)`,
+    ).run();
+
+    // Run backfill-lines
+    await cmdSavings(config, 'backfill-lines', ['--project', 'proj-bf']);
+
+    // Task 1 updated
+    const m1 = ctx.runMetricsRepo.getByTask('proj-bf/t-exist');
+    expect(m1[0].linesAdded).toBe(2);
+    expect(m1[0].linesDeleted).toBe(0);
+    expect(m1[0].filesChanged).toBe(1);
+
+    // Task 2 kept old numbers (not overwritten to 0)
+    const m2 = ctx.runMetricsRepo.getByTask('proj-bf/t-gone');
+    expect(m2[0].linesAdded).toBe(50);
+    expect(m2[0].linesDeleted).toBe(10);
   });
 });
