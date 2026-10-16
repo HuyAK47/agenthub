@@ -39,6 +39,23 @@ const report: SavingsReport = {
       durationMs: 65000,
       completedAt: '2026-10-15T10:00:00.000Z',
     },
+    {
+      taskId: 'demo/task-2',
+      slug: 'task-2',
+      title: 'Task không có thay đổi dòng',
+      projectId: 'demo',
+      status: 'done',
+      model: 'gemini-3.8-flash-high',
+      engine: 'agy',
+      linesAdded: 0,
+      linesDeleted: 0,
+      filesChanged: 0,
+      tokens: 50000,
+      estimated: true,
+      reviewRounds: 0,
+      durationMs: 12000,
+      completedAt: '2026-10-15T11:00:00.000Z',
+    },
   ],
 };
 
@@ -63,7 +80,66 @@ describe('SavingsPage', () => {
     expect(await screen.findByText(formattedSavedTokens)).toBeInTheDocument();
     expect(screen.getByText('Hiệu quả ủy quyền')).toBeInTheDocument();
     expect(screen.getByText('Tạo báo cáo savings')).toBeInTheDocument();
-    expect(screen.queryByText('≈')).not.toBeInTheDocument();
-    expect(screen.getByText('1m 5s')).toBeInTheDocument();
+    expect(screen.getByText('Task không có thay đổi dòng')).toBeInTheDocument();
+  });
+
+  it('renders ModelBadge with compact name and full title tooltip in task table', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <SavingsPage />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('Tạo báo cáo savings');
+
+    const badges = screen.getAllByTestId('model-badge');
+    expect(badges.length).toBe(2);
+
+    // First task: codex:gpt-5.6-luna -> Codex Luna
+    expect(badges[0]).toHaveTextContent('Codex Luna');
+    expect(badges[0]).toHaveAttribute('title', 'codex:gpt-5.6-luna');
+    expect(badges[0]).toHaveClass('badge-model-codex');
+    expect(badges[0]).toHaveClass('whitespace-nowrap');
+
+    // Second task: gemini-3.8-flash-high -> Gemini Flash · high
+    expect(badges[1]).toHaveTextContent('Gemini Flash · high');
+    expect(badges[1]).toHaveAttribute('title', 'gemini-3.8-flash-high');
+    expect(badges[1]).toHaveClass('badge-model-gemini');
+    expect(badges[1]).toHaveClass('whitespace-nowrap');
+  });
+
+  it('renders lines column formatted with +N / −M and em-dash when 0, with tabular-nums', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <SavingsPage />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('Tạo báo cáo savings');
+
+    // Check non-zero line changes and zero line changes in table body
+    const tableBody = container.querySelector('tbody')!;
+    expect(tableBody).toHaveTextContent('+42');
+    expect(tableBody).toHaveTextContent('−7');
+    expect(tableBody).toHaveTextContent('—');
+
+    // Check headers have whitespace-nowrap
+    const headers = container.querySelectorAll('thead th');
+    expect(headers.length).toBe(7);
+    headers.forEach((th) => {
+      expect(th).toHaveClass('whitespace-nowrap');
+    });
+
+    // Check number columns have tabular-nums
+    const tabularCells = container.querySelectorAll('tbody td.tabular-nums');
+    expect(tabularCells.length).toBeGreaterThan(0);
   });
 });

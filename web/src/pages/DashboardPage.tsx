@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
+import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 
 function RunningDuration({ startedAt }: { startedAt: string }) {
@@ -312,8 +313,8 @@ export const DashboardPage: React.FC = () => {
                           {projectId}
                         </span>
                       </td>
-                      <td className="px-6 py-4 font-mono text-xs text-[var(--text-secondary)]">
-                        {worker.model}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <ModelBadge model={worker.model} engine={worker.engine} />
                       </td>
                       <td className="px-6 py-4 font-medium text-[var(--text-primary)]">{worker.profileName}</td>
                       <td className="px-6 py-4 text-[var(--text-secondary)]">

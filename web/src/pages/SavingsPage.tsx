@@ -14,6 +14,7 @@ import {
   ArrowUpRight,
 } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { ModelBadge } from '../components/ModelBadge';
 
 export const SavingsPage: React.FC = () => {
   const { t, locale } = useLocale();
@@ -355,16 +356,16 @@ export const SavingsPage: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[760px] text-left text-xs">
                 <thead className="bg-[var(--bg-surface-hover)] border-b border-[var(--border-default)] text-[var(--text-secondary)] font-semibold uppercase tracking-wider">
                   <tr>
-                    <th className="px-6 py-3">Task</th>
-                    <th className="px-6 py-3">Model</th>
-                    <th className="px-6 py-3 text-right">{t('savings.linesChange')}</th>
-                    <th className="px-6 py-3 text-right">Worker Tokens</th>
-                    <th className="px-6 py-3 text-center">Claude</th>
-                    <th className="px-6 py-3 text-center">{t('savings.reviewRounds')}</th>
-                    <th className="px-6 py-3 text-right">{t('taskDetail.thDuration')}</th>
+                    <th className="px-6 py-3 whitespace-nowrap">Task</th>
+                    <th className="px-6 py-3 whitespace-nowrap">Model</th>
+                    <th className="px-6 py-3 text-right whitespace-nowrap">{t('savings.linesChange')}</th>
+                    <th className="px-6 py-3 text-right whitespace-nowrap">Worker Tokens</th>
+                    <th className="px-6 py-3 text-center whitespace-nowrap">Claude</th>
+                    <th className="px-6 py-3 text-center whitespace-nowrap">{t('savings.reviewRounds')}</th>
+                    <th className="px-6 py-3 text-right whitespace-nowrap">{t('taskDetail.thDuration')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-default)] text-[var(--text-primary)]">
@@ -380,7 +381,7 @@ export const SavingsPage: React.FC = () => {
                         key={task.taskId}
                         className="hover:bg-[var(--bg-surface-hover)] transition-colors"
                       >
-                        <td className="px-6 py-3.5">
+                        <td className="px-6 py-3.5 whitespace-nowrap">
                           <Link
                             to={`/tasks/${encodeURIComponent(task.taskId)}`}
                             className="font-medium hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 group"
@@ -392,26 +393,21 @@ export const SavingsPage: React.FC = () => {
                             {task.taskId}
                           </div>
                         </td>
-                        <td className="px-6 py-3.5">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-gray-100 dark:bg-gray-800 text-[var(--text-secondary)] border border-[var(--border-default)]">
-                            {task.model || task.engine}
-                          </span>
+                        <td className="px-6 py-3.5 whitespace-nowrap">
+                          <ModelBadge model={task.model} engine={task.engine} />
                         </td>
-                        <td className="px-6 py-3.5 text-right font-mono">
-                          {task.linesAdded > 0 || task.linesDeleted > 0 ? (
-                            <>
-                              <span className="text-emerald-600 dark:text-emerald-400">
-                                +{task.linesAdded}
-                              </span>{' '}
-                              <span className="text-rose-600 dark:text-rose-400">
-                                -{task.linesDeleted}
-                              </span>
-                            </>
+                        <td className="px-6 py-3.5 text-right font-mono tabular-nums whitespace-nowrap">
+                          {task.linesAdded === 0 && task.linesDeleted === 0 ? (
+                            <span className="text-[var(--t-text-3)] opacity-70">—</span>
                           ) : (
-                            <span className="text-[var(--text-secondary)]">0</span>
+                            <span>
+                              <span className="text-[var(--t-ok)] font-medium">+{task.linesAdded}</span>
+                              <span className="text-[var(--t-text-3)] mx-1">/</span>
+                              <span className="text-[var(--t-crit)] font-medium">−{task.linesDeleted}</span>
+                            </span>
                           )}
                         </td>
-                        <td className="px-6 py-3.5 text-right font-mono font-medium">
+                        <td className="px-6 py-3.5 text-right font-mono tabular-nums font-medium whitespace-nowrap">
                           {task.estimated && (
                             <span
                               title={t('savings.estimatedTitle')}
@@ -422,7 +418,7 @@ export const SavingsPage: React.FC = () => {
                           )}
                           <span>{formatNumber(task.tokens)}</span>
                         </td>
-                        <td className="px-6 py-3.5 text-center font-mono">
+                        <td className="px-6 py-3.5 text-center font-mono tabular-nums whitespace-nowrap">
                           {task.reviewRounds > 0 ? (
                             <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-semibold text-[11px]">
                               {task.reviewRounds}
@@ -431,13 +427,13 @@ export const SavingsPage: React.FC = () => {
                             <span className="text-[var(--text-secondary)]">0</span>
                           )}
                         </td>
-                        <td className="px-6 py-3.5 text-center">
+                        <td className="px-6 py-3.5 text-center whitespace-nowrap">
                           <span className={task.claudeCostSource === 'measured' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
                             {task.claudeCostSource === 'measured' ? 'measured' : 'estimated'}
                           </span>
                           {task.claudeEffectiveTokens ? <div className="text-[11px] font-mono text-[var(--text-secondary)]">{formatNumber(task.claudeEffectiveTokens)}</div> : null}
                         </td>
-                        <td className="px-6 py-3.5 text-right font-mono text-[var(--text-secondary)]">
+                        <td className="px-6 py-3.5 text-right font-mono tabular-nums text-[var(--text-secondary)] whitespace-nowrap">
                           {formatDuration(task.durationMs)}
                         </td>
                       </tr>
