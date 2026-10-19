@@ -27,7 +27,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   const cachedStatus = queryClient?.getQueryData<HubStatus>(['status']);
 
   let label = t(`status.${status}`);
-  if (status === 'waiting_quota' && waitReason) {
+  if (waitReason) {
     if (waitReason === 'disk') {
       const free = diskFreeGB ?? cachedStatus?.disk?.freeGB;
       const min = diskMinFreeGB ?? cachedStatus?.disk?.minFreeGB;
@@ -46,21 +46,21 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   }
 
   const isPulse = status === 'running' || status === 'checking';
-  const isWaitingQuotaWithReason = status === 'waiting_quota' && Boolean(waitReason);
+  const isWaitingWithReason = Boolean(waitReason);
 
-  const bgStyle = isWaitingQuotaWithReason
+  const bgStyle = isWaitingWithReason
     ? `var(--wait-${waitReason}-bg)`
     : `var(--status-${status}-bg, color-mix(in srgb, var(--t-surface-2) 15%, transparent))`;
 
-  const colorStyle = isWaitingQuotaWithReason
+  const colorStyle = isWaitingWithReason
     ? `var(--wait-${waitReason}-text)`
     : `var(--status-${status}-text, var(--t-text))`;
 
-  const borderStyle = isWaitingQuotaWithReason
+  const borderStyle = isWaitingWithReason
     ? `var(--wait-${waitReason}-border)`
     : `var(--status-${status}-border, transparent)`;
 
-  const dotStyle = isWaitingQuotaWithReason
+  const dotStyle = isWaitingWithReason
     ? `var(--wait-${waitReason}-dot)`
     : `var(--status-${status}-dot, currentColor)`;
 

@@ -20,14 +20,14 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
 }) => {
   const { t } = useLocale();
   const { data: fetchedTasks } = useQuery({
-    queryKey: ['tasks', 'waiting_quota'],
-    queryFn: () => getTasks({ status: 'waiting_quota' }),
+    queryKey: ['tasks', 'waiting'],
+    queryFn: () => getTasks(),
     enabled: propTasks === undefined,
     refetchInterval: 5000,
   });
 
   const allTasks = propTasks !== undefined ? propTasks : fetchedTasks || [];
-  const waitingTasks = allTasks.filter((task) => task.status === 'waiting_quota');
+  const waitingTasks = allTasks.filter((task) => task.status === 'waiting_quota' || task.waitReason === 'parallel' || task.waitReason === 'profile_busy');
 
   return (
     <div
@@ -78,7 +78,7 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
                     </Link>
 
                     <StatusBadge
-                      status="waiting_quota"
+                      status={task.status}
                       waitReason={task.waitReason}
                       diskFreeGB={diskFreeGB}
                       diskMinFreeGB={diskMinFreeGB}

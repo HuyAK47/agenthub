@@ -26,7 +26,7 @@ describe('StatusBadge Component', () => {
     expect(screen.getByText('Lỗi')).toBeInTheDocument();
   });
 
-  it('hiển thị đúng nhãn tiếng Việt và style cho từng waitReason khi waiting_quota', () => {
+  it('hiển thị đúng nhãn tiếng Việt và style cho từng waitReason', () => {
     const { rerender } = render(
       <StatusBadge status="waiting_quota" waitReason="disk" diskFreeGB={2.4} diskMinFreeGB={5} />
     );
@@ -52,5 +52,9 @@ describe('StatusBadge Component', () => {
     expect(screen.getByText('Chờ tài khoản rảnh')).toBeInTheDocument();
     expect(screen.getByTestId('status-badge-waiting_quota').getAttribute('data-wait-reason')).toBe('profile_busy');
     expect(screen.getByTestId('status-badge-waiting_quota').style.backgroundColor).toContain('var(--wait-profile_busy-bg)');
+
+    rerender(<StatusBadge status="queued" waitReason="parallel" />);
+    expect(screen.getByText('Chờ slot song song')).toBeInTheDocument();
+    expect(screen.getByTestId('status-badge-queued').style.backgroundColor).toContain('var(--wait-parallel-bg)');
   });
 });

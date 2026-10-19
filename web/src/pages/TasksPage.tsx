@@ -146,10 +146,10 @@ export const TasksPage: React.FC = () => {
                           </span>
                         ) : null}
 
-                        {task.status === 'waiting_quota' && (
+                        {task.waitReason && (
                           <div className="mb-2">
                             <StatusBadge
-                              status="waiting_quota"
+                              status={task.status}
                               waitReason={task.waitReason}
                               diskFreeGB={hubStatus?.disk?.freeGB}
                               diskMinFreeGB={hubStatus?.disk?.minFreeGB}
