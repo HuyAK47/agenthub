@@ -37,6 +37,16 @@ export const DEFAULT_SAVINGS_CONFIG: SavingsConfig = {
   claudeOverheadPerTask: 40_000,
 };
 
+export interface StallConfig {
+  noCommitMin: number;
+  loopThreshold: number;
+}
+
+export const DEFAULT_STALL_CONFIG: StallConfig = {
+  noCommitMin: 45,
+  loopThreshold: 6,
+};
+
 export type DeepPartialSavingsConfig = {
   bucketTokens?: Partial<SavingsConfig['bucketTokens']>;
   claudeFactor?: number;
@@ -87,6 +97,7 @@ export interface AgentHubConfig {
   cacheDir: string;
   savings: SavingsConfig;
   load: LoadConfig;
+  stall: StallConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -115,6 +126,7 @@ export function saveConfig(
     cacheDir?: string;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
+    stall?: Partial<StallConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -138,6 +150,7 @@ export function saveConfig(
     ...(patch.disk ? { disk: { ...((current.disk as Record<string, unknown>) || {}), ...patch.disk } } : {}),
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
+    ...(patch.stall ? { stall: { ...((current.stall as Record<string, unknown>) || {}), ...patch.stall } } : {}),
     ...(patch.savings
       ? {
           savings: {
@@ -178,6 +191,7 @@ export function updateConfigInMemory(
     cacheDir?: string;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
+    stall?: Partial<StallConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -249,6 +263,7 @@ export function updateConfigInMemory(
     }
   }
   if (patch.load) config.load = { ...config.load, ...patch.load };
+  if (patch.stall) config.stall = { ...config.stall, ...patch.stall };
 }
 
 export function loadConfig(overrideHome?: string): AgentHubConfig {
@@ -342,6 +357,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     claudeOverheadPerTask: typeof rawSavings.claudeOverheadPerTask === 'number' ? rawSavings.claudeOverheadPerTask : DEFAULT_SAVINGS_CONFIG.claudeOverheadPerTask,
   };
 
+  const rawStall = (userConfig.stall as Record<string, unknown>) || {};
+  const stall: StallConfig = {
+    noCommitMin: typeof rawStall.noCommitMin === 'number' ? rawStall.noCommitMin : DEFAULT_STALL_CONFIG.noCommitMin,
+    loopThreshold: typeof rawStall.loopThreshold === 'number' ? rawStall.loopThreshold : DEFAULT_STALL_CONFIG.loopThreshold,
+  };
+
   return {
     hubHome,
     agyHomesDir,
@@ -397,5 +418,6 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
     },
+    stall,
   };
 }

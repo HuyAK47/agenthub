@@ -200,6 +200,10 @@ export const UpdateConfigSchema = z.object({
     minFreeMemGB: z.number().positive().optional(),
     recoverAfterSec: z.number().int().positive().optional(),
   }).optional(),
+  stall: z.object({
+    noCommitMin: z.number().positive().optional(),
+    loopThreshold: z.number().int().positive().optional(),
+  }).optional(),
 });
 
 export function toTaskId(idOrParam: string): string {
@@ -1390,6 +1394,7 @@ export class AppService {
       notifications: this.config.notifications,
       savings: this.config.savings,
       load: this.config.load,
+      stall: this.config.stall,
     };
   }
 
