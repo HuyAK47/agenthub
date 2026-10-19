@@ -81,6 +81,11 @@ interface RunningTask {
   exitCode?: number | null;
 }
 
+interface StartingTask {
+  projectId: string;
+  profileName: string;
+}
+
 interface ReviewerRun {
   taskId: string;
   runId: string;
@@ -99,6 +104,9 @@ const STALL_NOTE = 'Lượt trước bị kẹt khi chờ tác vụ nền. Chạ
 
 export class Scheduler {
   private running: Map<string, RunningTask> = new Map(); // taskId -> RunningTask
+  // Reservations made synchronously before startTask reaches its first await.
+  // This closes the dispatch race where several queued tasks are started in one tick.
+  private starting: Map<string, StartingTask> = new Map();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private skipSchedulingOnce = false;
@@ -201,6 +209,7 @@ export class Scheduler {
     }
 
     this.stopped = true;
+    this.starting.clear();
 
     for (const run of this.reviewerRuns.values()) {
       clearTimeout(run.timeout);
@@ -797,11 +806,10 @@ export class Scheduler {
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
 
-      const runningInProject = Array.from(this.running.values()).filter((r) => {
-        return r.projectId === task.projectId;
-      }).length;
+      const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
+      const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
 
-      if (runningInProject >= project.maxParallel) continue;
+      if (runningInProject + startingInProject >= project.maxParallel) continue;
 
       // Find a suitable (model, profile) pair
       const pair = this.findModelProfilePair(task);
@@ -814,9 +822,15 @@ export class Scheduler {
           this.markDiskLow(disk.freeGB);
           continue;
         }
-        void this.startTask(task, pair.model, pair.profileName).catch((error) => {
-          console.error(`[scheduler] failed to start task ${task.id}:`, error);
-        });
+        void this.startTask(task, pair.model, pair.profileName)
+          .catch((error) => {
+            console.error(`[scheduler] failed to start task ${task.id}:`, error);
+          })
+          .finally(() => {
+            // A failed start can happen before the run is inserted or after an
+            // unexpected exception. Never leave a stale capacity reservation.
+            if (!this.running.has(task.id)) this.starting.delete(task.id);
+          });
       } else if (this.hasBusyMatchingProfile(task)) {
         // Keep queued while a usable profile is occupied.
         continue;
@@ -1040,6 +1054,12 @@ export class Scheduler {
       }
     }
 
+    for (const starting of this.starting.values()) {
+      if (sameEmailProfileNames.has(starting.profileName)) {
+        count++;
+      }
+    }
+
     for (const rr of this.reviewerRuns.values()) {
       seenRunIds.add(rr.runId);
       if (sameEmailProfileNames.has(rr.profileName)) {
@@ -1193,7 +1213,8 @@ export class Scheduler {
     const profile = this.profileRepo.get(profileName);
     if (!profile) return true;
     const running = Array.from(this.running.values()).filter((r) => r.profileName === profileName).length;
-    return running >= this.locks.slotsTotal(profile) || this.locks.getSlotsSync(profile).busy;
+    const starting = Array.from(this.starting.values()).filter((task) => task.profileName === profileName).length;
+    return running + starting >= this.locks.slotsTotal(profile) || this.locks.getSlotsSync(profile).busy;
   }
 
   async startTask(task: TaskRow, model: string, profileName: string, retryCount = 0): Promise<void> {
@@ -1225,6 +1246,8 @@ export class Scheduler {
       this.locks.release(profile.name, lockFile);
       return;
     }
+
+    this.starting.set(task.id, { projectId: task.projectId, profileName });
 
     // Create worktree if needed
     let worktreePath = task.worktreePath;
@@ -1378,6 +1401,7 @@ export class Scheduler {
         usageBefore,
       };
       this.running.set(task.id, rt);
+      this.starting.delete(task.id);
       this.locks.invalidate(profileName);
 
       // Unref so the child doesn't prevent daemon from exiting
