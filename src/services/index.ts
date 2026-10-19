@@ -35,6 +35,7 @@ import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
 import { isClaudeQuotaLimited } from '../claude-sessions/scanner.js';
 import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
+import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -584,6 +585,35 @@ export class AppService {
         totalGB: disk.totalGB,
       },
     };
+  }
+
+  getOrphans() {
+    const tasks = this.taskRepo.getAll();
+    const running = new Set(this.scheduler.getRunning().keys());
+    const projects = this.projectRepo.getAll();
+    const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
+    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths });
+    return processes
+      .map((process) => {
+        const cwd = process.cwd.replace(/ \(deleted\)$/, '');
+        const task = tasks.find((candidate) => candidate.worktreePath && (cwd === candidate.worktreePath || cwd.startsWith(candidate.worktreePath + path.sep)));
+        return { ...process, task: task ? { id: task.id, title: task.title, status: task.status } : null, active: task ? running.has(task.id) : false };
+      })
+      .filter((process) => !process.active);
+  }
+
+  reapOrphans() {
+    const orphans = this.getOrphans();
+    const projects = this.projectRepo.getAll();
+    const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
+    const reaped: number[] = [];
+    for (const orphan of orphans) {
+      reaped.push(...reapSyncForWorktree(orphan.cwd.replace(/ \(deleted\)$/, ''), {
+        worktreesDir: this.config.worktreesDir,
+        protectedPaths,
+      }));
+    }
+    return { ok: true, reaped: [...new Set(reaped)] };
   }
 
   // --- Projects ---

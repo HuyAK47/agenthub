@@ -193,6 +193,15 @@ export interface HubStatus {
   tasksByProject?: Record<string, Record<string, number>>;
 }
 
+export interface OrphanProcess {
+  pid: number;
+  cwd: string;
+  cpu: number;
+  rss: number;
+  task: { id: string; title: string; status: string } | null;
+  active: boolean;
+}
+
 export interface SavingsConfig {
   bucketTokens: {
     gemini: number;
