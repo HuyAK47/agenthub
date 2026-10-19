@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getDiskSpaceSync } from '../disk.js';
+import { getMonitoredDisks, type MonitoredDisk } from '../disk.js';
 import {
   TaskRepo,
   RunRepo,
@@ -121,6 +121,7 @@ export class Scheduler {
   private stopped = false;
   private skipSchedulingOnce = false;
   private diskLow = false;
+  private dockerDiskLow = false;
   private tasksWaitingForDisk = new Set<string>();
   private eventBus: EventBus;
   private quotaService: QuotaService;
@@ -384,8 +385,15 @@ export class Scheduler {
       this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
     }
     // 0. Check disk space: if sufficient, resume any tasks waiting for disk
-    const diskSpace = getDiskSpaceSync(this.config.worktreesDir);
-    if (diskSpace.freeGB >= this.config.disk.minFreeGB) {
+    const disks = this.getMonitoredDisks();
+    const blockedDisk = disks.find((disk) => disk.low);
+    if (blockedDisk) {
+      this.markDiskLow(blockedDisk);
+      const dockerDisk = disks.find((disk) => disk.label === 'Docker' && disk.low);
+      if (dockerDisk && this.running.size > 0) this.markDockerDiskLow(dockerDisk);
+    } else {
+      const diskSpace = disks.find((disk) => disk.source === 'worktrees')!;
+      this.dockerDiskLow = false;
       if (this.diskLow) {
         this.diskLow = false;
         this.eventBus.emit('disk.ok', undefined, {
@@ -495,8 +503,7 @@ export class Scheduler {
     const waitingTasks = this.taskRepo.getByStatus('waiting_quota');
     for (const task of waitingTasks) {
       if (reason !== 'startup_recheck' && task.waitReason === 'disk') {
-        const diskSpace = getDiskSpaceSync(this.config.worktreesDir);
-        if (diskSpace.freeGB < this.config.disk.minFreeGB) continue;
+        if (this.getMonitoredDisks().some((disk) => disk.low)) continue;
       }
       this.taskRepo.updateStatus(task.id, 'queued');
       this.eventBus.emit('task.queued', task.id, { reason });
@@ -1067,12 +1074,12 @@ export class Scheduler {
       // Find a suitable (model, profile) pair
       const pair = this.findModelProfilePair(task);
       if (pair) {
-        const disk = getDiskSpaceSync(this.config.worktreesDir);
-        if (disk.freeGB < this.config.disk.minFreeGB) {
+        const disk = this.getBlockingDisk();
+        if (disk) {
           this.tasksWaitingForDisk.add(task.id);
           this.taskRepo.updateStatus(task.id, 'waiting_quota', 'disk');
-          this.eventBus.emit('task.waiting_quota', task.id, { reason: 'disk' });
-          this.markDiskLow(disk.freeGB);
+          this.eventBus.emit('task.waiting_quota', task.id, { reason: 'disk', label: disk.label, freeGB: disk.freeGB, minFreeGB: disk.minFreeGB, message: this.diskWaitMessage(disk) });
+          this.markDiskLow(disk);
           continue;
         }
         void this.startTask(task, pair.model, pair.profileName)
@@ -1478,12 +1485,12 @@ export class Scheduler {
   }
 
   async startTask(task: TaskRow, model: string, profileName: string, retryCount = 0): Promise<void> {
-    const disk = getDiskSpaceSync(this.config.worktreesDir);
-    if (disk.freeGB < this.config.disk.minFreeGB) {
+    const disk = this.getBlockingDisk();
+    if (disk) {
       this.tasksWaitingForDisk.add(task.id);
       this.taskRepo.updateStatus(task.id, 'waiting_quota', 'disk');
-      this.eventBus.emit('task.waiting_quota', task.id, { reason: 'disk' });
-      this.markDiskLow(disk.freeGB);
+      this.eventBus.emit('task.waiting_quota', task.id, { reason: 'disk', label: disk.label, freeGB: disk.freeGB, minFreeGB: disk.minFreeGB, message: this.diskWaitMessage(disk) });
+      this.markDiskLow(disk);
       return;
     }
 
@@ -1872,13 +1879,50 @@ export class Scheduler {
     }
   }
 
-  private markDiskLow(freeGB: number): void {
+  private getMonitoredDisks(): MonitoredDisk[] {
+    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+  }
+
+  private getBlockingDisk(): MonitoredDisk | undefined {
+    return this.getMonitoredDisks().find((disk) => disk.low);
+  }
+
+  private diskWaitMessage(disk: MonitoredDisk): string {
+    return `Chờ ${disk.label} (còn ${disk.freeGB} GB / cần ${disk.minFreeGB} GB)`;
+  }
+
+  private markDiskLow(disk: MonitoredDisk): void {
     if (this.diskLow) return;
     this.diskLow = true;
     this.eventBus.emit('disk.low', undefined, {
-      freeGB,
-      minFreeGB: this.config.disk.minFreeGB,
+      label: disk.label,
+      freeGB: disk.freeGB,
+      minFreeGB: disk.minFreeGB,
     });
+  }
+
+  private markDockerDiskLow(disk: MonitoredDisk): void {
+    if (this.dockerDiskLow) return;
+    this.dockerDiskLow = true;
+    this.eventBus.emit('disk.docker_low', undefined, {
+      label: disk.label,
+      path: disk.path,
+      freeGB: disk.freeGB,
+      totalGB: disk.totalGB,
+      minFreeGB: disk.minFreeGB,
+    });
+    const warning = 'KHÔNG chạy docker build/pull/compose up – ổ Docker sắp đầy';
+    for (const running of this.running.values()) {
+      const task = this.taskRepo.get(running.taskId);
+      if (!task?.worktreePath) continue;
+      const taskFile = path.join(task.worktreePath, '.agenthub', 'task.md');
+      try {
+        const current = fs.readFileSync(taskFile, 'utf8');
+        if (!current.includes(warning)) fs.appendFileSync(taskFile, `\n\n⚠️ ${warning}\n`);
+      } catch {
+        // The task can finish while the warning is being written.
+      }
+    }
   }
 
   private onTaskDoneOrCancelled(taskId: string): void {
