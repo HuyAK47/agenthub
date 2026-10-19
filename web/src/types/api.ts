@@ -186,6 +186,12 @@ export interface HubStatus {
     freeGB: number;
     totalGB: number;
   };
+  load?: {
+    load1: number;
+    freeMemGB: number;
+    overloaded: boolean;
+    recoveringSince: number | null;
+  };
   // Backwards compatibility aliases
   tasksByStatus?: Record<TaskStatus, number>;
   runningWorkers?: RunningWorker[];
@@ -275,6 +281,13 @@ export interface SystemConfig {
   chat?: ChatConfig;
   notifications?: {
     desktop: boolean;
+  };
+  load?: {
+    enabled: boolean;
+    high: number;
+    ok: number;
+    minFreeMemGB: number;
+    recoverAfterSec: number;
   };
 }
 
