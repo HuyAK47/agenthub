@@ -1,0 +1,56 @@
+# Báo cáo hoàn thành: g-wait-reason
+
+## 1. Tóm tắt việc đã làm
+1. **DB Migration & Task Model**:
+   - Thêm cột `waitReason TEXT` (`'disk' | 'quota' | 'parallel' | 'profile_busy' | null`) vào bảng `tasks` qua Migration 16 trong `src/db/index.ts`.
+   - Cập nhật kiểu `WaitReason` và trường `waitReason` trong `TaskRow` (`src/db/index.ts`).
+   - Tự động xóa `waitReason = null` khi chuyển ra khỏi trạng thái `waiting_quota` trong `TaskRepo.insert`, `TaskRepo.updateStatus`, và `TaskRepo.update`.
+2. **Scheduler & Services**:
+   - Set `waitReason: 'parallel'` khi `runningInProject + startingInProject >= project.maxParallel` (scheduler dòng ~820).
+   - Set `waitReason: 'disk'` khi `disk.freeGB < this.config.disk.minFreeGB` ở cả `scheduleNewTasks` (scheduler dòng ~828) và `startTask` (scheduler dòng ~1224).
+   - Set `waitReason: 'profile_busy'` khi tất cả matching profiles đang bận chạy task khác (`hasBusyMatchingProfile(task)` - scheduler dòng ~842).
+   - Set `waitReason: 'quota'` khi tất cả matching profiles cạn quota.
+   - Thêm logic re-queue trong `Scheduler.tick()` khi slot song song được giải phóng, profile bận trở nên rảnh, hoặc dung lượng ổ đĩa phục hồi.
+   - Bổ sung `minFreeGB: this.config.disk.minFreeGB` vào `status.disk` trong `src/services/index.ts`.
+   - Bổ sung định dạng câu tóm tắt sự kiện tiếng Việt cho `task.waiting_quota` theo từng lý do trong `formatEventSummary`.
+3. **Web UI & i18n**:
+   - Cập nhật types `WaitReason`, `Task.waitReason`, và `HubStatus.disk.minFreeGB` trong `web/src/types/api.ts`.
+   - Cập nhật từ điển `vi.ts` và `en.ts` với đầy đủ các nhãn lý do chờ:
+     - `disk`: "Chờ ổ đĩa (còn {free} GB / cần {min} GB)"
+     - `quota`: "Chờ quota model"
+     - `parallel`: "Chờ slot song song"
+     - `profile_busy`: "Chờ tài khoản rảnh"
+     - Thêm nhãn dung lượng đĩa kèm ngưỡng: `diskFreeWithMin`: "Ổ đĩa: {free} / {total} GB trống (ngưỡng {min} GB)"
+   - Cập nhật component `StatusBadge` (`web/src/components/StatusBadge.tsx`) và CSS tokens trong `web/src/index.css` với màu badge riêng biệt cho từng lý do:
+     - `disk`: màu cam cảnh báo (orange)
+     - `quota`: màu tím (purple)
+     - `parallel`: màu xanh lam (accent blue)
+     - `profile_busy`: màu xanh ngọc (teal/checking)
+   - Cập nhật `TasksPage.tsx`: hiển thị `StatusBadge` kèm `waitReason` trên các Kanban card ở cột `waiting_quota`.
+   - Cập nhật `TaskDetailPage.tsx`: hiển thị `StatusBadge` kèm `waitReason` và thông số đĩa.
+   - Cập nhật `DashboardPage.tsx`: hiển thị dung lượng đĩa kèm ngưỡng `disk.minFreeGB`, tích hợp component `WaitingQueue` (`web/src/components/WaitingQueue.tsx`) hiển thị danh sách task đang chờ kèm lý do.
+4. **Unit & Integration Tests**:
+   - Thêm `test/wait-reason.test.ts` kiểm tra 4 lý do chờ được set và xóa đúng cách trong scheduler.
+   - Bổ sung test kiểm tra `StatusBadge` với 4 lý do chờ và màu sắc tương ứng trong `web/src/test/statusBadge.test.tsx`.
+   - Bổ sung test kiểm tra hiển thị ngưỡng `minFreeGB` trong `web/src/test/dashboardDisk.test.tsx`.
+   - Tạo bộ test `web/src/test/waitingQueue.test.tsx` kiểm tra hiển thị hàng đợi chờ trên Dashboard.
+   - Thêm test `TaskDetailPage` hiển thị waitReason badge trong `web/src/test/taskDetailPage.test.tsx`.
+   - Cập nhật `test/scheduler.test.ts` phù hợp với trạng thái `waiting_quota` khi hết slot song song và profile bận.
+
+## 2. Kết quả kiểm tra
+- `npm run lint`: PASS (0 errors, 0 warnings)
+- `npm run typecheck`: PASS (0 errors)
+- `npm --prefix web run typecheck`: PASS (0 errors)
+- `npm test`: PASS (33 test files, 331 tests passed)
+- `npm run test:web`: PASS (33 test files, 187 tests passed)
+- `npm run build`: PASS (tsc && copy protocol.md thành công)
+- `npm run build:web`: PASS (vite build thành công 29 assets)
+
+## 3. Việc chưa làm được
+- Không có. Tất cả các yêu cầu đã hoàn thành đầy đủ.
+
+## 4. Danh sách commit
+- `0f64755` feat(db): add waitReason column and migration 16
+- `b9a7365` feat(scheduler): track and clear waitReason for disk, quota, parallel, and profile_busy
+- `c222e53` test(scheduler): update maxParallel and profile slot assertions for waitReason
+- `2b5f941` feat(web): display waitReason labels and disk threshold on dashboard, tasks, and task detail
