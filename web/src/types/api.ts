@@ -46,6 +46,10 @@ export interface Profile {
   verifyUrl?: string | null;
 }
 
+export interface ProjectHooks {
+  onWorktreeRemoved?: string[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -54,6 +58,7 @@ export interface Project {
   envTemplate?: string | null;
   maxParallel: number;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
+  hooks?: ProjectHooks | string | null;
   createdAt?: string;
 }
 
@@ -383,6 +388,7 @@ export interface CreateProjectInput {
   envTemplate?: string | null;
   maxParallel?: number;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
+  hooks?: ProjectHooks | null;
 }
 
 export interface UpdateProjectInput {
@@ -391,6 +397,7 @@ export interface UpdateProjectInput {
   envTemplate?: string | null;
   maxParallel?: number;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
+  hooks?: ProjectHooks | null;
 }
 
 export interface CreateProfileInput {

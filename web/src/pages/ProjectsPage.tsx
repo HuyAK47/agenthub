@@ -3,6 +3,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createProject, deleteProject, getProjects, updateProject } from '../api/client';
 import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { Project } from '../types/api';
+
+function getProjectHooksString(proj: Project): string {
+  if (!proj.hooks) return '';
+  if (typeof proj.hooks === 'string') {
+    try {
+      const parsed = JSON.parse(proj.hooks);
+      return Array.isArray(parsed?.onWorktreeRemoved) ? parsed.onWorktreeRemoved.join('\n') : '';
+    } catch {
+      return '';
+    }
+  }
+  return Array.isArray(proj.hooks.onWorktreeRemoved) ? proj.hooks.onWorktreeRemoved.join('\n') : '';
+}
 
 export const ProjectsPage: React.FC = () => {
   const { t } = useLocale();
@@ -15,7 +29,9 @@ export const ProjectsPage: React.FC = () => {
   const [maxParallel, setMaxParallel] = useState(3);
   const [envTemplate, setEnvTemplate] = useState('');
   const [checksJson, setChecksJson] = useState('');
+  const [hooksText, setHooksText] = useState('');
   const [projectChecks, setProjectChecks] = useState<Record<string, string>>({});
+  const [projectHooks, setProjectHooks] = useState<Record<string, string>>({});
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -48,6 +64,14 @@ export const ProjectsPage: React.FC = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
   });
 
+  const updateHooksMutation = useMutation({
+    mutationFn: ({ id, hooks }: { id: string; hooks: string }) => {
+      const lines = hooks.split('\n').map((l) => l.trim()).filter(Boolean);
+      return updateProject(id, { hooks: lines.length > 0 ? { onWorktreeRemoved: lines } : null });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  });
+
   const resetForm = () => {
     setName('');
     setPath('');
@@ -55,6 +79,7 @@ export const ProjectsPage: React.FC = () => {
     setMaxParallel(3);
     setEnvTemplate('');
     setChecksJson('');
+    setHooksText('');
     setJsonError(null);
     setFormError(null);
   };
@@ -105,6 +130,7 @@ export const ProjectsPage: React.FC = () => {
       }
     }
 
+    const hookLines = hooksText.split('\n').map((l) => l.trim()).filter(Boolean);
     createMutation.mutate({
       name: name.trim(),
       path: path.trim(),
@@ -112,6 +138,7 @@ export const ProjectsPage: React.FC = () => {
       maxParallel: Number(maxParallel) || 3,
       envTemplate: envTemplate.trim() ? envTemplate.trim() : null,
       checks: checks as any,
+      ...(hookLines.length > 0 ? { hooks: { onWorktreeRemoved: hookLines } } : {}),
     });
   };
 
@@ -239,6 +266,11 @@ export const ProjectsPage: React.FC = () => {
             </div>
 
             <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">{t('extra.hooks')}</label>
+              <textarea rows={3} value={hooksText} onChange={(e) => setHooksText(e.target.value)} placeholder={'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)]" />
+            </div>
+
+            <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">{t('extra.checks')}</label>
               <textarea rows={3} value={checksJson} onChange={(e) => setChecksJson(e.target.value)} placeholder={'[{"name":"lint","cmd":["npm","run","lint"]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)]" />
             </div>
@@ -329,6 +361,25 @@ export const ProjectsPage: React.FC = () => {
                   </pre>
                 </div>
               )}
+
+              <div className="pt-2 border-t border-[var(--t-border)]">
+                <label className="block text-[11px] font-semibold text-[var(--t-text-3)] mb-1">{t('extra.hooks')}</label>
+                <textarea
+                  rows={2}
+                  value={projectHooks[proj.id] ?? getProjectHooksString(proj)}
+                  onChange={(e) => setProjectHooks((current) => ({ ...current, [proj.id]: e.target.value }))}
+                  placeholder={'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"'}
+                  className="w-full text-[11px] font-mono rounded border border-[var(--t-border)] p-2 bg-[var(--t-surface-2)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => updateHooksMutation.mutate({ id: proj.id, hooks: projectHooks[proj.id] ?? getProjectHooksString(proj) })}
+                  disabled={updateHooksMutation.isPending}
+                  className="mt-1 px-2 py-1 rounded bg-[var(--t-surface-2)] text-[11px]"
+                >
+                  {t('extra.saveHooks')}
+                </button>
+              </div>
 
               <div className="pt-2 border-t border-[var(--t-border)]">
                 <label className="block text-[11px] font-semibold text-[var(--t-text-3)] mb-1">{t('extra.checks')}</label>

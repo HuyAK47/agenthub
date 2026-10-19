@@ -219,4 +219,40 @@ describe('ProjectsPage', () => {
       checks: [{ name: 'lint', cmd: ['npm', 'run', 'lint'] }],
     });
   });
+
+  it('6. Sửa hooks trên project đã có và lưu thành công', async () => {
+    const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue({
+      ...mockProject,
+      hooks: { onWorktreeRemoved: ['docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"'] },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('XFarm')).toBeInTheDocument();
+
+    const textboxes = screen.getAllByRole('textbox');
+    // In project card, first textbox is hooks
+    const cardHooksTextarea = textboxes[0];
+
+    fireEvent.change(cardHooksTextarea, {
+      target: {
+        value: 'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"\ndocker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_mt_{slug_underscored}"',
+      },
+    });
+
+    const saveHooksBtn = screen.getByRole('button', { name: /Lưu hooks/i });
+    await act(async () => {
+      fireEvent.click(saveHooksBtn);
+      await Promise.resolve();
+    });
+
+    expect(updateSpy).toHaveBeenCalledWith('proj-1', {
+      hooks: {
+        onWorktreeRemoved: [
+          'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"',
+          'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_mt_{slug_underscored}"',
+        ],
+      },
+    });
+  });
 });

@@ -569,6 +569,7 @@ export const handlers = [
       defaultBranch: body.defaultBranch || 'main',
       envTemplate: body.envTemplate || null,
       maxParallel: body.maxParallel || 3,
+      hooks: body.hooks || null,
       createdAt: new Date().toISOString(),
     };
     mockProjects.push(newProject);

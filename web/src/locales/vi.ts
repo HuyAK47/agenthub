@@ -304,6 +304,7 @@ export const vi = {
     closeNotice: 'Đóng', profileName: 'Tên hồ sơ (Profile Name) *', cancel: 'Hủy', createLogin: 'Tạo & Đăng nhập',
     taskEmpty: 'Trống', taskFilter: 'Lọc theo project', allProjects: 'Tất cả project', createTask: 'Tạo Task',
     checks: 'checks (JSON, để trống = tự phát hiện)', saveChecks: 'Lưu checks', deleteProject: 'Xóa project',
+    hooks: 'hooks (onWorktreeRemoved - mỗi dòng một lệnh)', saveHooks: 'Lưu hooks',
     noProjects: 'Chưa có project nào được đăng ký.', loadProjectsError: 'Không thể tải danh sách project.',
     defaultBranch: 'Nhánh mặc định: ', maxParallel: 'Tối đa song song: ', validJson: 'JSON hợp lệ',
     invalidJson: 'Cú pháp JSON không hợp lệ: {error}',
