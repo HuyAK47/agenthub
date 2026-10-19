@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ProfileRow } from '../db/index.js';
+import { LIMITED_TEST_ENV, lowPriority } from '../priority.js';
 
 export interface SpawnOpts {
   profile: ProfileRow;
@@ -128,8 +129,10 @@ export class AgyEngine implements Engine {
       try { fs.mkdirSync(path.dirname(opts.lockFile), { recursive: true }); } catch { /* ignore */ }
     }
 
-    const command = opts.lockFile ? ['-n', opts.lockFile, this.agyPath, ...args] : args;
-    const executable = opts.lockFile ? 'flock' : this.agyPath;
+    Object.assign(env, LIMITED_TEST_ENV);
+    const [agyExe, agyArgs] = lowPriority(this.agyPath, args);
+    const command = opts.lockFile ? ['-n', opts.lockFile, agyExe, ...agyArgs] : agyArgs;
+    const executable = opts.lockFile ? 'flock' : agyExe;
     const child = spawn(executable, command, {
       cwd: opts.cwd,
       env,
@@ -245,11 +248,12 @@ export class CodexEngine implements Engine {
       try { fs.mkdirSync(path.dirname(opts.lockFile), { recursive: true }); } catch { /* ignore */ }
     }
 
-    const command = opts.lockFile ? ['-n', opts.lockFile, codexPath, ...args] : args;
-    const executable = opts.lockFile ? 'flock' : codexPath;
+    const [codexExe, codexArgs] = lowPriority(codexPath, args);
+    const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;
+    const executable = opts.lockFile ? 'flock' : codexExe;
     const child = spawn(executable, command, {
       cwd: opts.cwd,
-      env: process.env as Record<string, string>,
+      env: { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV },
       detached: true,
       stdio: ['ignore', logFd, logFd],
     });

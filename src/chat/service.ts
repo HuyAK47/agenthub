@@ -137,6 +137,12 @@ export class ChatService {
     return this.failoverState.snapshot();
   }
 
+  clearClaudeFailover(): ReturnType<ClaudeFailoverState['snapshot']> {
+    this.failoverState.clear();
+    this.eventBus.emit('claude.failover_cleared', undefined, { reason: 'manual' });
+    return this.failoverState.snapshot();
+  }
+
   private recordClaudeQuota(streamText: string, stderr: string, exitCode?: number | null): void {
     const result = detectClaudeQuota({ streamText, stderr, exitCode });
     if (!result.exhausted) return;
@@ -337,6 +343,8 @@ export class ChatService {
     if (session.busy === 1 || this.runningTurns.has(sessionId)) {
       throw new HttpError(409, 'conflict', 'Phiên đang bận');
     }
+
+    this.failoverState.noteActivity();
 
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();

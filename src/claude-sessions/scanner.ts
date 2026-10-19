@@ -14,6 +14,7 @@ export interface ClaudeScanOptions {
   worktreesDir?: string;
   weights?: { cacheCreation?: number; cacheRead?: number };
   failoverState?: ClaudeFailoverState;
+  failoverIdleSec?: number;
 }
 
 export class ClaudeSessionScanner {
@@ -50,12 +51,14 @@ export class ClaudeSessionScanner {
     let eligible = reset ? (!!repo.get(sessionId) || this.isHubChat(sessionId)) : existing.eligible === 1;
     let turnId = reset ? `${sessionId}:initial` : (existing.turnId || `${sessionId}:initial`);
     let turnTasks = new Set<string>(reset ? [] : parseTaskState(existing.turnTasks));
-    const records: Array<{ event: ClaudeTranscriptEvent; sessionId: string; turnId: string; tasks: string[] }> = [];
+    const records: Array<{ event: ClaudeTranscriptEvent; sessionId: string; turnId: string; tasks: string[]; line: number }> = [];
     const turns = new Map<string, Set<string>>();
     const stream = fs.createReadStream(file, { start, encoding: 'utf8' });
     const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
     try {
+      let lineNumber = start === 0 ? 0 : countNewlines(file, start);
       for await (const line of lines) {
+        lineNumber += 1;
         const raw = line as string;
         const bytes = Buffer.byteLength(raw + '\n');
         offset += bytes;
@@ -72,7 +75,7 @@ export class ClaudeSessionScanner {
           ? event.message.content.filter((block): block is { type: string; input?: unknown } => isRecord(block) && block.type === 'tool_use')
           : [];
         for (const block of toolBlocks) for (const id of taskRefsFromToolInput(block.input, tasks)) turnTasks.add(id);
-        records.push({ event, sessionId, turnId, tasks: [...turnTasks] });
+        records.push({ event, sessionId, turnId, tasks: [...turnTasks], line: lineNumber });
         turns.set(turnId, new Set(turnTasks));
       }
     } finally { lines.close(); stream.close(); }
@@ -99,10 +102,36 @@ export class ClaudeSessionScanner {
         repo.upsert({ sessionId, cwd: String(last?.cwd || ''), firstAt: totals.firstAt, lastAt: totals.lastAt, model: typeof last?.message?.model === 'string' ? last.message.model : null, messages: totals.messages, inputTokens: totals.input, outputTokens: totals.output, cacheCreationTokens: totals.creation, cacheReadTokens: totals.read, effectiveTokens: totals.effective, isHubChat: this.isHubChat(sessionId) ? 1 : 0 });
       });
       tx();
-      const quota = repo.quota();
-      if (quota?.resetsAt && quota.resetsAt > Date.now() / 1000 && Date.parse(quota.observedAt) >= Date.now() - 10 * 60_000 && isClaudeQuotaLimited(quota.status || undefined)) this.options.failoverState?.activate(Math.ceil(quota.resetsAt - Date.now() / 1000), 'claude_usage_limit');
+      this.updateFailover(file, records);
     }
     this.db.prepare('INSERT OR REPLACE INTO claude_scan_state (path,inode,size,offset,mtime,turnId,turnTasks,eligible) VALUES (?,?,?,?,?,?,?,?)').run(file, stat.ino, stat.size, offset, stat.mtimeMs, turnId, JSON.stringify([...turnTasks]), eligible ? 1 : 0);
+  }
+  private updateFailover(file: string, records: Array<{ event: ClaudeTranscriptEvent; line: number }>) {
+    const state = this.options.failoverState;
+    if (!state || records.length === 0) return;
+    const now = Date.now();
+    const maxAge = (this.options.failoverIdleSec ?? 5 * 60) * 2 * 1000;
+    let latestActivity: string | null = null;
+    let latestQuota: { event: ClaudeTranscriptEvent; line: number; observedAt: string } | null = null;
+    for (const record of records) {
+      const observedAt = typeof record.event.timestamp === 'string' ? record.event.timestamp : null;
+      if (!observedAt || Number.isNaN(Date.parse(observedAt))) continue;
+      if (record.event.type === 'assistant' || record.event.type === 'user') latestActivity = observedAt;
+      if (record.event.quotaLimits && isClaudeQuotaLimited(String(record.event.quotaLimits.status || ''))) {
+        latestQuota = { event: record.event, line: record.line, observedAt };
+      }
+    }
+    if (latestActivity && (!latestQuota || Date.parse(latestActivity) > Date.parse(latestQuota.observedAt))) {
+      state.noteActivity(latestActivity);
+      return;
+    }
+    if (!latestQuota) return;
+    const quotaAt = Date.parse(latestQuota.observedAt);
+    if (now - quotaAt > maxAge) return;
+    const resetsAt = numberOrNull(latestQuota.event.quotaLimits?.resetsAt);
+    if (!resetsAt || resetsAt <= now / 1000) return;
+    const resetSeconds = Math.ceil(resetsAt - now / 1000);
+    state.activate(resetSeconds, 'claude_usage_limit', { file, line: latestQuota.line, observedAt: latestQuota.observedAt });
   }
   private isHubChat(sessionId: string) { return !!this.db.prepare('SELECT 1 FROM chat_sessions WHERE claudeSessionId=?').get(sessionId); }
   private isAllowed(event: ClaudeTranscriptEvent, sessionId: string): boolean {
@@ -153,4 +182,15 @@ function findTranscriptFiles(dir: string, maxAgeDays: number): string[] {
     for (const entry of entries) if (entry.isFile() && entry.name.endsWith('.jsonl')) { const file = path.join(projectDir, entry.name); try { if (fs.statSync(file).mtimeMs >= cutoff) files.push(file); } catch { /* raced */ } }
   }
   return files;
+}
+
+function countNewlines(file: string, end: number): number {
+  try {
+    const prefix = Buffer.allocUnsafe(end);
+    const fd = fs.openSync(file, 'r');
+    try { fs.readSync(fd, prefix, 0, end, 0); } finally { fs.closeSync(fd); }
+    let count = 0;
+    for (const byte of prefix) if (byte === 10) count += 1;
+    return count;
+  } catch { return 0; }
 }

@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -85,6 +86,7 @@ export interface AgentHubConfig {
   };
   cacheDir: string;
   savings: SavingsConfig;
+  load: LoadConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -112,6 +114,7 @@ export function saveConfig(
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
     savings: DeepPartialSavingsConfig;
+    load?: Partial<LoadConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -134,6 +137,7 @@ export function saveConfig(
       : {}),
     ...(patch.disk ? { disk: { ...((current.disk as Record<string, unknown>) || {}), ...patch.disk } } : {}),
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
+    ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
     ...(patch.savings
       ? {
           savings: {
@@ -173,6 +177,7 @@ export function updateConfigInMemory(
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
     savings: DeepPartialSavingsConfig;
+    load?: Partial<LoadConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -243,6 +248,7 @@ export function updateConfigInMemory(
       config.savings.claudeOverheadPerTask = patch.savings.claudeOverheadPerTask;
     }
   }
+  if (patch.load) config.load = { ...config.load, ...patch.load };
 }
 
 export function loadConfig(overrideHome?: string): AgentHubConfig {
@@ -320,6 +326,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 
   const rawSavings = (userConfig.savings as Record<string, unknown>) || {};
+  const rawLoad = (userConfig.load as Record<string, unknown>) || {};
   const rawClaudeSessions = (userConfig.claudeSessions as Record<string, unknown>) || {};
   const rawClaudeWeights = (rawClaudeSessions.weights as Record<string, unknown>) || {};
   const rawClaudeInclude = Array.isArray(rawClaudeSessions.include)
@@ -383,5 +390,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     cleanup,
     cacheDir,
     savings,
+    load: {
+      enabled: typeof rawLoad.enabled === 'boolean' ? rawLoad.enabled : DEFAULT_LOAD_CONFIG.enabled,
+      high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
+      ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
+      minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
+      recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
+    },
   };
 }

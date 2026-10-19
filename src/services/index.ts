@@ -187,8 +187,14 @@ export const UpdateConfigSchema = z.object({
         .optional(),
       claudeFactor: z.number().positive().optional(),
       claudeOverheadPerTask: z.number().nonnegative().optional(),
-    })
-    .optional(),
+    }).optional(),
+  load: z.object({
+    enabled: z.boolean().optional(),
+    high: z.number().positive().optional(),
+    ok: z.number().positive().optional(),
+    minFreeMemGB: z.number().positive().optional(),
+    recoverAfterSec: z.number().int().positive().optional(),
+  }).optional(),
 });
 
 export function toTaskId(idOrParam: string): string {
@@ -439,6 +445,11 @@ export class AppService {
   }
   async rescanClaudeSessions() { await this.claudeScanner?.scan(); return { ok: true }; }
   getClaudeQuota() { const quota = this.claudeSessionRepo?.quota() || { status: null, resetsAt: null, rateLimitType: null, observedAt: null }; return { ...quota, limited: isClaudeQuotaLimited(quota.status || undefined) }; }
+  getClaudeFailover() { return this.chatService?.getClaudeFailover() || { active: false, until: null, reason: null, activatedAt: null, evidence: null, lastActivityAt: null }; }
+  clearClaudeFailover() {
+    if (!this.chatService) throw new HttpError(500, 'internal_error', 'ChatService chưa sẵn sàng');
+    return this.chatService.clearClaudeFailover();
+  }
   getClaudeToday() {
     const db = this.scheduler.getDatabase();
     if (!db) return { effectiveTokens: 0, sessions: 0, tasks: [] as Array<{ taskId: string; effectiveTokens: number }> };
@@ -584,6 +595,7 @@ export class AppService {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
       },
+      load: this.scheduler.getLoadStatus(),
     };
   }
 
@@ -1363,6 +1375,7 @@ export class AppService {
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
+      load: this.config.load,
     };
   }
 

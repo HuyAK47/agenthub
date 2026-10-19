@@ -33,6 +33,7 @@ const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
+import { LoadGuard, LoadSnapshot } from '../load.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -126,6 +127,8 @@ export class Scheduler {
   private failoverWasActive = false;
   private lastOrphanScan = 0;
   private recheckWaitingOnDiskOk = true;
+  private loadGuard: LoadGuard;
+  private lastLoadOverloaded = false;
 
   constructor(
     private config: AgentHubConfig,
@@ -144,6 +147,7 @@ export class Scheduler {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
     this.worktreeService = new WorktreeService(config);
+    this.loadGuard = new LoadGuard(config.load);
     this.locks = locks || new ProfileLockService(path.join(config.agyHomesDir, '.state'), config.slotsPerAgyProfile, config.slotsPerCodexProfile);
     this.db = db;
     this.runMetricsRepo = runMetricsRepo;
@@ -186,6 +190,14 @@ export class Scheduler {
   getRunning(): Map<string, RunningTask> {
     for (const runningTask of this.running.values()) this.refreshActivity(runningTask);
     return this.running;
+  }
+
+  effectiveParallel(project: { maxParallel: number }): number {
+    return this.loadGuard.effectiveParallel(project.maxParallel);
+  }
+
+  getLoadStatus(): LoadSnapshot {
+    return this.loadGuard.getStatus();
   }
 
   start(): void {
@@ -356,6 +368,12 @@ export class Scheduler {
    * Main scheduler tick
    */
   tick(): void {
+    this.loadGuard.setConfig(this.config.load);
+    const load = this.loadGuard.update();
+    if (load.overloaded !== this.lastLoadOverloaded) {
+      this.lastLoadOverloaded = load.overloaded;
+      this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
+    }
     // 0. Check disk space: if sufficient, resume any tasks waiting for disk
     const diskSpace = getDiskSpaceSync(this.config.worktreesDir);
     if (diskSpace.freeGB >= this.config.disk.minFreeGB) {
@@ -817,7 +835,7 @@ export class Scheduler {
       const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
       const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
 
-      if (runningInProject + startingInProject >= project.maxParallel) continue;
+      if (runningInProject + startingInProject >= this.effectiveParallel(project)) continue;
 
       // Find a suitable (model, profile) pair
       const pair = this.findModelProfilePair(task);

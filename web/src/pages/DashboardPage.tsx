@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getClaudeQuota, getOrphans, reapOrphans } from '../api/client';
+import { getStatus, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -65,6 +65,8 @@ export const DashboardPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const { data: claudeQuota } = useQuery({ queryKey: ['claude-quota'], queryFn: getClaudeQuota, refetchInterval: 30_000 });
+  const { data: claudeFailover } = useQuery({ queryKey: ['claude-failover'], queryFn: getClaudeFailover, refetchInterval: 5000 });
+  const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
 
   const handleReap = async () => {
@@ -196,6 +198,20 @@ export const DashboardPage: React.FC = () => {
               </span>
             </div>
           )}
+          {status.load && (
+            <div
+              data-testid="load-status"
+              className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border ${
+                status.load.overloaded
+                  ? 'text-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] border-[var(--t-warn)] font-medium'
+                  : 'text-[var(--t-text-2)] bg-[var(--t-surface-2)] border-[var(--t-border)]'
+              }`}
+            >
+              <Cpu className="w-3.5 h-3.5" />
+              <span>{status.load.overloaded ? t('dashboard.loadReducing') : t('dashboard.loadNormal')}</span>
+              <span>{status.load.load1.toFixed(1)} · {status.load.freeMemGB.toFixed(1)} GB</span>
+            </div>
+          )}
           <div className="flex items-center gap-2 text-xs text-[var(--t-ok)] bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] px-3 py-1.5 rounded-full border border-[var(--t-ok)]">
             <Radio className="w-3.5 h-3.5 animate-pulse" />
             <span>{t('dashboard.online')}</span>
@@ -208,6 +224,16 @@ export const DashboardPage: React.FC = () => {
       {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
         <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
+      </div>}
+      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
+            {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
+            {claudeFailover.evidence && <div className="text-xs text-[var(--text-secondary)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
+          </div>
+          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-white text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
+        </div>
       </div>}
 
       {/* Metric Cards */}

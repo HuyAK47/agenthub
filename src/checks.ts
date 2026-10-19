@@ -1,11 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync } from 'node:child_process';
 import type Database from 'better-sqlite3';
 import type { ProjectRow, TaskRow } from './db/index.js';
+import { runInProcessGroup } from './priority.js';
 
-const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 8192;
 const CONFLICT_MARKER_REGEX = /^(<{7}|={7}|>{7})( |$)/m;
 export interface CheckDefinition { name: string; cmd: string[]; timeoutSec?: number }
@@ -115,8 +114,9 @@ async function runOne(check: CheckDefinition, repo: string): Promise<CheckResult
     else output = files.filter((f) => { try { return CONFLICT_MARKER_REGEX.test(fs.readFileSync(path.join(repo, f), 'utf8')); } catch { return false; } }).join('\n');
     return { name: check.name, ok: !output, exitCode: output ? 1 : 0, durationMs: Date.now() - started, outputTail: tail(output || 'OK') };
   }
-  try { const r = await execFileAsync(check.cmd[0], check.cmd.slice(1), { cwd: repo, env: envFromFiles(repo), timeout: (check.timeoutSec || 600) * 1000, maxBuffer: 4 * 1024 * 1024 }); return { name: check.name, ok: true, exitCode: 0, durationMs: Date.now() - started, outputTail: tail(`${r.stdout}${r.stderr}`) }; }
-  catch (e) { const x = e as { code?: number; stdout?: string; stderr?: string; message?: string }; return { name: check.name, ok: false, exitCode: typeof x.code === 'number' ? x.code : null, durationMs: Date.now() - started, outputTail: tail(`${x.stdout || ''}${x.stderr || ''}${x.message || ''}`) }; }
+  const r = await runInProcessGroup(check.cmd[0], check.cmd.slice(1), { cwd: repo, env: envFromFiles(repo), timeoutMs: (check.timeoutSec || 600) * 1000 });
+  const ok = r.code === 0 && !r.timedOut;
+  return { name: check.name, ok, exitCode: r.code, durationMs: Date.now() - started, outputTail: tail(`${r.output}${r.timedOut ? `\nTimeout sau ${check.timeoutSec || 600}s` : ''}`) };
 }
 import { ensureWorktreeNodeModules } from './cache.js';
 

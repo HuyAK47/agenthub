@@ -279,6 +279,8 @@ export async function createServer(
   fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => service.getClaudeSession((req.params as { id: string }).id));
   fastify.post('/api/claude/sessions/rescan', async () => service.rescanClaudeSessions());
   fastify.get('/api/claude/quota', async () => service.getClaudeQuota());
+  fastify.get('/api/claude/failover', async () => service.getClaudeFailover());
+  fastify.post('/api/claude/failover/clear', async () => service.clearClaudeFailover());
   fastify.get('/api/claude/usage/today', async () => service.getClaudeToday());
 
   // --- SSE Route ---
