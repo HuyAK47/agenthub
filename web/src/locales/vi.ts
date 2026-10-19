@@ -41,6 +41,7 @@ export const vi = {
   },
   waitReason: {
     disk: 'Chờ ổ đĩa (còn {free} GB / cần {min} GB)',
+    diskNamed: 'Chờ {label} (còn {free} GB / cần {min} GB)',
     diskShort: 'Chờ ổ đĩa',
     quota: 'Chờ quota model',
     parallel: 'Chờ slot song song',

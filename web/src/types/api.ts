@@ -202,6 +202,15 @@ export interface HubStatus {
     totalGB: number;
     minFreeGB?: number;
   };
+  disks?: Array<{
+    path: string;
+    label: string;
+    freeGB: number;
+    totalGB: number;
+    minFreeGB: number;
+    low: boolean;
+    source: 'worktrees' | 'extra';
+  }>;
   load?: {
     load1: number;
     freeMemGB: number;
