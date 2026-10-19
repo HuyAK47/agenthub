@@ -8,12 +8,14 @@ import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
 
+import { AgentHubConfig } from '../src/config.js';
+
 describe('Worktree Cleanup Hooks', () => {
   let tmpDir: string;
   let worktreesDir: string;
   let projectPath: string;
   let service: WorktreeService;
-  let emittedEvents: Array<{ type: string; taskId?: string; payload?: any }>;
+  let emittedEvents: Array<{ type: string; taskId?: string; payload?: Record<string, unknown> }>;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-wt-hooks-test-'));
@@ -41,14 +43,14 @@ describe('Worktree Cleanup Hooks', () => {
 
     emittedEvents = [];
     const eventBus = {
-      emit: (type: string, taskId?: string, payload?: any) => {
-        emittedEvents.push({ type, taskId, payload });
+      emit: (type: string, taskId?: string, payload?: unknown) => {
+        emittedEvents.push({ type, taskId, payload: payload as Record<string, unknown> });
         return true;
       },
     };
 
     service = new WorktreeService(
-      { worktreesDir, hubHome: tmpDir } as any,
+      { worktreesDir, hubHome: tmpDir } as unknown as AgentHubConfig,
       eventBus,
     );
   });

@@ -96,8 +96,9 @@ export const ProjectHooksInputSchema = z.union([
     try {
       const parsed = JSON.parse(val);
       return ProjectHooksSchema.parse(parsed);
-    } catch (e: any) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Invalid hooks JSON: ${e.message}` });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Invalid hooks JSON: ${msg}` });
       return z.NEVER;
     }
   }),

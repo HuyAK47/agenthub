@@ -275,11 +275,12 @@ export class WorktreeService {
           durationMs,
           output: stdout,
         });
-      } catch (err: any) {
+      } catch (err) {
+        const error = err as { status?: number; killed?: boolean; stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
         const durationMs = Date.now() - startTime;
-        const exitCode = typeof err.status === 'number' ? err.status : (err.killed ? 137 : 1);
-        const output = (err.stdout ? String(err.stdout) : '') + (err.stderr ? String(err.stderr) : '');
-        console.error(`[worktree] Hook command failed: ${expandedCmd} (exit ${exitCode}): ${err.message}`);
+        const exitCode = typeof error.status === 'number' ? error.status : (error.killed ? 137 : 1);
+        const output = (error.stdout ? String(error.stdout) : '') + (error.stderr ? String(error.stderr) : '');
+        console.error(`[worktree] Hook command failed: ${expandedCmd} (exit ${exitCode}): ${error.message ?? String(err)}`);
         eventBus?.emit('worktree.hook', taskId, {
           hook: 'onWorktreeRemoved',
           cmd: expandedCmd,
@@ -287,7 +288,7 @@ export class WorktreeService {
           ok: false,
           exitCode,
           durationMs,
-          error: err.message,
+          error: error.message ?? String(err),
           output,
         });
       }
