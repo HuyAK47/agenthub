@@ -74,6 +74,8 @@ export const en: typeof vi = {
     realtime: 'Real-time',
     noEvents: 'No events recorded yet.',
     loadError: 'Failed to load system overview. Please try again.',
+    loadReducing: 'Reducing load',
+    loadNormal: 'Load normal',
   },
   tasks: {
     title: 'Task Management',

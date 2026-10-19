@@ -197,6 +197,20 @@ export const DashboardPage: React.FC = () => {
               </span>
             </div>
           )}
+          {status.load && (
+            <div
+              data-testid="load-status"
+              className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border ${
+                status.load.overloaded
+                  ? 'text-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] border-[var(--t-warn)] font-medium'
+                  : 'text-[var(--t-text-2)] bg-[var(--t-surface-2)] border-[var(--t-border)]'
+              }`}
+            >
+              <Cpu className="w-3.5 h-3.5" />
+              <span>{status.load.overloaded ? t('dashboard.loadReducing') : t('dashboard.loadNormal')}</span>
+              <span>{status.load.load1.toFixed(1)} · {status.load.freeMemGB.toFixed(1)} GB</span>
+            </div>
+          )}
           <div className="flex items-center gap-2 text-xs text-[var(--t-ok)] bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] px-3 py-1.5 rounded-full border border-[var(--t-ok)]">
             <Radio className="w-3.5 h-3.5 animate-pulse" />
             <span>{t('dashboard.online')}</span>

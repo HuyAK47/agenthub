@@ -72,6 +72,8 @@ export const vi = {
     realtime: 'Thời gian thực',
     noEvents: 'Chưa có sự kiện nào được ghi nhận.',
     loadError: 'Không thể tải thông tin tổng quan hệ thống. Vui lòng thử lại.',
+    loadReducing: 'Đang giảm tải',
+    loadNormal: 'Tải máy bình thường',
   },
   tasks: {
     title: 'Quản lý Task',

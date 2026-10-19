@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest';
+import { LoadGuard } from '../src/load.js';
+
+describe('LoadGuard', () => {
+  it('reduces effective parallelism without changing the configured value', () => {
+    const load = 20;
+    const memory = 4;
+    const guard = new LoadGuard({ enabled: true, high: 16, ok: 11, minFreeMemGB: 1.5, recoverAfterSec: 300 }, {
+      readLoad: () => load,
+      readFreeMemBytes: () => memory * 1024 ** 3,
+    });
+    const project = { maxParallel: 4 };
+
+    guard.update();
+    expect(guard.effectiveParallel(project.maxParallel)).toBe(1);
+    expect(project.maxParallel).toBe(4);
+  });
+
+  it('recovers only after the healthy period', () => {
+    let now = 0;
+    let load = 20;
+    const guard = new LoadGuard({ enabled: true, high: 16, ok: 11, minFreeMemGB: 1.5, recoverAfterSec: 300 }, {
+      readLoad: () => load,
+      readFreeMemBytes: () => 4 * 1024 ** 3,
+      now: () => now,
+    });
+
+    guard.update();
+    load = 10;
+    now = 0;
+    guard.update();
+    now = 299_000;
+    expect(guard.update().overloaded).toBe(true);
+    now = 300_000;
+    expect(guard.update().overloaded).toBe(false);
+  });
+
+  it('resets recovery when the machine becomes unhealthy again', () => {
+    let now = 0;
+    let load = 20;
+    const guard = new LoadGuard({ enabled: true, high: 16, ok: 11, minFreeMemGB: 1.5, recoverAfterSec: 300 }, {
+      readLoad: () => load,
+      readFreeMemBytes: () => 4 * 1024 ** 3,
+      now: () => now,
+    });
+
+    guard.update();
+    load = 10;
+    now = 200_000;
+    guard.update();
+    load = 12;
+    now = 400_000;
+    guard.update();
+    load = 10;
+    now = 499_000;
+    expect(guard.update().overloaded).toBe(true);
+    now = 600_000;
+    expect(guard.update().overloaded).toBe(true);
+    now = 799_000;
+    expect(guard.update().overloaded).toBe(false);
+  });
+});
