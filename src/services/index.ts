@@ -187,8 +187,14 @@ export const UpdateConfigSchema = z.object({
         .optional(),
       claudeFactor: z.number().positive().optional(),
       claudeOverheadPerTask: z.number().nonnegative().optional(),
-    })
-    .optional(),
+    }).optional(),
+  load: z.object({
+    enabled: z.boolean().optional(),
+    high: z.number().positive().optional(),
+    ok: z.number().positive().optional(),
+    minFreeMemGB: z.number().positive().optional(),
+    recoverAfterSec: z.number().int().positive().optional(),
+  }).optional(),
 });
 
 export function toTaskId(idOrParam: string): string {
@@ -584,6 +590,7 @@ export class AppService {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
       },
+      load: this.scheduler.getLoadStatus(),
     };
   }
 
@@ -1363,6 +1370,7 @@ export class AppService {
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
+      load: this.config.load,
     };
   }
 
