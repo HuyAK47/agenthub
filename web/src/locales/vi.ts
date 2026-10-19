@@ -81,6 +81,7 @@ export const vi = {
     filterProject: 'Lọc theo project',
     allProjects: 'Tất cả project',
     createTask: 'Tạo Task',
+    filterQuick: 'Lọc slug / tiêu đề',
   },
   createTask: {
     title: 'Tạo task mới',

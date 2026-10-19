@@ -16,6 +16,7 @@ import {
 import { useLocale } from '../context/LocaleContext';
 import { ModelBadge } from '../components/ModelBadge';
 import { formatNumber as formatNum, formatSigned } from '../utils/format';
+import { CollapsibleList } from '../components/CollapsibleList';
 
 export const SavingsPage: React.FC = () => {
   const { t, locale } = useLocale();
@@ -378,7 +379,8 @@ export const SavingsPage: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    tasks.map((task) => (
+                    <CollapsibleList items={tasks} initial={20} step={20} storageKey="agenthub:savings:tasks" tableColSpan={7}>
+                    {(task) => (
                       <tr
                         key={task.taskId}
                         className="hover:bg-[var(--bg-surface-hover)] transition-colors"
@@ -443,7 +445,8 @@ export const SavingsPage: React.FC = () => {
                           {formatDuration(task.durationMs)}
                         </td>
                       </tr>
-                    ))
+                    )}
+                    </CollapsibleList>
                   )}
                 </tbody>
               </table>

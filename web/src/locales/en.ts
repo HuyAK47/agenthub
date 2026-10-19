@@ -83,6 +83,7 @@ export const en: typeof vi = {
     filterProject: 'Filter by project',
     allProjects: 'All projects',
     createTask: 'New Task',
+    filterQuick: 'Filter slug / title',
   },
   createTask: {
     title: 'Create New Task',
