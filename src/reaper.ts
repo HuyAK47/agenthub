@@ -14,6 +14,7 @@ export interface ProcessInfo {
   cwd: string;
   cpu: number;
   rss: number;
+  startedAt: number;
 }
 
 const DELETED_SUFFIX = ' (deleted)';
@@ -27,9 +28,27 @@ function cleanCwd(cwd: string): string {
 }
 
 function isInside(target: string, dir: string): boolean {
-  const resolvedTarget = path.resolve(cleanCwd(target));
-  const resolvedDir = path.resolve(cleanCwd(dir));
+  const resolvedTarget = resolveReal(cleanCwd(target));
+  const resolvedDir = resolveReal(cleanCwd(dir));
   return resolvedTarget === resolvedDir || resolvedTarget.startsWith(resolvedDir + path.sep);
+}
+
+function resolveReal(target: string): string {
+  const resolved = path.resolve(target);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function bootTimeMs(): number {
+  try {
+    const seconds = fs.readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)$/m)?.[1];
+    return Number(seconds || 0) * 1000;
+  } catch {
+    return 0;
+  }
 }
 
 function processAncestors(): Set<number> {
@@ -66,6 +85,7 @@ function readProcessInfo(pid: number): ProcessInfo | null {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
     const afterComm = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
     const ticks = Number(afterComm[11] || 0) + Number(afterComm[12] || 0);
+    const startTicks = Number(afterComm[19] || 0);
     let cpu = 0;
     try {
       const uptime = Number(fs.readFileSync('/proc/uptime', 'utf8').split(/\s+/)[0]);
@@ -74,7 +94,8 @@ function readProcessInfo(pid: number): ProcessInfo | null {
     } catch {
       // proc/uptime may be unavailable outside Linux.
     }
-    return { pid, cwd, cpu, rss: Number(rssMatch?.[1] || 0) * 1024 };
+    const startedAt = bootTimeMs() + startTicks * 10;
+    return { pid, cwd, cpu, rss: Number(rssMatch?.[1] || 0) * 1024, startedAt };
   } catch {
     return null;
   }
@@ -113,28 +134,48 @@ function alive(pid: number): boolean {
   }
 }
 
+function killAfterGrace(pids: number[], graceMs: number): void {
+  const timer = setTimeout(() => {
+    for (const pid of pids) {
+      if (alive(pid)) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* process exited */ }
+      }
+    }
+  }, graceMs);
+  timer.unref();
+}
+
+function logReap(pids: number[], dir: string): void {
+  if (pids.length > 0) console.log(`[reaper] cleaned ${pids.join(', ')} in ${dir}`);
+}
+
 function reapSync(dir: string, options: ReaperOptions): number[] {
   const pids = findProcessesInDir(dir, options);
   for (const pid of pids) {
     try { process.kill(pid, 'SIGTERM'); } catch { /* process exited */ }
   }
-  const deadline = Date.now() + (options.graceMs ?? 5000);
-  while (Date.now() < deadline && pids.some(alive)) {
-    // This is intentionally synchronous because WorktreeService.remove is synchronous.
-    const until = Math.min(deadline, Date.now() + 50);
-    while (Date.now() < until) { /* wait */ }
+  killAfterGrace(pids, options.graceMs ?? 5000);
+  logReap(pids, dir);
+  return pids;
+}
+
+export async function reap(dir: string, options: ReaperOptions = {}): Promise<number[]> {
+  const pids = findProcessesInDir(dir, options);
+  if (pids.length === 0) return pids;
+  for (const pid of pids) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* process exited */ }
   }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, options.graceMs ?? 5000);
+    timer.unref();
+  });
   for (const pid of pids) {
     if (alive(pid)) {
       try { process.kill(pid, 'SIGKILL'); } catch { /* process exited */ }
     }
   }
-  if (pids.length > 0) console.log(`[reaper] cleaned ${pids.join(', ')} in ${dir}`);
+  logReap(pids, dir);
   return pids;
-}
-
-export async function reap(dir: string, options: ReaperOptions = {}): Promise<number[]> {
-  return reapSync(dir, options);
 }
 
 export function reapSyncForWorktree(dir: string, options: ReaperOptions = {}): number[] {

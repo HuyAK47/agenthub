@@ -390,14 +390,25 @@ export class Scheduler {
 
   /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
   reapOrphans(): void {
-    const activePaths = [...this.running.keys()]
-      .map((taskId) => this.taskRepo.get(taskId)?.worktreePath)
-      .filter((worktreePath): worktreePath is string => Boolean(worktreePath));
+    const tasks = this.taskRepo.getAll();
+    const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
     const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     for (const info of processes) {
-      const active = activePaths.some((worktreePath) => info.cwd.replace(/ \(deleted\)$/, '').startsWith(path.resolve(worktreePath) + path.sep));
-      if (active) continue;
       const dir = info.cwd.replace(/ \(deleted\)$/, '');
+      if (info.cwd.endsWith(' (deleted)')) {
+        reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        continue;
+      }
+
+      const task = tasks.find((candidate) => {
+        if (!candidate.worktreePath) return false;
+        const worktreePath = path.resolve(candidate.worktreePath);
+        const cwd = path.resolve(info.cwd);
+        return cwd === worktreePath || cwd.startsWith(worktreePath + path.sep);
+      });
+      const taskCanBeReaped = task && (task.status === 'done' || task.status === 'cancelled');
+      if (info.startedAt > oldProcessCutoff) continue;
+      if (task && !taskCanBeReaped) continue;
       reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
   }

@@ -63,4 +63,20 @@ describe('reaper', () => {
     expect(isAlive(pid)).toBe(true);
     expect(isDeletableWorktreePath(worktreesDir, projectRoot, [projectRoot])).toBe(false);
   });
+
+  it('returns immediately when scheduling escalation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-'));
+    const worktreesDir = path.join(root, 'worktrees');
+    const worktree = path.join(worktreesDir, 'project', 'task');
+    fs.mkdirSync(worktree, { recursive: true });
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: worktree, detached: true, stdio: 'ignore' });
+    children.push(child);
+    const pid = await waitForPid(worktree, { worktreesDir });
+
+    const started = Date.now();
+    const pending = reap(worktree, { worktreesDir, graceMs: 100 });
+    expect(Date.now() - started).toBeLessThan(100);
+    await pending;
+    expect(isAlive(pid)).toBe(false);
+  });
 });
