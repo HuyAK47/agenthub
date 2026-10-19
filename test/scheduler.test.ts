@@ -1338,6 +1338,32 @@ describe('Env file generation', () => {
     scheduler.stop();
   });
 
+  it('re-queues tasks left in waiting_quota by a previous daemon once disk is ok (restart loses in-memory disk waiters)', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+
+    taskRepo.insert({
+      id: 'test-project/disk-waiter',
+      projectId: 'test-project',
+      slug: 'disk-waiter',
+      title: 'Disk waiter from previous daemon',
+      status: 'waiting_quota',
+    });
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines,
+    );
+
+    scheduler.tick();
+    expect(['queued', 'running']).toContain(taskRepo.get('test-project/disk-waiter')?.status);
+
+    scheduler.stop();
+  });
+
   it('uses gemini-3.8-flash-high for hard level by default and opus only when specified in modelChain', () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);

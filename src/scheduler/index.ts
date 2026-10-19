@@ -125,6 +125,7 @@ export class Scheduler {
   private reviewerRuns = new Map<string, ReviewerRun>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
+  private recheckWaitingOnDiskOk = true;
 
   constructor(
     private config: AgentHubConfig,
@@ -374,6 +375,13 @@ export class Scheduler {
           }
         }
         this.tasksWaitingForDisk.clear();
+      }
+      if (this.recheckWaitingOnDiskOk) {
+        // tasksWaitingForDisk chỉ nằm trong bộ nhớ: sau khi daemon restart, task đã vào
+        // waiting_quota vì đĩa sẽ kẹt mãi. Đánh thức lại một lần; task thật sự hết quota
+        // sẽ được dispatch đưa về waiting_quota như cũ.
+        this.recheckWaitingOnDiskOk = false;
+        this.wakeWaitingQuotaTasks('startup_recheck');
       }
     }
 
