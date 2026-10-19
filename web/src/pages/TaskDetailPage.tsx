@@ -23,6 +23,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
+import { CollapsibleList } from '../components/CollapsibleList';
 import {
   ArrowLeft,
   Play,
@@ -583,7 +584,8 @@ export const TaskDetailPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y border-[var(--t-border)]">
-                {(task.runs || []).map((r) => (
+                <CollapsibleList items={task.runs || []} initial={10} step={10} storageKey={`agenthub:task:${id}:runs`} tableColSpan={7}>
+                {(r) => (
                   <tr key={r.id}>
                     <td className="px-6 py-3 font-mono text-xs">{r.id}</td>
                     <td className="px-6 py-3 font-medium uppercase text-xs">{r.engine}</td>
@@ -605,7 +607,8 @@ export const TaskDetailPage: React.FC = () => {
                       {calculateDuration(r.startedAt, r.endedAt)}
                     </td>
                   </tr>
-                ))}
+                )}
+                </CollapsibleList>
               </tbody>
             </table>
           )}

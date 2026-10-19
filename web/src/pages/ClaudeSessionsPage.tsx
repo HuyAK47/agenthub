@@ -5,6 +5,7 @@ import { apiFetch, rescanClaudeSessions } from '../api/client';
 import { Card } from '../components/ui/Card';
 import { useLocale } from '../context/LocaleContext';
 import { formatNumber } from '../utils/format';
+import { CollapsibleList } from '../components/CollapsibleList';
 
 type TaskUsage = { taskId: string; effectiveTokens: number };
 type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[] };
@@ -29,7 +30,8 @@ const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
             </tr>
           </thead>
           <tbody>
-            {sessions.map((session) => (
+            <CollapsibleList items={sessions} initial={20} step={20} storageKey="agenthub:claude-sessions" tableColSpan={6}>
+            {(session) => (
               <tr className="border-t border-[var(--t-border)]" key={session.sessionId}>
                 <td className="py-3 min-w-[260px]">
                   <Link className="hover:text-[var(--t-accent)]" to={`/claude-sessions/${encodeURIComponent(session.sessionId)}`}>
@@ -46,7 +48,8 @@ const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
                 </td>
                 <td>{session.lastAt ? new Date(session.lastAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US') : ''}</td>
               </tr>
-            ))}
+            )}
+            </CollapsibleList>
           </tbody>
         </table>
       </div>

@@ -22,6 +22,7 @@ import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
+import { CollapsibleList } from '../components/CollapsibleList';
 
 function RunningDuration({ startedAt }: { startedAt: string }) {
   const [elapsed, setElapsed] = useState('');
@@ -399,7 +400,8 @@ export const DashboardPage: React.FC = () => {
           </div>
         ) : (
           <ul className="divide-y divide-[var(--border-subtle)]">
-            {events.slice(0, 10).map((event) => {
+            <CollapsibleList items={events} initial={10} step={10} storageKey="agenthub:dashboard:events" className="contents">
+            {(event) => {
               const isClaude =
                 event.type === 'brain.status' ||
                 (typeof event.payload === 'object' &&
@@ -442,7 +444,8 @@ export const DashboardPage: React.FC = () => {
                   <span className="text-xs text-[var(--text-muted)] shrink-0" title={Number.isFinite(parseApiTime(event.ts)) ? new Date(parseApiTime(event.ts)).toISOString() : String(event.ts)}>{formatTimeAgo(event.ts)}</span>
                 </li>
               );
-            })}
+            }}
+            </CollapsibleList>
           </ul>
         )}
       </div>
