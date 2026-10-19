@@ -6,6 +6,18 @@ export interface ClaudeFailoverSnapshot {
   until: number | null;
   reason: string | null;
   activatedAt: number | null;
+  evidence?: {
+    file: string;
+    line: number;
+    observedAt: string;
+  } | null;
+  lastActivityAt?: string | null;
+}
+
+export interface ClaudeFailoverEvidence {
+  file: string;
+  line: number;
+  observedAt: string;
 }
 
 type Clock = () => number;
@@ -17,7 +29,7 @@ export class ClaudeFailoverState {
 
   constructor(private readonly filePath: string, now: Clock = () => Math.floor(Date.now() / 1000)) {
     this.now = now;
-    this.state = { active: false, until: null, reason: null, activatedAt: null };
+    this.state = { active: false, until: null, reason: null, activatedAt: null, evidence: null, lastActivityAt: null };
     try {
       const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<ClaudeFailoverSnapshot>;
       if (parsed.active && typeof parsed.until === 'number' && parsed.until > this.now()) {
@@ -26,6 +38,8 @@ export class ClaudeFailoverState {
           until: parsed.until,
           reason: typeof parsed.reason === 'string' ? parsed.reason : 'usage_limit',
           activatedAt: typeof parsed.activatedAt === 'number' ? parsed.activatedAt : null,
+          evidence: parsed.evidence && typeof parsed.evidence === 'object' ? parsed.evidence : null,
+          lastActivityAt: typeof parsed.lastActivityAt === 'string' ? parsed.lastActivityAt : null,
         };
       }
     } catch {
@@ -40,15 +54,28 @@ export class ClaudeFailoverState {
     return { ...this.state };
   }
 
-  activate(resetSeconds: number, reason = 'usage_limit'): ClaudeFailoverSnapshot {
+  activate(resetSeconds: number, reason = 'usage_limit', evidence?: ClaudeFailoverEvidence): ClaudeFailoverSnapshot {
     const now = this.now();
-    this.state = { active: true, until: now + Math.max(60, resetSeconds), reason, activatedAt: now };
+    this.state = { active: true, until: now + Math.max(60, resetSeconds), reason, activatedAt: now, evidence: evidence || null, lastActivityAt: null };
     this.persist();
     return this.snapshot();
   }
 
+  noteActivity(at: string | Date = new Date()): boolean {
+    const activity = at instanceof Date ? at : new Date(at);
+    if (Number.isNaN(activity.getTime())) return false;
+    const iso = activity.toISOString();
+    this.state.lastActivityAt = iso;
+    if (!this.state.active || this.state.activatedAt === null || activity.getTime() / 1000 <= this.state.activatedAt) {
+      this.persist();
+      return false;
+    }
+    this.clear();
+    return true;
+  }
+
   clear(): void {
-    this.state = { active: false, until: null, reason: null, activatedAt: null };
+    this.state = { active: false, until: null, reason: null, activatedAt: null, evidence: null, lastActivityAt: this.state.lastActivityAt || null };
     try { fs.unlinkSync(this.filePath); } catch { /* already absent */ }
   }
 
