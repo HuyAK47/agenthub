@@ -257,6 +257,40 @@ describe('maxParallel limit', () => {
 
     scheduler.stop();
   });
+
+  it('counts recovered live runs against the project limit', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    profileRepo.upsert({ name: 'p2', engine: 'agy', kind: 'isolated', home: '/tmp/p2', email: null, enabled: 1 });
+    profileRepo.upsert({ name: 'p3', engine: 'agy', kind: 'isolated', home: '/tmp/p3', email: null, enabled: 1 });
+
+    const workers = ['r1', 'r2', 'r3'].map((runId, index) => {
+      const taskId = `test-project/running-${index}`;
+      const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+      taskRepo.insert({ id: taskId, projectId: 'test-project', slug: `running-${index}`, title: taskId, status: 'running' });
+      runRepo.insert({ id: runId, taskId, engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: `p${index + 1}`, pid: child.pid });
+      return child;
+    });
+    taskRepo.insert({ id: 'test-project/queued-1', projectId: 'test-project', slug: 'queued-1', title: 'Queued 1', status: 'queued' });
+    taskRepo.insert({ id: 'test-project/queued-2', projectId: 'test-project', slug: 'queued-2', title: 'Queued 2', status: 'queued' });
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]),
+    );
+    try {
+      scheduler.start();
+      scheduler.tick();
+      expect(scheduler.getRunning().size).toBe(3);
+      expect(taskRepo.get('test-project/queued-1')?.status).toBe('queued');
+      expect(taskRepo.get('test-project/queued-2')?.status).toBe('queued');
+    } finally {
+      scheduler.stop();
+      for (const child of workers) child.kill();
+    }
+  });
 });
 
 describe('Profile uses both agy slots', () => {
