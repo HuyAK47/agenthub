@@ -275,8 +275,9 @@ export async function startDaemon(
     forceTimer.unref();
 
     try {
-      closeContext(ctx);
+      // Dừng nhận request trước, rồi mới đóng scheduler và DB
       await fastify.close();
+      closeContext(ctx);
     } catch (err) {
       console.error('Error during shutdown:', err);
     } finally {
