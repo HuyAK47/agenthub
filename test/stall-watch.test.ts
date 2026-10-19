@@ -163,7 +163,7 @@ describe('Stall & Looping Detection (g-no-commit-watch)', () => {
     expect(taskData.currentRun?.noCommitMinutes).toBe(50);
 
     const statusData = ctx.service.getStatus();
-    const worker = statusData.running.find((w: any) => w.taskId === taskId);
+    const worker = statusData.running.find((w) => w.taskId === taskId);
     expect(worker?.noCommitMinutes).toBe(50);
 
     // Kiểm tra 1 lần mỗi ngưỡng: ở phút 55 (vẫn trong ngưỡng tier 1: 55/45 = 1), không phát thêm event
@@ -270,7 +270,7 @@ describe('Stall & Looping Detection (g-no-commit-watch)', () => {
     expect(taskData.currentRun?.loopingCommand).toBe('npx playwright test spec/auth.spec.ts');
 
     const statusData = ctx.service.getStatus();
-    const worker = statusData.running.find((w: any) => w.taskId === taskId);
+    const worker = statusData.running.find((w) => w.taskId === taskId);
     expect(worker?.isLooping).toBe(true);
 
     // Kiểm tra không phát event lặp lại nếu vẫn đang ở trạng thái looping

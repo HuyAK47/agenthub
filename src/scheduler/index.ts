@@ -660,6 +660,7 @@ export class Scheduler {
         const lines = newChunk.split('\n');
 
         for (const rawLine of lines) {
+          // eslint-disable-next-line no-control-regex
           const cleanLine = rawLine.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
           if (cleanLine.includes('playwright test') || cleanLine.includes('pnpm test:ui')) {
             const matchTs = cleanLine.match(/^\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\]?/);
