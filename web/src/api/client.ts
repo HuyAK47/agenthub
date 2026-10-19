@@ -171,6 +171,23 @@ export async function getClaudeQuota(): Promise<ClaudeQuota> {
   return apiFetch<ClaudeQuota>('/api/claude/quota');
 }
 
+export type ClaudeFailover = {
+  active: boolean;
+  until: number | null;
+  reason: string | null;
+  activatedAt: number | null;
+  evidence?: { file: string; line: number; observedAt: string } | null;
+  lastActivityAt?: string | null;
+};
+
+export async function getClaudeFailover(): Promise<ClaudeFailover> {
+  return apiFetch<ClaudeFailover>('/api/claude/failover');
+}
+
+export async function clearClaudeFailover(): Promise<ClaudeFailover> {
+  return apiFetch<ClaudeFailover>('/api/claude/failover/clear', { method: 'POST' });
+}
+
 export async function rescanClaudeSessions(): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>('/api/claude/sessions/rescan', { method: 'POST' });
 }

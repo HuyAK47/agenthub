@@ -104,6 +104,26 @@ describe('Claude session privacy and quota handling', () => {
     transcript(fresh, projectDir, new Date().toISOString(), 'rejected');
     await new ClaudeSessionScanner(db, { dir: transcriptDir, failoverState: state }).scan();
     expect(state.snapshot().active).toBe(true);
+    expect(state.snapshot().evidence?.file).toContain('fresh/session.jsonl');
+    expect(state.snapshot().evidence?.line).toBe(1);
+    db.close();
+  });
+
+  it('clears failover when Claude writes a later activity record', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
+    const state = new ClaudeFailoverState(path.join(root, 'failover.json'));
+    const file = transcript(transcriptDir, projectDir, new Date().toISOString(), 'rejected');
+    await new ClaudeSessionScanner(db, { dir: path.join(root, 'projects'), failoverState: state }).scan();
+    expect(state.snapshot().active).toBe(true);
+    const activity = assistantEvent('session', projectDir, 'message-2', new Date().toISOString());
+    fs.appendFileSync(file, `${JSON.stringify(activity)}\n`);
+    await new ClaudeSessionScanner(db, { dir: path.join(root, 'projects'), failoverState: state }).scan();
+    expect(state.snapshot().active).toBe(false);
+    expect(state.snapshot().lastActivityAt).toBe(activity.timestamp);
     db.close();
   });
 

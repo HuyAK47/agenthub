@@ -224,6 +224,9 @@ async function main() {
     case 'claude-sessions':
       await cmdClaudeSessions(config, args.slice(1));
       break;
+    case 'claude-failover':
+      await cmdClaudeFailover(config, args.slice(1));
+      break;
 
     default:
       console.log(`AgentHub - Quản lý worker AI
@@ -246,7 +249,27 @@ Cách dùng:
   agenthub savings import-legacy [dir] Nhập lịch sử token từ log cũ
   agenthub savings backfill-lines [--project x] Tính lại số dòng cho các task có nhánh còn tồn tại
   agenthub claude-sessions --summary  Tóm tắt phiên Claude và chi phí 24 giờ qua
+  agenthub claude-failover [status|clear] Xem hoặc tắt failover Claude
 `);
+  }
+}
+
+async function cmdClaudeFailover(config: ReturnType<typeof loadConfig>, extraArgs: string[]): Promise<void> {
+  const ctx = createContext(config);
+  try {
+    const failover = ctx.service.getClaudeFailover();
+    if ((extraArgs[0] || 'status') === 'clear') {
+      console.log('✓ Đã tắt failover Claude');
+      ctx.service.clearClaudeFailover();
+      return;
+    }
+    console.log(`Failover Claude: ${failover.active ? 'ĐANG BẬT' : 'đang tắt'}`);
+    if (failover.until) console.log(`Hết hạn: ${new Date(failover.until * 1000).toISOString()}`);
+    if (failover.reason) console.log(`Lý do: ${failover.reason}`);
+    if (failover.evidence) console.log(`Bằng chứng: ${failover.evidence.file}:${failover.evidence.line} (${failover.evidence.observedAt})`);
+    if (failover.lastActivityAt) console.log(`Claude hoạt động cuối: ${failover.lastActivityAt}`);
+  } finally {
+    ctx.db.close();
   }
 }
 
