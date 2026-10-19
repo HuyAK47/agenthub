@@ -380,6 +380,20 @@ export const DashboardPage: React.FC = () => {
                         {worker.title && worker.title !== worker.taskId && (
                           <div className="text-xs text-[var(--text-muted)] font-mono mt-0.5">{worker.taskId}</div>
                         )}
+                        {((worker.noCommitMinutes != null && worker.noCommitMinutes > 0) || worker.isLooping) && (
+                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                            {worker.noCommitMinutes != null && worker.noCommitMinutes > 0 && (
+                              <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]">
+                                {t('extra.noCommit', { minutes: worker.noCommitMinutes })}
+                              </span>
+                            )}
+                            {worker.isLooping && (
+                              <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]">
+                                {t('extra.looping')}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">

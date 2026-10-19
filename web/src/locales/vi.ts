@@ -321,5 +321,7 @@ export const vi = {
     processingError: 'Đã xảy ra lỗi trong quá trình xử lý.', createChatError: 'Không thể tạo phiên trò chuyện', deleteChatError: 'Không thể xóa phiên trò chuyện', sendError: 'Lỗi khi gửi tin nhắn', stopError: 'Không thể dừng phản hồi', chatList: 'Danh sách cuộc trò chuyện', openSessions: 'Mở danh sách phiên', mode: 'Chế độ', chatWithClaude: 'Chat với Claude Code', chatWelcome: 'Chào mừng bạn đến với Chat với Claude!', chatWelcomeDesc: 'Tương tác trực tiếp với Claude Code để rà soát mã nguồn, điều phối tác vụ và giao việc tự động cho các agent.', startChat: 'Bắt đầu cuộc trò chuyện mới', emptyChat: 'Cuộc trò chuyện này chưa có tin nhắn nào.', emptyChatDesc: 'Hãy nhập câu hỏi bên dưới hoặc chọn một câu gợi ý nhanh để bắt đầu trao đổi với Claude.', runningTool: 'Đang chạy {tool}', progress: 'Đang làm: {tool} · bước {step} · {time}', thinking: 'Claude đang suy nghĩ… {seconds} giây',
     projectOptional: 'Dự án (không bắt buộc)', noProject: 'Không chọn project', chatTitle: 'Tiêu đề cuộc trò chuyện', chatTitlePlaceholder: 'VD: Hỏi về kiến trúc hệ thống, chia task...', claudeModel: 'Model Claude', claudeDefault: 'Mặc định của Claude Code', operationMode: 'Chế độ hoạt động', safeModeDesc: 'Claude được đọc code, xem git, chạy test và giao việc qua AgentHub; không sửa file.', enabledInSettings: 'bật trong Cài đặt', fullModeWarning: 'Cảnh báo: Claude được chạy MỌI lệnh trên máy.', createChat: 'Tạo cuộc trò chuyện',
     resetIn: 'reset sau {time}', fast: 'nhanh',
+    noCommit: 'Chưa commit {minutes} phút',
+    looping: 'Lặp lệnh',
   },
 };

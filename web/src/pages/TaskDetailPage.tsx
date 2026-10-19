@@ -374,6 +374,16 @@ export const TaskDetailPage: React.FC = () => {
                 size="sm"
               />
               {task.status === 'running' && <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />}
+              {task.status === 'running' && task.currentRun?.noCommitMinutes != null && task.currentRun.noCommitMinutes > 0 && (
+                <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]">
+                  {t('extra.noCommit', { minutes: task.currentRun.noCommitMinutes })}
+                </span>
+              )}
+              {task.status === 'running' && task.currentRun?.isLooping && (
+                <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]">
+                  {t('extra.looping')}
+                </span>
+              )}
               <span className="text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] font-mono text-[var(--t-text-3)]">
                 {t('taskDetail.level', { level: task.level })}
               </span>
