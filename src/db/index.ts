@@ -280,6 +280,10 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE tasks ADD COLUMN waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk', 'quota', 'parallel', 'profile_busy'));
   `,
+  // Migration 17: project hooks (e.g. onWorktreeRemoved)
+  `
+  ALTER TABLE projects ADD COLUMN hooks TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -311,6 +315,10 @@ export function openDatabase(dbPath: string): Database.Database {
 }
 
 // Repository helpers
+export interface ProjectHooks {
+  onWorktreeRemoved?: string[];
+}
+
 export interface ProjectRow {
   id: string;
   name: string;
@@ -319,6 +327,7 @@ export interface ProjectRow {
   envTemplate: string | null;
   maxParallel: number;
   checks: string | null;
+  hooks: string | null;
   createdAt: string;
 }
 
@@ -419,17 +428,31 @@ export class ProjectRepo {
     return this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined;
   }
 
-  insert(row: Omit<ProjectRow, 'createdAt' | 'checks'> & { checks?: string | null }): void {
+  insert(
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks'> & {
+      checks?: string | null;
+      hooks?: string | null;
+    },
+  ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(row.id, row.name, row.path, row.defaultBranch, row.envTemplate, row.maxParallel, row.checks || null);
+      .run(
+        row.id,
+        row.name,
+        row.path,
+        row.defaultBranch,
+        row.envTemplate,
+        row.maxParallel,
+        row.checks || null,
+        row.hooks || null,
+      );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
