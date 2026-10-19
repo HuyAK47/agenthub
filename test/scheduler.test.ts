@@ -250,10 +250,10 @@ describe('maxParallel limit', () => {
     // Count running tasks
     const tasks = taskRepo.getAll();
     const runningCount = tasks.filter(t => t.status === 'running').length;
-    const queuedCount = tasks.filter(t => t.status === 'queued').length;
+    const waitingParallelCount = tasks.filter(t => t.status === 'waiting_quota' && t.waitReason === 'parallel').length;
 
     expect(runningCount).toBe(2);
-    expect(queuedCount).toBe(1);
+    expect(waitingParallelCount).toBe(1);
 
     scheduler.stop();
   });
@@ -284,8 +284,10 @@ describe('maxParallel limit', () => {
       scheduler.start();
       scheduler.tick();
       expect(scheduler.getRunning().size).toBe(3);
-      expect(taskRepo.get('test-project/queued-1')?.status).toBe('queued');
-      expect(taskRepo.get('test-project/queued-2')?.status).toBe('queued');
+      expect(taskRepo.get('test-project/queued-1')?.status).toBe('waiting_quota');
+      expect(taskRepo.get('test-project/queued-1')?.waitReason).toBe('parallel');
+      expect(taskRepo.get('test-project/queued-2')?.status).toBe('waiting_quota');
+      expect(taskRepo.get('test-project/queued-2')?.waitReason).toBe('parallel');
     } finally {
       scheduler.stop();
       for (const child of workers) child.kill();
@@ -1125,7 +1127,8 @@ describe('Codex slots', () => {
     expect(scheduler.getRunning().size).toBe(2);
     expect(taskRepo.get('test-project/t1')?.status).toBe('running');
     expect(taskRepo.get('test-project/t2')?.status).toBe('running');
-    expect(taskRepo.get('test-project/t3')?.status).toBe('queued');
+    expect(taskRepo.get('test-project/t3')?.status).toBe('waiting_quota');
+    expect(taskRepo.get('test-project/t3')?.waitReason).toBe('profile_busy');
 
     scheduler.stop();
     scheduler.cancelAll();

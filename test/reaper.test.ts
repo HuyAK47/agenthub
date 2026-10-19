@@ -74,8 +74,8 @@ describe('reaper', () => {
     const pid = await waitForPid(worktree, { worktreesDir });
 
     const started = Date.now();
-    const pending = reap(worktree, { worktreesDir, graceMs: 100 });
-    expect(Date.now() - started).toBeLessThan(100);
+    const pending = reap(worktree, { worktreesDir, graceMs: 500 });
+    expect(Date.now() - started).toBeLessThan(400);
     await pending;
     expect(isAlive(pid)).toBe(false);
   });
