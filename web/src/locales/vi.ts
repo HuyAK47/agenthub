@@ -39,6 +39,13 @@ export const vi = {
     cancelled: 'Đã hủy',
     checking: 'Đang kiểm tra',
   },
+  waitReason: {
+    disk: 'Chờ ổ đĩa (còn {free} GB / cần {min} GB)',
+    diskShort: 'Chờ ổ đĩa',
+    quota: 'Chờ quota model',
+    parallel: 'Chờ slot song song',
+    profile_busy: 'Chờ tài khoản rảnh',
+  },
   timer: {
     expired: 'Hết hạn',
   },
@@ -280,6 +287,8 @@ export const vi = {
     pageSavings: 'Hiệu quả', pageAgentHub: 'AgentHub', claudeQuota: 'Quota Claude', unknown: 'chưa rõ', claudeSessions: 'Phiên Claude', tokensOverTime: 'Token theo thời gian', token: 'Token', task: 'Task', messages: 'tin nhắn', model: 'Model', lastActive: 'Hoạt động cuối', rescan: 'Quét lại',
     checking: 'Đang kiểm tra', stuck: 'kẹt (stalled)', waitingApprover: 'Chờ người duyệt', retryReviewer: 'Chạy lại reviewer',
     quickChatError: 'Lỗi gửi tin nhắn nhanh', diskFree: 'Ổ đĩa: {free} / {total} GB trống',
+    diskFreeWithMin: 'Ổ đĩa: {free} / {total} GB trống (ngưỡng {min} GB)',
+    waitingQueue: 'Hàng đợi chờ', waitingCount: '{count} task đang chờ', noWaitingTasks: 'Không có task nào đang chờ.',
     quickChat: 'Chat nhanh với Claude:', quickChatPlaceholder: 'Nhập câu hỏi... (VD: Tình hình các task thế nào?)',
     send: 'Gửi', sending: 'Đang gửi...', workersExecuting: '{count} worker đang thực thi',
     noWorkers: 'Hiện không có worker nào đang chạy tác vụ.', eventStream: 'Dòng sự kiện', realtime: 'Thời gian thực',

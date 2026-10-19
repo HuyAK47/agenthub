@@ -54,7 +54,12 @@ function apiProfile(profile: ProfileRow): ProfileRow {
 }
 
 function apiTask(task: TaskRow): TaskRow {
-  return { ...task, createdAt: toApiTime(task.createdAt)!, updatedAt: toApiTime(task.updatedAt)! };
+  return {
+    ...task,
+    waitReason: task.waitReason ?? null,
+    createdAt: toApiTime(task.createdAt)!,
+    updatedAt: toApiTime(task.updatedAt)!,
+  };
 }
 
 function apiRun<T extends { startedAt: string; endedAt: string | null }>(run: T): T {
@@ -314,11 +319,19 @@ export function formatEventSummary(
     case 'task.timeout':
       return `${taskLabel} hết thời gian chạy`;
 
-    case 'task.waiting_quota':
-      if (p && (p as Record<string, unknown>).reason === 'disk') {
+    case 'task.waiting_quota': {
+      const reason = p && (p as Record<string, unknown>).reason;
+      if (reason === 'disk') {
         return `${taskLabel} chờ dung lượng ổ đĩa`;
       }
+      if (reason === 'parallel') {
+        return `${taskLabel} chờ slot song song`;
+      }
+      if (reason === 'profile_busy') {
+        return `${taskLabel} chờ tài khoản rảnh`;
+      }
       return `${taskLabel} chờ quota khả dụng`;
+    }
 
     case 'disk.low': {
       const free = p && (p as Record<string, unknown>).freeGB !== undefined ? `${(p as Record<string, unknown>).freeGB}GB` : '';
@@ -594,6 +607,7 @@ export class AppService {
       disk: {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
+        minFreeGB: this.config.disk.minFreeGB,
       },
       load: this.scheduler.getLoadStatus(),
     };

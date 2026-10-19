@@ -564,4 +564,17 @@ describe('TaskDetailPage', () => {
     expect(screen.getByTestId('edit-error')).toHaveTextContent('Phát hiện chu trình phụ thuộc');
     expect(screen.getByRole('heading', { name: /Sửa thông tin task/i })).toBeInTheDocument();
   });
+
+  it('13. Hiển thị waitReason badge khi task ở trạng thái waiting_quota', async () => {
+    vi.spyOn(client, 'getTask').mockResolvedValue({
+      ...baseTask,
+      status: 'waiting_quota',
+      waitReason: 'parallel',
+    });
+    vi.spyOn(client, 'getTasks').mockResolvedValue([]);
+
+    renderPage();
+    expect(await screen.findByText('Task Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Chờ slot song song')).toBeInTheDocument();
+  });
 });

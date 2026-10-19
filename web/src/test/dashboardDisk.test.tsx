@@ -65,4 +65,29 @@ describe('DashboardPage - Disk status display', () => {
     expect(diskBadge).toHaveTextContent('Ổ đĩa: 15 / 73 GB trống');
     expect(diskBadge.className).not.toContain('text-[var(--t-warn)]');
   });
+
+  it('hiển thị ngưỡng minFreeGB khi có trường minFreeGB', async () => {
+    vi.spyOn(client, 'getStatus').mockResolvedValue({
+      tasks: { running: 0 },
+      running: [],
+      disk: {
+        freeGB: 2.1,
+        totalGB: 73.0,
+        minFreeGB: 5.0,
+      },
+    } as any);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <DashboardPage />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+
+    const diskBadge = await screen.findByTestId('disk-status');
+    expect(diskBadge).toBeInTheDocument();
+    expect(diskBadge).toHaveTextContent('Ổ đĩa: 2.1 / 73 GB trống (ngưỡng 5 GB)');
+    expect(diskBadge.className).toContain('text-[var(--t-warn)]');
+  });
 });

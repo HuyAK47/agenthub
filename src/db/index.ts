@@ -276,6 +276,10 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE claude_scan_state ADD COLUMN turnTasks TEXT NOT NULL DEFAULT '[]';
   ALTER TABLE claude_scan_state ADD COLUMN eligible INTEGER NOT NULL DEFAULT 1;
   `,
+  // Migration 16: task wait reason
+  `
+  ALTER TABLE tasks ADD COLUMN waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk', 'quota', 'parallel', 'profile_busy'));
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -349,6 +353,8 @@ export interface QuotaUsageRow {
   fetchedAt: number;
 }
 
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+
 export interface TaskRow {
   id: string;
   projectId: string;
@@ -361,6 +367,7 @@ export interface TaskRow {
   branch: string | null;
   worktreePath: string | null;
   status: string;
+  waitReason?: WaitReason;
   dependsOn: string;
   attempt: number;
   resume: number;
@@ -612,12 +619,13 @@ export class TaskRepo {
     branch?: string;
     dependsOn?: string[];
     status?: string;
+    waitReason?: WaitReason;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -631,6 +639,7 @@ export class TaskRepo {
         row.branch || null,
         deps,
         row.status || 'draft',
+        row.waitReason || null,
       );
 
     // Populate task_deps
@@ -642,19 +651,29 @@ export class TaskRepo {
     }
   }
 
-  updateStatus(id: string, status: string): void {
-    this.db
-      .prepare("UPDATE tasks SET status = ?, updatedAt = datetime('now') WHERE id = ?")
-      .run(status, id);
+  updateStatus(id: string, status: string, waitReason: WaitReason = null): void {
+    if (status === 'waiting_quota') {
+      this.db
+        .prepare("UPDATE tasks SET status = ?, waitReason = ?, updatedAt = datetime('now') WHERE id = ?")
+        .run(status, waitReason, id);
+    } else {
+      this.db
+        .prepare("UPDATE tasks SET status = ?, waitReason = NULL, updatedAt = datetime('now') WHERE id = ?")
+        .run(status, id);
+    }
   }
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
-    for (const [key, value] of Object.entries(fields)) {
+    const fieldsToApply = { ...fields };
+    if ('status' in fieldsToApply && fieldsToApply.status !== 'waiting_quota' && fieldsToApply.waitReason === undefined) {
+      fieldsToApply.waitReason = null;
+    }
+    for (const [key, value] of Object.entries(fieldsToApply)) {
       sets.push(`${key} = ?`);
       values.push(value);
     }

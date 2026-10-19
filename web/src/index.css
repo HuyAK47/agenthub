@@ -161,6 +161,31 @@
   --status-waiting_quota-border: color-mix(in srgb, var(--t-warn) 25%, transparent);
   --status-waiting_quota-dot: var(--t-warn);
 
+  /* Wait Reason Tokens (Light) */
+  --wait-disk-color: #ea580c;
+  --wait-disk-bg: color-mix(in srgb, #ea580c 12%, transparent);
+  --wait-disk-text: #c2410c;
+  --wait-disk-border: color-mix(in srgb, #ea580c 30%, transparent);
+  --wait-disk-dot: #ea580c;
+
+  --wait-quota-color: var(--t-purple);
+  --wait-quota-bg: color-mix(in srgb, var(--t-purple) 12%, transparent);
+  --wait-quota-text: var(--t-purple);
+  --wait-quota-border: color-mix(in srgb, var(--t-purple) 30%, transparent);
+  --wait-quota-dot: var(--t-purple);
+
+  --wait-parallel-color: var(--t-accent);
+  --wait-parallel-bg: color-mix(in srgb, var(--t-accent) 12%, transparent);
+  --wait-parallel-text: var(--t-accent);
+  --wait-parallel-border: color-mix(in srgb, var(--t-accent) 30%, transparent);
+  --wait-parallel-dot: var(--t-accent);
+
+  --wait-profile_busy-color: var(--t-checking);
+  --wait-profile_busy-bg: color-mix(in srgb, var(--t-checking) 12%, transparent);
+  --wait-profile_busy-text: #0f766e;
+  --wait-profile_busy-border: color-mix(in srgb, var(--t-checking) 30%, transparent);
+  --wait-profile_busy-dot: var(--t-checking);
+
   --status-draft-color: var(--t-text-3);
   --status-draft-bg: color-mix(in srgb, var(--t-text-3) 12%, transparent);
   --status-draft-text: var(--t-text-3);
@@ -269,6 +294,31 @@
   --status-waiting_quota-text: var(--t-warn);
   --status-waiting_quota-border: color-mix(in srgb, var(--t-warn) 25%, transparent);
   --status-waiting_quota-dot: var(--t-warn);
+
+  /* Wait Reason Tokens (Dark) */
+  --wait-disk-color: #f97316;
+  --wait-disk-bg: color-mix(in srgb, #f97316 15%, transparent);
+  --wait-disk-text: #fb923c;
+  --wait-disk-border: color-mix(in srgb, #f97316 35%, transparent);
+  --wait-disk-dot: #f97316;
+
+  --wait-quota-color: var(--t-purple);
+  --wait-quota-bg: color-mix(in srgb, var(--t-purple) 15%, transparent);
+  --wait-quota-text: hsl(277, 85%, 70%);
+  --wait-quota-border: color-mix(in srgb, var(--t-purple) 35%, transparent);
+  --wait-quota-dot: var(--t-purple);
+
+  --wait-parallel-color: var(--t-accent);
+  --wait-parallel-bg: color-mix(in srgb, var(--t-accent) 15%, transparent);
+  --wait-parallel-text: #60a5fa;
+  --wait-parallel-border: color-mix(in srgb, var(--t-accent) 35%, transparent);
+  --wait-parallel-dot: var(--t-accent);
+
+  --wait-profile_busy-color: var(--t-checking);
+  --wait-profile_busy-bg: color-mix(in srgb, var(--t-checking) 15%, transparent);
+  --wait-profile_busy-text: #2dd4bf;
+  --wait-profile_busy-border: color-mix(in srgb, var(--t-checking) 35%, transparent);
+  --wait-profile_busy-dot: var(--t-checking);
 
   --status-draft-color: var(--t-text-3);
   --status-draft-bg: color-mix(in srgb, var(--t-text-3) 12%, transparent);

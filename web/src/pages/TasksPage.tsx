@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getProjects, getTasks } from '../api/client';
+import { getProjects, getStatus, getTasks } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
@@ -25,6 +25,12 @@ export interface KanbanColumnProps {
 
 export const KanbanColumn: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
   const { t } = useLocale();
+  // Dùng chung cache ['status'] giữa các cột, chỉ để hiện dung lượng đĩa trong nhãn "Chờ ổ đĩa".
+  const { data: hubStatus } = useQuery({
+    queryKey: ['status'],
+    queryFn: getStatus,
+    refetchInterval: 10_000,
+  });
 
   const filteredTasks = useMemo(() => {
     const query = normalizeText(search.trim());
@@ -125,6 +131,18 @@ export const KanbanColumn: React.FC<KanbanColumnProps> = ({ statusKey, tasks, se
                   {t('extra.waitingApprover')}
                 </span>
               ) : null}
+
+              {task.waitReason && (
+                <div className="mb-2">
+                  <StatusBadge
+                    status={task.status}
+                    waitReason={task.waitReason}
+                    diskFreeGB={hubStatus?.disk?.freeGB}
+                    diskMinFreeGB={hubStatus?.disk?.minFreeGB}
+                    size="sm"
+                  />
+                </div>
+              )}
 
               {task.status === 'running' && (
                 <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />
