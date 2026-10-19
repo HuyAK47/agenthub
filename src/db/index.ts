@@ -620,12 +620,13 @@ export class TaskRepo {
     dependsOn?: string[];
     status?: string;
     waitReason?: WaitReason;
+    worktreePath?: string | null;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -640,6 +641,7 @@ export class TaskRepo {
         deps,
         row.status || 'draft',
         row.waitReason || null,
+        row.worktreePath || null,
       );
 
     // Populate task_deps
@@ -772,6 +774,12 @@ export class EventRepo {
     return this.db
       .prepare('SELECT * FROM events WHERE id > ? ORDER BY id')
       .all(afterId) as EventRow[];
+  }
+
+  getByTask(taskId: string): EventRow[] {
+    return this.db
+      .prepare('SELECT * FROM events WHERE taskId = ? ORDER BY id')
+      .all(taskId) as EventRow[];
   }
 }
 

@@ -559,7 +559,7 @@ export class Scheduler {
     const baseRef = task.baseRef || project?.defaultBranch || 'main';
     const branch = task.branch || `agenthub/${task.slug}`;
 
-    const repoPath = (task.worktreePath && fs.existsSync(task.worktreePath))
+    const repoPath = (task.worktreePath && fs.existsSync(path.join(task.worktreePath, '.git')))
       ? task.worktreePath
       : (project?.path && fs.existsSync(project.path) ? project.path : undefined);
 
