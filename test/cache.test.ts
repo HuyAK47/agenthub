@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ensureNodeModules } from '../src/cache.js';
+import { ensureNodeModules, ensureWorktreeNodeModules } from '../src/cache.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -131,5 +131,45 @@ describe('node_modules cache', () => {
     const cachedFile = path.join(cacheDir, entries[0], 'node_modules', 'fixture', 'index.js');
     expect(fs.statSync(path.join(worktreeA, 'node_modules', 'fixture', 'index.js')).ino).toBe(fs.statSync(cachedFile).ino);
     expect(fs.statSync(path.join(worktreeB, 'node_modules', 'fixture', 'index.js')).ino).toBe(fs.statSync(cachedFile).ino);
+  });
+
+  it('installs pnpm workspace links and dev dependency bins after restoring the root cache', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-pnpm-workspace-test-'));
+    const projectDir = path.join(tmpDir, 'project');
+    const worktreeDir = path.join(tmpDir, 'worktree');
+    const cacheDir = path.join(tmpDir, 'cache');
+    const packageDir = path.join(worktreeDir, 'packages', 'cli');
+    for (const dir of [projectDir, worktreeDir, path.join(projectDir, 'packages', 'cli'), packageDir]) fs.mkdirSync(dir, { recursive: true });
+    for (const dir of [projectDir, worktreeDir]) {
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', private: true }));
+      fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9');
+      fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
+    }
+    fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ name: '@fixture/cli', devDependencies: { typescript: '5.0.0' } }));
+    fs.mkdirSync(path.join(projectDir, 'node_modules', 'fixture'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'node_modules', 'fixture', 'index.js'), 'module.exports = 1;');
+
+    const calls: Array<{ cmd: string; args: string[]; cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number }> = [];
+    await ensureWorktreeNodeModules(worktreeDir, projectDir, cacheDir, async (cmd, args, opts) => {
+      calls.push({ cmd, args, cwd: opts?.cwd, env: opts?.env, timeout: opts?.timeout });
+      if (cmd === 'cp') await execFileAsync(cmd, args, { cwd: opts?.cwd });
+      if (cmd === 'pnpm') {
+        const nm = path.join(packageDir, 'node_modules');
+        fs.mkdirSync(path.join(nm, '.bin'), { recursive: true });
+        fs.mkdirSync(path.join(nm, 'typescript'), { recursive: true });
+        fs.writeFileSync(path.join(nm, 'typescript', 'package.json'), JSON.stringify({ bin: { tsc: 'bin/tsc' } }));
+        fs.writeFileSync(path.join(nm, '.bin', 'tsc'), '');
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const install = calls.find((call) => call.cmd === 'pnpm');
+    expect(install).toMatchObject({
+      cwd: worktreeDir,
+      args: ['install', '--frozen-lockfile', '--prefer-offline', '--config.confirmModulesPurge=false'],
+      timeout: 300_000,
+    });
+    expect(install?.env?.CI).toBe('true');
+    expect(fs.existsSync(path.join(packageDir, 'node_modules', '.bin', 'tsc'))).toBe(true);
   });
 });
