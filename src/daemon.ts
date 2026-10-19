@@ -168,8 +168,6 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     taskRepo,
     quotaMarkRepo,
   });
-  notifier.start();
-  claudeScanner.start();
 
   return {
     config,
@@ -198,6 +196,34 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   };
 }
 
+export function closeContext(ctx: DaemonContext): void {
+  try {
+    ctx.notifier?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.scheduler?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.usageService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.claudeScanner?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.db?.close();
+  } catch {
+    // ignore
+  }
+}
+
 export async function startDaemon(
   config: AgentHubConfig,
   engineOverrides?: Map<string, Engine>,
@@ -214,6 +240,10 @@ export async function startDaemon(
 
   // Start scheduler
   ctx.scheduler.start();
+
+  // Start notification service and claude transcript scanner
+  ctx.notifier.start();
+  ctx.claudeScanner.start();
 
   // Start Fastify HTTP server with security and API endpoints
   const fastify = await createServer(ctx.service, config);
@@ -245,12 +275,8 @@ export async function startDaemon(
     forceTimer.unref();
 
     try {
-      ctx.notifier.stop();
-      ctx.scheduler.stop();
-      ctx.usageService.stop();
-      ctx.claudeScanner.stop();
+      closeContext(ctx);
       await fastify.close();
-      ctx.db.close();
     } catch (err) {
       console.error('Error during shutdown:', err);
     } finally {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
@@ -565,4 +565,57 @@ describe('SavingsService and GET /api/savings integration', () => {
     expect(m2[0].linesAdded).toBe(50);
     expect(m2[0].linesDeleted).toBe(10);
   });
+
+  it('agenthub savings backfill-lines CLI process terminates on its own within 20s timeout', async () => {
+    const cliTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-cli-backfill-'));
+    const cliPath = path.resolve(__dirname, '../src/cli.ts');
+
+    try {
+      const { stdout, exitCode } = await new Promise<{ stdout: string; exitCode: number | null }>(
+        (resolve, reject) => {
+          let output = '';
+          const proc = spawn(
+            process.execPath,
+            ['--import', 'tsx', cliPath, 'savings', 'backfill-lines'],
+            {
+              env: {
+                ...process.env,
+                AGENTHUB_HOME: cliTempDir,
+              },
+              stdio: ['ignore', 'pipe', 'pipe'],
+            },
+          );
+
+          proc.stdout?.on('data', (d) => {
+            output += d.toString();
+          });
+          proc.stderr?.on('data', (d) => {
+            output += d.toString();
+          });
+
+          const timer = setTimeout(() => {
+            proc.kill('SIGKILL');
+            reject(new Error('Process did not terminate within 20s timeout'));
+          }, 20_000);
+
+          proc.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
+
+          proc.on('exit', (code) => {
+            clearTimeout(timer);
+            resolve({ stdout: output, exitCode: code });
+          });
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('Bắt đầu tính lại số dòng');
+      expect(stdout).toMatch(/Hoàn thành:\s+\d+\s+task được cập nhật,\s+\d+\s+task bỏ qua\./);
+    } finally {
+      fs.rmSync(cliTempDir, { recursive: true, force: true });
+    }
+  }, 25_000);
 });
+

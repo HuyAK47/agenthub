@@ -22,8 +22,17 @@ export class ClaudeSessionScanner {
   constructor(private db: Database.Database, private options: ClaudeScanOptions) {
     this.weights = { cacheCreation: options.weights?.cacheCreation ?? 1.25, cacheRead: options.weights?.cacheRead ?? 0.1 };
   }
-  start() { void this.scan().catch(() => undefined); this.timer = setInterval(() => void this.scan().catch(() => undefined), 60_000); }
-  stop() { if (this.timer) clearInterval(this.timer); }
+  start() {
+    void this.scan().catch(() => undefined);
+    this.timer = setInterval(() => void this.scan().catch(() => undefined), 60_000);
+    this.timer.unref?.();
+  }
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
   async scan() {
     const repo = new ClaudeSessionRepo(this.db);
     const tasks = this.db.prepare('SELECT id,slug FROM tasks').all() as Array<{ id: string; slug: string }>;
