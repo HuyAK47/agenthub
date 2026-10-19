@@ -849,8 +849,8 @@ export class Scheduler {
       const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
 
       if (runningInProject + startingInProject >= project.maxParallel) {
-        this.taskRepo.updateStatus(task.id, 'waiting_quota', 'parallel');
-        this.eventBus.emit('task.waiting_quota', task.id, { reason: 'parallel' });
+        this.taskRepo.update(task.id, { status: 'queued', waitReason: 'parallel' });
+        this.eventBus.emit('task.queued', task.id, { reason: 'parallel' });
         continue;
       }
 
@@ -875,8 +875,8 @@ export class Scheduler {
             if (!this.running.has(task.id)) this.starting.delete(task.id);
           });
       } else if (this.hasBusyMatchingProfile(task)) {
-        this.taskRepo.updateStatus(task.id, 'waiting_quota', 'profile_busy');
-        this.eventBus.emit('task.waiting_quota', task.id, { reason: 'profile_busy' });
+        this.taskRepo.update(task.id, { status: 'queued', waitReason: 'profile_busy' });
+        this.eventBus.emit('task.queued', task.id, { reason: 'profile_busy' });
         continue;
       } else if (this.allMatchingProfilesNeedLogin(task)) {
         this.taskRepo.updateStatus(task.id, 'failed');

@@ -206,7 +206,7 @@ describe('Task waitReason (lý do chờ)', () => {
     expect(t1?.status).toBe('running');
     expect(t1?.waitReason).toBeNull();
 
-    expect(t2?.status).toBe('waiting_quota');
+    expect(t2?.status).toBe('queued');
     expect(t2?.waitReason).toBe('parallel');
 
     // Increase maxParallel to 2
@@ -272,7 +272,7 @@ describe('Task waitReason (lý do chờ)', () => {
     expect(t1a?.status).toBe('running');
     expect(t1b?.status).toBe('running');
     // Third task has available parallel slot in proj2, but p1 has no free slots!
-    expect(t2?.status).toBe('waiting_quota');
+    expect(t2?.status).toBe('queued');
     expect(t2?.waitReason).toBe('profile_busy');
 
     // Add another profile p2
