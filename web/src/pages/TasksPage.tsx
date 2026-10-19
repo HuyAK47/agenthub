@@ -145,7 +145,19 @@ export const KanbanColumn: React.FC<KanbanColumnProps> = ({ statusKey, tasks, se
               )}
 
               {task.status === 'running' && (
-                <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />
+                <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                  <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />
+                  {task.currentRun?.noCommitMinutes != null && task.currentRun.noCommitMinutes > 0 && (
+                    <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]">
+                      {t('extra.noCommit', { minutes: task.currentRun.noCommitMinutes })}
+                    </span>
+                  )}
+                  {task.currentRun?.isLooping && (
+                    <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]">
+                      {t('extra.looping')}
+                    </span>
+                  )}
+                </div>
               )}
 
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border-subtle)] text-[11px]">

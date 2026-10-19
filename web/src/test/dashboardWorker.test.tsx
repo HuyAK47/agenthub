@@ -55,4 +55,33 @@ describe('DashboardPage - Worker display fallback', () => {
     expect(screen.getByText('XFarm')).toBeInTheDocument();
     expect(screen.getByText('AgentHub')).toBeInTheDocument();
   });
+
+  it('hiển thị nhãn cảnh báo "Chưa commit 50 phút" và "Lặp lệnh" khi worker bị stall hoặc loop', async () => {
+    vi.spyOn(client, 'getStatus').mockResolvedValue({
+      tasks: { running: 1 },
+      running: [
+        {
+          taskId: 'xfarm/p7-acceptance',
+          projectId: 'xfarm',
+          title: 'Playwright spec',
+          model: 'gemini-3.8-flash-high',
+          profileName: 'g1',
+          startedAt: new Date(Date.now() - 50 * 60000).toISOString(),
+          noCommitMinutes: 50,
+          isLooping: true,
+        },
+      ],
+    } as any);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <DashboardPage />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByText('Chưa commit 50 phút')).toBeInTheDocument();
+    expect(screen.getByText('Lặp lệnh')).toBeInTheDocument();
+  });
 });

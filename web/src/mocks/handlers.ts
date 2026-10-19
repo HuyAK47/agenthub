@@ -346,6 +346,7 @@ let mockConfig: SystemConfig = {
   slotsPerAgyProfile: 2,
   slotsPerCodexProfile: 2,
   watchdog: { stallMinutes: 8, waitingMinutes: 5 },
+  stall: { noCommitMin: 45, loopThreshold: 6 },
   modelChains: {
     hard: ['codex:gpt-5.6-luna', 'gemini-3.8-flash-high'],
     easy: ['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna'],

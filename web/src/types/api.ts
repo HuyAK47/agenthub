@@ -107,7 +107,15 @@ export interface Task {
   reviewerEscalationReason?: string | null;
   createdAt: string;
   updatedAt: string;
-  currentRun?: { startedAt: string; lastOutputAt: string; lastActivityAt: string; activitySource: 'log' | 'conversation' | 'worktree' } | null;
+  currentRun?: {
+    startedAt: string;
+    lastOutputAt: string;
+    lastActivityAt: string;
+    activitySource: 'log' | 'conversation' | 'worktree';
+    noCommitMinutes?: number | null;
+    isLooping?: boolean;
+    loopingCommand?: string | null;
+  } | null;
   checks?: CheckResult[];
 }
 
@@ -147,6 +155,10 @@ export interface RunningWorker {
   elapsedMs?: number;
   lastActivityAt?: string;
   activitySource?: 'log' | 'conversation' | 'worktree';
+  // Stall & looping detection
+  noCommitMinutes?: number | null;
+  isLooping?: boolean;
+  loopingCommand?: string | null;
   // UI helper fields
   projectId?: string;
   slug?: string;
@@ -275,6 +287,7 @@ export interface SystemConfig {
   slotsPerAgyProfile?: number;
   slotsPerCodexProfile?: number;
   watchdog?: { stallMinutes: number; waitingMinutes: number };
+  stall?: { noCommitMin: number; loopThreshold: number };
   savings?: SavingsConfig;
   // Backwards compatibility alias for DEC-001 if needed
   modelChains?: {

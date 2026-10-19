@@ -80,6 +80,15 @@ interface RunningTask {
   lockSlot?: number;
   child?: ChildProcess;
   exitCode?: number | null;
+  // Stall & looping detection
+  lastCommitCheckAt?: number;
+  lastCommitCount?: number;
+  lastNoCommitThresholdEmitted?: number;
+  noCommitMinutes?: number;
+  isLooping?: boolean;
+  loopingCommand?: string;
+  commandOccurrences?: Array<{ command: string; timestamp: number }>;
+  lastLogOffset?: number;
 }
 
 interface StartingTask {
@@ -506,9 +515,10 @@ export class Scheduler {
 
   private async checkRunningTasks(): Promise<void> {
     if (this.running.size === 0) return;
+    const now = Date.now();
     for (const [taskId, rt] of this.running) {
       // Check timeout
-      if (Date.now() > rt.timeoutAt) {
+      if (now > rt.timeoutAt) {
         this.killTask(taskId, 'timeout');
         continue;
       }
@@ -522,7 +532,190 @@ export class Scheduler {
 
       if (this.isStalled(rt)) {
         this.handleStall(taskId, rt);
+        continue;
       }
+
+      // Check no-commit watch every 5 minutes
+      if (!rt.lastCommitCheckAt || now - rt.lastCommitCheckAt >= 5 * 60 * 1000) {
+        await this.checkTaskCommits(taskId, rt, now);
+        rt.lastCommitCheckAt = now;
+      }
+
+      // Check looping detection
+      this.checkTaskLooping(taskId, rt, now);
+    }
+  }
+
+  async checkTaskCommits(taskId: string, runningTask?: RunningTask, now = Date.now(), force = false): Promise<void> {
+    const rt = runningTask || this.running.get(taskId);
+    if (!rt) return;
+    if (!force && rt.lastCommitCheckAt && now - rt.lastCommitCheckAt < 5 * 60 * 1000) {
+      return;
+    }
+
+    const task = this.taskRepo.get(taskId);
+    if (!task) return;
+    const project = this.projectRepo.get(task.projectId);
+    const baseRef = task.baseRef || project?.defaultBranch || 'main';
+    const branch = task.branch || `agenthub/${task.slug}`;
+
+    const repoPath = (task.worktreePath && fs.existsSync(path.join(task.worktreePath, '.git')))
+      ? task.worktreePath
+      : (project?.path && fs.existsSync(project.path) ? project.path : undefined);
+
+    if (!repoPath) return;
+
+    let timestamps: number[] = [];
+    try {
+      const { stdout } = await execFileAsync('git', ['log', '--format=%ct', `${baseRef}..${branch}`], {
+        cwd: repoPath,
+      });
+      timestamps = stdout
+        .trim()
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => parseInt(s, 10) * 1000)
+        .filter((n) => !isNaN(n));
+    } catch {
+      timestamps = [];
+    }
+
+    const commitCount = timestamps.length;
+    rt.lastCommitCount = commitCount;
+
+    const lastCommitTime = commitCount > 0 ? timestamps[0] : rt.startTime;
+    const elapsedMs = Math.max(0, now - lastCommitTime);
+    const elapsedMinutes = Math.floor(elapsedMs / (60 * 1000));
+
+    const thresholdMin = this.config.stall?.noCommitMin ?? 45;
+    if (elapsedMinutes > thresholdMin) {
+      rt.noCommitMinutes = elapsedMinutes;
+      const thresholdTier = Math.floor(elapsedMinutes / thresholdMin);
+      if ((rt.lastNoCommitThresholdEmitted || 0) < thresholdTier) {
+        rt.lastNoCommitThresholdEmitted = thresholdTier;
+        this.eventBus.emit('task.no_commit', taskId, {
+          minutes: elapsedMinutes,
+          commits: commitCount,
+          lastCommitAt: commitCount > 0 ? new Date(timestamps[0]).toISOString() : null,
+        });
+
+        if (task.worktreePath && fs.existsSync(task.worktreePath)) {
+          const taskMdPath = path.join(task.worktreePath, '.agenthub', 'task.md');
+          if (fs.existsSync(taskMdPath)) {
+            try {
+              const content = fs.readFileSync(taskMdPath, 'utf-8');
+              const reminder = 'Hãy commit phần đã xong và thu hẹp phạm vi.';
+              if (!content.includes('Hãy commit phần đã xong và thu hẹp phạm vi')) {
+                const separator = content.endsWith('\n') ? '\n' : '\n\n';
+                fs.writeFileSync(taskMdPath, content + separator + reminder + '\n', 'utf-8');
+              }
+            } catch {
+              // ignore write error
+            }
+          }
+        }
+      }
+    } else {
+      rt.noCommitMinutes = undefined;
+      rt.lastNoCommitThresholdEmitted = 0;
+    }
+  }
+
+  checkTaskLooping(taskId: string, runningTask?: RunningTask, now = Date.now()): void {
+    const rt = runningTask || this.running.get(taskId);
+    if (!rt) return;
+
+    const run = this.runRepo.get(rt.runId);
+    if (!run?.logPath || !fs.existsSync(run.logPath)) return;
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(run.logPath);
+    } catch {
+      return;
+    }
+
+    if (!rt.commandOccurrences) {
+      rt.commandOccurrences = [];
+    }
+
+    const lastOffset = rt.lastLogOffset || 0;
+    if (stat.size < lastOffset) {
+      rt.lastLogOffset = 0;
+      rt.commandOccurrences = [];
+    }
+
+    const currentOffset = rt.lastLogOffset || 0;
+    if (stat.size > currentOffset) {
+      try {
+        const fd = fs.openSync(run.logPath, 'r');
+        const bytesToRead = stat.size - currentOffset;
+        const buf = Buffer.alloc(bytesToRead);
+        fs.readSync(fd, buf, 0, bytesToRead, currentOffset);
+        fs.closeSync(fd);
+        rt.lastLogOffset = stat.size;
+
+        const newChunk = buf.toString('utf-8');
+        const lines = newChunk.split('\n');
+
+        for (const rawLine of lines) {
+          // eslint-disable-next-line no-control-regex
+          const cleanLine = rawLine.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+          if (cleanLine.includes('playwright test') || cleanLine.includes('pnpm test:ui')) {
+            const matchTs = cleanLine.match(/^\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\]?/);
+            let lineTime = matchTs ? Date.parse(matchTs[1]) : NaN;
+            if (isNaN(lineTime)) {
+              lineTime = now;
+            }
+            const cmd = cleanLine
+              .replace(/^\[[^\]]+\]\s*/, '')
+              .replace(/^[$>#]\s*/, '')
+              .trim();
+
+            if (cmd) {
+              rt.commandOccurrences.push({ command: cmd, timestamp: lineTime });
+            }
+          }
+        }
+      } catch {
+        // ignore read error
+      }
+    }
+
+    const windowMs = 30 * 60 * 1000;
+    const cutoff = now - windowMs;
+    rt.commandOccurrences = rt.commandOccurrences.filter((entry) => entry.timestamp >= cutoff);
+
+    const counts = new Map<string, number>();
+    for (const entry of rt.commandOccurrences) {
+      counts.set(entry.command, (counts.get(entry.command) || 0) + 1);
+    }
+
+    const threshold = this.config.stall?.loopThreshold ?? 6;
+    let loopingCmd: string | undefined;
+    let maxCount = 0;
+
+    for (const [cmd, count] of counts.entries()) {
+      if (count > threshold && count > maxCount) {
+        loopingCmd = cmd;
+        maxCount = count;
+      }
+    }
+
+    if (loopingCmd) {
+      rt.loopingCommand = loopingCmd;
+      if (!rt.isLooping) {
+        rt.isLooping = true;
+        this.eventBus.emit('task.looping', taskId, {
+          command: loopingCmd,
+          count: maxCount,
+          runId: rt.runId,
+        });
+      }
+    } else {
+      rt.isLooping = false;
+      rt.loopingCommand = undefined;
     }
   }
 
@@ -1471,6 +1664,11 @@ export class Scheduler {
         cachedConversationMtime: 0,
         cachedWorktreeMtime: 0,
         usageBefore,
+        lastCommitCheckAt: Date.now(),
+        lastCommitCount: 0,
+        lastNoCommitThresholdEmitted: 0,
+        commandOccurrences: [],
+        lastLogOffset: 0,
       };
       this.running.set(task.id, rt);
       this.starting.delete(task.id);

@@ -577,4 +577,26 @@ describe('TaskDetailPage', () => {
     expect(await screen.findByText('Task Alpha')).toBeInTheDocument();
     expect(screen.getByText('Chờ slot song song')).toBeInTheDocument();
   });
+
+  it('14. Hiển thị cảnh báo chưa commit và lặp lệnh khi task đang running', async () => {
+    vi.spyOn(client, 'getTask').mockResolvedValue({
+      ...baseTask,
+      status: 'running',
+      currentRun: {
+        startedAt: '2026-10-15T00:00:00Z',
+        lastOutputAt: '2026-10-15T00:10:00Z',
+        lastActivityAt: '2026-10-15T00:10:00Z',
+        activitySource: 'log',
+        noCommitMinutes: 50,
+        isLooping: true,
+      },
+    });
+    vi.spyOn(client, 'getTasks').mockResolvedValue([]);
+
+    renderPage();
+    expect(await screen.findByText('Task Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Chưa commit 50 phút')).toBeInTheDocument();
+    expect(screen.getByText('Lặp lệnh')).toBeInTheDocument();
+  });
 });
+
