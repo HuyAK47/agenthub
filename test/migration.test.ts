@@ -47,6 +47,7 @@ describe('database migrations', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM tasks').get()).toMatchObject({ count: 1 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM runs').get()).toMatchObject({ count: 1 });
     expect(db.prepare('SELECT outcome, reason FROM runs WHERE id = \'run-1\'').get()).toEqual({ outcome: null, reason: null });
+    expect(db.prepare('SELECT waitReason FROM tasks WHERE id = \'p/task\'').get()).toEqual({ waitReason: null });
     expect(db.prepare('SELECT COUNT(*) AS count FROM check_results').get()).toMatchObject({ count: 1 });
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     expect(db.prepare('PRAGMA foreign_key_list(check_results)').all()).toEqual(

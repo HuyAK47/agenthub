@@ -54,7 +54,12 @@ function apiProfile(profile: ProfileRow): ProfileRow {
 }
 
 function apiTask(task: TaskRow): TaskRow {
-  return { ...task, createdAt: toApiTime(task.createdAt)!, updatedAt: toApiTime(task.updatedAt)! };
+  return {
+    ...task,
+    waitReason: task.waitReason ?? null,
+    createdAt: toApiTime(task.createdAt)!,
+    updatedAt: toApiTime(task.updatedAt)!,
+  };
 }
 
 function apiRun<T extends { startedAt: string; endedAt: string | null }>(run: T): T {
