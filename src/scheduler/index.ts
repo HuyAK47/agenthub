@@ -376,12 +376,39 @@ export class Scheduler {
         }
         this.tasksWaitingForDisk.clear();
       }
+      const diskWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'disk');
+      for (const t of diskWaiters) {
+        this.taskRepo.updateStatus(t.id, 'queued');
+        this.eventBus.emit('task.queued', t.id, { reason: 'disk_ready' });
+      }
       if (this.recheckWaitingOnDiskOk) {
         // tasksWaitingForDisk chỉ nằm trong bộ nhớ: sau khi daemon restart, task đã vào
         // waiting_quota vì đĩa sẽ kẹt mãi. Đánh thức lại một lần; task thật sự hết quota
         // sẽ được dispatch đưa về waiting_quota như cũ.
         this.recheckWaitingOnDiskOk = false;
         this.wakeWaitingQuotaTasks('startup_recheck');
+      }
+    }
+
+    // 0b. Resume parallel waiters if project slot is available
+    const parallelWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'parallel');
+    for (const task of parallelWaiters) {
+      const project = this.projectRepo.get(task.projectId);
+      if (!project) continue;
+      const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
+      const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
+      if (runningInProject + startingInProject < project.maxParallel) {
+        this.taskRepo.updateStatus(task.id, 'queued');
+        this.eventBus.emit('task.queued', task.id, { reason: 'parallel_available' });
+      }
+    }
+
+    // 0c. Resume busy profile waiters if a matching profile became available
+    const busyProfileWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'profile_busy');
+    for (const task of busyProfileWaiters) {
+      if (!this.hasBusyMatchingProfile(task) || Boolean(this.findModelProfilePair(task))) {
+        this.taskRepo.updateStatus(task.id, 'queued');
+        this.eventBus.emit('task.queued', task.id, { reason: 'profile_available' });
       }
     }
 
@@ -440,6 +467,10 @@ export class Scheduler {
   wakeWaitingQuotaTasks(reason = 'quota_unblocked'): void {
     const waitingTasks = this.taskRepo.getByStatus('waiting_quota');
     for (const task of waitingTasks) {
+      if (reason !== 'startup_recheck' && task.waitReason === 'disk') {
+        const diskSpace = getDiskSpaceSync(this.config.worktreesDir);
+        if (diskSpace.freeGB < this.config.disk.minFreeGB) continue;
+      }
       this.taskRepo.updateStatus(task.id, 'queued');
       this.eventBus.emit('task.queued', task.id, { reason });
     }
@@ -817,7 +848,11 @@ export class Scheduler {
       const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
       const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
 
-      if (runningInProject + startingInProject >= project.maxParallel) continue;
+      if (runningInProject + startingInProject >= project.maxParallel) {
+        this.taskRepo.updateStatus(task.id, 'waiting_quota', 'parallel');
+        this.eventBus.emit('task.waiting_quota', task.id, { reason: 'parallel' });
+        continue;
+      }
 
       // Find a suitable (model, profile) pair
       const pair = this.findModelProfilePair(task);
@@ -825,7 +860,7 @@ export class Scheduler {
         const disk = getDiskSpaceSync(this.config.worktreesDir);
         if (disk.freeGB < this.config.disk.minFreeGB) {
           this.tasksWaitingForDisk.add(task.id);
-          this.taskRepo.updateStatus(task.id, 'waiting_quota');
+          this.taskRepo.updateStatus(task.id, 'waiting_quota', 'disk');
           this.eventBus.emit('task.waiting_quota', task.id, { reason: 'disk' });
           this.markDiskLow(disk.freeGB);
           continue;
@@ -840,15 +875,16 @@ export class Scheduler {
             if (!this.running.has(task.id)) this.starting.delete(task.id);
           });
       } else if (this.hasBusyMatchingProfile(task)) {
-        // Keep queued while a usable profile is occupied.
+        this.taskRepo.updateStatus(task.id, 'waiting_quota', 'profile_busy');
+        this.eventBus.emit('task.waiting_quota', task.id, { reason: 'profile_busy' });
         continue;
       } else if (this.allMatchingProfilesNeedLogin(task)) {
         this.taskRepo.updateStatus(task.id, 'failed');
         this.eventBus.emit('task.failed', task.id, { reason: 'auth_expired', message: 'Tất cả hồ sơ phù hợp đều cần đăng nhập lại' });
       } else {
         // Every matching profile is quota-exhausted, or no matching profile exists.
-        this.taskRepo.updateStatus(task.id, 'waiting_quota');
-        this.eventBus.emit('task.waiting_quota', task.id);
+        this.taskRepo.updateStatus(task.id, 'waiting_quota', 'quota');
+        this.eventBus.emit('task.waiting_quota', task.id, { reason: 'quota' });
       }
     }
   }
@@ -1229,7 +1265,7 @@ export class Scheduler {
     const disk = getDiskSpaceSync(this.config.worktreesDir);
     if (disk.freeGB < this.config.disk.minFreeGB) {
       this.tasksWaitingForDisk.add(task.id);
-      this.taskRepo.updateStatus(task.id, 'waiting_quota');
+      this.taskRepo.updateStatus(task.id, 'waiting_quota', 'disk');
       this.eventBus.emit('task.waiting_quota', task.id, { reason: 'disk' });
       this.markDiskLow(disk.freeGB);
       return;
@@ -1581,6 +1617,7 @@ export class Scheduler {
       this.taskRepo.updateStatus(taskId, 'failed');
       this.eventBus.emit('task.timeout', taskId);
     }
+    if (!this.stopped) this.triggerTick();
   }
 
   private killProcessGroup(pid: number): void {
