@@ -556,6 +556,9 @@ export class AppService {
         elapsedMs: Date.now() - r.startTime,
         lastActivityAt: new Date(r.lastActivityAt).toISOString(),
         activitySource: r.activitySource,
+        noCommitMinutes: r.noCommitMinutes ?? null,
+        isLooping: r.isLooping ?? false,
+        loopingCommand: r.loopingCommand ?? null,
         title: task?.title ?? '',
         projectId: task?.projectId ?? (r.projectId || (r.taskId.includes('/') ? r.taskId.split('/')[0] : '')),
         slug: task?.slug ?? (r.taskId.includes('/') ? r.taskId.slice(r.taskId.indexOf('/') + 1) : r.taskId),
@@ -964,7 +967,15 @@ export class AppService {
       return {
         ...apiTask(task),
         checks: this.scheduler.getCheckResults(task.id),
-        currentRun: run ? { startedAt: new Date(run.startTime).toISOString(), lastOutputAt: new Date(run.lastOutputAt).toISOString(), lastActivityAt: new Date(run.lastActivityAt).toISOString(), activitySource: run.activitySource } : null,
+        currentRun: run ? {
+          startedAt: new Date(run.startTime).toISOString(),
+          lastOutputAt: new Date(run.lastOutputAt).toISOString(),
+          lastActivityAt: new Date(run.lastActivityAt).toISOString(),
+          activitySource: run.activitySource,
+          noCommitMinutes: run.noCommitMinutes ?? null,
+          isLooping: run.isLooping ?? false,
+          loopingCommand: run.loopingCommand ?? null,
+        } : null,
       };
     }) as TaskRow[];
   }
@@ -1011,7 +1022,15 @@ export class AppService {
     const activeRun = this.scheduler.getRunning().get(taskId);
     return {
       ...apiTask(task),
-      currentRun: activeRun ? { startedAt: new Date(activeRun.startTime).toISOString(), lastOutputAt: new Date(activeRun.lastOutputAt).toISOString(), lastActivityAt: new Date(activeRun.lastActivityAt).toISOString(), activitySource: activeRun.activitySource } : null,
+      currentRun: activeRun ? {
+        startedAt: new Date(activeRun.startTime).toISOString(),
+        lastOutputAt: new Date(activeRun.lastOutputAt).toISOString(),
+        lastActivityAt: new Date(activeRun.lastActivityAt).toISOString(),
+        activitySource: activeRun.activitySource,
+        noCommitMinutes: activeRun.noCommitMinutes ?? null,
+        isLooping: activeRun.isLooping ?? false,
+        loopingCommand: activeRun.loopingCommand ?? null,
+      } : null,
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
       doneContent,
