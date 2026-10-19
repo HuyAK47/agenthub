@@ -27,7 +27,7 @@ import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
-import { getDiskSpaceSync } from '../disk.js';
+import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
 import { parseAuthState } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
@@ -204,6 +204,10 @@ export const UpdateConfigSchema = z.object({
     noCommitMin: z.number().positive().optional(),
     loopThreshold: z.number().int().positive().optional(),
   }).optional(),
+  disk: z.object({
+    minFreeGB: z.number().positive().optional(),
+    extraPaths: z.array(z.object({ path: z.string().min(1), minFreeGB: z.number().positive(), label: z.string().min(1) })).optional(),
+  }).optional(),
 });
 
 export function toTaskId(idOrParam: string): string {
@@ -340,6 +344,11 @@ export function formatEventSummary(
     case 'disk.low': {
       const free = p && (p as Record<string, unknown>).freeGB !== undefined ? `${(p as Record<string, unknown>).freeGB}GB` : '';
       return free ? `Ổ đĩa gần đầy (còn ${free})` : 'Ổ đĩa gần đầy';
+    }
+
+    case 'disk.docker_low': {
+      const free = p && (p as Record<string, unknown>).freeGB !== undefined ? `${(p as Record<string, unknown>).freeGB}GB` : '';
+      return free ? `Ổ đĩa Docker gần đầy (còn ${free})` : 'Ổ đĩa Docker gần đầy';
     }
 
     case 'run.crashed':
@@ -601,6 +610,7 @@ export class AppService {
     });
 
     const disk = getDiskSpaceSync(this.config.worktreesDir);
+    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
 
     return {
       tasks: byStatus,
@@ -616,6 +626,7 @@ export class AppService {
         totalGB: disk.totalGB,
         minFreeGB: this.config.disk.minFreeGB,
       },
+      disks,
       load: this.scheduler.getLoadStatus(),
     };
   }
@@ -1414,6 +1425,7 @@ export class AppService {
       savings: this.config.savings,
       load: this.config.load,
       stall: this.config.stall,
+      disk: this.config.disk,
     };
   }
 

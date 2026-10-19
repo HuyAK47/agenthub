@@ -10,6 +10,7 @@ export interface StatusBadgeProps {
   waitReason?: WaitReason;
   diskFreeGB?: number;
   diskMinFreeGB?: number;
+  diskLabel?: string;
   className?: string;
   size?: 'sm' | 'md' | 'lg';
 }
@@ -19,6 +20,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   waitReason,
   diskFreeGB,
   diskMinFreeGB,
+  diskLabel,
   className = '',
   size = 'md',
 }) => {
@@ -32,7 +34,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       const free = diskFreeGB ?? cachedStatus?.disk?.freeGB;
       const min = diskMinFreeGB ?? cachedStatus?.disk?.minFreeGB;
       if (free !== undefined && min !== undefined) {
-        label = t('waitReason.disk', { free, min });
+        const diskName = diskLabel ?? cachedStatus?.disks?.find((disk) => disk.low)?.label;
+        label = diskName ? t('waitReason.diskNamed', { label: diskName, free, min }) : t('waitReason.disk', { free, min });
       } else {
         label = t('waitReason.diskShort');
       }

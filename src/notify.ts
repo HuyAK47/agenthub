@@ -102,6 +102,13 @@ export class NotificationService {
         break;
       }
 
+      case 'disk.docker_low': {
+        const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
+        const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 5;
+        this.notify(`Ổ đĩa Docker còn ${freeGB} GB (< ${minFreeGB} GB): không chạy docker build/pull/compose up`, 'critical');
+        break;
+      }
+
       case 'quota.exhausted': {
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
         const family = (p.family || p.model || '') as string;

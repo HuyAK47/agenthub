@@ -11,12 +11,14 @@ export interface WaitingQueueProps {
   tasks?: Task[];
   diskFreeGB?: number;
   diskMinFreeGB?: number;
+  diskLabel?: string;
 }
 
 export const WaitingQueue: React.FC<WaitingQueueProps> = ({
   tasks: propTasks,
   diskFreeGB,
   diskMinFreeGB,
+  diskLabel,
 }) => {
   const { t } = useLocale();
   const { data: fetchedTasks } = useQuery({
@@ -82,6 +84,7 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
                       waitReason={task.waitReason}
                       diskFreeGB={diskFreeGB}
                       diskMinFreeGB={diskMinFreeGB}
+                      diskLabel={diskLabel}
                       size="sm"
                     />
                   </div>

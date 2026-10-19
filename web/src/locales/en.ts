@@ -43,6 +43,7 @@ export const en: typeof vi = {
   },
   waitReason: {
     disk: 'Waiting for disk ({free} GB free / {min} GB needed)',
+    diskNamed: 'Waiting for {label} ({free} GB free / {min} GB needed)',
     diskShort: 'Waiting for disk',
     quota: 'Waiting for model quota',
     parallel: 'Waiting for parallel slot',

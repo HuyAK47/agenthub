@@ -227,4 +227,32 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
     ctx.scheduler.tick();
     expect(ctx.taskRepo.get('proj/t1')!.status).toBe('waiting_quota');
   });
+
+  it('blocks on a configured extra disk and includes its label in the wait event', () => {
+    const extraPath = path.join(tmpDir, 'shared-docker');
+    fs.mkdirSync(extraPath);
+    config.disk.extraPaths = [{ path: extraPath, minFreeGB: 5, label: 'Ổ Docker dùng chung' }];
+    vi.spyOn(fs, 'statfs').mockImplementation((target: unknown, cb: unknown) => {
+      const freeGB = target === extraPath ? 1 : 20;
+      (cb as (err: unknown, stats: unknown) => void)(null, {
+        bsize: 1024 * 1024,
+        bavail: freeGB * 1024,
+        blocks: 100 * 1024,
+      });
+    });
+
+    const events: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+    ctx.scheduler.getEventBus().on('*', (type, _taskId, payload) => events.push({ type, payload: payload as Record<string, unknown> }));
+    ctx.taskRepo.insert({ id: 'proj/t-extra', projectId: 'proj', slug: 't-extra', title: 'Extra disk', status: 'queued', level: 'easy' });
+
+    ctx.scheduler.tick();
+
+    expect(ctx.taskRepo.get('proj/t-extra')?.status).toBe('waiting_quota');
+    expect(events.find((event) => event.type === 'task.waiting_quota')?.payload).toMatchObject({
+      reason: 'disk',
+      label: 'Ổ Docker dùng chung',
+      freeGB: 1,
+      minFreeGB: 5,
+    });
+  });
 });

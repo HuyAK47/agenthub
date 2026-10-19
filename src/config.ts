@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
+import type { ExtraDiskPath } from './disk.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -89,6 +90,7 @@ export interface AgentHubConfig {
   };
   disk: {
     minFreeGB: number;
+    extraPaths: ExtraDiskPath[];
   };
   cleanup: {
     nodeModulesOnDone: boolean;
@@ -121,7 +123,7 @@ export function saveConfig(
     notifications: {
       desktop: boolean;
     };
-    disk?: { minFreeGB?: number };
+    disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
     savings: DeepPartialSavingsConfig;
@@ -186,7 +188,7 @@ export function updateConfigInMemory(
     notifications: {
       desktop: boolean;
     };
-    disk?: { minFreeGB?: number };
+    disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
     savings: DeepPartialSavingsConfig;
@@ -238,6 +240,9 @@ export function updateConfigInMemory(
   }
   if (patch.disk?.minFreeGB !== undefined) {
     config.disk.minFreeGB = patch.disk.minFreeGB;
+  }
+  if (patch.disk?.extraPaths !== undefined) {
+    config.disk.extraPaths = [...patch.disk.extraPaths];
   }
   if (patch.cleanup?.nodeModulesOnDone !== undefined) {
     config.cleanup.nodeModulesOnDone = patch.cleanup.nodeModulesOnDone;
@@ -322,11 +327,18 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
 
-  const userDisk = (userConfig.disk as { minFreeGB?: number } | undefined);
+  const userDisk = (userConfig.disk as { minFreeGB?: number; extraPaths?: unknown } | undefined);
   const userCleanup = (userConfig.cleanup as { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number } | undefined);
 
   const disk = {
     minFreeGB: typeof userDisk?.minFreeGB === 'number' ? userDisk.minFreeGB : 3,
+    extraPaths: Array.isArray(userDisk?.extraPaths)
+      ? userDisk.extraPaths.filter((entry): entry is ExtraDiskPath => {
+          if (!entry || typeof entry !== 'object') return false;
+          const value = entry as Record<string, unknown>;
+          return typeof value.path === 'string' && typeof value.minFreeGB === 'number' && typeof value.label === 'string';
+        })
+      : [],
   };
 
   const cleanup = {

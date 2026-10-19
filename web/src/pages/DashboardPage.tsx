@@ -222,6 +222,22 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
+      {status.disks && status.disks.length > 0 && (
+        <div data-testid="monitored-disks" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {status.disks.map((disk) => (
+            <div key={`${disk.label}:${disk.path}`} className={`rounded-xl border p-4 ${disk.low ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-sm">{disk.label}</span>
+                <HardDrive className="w-4 h-4 text-[var(--t-text-2)]" />
+              </div>
+              <div className="mt-2 text-xs text-[var(--text-secondary)]">
+                {disk.freeGB} / {disk.totalGB} GB trống · ngưỡng {disk.minFreeGB} GB
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} />}
       {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
@@ -428,7 +444,11 @@ export const DashboardPage: React.FC = () => {
       <ReviewQueue activeTaskId={status.brain?.taskId} />
 
       {/* Waiting queue */}
-      <WaitingQueue diskFreeGB={status.disk?.freeGB} diskMinFreeGB={status.disk?.minFreeGB} />
+      <WaitingQueue
+        diskFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.freeGB ?? status.disk?.freeGB}
+        diskMinFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.minFreeGB ?? status.disk?.minFreeGB}
+        diskLabel={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.label}
+      />
 
       {/* Recent events */}
       <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
