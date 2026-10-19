@@ -84,6 +84,26 @@ export const modelValidator = z.string().refine(
   { message: 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:' },
 );
 
+export const ProjectHooksSchema = z.object({
+  onWorktreeRemoved: z.array(z.string()).optional(),
+});
+export type ProjectHooks = z.infer<typeof ProjectHooksSchema>;
+
+export const ProjectHooksInputSchema = z.union([
+  ProjectHooksSchema,
+  z.string().transform((val, ctx) => {
+    if (!val.trim()) return null;
+    try {
+      const parsed = JSON.parse(val);
+      return ProjectHooksSchema.parse(parsed);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Invalid hooks JSON: ${msg}` });
+      return z.NEVER;
+    }
+  }),
+]);
+
 export const CreateProjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1),
@@ -92,6 +112,7 @@ export const CreateProjectSchema = z.object({
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().default(3),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
+  hooks: ProjectHooksInputSchema.nullable().optional(),
 });
 
 export const UpdateProjectSchema = z.object({
@@ -100,6 +121,7 @@ export const UpdateProjectSchema = z.object({
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().optional(),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
+  hooks: ProjectHooksInputSchema.nullable().optional(),
 });
 
 export const CreateTaskSchema = z.object({
@@ -693,6 +715,7 @@ export class AppService {
       envTemplate: parsed.envTemplate || null,
       maxParallel: parsed.maxParallel,
       checks: parsed.checks ? JSON.stringify(parsed.checks) : null,
+      hooks: parsed.hooks ? JSON.stringify(parsed.hooks) : null,
     });
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -702,7 +725,11 @@ export class AppService {
   updateProject(id: string, raw: unknown): ProjectRow {
     this.getProject(id);
     const parsed = UpdateProjectSchema.parse(raw);
-    this.projectRepo.update(id, { ...parsed, checks: parsed.checks === undefined ? undefined : parsed.checks ? JSON.stringify(parsed.checks) : null });
+    this.projectRepo.update(id, {
+      ...parsed,
+      checks: parsed.checks === undefined ? undefined : parsed.checks ? JSON.stringify(parsed.checks) : null,
+      hooks: parsed.hooks === undefined ? undefined : parsed.hooks ? JSON.stringify(parsed.hooks) : null,
+    });
     this.invalidateOutOfScopeClaudeScanStates();
     return this.getProject(id);
   }
@@ -1354,8 +1381,26 @@ export class AppService {
 
     if (task.worktreePath) {
       const project = this.projectRepo.get(task.projectId);
+      let hooks = null;
+      if (project?.hooks) {
+        try {
+          hooks = JSON.parse(project.hooks);
+        } catch {
+          // ignore invalid json
+        }
+      }
       // Chỉ xóa đường dẫn nằm hẳn trong worktreesDir và không phải gốc project (sự cố 16/10).
-      const removed = new WorktreeService(this.config).remove(project?.path ?? null, task.worktreePath);
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(
+        project?.path ?? null,
+        task.worktreePath,
+        {
+          slot: task.slot,
+          slug: task.slug,
+          projectId: task.projectId,
+          taskId: task.id,
+          hooks,
+        },
+      );
       if (!removed) {
         throw new HttpError(
           422,

@@ -9,6 +9,15 @@ export interface WorktreeInfo {
   slot: number;
 }
 
+export interface WorktreeHookContext {
+  slot?: number | null;
+  slug?: string;
+  projectId?: string;
+  taskId?: string;
+  hooks?: { onWorktreeRemoved?: string[] } | null;
+  eventBus?: { emit: (type: string, taskId?: string, payload?: unknown) => boolean };
+}
+
 function resolveReal(target: string): string {
   const resolved = path.resolve(target);
   try {
@@ -43,7 +52,10 @@ export function isDeletableWorktreePath(
 }
 
 export class WorktreeService {
-  constructor(private config: AgentHubConfig) {}
+  constructor(
+    private config: AgentHubConfig,
+    private eventBus?: { emit: (type: string, taskId?: string, payload?: unknown) => boolean },
+  ) {}
 
   /**
    * Allocate a slot number (1-9) for a project.
@@ -169,7 +181,11 @@ export class WorktreeService {
   /**
    * Remove a worktree
    */
-  remove(projectPath: string | null | undefined, worktreePath: string): boolean {
+  remove(
+    projectPath: string | null | undefined,
+    worktreePath: string,
+    context?: WorktreeHookContext,
+  ): boolean {
     if (!isDeletableWorktreePath(this.config.worktreesDir, worktreePath, [projectPath, this.config.hubHome])) {
       console.error(`[worktree] REFUSED to remove ${worktreePath}: outside ${this.config.worktreesDir} or a project root`);
       return false;
@@ -191,7 +207,92 @@ export class WorktreeService {
     if (fs.existsSync(worktreePath)) {
       fs.rmSync(worktreePath, { recursive: true, force: true });
     }
+    if (fs.existsSync(worktreePath)) {
+      console.error(`[worktree] Failed to remove worktree path: ${worktreePath}`);
+      return false;
+    }
+
+    this.runOnWorktreeRemovedHooks(projectPath, worktreePath, context);
     return true;
+  }
+
+  private runOnWorktreeRemovedHooks(
+    projectPath: string | null | undefined,
+    worktreePath: string,
+    context?: WorktreeHookContext,
+  ): void {
+    const hooks = context?.hooks?.onWorktreeRemoved;
+    if (!hooks || !Array.isArray(hooks) || hooks.length === 0) {
+      return;
+    }
+
+    const eventBus = context?.eventBus || this.eventBus;
+    const slug = context?.slug || path.basename(worktreePath);
+    const taskId = context?.taskId || (context?.projectId ? `${context.projectId}/${slug}` : undefined);
+
+    // Security protection: slug only allows [a-z0-9_-], reject otherwise
+    if (!slug || !/^[a-z0-9_-]+$/.test(slug)) {
+      console.error(`[worktree] REFUSED hooks for ${worktreePath}: slug "${slug}" contains invalid characters (must match [a-z0-9_-])`);
+      eventBus?.emit('worktree.hook', taskId, {
+        hook: 'onWorktreeRemoved',
+        ok: false,
+        error: `Refused hooks: slug "${slug}" contains invalid characters (must match [a-z0-9_-])`,
+        slug,
+      });
+      return;
+    }
+
+    const slotStr = context?.slot != null ? String(context.slot) : '';
+    const slugUnderscored = slug.replace(/-/g, '_');
+    const project = context?.projectId || (projectPath ? path.basename(projectPath) : '');
+    const cwd = projectPath || undefined;
+
+    for (const rawCmd of hooks) {
+      if (typeof rawCmd !== 'string' || !rawCmd.trim()) continue;
+
+      const expandedCmd = rawCmd
+        .replace(/\{slot\}/g, slotStr)
+        .replace(/\{slug\}/g, slug)
+        .replace(/\{slug_underscored\}/g, slugUnderscored)
+        .replace(/\{worktree\}/g, worktreePath)
+        .replace(/\{project\}/g, project);
+
+      const startTime = Date.now();
+      try {
+        const stdout = execFileSync('sh', ['-c', expandedCmd], {
+          cwd,
+          timeout: 60000,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const durationMs = Date.now() - startTime;
+        eventBus?.emit('worktree.hook', taskId, {
+          hook: 'onWorktreeRemoved',
+          cmd: expandedCmd,
+          rawCmd,
+          ok: true,
+          exitCode: 0,
+          durationMs,
+          output: stdout,
+        });
+      } catch (err) {
+        const error = err as { status?: number; killed?: boolean; stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
+        const durationMs = Date.now() - startTime;
+        const exitCode = typeof error.status === 'number' ? error.status : (error.killed ? 137 : 1);
+        const output = (error.stdout ? String(error.stdout) : '') + (error.stderr ? String(error.stderr) : '');
+        console.error(`[worktree] Hook command failed: ${expandedCmd} (exit ${exitCode}): ${error.message ?? String(err)}`);
+        eventBus?.emit('worktree.hook', taskId, {
+          hook: 'onWorktreeRemoved',
+          cmd: expandedCmd,
+          rawCmd,
+          ok: false,
+          exitCode,
+          durationMs,
+          error: error.message ?? String(err),
+          output,
+        });
+      }
+    }
   }
 
   /**
