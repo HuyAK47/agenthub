@@ -156,7 +156,7 @@ export class Scheduler {
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
-    this.worktreeService = new WorktreeService(config);
+    this.worktreeService = new WorktreeService(config, this.eventBus);
     this.loadGuard = new LoadGuard(config.load);
     this.locks = locks || new ProfileLockService(path.join(config.agyHomesDir, '.state'), config.slotsPerAgyProfile, config.slotsPerCodexProfile);
     this.db = db;
@@ -1950,9 +1950,23 @@ export class Scheduler {
 
       if (now - updatedAt >= thresholdMs) {
         const project = this.projectRepo.get(task.projectId);
+        let hooks = null;
+        if (project?.hooks) {
+          try {
+            hooks = JSON.parse(project.hooks);
+          } catch {
+            // ignore
+          }
+        }
         try {
           // remove() refuses anything outside worktreesDir or overlapping a project root.
-          this.worktreeService.remove(project?.path ?? null, task.worktreePath);
+          this.worktreeService.remove(project?.path ?? null, task.worktreePath, {
+            slot: task.slot,
+            slug: task.slug,
+            projectId: task.projectId,
+            taskId: task.id,
+            hooks,
+          });
         } catch {
           // ignore
         }

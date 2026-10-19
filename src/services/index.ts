@@ -1380,8 +1380,26 @@ export class AppService {
 
     if (task.worktreePath) {
       const project = this.projectRepo.get(task.projectId);
+      let hooks = null;
+      if (project?.hooks) {
+        try {
+          hooks = JSON.parse(project.hooks);
+        } catch {
+          // ignore invalid json
+        }
+      }
       // Chỉ xóa đường dẫn nằm hẳn trong worktreesDir và không phải gốc project (sự cố 16/10).
-      const removed = new WorktreeService(this.config).remove(project?.path ?? null, task.worktreePath);
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(
+        project?.path ?? null,
+        task.worktreePath,
+        {
+          slot: task.slot,
+          slug: task.slug,
+          projectId: task.projectId,
+          taskId: task.id,
+          hooks,
+        },
+      );
       if (!removed) {
         throw new HttpError(
           422,
