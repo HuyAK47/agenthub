@@ -41,6 +41,13 @@ export const en: typeof vi = {
     cancelled: 'Cancelled',
     checking: 'Checking',
   },
+  waitReason: {
+    disk: 'Waiting for disk ({free} GB free / {min} GB needed)',
+    diskShort: 'Waiting for disk',
+    quota: 'Waiting for model quota',
+    parallel: 'Waiting for parallel slot',
+    profile_busy: 'Waiting for free account',
+  },
   timer: {
     expired: 'Expired',
   },
@@ -282,6 +289,8 @@ export const en: typeof vi = {
     themeAria: 'Theme mode', dark: 'Dark', light: 'Light', system: 'System', default: 'Default',
     sidebarAria: 'Sidebar navigation', pageTaskCreate: 'Create task', pageTaskDetail: 'Task details', pageSavings: 'Savings', pageAgentHub: 'AgentHub', claudeQuota: 'Claude quota', unknown: 'unknown', claudeSessions: 'Claude sessions', tokensOverTime: 'Tokens over time', token: 'Token', task: 'Task', messages: 'messages', model: 'Model', lastActive: 'Last active', rescan: 'Rescan',
     checking: 'Checking', stuck: 'stalled', waitingApprover: 'Waiting for reviewer', retryReviewer: 'Retry reviewer', quickChatError: 'Quick chat error', diskFree: 'Disk: {free} / {total} GB free',
+    diskFreeWithMin: 'Disk: {free} / {total} GB free (min {min} GB)',
+    waitingQueue: 'Waiting Queue', waitingCount: '{count} task(s) waiting', noWaitingTasks: 'No tasks waiting.',
     quickChat: 'Quick chat with Claude:', quickChatPlaceholder: 'Ask a question... (e.g. How are the tasks going?)', send: 'Send', sending: 'Sending...', workersExecuting: '{count} worker(s) running', noWorkers: 'No workers are currently executing tasks.', eventStream: 'Event stream', realtime: 'Real-time', noEvents: 'No events recorded yet.', checkPassed: 'Check passed', checkFailed: 'Check failed',
     reviewQueue: 'Review queue', reviewCount: '{count} task(s) waiting for review', noReview: 'No tasks waiting for review.', claudeReviewing: 'Claude is reviewing', waitingReview: 'waiting for Claude review', view: 'View', authClose: 'Close notice', noProfiles: 'No profiles in the system.', duplicateWarning: 'Warning: Duplicate email with another profile!', duplicateTip: 'Tip: Log in again with another Google account!', busy: 'BUSY', idle: 'Idle', executing: 'Running {used}/{total}', loggedIn: 'Logged in', needVerification: 'Account verification required', openVerification: 'Open verification page', verificationTip: 'Open the link with the matching Google account, complete verification, then click Check', addProfileTitle: 'Add new isolated agy account', addProfileDesc: 'The system will create an isolated HOME directory and open a terminal for Google authentication.', closeNotice: 'Close', profileName: 'Profile Name *', cancel: 'Cancel', createLogin: 'Create & Login', taskEmpty: 'Empty', taskFilter: 'Filter by project', allProjects: 'All projects', createTask: 'New Task', checks: 'checks (JSON, blank = auto-detect)', saveChecks: 'Save checks', deleteProject: 'Delete project', noProjects: 'No projects registered yet.', loadProjectsError: 'Failed to load projects list.', defaultBranch: 'Default branch: ', maxParallel: 'Max parallel: ', validJson: 'Valid JSON', invalidJson: 'Invalid JSON syntax: {error}', updateAvailable: 'A new dashboard version is available', reload: 'Reload', silent: 'silent for {minutes} minutes', noData: 'No data', refresh: 'Refresh', checkResults: 'Check results', rerunCheck: 'Run checks again', noCheckResults: 'No check results yet.', noOutput: '(no output)', brainPlanning: 'Planning', brainDispatching: 'Dispatching', brainReviewing: 'Reviewing', brainMerging: 'Merging code', brainDeploying: 'Deploying', brainWaiting: 'Waiting for worker', brainIdle: 'Idle', brainTalking: 'Talking with you', justNow: 'just now', updatedMinutes: 'updated {count} minutes ago', updatedHours: 'updated {count} hours ago', updatedDays: 'updated {count} days ago', coordinator: 'Claude · Coordinator', staleBrain: 'Claude has not updated for 15 minutes', loginTitle: 'Google login for profile “{name}”', loginClose: 'Close', loginOpen: 'Open login page', copy: 'Copy', copied: 'Copied', loginWaiting: 'Waiting for agy to show the login link…', pasteCode: 'Paste the verification code or login URL here, then click Send', reconnect: 'Reconnect', finish: 'Finish', silentRun: 'silent for {minutes} minutes', statusChecking: 'Checking',
   },

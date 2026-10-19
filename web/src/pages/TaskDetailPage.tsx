@@ -14,6 +14,7 @@ import {
   startTask,
   updateTask,
   rerunChecks,
+  getStatus,
 } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { subscribeToRunOutput } from '../api/sse';
@@ -87,6 +88,13 @@ export const TaskDetailPage: React.FC = () => {
     queryFn: () => getTask(id),
     enabled: !!id,
     refetchInterval: 4000,
+  });
+
+  const { data: hubStatus } = useQuery({
+    queryKey: ['status'],
+    queryFn: getStatus,
+    enabled: task?.status === 'waiting_quota' && task?.waitReason === 'disk',
+    refetchInterval: 10_000,
   });
 
   // Fetch initial log
@@ -357,7 +365,13 @@ export const TaskDetailPage: React.FC = () => {
               <span className="text-xs font-mono font-semibold text-[var(--t-text-3)]">
                 {task.slug}
               </span>
-              <StatusBadge status={task.status} size="sm" />
+              <StatusBadge
+                status={task.status}
+                waitReason={task.waitReason}
+                diskFreeGB={hubStatus?.disk?.freeGB}
+                diskMinFreeGB={hubStatus?.disk?.minFreeGB}
+                size="sm"
+              />
               {task.status === 'running' && <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />}
               <span className="text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] font-mono text-[var(--t-text-3)]">
                 {t('taskDetail.level', { level: task.level })}

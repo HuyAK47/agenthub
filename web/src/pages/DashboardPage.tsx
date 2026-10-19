@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
+import { WaitingQueue } from '../components/WaitingQueue';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 
@@ -184,14 +185,16 @@ export const DashboardPage: React.FC = () => {
             <div
               data-testid="disk-status"
               className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                status.disk.freeGB < 5
+                (status.disk.minFreeGB !== undefined ? status.disk.freeGB < status.disk.minFreeGB : status.disk.freeGB < 5)
                   ? 'text-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] border-[var(--t-warn)] font-medium'
                   : 'text-[var(--t-text-2)] bg-[var(--t-surface-2)] border-[var(--t-border)]'
               }`}
             >
               <HardDrive className="w-3.5 h-3.5" />
               <span>
-                {t('extra.diskFree', { free: status.disk.freeGB, total: status.disk.totalGB })}
+                {status.disk.minFreeGB !== undefined
+                  ? t('extra.diskFreeWithMin', { free: status.disk.freeGB, total: status.disk.totalGB, min: status.disk.minFreeGB })
+                  : t('extra.diskFree', { free: status.disk.freeGB, total: status.disk.totalGB })}
               </span>
             </div>
           )}
@@ -382,6 +385,9 @@ export const DashboardPage: React.FC = () => {
 
       {/* Review queue */}
       <ReviewQueue activeTaskId={status.brain?.taskId} />
+
+      {/* Waiting queue */}
+      <WaitingQueue diskFreeGB={status.disk?.freeGB} diskMinFreeGB={status.disk?.minFreeGB} />
 
       {/* Recent events */}
       <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">

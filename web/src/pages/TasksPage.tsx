@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getProjects, getTasks } from '../api/client';
+import { getProjects, getTasks, getStatus } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
@@ -17,6 +17,12 @@ export const TasksPage: React.FC = () => {
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+
+  const { data: hubStatus } = useQuery({
+    queryKey: ['status'],
+    queryFn: getStatus,
+    refetchInterval: 10_000,
   });
 
   const { data: tasks = [], isLoading } = useQuery({
@@ -139,6 +145,18 @@ export const TasksPage: React.FC = () => {
                             {t('extra.waitingApprover')}
                           </span>
                         ) : null}
+
+                        {task.status === 'waiting_quota' && (
+                          <div className="mb-2">
+                            <StatusBadge
+                              status="waiting_quota"
+                              waitReason={task.waitReason}
+                              diskFreeGB={hubStatus?.disk?.freeGB}
+                              diskMinFreeGB={hubStatus?.disk?.minFreeGB}
+                              size="sm"
+                            />
+                          </div>
+                        )}
 
                         {task.status === 'running' && <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />}
 

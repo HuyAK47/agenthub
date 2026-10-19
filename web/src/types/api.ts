@@ -80,6 +80,8 @@ export interface Review {
   createdAt: string;
 }
 
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+
 export interface Task {
   id: string; // project~slug or project/slug
   projectId: string;
@@ -92,6 +94,7 @@ export interface Task {
   branch?: string;
   worktreePath?: string | null;
   status: TaskStatus;
+  waitReason?: WaitReason;
   dependsOn: string | string[];
   attempt: number;
   resume: number;
@@ -185,6 +188,7 @@ export interface HubStatus {
   disk?: {
     freeGB: number;
     totalGB: number;
+    minFreeGB?: number;
   };
   // Backwards compatibility aliases
   tasksByStatus?: Record<TaskStatus, number>;
