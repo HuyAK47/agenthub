@@ -1294,7 +1294,12 @@ export class Scheduler {
         try {
           await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
         } catch (error) {
-          console.warn(`[scheduler] failed to prepare node_modules for ${task.id}; worker will install if needed:`, error);
+          this.locks.release(profile.name, lockFile);
+          this.taskRepo.update(task.id, { status: 'failed' });
+          this.eventBus.emit('task.failed', task.id, {
+            error: `Failed to prepare node_modules before worker start: ${String(error)}`,
+          });
+          return;
         }
       }
 

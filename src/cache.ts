@@ -25,6 +25,98 @@ export interface EnsureNodeModulesResult {
   usedNpmCi: boolean;
 }
 
+const INSTALL_TIMEOUT_MS = 300_000;
+
+function readPackageJson(dir: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function hasWorkspaceConfig(dir: string): boolean {
+  if (fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return true;
+  const workspaces = readPackageJson(dir)?.workspaces;
+  return Array.isArray(workspaces) || (workspaces !== null && typeof workspaces === 'object');
+}
+
+function workspacePatterns(dir: string): string[] {
+  const pkgWorkspaces = readPackageJson(dir)?.workspaces;
+  if (Array.isArray(pkgWorkspaces)) return pkgWorkspaces.filter((value): value is string => typeof value === 'string');
+  if (pkgWorkspaces && typeof pkgWorkspaces === 'object') {
+    const packages = (pkgWorkspaces as { packages?: unknown }).packages;
+    if (Array.isArray(packages)) return packages.filter((value): value is string => typeof value === 'string');
+  }
+  try {
+    const yaml = fs.readFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'utf8');
+    return yaml.split('\n').flatMap((line) => {
+      const match = line.match(/^\s*-\s*['"]?([^'"#]+?)['"]?\s*(?:#.*)?$/);
+      return match ? [match[1].trim()] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function expandWorkspacePattern(dir: string, pattern: string): string[] {
+  const segments = pattern.replace(/^\.\//, '').split('/').filter(Boolean);
+  const result: string[] = [];
+  const visit = (current: string, index: number) => {
+    if (index === segments.length) {
+      if (fs.existsSync(path.join(current, 'package.json'))) result.push(current);
+      return;
+    }
+    const segment = segments[index];
+    if (!segment.includes('*')) {
+      visit(path.join(current, segment), index + 1);
+      return;
+    }
+    if (!fs.existsSync(current)) return;
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const regex = new RegExp(`^${segment.split('*').map((part) => part.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('.*')}$`);
+      if (regex.test(entry.name)) visit(path.join(current, entry.name), index + 1);
+    }
+  };
+  visit(dir, 0);
+  return result;
+}
+
+function workspacePackageDirs(dir: string): string[] {
+  if (!hasWorkspaceConfig(dir)) return [];
+  const dirs = new Set<string>([dir]);
+  for (const pattern of workspacePatterns(dir)) {
+    for (const packageDir of expandWorkspacePattern(dir, pattern)) dirs.add(packageDir);
+  }
+  return [...dirs];
+}
+
+function packageBinNames(packageDir: string, dependency: string): string[] {
+  const installed = readPackageJson(path.join(packageDir, 'node_modules', dependency));
+  const bin = installed?.bin;
+  if (typeof bin === 'string') return [dependency.split('/').pop() || dependency];
+  if (bin && typeof bin === 'object') return Object.keys(bin);
+  return [dependency.split('/').pop() || dependency];
+}
+
+export function verifyWorkspaceInstall(dir: string): boolean {
+  const packages = workspacePackageDirs(dir);
+  if (!packages.length) return true;
+  for (const packageDir of packages) {
+    const nodeModules = path.join(packageDir, 'node_modules');
+    if (!fs.existsSync(nodeModules)) return false;
+    const devDependencies = readPackageJson(packageDir)?.devDependencies;
+    if (!devDependencies || typeof devDependencies !== 'object') continue;
+    for (const dependency of Object.keys(devDependencies)) {
+      for (const bin of packageBinNames(packageDir, dependency)) {
+        if (!fs.existsSync(path.join(nodeModules, '.bin', bin))) return false;
+      }
+    }
+  }
+  return true;
+}
+
 export function getLockFileInfo(dir: string): { type: 'npm' | 'pnpm'; file: string; path: string } | null {
   const pnpmPath = path.join(dir, 'pnpm-lock.yaml');
   if (fs.existsSync(pnpmPath)) {
@@ -128,6 +220,7 @@ export function areDirectoriesHardLinked(dir1: string, dir2: string): boolean {
 }
 export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise<EnsureNodeModulesResult> {
   const { worktreeDir, projectDir, env } = opts;
+  const workspaceProject = hasWorkspaceConfig(worktreeDir);
   const pkgPath = path.join(worktreeDir, 'package.json');
   if (!fs.existsSync(pkgPath)) {
     return { cached: false, createdCache: false, usedNpmCi: false };
@@ -186,8 +279,18 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
       // ignore
     }
     const ciCmd = worktreeLock.type === 'pnpm' ? 'pnpm' : 'npm';
-    const ciArgs = worktreeLock.type === 'pnpm' ? ['i', '--frozen-lockfile'] : ['ci', '--ignore-scripts=false'];
-    await runner(ciCmd, ciArgs, { cwd: worktreeDir, timeout: 600000 });
+    const ciArgs = workspaceProject && worktreeLock.type === 'pnpm'
+      ? ['install', '--frozen-lockfile', '--prefer-offline', '--config.confirmModulesPurge=false']
+      : worktreeLock.type === 'pnpm' ? ['i', '--frozen-lockfile'] : ['ci', '--ignore-scripts=false'];
+    try {
+      await runner(ciCmd, ciArgs, {
+        cwd: worktreeDir,
+        env: workspaceProject && worktreeLock.type === 'pnpm' ? { ...process.env, ...env, CI: 'true' } : env,
+        timeout: INSTALL_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw new Error(`Failed to install dependencies in ${worktreeDir}: ${String(error)}`);
+    }
     writeHash();
     return { cached: false, createdCache: false, usedNpmCi: true };
   };
@@ -203,13 +306,13 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
     try {
       const tempNm = path.join(tempDir, 'node_modules');
       if (sourceNodeModules) {
-        await runner('cp', ['-al', sourceNodeModules, tempNm], { timeout: 600000 });
+        await runner('cp', ['-al', sourceNodeModules, tempNm], { timeout: INSTALL_TIMEOUT_MS });
       } else {
         fs.copyFileSync(pkgPath, path.join(tempDir, 'package.json'));
         fs.copyFileSync(worktreeLock.path, path.join(tempDir, worktreeLock.file));
         const ciCmd = worktreeLock.type === 'pnpm' ? 'pnpm' : 'npm';
         const ciArgs = worktreeLock.type === 'pnpm' ? ['i', '--frozen-lockfile'] : ['ci', '--ignore-scripts=false'];
-        await runner(ciCmd, ciArgs, { cwd: tempDir, timeout: 600000 });
+        await runner(ciCmd, ciArgs, { cwd: tempDir, timeout: INSTALL_TIMEOUT_MS });
       }
       if (!fs.existsSync(tempNm)) return null;
       if (sourceNodeModules) {
@@ -298,7 +401,7 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
   }
 
   if (cacheNm && fs.existsSync(cacheNm)) {
-    await runner('cp', ['-al', cacheNm, targetNodeModules], { timeout: 600000 });
+    await runner('cp', ['-al', cacheNm, targetNodeModules], { timeout: INSTALL_TIMEOUT_MS });
     writeHash();
     return verifyOrInstall({ cached: true, createdCache, usedNpmCi: false });
   }
@@ -312,15 +415,42 @@ export async function ensureWorktreeNodeModules(
   cacheBaseDir?: string,
   execFn?: EnsureNodeModulesOptions['execFn'],
 ): Promise<void> {
-  // 1. Root
+  const rootIsWorkspace = hasWorkspaceConfig(worktreePath);
+  const workspaceInstall = async () => {
+    if (!rootIsWorkspace || !fs.existsSync(path.join(worktreePath, 'pnpm-lock.yaml'))) return;
+    if (verifyWorkspaceInstall(worktreePath)) return;
+    const workspaceEnv = { ...process.env, CI: 'true' };
+    try {
+      await (execFn || ((cmd, args, opts) => execFileAsync(cmd, args, {
+        cwd: opts?.cwd,
+        env: opts?.env || workspaceEnv,
+        timeout: opts?.timeout,
+      })))(
+        'pnpm',
+        ['install', '--frozen-lockfile', '--prefer-offline', '--config.confirmModulesPurge=false'],
+        { cwd: worktreePath, env: workspaceEnv, timeout: INSTALL_TIMEOUT_MS },
+      );
+    } catch (error) {
+      throw new Error(`Failed to install pnpm workspace dependencies in ${worktreePath}: ${String(error)}`);
+    }
+    if (!verifyWorkspaceInstall(worktreePath)) {
+      throw new Error(`pnpm install completed but workspace dependencies are incomplete in ${worktreePath}`);
+    }
+  };
+
+  // Restore the root cache first, then let pnpm recreate workspace links and bins.
   await ensureNodeModules({
     worktreeDir: worktreePath,
     projectDir: projectPath,
     cacheBaseDir,
     execFn,
   });
+  await workspaceInstall();
 
-  // 2. Web/ if web/package.json exists
+  // pnpm workspace installation handles all workspace packages from its root.
+  if (rootIsWorkspace) return;
+
+  // Web/ for non-workspace projects.
   const webWorktreeDir = path.join(worktreePath, 'web');
   if (fs.existsSync(path.join(webWorktreeDir, 'package.json'))) {
     const webProjectDir = projectPath ? path.join(projectPath, 'web') : undefined;
