@@ -97,7 +97,8 @@ function packageBinNames(packageDir: string, dependency: string): string[] {
   const bin = installed?.bin;
   if (typeof bin === 'string') return [dependency.split('/').pop() || dependency];
   if (bin && typeof bin === 'object') return Object.keys(bin);
-  return [dependency.split('/').pop() || dependency];
+  // Gói không khai báo bin (@types/*, config nội bộ…) thì không đòi file trong .bin
+  return [];
 }
 
 export function verifyWorkspaceInstall(dir: string): boolean {
@@ -105,10 +106,18 @@ export function verifyWorkspaceInstall(dir: string): boolean {
   if (!packages.length) return true;
   for (const packageDir of packages) {
     const nodeModules = path.join(packageDir, 'node_modules');
+    const pkg = readPackageJson(packageDir);
+    const hasDeps = ['dependencies', 'devDependencies'].some((key) => {
+      const deps = pkg?.[key];
+      return deps !== null && typeof deps === 'object' && Object.keys(deps).length > 0;
+    });
+    // pnpm không tạo node_modules cho package không có dependency (ví dụ packages/config)
+    if (!hasDeps) continue;
     if (!fs.existsSync(nodeModules)) return false;
-    const devDependencies = readPackageJson(packageDir)?.devDependencies;
+    const devDependencies = pkg?.devDependencies;
     if (!devDependencies || typeof devDependencies !== 'object') continue;
     for (const dependency of Object.keys(devDependencies)) {
+      if (!fs.existsSync(path.join(nodeModules, dependency))) return false;
       for (const bin of packageBinNames(packageDir, dependency)) {
         if (!fs.existsSync(path.join(nodeModules, '.bin', bin))) return false;
       }
