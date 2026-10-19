@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AgentHubConfig } from '../config.js';
+import { reapSyncForWorktree } from '../reaper.js';
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -173,6 +174,11 @@ export class WorktreeService {
       console.error(`[worktree] REFUSED to remove ${worktreePath}: outside ${this.config.worktreesDir} or a project root`);
       return false;
     }
+    reapSyncForWorktree(worktreePath, {
+      worktreesDir: this.config.worktreesDir,
+      protectedPaths: [projectPath, this.config.hubHome],
+      graceMs: 5000,
+    });
     if (projectPath && fs.existsSync(projectPath)) {
       try {
         execFileSync('git', ['-C', projectPath, 'worktree', 'remove', '--force', worktreePath], {

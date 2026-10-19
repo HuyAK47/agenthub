@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getClaudeQuota } from '../api/client';
+import { getStatus, getClaudeQuota, getOrphans, reapOrphans } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -56,6 +56,7 @@ export const DashboardPage: React.FC = () => {
   const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
   const [quickChatText, setQuickChatText] = useState('');
   const [isSubmittingQuickChat, setIsSubmittingQuickChat] = useState(false);
+  const [isReaping, setIsReaping] = useState(false);
 
   const { data: status, isLoading, error } = useQuery({
     queryKey: ['status'],
@@ -63,6 +64,18 @@ export const DashboardPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const { data: claudeQuota } = useQuery({ queryKey: ['claude-quota'], queryFn: getClaudeQuota, refetchInterval: 30_000 });
+  const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
+
+  const handleReap = async () => {
+    if (isReaping) return;
+    setIsReaping(true);
+    try {
+      await reapOrphans();
+      await refetchOrphans();
+    } finally {
+      setIsReaping(false);
+    }
+  };
 
   const handleQuickChat = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -222,6 +235,36 @@ export const DashboardPage: React.FC = () => {
             </div>
           );
         })}
+      </div>
+
+      <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
+        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">Tiến trình mồ côi</h2>
+            <p className="text-xs text-[var(--text-secondary)]">Các tiến trình còn giữ cwd trong worktree đã dừng.</p>
+          </div>
+          <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
+            {isReaping ? 'Đang dọn…' : 'Dọn'} ({orphans.length})
+          </button>
+        </div>
+        {orphans.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)]">
+                <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">Task</th></tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-subtle)]">
+                {orphans.map((orphan) => <tr key={orphan.pid}>
+                  <td className="px-6 py-3 font-mono">{orphan.pid}</td>
+                  <td className="px-6 py-3 font-mono max-w-sm truncate" title={orphan.cwd}>{orphan.cwd}</td>
+                  <td className="px-6 py-3">{orphan.cpu.toFixed(1)}%</td>
+                  <td className="px-6 py-3">{(orphan.rss / 1024 / 1024).toFixed(1)} MB</td>
+                  <td className="px-6 py-3">{orphan.task?.title || orphan.task?.id || 'Không xác định'}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Compact quick chat */}

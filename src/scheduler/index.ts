@@ -32,6 +32,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
+import { listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -115,6 +116,7 @@ export class Scheduler {
   private failoverState?: ClaudeFailoverState;
   private reviewerRuns = new Map<string, ReviewerRun>();
   private failoverWasActive = false;
+  private lastOrphanScan = 0;
 
   constructor(
     private config: AgentHubConfig,
@@ -179,6 +181,9 @@ export class Scheduler {
 
   start(): void {
     this.stopped = false;
+    // The orphan pass is periodic; do not scan and potentially reap processes
+    // during daemon startup while tests or callers are still preparing state.
+    this.lastOrphanScan = Date.now();
     // Recover crashed runs on startup
     this.recoverOnStartup();
     this.skipSchedulingOnce = true;
@@ -377,6 +382,35 @@ export class Scheduler {
 
     // 4. Prune expired worktrees for completed tasks
     this.cleanExpiredWorktrees();
+    if (Date.now() - this.lastOrphanScan >= 10 * 60 * 1000) {
+      this.lastOrphanScan = Date.now();
+      this.reapOrphans();
+    }
+  }
+
+  /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
+  reapOrphans(): void {
+    const tasks = this.taskRepo.getAll();
+    const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
+    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    for (const info of processes) {
+      const dir = info.cwd.replace(/ \(deleted\)$/, '');
+      if (info.cwd.endsWith(' (deleted)')) {
+        reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        continue;
+      }
+
+      const task = tasks.find((candidate) => {
+        if (!candidate.worktreePath) return false;
+        const worktreePath = path.resolve(candidate.worktreePath);
+        const cwd = path.resolve(info.cwd);
+        return cwd === worktreePath || cwd.startsWith(worktreePath + path.sep);
+      });
+      const taskCanBeReaped = task && (task.status === 'done' || task.status === 'cancelled');
+      if (info.startedAt > oldProcessCutoff) continue;
+      if (task && !taskCanBeReaped) continue;
+      reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    }
   }
 
   /**
@@ -443,6 +477,10 @@ export class Scheduler {
 
   private handleStall(taskId: string, rt: RunningTask): void {
     this.killProcessGroup(rt.pid);
+    const stalledTask = this.taskRepo.get(taskId);
+    if (stalledTask?.worktreePath) {
+      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    }
     this.running.delete(taskId);
     if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
     this.locks.invalidate(rt.profileName);
@@ -585,6 +623,10 @@ export class Scheduler {
       if (this.stopped) return;
       const task = this.taskRepo.get(taskId);
       if (!task) return;
+
+      if (task.worktreePath) {
+        await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      }
 
     // Read log tail for quota detection
     const run = this.runRepo.get(rt.runId);
@@ -1467,6 +1509,10 @@ export class Scheduler {
     if (!rt) return;
 
     this.killProcessGroup(rt.pid);
+    const task = this.taskRepo.get(taskId);
+    if (task?.worktreePath) {
+      reapSyncForWorktree(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    }
 
     this.running.delete(taskId);
     if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);

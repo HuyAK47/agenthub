@@ -123,6 +123,9 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.get('/api/system/orphans', async () => service.getOrphans());
+  fastify.post('/api/system/orphans/reap', async () => service.reapOrphans());
+
   // --- Brain API ---
   if (service.brainService) {
     registerBrainRoutes(fastify, service.brainService);

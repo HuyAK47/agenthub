@@ -18,6 +18,7 @@ import {
   UpdateTaskInput,
   VersionResponse,
   SavingsReport,
+  OrphanProcess,
 } from '../types/api';
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
@@ -152,6 +153,14 @@ export async function getVersion(): Promise<VersionResponse | null> {
 }
 export async function getStatus(): Promise<HubStatus> {
   return apiFetch<HubStatus>('/api/status');
+}
+
+export async function getOrphans(): Promise<OrphanProcess[]> {
+  return apiFetch<OrphanProcess[]>('/api/system/orphans');
+}
+
+export async function reapOrphans(): Promise<{ ok: boolean; reaped: number[] }> {
+  return apiFetch<{ ok: boolean; reaped: number[] }>('/api/system/orphans/reap', { method: 'POST' });
 }
 
 export async function getBrain(): Promise<BrainStatus> {
