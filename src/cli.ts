@@ -2,8 +2,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { loadConfig, AgentHubConfig } from './config.js';
-import { createContext } from './daemon.js';
-import { startDaemon } from './daemon.js';
+import { createContext, closeContext, startDaemon } from './daemon.js';
 import { runMcpServer } from './mcp/index.js';
 import { getOrCreateToken, getTokenPath } from './auth.js';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -706,125 +705,129 @@ export async function cmdSavings(
 ): Promise<void> {
   const ctx = createContext(config);
 
-  switch (sub) {
-    case 'import-legacy': {
-      const targetDir = extraArgs[0]
-        ? path.resolve(extraArgs[0])
-        : path.join(os.homedir(), '.gemini', 'agy-run-logs');
+  try {
+    switch (sub) {
+      case 'import-legacy': {
+        const targetDir = extraArgs[0]
+          ? path.resolve(extraArgs[0])
+          : path.join(os.homedir(), '.gemini', 'agy-run-logs');
 
-      if (!fs.existsSync(targetDir)) {
-        console.log(`Thư mục log không tồn tại: ${targetDir}`);
-        ctx.db.close();
-        return;
-      }
-
-      console.log(`Đang quét log Codex trong: ${targetDir}...`);
-
-      function scanDir(dir: string, depth = 0): string[] {
-        const results: string[] = [];
-        if (depth > 4) return results;
-        try {
-          const entries = fs.readdirSync(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-              results.push(...scanDir(fullPath, depth + 1));
-            } else if (entry.isFile() && entry.name.endsWith('.log') && /codex/i.test(entry.name)) {
-              results.push(fullPath);
-            }
-          }
-        } catch {
-          // ignore
+        if (!fs.existsSync(targetDir)) {
+          console.log(`Thư mục log không tồn tại: ${targetDir}`);
+          return;
         }
-        return results;
-      }
 
-      const logFiles = scanDir(targetDir);
-      if (logFiles.length === 0) {
-        console.log('Không tìm thấy log Codex nào.');
-        ctx.db.close();
-        return;
-      }
+        console.log(`Đang quét log Codex trong: ${targetDir}...`);
 
-      let importedCount = 0;
-      for (const filePath of logFiles) {
-        try {
-          const content = fs.readFileSync(filePath, 'utf-8');
-          const tokens = parseCodexTokens(content);
-          if (tokens == null) continue;
-
-          // The slug is the name of the directory containing the log file
-          const slug = path.basename(path.dirname(filePath));
-          const allTasks = ctx.taskRepo.getAll();
-          const task = allTasks.find((t) => t.slug === slug);
-          if (!task) {
-            console.log(`- Bỏ qua: Không tìm thấy task có slug "${slug}" cho log ${path.basename(filePath)}`);
-            continue;
+        function scanDir(dir: string, depth = 0): string[] {
+          const results: string[] = [];
+          if (depth > 4) return results;
+          try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              const fullPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                results.push(...scanDir(fullPath, depth + 1));
+              } else if (entry.isFile() && entry.name.endsWith('.log') && /codex/i.test(entry.name)) {
+                results.push(fullPath);
+              }
+            }
+          } catch {
+            // ignore
           }
+          return results;
+        }
 
-          const runs = ctx.runRepo.getByTask(task.id);
-          const targetRun = runs.find((r) => r.engine === 'codex') || runs[0];
-          const runId = targetRun ? targetRun.id : crypto.randomUUID();
+        const logFiles = scanDir(targetDir);
+        if (logFiles.length === 0) {
+          console.log('Không tìm thấy log Codex nào.');
+          return;
+        }
 
-          if (!targetRun) {
-            ctx.runRepo.insert({
-              id: runId,
+        let importedCount = 0;
+        for (const filePath of logFiles) {
+          try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const tokens = parseCodexTokens(content);
+            if (tokens == null) continue;
+
+            // The slug is the name of the directory containing the log file
+            const slug = path.basename(path.dirname(filePath));
+            const allTasks = ctx.taskRepo.getAll();
+            const task = allTasks.find((t) => t.slug === slug);
+            if (!task) {
+              console.log(`- Bỏ qua: Không tìm thấy task có slug "${slug}" cho log ${path.basename(filePath)}`);
+              continue;
+            }
+
+            const runs = ctx.runRepo.getByTask(task.id);
+            const targetRun = runs.find((r) => r.engine === 'codex') || runs[0];
+            const runId = targetRun ? targetRun.id : crypto.randomUUID();
+
+            if (!targetRun) {
+              ctx.runRepo.insert({
+                id: runId,
+                taskId: task.id,
+                engine: 'codex',
+                model: 'gpt-5.6-luna',
+                profileName: 'codex',
+              });
+            }
+
+            ctx.runMetricsRepo.upsert({
+              runId,
               taskId: task.id,
               engine: 'codex',
-              model: 'gpt-5.6-luna',
-              profileName: 'codex',
+              model: targetRun?.model || 'gpt-5.6-luna',
+              profileName: targetRun?.profileName || 'codex',
+              tokensUsed: tokens,
+              usageBefore: null,
+              usageAfter: null,
+              linesAdded: 0,
+              linesDeleted: 0,
+              filesChanged: 0,
+              durationMs: null,
             });
+
+            console.log(`✓ Đã nhập ${tokens.toLocaleString()} tokens cho task "${task.id}" từ ${path.basename(filePath)}`);
+            importedCount++;
+          } catch (err) {
+            console.error(`Lỗi đọc ${filePath}: ${err}`);
           }
-
-          ctx.runMetricsRepo.upsert({
-            runId,
-            taskId: task.id,
-            engine: 'codex',
-            model: targetRun?.model || 'gpt-5.6-luna',
-            profileName: targetRun?.profileName || 'codex',
-            tokensUsed: tokens,
-            usageBefore: null,
-            usageAfter: null,
-            linesAdded: 0,
-            linesDeleted: 0,
-            filesChanged: 0,
-            durationMs: null,
-          });
-
-          console.log(`✓ Đã nhập ${tokens.toLocaleString()} tokens cho task "${task.id}" từ ${path.basename(filePath)}`);
-          importedCount++;
-        } catch (err) {
-          console.error(`Lỗi đọc ${filePath}: ${err}`);
         }
+
+        console.log(`\nHoàn thành nhập lịch sử: đã gắn token cho ${importedCount} lượt chạy.`);
+        break;
       }
 
-      console.log(`\nHoàn thành nhập lịch sử: đã gắn token cho ${importedCount} lượt chạy.`);
-      break;
+      case 'backfill-lines': {
+        const projectFlag = getArg(extraArgs, '--project') || getArg(extraArgs, '-p');
+        console.log(`Bắt đầu tính lại số dòng cho các task${projectFlag ? ` thuộc project "${projectFlag}"` : ''}...`);
+
+        const res = await ctx.savingsService.backfillLines(projectFlag);
+
+        for (const item of res.updated) {
+          console.log(`✓ Đã tính lại ${item.taskId}: +${item.linesAdded}/-${item.linesDeleted} (${item.filesChanged} file)`);
+        }
+        for (const item of res.skipped) {
+          console.log(`- Bỏ qua ${item.taskId}: Nhánh không tồn tại hoặc project không hợp lệ`);
+        }
+
+        console.log(`\nHoàn thành: ${res.updated.length} task được cập nhật, ${res.skipped.length} task bỏ qua.`);
+        break;
+      }
+
+      default:
+        console.log('Cách dùng: agenthub savings import-legacy <dir> | backfill-lines [--project x]');
+        process.exitCode = 1;
+        break;
     }
-
-    case 'backfill-lines': {
-      const projectFlag = getArg(extraArgs, '--project') || getArg(extraArgs, '-p');
-      console.log(`Bắt đầu tính lại số dòng cho các task${projectFlag ? ` thuộc project "${projectFlag}"` : ''}...`);
-
-      const res = await ctx.savingsService.backfillLines(projectFlag);
-
-      for (const item of res.updated) {
-        console.log(`✓ Đã tính lại ${item.taskId}: +${item.linesAdded}/-${item.linesDeleted} (${item.filesChanged} file)`);
-      }
-      for (const item of res.skipped) {
-        console.log(`- Bỏ qua ${item.taskId}: Nhánh không tồn tại hoặc project không hợp lệ`);
-      }
-
-      console.log(`\nHoàn thành: ${res.updated.length} task được cập nhật, ${res.skipped.length} task bỏ qua.`);
-      break;
-    }
-
-    default:
-      console.log('Cách dùng: agenthub savings import-legacy <dir> | backfill-lines [--project x]');
-      break;
+  } catch (err) {
+    console.error('Lỗi khi thực hiện lệnh savings:', err);
+    process.exitCode = 1;
+  } finally {
+    closeContext(ctx);
   }
-
-  ctx.db.close();
 }
 
 function getArg(args: string[], flag: string): string | undefined {

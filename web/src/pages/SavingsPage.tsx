@@ -15,12 +15,14 @@ import {
 } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { ModelBadge } from '../components/ModelBadge';
+import { formatNumber as formatNum, formatSigned } from '../utils/format';
 
 export const SavingsPage: React.FC = () => {
   const { t, locale } = useLocale();
   const [projectFilter, setProjectFilter] = useState<string>('');
   const [sinceFilter, setSinceFilter] = useState<string>('');
-  const formatNumber = (value: number) => value.toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US');
+  const formatNumber = (value: number | null | undefined, decimals?: number) =>
+    formatNum(value, { decimals, locale });
 
   const { data: projects = [] } = useQuery<Project[]>({
     queryKey: ['projects'],
@@ -147,7 +149,7 @@ export const SavingsPage: React.FC = () => {
                 </div>
                 <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
                   <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/50 dark:border-emerald-800/50">
-                    {((summary?.savingsRatio || 0) * 100).toFixed(1)}%
+                    {formatNumber((summary?.savingsRatio || 0) * 100, 1)}%
                   </span>
                   <span>{t('savings.savingRate')}</span>
                 </div>
@@ -166,13 +168,13 @@ export const SavingsPage: React.FC = () => {
               </div>
               <div>
                 <div className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
-                  +{summary ? formatNumber(summary.totalLinesAdded) : '0'}
+                  {formatSigned(summary?.totalLinesAdded, { locale, positivePrefix: '+' })}
                   <span className="text-xs font-normal text-[var(--text-secondary)] ml-1">
                     {t('savings.lines')}
                   </span>
                 </div>
                 <div className="mt-2 text-xs text-[var(--text-secondary)]">
-                    -{summary ? formatNumber(summary.totalLinesDeleted) : '0'} {t('savings.linesDeleted')}
+                  {formatSigned(summary?.totalLinesDeleted ? -summary.totalLinesDeleted : 0, { locale, negativePrefix: '-' })} {t('savings.linesDeleted')}
                 </div>
               </div>
             </div>
@@ -212,7 +214,7 @@ export const SavingsPage: React.FC = () => {
               </div>
               <div>
                 <div className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
-                  {(summary?.avgReviewRounds || 0).toFixed(1)}
+                  {formatNumber(summary?.avgReviewRounds, 1)}
                   <span className="text-xs font-normal text-[var(--text-secondary)] ml-1">
                     {t('savings.rounds')}
                   </span>
@@ -401,9 +403,13 @@ export const SavingsPage: React.FC = () => {
                             <span className="text-[var(--t-text-3)] opacity-70">—</span>
                           ) : (
                             <span>
-                              <span className="text-[var(--t-ok)] font-medium">+{task.linesAdded}</span>
+                              <span className="text-[var(--t-ok)] font-medium">
+                                {formatSigned(task.linesAdded, { locale, positivePrefix: '+' })}
+                              </span>
                               <span className="text-[var(--t-text-3)] mx-1">/</span>
-                              <span className="text-[var(--t-crit)] font-medium">−{task.linesDeleted}</span>
+                              <span className="text-[var(--t-crit)] font-medium">
+                                {formatSigned(task.linesDeleted ? -task.linesDeleted : 0, { locale, negativePrefix: '−' })}
+                              </span>
                             </span>
                           )}
                         </td>

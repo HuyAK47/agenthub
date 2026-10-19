@@ -4,12 +4,13 @@ import { Link, useParams } from 'react-router-dom';
 import { apiFetch, rescanClaudeSessions } from '../api/client';
 import { Card } from '../components/ui/Card';
 import { useLocale } from '../context/LocaleContext';
+import { formatNumber } from '../utils/format';
 
 type TaskUsage = { taskId: string; effectiveTokens: number };
 type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[] };
 type Turn = { ts: string; turnId: string; effectiveTokens: number; input: number; output: number; tasks: TaskUsage[] };
 type SessionDetail = Session & { turns: Turn[] };
-const formatTokens = (value: number, locale: string) => Math.round(value).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US');
+const formatTokens = (value: number, locale: string) => formatNumber(value, { locale });
 
 const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
   const { t, locale } = useLocale();
