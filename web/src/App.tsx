@@ -16,6 +16,7 @@ const TaskDetailPage = lazy(() => import('./pages/TaskDetailPage').then((m) => (
 const ProfilesPage = lazy(() => import('./pages/ProfilesPage').then((m) => ({ default: m.ProfilesPage })));
 const ChatPage = lazy(() => import('./pages/ChatPage').then((m) => ({ default: m.ChatPage })));
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
+const PlansPage = lazy(() => import('./pages/PlansPage').then((m) => ({ default: m.PlansPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 const queryClient = new QueryClient({
@@ -56,6 +57,8 @@ export const App: React.FC = () => {
                   <Route path="chat/:sessionId" element={<ChatPage />} />
                   <Route path="claude-sessions" element={<ClaudeSessionsPage />} />
                   <Route path="claude-sessions/:sessionId" element={<ClaudeSessionsPage />} />
+                  <Route path="plans" element={<PlansPage />} />
+                  <Route path="plans/:batchId" element={<PlansPage />} />
                   <Route path="tasks" element={<TasksPage />} />
                   <Route path="tasks/new" element={<CreateTaskPage />} />
                   <Route path="tasks/:id" element={<TaskDetailPage />} />

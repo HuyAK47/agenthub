@@ -101,6 +101,14 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   knowledgeMaxChars: 12000,
 };
 
+export interface PlanningConfig {
+  requireApproval: boolean;
+}
+
+export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
+  requireApproval: false,
+};
+
 export type DeepPartialSavingsConfig = {
   bucketTokens?: Partial<SavingsConfig['bucketTokens']>;
   claudeFactor?: number;
@@ -157,6 +165,7 @@ export interface AgentHubConfig {
   load: LoadConfig;
   stall: StallConfig;
   context: ContextConfig;
+  planning: PlanningConfig;
   telegram: TelegramConfig;
 }
 
@@ -190,6 +199,7 @@ export function saveConfig(
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
     context?: Partial<ContextConfig>;
+    planning?: Partial<PlanningConfig>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -223,6 +233,9 @@ export function saveConfig(
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
     ...(patch.stall ? { stall: { ...((current.stall as Record<string, unknown>) || {}), ...patch.stall } } : {}),
     ...(patch.context ? { context: { ...((current.context as Record<string, unknown>) || {}), ...patch.context } } : {}),
+    ...(patch.planning && typeof patch.planning === 'object'
+      ? { planning: { ...((current.planning as Record<string, unknown>) || {}), ...patch.planning } }
+      : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
       ? {
           telegram: {
@@ -283,6 +296,7 @@ export function updateConfigInMemory(
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
     context?: Partial<ContextConfig>;
+    planning?: Partial<PlanningConfig>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -386,6 +400,11 @@ export function updateConfigInMemory(
     }
     if (patch.context.knowledgeFile !== undefined) {
       config.context.knowledgeFile = patch.context.knowledgeFile;
+    }
+  }
+  if (patch.planning) {
+    if (patch.planning.requireApproval !== undefined) {
+      config.planning.requireApproval = patch.planning.requireApproval;
     }
   }
   if (patch.telegram) {
@@ -530,6 +549,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   };
 
   const defaultBotTokenFile = path.join(hubHome, 'secrets', 'telegram.token');
+  const rawPlanning = (userConfig.planning as Record<string, unknown>) || {};
+  const planning: PlanningConfig = {
+    requireApproval: rawPlanning.requireApproval === true,
+  };
   const rawTelegram = (userConfig.telegram as Record<string, unknown>) || {};
   const rawTelegramNotify = (rawTelegram.notify as Record<string, unknown>) || {};
   const telegram: TelegramConfig = {
@@ -632,6 +655,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       knowledgeMaxChars: context.knowledgeMaxChars,
       knowledgeFile: context.knowledgeFile,
     },
+    planning,
     telegram,
   };
 }

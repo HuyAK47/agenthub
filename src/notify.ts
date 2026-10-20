@@ -61,6 +61,14 @@ export class NotificationService {
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
 
     switch (type) {
+      case 'batch.created': {
+        const count = typeof p.taskCount === 'number' ? p.taskCount : 0;
+        const who = typeof p.createdBy === 'string' && p.createdBy ? p.createdBy : 'Claude';
+        const label = who.toLowerCase() === 'claude' ? 'Claude' : who;
+        this.notify(`${label} đề xuất ${count} task, chờ bạn duyệt`, 'normal');
+        break;
+      }
+
       case 'task.review_ready': {
         const title = this.resolveTaskTitle(taskId, p);
         let msg = `AgentHub: ${title} chờ review`;

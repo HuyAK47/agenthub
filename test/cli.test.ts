@@ -129,6 +129,7 @@ describe('AgentHub CLI and Installation', () => {
 
   it('cmdBrain updates brain status directly in DB when daemon is offline', async () => {
     const config = loadConfig();
+    config.port = 65534;
     const { cmdBrain, BrainRepo } = await import('../src/brain.js');
     const { openDatabase } = await import('../src/db/index.js');
 

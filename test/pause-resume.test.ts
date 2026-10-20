@@ -361,7 +361,9 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     // Pause task
     ctx.scheduler.pauseTask('p-test/t-stop', 'manual');
     expect(rt.paused).toBe(true);
-    expect(getProcessState(rt.pid)).toBe('T');
+    await vi.waitFor(() => {
+      expect(getProcessState(rt.pid)).toBe('T');
+    }, { timeout: 2000 });
 
     // Dừng scheduler -> Requirement 4: gửi SIGCONT tới mọi task paused
     ctx.scheduler.stop();

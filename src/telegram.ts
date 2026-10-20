@@ -1230,6 +1230,14 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     switch (type) {
+      case 'batch.created': {
+        const count = typeof p.taskCount === 'number' ? p.taskCount : 0;
+        const who = typeof p.createdBy === 'string' && p.createdBy ? p.createdBy : 'Claude';
+        const label = who.toLowerCase() === 'claude' ? 'Claude' : who;
+        this.broadcastMessage(`${label} đề xuất ${count} task, chờ bạn duyệt`);
+        break;
+      }
+
       case 'review.escalated':
       case 'task.review_ready': {
         if (!notify.reviewReady) return;

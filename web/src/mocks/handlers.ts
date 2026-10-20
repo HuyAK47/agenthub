@@ -9,6 +9,7 @@ import {
   Project,
   SystemConfig,
   TaskDetail,
+  TaskBatch,
 } from '../types/api';
 import { parseApiTime } from '../lib/time';
 import { filterTasksForDag, layoutTaskDag } from '../components/dag/dagUtils';
@@ -125,7 +126,62 @@ let mockProfiles: Profile[] = [
   },
 ];
 
+let mockBatches: TaskBatch[] = [
+  {
+    id: 'batch-1',
+    projectId: 'agenthub',
+    title: 'Kế hoạch phát triển AgentHub',
+    goal: 'Bổ sung tính năng batch planning và DAG visualizer',
+    status: 'draft',
+    createdBy: 'claude',
+    createdAt: '2026-10-20T10:00:00Z',
+  },
+  {
+    id: 'batch-2',
+    projectId: 'xfarm',
+    title: 'Nâng cấp API farm',
+    goal: 'Tối ưu GraphQL và mutation',
+    status: 'dispatched',
+    createdBy: 'user',
+    createdAt: '2026-10-19T14:30:00Z',
+  },
+];
+
 let mockTasks: TaskDetail[] = [
+  {
+    id: 'agenthub~b1-task-1',
+    projectId: 'agenthub',
+    slug: 'b1-task-1',
+    title: 'Tạo bảng task_batches',
+    body: 'Migration 28: thêm bảng task_batches và cột batchId',
+    level: 'easy',
+    status: 'draft',
+    dependsOn: [],
+    attempt: 0,
+    resume: 0,
+    createdAt: '2026-10-20T10:00:00Z',
+    updatedAt: '2026-10-20T10:00:00Z',
+    batchId: 'batch-1',
+    runs: [],
+    reviews: [],
+  },
+  {
+    id: 'agenthub~b1-task-2',
+    projectId: 'agenthub',
+    slug: 'b1-task-2',
+    title: 'Xây dựng PlansPage',
+    body: 'Trang Kế hoạch với danh sách đợt và TaskDag',
+    level: 'hard',
+    status: 'draft',
+    dependsOn: ['b1-task-1'],
+    attempt: 0,
+    resume: 0,
+    createdAt: '2026-10-20T10:05:00Z',
+    updatedAt: '2026-10-20T10:05:00Z',
+    batchId: 'batch-1',
+    runs: [],
+    reviews: [],
+  },
   {
     id: 'agenthub~a0-core',
     projectId: 'agenthub',
@@ -1164,6 +1220,17 @@ export const handlers = [
     });
   }),
 
+  // GET /api/models
+  http.get('/api/models', ({ request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    return HttpResponse.json({
+      suggestions: ['codex:gpt-5.6-luna', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium'],
+      configured: [...new Set([...mockConfig.modelChainHard, ...mockConfig.modelChainEasy])],
+    });
+  }),
+
   // GET /api/chat/sessions
   http.get('/api/chat/sessions', ({ request }) => {
     if (!checkAuth(request)) {
@@ -1306,6 +1373,283 @@ export const handlers = [
     return HttpResponse.json({ ok: true });
   }),
 
+  // --- Batches API ---
+  // GET /api/batches
+  http.get('/api/batches', ({ request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const url = new URL(request.url);
+    const project = url.searchParams.get('project');
+    const status = url.searchParams.get('status');
+
+    let result = mockBatches.map((b) => ({
+      ...b,
+      tasks: mockTasks.filter((t) => t.batchId === b.id),
+    }));
+
+    if (project) {
+      result = result.filter((b) => b.projectId === project);
+    }
+    if (status) {
+      result = result.filter((b) => b.status === status);
+    }
+
+    return HttpResponse.json(result);
+  }),
+
+  // GET /api/batches/:id
+  http.get('/api/batches/:id', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const batch = mockBatches.find((b) => b.id === id);
+    if (!batch) {
+      return HttpResponse.json({ error: 'not_found', message: 'Batch không tồn tại' }, { status: 404 });
+    }
+    const tasks = mockTasks.filter((t) => t.batchId === batch.id);
+    return HttpResponse.json({ ...batch, tasks });
+  }),
+
+  // POST /api/batches
+  http.post('/api/batches', async ({ request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const body = (await request.json()) as any;
+    const newBatch: TaskBatch = {
+      id: `batch-${Date.now()}`,
+      projectId: body.project,
+      title: body.title,
+      goal: body.goal || null,
+      status: 'draft',
+      createdBy: body.createdBy || 'user',
+      createdAt: new Date().toISOString(),
+    };
+    mockBatches.unshift(newBatch);
+
+    const createdTasks: TaskDetail[] = (body.tasks || []).map((t: any) => {
+      const taskDetail: TaskDetail = {
+        id: `${body.project}~${t.slug}`,
+        projectId: body.project,
+        slug: t.slug,
+        title: t.title,
+        body: t.body || null,
+        level: t.level || 'easy',
+        status: 'draft',
+        modelChain: t.modelChain || null,
+        dependsOn: t.dependsOn || [],
+        batchId: newBatch.id,
+        attempt: 0,
+        resume: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        runs: [],
+        reviews: [],
+      };
+      mockTasks.unshift(taskDetail);
+      return taskDetail;
+    });
+
+    return HttpResponse.json({ ...newBatch, tasks: createdTasks }, { status: 201 });
+  }),
+
+  // POST /api/batches/:id/dispatch
+  http.post('/api/batches/:id/dispatch', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const batch = mockBatches.find((b) => b.id === id);
+    if (!batch) {
+      return HttpResponse.json({ error: 'not_found', message: 'Batch không tồn tại' }, { status: 404 });
+    }
+    if (batch.status !== 'draft') {
+      return HttpResponse.json(
+        { error: 'conflict', message: 'Chỉ có thể giao đợt ở trạng thái draft' },
+        { status: 409 },
+      );
+    }
+
+    const batchTasks = mockTasks.filter((t) => t.batchId === batch.id);
+    const slugMap = new Map<string, string[]>();
+    for (const t of batchTasks) {
+      const deps = Array.isArray(t.dependsOn) ? t.dependsOn : t.dependsOn ? [t.dependsOn] : [];
+      slugMap.set(t.slug, deps);
+    }
+    const visited = new Set<string>();
+    const recStack = new Set<string>();
+    let hasCycle = false;
+    const checkCycle = (node: string): boolean => {
+      visited.add(node);
+      recStack.add(node);
+      for (const dep of slugMap.get(node) || []) {
+        if (!visited.has(dep)) {
+          if (checkCycle(dep)) return true;
+        } else if (recStack.has(dep)) {
+          return true;
+        }
+      }
+      recStack.delete(node);
+      return false;
+    };
+    for (const slug of slugMap.keys()) {
+      if (!visited.has(slug)) {
+        if (checkCycle(slug)) {
+          hasCycle = true;
+          break;
+        }
+      }
+    }
+    if (hasCycle) {
+      return HttpResponse.json(
+        { error: 'cycle_detected', message: 'Phát hiện vòng phụ thuộc trong đợt' },
+        { status: 400 },
+      );
+    }
+
+    batch.status = 'dispatched';
+    let count = 0;
+    for (const t of batchTasks) {
+      if (t.status === 'draft') {
+        t.status = 'queued';
+        t.updatedAt = new Date().toISOString();
+        count++;
+      }
+    }
+    return HttpResponse.json({ ok: true, dispatchedCount: count });
+  }),
+
+  // POST /api/batches/:id/discard
+  http.post('/api/batches/:id/discard', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const batch = mockBatches.find((b) => b.id === id);
+    if (!batch) {
+      return HttpResponse.json({ error: 'not_found', message: 'Batch không tồn tại' }, { status: 404 });
+    }
+    batch.status = 'discarded';
+    return HttpResponse.json({ ok: true });
+  }),
+
+  // POST /api/batches/:id/tasks
+  http.post('/api/batches/:id/tasks', async ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const batch = mockBatches.find((b) => b.id === id);
+    if (!batch) {
+      return HttpResponse.json({ error: 'not_found', message: 'Batch không tồn tại' }, { status: 404 });
+    }
+    const body = (await request.json()) as any;
+    const newTask: TaskDetail = {
+      id: `${batch.projectId}~${body.slug}`,
+      projectId: batch.projectId,
+      slug: body.slug,
+      title: body.title,
+      body: body.body || null,
+      level: body.level || 'easy',
+      status: 'draft',
+      modelChain: body.modelChain || null,
+      dependsOn: body.dependsOn || [],
+      batchId: batch.id,
+      attempt: 0,
+      resume: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      runs: [],
+      reviews: [],
+    };
+    mockTasks.unshift(newTask);
+    return HttpResponse.json(newTask, { status: 201 });
+  }),
+
+  // DELETE /api/batches/:id/tasks/:taskId
+  http.delete('/api/batches/:id/tasks/:taskId', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { taskId } = params;
+    const idx = mockTasks.findIndex((t) => t.id === taskId || t.slug === taskId);
+    if (idx !== -1) {
+      mockTasks.splice(idx, 1);
+    }
+    return HttpResponse.json({ ok: true });
+  }),
+
+  // DELETE /api/tasks/:id
+  http.delete('/api/tasks/:id', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const idx = mockTasks.findIndex((t) => t.id === id);
+    if (idx !== -1) {
+      mockTasks.splice(idx, 1);
+    }
+    return HttpResponse.json({ ok: true });
+  }),
+
+  // POST /api/chat/sessions/:id/compact
+  http.post('/api/chat/sessions/:id/compact', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const session = mockChatSessions.find((s) => s.id === id);
+    if (!session) {
+      return HttpResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    session.contextTokens = 20000;
+    session.updatedAt = new Date().toISOString();
+    const systemMsg = {
+      id: `msg-${Date.now()}`,
+      sessionId: session.id,
+      role: 'system',
+      content: 'Đã nén ngữ cảnh',
+      createdAt: new Date().toISOString(),
+    };
+    if (!mockChatMessages[session.id]) {
+      mockChatMessages[session.id] = [];
+    }
+    mockChatMessages[session.id].push(systemMsg as any);
+    return HttpResponse.json({ ok: true, contextTokens: 20000 });
+  }),
+
+  // POST /api/chat/sessions/:id/fork-summary
+  http.post('/api/chat/sessions/:id/fork-summary', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const session = mockChatSessions.find((s) => s.id === id);
+    if (!session) {
+      return HttpResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    const newSession = {
+      id: `cs-${Date.now()}`,
+      title: `${session.title} (tóm tắt)`,
+      mode: session.mode,
+      busy: false,
+      updatedAt: new Date().toISOString(),
+      lastMessage: 'Tóm tắt phiên trước...',
+    };
+    mockChatSessions.unshift(newSession);
+    mockChatMessages[newSession.id] = [
+      {
+        id: `msg-${Date.now()}`,
+        sessionId: newSession.id,
+        role: 'user',
+        content: 'Tóm tắt phiên trước...',
+        createdAt: new Date().toISOString(),
+      } as any,
+    ];
+    return HttpResponse.json({ id: newSession.id, sessionId: newSession.id }, { status: 201 });
+  }),
   // POST /api/chat/sessions/:id/compact
   http.post('/api/chat/sessions/:id/compact', ({ params, request }) => {
     if (!checkAuth(request)) {

@@ -342,3 +342,79 @@ export function computeTaskGraph(tasks: GraphTaskItem[]): TaskGraphResult {
     maxBlockedCount,
   };
 }
+
+/**
+ * Detects if there is a cycle in task dependencies.
+ * Returns the cycle path (e.g. ['a', 'b', 'a']) if a cycle is found, or null if acyclic.
+ */
+export function detectCycle(
+  tasks: Array<{ id: string; slug?: string; projectId?: string; dependsOn?: string | string[] }>,
+): string[] | null {
+  const taskMap = new Map<string, string>();
+  for (const t of tasks) {
+    const id = t.id;
+    taskMap.set(id, id);
+    taskMap.set(id.replace('/', '~'), id);
+    taskMap.set(id.replace('~', '/'), id);
+    if (t.slug) {
+      taskMap.set(t.slug, id);
+      if (t.projectId) {
+        taskMap.set(`${t.projectId}/${t.slug}`, id);
+        taskMap.set(`${t.projectId}~${t.slug}`, id);
+      }
+    }
+  }
+
+  const adj = new Map<string, string[]>();
+  for (const t of tasks) {
+    const fromId = t.id;
+    if (!adj.has(fromId)) adj.set(fromId, []);
+    const deps = parseDependsOn(t.dependsOn);
+    for (const dep of deps) {
+      let resolved = taskMap.get(dep);
+      if (!resolved && t.projectId && !dep.includes('/') && !dep.includes('~')) {
+        resolved = taskMap.get(`${t.projectId}/${dep}`);
+      }
+      if (resolved) {
+        adj.get(fromId)!.push(resolved);
+      }
+    }
+  }
+
+  const visited = new Set<string>();
+  const recStack = new Set<string>();
+  const stack: string[] = [];
+
+  function dfs(curr: string): string[] | null {
+    visited.add(curr);
+    recStack.add(curr);
+    stack.push(curr);
+
+    const neighbors = adj.get(curr) || [];
+    for (const next of neighbors) {
+      if (!visited.has(next)) {
+        const cycle = dfs(next);
+        if (cycle) return cycle;
+      } else if (recStack.has(next)) {
+        const startIndex = stack.indexOf(next);
+        if (startIndex !== -1) {
+          return [...stack.slice(startIndex), next];
+        }
+        return [next, curr, next];
+      }
+    }
+
+    stack.pop();
+    recStack.delete(curr);
+    return null;
+  }
+
+  for (const t of tasks) {
+    if (!visited.has(t.id)) {
+      const cycle = dfs(t.id);
+      if (cycle) return cycle;
+    }
+  }
+
+  return null;
+}

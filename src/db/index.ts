@@ -463,6 +463,22 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE claude_sessions ADD COLUMN limitHitAt TEXT;
   ALTER TABLE claude_sessions ADD COLUMN autoResumeEnabled INTEGER NOT NULL DEFAULT 0;
   `,
+  // Migration 34: task batches and batchId for tasks
+  `
+  CREATE TABLE IF NOT EXISTS task_batches (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    title TEXT NOT NULL,
+    goal TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'dispatched', 'discarded')),
+    createdBy TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_batches_project ON task_batches(projectId, createdAt DESC);
+  ALTER TABLE tasks ADD COLUMN batchId TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batchId);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -579,8 +595,21 @@ export interface TaskRow {
   doneReport?: string | null;
   diffStat?: string | null;
   slot: number | null;
+  batchId?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type BatchStatus = 'draft' | 'dispatched' | 'discarded';
+
+export interface TaskBatchRow {
+  id: string;
+  projectId: string;
+  title: string;
+  goal: string | null;
+  status: BatchStatus;
+  createdBy: string | null;
+  createdAt: string;
 }
 
 export interface RunRow {
@@ -899,6 +928,10 @@ export class TaskRepo {
       .all(status) as TaskRow[];
   }
 
+  getByBatch(batchId: string): TaskRow[] {
+    return this.db.prepare('SELECT * FROM tasks WHERE batchId = ? ORDER BY createdAt').all(batchId) as TaskRow[];
+  }
+
   get(id: string): TaskRow | undefined {
     return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
   }
@@ -924,12 +957,14 @@ export class TaskRepo {
     doneReport?: string | null;
     diffStat?: string | null;
     sourceRef?: string | null;
+    batchId?: string | null;
+    skipDeps?: boolean;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -948,14 +983,23 @@ export class TaskRepo {
         row.doneReport || null,
         row.diffStat || null,
         row.sourceRef || null,
+        row.batchId || null,
       );
 
     // Populate task_deps
-    if (row.dependsOn && row.dependsOn.length > 0) {
+    if (!row.skipDeps && row.dependsOn && row.dependsOn.length > 0) {
       const stmt = this.db.prepare('INSERT INTO task_deps (taskId, dependsOnId) VALUES (?, ?)');
       for (const dep of row.dependsOn) {
         stmt.run(row.id, dep);
       }
+    }
+  }
+
+  populateDeps(taskId: string, dependsOn: string[]): void {
+    if (!dependsOn || dependsOn.length === 0) return;
+    const stmt = this.db.prepare('INSERT INTO task_deps (taskId, dependsOnId) VALUES (?, ?)');
+    for (const dep of dependsOn) {
+      stmt.run(taskId, dep);
     }
   }
 
@@ -971,9 +1015,18 @@ export class TaskRepo {
     }
   }
 
+  delete(id: string): void {
+    this.db.prepare('DELETE FROM task_deps WHERE taskId = ? OR dependsOnId = ?').run(id, id);
+    this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  }
+
+  setBatchId(id: string, batchId: string | null): void {
+    this.db.prepare("UPDATE tasks SET batchId = ?, updatedAt = datetime('now') WHERE id = ?").run(batchId, id);
+  }
+
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
@@ -1009,6 +1062,86 @@ export class TaskRepo {
       .prepare("SELECT slot FROM tasks WHERE projectId = ? AND slot IS NOT NULL AND status NOT IN ('done', 'cancelled')")
       .all(projectId) as Array<{ slot: number }>;
     return rows.map((row) => row.slot);
+  }
+}
+
+export class TaskBatchRepo {
+  constructor(private db: Database.Database) {}
+
+  create(row: {
+    id: string;
+    projectId: string;
+    title: string;
+    goal?: string | null;
+    status?: BatchStatus;
+    createdBy?: string | null;
+  }): void {
+    this.db
+      .prepare(
+        'INSERT INTO task_batches (id, projectId, title, goal, status, createdBy) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        row.id,
+        row.projectId,
+        row.title,
+        row.goal || null,
+        row.status || 'draft',
+        row.createdBy || null,
+      );
+  }
+
+  get(id: string): TaskBatchRow | undefined {
+    return this.db.prepare('SELECT * FROM task_batches WHERE id = ?').get(id) as TaskBatchRow | undefined;
+  }
+
+  list(projectId?: string, status?: string): TaskBatchRow[] {
+    let query = 'SELECT * FROM task_batches';
+    const params: unknown[] = [];
+    const conditions: string[] = [];
+    if (projectId && projectId !== 'all') {
+      conditions.push('projectId = ?');
+      params.push(projectId);
+    }
+    if (status && status !== 'all') {
+      conditions.push('status = ?');
+      params.push(status);
+    }
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+    query += ' ORDER BY createdAt DESC';
+    return this.db.prepare(query).all(...params) as TaskBatchRow[];
+  }
+
+  updateStatus(id: string, status: BatchStatus): void {
+    this.db.prepare('UPDATE task_batches SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  update(
+    id: string,
+    fields: Partial<{ title: string; goal: string | null; status: BatchStatus }>,
+  ): void {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (fields.title !== undefined) {
+      sets.push('title = ?');
+      params.push(fields.title);
+    }
+    if (fields.goal !== undefined) {
+      sets.push('goal = ?');
+      params.push(fields.goal);
+    }
+    if (fields.status !== undefined) {
+      sets.push('status = ?');
+      params.push(fields.status);
+    }
+    if (sets.length > 0) {
+      this.db.prepare(`UPDATE task_batches SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+    }
+  }
+
+  delete(id: string): void {
+    this.db.prepare('DELETE FROM task_batches WHERE id = ?').run(id);
   }
 }
 
