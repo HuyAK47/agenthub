@@ -40,15 +40,18 @@ export class ProfileService {
    * - All subdirectories in ~/.agy-homes/ (except .state)
    */
   registerAll(): void {
-    // Register "chinh" profile (keyring-based)
-    this.profileRepo.upsert({
-      name: 'chinh',
-      engine: 'agy',
-      kind: 'keyring',
-      home: os.homedir(),
-      email: this.readEmailFromLog(this.config.defaultLogDir),
-      enabled: 1,
-    });
+    // Register keyring agy profile if none exists (handles renamed "chinh" -> "g0")
+    const hasKeyring = this.profileRepo.getAll(true).some((p) => p.kind === 'keyring' && p.engine === 'agy');
+    if (!hasKeyring) {
+      this.profileRepo.upsert({
+        name: 'chinh',
+        engine: 'agy',
+        kind: 'keyring',
+        home: os.homedir(),
+        email: this.readEmailFromLog(this.config.defaultLogDir),
+        enabled: 1,
+      });
+    }
 
     // Register "codex" if found
     const codexPath = CodexEngine.findCodexPath();
@@ -74,6 +77,26 @@ export class ProfileService {
         email: this.readClaudeAccount(os.homedir())?.email || null,
         enabled: 1,
       });
+    }
+
+    // Register codex-homes profiles
+    const codexHomesDir = path.join(this.config.hubHome, 'codex-homes');
+    if (fs.existsSync(codexHomesDir)) {
+      const entries = fs.readdirSync(codexHomesDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const fullPath = path.join(codexHomesDir, entry.name);
+        if (!this.profileRepo.get(entry.name)) {
+          this.profileRepo.upsert({
+            name: entry.name,
+            engine: 'codex',
+            kind: 'isolated',
+            home: fullPath,
+            email: null,
+            enabled: 1,
+          });
+        }
+      }
     }
 
     // Register agy-homes profiles
@@ -183,11 +206,20 @@ export class ProfileService {
   /**
    * Create a new isolated agy profile
    */
-  createProfile(name: string, engine: 'agy' | 'claude' = 'agy'): void {
+  createProfile(name: string, engine: 'agy' | 'claude' | 'codex' = 'agy'): void {
     if (engine === 'claude') {
       const homeDir = path.join(this.config.hubHome, 'claude-homes', name);
       fs.mkdirSync(homeDir, { recursive: true, mode: 0o700 });
       this.profileRepo.upsert({ name, engine: 'claude', kind: 'isolated', home: homeDir, email: null, enabled: 1 });
+      return;
+    }
+    if (engine === 'codex') {
+      const homeDir = path.join(this.config.hubHome, 'codex-homes', name);
+      fs.mkdirSync(homeDir, { recursive: true, mode: 0o700 });
+      this.profileRepo.upsert({ name, engine: 'codex', kind: 'isolated', home: homeDir, email: null, enabled: 1 });
+      if (!isProfileLoggedIn(this.profileRepo.get(name)!)) {
+        this.profileRepo.updateAuthState(name, 'not_logged_in', 'Chưa đăng nhập', null);
+      }
       return;
     }
     const homeDir = path.join(this.config.agyHomesDir, name);
@@ -266,27 +298,49 @@ export class ProfileService {
     return account;
   }
 
-  deleteProfile(name: string): void {
-    const profile = this.profileRepo.get(name);
-    if (!profile) throw new Error(`Hồ sơ "${name}" không tồn tại`);
-    if (profile.engine !== 'claude' || profile.kind === 'system') throw new Error('Chỉ có thể xóa hồ sơ Claude riêng');
-    if (profile.home && fs.existsSync(profile.home)) {
-      const homesRoot = path.resolve(this.config.hubHome, 'claude-homes');
-      let realRoot: string;
-      let realHome: string;
-      try {
-        realRoot = fs.realpathSync(homesRoot);
-        realHome = fs.realpathSync(profile.home);
-      } catch {
-        throw new Error('Từ chối xóa hồ sơ Claude: không xác định được đường dẫn thật');
-      }
-      const relative = path.relative(realRoot, realHome);
-      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-        throw new Error('Từ chối xóa hồ sơ Claude: thư mục nằm ngoài claude-homes');
-      }
-      fs.rmSync(profile.home, { recursive: true, force: true });
+  purgeHomeDirectory(profile: ProfileRow): void {
+    if (!profile.home || !fs.existsSync(profile.home)) return;
+
+    let engineRoot: string;
+    if (profile.engine === 'claude') {
+      engineRoot = path.resolve(this.config.hubHome, 'claude-homes');
+    } else if (profile.engine === 'codex') {
+      engineRoot = path.resolve(this.config.hubHome, 'codex-homes');
+    } else {
+      engineRoot = path.resolve(this.config.agyHomesDir);
     }
-    this.profileRepo.delete(name);
+
+    let realRoot: string;
+    let realHome: string;
+    try {
+      realRoot = fs.existsSync(engineRoot) ? fs.realpathSync(engineRoot) : engineRoot;
+      realHome = fs.realpathSync(profile.home);
+    } catch {
+      throw new Error(`Từ chối xóa hồ sơ ${profile.name}: không xác định được đường dẫn thật`);
+    }
+
+    if (realHome === realRoot) {
+      throw new Error(`Từ chối xóa hồ sơ ${profile.name}: thư mục home trùng với thư mục gốc engine`);
+    }
+
+    const relative = path.relative(realRoot, realHome);
+    if (!relative || relative === '.' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`Từ chối xóa hồ sơ ${profile.name}: thư mục nằm ngoài ${path.basename(engineRoot)}`);
+    }
+
+    fs.rmSync(profile.home, { recursive: true, force: true });
+  }
+
+  deleteProfile(name: string, purgeHome = true): void {
+    const profile = this.profileRepo.get(name);
+    if (!profile || profile.deletedAt) throw new Error(`Hồ sơ "${name}" không tồn tại`);
+    if (profile.kind === 'system' || profile.kind === 'keyring') {
+      throw new Error('Từ chối xóa: không thể xóa hồ sơ hệ thống hoặc keyring');
+    }
+    if (purgeHome && profile.home && fs.existsSync(profile.home)) {
+      this.purgeHomeDirectory(profile);
+    }
+    this.profileRepo.softDelete(name);
   }
 
   /**
@@ -349,7 +403,12 @@ export class ProfileService {
 }
 
 export function isProfileLoggedIn(profile: ProfileRow): boolean {
-  if (profile.engine === 'codex') return fs.existsSync(path.join(profile.home || os.homedir(), '.codex', 'auth.json'));
+  if (profile.engine === 'codex') {
+    if (profile.kind === 'isolated' && profile.home) {
+      return fs.existsSync(path.join(profile.home, 'auth.json'));
+    }
+    return fs.existsSync(path.join(profile.home || os.homedir(), '.codex', 'auth.json'));
+  }
   if (profile.kind === 'keyring') return true;
   if (profile.engine === 'claude') {
     const home = profile.home || os.homedir();
