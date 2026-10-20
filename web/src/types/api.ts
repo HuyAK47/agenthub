@@ -392,11 +392,14 @@ export interface ChatSession {
   state?: 'idle' | 'running' | 'waiting_permission' | 'error';
   model?: string;
   profileName?: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
+  contextTokens?: number;
   updatedAt: string;
   lastMessage?: string | null;
 }
 
-export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error';
+export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
 
 export interface ChatMessageMeta {
   name?: string;
@@ -454,6 +457,7 @@ export interface ChatConfig {
   idleTimeoutSec?: number;
   model?: '' | 'sonnet' | 'haiku';
   claudeProfile?: string;
+  autoCompactPercent?: number;
 }
 
 export interface CreateProjectInput {

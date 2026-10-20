@@ -11,6 +11,8 @@ import {
   warmChatSession,
   decideChatPermission,
   getChatPermissions,
+  compactChatSession,
+  forkSummaryChatSession,
 } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { ChatMessage, ChatMode, ChatSession, ChatPermissionRequest } from '../types/api';
@@ -27,6 +29,8 @@ import {
   AlertCircle,
   Plus,
   Bot,
+  Minimize2,
+  GitFork,
 } from 'lucide-react';
 
 const EMPTY_SESSIONS: ChatSession[] = [];
@@ -250,6 +254,10 @@ export const ChatPage: React.FC = () => {
         ]);
 
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+      } else if (type === 'chat.compacted') {
+        setToastMessage(t('extra.compacted'));
+        queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession?.id] });
+        queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       } else if (type === 'chat.status') {
         queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) => prev.map((session) =>
           session.id === targetSessionId ? { ...session, state: payload.status, busy: payload.status !== 'idle' && payload.status !== 'error' } : session));
@@ -353,6 +361,29 @@ export const ChatPage: React.FC = () => {
     },
     onError: (err: any) => {
       alert(err.message || t('extra.stopError'));
+    },
+  });
+
+  const compactMutation = useMutation({
+    mutationFn: () => compactChatSession(activeSession!.id),
+    onSuccess: () => {
+      setToastMessage(t('extra.compacted'));
+      queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession?.id] });
+      queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+    },
+    onError: (err: any) => {
+      setToastMessage(err.message || t('extra.compactError'));
+    },
+  });
+
+  const forkSummaryMutation = useMutation({
+    mutationFn: () => forkSummaryChatSession(activeSession!.id),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+      navigate(`/chat/${res.id}`);
+    },
+    onError: (err: any) => {
+      setToastMessage(err.message || t('extra.forkSummaryError'));
     },
   });
 
@@ -513,15 +544,44 @@ export const ChatPage: React.FC = () => {
             )}
           </div>
 
-          {/* New chat button for convenience on mobile/header */}
-          <button
-            type="button"
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-primary)] transition-colors cursor-pointer shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{t('common.create')}</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {activeSession && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => compactMutation.mutate()}
+                  disabled={isBusy || compactMutation.isPending}
+                  title={t('extra.compactTooltip')}
+                  aria-label={t('extra.compact')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Minimize2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{t('extra.compact')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => forkSummaryMutation.mutate()}
+                  disabled={isBusy || forkSummaryMutation.isPending}
+                  title={t('extra.forkSummaryTooltip')}
+                  aria-label={t('extra.forkSummary')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <GitFork className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{t('extra.forkSummary')}</span>
+                </button>
+              </>
+            )}
+
+            {/* New chat button for convenience on mobile/header */}
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-primary)] transition-colors cursor-pointer shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t('common.create')}</span>
+            </button>
+          </div>
         </div>
 
         {/* Messages Body */}

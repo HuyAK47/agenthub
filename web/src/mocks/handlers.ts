@@ -1170,4 +1170,61 @@ export const handlers = [
     }
     return HttpResponse.json({ ok: true });
   }),
+
+  // POST /api/chat/sessions/:id/compact
+  http.post('/api/chat/sessions/:id/compact', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const session = mockChatSessions.find((s) => s.id === id);
+    if (!session) {
+      return HttpResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    session.contextTokens = 20000;
+    session.updatedAt = new Date().toISOString();
+    const systemMsg = {
+      id: `msg-${Date.now()}`,
+      sessionId: session.id,
+      role: 'system',
+      content: 'Đã nén ngữ cảnh',
+      createdAt: new Date().toISOString(),
+    };
+    if (!mockChatMessages[session.id]) {
+      mockChatMessages[session.id] = [];
+    }
+    mockChatMessages[session.id].push(systemMsg as any);
+    return HttpResponse.json({ ok: true, contextTokens: 20000 });
+  }),
+
+  // POST /api/chat/sessions/:id/fork-summary
+  http.post('/api/chat/sessions/:id/fork-summary', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const session = mockChatSessions.find((s) => s.id === id);
+    if (!session) {
+      return HttpResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    const newSession = {
+      id: `cs-${Date.now()}`,
+      title: `${session.title} (tóm tắt)`,
+      mode: session.mode,
+      busy: false,
+      updatedAt: new Date().toISOString(),
+      lastMessage: 'Tóm tắt phiên trước...',
+    };
+    mockChatSessions.unshift(newSession);
+    mockChatMessages[newSession.id] = [
+      {
+        id: `msg-${Date.now()}`,
+        sessionId: newSession.id,
+        role: 'user',
+        content: 'Tóm tắt phiên trước...',
+        createdAt: new Date().toISOString(),
+      } as any,
+    ];
+    return HttpResponse.json({ id: newSession.id, sessionId: newSession.id }, { status: 201 });
+  }),
 ];

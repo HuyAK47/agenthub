@@ -91,6 +91,17 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
     );
   }
 
+  // System message (e.g. "Đã nén ngữ cảnh")
+  if (message.role === 'system') {
+    return (
+      <div className="flex justify-center my-3" data-testid="system-message">
+        <div className="px-3.5 py-1.5 rounded-full bg-[var(--bg-surface-subtle)] border border-[var(--border-default)] text-[var(--text-secondary)] text-xs font-medium shadow-xs text-center">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+
   // Error message (red border)
   if (message.role === 'error') {
     return (
