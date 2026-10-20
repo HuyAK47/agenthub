@@ -8,7 +8,7 @@ import { formatNumber } from '../utils/format';
 import { CollapsibleList } from '../components/CollapsibleList';
 
 type TaskUsage = { taskId: string; effectiveTokens: number };
-type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[] };
+type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[]; limitResetAt?: number | null; autoResumeEnabled?: number };
 type Turn = { ts: string; turnId: string; effectiveTokens: number; input: number; output: number; tasks: TaskUsage[] };
 type SessionDetail = Session & { turns: Turn[] };
 const formatTokens = (value: number, locale: string) => formatNumber(value, { locale });
@@ -78,6 +78,13 @@ const SessionDetail: React.FC<{ data: SessionDetail; sessionId: string }> = ({ d
       <Card>
         <h1 className="text-xl font-semibold">{data.title || sessionId}</h1>
         <p className="text-sm text-[var(--t-text-3)] mt-1 break-all">{data.cwd} · {data.model || t('extra.unknown')}</p>
+        <label className="flex items-center gap-2 mt-4 text-sm">
+          <input type="checkbox" checked={data.autoResumeEnabled === 1} onChange={(event) => {
+            void apiFetch(`/api/claude/sessions/${encodeURIComponent(sessionId)}/auto-resume`, { method: 'PATCH', body: JSON.stringify({ enabled: event.target.checked }) });
+          }} />
+          Tự tiếp tục khi hết giới hạn
+        </label>
+        {data.limitResetAt ? <p className="text-sm text-[var(--t-warn)] mt-2">Giới hạn 5 giờ · tự tiếp tục sau {new Date(data.limitResetAt * 1000 + 60_000).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US')}</p> : null}
         <h2 className="font-semibold mt-6 mb-2">{t('extra.tokensOverTime')}</h2>
         <TurnChart turns={data.turns} label={t('extra.tokensOverTime')} />
         <div className="overflow-x-auto">
