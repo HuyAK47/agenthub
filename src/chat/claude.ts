@@ -270,6 +270,8 @@ export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
     args.push(
       '--permission-mode',
       'default',
+      '--permission-prompt-tool',
+      'mcp__agenthub__permission_prompt',
       '--allowedTools',
       'Read,Grep,Glob,LS,mcp__agenthub,Bash(git status:*),Bash(git log:*),Bash(npm test:*),Bash(npm run lint:*),Bash(npm run typecheck:*)',
     );
@@ -283,7 +285,7 @@ export function spawnClaude(
   args: string[],
   cwd: string,
   stdinText?: string,
-  options: { disableToolSearch?: boolean } = {},
+  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number } = {},
 ): ChildProcess {
   const child = spawn(claudeBin, args, {
     cwd,
@@ -291,6 +293,8 @@ export function spawnClaude(
     env: {
       ...process.env,
       ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
+      ...(options.chatSessionId ? { AGENTHUB_CHAT_SESSION_ID: options.chatSessionId } : {}),
+      ...(options.port ? { AGENTHUB_PORT: String(options.port) } : {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
