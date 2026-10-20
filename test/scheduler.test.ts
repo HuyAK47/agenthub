@@ -371,7 +371,7 @@ describe('Scheduler regression fixes', () => {
     delete process.env.FAKE_MODE;
   });
 
-  it('stop leaves detached workers running and cancelAll cancels them explicitly', async () => {
+  it('shutdown stops detached workers and records a resumable run', async () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);
     profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
@@ -380,9 +380,9 @@ describe('Scheduler regression fixes', () => {
     const scheduler = makeScheduler();
     scheduler.tick();
     scheduler.stop();
-    expect(taskRepo.get('test-project/a')!.status).toBe('running');
-    expect(runRepo.getByTask('test-project/a')[0].outcome).toBeNull();
-    scheduler.cancelAll();
+    expect(taskRepo.get('test-project/a')!.status).toBe('queued');
+    expect(taskRepo.get('test-project/a')!.resume).toBe(1);
+    expect(runRepo.getByTask('test-project/a')[0]).toMatchObject({ outcome: 'crashed', reason: 'daemon_shutdown' });
     delete process.env.FAKE_MODE;
   });
 
