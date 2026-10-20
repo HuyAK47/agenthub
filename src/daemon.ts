@@ -58,6 +58,7 @@ export interface DaemonContext {
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
+  usageRepo: QuotaUsageRepo;
 }
 
 export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>): DaemonContext {
@@ -206,6 +207,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    usageRepo,
   };
 }
 

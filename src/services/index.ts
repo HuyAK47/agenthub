@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z, ZodError } from 'zod';
 import { AgentHubConfig, saveConfig, updateConfigInMemory } from '../config.js';
@@ -30,7 +30,7 @@ import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
 import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
-import { parseAuthState } from '../profiles/auth.js';
+import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
@@ -179,11 +179,18 @@ export const RetryTaskSchema = z.object({
 
 export const CreateProfileSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
-  engine: z.enum(['agy', 'claude']).default('agy'),
+  engine: z.enum(['agy', 'claude', 'codex']).default('agy'),
+});
+
+export const RenameProfileSchema = z.object({
+  newName: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
 export const UpdateProfileSchema = z.object({
-  enabled: z.union([z.boolean(), z.number().int().min(0).max(1)]),
+  enabled: z.union([z.boolean(), z.number().int().min(0).max(1)]).optional(),
+  label: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  priority: z.number().int().optional(),
 });
 
 export const MarkQuotaSchema = z.object({
@@ -866,6 +873,16 @@ export class AppService {
           }
         }
       }
+      if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
+        const lastCheck = this.emailCheckCache.get(p.name) || 0;
+        if (now - lastCheck > 30_000) {
+          this.emailCheckCache.set(p.name, now);
+          const email = this.refreshCodexEmail(p);
+          if (email) {
+            p.email = email;
+          }
+        }
+      }
     }
 
     const quotaMarks = this.quotaMarkRepo.getActive();
@@ -904,19 +921,138 @@ export class AppService {
     return apiProfile(this.profileRepo.get(parsed.name)!);
   }
 
-  deleteProfile(name: string): { ok: boolean } {
+  deleteProfile(name: string, purgeHome = false): { ok: boolean } {
     const profile = this.profileRepo.get(name);
-    if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.engine !== 'claude' || profile.kind === 'system') {
-      throw new HttpError(400, 'bad_request', 'Chỉ có thể xóa hồ sơ Claude riêng');
+    if (!profile || profile.deletedAt) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    if (profile.kind === 'system' || profile.kind === 'keyring') {
+      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống hoặc keyring');
     }
+
+    const runningMap = this.scheduler.getRunning();
+    const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);
+    const hasReviewer = this.scheduler.reviewerRunsForProfile(name);
+    if (isBusy || hasReviewer) {
+      throw new HttpError(409, 'conflict', `Không thể xóa hồ sơ "${name}" đang chạy task`);
+    }
+
     try {
-      this.coreProfileService.deleteProfile(name);
+      this.coreProfileService.deleteProfile(name, purgeHome);
     } catch (error) {
       throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
     }
+    this.emailCheckCache.delete(name);
+    this.profileChecks.delete(name);
     this.scheduler.getEventBus().emit('profile.deleted', undefined, { name });
     return { ok: true };
+  }
+
+  renameProfile(name: string, raw: unknown): ProfileRow {
+    const profile = this.profileRepo.get(name);
+    if (!profile || profile.deletedAt) {
+      throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    }
+
+    const parsed = RenameProfileSchema.parse(raw);
+    const newName = parsed.newName;
+    if (newName === name) {
+      return apiProfile(profile);
+    }
+
+    const existing = this.profileRepo.get(newName);
+    if (existing) {
+      throw new HttpError(409, 'conflict', `Hồ sơ "${newName}" đã tồn tại`);
+    }
+
+    const runningMap = this.scheduler.getRunning();
+    const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);
+    const hasReviewer = this.scheduler.reviewerRunsForProfile(name);
+    if (isBusy || hasReviewer) {
+      throw new HttpError(409, 'conflict', `Không thể đổi tên hồ sơ "${name}" đang chạy task`);
+    }
+
+    let newHome: string | undefined;
+    let oldHomeToRollback: string | undefined;
+
+    if (profile.home && fs.existsSync(profile.home)) {
+      const managedRoots = [
+        path.resolve(this.config.agyHomesDir),
+        path.resolve(this.config.hubHome, 'codex-homes'),
+        path.resolve(this.config.hubHome, 'claude-homes'),
+      ];
+
+      let realHome: string;
+      try {
+        realHome = fs.realpathSync(profile.home);
+      } catch {
+        realHome = path.resolve(profile.home);
+      }
+
+      const matchedRoot = managedRoots.find((rootPath) => {
+        try {
+          const realRoot = fs.existsSync(rootPath) ? fs.realpathSync(rootPath) : rootPath;
+          if (realHome === realRoot) return false;
+          const rel = path.relative(realRoot, realHome);
+          return !!rel && rel !== '.' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+        } catch {
+          return false;
+        }
+      });
+
+      if (matchedRoot) {
+        const targetDir = path.join(path.dirname(profile.home), newName);
+        if (fs.existsSync(targetDir)) {
+          throw new HttpError(409, 'conflict', `Thư mục "${targetDir}" đã tồn tại trên đĩa`);
+        }
+        try {
+          fs.renameSync(profile.home, targetDir);
+          newHome = targetDir;
+          oldHomeToRollback = profile.home;
+        } catch (err) {
+          throw new HttpError(500, 'internal_error', `Không thể đổi tên thư mục: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    try {
+      this.profileRepo.rename(name, newName, newHome);
+    } catch (err) {
+      if (oldHomeToRollback && newHome) {
+        try {
+          fs.renameSync(newHome, oldHomeToRollback);
+        } catch {
+          // ignore rollback failure
+        }
+      }
+      throw err;
+    }
+
+    this.emailCheckCache.delete(name);
+    this.profileChecks.delete(name);
+
+    this.scheduler.getEventBus().emit('profile.updated', undefined, { name: newName, oldName: name });
+
+    return apiProfile(this.profileRepo.get(newName)!);
+  }
+
+  private refreshCodexEmail(profile: ProfileRow): string | null {
+    if (profile.engine !== 'codex') return null;
+    const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
+    if (!codexPath) return null;
+    const checkEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (profile.kind === 'isolated' && profile.home) {
+      checkEnv.CODEX_HOME = profile.home;
+    }
+    try {
+      const res = execFileSync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' });
+      const parsed = parseCodexLoginStatus(res);
+      if (parsed.email && parsed.email !== profile.email) {
+        this.profileRepo.upsert({ ...profile, email: parsed.email });
+        return parsed.email;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   startProfileCheck(name: string): { started: true } {
@@ -960,16 +1096,57 @@ export class AppService {
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
       } else {
-        const codexPath = CodexEngine.findCodexPath();
+        const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
         if (!codexPath) {
           message = 'Không tìm thấy Codex CLI';
           this.profileRepo.updateAuthState(profile.name, 'error', message, null);
         } else {
-          const result = await execFileAsync(codexPath, ['--version'], { timeout: 20_000 });
-          output = `${result.stdout}${result.stderr}`;
-          ok = true;
-          message = output.trim() || 'Codex CLI sẵn sàng';
-          this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+          const checkEnv: NodeJS.ProcessEnv = { ...process.env };
+          if (profile.kind === 'isolated' && profile.home) {
+            checkEnv.CODEX_HOME = profile.home;
+          }
+          try {
+            const result = await execFileAsync(codexPath, ['login', 'status'], {
+              env: checkEnv,
+              timeout: 20_000,
+            });
+            output = `${result.stdout}${result.stderr}`;
+            const parsed = parseCodexLoginStatus(output);
+            if (parsed.notLoggedIn) {
+              ok = false;
+              message = 'Chưa đăng nhập';
+              this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
+            } else {
+              ok = true;
+              message = parsed.plan ? `Đã đăng nhập (${parsed.plan})` : 'Đã đăng nhập';
+              if (parsed.email) {
+                email = parsed.email;
+                this.profileRepo.upsert({ ...profile, email: parsed.email });
+              }
+              this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+            }
+          } catch (execErr) {
+            const err = execErr as { stdout?: string; stderr?: string; message?: string };
+            output = `${err.stdout || ''}${err.stderr || ''}`;
+            const parsed = parseCodexLoginStatus(output);
+            if (parsed.notLoggedIn) {
+              ok = false;
+              message = 'Chưa đăng nhập';
+              this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
+            } else {
+              try {
+                const verResult = await execFileAsync(codexPath, ['--version'], { env: checkEnv, timeout: 5000 });
+                output = `${verResult.stdout}${verResult.stderr}`;
+                ok = true;
+                message = output.trim() || 'Codex CLI sẵn sàng';
+                this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+              } catch {
+                ok = false;
+                message = err.message || 'Kiểm tra thất bại';
+                this.profileRepo.updateAuthState(profile.name, 'error', message, null);
+              }
+            }
+          }
         }
       }
     } catch (error) {
@@ -1016,17 +1193,39 @@ export class AppService {
 
   updateProfile(name: string, raw: unknown): ProfileRow {
     const profile = this.profileRepo.get(name);
-    if (!profile) {
+    if (!profile || profile.deletedAt) {
       throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
     }
 
     const parsed = UpdateProfileSchema.parse(raw);
-    const enabledNum = typeof parsed.enabled === 'boolean' ? (parsed.enabled ? 1 : 0) : parsed.enabled;
+    const updates: Partial<Pick<ProfileRow, 'label' | 'notes' | 'priority' | 'enabled'>> = {};
 
-    const wasDisabled = profile.enabled === 0;
-    this.profileRepo.updateEnabled(name, enabledNum);
+    let wasDisabled = false;
+    let enabledNum: number | undefined;
+    if (parsed.enabled !== undefined) {
+      enabledNum = typeof parsed.enabled === 'boolean' ? (parsed.enabled ? 1 : 0) : parsed.enabled;
+      updates.enabled = enabledNum;
+      wasDisabled = profile.enabled === 0;
+    }
+    if (parsed.label !== undefined) {
+      updates.label = parsed.label;
+    }
+    if (parsed.notes !== undefined) {
+      updates.notes = parsed.notes;
+    }
+    if (parsed.priority !== undefined) {
+      updates.priority = parsed.priority;
+    }
 
-    this.scheduler.getEventBus().emit('profile.updated', undefined, { name, enabled: enabledNum });
+    this.profileRepo.update(name, updates);
+
+    this.scheduler.getEventBus().emit('profile.updated', undefined, {
+      name,
+      ...(enabledNum !== undefined ? { enabled: enabledNum } : {}),
+      ...(parsed.label !== undefined ? { label: parsed.label } : {}),
+      ...(parsed.notes !== undefined ? { notes: parsed.notes } : {}),
+      ...(parsed.priority !== undefined ? { priority: parsed.priority } : {}),
+    });
 
     // When re-enabling a profile, wake up waiting_quota tasks
     if (wasDisabled && enabledNum === 1) {
