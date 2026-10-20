@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ChildProcess } from 'node:child_process';
@@ -26,6 +27,7 @@ import {
   checkClaudePartialSupport,
   checkClaudeStreamJsonSupport,
   ensureChatMcpConfig,
+  chatMcpConfigPath,
   buildClaudeArgs,
   spawnClaude,
   killProcessGroup,
@@ -176,8 +178,17 @@ export class ChatService {
   }
 
   async requestPermission(input: { sessionId: string; messageId?: string | null; toolName: string; input: Record<string, unknown> }) {
+    const running = this.runningTurns.get(input.sessionId);
+    if (running) {
+      running.waitingPermission = true;
+      this.pauseTurnWatchdog(running);
+    }
     this.setSessionState(input.sessionId, 'waiting_permission');
     const result = await this.permissionBroker.request(input);
+    if (running && this.runningTurns.get(input.sessionId) === running && !running.cancelled) {
+      running.waitingPermission = false;
+      this.resetTurnWatchdog(running);
+    }
     const latest = this.permissionBroker.getLatest(input.sessionId, input.messageId, input.toolName);
     if (latest) this.emitEvent('chat.permission_resolved', { id: latest.id, sessionId: input.sessionId, decision: latest.status });
     if (this.chatSessionRepo.get(input.sessionId)?.state === 'waiting_permission') {
@@ -338,6 +349,7 @@ export class ChatService {
 
     // Remove from queue if any
     this.queue = this.queue.filter((t) => t.sessionId !== id);
+    this.removeChatMcpConfig(id);
     this.chatSessionRepo.delete(id);
     return { ok: true };
   }
@@ -540,7 +552,7 @@ export class ChatService {
       }
     }
 
-    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome);
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec);
     const supportsPartial = checkClaudePartialSupport(claudeBin);
 
     const session = this.chatSessionRepo.get(turn.sessionId);
@@ -822,7 +834,7 @@ export class ChatService {
     const proc = spawnClaude(claudeBin, buildClaudeArgs({
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
-      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome),
+      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
       model: session.model,
@@ -924,6 +936,10 @@ export class ChatService {
     if (proc.idleTimer) clearTimeout(proc.idleTimer);
     this.persistentProcesses.delete(proc.sessionId);
     if (proc.child.pid) killProcessGroup(proc.child.pid);
+  }
+
+  private removeChatMcpConfig(sessionId: string): void {
+    try { fs.rmSync(chatMcpConfigPath(this.config.hubHome, sessionId), { force: true }); } catch { /* best effort */ }
   }
 
   private handlePersistentClose(proc: PersistentProcess): void {

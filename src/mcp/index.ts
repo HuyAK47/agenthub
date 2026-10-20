@@ -149,13 +149,14 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     return token;
   };
 
-  async function callApi<T>(method: string, apiPath: string, body?: unknown): Promise<T> {
+  async function callApi<T>(method: string, apiPath: string, body?: unknown, timeoutMs?: number): Promise<T> {
     const token = getToken();
     const port = getPort();
     const url = `${getBaseUrl()}${apiPath}`;
 
     let res: Response;
     try {
+      const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
       res = await fetch(url, {
         method,
         headers: {
@@ -164,6 +165,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
       });
     } catch (err: unknown) {
       const errorObj = err as { code?: string; cause?: { code?: string }; message?: string } | undefined;
@@ -208,6 +210,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         if (!sessionId) return { content: [{ type: 'text', text: JSON.stringify({ behavior: 'deny', message: 'Thiếu phiên chat' }) }] };
         const result = await callApi<{ behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown>; message?: string }>(
           'POST', '/api/chat/permissions', { sessionId, tool_name: args.tool_name, input: args.input },
+          (Number(process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC) || 600) * 1000 + 30_000,
         );
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       } catch (err: unknown) {

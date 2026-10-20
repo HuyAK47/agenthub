@@ -1039,6 +1039,11 @@ export class ChatPermissionRepo {
       : this.db.prepare("SELECT * FROM chat_permissions WHERE status = 'pending' ORDER BY createdAt").all()) as ChatPermissionRow[];
   }
 
+  expirePending(message = 'AgentHub khởi động lại'): number {
+    const result = this.db.prepare("UPDATE chat_permissions SET status = 'deny', message = ?, resolvedAt = datetime('now') WHERE status = 'pending'").run(message);
+    return result.changes;
+  }
+
   getLatest(sessionId: string, messageId: string | null | undefined, toolName: string): ChatPermissionRow | undefined {
     return this.db.prepare('SELECT * FROM chat_permissions WHERE sessionId = ? AND messageId IS ? AND toolName = ? ORDER BY createdAt DESC LIMIT 1')
       .get(sessionId, messageId || null, toolName) as ChatPermissionRow | undefined;
