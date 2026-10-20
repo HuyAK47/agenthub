@@ -388,6 +388,18 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE profiles ADD COLUMN notes TEXT;
   ALTER TABLE profiles ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
   `,
+  // Migration 29: provider account type and legacy multiple-profile policy
+  `
+  ALTER TABLE profiles ADD COLUMN accountType TEXT NOT NULL DEFAULT 'personal'
+    CHECK(accountType IN ('personal', 'team', 'api'));
+  INSERT OR REPLACE INTO meta (key, value)
+    SELECT 'multiple_per_provider_legacy', 'true'
+    WHERE EXISTS (
+      SELECT 1 FROM profiles
+      WHERE accountType = 'personal' AND deletedAt IS NULL
+      GROUP BY engine HAVING COUNT(*) > 1
+    );
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -452,6 +464,7 @@ export interface ProfileRow {
   label?: string | null;
   notes?: string | null;
   priority?: number;
+  accountType?: 'personal' | 'team' | 'api';
   deletedAt?: string | null;
 }
 
@@ -605,8 +618,8 @@ export class ProfileRepo {
   upsert(row: Omit<ProfileRow, 'createdAt'>): void {
     this.db
       .prepare(
-        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt, accountType)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            engine=excluded.engine,
            kind=excluded.kind,
@@ -618,6 +631,7 @@ export class ProfileRepo {
            label=COALESCE(excluded.label, profiles.label),
            notes=COALESCE(excluded.notes, profiles.notes),
            priority=COALESCE(excluded.priority, profiles.priority),
+           accountType=COALESCE(excluded.accountType, profiles.accountType),
            deletedAt=COALESCE(excluded.deletedAt, profiles.deletedAt)`,
       )
       .run(
@@ -634,6 +648,7 @@ export class ProfileRepo {
         row.notes ?? null,
         row.priority ?? 0,
         row.deletedAt ?? null,
+        row.accountType ?? 'personal',
       );
   }
 
@@ -713,6 +728,11 @@ export class ProfileRepo {
     return this.db
       .prepare('SELECT * FROM profiles WHERE enabled = 1 AND deletedAt IS NULL ORDER BY name')
       .all() as ProfileRow[];
+  }
+
+  hasMetaFlag(key: string): boolean {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value?: string } | undefined;
+    return row?.value === 'true';
   }
 }
 
