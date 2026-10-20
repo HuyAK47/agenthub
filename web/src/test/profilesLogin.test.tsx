@@ -76,7 +76,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
     expect(screen.queryByText('old.expired@gmail.com')).not.toBeInTheDocument();
   });
 
-  it('nút Đăng nhập chỉ hiện với hồ sơ agy isolated', async () => {
+  it('nút Đăng nhập chỉ hiện với hồ sơ có thể đăng nhập (agy isolated, codex, claude)', async () => {
     const mockProfiles: Profile[] = [
       {
         name: 'g-iso',
@@ -116,13 +116,13 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
 
     await screen.findByText('g-iso');
 
-    // Button "Đăng nhập ngay" (inline) only for g-iso
+    // Button "Đăng nhập ngay" (inline) for g-iso and codex-iso (not for keyring)
     const loginNowBtns = screen.getAllByText('Đăng nhập ngay');
-    expect(loginNowBtns).toHaveLength(1);
+    expect(loginNowBtns).toHaveLength(2);
 
-    // Button "Đăng nhập" (in Action column) only for g-iso
+    // Button "Đăng nhập" (in Action column) for g-iso and codex-iso
     const actionLoginBtns = screen.getAllByRole('button', { name: /^Đăng nhập$/ });
-    expect(actionLoginBtns).toHaveLength(1);
+    expect(actionLoginBtns).toHaveLength(2);
   });
 
   it('giữ hành vi cũ nếu loggedIn không có trong response (server cũ)', async () => {
