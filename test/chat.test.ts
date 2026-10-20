@@ -1263,6 +1263,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
 
     await vi.waitFor(() => {
       expect(firstDone).toBe(true);
+      expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
     }, { timeout: 10_000 });
 
     let sessRow = ctx.chatSessionRepo.get(session.id);
@@ -1276,12 +1277,13 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       secondDone = true;
     });
 
-    await server.inject({
+    const res2 = await server.inject({
       method: 'POST',
       url: `/api/chat/sessions/${session.id}/messages`,
       headers: authHeaders(),
       payload: { text: 'Turn 2 usage:220:60' },
     });
+    expect(res2.statusCode).toBe(202);
 
     await vi.waitFor(() => {
       expect(secondDone).toBe(true);
@@ -1369,6 +1371,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
 
     await vi.waitFor(() => {
       expect(done).toBe(true);
+      expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
     }, { timeout: 10_000 });
 
     const sessRow = ctx.chatSessionRepo.get(session.id);
@@ -1381,12 +1384,13 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       secondDone = true;
     });
 
-    await server.inject({
+    const res2 = await server.inject({
       method: 'POST',
       url: `/api/chat/sessions/${session.id}/messages`,
       headers: authHeaders(),
       payload: { text: 'Tin nhắn thứ 2 ngắn gọn' },
     });
+    expect(res2.statusCode).toBe(202);
 
     await vi.waitFor(() => {
       expect(secondDone).toBe(true);
