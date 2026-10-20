@@ -7,6 +7,8 @@ import { ClaudeSessionScanner, isClaudeQuotaLimited } from '../src/claude-sessio
 import { ClaudeFailoverState } from '../src/chat/failover.js';
 import { attributeTurn, taskRefsFromToolInput } from '../src/claude-sessions/attribution.js';
 
+const fakeClaudeBin = path.resolve(__dirname, 'fixtures', 'fake-claude.mjs');
+
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
@@ -38,6 +40,54 @@ function addProjectAndTask(db: ReturnType<typeof openDatabase>, projectDir: stri
 }
 
 describe('Claude session privacy and quota handling', () => {
+  it('auto-resumes only a stable stopped session into a real chat session', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
+    const hitAt = new Date(Date.now() - 20 * 60_000);
+    const file = path.join(transcriptDir, 'session.jsonl');
+    fs.writeFileSync(file, `${JSON.stringify({
+      type: 'assistant', sessionId: 'session', cwd: projectDir, timestamp: hitAt.toISOString(),
+      quotaLimits: { status: 'rejected', resetsAt: Math.floor(hitAt.getTime() / 1000) + 60, rateLimitType: 'five_hour' },
+      message: { id: 'limited', model: 'claude-sonnet', usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: 'text', text: 'stopped' }] },
+    })}\n`);
+    fs.utimesSync(file, hitAt, hitAt);
+    const scanner = new ClaudeSessionScanner(db, {
+      dir: path.join(root, 'projects'),
+      autoResume: { enabled: true, prompt: 'resume safely', claudeBin: fakeClaudeBin, profileName: 'claude-test' },
+    });
+    await scanner.scan();
+    db.prepare('UPDATE claude_sessions SET autoResumeEnabled=1 WHERE sessionId=?').run('session');
+    await scanner.scan();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const chat = db.prepare("SELECT id,projectId,claudeSessionId,title,state FROM chat_sessions WHERE title LIKE 'Tự tiếp tục:%'").get() as { id: string; projectId: string; claudeSessionId: string; title: string; state: string };
+    expect(chat).toMatchObject({ projectId: 'p', claudeSessionId: 'session', state: 'idle' });
+    expect(chat.title).toContain('session');
+    expect(db.prepare('SELECT role,content FROM chat_messages WHERE sessionId=?').all(chat.id)).toEqual(expect.arrayContaining([
+      { role: 'user', content: 'resume safely' },
+      expect.objectContaining({ role: 'assistant' }),
+    ]));
+    expect(db.prepare('SELECT limitResetAt FROM claude_sessions WHERE sessionId=?').get('session')).toEqual({ limitResetAt: null });
+    db.close();
+  });
+
+  it('does not auto-resume when transcript cwd is missing', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', 'encoded'); fs.mkdirSync(transcriptDir, { recursive: true });
+    const db = openDatabase(path.join(root, 'hub.db')); const file = path.join(transcriptDir, 'session.jsonl');
+    const hitAt = new Date(Date.now() - 20 * 60_000);
+    fs.writeFileSync(file, `${JSON.stringify({ type: 'assistant', sessionId: 'session', timestamp: hitAt.toISOString(), quotaLimits: { status: 'rejected', resetsAt: Math.floor(hitAt.getTime() / 1000) - 60 }, message: { id: 'limited', content: [] } })}\n`);
+    fs.utimesSync(file, hitAt, hitAt);
+    const scanner = new ClaudeSessionScanner(db, { dir: path.join(root, 'projects'), autoResume: { enabled: true, prompt: 'resume', claudeBin: fakeClaudeBin } });
+    await scanner.scan();
+    db.prepare('UPDATE claude_sessions SET autoResumeEnabled=1 WHERE sessionId=?').run('session');
+    await scanner.scan();
+    expect(db.prepare('SELECT COUNT(*) count FROM chat_sessions').get()).toEqual({ count: 0 });
+    db.close();
+  });
+
   it('deduplicates message ids and reads only appended transcript bytes', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
     const transcriptDir = path.join(root, 'projects', 'encoded'); fs.mkdirSync(transcriptDir, { recursive: true });

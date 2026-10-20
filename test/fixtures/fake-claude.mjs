@@ -91,6 +91,13 @@ async function main() {
     return;
   }
 
+  if (prompt.includes('quota-once') && process.env.FAKE_QUOTA_ONCE_FILE && !fs.existsSync(process.env.FAKE_QUOTA_ONCE_FILE)) {
+    fs.writeFileSync(process.env.FAKE_QUOTA_ONCE_FILE, 'hit\n');
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-quota-once' }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-quota-once', is_error: true, result: 'Usage limit reached. Try again in 1m' }));
+    return;
+  }
+
   if (prompt.includes('resume-fail') && resumeIdx >= 0) {
     console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-old-123' }));
     console.log(JSON.stringify({ type: 'result', session_id: 'sess-old-123', is_error: true, result: 'Session not found for resume' }));
