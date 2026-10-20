@@ -9,7 +9,6 @@ import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
 import {
   TelegramBotService,
-  TelegramUpdate,
   readTelegramToken,
   isProjectMergeEnabled,
 } from '../src/telegram.js';
