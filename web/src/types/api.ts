@@ -23,7 +23,13 @@ export interface QuotaMark {
   until: number; // epoch seconds
   reason?: string;
 }
-export interface QuotaUsageItem { grp: string; window: '5h' | 'week'; remainingPct: number; resetAt: number; fetchedAt: number; }
+export interface QuotaUsageItem {
+  grp: string;
+  window: '5h' | 'week';
+  remainingPct: number;
+  resetAt: number;
+  fetchedAt: number;
+}
 
 export interface Profile {
   name: string;
@@ -48,6 +54,10 @@ export interface Profile {
   authMessage?: string | null;
   verifyUrl?: string | null;
   claudePlan?: string;
+  label?: string | null;
+  notes?: string | null;
+  priority?: number;
+  currentTask?: { id?: string; title?: string } | null;
 }
 
 export interface ProjectHooks {
@@ -60,6 +70,8 @@ export interface ProjectMerge {
   checks: string[];
   timeoutSec: number;
 }
+export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
+export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
 
 export interface Project {
   id: string;
@@ -71,6 +83,7 @@ export interface Project {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
+  review?: ProjectReview | string | null;
   createdAt?: string;
 }
 
@@ -131,6 +144,8 @@ export interface Task {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  reviewStep?: number;
+  reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
   currentRun?: {
@@ -145,7 +160,12 @@ export interface Task {
     profileName?: string;
   } | null;
   checks?: CheckResult[];
-  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
 }
 
 export interface CheckResult {
@@ -157,13 +177,20 @@ export interface CheckResult {
 }
 
 export interface TaskDetail extends Task {
+  reviewChain?: ReviewChainStep[];
+  reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
   doneContent?: string | null;
   blockedContent?: string | null;
   commits?: string[] | null;
   gitCommits?: string[] | null;
-  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
   derivedTasks?: Task[];
 }
 
@@ -411,7 +438,13 @@ export interface SystemConfig {
   chat?: ChatConfig;
   reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
-    fallback: Array<{ type: 'profile'; profile?: string } | { type: 'model'; model: string } | { type: 'apiKey'; dailyCapUSD: number } | { type: 'engine'; engine: 'codex' } | { type: 'wait' }>;
+    fallback: Array<
+      | { type: 'profile'; profile?: string }
+      | { type: 'model'; model: string }
+      | { type: 'apiKey'; dailyCapUSD: number }
+      | { type: 'engine'; engine: 'codex' }
+      | { type: 'wait' }
+    >;
   };
   notifications?: {
     desktop: boolean;
@@ -519,6 +552,7 @@ export interface CreateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
 }
 
 export interface UpdateProjectInput {
@@ -529,11 +563,12 @@ export interface UpdateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
 }
 
 export interface CreateProfileInput {
   name: string;
-  engine?: 'agy' | 'claude' | 'codex';
+  engine?: 'agy' | 'codex' | 'claude';
   accountType?: ProfileAccountType;
 }
 
