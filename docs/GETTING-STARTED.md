@@ -4,7 +4,7 @@ Hướng dẫn cho người mới: cài AgentHub, kết nối tài khoản AI v�
 
 AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các worker AI (Gemini qua Antigravity CLI, Codex CLI). Mỗi task chạy trong một git worktree riêng. Hub theo dõi quota, tải máy, dung lượng ổ đĩa và tự chạy kiểm tra (lint, test…) khi worker làm xong. **Claude Code** đóng vai trò "bộ não": lên kế hoạch, giao việc, review và merge.
 
-> **Hạn chế hiện tại (đọc trước):** khung **Chat với Claude trên dashboard chưa dùng được ổn định**. Để điều khiển hub (giao việc, review, merge), bạn cần **mở Claude Code trong VS Code** (hoặc Claude Code trên terminal) và dùng các công cụ MCP `hub_*` (xem mục 6). Dashboard web vẫn dùng tốt để **xem** tiến độ, log, quota, tải máy và để tạo/huỷ/chạy lại task thủ công.
+> **Các phương thức điều khiển hub:** Bạn có thể điều khiển AgentHub (giao việc, review, quản lý task) thông qua **Chat với Claude trực tiếp trên Web Dashboard**, **điều khiển từ xa qua Telegram Bot** trên điện thoại, hoặc **dùng Claude Code trong VS Code** qua giao thức MCP (xem mục 7 và 8). Dashboard web cung cấp đầy đủ công cụ theo dõi tiến độ, log thời gian thực, quota tài khoản, tải máy và quản lý task.
 
 ---
 
@@ -64,13 +64,12 @@ agenthub open                     # mở http://127.0.0.1:7700/#token=...
   `ssh -L 7700:127.0.0.1:7700 user@may-chay-hub` rồi mở `http://127.0.0.1:7700/#token=...` trên máy của bạn.
 - Cập nhật phiên bản mới: `git pull && npm ci && npm --prefix web ci && npm run build && npm run build:web && systemctl --user restart agenthub`.
 
-## 4. Kết nối tài khoản worker
+## 4. Kết nối tài khoản worker (Gemini, Codex)
 
 Mở **Tài khoản (Profiles)**, bấm **Thêm tài khoản**, chọn nhà cung cấp và nhập tên. Dashboard mở trình hướng dẫn cạnh terminal; mỗi bước sẽ được đánh dấu theo output terminal.
 
 - **Antigravity (Gemini):** Hub chọn `Google OAuth` trong menu `agy` (nếu menu còn hiện, bấm Enter). Bấm **Mở trang đăng nhập Google**, đăng nhập đúng tài khoản muốn thêm. Khi Google chuyển tới `antigravity.google`, copy mã xác thực, dán vào ô mã trên dashboard và bấm **Gửi**. Chờ thông báo đăng nhập thành công; Hub tự đọc email. Mã chỉ có hiệu lực khoảng 60 giây, nên bấm **Đăng nhập lại** nếu hết hạn. Dùng tài khoản Google khác các hồ sơ hiện có để có quota riêng.
 - **Codex (OpenAI):** Hub chạy `codex login --device-auth`. Mở link, đăng nhập ChatGPT, copy mã thiết bị hiển thị trên dashboard và dán vào ô mã; chờ xác nhận.
-- **Claude:** Hub gửi `/login`. Chọn loại gói Claude, mở link, đăng nhập, copy mã rồi dán vào ô mã trên dashboard.
 
 Trạng thái hồ sơ gồm **Đã đăng nhập**, **Chưa đăng nhập**, **Cần xác minh** và **Lỗi**. Thẻ cũng hiển thị quota 5 giờ/tuần, task đang chạy, cảnh báo trùng email và menu **Kiểm tra**, **Sửa**, **Đổi tên**, **Xoá**. Xoá có thể giữ lại hoặc xoá cả thư mục dữ liệu đăng nhập.
 
@@ -80,7 +79,44 @@ Nếu không thấy link, kiểm tra terminal đầy đủ và dùng **Kết n�
 
 Mặc định AgentHub chỉ cho một hồ sơ **personal** trên mỗi engine để tránh khuyến khích xoay vòng nhiều tài khoản cá nhân nhằm vượt giới hạn. Hồ sơ **API key** và **Team** vẫn được phép thêm. Nếu bật `multiplePerProvider`, dashboard sẽ cảnh báo và bạn chịu trách nhiệm tuân thủ điều khoản của nhà cung cấp; nhiều gói cá nhân cấm chia sẻ hoặc vượt giới hạn. Khi dùng chung, nên ưu tiên API key hoặc gói Team thay vì nhiều gói cá nhân.
 
-## 5. Đăng ký dự án
+## 5. Đăng nhập tài khoản Claude
+
+Claude đóng vai trò là "bộ não điều phối" (Brain) của AgentHub: tiếp nhận yêu cầu từ bạn, chia nhỏ thành các task độc lập, giao việc cho các worker AI (Gemini, Codex), theo dõi tiến độ và review nghiệm thu mã nguồn.
+
+### Thư mục lưu trữ biệt lập
+Mỗi hồ sơ Claude được lưu trữ độc lập tại:
+```
+~/.agenthub/claude-homes/<tên_hồ_sơ>/
+```
+Thư mục được bảo vệ tự động với quyền `0700` (chỉ user hiện tại có quyền truy cập), chứa file cấu hình `.claude.json` và chứng thực `.credentials.json`.
+
+### Cách tạo và đăng nhập hồ sơ Claude
+
+1. **Qua Web Dashboard (khuyến nghị)**:
+   - Vào mục **Tài khoản (Profiles)**, bấm **Thêm tài khoản**.
+   - Chọn nhà cung cấp **Claude**, nhập tên hồ sơ (ví dụ: `claude-main` hoặc `claude-work`) và chọn loại tài khoản (`personal`, `team`, hoặc `api_key`).
+   - Bấm **Tạo & Đăng nhập**. Dashboard sẽ mở cửa sổ terminal tương tác PTY và tự động gửi lệnh `/login`.
+   - Chọn loại gói tài khoản Claude (Claude Pro / Team / Enterprise).
+   - Nhấp vào đường link đăng nhập được cung cấp để mở trình duyệt, đăng nhập vào tài khoản Anthropic của bạn.
+   - Sao chép mã ủy quyền xác thực (OAuth authorization code), dán vào ô nhập trên dashboard và bấm **Gửi**.
+   - Chờ terminal hoàn tất xác thực; Hub sẽ tự động đọc email tài khoản và cập nhật trạng thái **Đã đăng nhập**.
+
+2. **Qua CLI**:
+   ```bash
+   # Tạo hồ sơ Claude mới
+   agenthub profile add claude-main --engine claude
+
+   # Mở phiên đăng nhập tương tác
+   agenthub profile login claude-main
+   ```
+
+### Nhận diện trạng thái tự động
+Hệ thống tự động kiểm tra định kỳ tính hợp lệ của token đăng nhập. Thẻ hồ sơ Claude trên trang **Profiles** hiển thị:
+- **Đã đăng nhập**: Hiển thị địa chỉ email gắn với tài khoản.
+- **Chưa đăng nhập**: Phiên đăng nhập hết hạn hoặc chưa hoàn tất, kèm nút **Đăng nhập** nhanh.
+- **Thao tác quản lý**: Hỗ trợ **Kiểm tra** kết nối, **Đổi tên** hồ sơ, hoặc **Xoá** hồ sơ (có tùy chọn giữ lại hoặc xóa sạch thư mục dữ liệu).
+
+## 6. Đăng ký dự án
 
 ```bash
 agenthub project add <tên> /đường/dẫn/tới/repo
@@ -95,11 +131,36 @@ Sau đó vào trang **Projects** để chỉnh:
 
 Trong repo dự án nên có file `AGENTS.md` mô tả quy ước (cách chạy, cách test, những gì không được làm). Worker đọc file này trước khi làm việc.
 
-## 6. Điều khiển hub bằng Claude Code trong VS Code (cách khuyến nghị)
+## 7. Điều khiển hub: Web Dashboard, Telegram và Claude Code trong VS Code
 
-Vì chat trên dashboard chưa ổn định, hãy điều khiển qua Claude Code:
+Bạn có thể tương tác và điều khiển Claude theo 3 phương thức linh hoạt:
 
-1. Đăng ký MCP server của hub với Claude Code (một lần):
+### 7.1 Trò chuyện trực tiếp trên Web Dashboard
+
+Khung chat trên Web Dashboard cho phép bạn trao đổi trực tiếp với Claude Code mà không cần rời trình duyệt:
+
+1. Nhấp vào mục **Trò chuyện** (Chat) trên thanh điều hướng hoặc biểu tượng Brain.
+2. **Chọn Model & Chế độ**:
+   - Model: `sonnet` (suy luận sâu, phù hợp điều phối task phức tạp) hoặc `haiku` (phản hồi nhanh, tiết kiệm quota).
+   - Chế độ: **An toàn (`safe`)** (mặc định — chỉ dùng MCP an toàn và các lệnh đọc kiểm tra) hoặc **Đầy đủ (`full`)** (toàn quyền thực thi, cần bật `chat.allowFullMode: true` trong cấu hình).
+3. **Quản lý phiên hội thoại**:
+   - Danh sách phiên bên cạnh hỗ trợ tìm kiếm, ghim phiên quan trọng lên đầu, đổi tên, lưu trữ và xoá có hộp thoại xác nhận.
+   - Nút **Xuất Markdown**: tải toàn bộ lịch sử trao đổi của phiên ra file `.md`.
+   - Danh sách tin nhắn ảo hóa (virtualized) với cơ chế cuộn tải dần lịch sử (`before=`) mượt mà.
+4. **Duyệt quyền công cụ (Tool Permissions)**:
+   - Khi Claude cần chạy công cụ hoặc lệnh ngoài danh mục an toàn, hộp thoại xin quyền tương tác sẽ xuất hiện trực tiếp trong khung chat với 3 lựa chọn: **Cho phép**, **Luôn cho phép** (ghi nhớ cho lệnh tương tự trong phiên) hoặc **Từ chối**.
+   - Watchdog tự động tạm dừng đếm thời gian im lặng khi đang chờ bạn đưa ra quyết định, không lo bị timeout.
+5. **Nén ngữ cảnh & Mở phiên tóm tắt**:
+   - Khung **ContextMeter** hiển thị trực quan số token bối cảnh hiện tại.
+   - Nút **Nén ngữ cảnh** (`/compact`): yêu cầu Claude tinh gọn ngữ cảnh để tiếp tục phiên dài.
+   - Nút **Mở phiên mới kèm tóm tắt** (`/fork-summary`): Claude tóm tắt kết quả phiên hiện tại và khởi tạo một phiên chat mới sạch sẽ với bản tóm tắt làm bối cảnh đầu vào.
+   - Tự động nén: Hệ thống tự động kích hoạt nén khi bối cảnh vượt ngưỡng `autoCompactPercent` (mặc định 85% của 200.000 tokens).
+
+### 7.2 Điều khiển qua Claude Code trong VS Code (MCP)
+
+Nếu bạn quen làm việc trong VS Code hoặc terminal:
+
+1. Đăng ký MCP server của hub với Claude Code (chỉ cần chạy một lần):
    ```bash
    agenthub mcp-install            # = claude mcp add --scope user agenthub -- node .../dist/cli.js mcp
    ```
@@ -124,7 +185,131 @@ Câu lệnh mẫu:
 
 Không có Claude Code thì vẫn tạo task tay được: trang **Tasks → Tạo task** trên dashboard, hoặc `agenthub task add`.
 
-## 7. Vòng đời một task
+## 8. Điều khiển từ xa qua Telegram
+
+AgentHub tích hợp bot Telegram cho phép bạn giám sát tiến độ, duyệt code và trò chuyện với Claude từ điện thoại ở bất kỳ đâu.
+
+### Bước 1: Tạo bot với @BotFather
+1. Mở ứng dụng Telegram, tìm kiếm tài khoản chính thức **`@BotFather`**.
+2. Gửi lệnh `/newbot`.
+3. Nhập tên hiển thị cho bot (ví dụ: `MyAgentHubBot`).
+4. Nhập username cho bot (phải kết thúc bằng chữ `bot`, ví dụ: `my_agenthub_remote_bot`).
+5. `@BotFather` sẽ gửi lại mã HTTP API token (dạng: `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ`).
+
+### Bước 2: Cấu hình Token vào AgentHub
+- **Cách 1: Qua Web Dashboard**:
+  Mở trang **Settings**, cuộn đến mục **Telegram Bot**, dán Bot Token vào ô nhập và bấm **Lưu token**.
+- **Cách 2: Lưu vào file**:
+  ```bash
+  mkdir -p ~/.agenthub/secrets
+  echo "YOUR_BOT_TOKEN_HERE" > ~/.agenthub/secrets/telegram.token
+  chmod 0600 ~/.agenthub/secrets/telegram.token
+  ```
+- **Khai báo cấu hình trong `~/.agenthub/config.json`**:
+  ```json
+  {
+    "telegram": {
+      "enabled": true,
+      "botTokenFile": "~/.agenthub/secrets/telegram.token",
+      "allowedChatIds": [],
+      "notify": {
+        "reviewReady": true,
+        "failed": true,
+        "blocked": true,
+        "quota": true,
+        "fallback": true
+      }
+    }
+  }
+  ```
+
+### Bước 3: Ghép đôi thiết bị (Pairing flow)
+Để đảm bảo an toàn tuyệt đối, bot chỉ phản hồi các cuộc trò chuyện đã ghép đôi thành công:
+1. Vào trang **Settings** trên Web Dashboard, tìm mục Telegram và bấm **Tạo mã ghép đôi** (hoặc gọi API `POST /api/telegram/pair-code`).
+2. Hệ thống tạo một mã xác thực 6 chữ số ngẫu nhiên (hiệu lực trong 5 phút).
+3. Mở cuộc trò chuyện với bot trên Telegram, bấm **Start** hoặc gửi trực tiếp mã 6 số (hoặc cú pháp `/start <mã>` / `/pair <mã>`).
+4. Bot phản hồi thông báo ghép đôi thành công và lưu `chatId` của bạn vào danh sách cho phép.
+
+### Danh sách lệnh Telegram
+
+| Lệnh | Mô tả |
+|---|---|
+| `/status` | Xem tổng quan trạng thái hệ thống: task đang chạy/chờ, CPU/RAM, ổ đĩa, quota các tài khoản |
+| `/tasks [trạng thái]` | Liệt kê danh sách task (ví dụ: `/tasks review`, `/tasks running`, `/tasks failed`) |
+| `/task <id>` | Xem chi tiết task: đề bài, kết quả kiểm tra autocheck, link xem trên dashboard |
+| `/log <id>` | Xem 30 dòng log thực thi mới nhất của task |
+| `/approve <id>` | Duyệt task hoàn thành (tự động merge nếu dự án đã cấu hình worktree merge) |
+| `/reject <id> <nhận xét>` | Trả về task kèm nhận xét yêu cầu worker chỉnh sửa |
+| `/cancel <id>` | Hủy task (hiển thị nút inline xác nhận an toàn trước khi hủy) |
+| `/retry <id>` | Chạy lại task bị lỗi (`failed`) hoặc bị chặn (`blocked`) |
+| `/pause` | Tạm dừng giao task mới cho worker (task đang chạy vẫn tiếp tục) |
+| `/resume` | Tiếp tục giao task mới cho worker |
+| `/new` | Khởi tạo phiên trò chuyện mới với Claude |
+| `/stop` | Dừng lượt phản hồi hiện tại của Claude |
+| `/help` | Hiển thị hướng dẫn và danh sách lệnh |
+
+*Ghi chú: `<id>` có thể là `slug` ngắn (nếu không trùng) hoặc dạng đầy đủ `project/slug`.*
+
+### Chat với Claude & Duyệt quyền bằng nút bấm
+- **Chat tự nhiên**: Mọi tin nhắn văn bản thông thường (không bắt đầu bằng dấu `/`) gửi đến bot sẽ được chuyển tiếp trực tiếp vào phiên chat Claude (`telegram:<chatId>`). Bạn có thể giao việc, nhờ giải thích code hay yêu cầu điều phối task ngay trên điện thoại.
+- **Duyệt quyền bằng nút bấm**: Khi Claude cần thực thi lệnh kiểm tra hoặc chạy công cụ, bot tự động gửi tin nhắn xin quyền kèm 3 nút inline: **Cho phép**, **Luôn cho phép** và **Từ chối**. Bạn chỉ cần bấm nút trực tiếp trên Telegram.
+- **Nút thao tác nhanh**: Khi có thông báo task hoàn thành kiểm tra (`reviewReady`), tin nhắn Telegram đi kèm các nút inline: **Duyệt**, **Trả về** và **Xem log**.
+
+### Bảo mật của Telegram Bot
+- **Chỉ chat đã ghép đôi mới có quyền điều khiển**: Mọi tin nhắn từ người dùng lạ chưa ghép đôi đều bị từ chối (`🚫 Bạn chưa được phép điều khiển bot này`) và ghi log cảnh báo.
+- **Token lưu với quyền 0600**: File token bot chỉ cho phép user hiện tại đọc/ghi (`chmod 0600`).
+- **Che giấu token an toàn**: Token không bao giờ lưu trong cơ sở dữ liệu `hub.db`, không xuất hiện trong log và không trả về qua API (chỉ báo `{ configured: true }`).
+
+## 9. Chuỗi dự phòng khi hết token (Claude Fallback Chain)
+
+Khi tài khoản Claude chính gặp giới hạn tốc độ (rate limit / HTTP 429) hoặc hết hạn mức sử dụng (usage limits), AgentHub không làm gián đoạn luồng làm việc mà tự động kích hoạt **Chuỗi dự phòng (Fallback Chain)** được cấu hình trong `brain.fallback`.
+
+### Các bước dự phòng hỗ trợ
+
+1. **Đổi hồ sơ Claude (`profile`)**:
+   `{ "type": "profile", "profile": "claude-team" }`  
+   Chuyển sang một hồ sơ Claude dự phòng khác đã đăng nhập (ví dụ tài khoản Team hoặc tài khoản phụ). Nếu bỏ trống `profile`, hub sẽ tự động tìm hồ sơ Claude bất kỳ đang ở trạng thái đã đăng nhập và kích hoạt.
+
+2. **Hạ cấp model (`model`)**:
+   `{ "type": "model", "model": "haiku" }`  
+   Tạm thời hạ từ `sonnet` xuống model nhẹ hơn như `haiku` để tiếp tục điều phối với mức tiêu tốn quota thấp hơn.
+
+3. **Anthropic API Key (`apiKey`) có trần chi phí**:
+   `{ "type": "apiKey", "dailyCapUSD": 5 }`  
+   Tạm thời chuyển sang dùng API key trả tiền trực tiếp cho Anthropic khi hết hạn mức thuê bao.
+
+   > [!WARNING] **Cảnh báo chi phí API key**
+   > Khác với các gói thuê bao cố định tháng (Claude Pro / Team), Anthropic API key tính phí trực tiếp trên từng token gửi nhận (pay-as-you-go). Nếu không kiểm soát, chi phí có thể tăng nhanh khi task nặng.
+   > AgentHub bảo vệ bạn bằng cách **bắt buộc thiết lập trần chi phí mỗi ngày** (`dailyCapUSD`, ví dụ tối đa 5 USD/ngày). Khi chi phí trong ngày đạt ngưỡng trần, hệ thống tự động khóa bước API key và chuyển tiếp sang bước dự phòng tiếp theo trong chuỗi.
+   > Token API key được lưu biệt lập tại `~/.agenthub/secrets/anthropic.key` với quyền bảo mật nghiêm ngặt `0600`, không bao giờ hiển thị trên API hay giao diện web (chỉ hiển thị cờ `apiKeyConfigured: true`).
+
+4. **Codex CLI reviewer / engine (`engine`)**:
+   `{ "type": "engine", "engine": "codex" }`  
+   Kích hoạt OpenAI Codex CLI (ở chế độ chỉ đọc `readOnly: true`) để đảm nhận vai trò review code hoặc điều phối dự phòng.
+
+5. **Chờ mở khóa hạn mức (`wait`)**:
+   `{ "type": "wait" }`  
+   Tạm dừng hệ thống và chờ đến thời điểm mở khóa quota tiếp theo của Claude (`resetAt`).
+
+### Ví dụ cấu hình trong `~/.agenthub/config.json`
+
+```json
+{
+  "brain": {
+    "fallback": [
+      { "type": "profile", "profile": "claude-team" },
+      { "type": "model", "model": "haiku" },
+      { "type": "apiKey", "dailyCapUSD": 5 },
+      { "type": "engine", "engine": "codex" },
+      { "type": "wait" }
+    ]
+  }
+}
+```
+
+Bạn cũng có thể xem trạng thái bước fallback hiện tại, chi phí tiêu thụ trong ngày và cấu hình trực quan trên trang **Settings** của Web Dashboard.
+
+## 10. Vòng đời một task
 
 `queued` → `running` (worker làm trong worktree riêng, commit theo bước) → worker tạo `.agenthub/DONE` (hoặc `BLOCKED`) → `checking` (hub chạy kiểm tra tự động) → `review` → Claude/bạn **duyệt & merge** hoặc **trả về** (task chạy lại với nhận xét) → `done`.
 
@@ -135,7 +320,7 @@ Nhãn chờ trên dashboard:
 - **Chờ ổ đĩa**: ổ worktree hoặc ổ Docker dưới ngưỡng.
 - **Chờ quota model**: tài khoản hết lượt.
 
-## 8. Cấu hình bảo vệ máy (khuyến nghị bật)
+## 11. Cấu hình bảo vệ máy (khuyến nghị bật)
 
 Trang **Settings** (hoặc `PUT /api/config`):
 
@@ -157,22 +342,23 @@ Trang **Settings** (hoặc `PUT /api/config`):
 
 Worker và lệnh kiểm tra chạy với ưu tiên thấp (`nice`/`ionice` trên Linux, chỉ `nice` trên macOS), nên IDE và trình duyệt của bạn vẫn mượt.
 
-## 9. Hạn chế và lưu ý
+## 12. Hạn chế và lưu ý
 
-- **Chat trên dashboard chưa dùng được ổn định.** Hãy điều khiển qua Claude Code trong VS Code (mục 6).
-- **Chế độ dự phòng:** khi Claude hết quota, reviewer Codex có thể tự duyệt task. Duyệt của Codex **không merge**, nên sau đó cần kiểm tra và merge các task đó.
+- **Quyền hạn khi chat**: Khung chat mặc định chạy ở chế độ An toàn (`safe`). Khi Claude cần chạy lệnh công cụ, bạn có thể bấm phê duyệt trực tiếp trên giao diện chat hoặc qua Telegram. Nếu muốn cấp quyền rộng hơn, bạn có thể bật `chat.allowFullMode: true` trong cấu hình.
+- **Chế độ dự phòng:** Khi Claude hết quota, chuỗi dự phòng `brain.fallback` tự động kích hoạt. Nếu chuyển sang reviewer Codex, các task được duyệt bởi Codex **không tự động merge**, bạn cần kiểm tra lại và thực hiện merge các task đó.
 - Chỉ hỗ trợ chạy cục bộ, một người dùng. Dashboard không có phân quyền nhiều người.
 - Worker được chạy với quyền cao trong worktree. Chỉ giao việc cho repo bạn tin tưởng, không đưa secret thật vào `.env` mẫu.
 - **Không cho worker chạy `docker build/pull`** trên máy có ổ Docker gần đầy: đầy ổ có thể làm sập Postgres của các dự án khác.
 
-## 10. Xử lý sự cố nhanh
+## 13. Xử lý sự cố nhanh
 
 | Hiện tượng | Cách xử lý |
 |---|---|
 | Dashboard trắng/không vào được | `systemctl --user status agenthub`, xem `~/.agenthub/logs/daemon.out` |
-| Task đứng ở "chờ" lâu | Xem nhãn lý do chờ (mục 7). Kiểm tra dung lượng đĩa, tải máy, quota trên Dashboard |
+| Task đứng ở "chờ" lâu | Xem nhãn lý do chờ (mục 10). Kiểm tra dung lượng đĩa, tải máy, quota trên Dashboard |
 | Máy chậm | Giảm `maxParallel`. Kiểm tra tiến trình mồ côi trên Dashboard (nút "Dọn") |
 | Worker báo thiếu thư viện | Hub tự chạy `pnpm/npm install` khi tạo worktree. Nếu lỗi, xem log run của task |
 | Task chạy lặp, không commit | Huỷ, rồi tạo lại với phạm vi hẹp hơn và yêu cầu commit sau mỗi bước |
+| Telegram bot không phản hồi | Kiểm tra token trong `secrets/telegram.token` và xác thực ghép đôi trên Dashboard |
 
 Xem thêm: [USAGE.md](USAGE.md) (quy trình chi tiết), [FEATURES.md](FEATURES.md) (danh sách tính năng), [PLAN.md](PLAN.md) (kiến trúc).
