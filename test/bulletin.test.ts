@@ -286,7 +286,6 @@ describe('Context Bulletin & Overlap Coordination', () => {
 
       process.env.AGENTHUB_TASK_ID = 'proj/task-1';
       const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const consoleErrSpy = vi.spyOn(console, 'error');
 
       await cmdNote(testConfig, ['Thêm route mới /api/v2/notes']);
 
@@ -401,7 +400,7 @@ describe('Context Bulletin & Overlap Coordination', () => {
       // Verify event was emitted
       expect(overlapEvents).toHaveLength(1);
       expect(overlapEvents[0].taskId).toBe('proj/task-1');
-      expect((overlapEvents[0].payload as any).file).toBe('shared.ts');
+      expect((overlapEvents[0].payload as { file?: string }).file).toBe('shared.ts');
 
       // Verify desktop notification was sent by NotificationService
       expect(notifierExecCalls.length).toBeGreaterThan(0);
@@ -441,14 +440,14 @@ describe('Context Bulletin & Overlap Coordination', () => {
     });
 
     it('generates bulletin with notes from other tasks and related overlaps', () => {
-      const task1 = ctx.taskRepo.insert({
+      ctx.taskRepo.insert({
         id: 'proj/task-1',
         projectId: 'proj',
         slug: 'task-1',
         title: 'Task 1',
         status: 'running',
         worktreePath: worktree1Dir,
-      })!;
+      });
       ctx.taskRepo.insert({
         id: 'proj/task-2',
         projectId: 'proj',
