@@ -288,7 +288,12 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE projects ADD COLUMN merge TEXT;
   `,
-  // Migration 19: Claude Code profiles and chat account selection
+  // Migration 19: explicit chat lifecycle state
+  `
+  ALTER TABLE chat_sessions ADD COLUMN state TEXT NOT NULL DEFAULT 'idle'
+    CHECK(state IN ('idle','running','waiting_permission','error'));
+  `,
+  // Migration 20: Claude Code profiles and chat account selection
   `
   PRAGMA foreign_keys = OFF;
   CREATE TABLE profiles_new (
@@ -877,6 +882,7 @@ export interface ChatSessionRow {
   model: string;
   profileName: string | null;
   busy: number;
+  state: 'idle' | 'running' | 'waiting_permission' | 'error';
   createdAt: string;
   updatedAt: string;
 }
@@ -914,11 +920,12 @@ export class ChatSessionRepo {
     model?: string;
     profileName?: string | null;
     busy?: number;
+    state?: ChatSessionRow['state'];
   }): void {
     this.db
       .prepare(
-        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, profileName)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, profileName, state)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         row.id,
@@ -929,6 +936,7 @@ export class ChatSessionRepo {
         row.busy ?? 0,
         row.model || '',
         row.profileName || null,
+        row.state || 'idle',
       );
   }
 
@@ -958,6 +966,14 @@ export class ChatSessionRepo {
       .run(busy, id);
   }
 
+  updateState(id: string, state: ChatSessionRow['state']): void {
+    this.db.prepare("UPDATE chat_sessions SET state = ?, updatedAt = datetime('now') WHERE id = ?").run(state, id);
+  }
+
+  clearClaudeSessionId(id: string): void {
+    this.db.prepare("UPDATE chat_sessions SET claudeSessionId = NULL, updatedAt = datetime('now') WHERE id = ?").run(id);
+  }
+
   touchUpdatedAt(id: string): void {
     this.db
       .prepare("UPDATE chat_sessions SET updatedAt = datetime('now') WHERE id = ?")
@@ -965,7 +981,7 @@ export class ChatSessionRepo {
   }
 
   resetAllBusy(): void {
-    this.db.prepare('UPDATE chat_sessions SET busy = 0 WHERE busy != 0').run();
+    this.db.prepare("UPDATE chat_sessions SET busy = 0, state = 'idle' WHERE busy != 0 OR state != 'idle'").run();
   }
 
   delete(id: string): void {

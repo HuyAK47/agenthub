@@ -81,3 +81,13 @@ npm test
 # Kiểm thử giao diện web
 npm run test:web
 ```
+
+## Giấy phép
+
+AgentHub phát hành theo giấy phép [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+
+- Bạn được dùng, sửa và phân phối lại miễn phí, kể cả cho mục đích thương mại.
+- Nếu bạn phân phối bản đã sửa, hoặc cho người khác dùng bản đã sửa qua mạng (dịch vụ, SaaS), bạn phải công khai mã nguồn phần đã sửa theo cùng giấy phép.
+- Cần dùng AgentHub mà không muốn chịu các điều kiện trên (ví dụ tích hợp vào sản phẩm đóng mã): liên hệ tác giả để có giấy phép thương mại.
+
+Copyright (C) 2026 ducanh19020217

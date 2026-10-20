@@ -389,6 +389,7 @@ export interface ChatSession {
   title: string;
   mode: ChatMode;
   busy: boolean;
+  state?: 'idle' | 'running' | 'waiting_permission' | 'error';
   model?: string;
   profileName?: string | null;
   updatedAt: string;
@@ -404,6 +405,7 @@ export interface ChatMessageMeta {
   costUsd?: number;
   numTurns?: number;
   error?: string;
+  retryText?: string;
 }
 
 export interface ChatMessage {

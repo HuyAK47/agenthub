@@ -65,6 +65,9 @@ export interface RunningTurn {
   cancelled: boolean;
   persistent?: boolean;
   cancelTimer?: NodeJS.Timeout;
+  idleTimer?: NodeJS.Timeout;
+  waitingPermission?: boolean;
+  pendingToolUse?: boolean;
 }
 
 interface PersistentProcess {
@@ -185,6 +188,7 @@ export class ChatService {
     model: string;
     profileName: string | null;
     busy: number;
+    state: ChatSessionRow['state'];
     updatedAt: string;
     lastMessage?: {
       id: string;
@@ -204,6 +208,7 @@ export class ChatService {
         model: string;
         profileName: string | null;
         busy: number;
+        state: ChatSessionRow['state'];
         updatedAt: string;
         lastMessage?: {
           id: string;
@@ -219,6 +224,7 @@ export class ChatService {
         model: s.model,
         profileName: s.profileName,
         busy: s.busy,
+        state: s.state,
         updatedAt: s.updatedAt,
       };
       if (last) {
@@ -370,6 +376,7 @@ export class ChatService {
 
     // Mark session busy
     this.chatSessionRepo.setBusy(sessionId, 1);
+    this.setSessionState(sessionId, 'running');
 
     // Enqueue turn
     this.enqueueTurn({
@@ -405,6 +412,7 @@ export class ChatService {
     if (queuedIndex >= 0) {
       this.queue.splice(queuedIndex, 1);
       this.chatSessionRepo.setBusy(sessionId, 0);
+      this.setSessionState(sessionId, 'idle');
       return { ok: true };
     }
 
@@ -420,6 +428,7 @@ export class ChatService {
             if (running.child.pid) killProcessGroup(running.child.pid);
             this.runningTurns.delete(sessionId);
             this.chatSessionRepo.setBusy(sessionId, 0);
+            this.setSessionState(sessionId, 'idle');
             this.emitChatError(sessionId, running.messageId, 'Đã hủy lượt chat');
             const proc = this.persistentProcesses.get(sessionId);
             if (proc) this.closePersistentProcess(proc);
@@ -433,6 +442,7 @@ export class ChatService {
       }
       this.runningTurns.delete(sessionId);
       this.chatSessionRepo.setBusy(sessionId, 0);
+      this.setSessionState(sessionId, 'idle');
       this.emitChatError(sessionId, running.messageId, 'Đã hủy lượt chat');
       setBrainActivity('idle').catch(() => {});
       this.processQueue();
@@ -441,6 +451,7 @@ export class ChatService {
 
     // Session not currently running
     this.chatSessionRepo.setBusy(sessionId, 0);
+    this.setSessionState(sessionId, 'idle');
     return { ok: true };
   }
 
@@ -463,6 +474,7 @@ export class ChatService {
     const claudeBin = findClaudeBin(this.claudeBinOverride || this.config.chat?.claudeBin);
     if (!claudeBin) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.setSessionState(turn.sessionId, 'error');
       const errMsg = 'Không tìm thấy lệnh claude trên hệ thống';
       this.chatMessageRepo.insert({
         id: turn.messageId,
@@ -512,6 +524,7 @@ export class ChatService {
       child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
     } catch (err: unknown) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.setSessionState(turn.sessionId, 'error');
       const errMsg = err instanceof Error ? err.message : 'Lỗi khởi chạy claude';
       this.chatMessageRepo.insert({
         id: turn.messageId,
@@ -535,6 +548,7 @@ export class ChatService {
         }
         this.runningTurns.delete(turn.sessionId);
         this.chatSessionRepo.setBusy(turn.sessionId, 0);
+        this.setSessionState(turn.sessionId, 'error');
         const timeoutMsg = 'Lượt chat bị quá thời gian (15 phút)';
         this.chatMessageRepo.insert({
           id: turn.messageId,
@@ -556,6 +570,7 @@ export class ChatService {
       cancelled: false,
     };
     this.runningTurns.set(turn.sessionId, runningTurn);
+    this.armTurnWatchdog(runningTurn);
 
     const parser = new StreamChunkParser();
     let accumulatedText = '';
@@ -564,6 +579,7 @@ export class ChatService {
     const startTime = Date.now();
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      this.resetTurnWatchdog(runningTurn);
       const events = parser.feed(chunk);
       for (const ev of events) {
         if (ev.type === 'init') {
@@ -583,6 +599,8 @@ export class ChatService {
             this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
           }
         } else if (ev.type === 'tool_use') {
+          runningTurn.pendingToolUse = true;
+          this.pauseTurnWatchdog(runningTurn);
           this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
           this.chatMessageRepo.insert({
             id: crypto.randomUUID(),
@@ -591,6 +609,15 @@ export class ChatService {
             content: ev.summary,
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
+        } else if (ev.type === 'permission_request') {
+          runningTurn.waitingPermission = true;
+          this.pauseTurnWatchdog(runningTurn);
+          this.setSessionState(turn.sessionId, 'waiting_permission');
+          this.emitEvent('chat.permission', { sessionId: turn.sessionId, messageId: turn.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
+        } else if (ev.type === 'tool_result') {
+          runningTurn.pendingToolUse = false;
+          runningTurn.waitingPermission = false;
+          this.resetTurnWatchdog(runningTurn);
         } else if (ev.type === 'result') {
           resultHandled = true;
           if (ev.result) accumulatedText += ev.result;
@@ -603,6 +630,11 @@ export class ChatService {
 
           if (ev.isError) {
             const errMsg = ev.result || 'Claude error';
+            if (turn.claudeSessionId && /session|resume|conversation/i.test(errMsg) && /not found|invalid|unknown|exist/i.test(errMsg)) {
+              this.chatSessionRepo.clearClaudeSessionId(turn.sessionId);
+              this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: turn.sessionId, role: 'error', content: 'Đã mở phiên mới, ngữ cảnh cũ không còn' });
+            }
+            this.setSessionState(turn.sessionId, 'error');
             this.chatMessageRepo.insert({
               id: turn.messageId,
               sessionId: turn.sessionId,
@@ -611,6 +643,7 @@ export class ChatService {
             });
             this.emitChatError(turn.sessionId, turn.messageId, errMsg);
           } else {
+            this.setSessionState(turn.sessionId, 'idle');
             const finalText = ev.result ?? accumulatedText;
             this.chatMessageRepo.insert({
               id: turn.messageId,
@@ -640,6 +673,7 @@ export class ChatService {
 
     child.on('close', (code) => {
       clearTimeout(timeoutTimer);
+      if (runningTurn.idleTimer) clearTimeout(runningTurn.idleTimer);
       const flushed = parser.flush();
       for (const ev of flushed) {
         if (ev.type === 'init' && ev.sessionId) {
@@ -657,6 +691,8 @@ export class ChatService {
             this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
           }
         } else if (ev.type === 'tool_use') {
+          runningTurn.pendingToolUse = true;
+          this.pauseTurnWatchdog(runningTurn);
           this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
           this.chatMessageRepo.insert({
             id: crypto.randomUUID(),
@@ -665,6 +701,10 @@ export class ChatService {
             content: ev.summary,
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
+        } else if (ev.type === 'tool_result') {
+          runningTurn.pendingToolUse = false;
+          runningTurn.waitingPermission = false;
+          this.resetTurnWatchdog(runningTurn);
         }
       }
 
@@ -685,20 +725,12 @@ export class ChatService {
               // ignore db error on shutdown
             }
             this.emitChatError(turn.sessionId, turn.messageId, errMsg);
+            this.setSessionState(turn.sessionId, 'error');
           } else {
-            try {
-              this.chatMessageRepo.insert({
-                id: turn.messageId,
-                sessionId: turn.sessionId,
-                role: 'assistant',
-                content: accumulatedText,
-              });
-            } catch {
-              // ignore db error on shutdown
-            }
-            this.emitChatDone(turn.sessionId, turn.messageId, {
-              durationMs: Date.now() - startTime,
-            });
+            const errMsg = 'Claude process đã dừng trước khi trả về kết quả';
+            try { this.chatMessageRepo.insert({ id: turn.messageId, sessionId: turn.sessionId, role: 'error', content: errMsg }); } catch { /* shutdown */ }
+            this.emitChatError(turn.sessionId, turn.messageId, errMsg);
+            this.setSessionState(turn.sessionId, 'error');
           }
         }
         this.runningTurns.delete(turn.sessionId);
@@ -726,6 +758,7 @@ export class ChatService {
     proc.active = running;
     proc.lastUsedAt = Date.now();
     this.runningTurns.set(turn.sessionId, running);
+    this.armTurnWatchdog(running);
     setBrainActivity('talking').catch(() => {});
     try {
       const lastSnapshot = this.snapshotAt.get(turn.sessionId) || 0;
@@ -767,14 +800,26 @@ export class ChatService {
   }
 
   private handlePersistentOutput(proc: PersistentProcess, chunk: Buffer): void {
+    if (proc.active) this.resetTurnWatchdog(proc.active);
     for (const ev of proc.parser.feed(chunk)) {
       if ((ev.type === 'init' || ev.type === 'result') && ev.sessionId && !this.chatSessionRepo.get(proc.sessionId)?.claudeSessionId) {
         this.chatSessionRepo.updateClaudeSessionId(proc.sessionId, ev.sessionId);
       }
       if (ev.type === 'result' && proc.active) this.finishPersistentTurn(proc, ev);
       else if (ev.type === 'tool_use' && proc.active) {
+        proc.active.pendingToolUse = true;
+        this.pauseTurnWatchdog(proc.active);
         this.emitChatTool(proc.sessionId, proc.active.messageId, ev.name, ev.summary);
         this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }) });
+      } else if (ev.type === 'permission_request' && proc.active) {
+        proc.active.waitingPermission = true;
+        this.pauseTurnWatchdog(proc.active);
+        this.setSessionState(proc.sessionId, 'waiting_permission');
+        this.emitEvent('chat.permission', { sessionId: proc.sessionId, messageId: proc.active.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
+      } else if (ev.type === 'tool_result' && proc.active) {
+        proc.active.pendingToolUse = false;
+        proc.active.waitingPermission = false;
+        this.resetTurnWatchdog(proc.active);
       } else if ((ev.type === 'text_delta' || ev.type === 'assistant_text') && proc.active) {
         this.emitChatDelta(proc.sessionId, proc.active.messageId, ev.text);
       }
@@ -785,15 +830,23 @@ export class ChatService {
     const running = proc.active;
     if (!running) return;
     clearTimeout(running.timeoutTimer);
+    if (running.idleTimer) clearTimeout(running.idleTimer);
     if (running.cancelTimer) clearTimeout(running.cancelTimer);
     proc.active = undefined;
     this.runningTurns.delete(proc.sessionId);
     this.recordClaudeQuota(ev.result || '', proc.stderrOutput, 0);
     this.chatSessionRepo.setBusy(proc.sessionId, 0);
     if (ev.isError) {
+      this.setSessionState(proc.sessionId, 'error');
+      const session = this.chatSessionRepo.get(proc.sessionId);
+      if (session?.claudeSessionId && /session|resume|conversation/i.test(ev.result || '') && /not found|invalid|unknown|exist/i.test(ev.result || '')) {
+        this.chatSessionRepo.clearClaudeSessionId(proc.sessionId);
+        this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'error', content: 'Đã mở phiên mới, ngữ cảnh cũ không còn' });
+      }
       this.chatMessageRepo.insert({ id: running.messageId, sessionId: proc.sessionId, role: 'error', content: ev.result || 'Claude error' });
       this.emitChatError(proc.sessionId, running.messageId, ev.result || 'Claude error');
     } else {
+      this.setSessionState(proc.sessionId, 'idle');
       this.chatMessageRepo.insert({ id: running.messageId, sessionId: proc.sessionId, role: 'assistant', content: ev.result || '', meta: JSON.stringify({ costUsd: ev.costUsd, durationMs: ev.durationMs, numTurns: ev.numTurns }) });
       this.emitChatDone(proc.sessionId, running.messageId, { durationMs: ev.durationMs || 0, costUsd: ev.costUsd, numTurns: ev.numTurns });
     }
@@ -805,9 +858,11 @@ export class ChatService {
 
   private finishPersistentError(proc: PersistentProcess, turn: QueuedTurn, message: string): void {
     if (proc.active) clearTimeout(proc.active.timeoutTimer);
+    if (proc.active?.idleTimer) clearTimeout(proc.active.idleTimer);
     proc.active = undefined;
     this.runningTurns.delete(turn.sessionId);
     this.chatSessionRepo.setBusy(turn.sessionId, 0);
+    this.setSessionState(turn.sessionId, 'error');
     this.chatMessageRepo.insert({ id: turn.messageId, sessionId: turn.sessionId, role: 'error', content: message });
     this.emitChatError(turn.sessionId, turn.messageId, message);
     this.closePersistentProcess(proc);
@@ -840,6 +895,7 @@ export class ChatService {
       this.runningTurns.delete(proc.sessionId);
       this.recordClaudeQuota('', proc.stderrOutput, null);
       this.chatSessionRepo.setBusy(proc.sessionId, 0);
+      this.setSessionState(proc.sessionId, 'error');
       if (!active.cancelled) {
         this.chatMessageRepo.insert({ id: active.messageId, sessionId: proc.sessionId, role: 'error', content: 'Claude process đã dừng' });
         this.emitChatError(proc.sessionId, active.messageId, 'Claude process đã dừng');
@@ -878,6 +934,41 @@ export class ChatService {
 
   private emitChatError(sessionId: string, messageId: string, message: string): void {
     this.emitEvent('chat.error', { sessionId, messageId, message });
+  }
+
+  private setSessionState(sessionId: string, state: ChatSessionRow['state']): void {
+    try { this.chatSessionRepo.updateState(sessionId, state); } catch { return; }
+    this.emitEvent('chat.status', { sessionId, status: state });
+  }
+
+  private armTurnWatchdog(turn: RunningTurn): void {
+    if (turn.waitingPermission || turn.pendingToolUse) return;
+    const timeoutMs = Math.max(1, this.config.chat.idleTimeoutSec || 300) * 1000;
+    turn.idleTimer = setTimeout(() => {
+      if (this.runningTurns.get(turn.sessionId) !== turn || turn.cancelled) return;
+      turn.cancelled = true;
+      if (turn.child.pid) killProcessGroup(turn.child.pid);
+      clearTimeout(turn.timeoutTimer);
+      this.runningTurns.delete(turn.sessionId);
+      this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.setSessionState(turn.sessionId, 'error');
+      const message = `Claude không có output trong ${this.config.chat.idleTimeoutSec || 300} giây; hãy thử lại`;
+      this.chatMessageRepo.insert({ id: turn.messageId, sessionId: turn.sessionId, role: 'error', content: message });
+      this.emitChatError(turn.sessionId, turn.messageId, message);
+      this.processQueue();
+    }, timeoutMs);
+  }
+
+  private resetTurnWatchdog(turn: RunningTurn): void {
+    if (turn.idleTimer) clearTimeout(turn.idleTimer);
+    this.armTurnWatchdog(turn);
+  }
+
+  private pauseTurnWatchdog(turn: RunningTurn): void {
+    if (turn.idleTimer) {
+      clearTimeout(turn.idleTimer);
+      turn.idleTimer = undefined;
+    }
   }
 
   private emitEvent(type: string, payload: unknown): void {
@@ -952,6 +1043,11 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
 
   // POST /api/chat/sessions/:id/cancel
   fastify.post('/api/chat/sessions/:id/cancel', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return chatService.cancelSession(id);
+  });
+
+  fastify.post('/api/chat/sessions/:id/stop', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return chatService.cancelSession(id);
   });
