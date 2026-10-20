@@ -256,6 +256,31 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>}
 
+      {status.overlaps && status.overlaps.length > 0 && (
+        <div
+          data-testid="overlap-warnings"
+          className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4 space-y-2"
+        >
+          <div className="flex items-center gap-2 text-[var(--t-warn)] font-semibold text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{t('dashboard.overlapWarningTitle')}</span>
+          </div>
+          <p className="text-xs text-[var(--text-secondary)]">
+            {t('dashboard.overlapWarningDesc', { count: status.overlaps.length })}
+          </p>
+          <ul className="space-y-1.5 text-xs">
+            {status.overlaps.map((ov) => (
+              <li key={ov.id} className="flex items-center gap-2 text-[var(--text-primary)]">
+                <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-default)]">
+                  {ov.taskId}
+                </span>
+                <span>{ov.content}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {metrics.map((m) => {

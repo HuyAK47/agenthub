@@ -50,6 +50,14 @@ export const DEFAULT_STALL_CONFIG: StallConfig = {
   loopThreshold: 6,
 };
 
+export interface ContextConfig {
+  overlapCheckSec: number;
+}
+
+export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
+  overlapCheckSec: 60,
+};
+
 export type DeepPartialSavingsConfig = {
   bucketTokens?: Partial<SavingsConfig['bucketTokens']>;
   claudeFactor?: number;
@@ -102,6 +110,7 @@ export interface AgentHubConfig {
   savings: SavingsConfig;
   load: LoadConfig;
   stall: StallConfig;
+  context: ContextConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -131,6 +140,7 @@ export function saveConfig(
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
+    context?: Partial<ContextConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -155,6 +165,7 @@ export function saveConfig(
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
     ...(patch.stall ? { stall: { ...((current.stall as Record<string, unknown>) || {}), ...patch.stall } } : {}),
+    ...(patch.context ? { context: { ...((current.context as Record<string, unknown>) || {}), ...patch.context } } : {}),
     ...(patch.savings
       ? {
           savings: {
@@ -196,6 +207,7 @@ export function updateConfigInMemory(
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
+    context?: Partial<ContextConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -273,6 +285,11 @@ export function updateConfigInMemory(
   }
   if (patch.load) config.load = { ...config.load, ...patch.load };
   if (patch.stall) config.stall = { ...config.stall, ...patch.stall };
+  if (patch.context) {
+    if (patch.context.overlapCheckSec !== undefined) {
+      config.context.overlapCheckSec = patch.context.overlapCheckSec;
+    }
+  }
 }
 
 export function loadConfig(overrideHome?: string): AgentHubConfig {
@@ -437,5 +454,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
     },
     stall,
+    context: {
+      overlapCheckSec: typeof (userConfig.context as Record<string, unknown> | undefined)?.overlapCheckSec === 'number'
+        ? ((userConfig.context as Record<string, unknown>).overlapCheckSec as number)
+        : DEFAULT_CONTEXT_CONFIG.overlapCheckSec,
+    },
   };
 }

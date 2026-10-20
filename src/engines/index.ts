@@ -15,6 +15,7 @@ export interface SpawnOpts {
   lockFile?: string;
   outputPath?: string;
   readOnly?: boolean;
+  env?: Record<string, string>;
 }
 
 export interface QuotaDetection {
@@ -115,6 +116,10 @@ export class AgyEngine implements Engine {
     if (opts.profile.kind === 'isolated' && opts.profile.home) {
       env.HOME = opts.profile.home;
       env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
+    }
+
+    if (opts.env) {
+      Object.assign(env, opts.env);
     }
 
     // Ensure log directory exists
@@ -251,9 +256,13 @@ export class CodexEngine implements Engine {
     const [codexExe, codexArgs] = lowPriority(codexPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;
     const executable = opts.lockFile ? 'flock' : codexExe;
+    const env: Record<string, string> = { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV };
+    if (opts.env) {
+      Object.assign(env, opts.env);
+    }
     const child = spawn(executable, command, {
       cwd: opts.cwd,
-      env: { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV },
+      env,
       detached: true,
       stdio: ['ignore', logFd, logFd],
     });
@@ -323,6 +332,7 @@ export class FakeEngine implements Engine {
       FAKE_MODEL: opts.model,
       FAKE_PROFILE: opts.profile.name,
       FAKE_OUTPUT_PATH: opts.outputPath || '',
+      ...(opts.env || {}),
     };
 
     const command = process.env.FAKE_MODE === 'reviewer-error' ? '/definitely-missing-agenthub-fixture' : process.execPath;

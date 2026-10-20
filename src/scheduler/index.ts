@@ -134,6 +134,7 @@ export class Scheduler {
   private runMetricsRepo?: RunMetricsRepo;
   private reviewRepo?: ReviewRepo;
   private failoverState?: ClaudeFailoverState;
+  private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
@@ -187,6 +188,10 @@ export class Scheduler {
   configureReviewer(reviewRepo: ReviewRepo, failoverState: ClaudeFailoverState): void {
     this.reviewRepo = reviewRepo;
     this.failoverState = failoverState;
+  }
+
+  configureBulletinService(bulletinService: { updateBulletinForTask: (task: TaskRow) => void }): void {
+    this.bulletinService = bulletinService;
   }
 
   getReviewerStatus(): { active: boolean; running: string[]; waiting: number } {
@@ -1159,7 +1164,17 @@ export class Scheduler {
         runId: check.runId || 'unknown',
         runStartedAt: check.runStartedAt || 'unknown',
       }));
-      child = engine.spawn({ profile, model: reviewerModel, cwd: task.worktreePath, prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks), logPath, outputPath, readOnly: true, lockFile });
+      child = engine.spawn({
+        profile,
+        model: reviewerModel,
+        cwd: task.worktreePath,
+        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks),
+        logPath,
+        outputPath,
+        readOnly: true,
+        lockFile,
+        env: { AGENTHUB_TASK_ID: task.id },
+      });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
     } catch (error) {
@@ -1638,6 +1653,7 @@ export class Scheduler {
         prompt,
         logPath,
         lockFile,
+        env: { AGENTHUB_TASK_ID: task.id },
       });
 
       const pid = child.pid!;
@@ -1646,6 +1662,10 @@ export class Scheduler {
 
       // Update task status
       this.taskRepo.update(task.id, { status: 'running' });
+
+      if (this.bulletinService) {
+        this.bulletinService.updateBulletinForTask({ ...task, status: 'running', worktreePath });
+      }
 
       // Track the running task
       const rt: RunningTask = {
