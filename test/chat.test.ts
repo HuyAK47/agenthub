@@ -67,10 +67,10 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     };
 
     const home = '/fake/home';
-    const projectPath = '/media/veracrypt8/Project_Cty/soar.fe';
+    const projectPath = '/media/disk/Projects/sample-app';
     const result = readHubSnapshotFiles(projectPath, home, mockFs);
 
-    const expectedMemoryPath = path.join(home, '.claude', 'projects', '-media-veracrypt8-Project-Cty-soar-fe', 'memory', 'MEMORY.md');
+    const expectedMemoryPath = path.join(home, '.claude', 'projects', '-media-disk-Projects-sample-app', 'memory', 'MEMORY.md');
     expect(checkedPaths).toContain(expectedMemoryPath);
     expect(result.memory).toBe('Project memory notes');
   });

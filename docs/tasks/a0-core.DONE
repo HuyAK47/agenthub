@@ -21,14 +21,14 @@
   AGENTHUB_HOME=$(mktemp -d) node dist/cli.js profile list
   === Hồ sơ ===
 
-    chinh: engine=agy, kind=keyring, email=ducanh19020217@gmail.com ...
+    chinh: engine=agy, kind=keyring, email=owner@example.com ...
     codex: engine=codex, kind=codex, email=(chưa có)
-    g1: engine=agy, kind=isolated, email=ducanh19020217@gmail.com ...
+    g1: engine=agy, kind=isolated, email=owner@example.com ...
     g2: engine=agy, kind=isolated, email=ducanh20176919@gmail.com ...
     g3: engine=agy, kind=isolated, email=(chưa có)
 
   ⚠️  Cảnh báo trùng email:
-    ducanh19020217@gmail.com: chinh, g1
+    owner@example.com: chinh, g1
   ```
 
   Lệnh trên dùng `AGENTHUB_HOME` tạm và không ghi thay đổi vào `~/.agy-homes`.
