@@ -5,10 +5,26 @@ import {
   CreateChatSessionInput,
   SendMessageResponse,
   UpdateChatSessionInput,
+  ChatPermissionRequest,
 } from '../types/api';
 
 export async function getChatSessions(): Promise<ChatSession[]> {
   return apiFetch<ChatSession[]>('/api/chat/sessions');
+}
+
+export async function decideChatPermission(
+  id: string,
+  decision: 'allow' | 'deny' | 'allow_always',
+  message?: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/chat/permissions/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, message }),
+  });
+}
+
+export async function getChatPermissions(sessionId: string): Promise<ChatPermissionRequest[]> {
+  return apiFetch<ChatPermissionRequest[]>(`/api/chat/permissions?sessionId=${encodeURIComponent(sessionId)}`);
 }
 
 export async function createChatSession(
