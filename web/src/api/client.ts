@@ -24,6 +24,8 @@ import {
   OrphanProcess,
   KnowledgeEntry,
   TaskGraphResponse,
+  TaskBatch,
+  CreateBatchInput,
 } from '../types/api';
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
@@ -367,6 +369,59 @@ export async function startTask(id: string): Promise<Task> {
 export async function cancelTask(id: string): Promise<Task> {
   return apiFetch<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, {
     method: 'POST',
+  });
+}
+
+export async function deleteTask(id: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/tasks/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getBatches(params?: { project?: string; status?: string }): Promise<TaskBatch[]> {
+  const query = new URLSearchParams();
+  if (params?.project && params.project !== 'all') query.set('project', params.project);
+  if (params?.status && params.status !== 'all') query.set('status', params.status);
+  const qStr = query.toString();
+  return apiFetch<TaskBatch[]>(`/api/batches${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getBatch(id: string): Promise<TaskBatch & { tasks: Task[] }> {
+  return apiFetch<TaskBatch & { tasks: Task[] }>(`/api/batches/${encodeURIComponent(id)}`);
+}
+
+export async function createBatch(data: CreateBatchInput): Promise<TaskBatch & { tasks: Task[] }> {
+  return apiFetch<TaskBatch & { tasks: Task[] }>('/api/batches', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function dispatchBatch(id: string): Promise<{ ok: boolean; batchId: string; dispatchedCount: number }> {
+  return apiFetch<{ ok: boolean; batchId: string; dispatchedCount: number }>(`/api/batches/${encodeURIComponent(id)}/dispatch`, {
+    method: 'POST',
+  });
+}
+
+export async function discardBatch(id: string): Promise<{ ok: boolean; batchId: string }> {
+  return apiFetch<{ ok: boolean; batchId: string }>(`/api/batches/${encodeURIComponent(id)}/discard`, {
+    method: 'POST',
+  });
+}
+
+export async function addTaskToBatch(
+  batchId: string,
+  data: { slug: string; title: string; body?: string; level?: string; modelChain?: string[]; dependsOn?: string[] },
+): Promise<Task> {
+  return apiFetch<Task>(`/api/batches/${encodeURIComponent(batchId)}/tasks`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function removeTaskFromBatch(batchId: string, taskId: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/batches/${encodeURIComponent(batchId)}/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
   });
 }
 

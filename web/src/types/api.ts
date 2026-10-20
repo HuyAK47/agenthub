@@ -144,6 +144,35 @@ export interface Task {
   } | null;
   checks?: CheckResult[];
   sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  batchId?: string | null;
+}
+
+export type BatchStatus = 'draft' | 'dispatched' | 'discarded';
+
+export interface TaskBatch {
+  id: string;
+  projectId: string;
+  title: string;
+  goal: string | null;
+  status: BatchStatus;
+  createdBy: string | null;
+  createdAt: string;
+  tasks?: Task[];
+}
+
+export interface CreateBatchInput {
+  project: string;
+  title: string;
+  goal?: string;
+  tasks: Array<{
+    slug: string;
+    title: string;
+    body?: string;
+    level?: TaskLevel;
+    modelChain?: string[];
+    dependsOn?: string[];
+  }>;
+  createdBy?: string;
 }
 
 export interface CheckResult {

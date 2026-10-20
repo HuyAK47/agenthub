@@ -17,6 +17,7 @@ import {
   MessageSquare,
   TerminalSquare,
   TrendingUp,
+  Layers,
   Wifi,
   WifiOff,
 } from 'lucide-react';
@@ -53,6 +54,7 @@ export const Layout: React.FC = () => {
     { to: '/', label: t('common.dashboard'), icon: Activity },
     { to: '/chat', label: 'Chat', icon: MessageSquare },
     { to: '/claude-sessions', label: t('extra.claudeSessions'), icon: TerminalSquare },
+    { to: '/plans', label: t('common.plans'), icon: Layers },
     { to: '/tasks', label: 'Task', icon: CheckSquare },
     { to: '/savings', label: t('extra.pageSavings'), icon: TrendingUp },
     { to: '/profiles', label: t('common.profiles'), icon: Users },
@@ -64,6 +66,7 @@ export const Layout: React.FC = () => {
     if (pathname === '/') return t('common.dashboard');
     if (pathname.startsWith('/chat')) return 'Chat';
     if (pathname.startsWith('/claude-sessions')) return t('extra.claudeSessions');
+    if (pathname.startsWith('/plans')) return t('extra.pagePlans');
     if (pathname === '/tasks/new') return t('extra.pageTaskCreate');
     if (pathname.startsWith('/tasks/')) return t('extra.pageTaskDetail');
     if (pathname.startsWith('/tasks')) return t('common.tasks');
