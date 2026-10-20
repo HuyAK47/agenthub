@@ -53,10 +53,17 @@ export interface TelegramNotifyConfig {
   fallback: boolean;
 }
 
+export interface TelegramChat {
+  id: number;
+  name: string;
+  username?: string;
+}
+
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
+  chats: TelegramChat[];
   notify: TelegramNotifyConfig;
 }
 
@@ -171,6 +178,7 @@ export function saveConfig(
       enabled?: boolean;
       botTokenFile?: string;
       allowedChatIds?: number[];
+      chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
   }>,
@@ -260,6 +268,7 @@ export function updateConfigInMemory(
       enabled?: boolean;
       botTokenFile?: string;
       allowedChatIds?: number[];
+      chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
   }>,
@@ -355,6 +364,7 @@ export function updateConfigInMemory(
         patch.telegram.allowedChatIds !== undefined
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
+      chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -487,6 +497,11 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : defaultBotTokenFile,
     allowedChatIds: Array.isArray(rawTelegram.allowedChatIds)
       ? rawTelegram.allowedChatIds.filter((id): id is number => typeof id === 'number')
+      : [],
+    chats: Array.isArray(rawTelegram.chats)
+      ? rawTelegram.chats.filter((chat): chat is TelegramChat =>
+          Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
+        )
       : [],
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,
