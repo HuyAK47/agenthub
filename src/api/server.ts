@@ -275,6 +275,13 @@ export async function createServer(
     return service.getSavings(query);
   });
 
+  // --- Daily Usage API ---
+  fastify.get('/api/usage/daily', async (req: FastifyRequest) => {
+    const query = req.query as { days?: string };
+    const days = query?.days ? parseInt(query.days, 10) : 7;
+    return service.getDailyUsage(Number.isNaN(days) ? 7 : days);
+  });
+
   fastify.get('/api/claude/sessions', async (req: FastifyRequest) => service.listClaudeSessions(Number((req.query as { activeWithinMin?: string }).activeWithinMin || 5)));
   fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => service.getClaudeSession((req.params as { id: string }).id));
   fastify.post('/api/claude/sessions/rescan', async () => service.rescanClaudeSessions());

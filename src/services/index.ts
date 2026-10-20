@@ -31,6 +31,7 @@ import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
 import { parseAuthState } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
+import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
 import { isClaudeQuotaLimited } from '../claude-sessions/scanner.js';
 import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
@@ -514,6 +515,22 @@ export class AppService {
       throw new HttpError(500, 'internal_error', 'SavingsService chưa được khởi tạo');
     }
     return this.savingsService.getSavings(query);
+  }
+
+  // --- Daily Usage ---
+  getDailyUsage(days = 7) {
+    const db = this.scheduler.getDatabase();
+    if (!db) {
+      throw new HttpError(500, 'internal_error', 'Database chưa sẵn sàng');
+    }
+    return getDailyUsageReport({
+      days,
+      db,
+      profileRepo: this.profileRepo,
+      quotaMarkRepo: this.quotaMarkRepo,
+      scheduler: this.scheduler,
+      config: this.config,
+    });
   }
 
   // --- Status ---
