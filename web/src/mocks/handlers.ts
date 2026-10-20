@@ -1121,6 +1121,17 @@ export const handlers = [
     });
   }),
 
+  // GET /api/models
+  http.get('/api/models', ({ request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    return HttpResponse.json({
+      suggestions: ['codex:gpt-5.6-luna', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium'],
+      configured: [...new Set([...mockConfig.modelChainHard, ...mockConfig.modelChainEasy])],
+    });
+  }),
+
   // GET /api/chat/sessions
   http.get('/api/chat/sessions', ({ request }) => {
     if (!checkAuth(request)) {

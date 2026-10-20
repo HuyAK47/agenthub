@@ -134,6 +134,7 @@ export interface Task {
   worktreePath?: string | null;
   status: TaskStatus;
   waitReason?: WaitReason;
+  modelWarnings?: string[];
   dependsOn: string | string[];
   attempt: number;
   resume: number;
@@ -456,6 +457,11 @@ export interface SystemConfig {
     minFreeMemGB: number;
     recoverAfterSec: number;
   };
+}
+
+export interface ModelOptions {
+  suggestions: string[];
+  configured: string[];
 }
 
 export type ChatMode = 'safe' | 'full';

@@ -18,6 +18,7 @@ import {
   getStatus,
   getProjectNotes,
   createTaskNote,
+  getModelOptions,
 } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { subscribeToRunOutput } from '../api/sse';
@@ -86,6 +87,7 @@ export const TaskDetailPage: React.FC = () => {
   const [selectedDeps, setSelectedDeps] = useState<string[]>([]);
   const [selectedModelToAdd, setSelectedModelToAdd] = useState(VALID_MODELS[0]);
   const [editError, setEditError] = useState<string | null>(null);
+  const [retryWithDifferentModel, setRetryWithDifferentModel] = useState(false);
 
   // Live log state
   const [liveLog, setLiveLog] = useState<string>('');
@@ -249,6 +251,8 @@ export const TaskDetailPage: React.FC = () => {
     queryFn: () => getTasks({ project: task?.projectId }),
     enabled: showEditModal && !!task?.projectId,
   });
+  const { data: modelOptions } = useQuery({ queryKey: ['model-options'], queryFn: getModelOptions });
+  const modelSuggestions = modelOptions?.suggestions?.length ? modelOptions.suggestions : VALID_MODELS;
 
   const editMutation = useMutation({
     mutationFn: (data: { modelChain: string[]; dependsOn: string[]; level: TaskLevel }) => updateTask(id, data),
@@ -256,6 +260,10 @@ export const TaskDetailPage: React.FC = () => {
       setShowEditModal(false);
       queryClient.invalidateQueries({ queryKey: ['task', id] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      if (retryWithDifferentModel) {
+        setRetryWithDifferentModel(false);
+        retryMutation.mutate();
+      }
     },
     onError: (err: any) => {
       setEditError(err.message || t('taskDetail.updateError'));
@@ -293,7 +301,7 @@ export const TaskDetailPage: React.FC = () => {
     setModelChain(initialChain);
     setSelectedDeps(initialDeps);
     setEditLevel(task.level || 'easy');
-    setSelectedModelToAdd(VALID_MODELS[0]);
+    setSelectedModelToAdd(modelSuggestions[0] || VALID_MODELS[0]);
     setEditError(null);
     setShowEditModal(true);
   };
@@ -483,14 +491,24 @@ export const TaskDetailPage: React.FC = () => {
 
           {/* Retry (if failed or blocked) */}
           {(task.status === 'failed' || task.status === 'blocked') && (
-            <button
-              type="button"
-              onClick={() => setShowRetryModal(true)}
-              className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>{t('taskDetail.btnRetry')}</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setShowRetryModal(true)}
+                className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>{t('taskDetail.btnRetry')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setRetryWithDifferentModel(true); openEditModal(); }}
+                className="px-3.5 py-1.5 rounded-lg border border-[var(--t-accent)] text-[var(--t-accent)] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>{t('taskDetail.retryWithModel')}</span>
+              </button>
+            </>
           )}
 
           {/* Review actions (if review) */}
@@ -554,6 +572,15 @@ export const TaskDetailPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {task.modelWarnings?.length ? (
+        <div className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_12%,transparent)] px-4 py-3 text-sm text-[var(--t-text)]">
+          <strong>{t('taskDetail.modelWarningTitle')}</strong>
+          <ul className="mt-1 list-disc pl-5">
+            {task.modelWarnings.map((model) => <li key={model}>{t('taskDetail.modelWarningItem', { model })}</li>)}
+          </ul>
+        </div>
+      ) : null}
 
       <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} onCreateTask={(check) => openCapture(check.outputTail, check.name)} />
 
@@ -1033,7 +1060,7 @@ export const TaskDetailPage: React.FC = () => {
                     list="task-model-suggestions"
                     className="flex-1 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2.5 py-1.5 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
                   />
-                  <datalist id="task-model-suggestions">{VALID_MODELS.map((m) => <option key={m} value={m} />)}</datalist>
+                  <datalist id="task-model-suggestions">{modelSuggestions.map((m) => <option key={m} value={m} />)}</datalist>
                   <button
                     type="button"
                     data-testid="add-model-btn"
