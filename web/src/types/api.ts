@@ -302,6 +302,56 @@ export interface SavingsReport {
   tasks: SavingsTaskItem[];
 }
 
+export interface ProfileQuotaInfo {
+  gemini5h: number | null;
+  geminiWeek: number | null;
+  claude5h: number | null;
+  claudeWeek: number | null;
+}
+
+export interface DayMetric {
+  runs: number;
+  durationMs: number;
+  tokens: number;
+}
+
+export interface DailyProfileSummary {
+  name: string;
+  engine: 'agy' | 'codex';
+  enabled: boolean;
+  isIdle: boolean;
+  idleReason?: string;
+  quota: ProfileQuotaInfo;
+  quotaUsage: QuotaUsageItem[];
+  today: DayMetric;
+  totals: DayMetric;
+  daily: Record<string, DayMetric>;
+}
+
+export interface DailyUsageDayProfile extends DayMetric {
+  profileName: string;
+  engine: 'agy' | 'codex';
+  isIdle: boolean;
+  quota: ProfileQuotaInfo;
+}
+
+export interface DailyUsageDay {
+  date: string;
+  isToday: boolean;
+  totalRuns: number;
+  totalDurationMs: number;
+  totalTokens: number;
+  profiles: DailyUsageDayProfile[];
+}
+
+export interface DailyUsageReport {
+  days: number;
+  timezone: string;
+  dates: string[];
+  profiles: DailyProfileSummary[];
+  byDay: DailyUsageDay[];
+}
+
 export interface SystemConfig {
   modelChainHard: string[];
   modelChainEasy: string[];
