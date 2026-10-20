@@ -129,6 +129,8 @@ export interface Task {
     noCommitMinutes?: number | null;
     isLooping?: boolean;
     loopingCommand?: string | null;
+    model?: string;
+    profileName?: string;
   } | null;
   checks?: CheckResult[];
 }
