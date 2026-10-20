@@ -38,6 +38,7 @@ import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
+import type { TelegramBotService } from '../telegram.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -504,6 +505,7 @@ export class AppService {
     public savingsService?: SavingsService,
     public claudeSessionRepo?: ClaudeSessionRepo,
     public claudeScanner?: ClaudeSessionScanner,
+    public telegramBotService?: TelegramBotService,
   ) {}
 
   listClaudeSessions(activeWithinMin = 5) {
@@ -696,6 +698,11 @@ export class AppService {
       },
       disks,
       load: this.scheduler.getLoadStatus(),
+      telegram: {
+        enabled: this.config.telegram?.enabled ?? false,
+        allowedChatsCount: this.config.telegram?.allowedChatIds?.length ?? 0,
+        hasToken: Boolean(this.telegramBotService?.hasValidToken()),
+      },
     };
   }
 
@@ -1521,6 +1528,23 @@ export class AppService {
     return this.scheduler.isPaused();
   }
 
+  // --- Telegram ---
+  setTelegramBotService(botService: TelegramBotService): void {
+    this.telegramBotService = botService;
+  }
+
+  getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] } {
+    if (!this.telegramBotService) {
+      throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    }
+    const pairing = this.telegramBotService.getPairingCode(refresh);
+    return {
+      ...pairing,
+      enabled: this.config.telegram?.enabled ?? false,
+      allowedChatIds: this.config.telegram?.allowedChatIds ?? [],
+    };
+  }
+
   // --- Config ---
   getConfig() {
     return {
@@ -1564,6 +1588,14 @@ export class AppService {
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
+
+    if (parsed.telegram?.enabled !== undefined && this.telegramBotService) {
+      if (parsed.telegram.enabled) {
+        this.telegramBotService.start();
+      } else {
+        void this.telegramBotService.stop();
+      }
+    }
 
     this.scheduler.getEventBus().emit('config.updated', undefined, parsed);
 
