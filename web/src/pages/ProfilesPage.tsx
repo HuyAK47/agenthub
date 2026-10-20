@@ -9,6 +9,7 @@ import {
   refreshProfileUsage,
   deleteQuota,
   deleteProfile,
+  getConfig,
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { QuotaUsage } from '../components/QuotaUsage';
@@ -40,6 +41,7 @@ export const ProfilesPage: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
   const [newProfileEngine, setNewProfileEngine] = useState<'agy' | 'claude'>('agy');
+  const [newProfileAccountType, setNewProfileAccountType] = useState<'personal' | 'team' | 'api'>('personal');
   const [addError, setAddError] = useState<string | null>(null);
 
   // Active terminal login session
@@ -80,6 +82,7 @@ export const ProfilesPage: React.FC = () => {
     queryFn: getProfiles,
     refetchInterval: 5000,
   });
+  const { data: systemConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig });
 
   const toggleMutation = useMutation({
     mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
@@ -225,11 +228,12 @@ export const ProfilesPage: React.FC = () => {
 
     try {
       const name = newProfileName.trim();
-      await createProfile({ name, engine: newProfileEngine });
+      await createProfile({ name, engine: newProfileEngine, accountType: newProfileAccountType });
       const loginRes = await loginProfile(name);
       setShowAddModal(false);
       setNewProfileName('');
       setNewProfileEngine('agy');
+      setNewProfileAccountType('personal');
       setActiveLogin({ name, sessionId: loginRes.sessionId });
     } catch (err: any) {
       setAddError(err.message || t('profiles.createFailed'));
@@ -254,6 +258,11 @@ export const ProfilesPage: React.FC = () => {
           <p className="text-sm text-[var(--t-text-3)]">
             {t('profiles.subtitle')}
           </p>
+          {systemConfig?.multiplePerProvider && (
+            <p className="mt-2 max-w-2xl text-xs text-[var(--t-warn)]">
+              Bạn chịu trách nhiệm tuân thủ điều khoản của nhà cung cấp; nhiều gói cá nhân cấm chia sẻ hoặc vượt giới hạn.
+            </p>
+          )}
         </div>
 
         <button
@@ -382,6 +391,7 @@ export const ProfilesPage: React.FC = () => {
                           {profile.engine}
                         </span>
                         <span className="text-xs text-[var(--t-text-3)] font-mono">({profile.kind})</span>
+                        <span className="text-xs text-[var(--t-text-3)]">· {profile.accountType || 'personal'}</span>
                       </td>
 
                       {/* Email + Duplicate warning */}
@@ -688,6 +698,15 @@ export const ProfilesPage: React.FC = () => {
                 <select value={newProfileEngine} onChange={(e) => setNewProfileEngine(e.target.value as 'agy' | 'claude')} className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]">
                   <option value="agy">Antigravity</option>
                   <option value="claude">Claude Code</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">Loại tài khoản</label>
+                <select value={newProfileAccountType} onChange={(e) => setNewProfileAccountType(e.target.value as 'personal' | 'team' | 'api')} className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]">
+                  <option value="personal">Cá nhân</option>
+                  <option value="team">Team</option>
+                  <option value="api">API key</option>
                 </select>
               </div>
 

@@ -607,4 +607,44 @@ process.exit(0);`,
       expect(fs.existsSync(homeDir)).toBe(false);
     });
   });
+
+  describe('7. Tuân thủ điều khoản provider', () => {
+    it('chặn personal thứ hai nhưng cho phép team và api', async () => {
+      const first = await server.inject({
+        method: 'POST',
+        url: '/api/profiles',
+        headers: authHeaders(),
+        payload: { name: 'personal-one', engine: 'agy', accountType: 'personal' },
+      });
+      expect(first.statusCode).toBe(201);
+
+      const second = await server.inject({
+        method: 'POST',
+        url: '/api/profiles',
+        headers: authHeaders(),
+        payload: { name: 'personal-two', engine: 'agy', accountType: 'personal' },
+      });
+      expect(second.statusCode).toBe(409);
+
+      for (const accountType of ['team', 'api']) {
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/profiles',
+          headers: authHeaders(),
+          payload: { name: `agy-${accountType}`, engine: 'agy', accountType },
+        });
+        expect(response.statusCode).toBe(201);
+        expect(JSON.parse(response.body).accountType).toBe(accountType);
+      }
+    });
+
+    it('hồ sơ không khai báo accountType vẫn mặc định là personal', () => {
+      const first = ctx.profileRepo.get('legacy-one');
+      expect(first).toBeUndefined();
+      ctx.profileRepo.upsert({ name: 'legacy-one', engine: 'agy', kind: 'isolated', home: null, email: null, enabled: 1 });
+      ctx.profileRepo.upsert({ name: 'legacy-two', engine: 'agy', kind: 'isolated', home: null, email: null, enabled: 1 });
+      expect(ctx.profileRepo.get('legacy-one')?.accountType).toBe('personal');
+      expect(ctx.profileRepo.get('legacy-two')?.accountType).toBe('personal');
+    });
+  });
 });
