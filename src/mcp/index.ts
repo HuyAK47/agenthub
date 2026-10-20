@@ -121,6 +121,7 @@ export interface McpServerOptions {
   token?: string;
   baseUrl?: string;
   tokenPath?: string;
+  chatSessionId?: string;
 }
 
 export function createMcpServer(options?: McpServerOptions): McpServer {
@@ -148,13 +149,14 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     return token;
   };
 
-  async function callApi<T>(method: string, apiPath: string, body?: unknown): Promise<T> {
+  async function callApi<T>(method: string, apiPath: string, body?: unknown, timeoutMs?: number): Promise<T> {
     const token = getToken();
     const port = getPort();
     const url = `${getBaseUrl()}${apiPath}`;
 
     let res: Response;
     try {
+      const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
       res = await fetch(url, {
         method,
         headers: {
@@ -163,6 +165,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
       });
     } catch (err: unknown) {
       const errorObj = err as { code?: string; cause?: { code?: string }; message?: string } | undefined;
@@ -193,6 +196,28 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       return text as unknown as T;
     }
   }
+
+  server.tool(
+    'permission_prompt',
+    'Yêu cầu người dùng duyệt một lần chạy công cụ trong chat safe mode',
+    {
+      tool_name: z.string(),
+      input: z.record(z.unknown()),
+    },
+    async (args) => {
+      try {
+        const sessionId = options?.chatSessionId || process.env.AGENTHUB_CHAT_SESSION_ID;
+        if (!sessionId) return { content: [{ type: 'text', text: JSON.stringify({ behavior: 'deny', message: 'Thiếu phiên chat' }) }] };
+        const result = await callApi<{ behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown>; message?: string }>(
+          'POST', '/api/chat/permissions', { sessionId, tool_name: args.tool_name, input: args.input },
+          (Number(process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC) || 600) * 1000 + 30_000,
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      } catch (err: unknown) {
+        return { content: [{ type: 'text', text: JSON.stringify({ behavior: 'deny', message: err instanceof Error ? err.message : String(err) }) }] };
+      }
+    },
+  );
 
   // 1. hub_status
   server.tool(

@@ -359,7 +359,7 @@ export const ProfilesPage: React.FC = () => {
                   const isNotLoggedIn = profile.authState === 'not_logged_in' || (!isNeedsVerification && !isLoggedIn);
                   const needsReLogin = profile.authState === 'not_logged_in' &&
                     Boolean(profile.authMessage && /401|hết hạn|expired/i.test(profile.authMessage));
-                  const canLogin = (profile.engine === 'agy' && profile.kind === 'isolated') || profile.engine === 'claude';
+                  const canLogin = (profile.engine === 'agy' && profile.kind === 'isolated') || profile.engine === 'claude' || profile.engine === 'codex';
 
                   return (
                     <tr
@@ -600,22 +600,41 @@ export const ProfilesPage: React.FC = () => {
                           );
                         })()}
 
-                        {/* Relogin / Login button */}
+                        {/* Login (not logged in) or re-login (already logged in, secondary style) */}
                         {canLogin && (
                           <button
                             type="button"
                             onClick={() => handleManualLogin(profile.name)}
-                            className="px-2.5 py-1 text-xs font-medium rounded bg-[var(--t-accent-bg)] text-[var(--t-accent)] border border-[var(--t-accent)] hover:bg-[var(--t-accent-bg)] cursor-pointer"
+                            title={isLoggedIn && !isNotLoggedIn ? 'Đăng nhập lại khi phiên hết hạn hoặc muốn đổi tài khoản' : undefined}
+                            className={isLoggedIn && !isNotLoggedIn && !needsReLogin
+                              ? 'px-2.5 py-1 text-xs font-medium rounded text-[var(--t-text-3)] border border-[var(--t-border)] hover:text-[var(--t-text)] cursor-pointer'
+                              : 'px-2.5 py-1 text-xs font-medium rounded bg-[var(--t-accent-bg)] text-[var(--t-accent)] border border-[var(--t-accent)] hover:bg-[var(--t-accent-bg)] cursor-pointer'}
                           >
-                            {t('profiles.loginBtn')}
+                            {isLoggedIn && !isNotLoggedIn && !needsReLogin ? 'Đăng nhập lại' : t('profiles.loginBtn')}
                           </button>
                         )}
-                        {profile.engine === 'claude' && profile.kind === 'isolated' && (
-                          <button type="button" onClick={async () => {
-                            if (!window.confirm(`Xóa hồ sơ Claude ${profile.name}?`)) return;
-                            await deleteProfile(profile.name);
-                            queryClient.invalidateQueries({ queryKey: ['profiles'] });
-                          }} className="px-2.5 py-1 text-xs font-medium rounded text-[var(--t-crit)] border border-[var(--t-crit)] cursor-pointer">Đăng xuất</button>
+                        {profile.kind !== 'system' && (
+                          <button
+                            type="button"
+                            data-testid={`delete-profile-${profile.name}`}
+                            disabled={isBusy}
+                            title={isBusy ? 'Hồ sơ đang chạy task, đợi task xong rồi xoá' : 'Xoá hồ sơ khỏi hub (lịch sử chạy vẫn giữ)'}
+                            onClick={async () => {
+                              const what = profile.engine === 'claude' && profile.kind === 'isolated'
+                                ? 'Hồ sơ và thư mục cấu hình Claude của nó sẽ bị xoá.'
+                                : 'Hồ sơ sẽ bị ẩn và không được giao task nữa. Thư mục đăng nhập và lịch sử chạy vẫn được giữ.';
+                              if (!window.confirm(`Xoá hồ sơ "${profile.name}"?\n\n${what}`)) return;
+                              try {
+                                await deleteProfile(profile.name);
+                              } catch (err: any) {
+                                alert(err?.message || 'Xoá hồ sơ thất bại');
+                              }
+                              queryClient.invalidateQueries({ queryKey: ['profiles'] });
+                            }}
+                            className="px-2.5 py-1 text-xs font-medium rounded text-[var(--t-crit)] border border-[var(--t-crit)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            Xoá
+                          </button>
                         )}
                       </td>
                     </tr>

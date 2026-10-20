@@ -19,7 +19,7 @@ import {
   TaskRow,
   QuotaMarkRow,
 } from '../db/index.js';
-import { ProfileService as CoreProfileService, isProfileLoggedIn } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -211,6 +211,7 @@ export const UpdateConfigSchema = z.object({
       allowFullMode: z.boolean().optional(),
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
+      permissionTimeoutSec: z.number().int().positive().optional(),
       model: z.enum(['', 'sonnet', 'haiku']).optional(),
     })
     .optional(),
@@ -657,7 +658,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        duplicateWarning: p.email ? dupes.has(p.email) : false,
+        duplicateWarning: dupes.has(accountKey(p) || ''),
       };
     });
 
@@ -849,7 +850,7 @@ export class AppService {
           return email;
         }
         const dupes = this.coreProfileService.getDuplicateEmails();
-        const duplicateWarning = dupes.has(email);
+        const duplicateWarning = dupes.has(`${profile.engine}:${email}`);
         this.scheduler.getEventBus().emit('profile.updated', undefined, {
           name: profile.name,
           email,
@@ -904,7 +905,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        duplicateWarning: p.email ? dupes.has(p.email) : false,
+        duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
@@ -913,7 +914,11 @@ export class AppService {
   createProfile(raw: unknown): ProfileRow {
     const parsed = CreateProfileSchema.parse(raw);
     if (this.profileRepo.get(parsed.name)) {
-      throw new HttpError(409, 'conflict', `Hồ sơ "${parsed.name}" đã tồn tại`);
+      if (!this.profileRepo.isDeleted(parsed.name)) {
+        throw new HttpError(409, 'conflict', `Hồ sơ "${parsed.name}" đã tồn tại`);
+      }
+      // Re-adding a deleted profile brings the same name back.
+      this.profileRepo.restore(parsed.name);
     }
 
     this.coreProfileService.createProfile(parsed.name, parsed.engine);
@@ -926,13 +931,21 @@ export class AppService {
   deleteProfile(name: string): { ok: boolean } {
     const profile = this.profileRepo.get(name);
     if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.engine !== 'claude' || profile.kind === 'system') {
-      throw new HttpError(400, 'bad_request', 'Chỉ có thể xóa hồ sơ Claude riêng');
+    if (profile.kind === 'system') {
+      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống');
     }
-    try {
-      this.coreProfileService.deleteProfile(name);
-    } catch (error) {
-      throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+    const running = Array.from(this.scheduler.getRunning().values()).some((r) => r.profileName === name);
+    if (running) throw new HttpError(409, 'conflict', `Hồ sơ "${name}" đang chạy task, hãy đợi task xong`);
+    if (profile.engine === 'claude' && profile.kind === 'isolated') {
+      // Claude profiles own their config dir under claude-homes; remove it (path-guarded).
+      try {
+        this.coreProfileService.deleteProfile(name);
+      } catch (error) {
+        throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+      }
+    } else {
+      // Other profiles keep their files and run history; hide them from lists and scheduling.
+      this.profileRepo.softDelete(name);
     }
     this.scheduler.getEventBus().emit('profile.deleted', undefined, { name });
     return { ok: true };
@@ -1027,7 +1040,8 @@ export class AppService {
   async refreshUsage(name: string) {
     const profile = this.profileRepo.get(name);
     if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    await this.usageService.collect(profile);
+    if (profile.engine === 'codex') this.usageService.collectCodex(profile);
+    else await this.usageService.collect(profile);
     this.refreshProfileEmail(profile.name);
     return this.listProfiles().find((p) => p.name === name);
   }
@@ -1598,6 +1612,7 @@ export class AppService {
         allowFullMode: this.config.chat.allowFullMode,
         maxConcurrent: this.config.chat.maxConcurrent,
         idleTimeoutSec: this.config.chat.idleTimeoutSec,
+        permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
       },
       reviewer: this.config.reviewer,
