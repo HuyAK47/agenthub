@@ -509,7 +509,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
-        const res = await callApi<{ id: string; status: string; title: string }>('POST', '/api/tasks', args);
+        const res = await callApi<{ id: string; status: string; title: string }>('POST', '/api/tasks', { ...args, fromClaude: true });
         try {
           await callApi('PUT', '/api/brain', {
             activity: 'dispatching',
@@ -548,6 +548,133 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         const res = await callApi<{ id: string; status: string; title: string }>('PATCH', `/api/tasks/${routeId}`, payload);
         return {
           content: [{ type: 'text', text: `✓ Đã cập nhật task "${res.id}" [${res.status}]: ${res.title}` }],
+        };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // hub_create_batch
+  server.tool(
+    'hub_create_batch',
+    'Tạo đợt task mới (batch) với mọi task ở trạng thái draft chờ duyệt. Dùng cho kế hoạch >= 3 task.',
+    {
+      project: z.string().describe('ID của project'),
+      title: z.string().describe('Tiêu đề của đợt lên kế hoạch'),
+      goal: z.string().optional().describe('Mục tiêu tổng quát của đợt'),
+      tasks: z
+        .array(
+          z.object({
+            slug: z.string().describe('Slug định danh task'),
+            title: z.string().describe('Tiêu đề task'),
+            body: z.string().optional().describe('Đề bài task dạng markdown'),
+            level: z.enum(['easy', 'hard']).optional().describe('Độ khó của task (easy hoặc hard)'),
+            modelChain: z.array(z.string()).optional().describe('Chuỗi model chỉ định'),
+            dependsOn: z.array(z.string()).optional().describe('Danh sách ID hoặc slug task phụ thuộc trong cùng đợt'),
+          }),
+        )
+        .min(1)
+        .describe('Danh sách task trong đợt'),
+    },
+    async (args) => {
+      try {
+        const res = await callApi<{
+          id: string;
+          projectId: string;
+          title: string;
+          goal?: string;
+          status: string;
+          tasks: Array<{ id: string; slug: string; title: string; status: string; dependsOn: string | string[] }>;
+        }>('POST', '/api/batches', { ...args, createdBy: 'claude' });
+
+        const taskLines = res.tasks
+          .map((t) => `  - ${t.id} [${t.status}]: ${t.title}`)
+          .join('\n');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✓ Đã tạo đợt "${res.id}" [${res.status}]: "${res.title}" gồm ${res.tasks.length} task (chờ duyệt):\n${taskLines}`,
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // hub_batch
+  server.tool(
+    'hub_batch',
+    'Xem thông tin chi tiết và danh sách task của một đợt (batch)',
+    {
+      id: z.string().describe('ID của đợt (batchId)'),
+    },
+    async (args) => {
+      try {
+        const res = await callApi<{
+          id: string;
+          projectId: string;
+          title: string;
+          goal?: string | null;
+          status: string;
+          createdBy?: string | null;
+          createdAt: string;
+          tasks: Array<{ id: string; slug: string; title: string; status: string; level: string; dependsOn: string | string[] }>;
+        }>('GET', `/api/batches/${encodeURIComponent(args.id)}`);
+
+        const goalStr = res.goal ? `\nMục tiêu: ${res.goal}` : '';
+        const taskLines = res.tasks.length
+          ? res.tasks
+              .map((t) => {
+                const deps = Array.isArray(t.dependsOn)
+                  ? t.dependsOn.join(', ')
+                  : typeof t.dependsOn === 'string'
+                  ? t.dependsOn
+                  : '';
+                return `  - ${t.id} [${t.status}] (${t.level})${deps ? ` phụ thuộc: [${deps}]` : ''}: ${t.title}`;
+              })
+              .join('\n')
+          : '  (chưa có task)';
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Đợt: ${res.title} (${res.id}) [${res.status}] · Project: ${res.projectId}${goalStr}\nDanh sách task (${res.tasks.length}):\n${taskLines}`,
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // hub_dispatch_batch
+  server.tool(
+    'hub_dispatch_batch',
+    'Giao cả đợt task (chuyển mọi draft sang queued sau khi kiểm tra không có vòng phụ thuộc)',
+    {
+      id: z.string().describe('ID của đợt (batchId)'),
+    },
+    async (args) => {
+      try {
+        const res = await callApi<{
+          ok: boolean;
+          batchId: string;
+          dispatchedCount: number;
+        }>('POST', `/api/batches/${encodeURIComponent(args.id)}/dispatch`);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✓ Đã giao đợt "${res.batchId}": ${res.dispatchedCount} task đã được chuyển sang hàng đợi (queued)`,
+            },
+          ],
         };
       } catch (err: unknown) {
         return handleError(err);
