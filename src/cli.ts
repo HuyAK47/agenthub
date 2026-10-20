@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { AgyEngine } from './engines/index.js';
-import { runDoctor, formatDoctorText, formatDoctorJson, DoctorReport } from './doctor.js';
+import { runDoctor, formatDoctorText, formatDoctorJson, DoctorReport, findAgyPath, findCodexPath } from './doctor.js';
 import { cmdBrain } from './brain.js';
 import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
@@ -138,6 +138,25 @@ export async function cmdDoctor(
   return report;
 }
 
+export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = []): Promise<void> {
+  console.log('==> Thiết lập AgentHub lần đầu');
+  const checks = [
+    ['agy', findAgyPath() !== null, 'Cài Antigravity CLI (agy), sau đó đăng nhập trong Profiles.'],
+    ['codex', findCodexPath() !== null, 'Cài Codex CLI, sau đó đăng nhập trong Profiles.'],
+    ['claude', Boolean(findClaudeBin(config.chat.claudeBin)), 'Cài Claude Code để điều phối và dùng MCP.'],
+  ] as const;
+  for (const [name, available, hint] of checks) {
+    console.log(`  ${available ? '✓' : '!'} ${name}: ${available ? 'đã tìm thấy' : `chưa tìm thấy — ${hint}`}`);
+  }
+
+  const tokenPath = config.tokenPath || getTokenPath();
+  getOrCreateToken(tokenPath);
+  console.log(`✓ Đã chuẩn bị token tại ${tokenPath}`);
+  await cmdInstallService([]);
+  await cmdOpen(config, extraArgs.includes('--no-browser') ? ['--no-browser'] : []);
+  console.log('Tiếp theo: mở trang Profiles để đăng nhập worker, rồi chạy `agenthub mcp-install` để kết nối Claude Code.');
+}
+
 async function main() {
   const config = loadConfig();
   if (command === 'install-service' || command === 'uninstall' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
@@ -155,6 +174,10 @@ async function main() {
 
     case 'open':
       await cmdOpen(config, args.slice(1));
+      break;
+
+    case 'setup':
+      await cmdSetup(config, args.slice(1));
       break;
 
     case 'update':
@@ -242,6 +265,7 @@ Cách dùng:
   agenthub daemon                     Chạy daemon AgentHub
   agenthub mcp                        Chạy MCP server (stdio transport)
   agenthub open                       Mở giao diện web trong trình duyệt
+  agenthub setup [--no-browser]       Thiết lập lần đầu, service và dashboard
   agenthub update                     Cập nhật AgentHub lên phiên bản mới nhất
   agenthub version [--check]          Xem phiên bản và kiểm tra cập nhật mới
   agenthub install-service [--print]  Cài đặt systemd/LaunchAgent user service
