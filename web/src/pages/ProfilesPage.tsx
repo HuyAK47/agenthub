@@ -536,6 +536,11 @@ export const ProfilesPage: React.FC = () => {
                             onRefresh={() => usageMutation.mutate(profile.name)}
                             refreshing={usageMutation.isPending && usageMutation.variables === profile.name}
                           />
+                          {profile.engine === 'claude' && profile.claudeTokens && (
+                            <div className="text-xs text-[var(--t-text-3)]" data-testid={`claude-tokens-${profile.name}`}>
+                              Token hôm nay: {Math.round(profile.claudeTokens.today).toLocaleString()} · tuần: {Math.round(profile.claudeTokens.week).toLocaleString()}
+                            </div>
+                          )}
                         </div>
                       </td>
 
