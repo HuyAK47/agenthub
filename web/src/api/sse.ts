@@ -223,6 +223,8 @@ export function connectSSE(queryClient: QueryClient): () => void {
       'chat.tool',
       'chat.done',
       'chat.error',
+      'chat.permission_request',
+      'chat.permission_resolved',
     ];
 
     for (const evtName of SSE_EVENTS) {
