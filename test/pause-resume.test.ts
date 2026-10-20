@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import { spawn, execFileSync } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
@@ -9,6 +10,29 @@ import { FakeEngine, Engine } from '../src/engines/index.js';
 import { measureProcessTree } from '../src/process-tree.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
+import { LoadGuard } from '../src/load.js';
+
+interface WorkerStatus {
+  taskId: string;
+  rss?: number;
+  cpu?: number;
+  paused?: boolean;
+  pauseReason?: string | null;
+}
+
+interface StatusResponse {
+  running: WorkerStatus[];
+}
+
+interface TaskDetailResponse {
+  paused?: boolean;
+  pauseReason?: string | null;
+}
+
+interface PauseEventPayload {
+  reason?: string;
+  runId?: string;
+}
 
 function getProcessState(pid: number): string | null {
   try {
@@ -162,7 +186,7 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
 
     // Bắt event
     let pausedEventReceived = false;
-    ctx.scheduler.getEventBus().once('task.paused', (taskId: string, payload: any) => {
+    ctx.scheduler.getEventBus().once('task.paused', (taskId: string, payload?: PauseEventPayload) => {
       if (taskId === 'p-test/t1' && payload?.reason === 'manual') {
         pausedEventReceived = true;
       }
@@ -176,8 +200,9 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     expect(pausedEventReceived).toBe(true);
 
     // Kiểm tra /proc/<pid>/status chuyển sang T (stopped)
-    const stoppedState = getProcessState(rt!.pid);
-    expect(stoppedState).toBe('T');
+    await vi.waitFor(() => {
+      expect(getProcessState(rt!.pid)).toBe('T');
+    }, { timeout: 2000 });
 
     // Bắt event resumed
     let resumedEventReceived = false;
@@ -194,12 +219,10 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     expect(rt!.pauseReason).toBeNull();
     expect(resumedEventReceived).toBe(true);
 
-    // Chờ một chút để tiến trình nhận signal
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
     // Kiểm tra /proc/<pid>/status quay lại S hoặc R
-    const resumedState = getProcessState(rt!.pid);
-    expect(['S', 'R']).toContain(resumedState);
+    await vi.waitFor(() => {
+      expect(['S', 'R']).toContain(getProcessState(rt!.pid));
+    }, { timeout: 2000 });
   });
 
   it('3. Đóng băng đồng hồ timeout và stall watchdog khi task bị pause', async () => {
@@ -215,8 +238,6 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     const rt = ctx.scheduler.getRunning().get('p-test/t-timeout')!;
     expect(rt).toBeDefined();
 
-    const originalTimeoutAt = rt.timeoutAt;
-
     // Pause task
     ctx.scheduler.pauseTask('p-test/t-timeout', 'manual');
     expect(rt.paused).toBe(true);
@@ -226,7 +247,7 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     rt.timeoutAt = savedTimeoutAt;
 
     // Gọi checkRunningTasks: task không được coi là timeout hay stall vì đang paused
-    await (ctx.scheduler as any).checkRunningTasks();
+    await (ctx.scheduler as unknown as { checkRunningTasks: () => Promise<void> }).checkRunningTasks();
     expect(ctx.scheduler.getRunning().has('p-test/t-timeout')).toBe(true);
     const taskInDb = ctx.taskRepo.get('p-test/t-timeout')!;
     expect(taskInDb.status).toBe('running');
@@ -269,7 +290,7 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     t2.rss = 500 * 1024 * 1024; // Highest RSS
     t3.rss = 200 * 1024 * 1024;
 
-    const loadGuard = (ctx.scheduler as any).loadGuard;
+    const loadGuard = (ctx.scheduler as unknown as { loadGuard: LoadGuard }).loadGuard;
     expect(loadGuard).toBeDefined();
 
     // 4.1 Chính sách 'recent': task gần nhất (t3) bị pause trước
@@ -366,7 +387,7 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
   it('6. API POST /api/tasks/:id/pause và /resume và các trường tài nguyên lộ qua /api/status', async () => {
     const server = await createServer(ctx.service, config);
     await server.listen({ port: 0, host: '127.0.0.1' });
-    const port = (server.server.address() as any).port;
+    const port = (server.server.address() as net.AddressInfo).port;
 
     ctx.taskRepo.insert({
       id: 'p-test/t-api',
@@ -387,12 +408,12 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
       const statusRes1 = await fetch(`http://127.0.0.1:${port}/api/status`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      const statusData1 = (await statusRes1.json()) as any;
-      const worker1 = statusData1.running.find((w: any) => w.taskId === 'p-test/t-api');
+      const statusData1 = (await statusRes1.json()) as StatusResponse;
+      const worker1 = statusData1.running.find((w) => w.taskId === 'p-test/t-api');
       expect(worker1).toBeDefined();
-      expect(worker1.rss).toBe(157286400);
-      expect(worker1.cpu).toBe(18.2);
-      expect(worker1.paused).toBe(false);
+      expect(worker1!.rss).toBe(157286400);
+      expect(worker1!.cpu).toBe(18.2);
+      expect(worker1!.paused).toBe(false);
 
       // 2. Gọi POST /api/tasks/:id/pause
       const pauseRes = await fetch(`http://127.0.0.1:${port}/api/tasks/p-test~t-api/pause`, {
@@ -400,7 +421,7 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
         headers: { authorization: `Bearer ${token}` },
       });
       expect(pauseRes.status).toBe(200);
-      const pauseData = (await pauseRes.json()) as any;
+      const pauseData = (await pauseRes.json()) as { ok: boolean; paused: boolean };
       expect(pauseData.ok).toBe(true);
       expect(pauseData.paused).toBe(true);
 
@@ -408,16 +429,16 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
       const statusRes2 = await fetch(`http://127.0.0.1:${port}/api/status`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      const statusData2 = (await statusRes2.json()) as any;
-      const worker2 = statusData2.running.find((w: any) => w.taskId === 'p-test/t-api');
-      expect(worker2.paused).toBe(true);
-      expect(worker2.pauseReason).toBe('manual');
+      const statusData2 = (await statusRes2.json()) as StatusResponse;
+      const worker2 = statusData2.running.find((w) => w.taskId === 'p-test/t-api');
+      expect(worker2!.paused).toBe(true);
+      expect(worker2!.pauseReason).toBe('manual');
 
       // 4. /api/tasks/:id phản ánh paused
       const taskDetailRes = await fetch(`http://127.0.0.1:${port}/api/tasks/p-test~t-api`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      const taskDetailData = (await taskDetailRes.json()) as any;
+      const taskDetailData = (await taskDetailRes.json()) as TaskDetailResponse;
       expect(taskDetailData.paused).toBe(true);
       expect(taskDetailData.pauseReason).toBe('manual');
 
@@ -427,7 +448,7 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
         headers: { authorization: `Bearer ${token}` },
       });
       expect(resumeRes.status).toBe(200);
-      const resumeData = (await resumeRes.json()) as any;
+      const resumeData = (await resumeRes.json()) as { ok: boolean; paused: boolean };
       expect(resumeData.ok).toBe(true);
       expect(resumeData.paused).toBe(false);
 
@@ -435,10 +456,10 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
       const statusRes3 = await fetch(`http://127.0.0.1:${port}/api/status`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      const statusData3 = (await statusRes3.json()) as any;
-      const worker3 = statusData3.running.find((w: any) => w.taskId === 'p-test/t-api');
-      expect(worker3.paused).toBe(false);
-      expect(worker3.pauseReason).toBeNull();
+      const statusData3 = (await statusRes3.json()) as StatusResponse;
+      const worker3 = statusData3.running.find((w) => w.taskId === 'p-test/t-api');
+      expect(worker3!.paused).toBe(false);
+      expect(worker3!.pauseReason).toBeNull();
     } finally {
       await server.close();
     }

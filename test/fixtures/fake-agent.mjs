@@ -110,12 +110,17 @@ async function run() {
       );
       break;
 
-    case 'sleep-loop':
+    case 'sleep-loop': {
       console.log('Fake agent: sleep loop...');
-      while (true) {
+      let running = true;
+      while (running) {
         await new Promise((resolve) => setTimeout(resolve, 200));
+        if (process.env.STOP_SLEEP === '1') {
+          running = false;
+        }
       }
       break;
+    }
 
     case 'transient':
       console.log('Fake agent: transient error...');
