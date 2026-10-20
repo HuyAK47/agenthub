@@ -90,7 +90,6 @@ function usageText(profile: Profile) {
 function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; }
 
 export const ProfilesPage: React.FC = () => {
-  const { t } = useLocale();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
