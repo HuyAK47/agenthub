@@ -102,12 +102,14 @@ export function runClaudeUsage(opts: ClaudeUsageRunOptions): Promise<string> {
     let sent = false;
     let trusted = false;
     let done = false;
+    let promptTimer: ReturnType<typeof setTimeout> | undefined;
     const proc = pty.spawn(opts.claudeBin, [], { name: 'xterm-256color', cols: 120, rows: 50, cwd: path.resolve(opts.cwd), env });
     const finish = () => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       clearTimeout(sendTimer);
+      if (promptTimer) clearTimeout(promptTimer);
       try { proc.write('\x1b'); } catch { /* exited */ }
       setTimeout(() => { try { proc.kill(); } catch { /* exited */ } }, 200);
       resolve(out);
@@ -119,6 +121,18 @@ export function runClaudeUsage(opts: ClaudeUsageRunOptions): Promise<string> {
       proc.write('/usage');
       setTimeout(() => { try { proc.write('\r'); } catch { /* exited */ } }, 800);
     };
+    const waitForPrompt = () => {
+      if (sent || done) return;
+      // Claude Code renders its input prompt as a standalone ❯ (or > in
+      // plain terminals). Waiting for it avoids sending /usage while the
+      // CLI is still loading under a slow systemd environment.
+      const text = cleanTerminalOutput(out);
+      if (/(?:^|\n)\s*[❯>]\s*$/.test(text)) {
+        sendUsage();
+        return;
+      }
+      promptTimer = setTimeout(waitForPrompt, 250);
+    };
     proc.onData((data) => {
       out += data;
       const text = cleanTerminalOutput(out);
@@ -129,11 +143,15 @@ export function runClaudeUsage(opts: ClaudeUsageRunOptions): Promise<string> {
         setTimeout(() => { try { proc.write('\r'); } catch { /* exited */ } }, 400);
         return;
       }
-      if (sent && /Current week[\s\S]*?%\s*used[\s\S]*?Resets[^\n]*\)/i.test(text)) finish();
+      if (sent && /Current (?:session|week)[\s\S]*?%\s*used[\s\S]*?Resets[^\n]*\)/i.test(text)) {
+        setTimeout(finish, 300);
+      }
     });
     proc.onExit(() => finish());
-    // The prompt is ready a few seconds after start (after the trust screen on first run).
-    const sendTimer = setTimeout(sendUsage, 9000);
+    // Keep a generous fallback for CLI versions that do not render a clean
+    // standalone prompt, while preferring the readiness signal above.
+    const sendTimer = setTimeout(sendUsage, 20_000);
+    promptTimer = setTimeout(waitForPrompt, 250);
     const timer = setTimeout(finish, opts.timeoutMs ?? 45000);
   });
 }
