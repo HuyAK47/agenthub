@@ -189,6 +189,14 @@ export async function clearClaudeFailover(): Promise<ClaudeFailover> {
   return apiFetch<ClaudeFailover>('/api/claude/failover/clear', { method: 'POST' });
 }
 
+export async function getClaudeApiKeyStatus(): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key');
+}
+
+export async function setClaudeApiKey(apiKey: string): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key', { method: 'PUT', body: JSON.stringify({ apiKey }) });
+}
+
 export async function rescanClaudeSessions(): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>('/api/claude/sessions/rescan', { method: 'POST' });
 }
