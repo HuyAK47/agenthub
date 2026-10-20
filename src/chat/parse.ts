@@ -19,6 +19,10 @@ export type ParsedStreamEvent =
       summary: string;
     }
   | {
+      type: 'permission_request';
+      message?: string;
+    }
+  | {
       type: 'result';
       sessionId?: string;
       costUsd?: number;
@@ -106,6 +110,10 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
       sessionId: data.session_id,
     });
     return events;
+  }
+
+  if ((data.type === 'permission_request' || (data.type === 'system' && data.subtype === 'permission_request'))) {
+    return [{ type: 'permission_request', message: typeof data.message === 'string' ? data.message : undefined }];
   }
 
   // 2. type: "assistant"

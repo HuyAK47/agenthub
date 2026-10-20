@@ -322,7 +322,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : typeof userConfig.maxConcurrent === 'number'
         ? userConfig.maxConcurrent
         : 2,
-    idleTimeoutSec: typeof chatRaw.idleTimeoutSec === 'number' ? chatRaw.idleTimeoutSec : 600,
+    idleTimeoutSec: typeof chatRaw.idleTimeoutSec === 'number' ? chatRaw.idleTimeoutSec : 300,
     model: typeof chatRaw.model === 'string' ? chatRaw.model : 'sonnet',
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
