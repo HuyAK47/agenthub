@@ -757,7 +757,14 @@ export class ChatService {
 
         const parser = new StreamChunkParser();
         let lastAssistantUsage: AssistantUsage | undefined;
-        let resultUsage: any = undefined;
+        let resultUsage:
+          | {
+              inputTokens: number;
+              outputTokens: number;
+              cacheReadInputTokens?: number;
+              cacheCreationInputTokens?: number;
+            }
+          | undefined = undefined;
 
         child.stdout?.on('data', (chunk: Buffer) => {
           for (const ev of parser.feed(chunk)) {
