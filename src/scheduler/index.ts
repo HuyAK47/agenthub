@@ -261,18 +261,7 @@ export class Scheduler {
     this.stopped = true;
     this.starting.clear();
 
-    // Check groups are stopped by the daemon shutdown path; scheduler.stop()
-    // remains safe for callers that only pause scheduling in tests/services.
-    for (const rt of this.running.values()) {
-      this.killProcessGroup(rt.pid, 'SIGTERM');
-      this.runRepo.finish(rt.runId, 'crashed', undefined, 'daemon_shutdown');
-      this.taskRepo.update(rt.taskId, { status: 'queued', resume: 1 });
-    }
-    this.running.clear();
-
     for (const run of this.reviewerRuns.values()) {
-      this.killProcessGroup(run.pid, 'SIGTERM');
-      this.runRepo.finish(run.runId, 'crashed', undefined, 'daemon_shutdown');
       clearTimeout(run.timeout);
       if (run.exitTimeout) {
         clearTimeout(run.exitTimeout);

@@ -379,6 +379,7 @@ describe('Scheduler regression fixes', () => {
     process.env.FAKE_MODE = 'slow';
     const scheduler = makeScheduler();
     scheduler.tick();
+    await vi.waitFor(() => expect(taskRepo.get('test-project/a')!.status).toBe('running'));
     scheduler.stop();
     expect(taskRepo.get('test-project/a')!.status).toBe('running');
     expect(runRepo.getByTask('test-project/a')[0].outcome).toBeNull();
