@@ -1,0 +1,34 @@
+# Hoàn tất c-telegram-settings
+
+## Đã làm
+
+- Bổ sung API Telegram:
+  - `PUT /api/telegram/token` lưu token với quyền `0600` và không trả token.
+  - `POST /api/telegram/test` gọi `getMe`, trả tên/username bot.
+  - `POST /api/telegram/pair-code` tạo mã ghép đôi 6 số.
+  - `DELETE /api/telegram/chats/:id` gỡ chat đã ghép.
+  - Mở rộng status/config để lưu metadata chat (tên, id) và giữ tương thích API pairing cũ.
+- Bổ sung giao diện Telegram trong Settings: token dạng password, trạng thái đã cấu hình, kiểm tra bot, bật/tắt, mã ghép đôi và hướng dẫn `/start`, danh sách chat với nút gỡ, loại thông báo, hướng dẫn @BotFather.
+- Bổ sung bản dịch Việt/Anh và client API tương ứng.
+- Đã merge `integration` trước khi hoàn tất.
+
+## Kiểm tra
+
+- `npm run lint`: đạt.
+- `npm run typecheck`: đạt.
+- `npm --prefix web run typecheck`: đạt.
+- `npm run build`: đạt.
+- `npm run build:web`: đạt.
+- `npm test -- --run test/telegram.test.ts`: đạt, 1 file / 32 test.
+- `npm --prefix web run test -- --run`: đạt, 36 file / 204 test.
+- `npm test -- --run`: 49 file / 457 test đều pass; tiến trình kết thúc mã lỗi do safety net phát hiện `/home/ducanh/.agenthub` bị một tiến trình test ở worktree khác sửa đồng thời. Không có test assertion thất bại.
+
+## Việc còn thiếu
+
+- Không còn việc nào trong phạm vi task. Full backend suite cần chạy lại trong môi trường không có test worktree khác đồng thời sửa `~/.agenthub` để vượt safety net.
+
+## Commit
+
+- `c68a5a6 feat(telegram): add settings management API`
+- `757ba98 feat(web): add Telegram settings controls`
+- `9b986da Merge branch 'integration' into agenthub/c-telegram-settings`
