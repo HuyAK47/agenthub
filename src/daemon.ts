@@ -70,7 +70,10 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
-  const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'));
+  const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
+    steps: config.brain.fallback,
+    apiKeyPath: path.join(config.hubHome, 'secrets', 'anthropic.key'),
+  });
   const claudeScanner = new ClaudeSessionScanner(db, { ...config.claudeSessions, hubHome: config.hubHome, worktreesDir: config.worktreesDir, failoverState });
   usageRepo.deleteForEngine('codex');
 

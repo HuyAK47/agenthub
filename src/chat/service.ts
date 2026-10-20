@@ -19,7 +19,7 @@ import {
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser } from './parse.js';
-import { ClaudeFailoverState } from './failover.js';
+import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
 import {
   findClaudeBin,
   checkClaudePartialSupport,
@@ -148,15 +148,47 @@ export class ChatService {
     return this.failoverState.snapshot();
   }
 
+  getClaudeApiKeyStatus(): { configured: boolean } {
+    return { configured: this.failoverState.snapshot().apiKeyConfigured };
+  }
+
+  setClaudeApiKey(value: string): void {
+    this.failoverState.setApiKey(value);
+  }
+
+  configureFailoverSteps(steps: ClaudeFallbackStep[]): void {
+    this.failoverState.configureSteps(steps);
+  }
+
   private recordClaudeQuota(streamText: string, stderr: string, exitCode?: number | null): void {
     const result = detectClaudeQuota({ streamText, stderr, exitCode });
     if (!result.exhausted) return;
-    const snapshot = this.failoverState.activate(result.resetSeconds || this.config.reviewer.failoverSec, 'claude_usage_limit');
+    const snapshot = this.failoverState.snapshot().active
+      ? this.failoverState.advance('claude_usage_limit')
+      : this.failoverState.activate(result.resetSeconds || this.config.reviewer.failoverSec, 'claude_usage_limit');
     this.eventBus.emit('claude.quota_exhausted', undefined, {
       until: snapshot.until,
       reason: snapshot.reason,
     });
-    this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until });
+    this.eventBus.emit('claude.failover_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });
+    this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until, step: snapshot.step });
+  }
+
+  private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string> } {
+    const snapshot = this.failoverState.snapshot();
+    const step = snapshot.active ? snapshot.step : null;
+    if (!step) return { model: turn.model, profileName: turn.profileName };
+    if (step.type === 'model') return { model: step.model, profileName: turn.profileName };
+    if (step.type === 'profile') {
+      const selected = step.profile || this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude')?.name;
+      return { model: turn.model, profileName: selected || turn.profileName };
+    }
+    if (step.type === 'apiKey') {
+      const key = this.failoverState.getApiKey();
+      if (key && snapshot.dailyCostUSD < step.dailyCapUSD) return { model: turn.model, profileName: turn.profileName, env: { ANTHROPIC_API_KEY: key } };
+      this.failoverState.advance(key ? 'daily_cap_reached' : 'api_key_unconfigured');
+    }
+    return { model: turn.model, profileName: turn.profileName };
   }
 
   setClaudeBinOverride(bin?: string): void {
@@ -506,14 +538,15 @@ export class ChatService {
     const supportsPartial = checkClaudePartialSupport(claudeBin);
 
     const session = this.chatSessionRepo.get(turn.sessionId);
-    const profile = turn.profileName && this.profileRepo ? this.profileRepo.get(turn.profileName) : undefined;
+    const execution = this.failoverExecution(turn);
+    const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
     const args = buildClaudeArgs({
       text: turn.text,
       claudeSessionId: turn.claudeSessionId,
       mode: turn.mode,
       mcpConfigPath,
       supportsPartial,
-      model: turn.model,
+      model: execution.model,
       hubSnapshot: session ? this.hubSnapshot(session) : undefined,
     });
 
@@ -521,7 +554,7 @@ export class ChatService {
 
     let child: ChildProcess;
     try {
-      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
+      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     } catch (err: unknown) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
       this.setSessionState(turn.sessionId, 'error');
@@ -643,6 +676,13 @@ export class ChatService {
             });
             this.emitChatError(turn.sessionId, turn.messageId, errMsg);
           } else {
+            if (ev.costUsd !== undefined) {
+              const before = this.failoverState.snapshot();
+              const after = this.failoverState.recordCost(ev.costUsd);
+              if (before.step?.type === 'apiKey' && after.step?.type === 'apiKey' && ev.costUsd > 0) {
+                this.eventBus.emit('claude.fallback_changed', undefined, { step: after.step, reason: 'cost_recorded', resetAt: after.resetAt, dailyCostUSD: after.dailyCostUSD });
+              }
+            }
             this.setSessionState(turn.sessionId, 'idle');
             const finalText = ev.result ?? accumulatedText;
             this.chatMessageRepo.insert({
@@ -780,16 +820,17 @@ export class ChatService {
     }
     let cwd = os.homedir();
     if (session.projectId) cwd = this.projectRepo.get(session.projectId)?.path || cwd;
-    const profile = session.profileName && this.profileRepo ? this.profileRepo.get(session.profileName) : undefined;
+    const execution = this.failoverExecution({ sessionId: session.id, messageId: '', text: '', projectId: session.projectId, mode: session.mode, claudeSessionId: session.claudeSessionId, model: session.model, profileName: session.profileName });
+    const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
     const proc = spawnClaude(claudeBin, buildClaudeArgs({
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
       mcpConfigPath: ensureChatMcpConfig(this.config.hubHome),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
-      model: session.model,
+      model: execution.model,
       hubSnapshot: this.hubSnapshot(session, (this.snapshotAt.get(session.id) || 0) > 0 && Date.now() - (this.snapshotAt.get(session.id) || 0) > 10 * 60 * 1000),
-    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
+    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, profileName: session.profileName, stderrOutput: '' };
     this.persistentProcesses.set(session.id, state);
     proc.stdout?.on('data', (chunk: Buffer) => this.handlePersistentOutput(state, chunk));
@@ -835,6 +876,7 @@ export class ChatService {
     proc.active = undefined;
     this.runningTurns.delete(proc.sessionId);
     this.recordClaudeQuota(ev.result || '', proc.stderrOutput, 0);
+    if (ev.costUsd !== undefined) this.failoverState.recordCost(ev.costUsd);
     this.chatSessionRepo.setBusy(proc.sessionId, 0);
     if (ev.isError) {
       this.setSessionState(proc.sessionId, 'error');

@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
 import type { ExtraDiskPath } from './disk.js';
+import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -12,6 +13,10 @@ export interface ChatConfig {
   idleTimeoutSec: number;
   model: string;
   claudeProfile?: string;
+}
+
+export interface BrainConfig {
+  fallback: ClaudeFallbackStep[];
 }
 
 export interface ClaudeSessionsConfig {
@@ -78,6 +83,7 @@ export interface AgentHubConfig {
   defaultLogDir: string;
   autoFixOnFail: boolean;
   chat: ChatConfig;
+  brain: BrainConfig;
   claudeSessions: ClaudeSessionsConfig;
   reviewer: {
     enabled: boolean;
@@ -120,6 +126,7 @@ export function saveConfig(
     port: number;
     autoFixOnFail?: boolean;
     chat: Partial<ChatConfig>;
+    brain?: Partial<BrainConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications: {
       desktop: boolean;
@@ -147,6 +154,7 @@ export function saveConfig(
     ...(patch.chat && typeof patch.chat === 'object'
       ? { chat: { ...((current.chat as Record<string, unknown>) || {}), ...patch.chat } }
       : {}),
+    ...(patch.brain && typeof patch.brain === 'object' ? { brain: { ...((current.brain as Record<string, unknown>) || {}), ...patch.brain } } : {}),
     ...(patch.reviewer && typeof patch.reviewer === 'object'
       ? { reviewer: { ...((current.reviewer as Record<string, unknown>) || {}), ...patch.reviewer } }
       : {}),
@@ -185,6 +193,7 @@ export function updateConfigInMemory(
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
     autoFixOnFail: boolean;
     chat: Partial<ChatConfig>;
+    brain?: Partial<BrainConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications: {
       desktop: boolean;
@@ -233,6 +242,7 @@ export function updateConfigInMemory(
     if (patch.chat.model !== undefined) config.chat.model = patch.chat.model;
     if (patch.chat.claudeProfile !== undefined) config.chat.claudeProfile = patch.chat.claudeProfile;
   }
+  if (patch.brain?.fallback) config.brain.fallback = normalizeFallbackSteps(patch.brain.fallback);
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
   if (patch.notifications) {
     config.notifications = {
@@ -329,6 +339,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-may',
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
+  const brainRaw = (userConfig.brain as Record<string, unknown>) || {};
 
   const userDisk = (userConfig.disk as { minFreeGB?: number; extraPaths?: unknown } | undefined);
   const userCleanup = (userConfig.cleanup as { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number } | undefined);
@@ -401,6 +412,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     defaultLogDir,
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
+    brain: { fallback: normalizeFallbackSteps(brainRaw.fallback) },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
       maxAgeDays: typeof rawClaudeSessions.maxAgeDays === 'number' ? rawClaudeSessions.maxAgeDays : 14,
