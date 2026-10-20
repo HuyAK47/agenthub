@@ -12,6 +12,7 @@ export interface ChatConfig {
   idleTimeoutSec: number;
   model: string;
   permissionTimeoutSec: number;
+  claudeProfile?: string;
 }
 
 export interface ClaudeSessionsConfig {
@@ -232,6 +233,7 @@ export function updateConfigInMemory(
     if (patch.chat.idleTimeoutSec !== undefined) config.chat.idleTimeoutSec = patch.chat.idleTimeoutSec;
     if (patch.chat.model !== undefined) config.chat.model = patch.chat.model;
     if (patch.chat.permissionTimeoutSec !== undefined) config.chat.permissionTimeoutSec = patch.chat.permissionTimeoutSec;
+    if (patch.chat.claudeProfile !== undefined) config.chat.claudeProfile = patch.chat.claudeProfile;
   }
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
   if (patch.notifications) {
@@ -327,6 +329,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     idleTimeoutSec: typeof chatRaw.idleTimeoutSec === 'number' ? chatRaw.idleTimeoutSec : 300,
     model: typeof chatRaw.model === 'string' ? chatRaw.model : 'sonnet',
     permissionTimeoutSec: typeof chatRaw.permissionTimeoutSec === 'number' ? chatRaw.permissionTimeoutSec : 600,
+    claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-may',
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
 

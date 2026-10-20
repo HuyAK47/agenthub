@@ -285,13 +285,14 @@ export function spawnClaude(
   args: string[],
   cwd: string,
   stdinText?: string,
-  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number } = {},
+  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number; claudeConfigDir?: string } = {},
 ): ChildProcess {
   const child = spawn(claudeBin, args, {
     cwd,
     detached: true,
     env: {
       ...process.env,
+      ...(options.claudeConfigDir ? { CLAUDE_CONFIG_DIR: options.claudeConfigDir } : {}),
       ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
       ...(options.chatSessionId ? { AGENTHUB_CHAT_SESSION_ID: options.chatSessionId } : {}),
       ...(options.port ? { AGENTHUB_PORT: String(options.port) } : {}),

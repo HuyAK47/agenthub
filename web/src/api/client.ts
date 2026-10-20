@@ -232,6 +232,10 @@ export async function createProfile(data: CreateProfileInput): Promise<Profile> 
   });
 }
 
+export async function deleteProfile(name: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
 export async function loginProfile(name: string): Promise<LoginSessionResponse> {
   return apiFetch<LoginSessionResponse>(`/api/profiles/${encodeURIComponent(name)}/login`, {
     method: 'POST',

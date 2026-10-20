@@ -371,6 +371,7 @@ export const ChatPage: React.FC = () => {
     title?: string;
     mode: ChatMode;
     model?: string;
+    profileName?: string | null;
   }) => {
     createSessionMutation.mutate(data);
   };
