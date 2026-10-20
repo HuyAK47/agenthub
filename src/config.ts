@@ -76,11 +76,14 @@ export const DEFAULT_STALL_CONFIG: StallConfig = {
 export interface ContextConfig {
   overlapCheckSec: number;
   depsMaxChars: number;
+  knowledgeMaxChars: number;
+  knowledgeFile?: string;
 }
 
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   overlapCheckSec: 60,
   depsMaxChars: 16000,
+  knowledgeMaxChars: 12000,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -346,6 +349,12 @@ export function updateConfigInMemory(
     if (patch.context.depsMaxChars !== undefined) {
       config.context.depsMaxChars = patch.context.depsMaxChars;
     }
+    if (patch.context.knowledgeMaxChars !== undefined) {
+      config.context.knowledgeMaxChars = patch.context.knowledgeMaxChars;
+    }
+    if (patch.context.knowledgeFile !== undefined) {
+      config.context.knowledgeFile = patch.context.knowledgeFile;
+    }
   }
   if (patch.telegram) {
     config.telegram = {
@@ -474,6 +483,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     depsMaxChars: typeof rawContext.depsMaxChars === 'number' && rawContext.depsMaxChars > 0
       ? Math.floor(rawContext.depsMaxChars)
       : 16000,
+    knowledgeMaxChars: typeof rawContext.knowledgeMaxChars === 'number' && rawContext.knowledgeMaxChars > 0
+      ? Math.floor(rawContext.knowledgeMaxChars)
+      : DEFAULT_CONTEXT_CONFIG.knowledgeMaxChars,
+    knowledgeFile: typeof rawContext.knowledgeFile === 'string' && rawContext.knowledgeFile.trim()
+      ? rawContext.knowledgeFile.trim()
+      : undefined,
   };
 
   const defaultBotTokenFile = path.join(hubHome, 'secrets', 'telegram.token');
@@ -558,6 +573,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         ? rawContext.overlapCheckSec
         : DEFAULT_CONTEXT_CONFIG.overlapCheckSec,
       depsMaxChars: context.depsMaxChars,
+      knowledgeMaxChars: context.knowledgeMaxChars,
+      knowledgeFile: context.knowledgeFile,
     },
     telegram,
   };

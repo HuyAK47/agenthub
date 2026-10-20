@@ -368,6 +368,20 @@ export const MIGRATIONS: string[] = [
   `,
   // Migration 26: task provenance for captured errors
   `ALTER TABLE tasks ADD COLUMN sourceRef TEXT;`,
+  // Migration 27: project knowledge entries
+  `
+  CREATE TABLE IF NOT EXISTS knowledge_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projectId TEXT NOT NULL,
+    taskId TEXT NOT NULL,
+    content TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    pinned INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (projectId) REFERENCES projects(id),
+    CHECK (length(taskId) > 0)
+  );
+  CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_entries(projectId, pinned DESC, createdAt DESC);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -1403,6 +1417,52 @@ export interface TaskNoteRow {
   kind: TaskNoteKind;
   content: string;
   createdAt: string;
+}
+
+export interface KnowledgeEntryRow {
+  id: number;
+  projectId: string;
+  taskId: string;
+  content: string;
+  createdAt: string;
+  pinned: number;
+}
+
+export class KnowledgeRepo {
+  constructor(private db: Database.Database) {}
+
+  getByProject(projectId: string): KnowledgeEntryRow[] {
+    return this.db
+      .prepare('SELECT * FROM knowledge_entries WHERE projectId = ? ORDER BY pinned DESC, createdAt DESC, id DESC')
+      .all(projectId) as KnowledgeEntryRow[];
+  }
+
+  get(id: number): KnowledgeEntryRow | undefined {
+    return this.db.prepare('SELECT * FROM knowledge_entries WHERE id = ?').get(id) as KnowledgeEntryRow | undefined;
+  }
+
+  insert(row: { projectId: string; taskId: string; content: string; pinned?: boolean }): KnowledgeEntryRow {
+    const result = this.db
+      .prepare('INSERT INTO knowledge_entries (projectId, taskId, content, pinned) VALUES (?, ?, ?, ?)')
+      .run(row.projectId, row.taskId, row.content, row.pinned ? 1 : 0);
+    return this.get(result.lastInsertRowid as number)!;
+  }
+
+  update(id: number, fields: { content?: string; pinned?: boolean }): KnowledgeEntryRow | undefined {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (fields.content !== undefined) { sets.push('content = ?'); values.push(fields.content); }
+    if (fields.pinned !== undefined) { sets.push('pinned = ?'); values.push(fields.pinned ? 1 : 0); }
+    if (sets.length > 0) {
+      values.push(id);
+      this.db.prepare(`UPDATE knowledge_entries SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    }
+    return this.get(id);
+  }
+
+  delete(id: number): void {
+    this.db.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id);
+  }
 }
 
 export class TaskNoteRepo {

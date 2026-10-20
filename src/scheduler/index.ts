@@ -16,6 +16,7 @@ import {
   RunMetricsRepo,
   TaskRow,
   ProfileRow,
+  KnowledgeRepo,
 } from '../db/index.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, QuotaService } from '../quota/index.js';
@@ -132,6 +133,7 @@ export class Scheduler {
   private checkRunner?: CheckRunner;
   private db?: Database.Database;
   private runMetricsRepo?: RunMetricsRepo;
+  private knowledgeRepo?: KnowledgeRepo;
   private reviewRepo?: ReviewRepo;
   private failoverState?: ClaudeFailoverState;
   private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
@@ -155,6 +157,7 @@ export class Scheduler {
     locks?: ProfileLockService,
     db?: Database.Database,
     runMetricsRepo?: RunMetricsRepo,
+    knowledgeRepo?: KnowledgeRepo,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -163,6 +166,7 @@ export class Scheduler {
     this.locks = locks || new ProfileLockService(path.join(config.agyHomesDir, '.state'), config.slotsPerAgyProfile, config.slotsPerCodexProfile);
     this.db = db;
     this.runMetricsRepo = runMetricsRepo;
+    this.knowledgeRepo = knowledgeRepo;
     if (db) this.checkRunner = new CheckRunner(db);
 
     if (engineOverrides) {
@@ -1583,6 +1587,8 @@ export class Scheduler {
       feedback,
       this.getDependencyContext(task),
       this.config.context?.depsMaxChars,
+      this.knowledgeRepo?.getByProject(task.projectId) || [],
+      this.config.context?.knowledgeMaxChars,
     );
   }
 
