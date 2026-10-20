@@ -1008,7 +1008,8 @@ export class AppService {
   async refreshUsage(name: string) {
     const profile = this.profileRepo.get(name);
     if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    await this.usageService.collect(profile);
+    if (profile.engine === 'codex') this.usageService.collectCodex(profile);
+    else await this.usageService.collect(profile);
     this.refreshProfileEmail(profile.name);
     return this.listProfiles().find((p) => p.name === name);
   }
