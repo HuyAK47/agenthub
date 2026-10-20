@@ -216,6 +216,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     taskRepo,
     projectRepo,
     quotaMarkRepo,
+    chatService,
   });
   service.setTelegramBotService(telegramService);
 
