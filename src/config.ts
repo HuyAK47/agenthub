@@ -603,6 +603,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
+      pausePolicy: rawLoad.pausePolicy === 'rss' || rawLoad.pausePolicy === 'recent' ? rawLoad.pausePolicy : DEFAULT_LOAD_CONFIG.pausePolicy,
+      maxAutoPaused: typeof rawLoad.maxAutoPaused === 'number' ? rawLoad.maxAutoPaused : DEFAULT_LOAD_CONFIG.maxAutoPaused,
+      autoPauseThresholdSec: typeof rawLoad.autoPauseThresholdSec === 'number' ? rawLoad.autoPauseThresholdSec : DEFAULT_LOAD_CONFIG.autoPauseThresholdSec,
     },
     stall,
     context: {

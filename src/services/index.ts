@@ -479,6 +479,20 @@ export function formatEventSummary(
     case 'task.cancelled':
       return `${taskLabel} đã bị hủy`;
 
+    case 'task.paused':
+      return p.reason === 'load'
+        ? `${taskLabel} tạm dừng do quá tải`
+        : `${taskLabel} đã tạm dừng`;
+
+    case 'task.resumed':
+      return `${taskLabel} tiếp tục chạy`;
+
+    case 'load.task_paused':
+      return `${taskLabel} tạm dừng do quá tải`;
+
+    case 'load.task_resumed':
+      return `${taskLabel} tiếp tục chạy sau khi tải giảm`;
+
     case 'task.timeout':
       return `${taskLabel} hết thời gian chạy`;
 
@@ -778,6 +792,10 @@ export class AppService {
         projectId: task?.projectId ?? (r.projectId || (r.taskId.includes('/') ? r.taskId.split('/')[0] : '')),
         slug: task?.slug ?? (r.taskId.includes('/') ? r.taskId.slice(r.taskId.indexOf('/') + 1) : r.taskId),
         worktreePath: task?.worktreePath ?? null,
+        rss: r.rss ?? 0,
+        cpu: r.cpu ?? 0,
+        paused: Boolean(r.paused),
+        pauseReason: r.pauseReason ?? null,
       };
     });
 
@@ -1451,6 +1469,8 @@ export class AppService {
         ...apiTask(task),
         reviewChain,
         checks: this.scheduler.getCheckResults(task.id),
+        paused: Boolean(run?.paused),
+        pauseReason: run?.pauseReason ?? null,
         currentRun: run ? {
           startedAt: new Date(run.startTime).toISOString(),
           lastOutputAt: new Date(run.lastOutputAt).toISOString(),
@@ -1459,6 +1479,10 @@ export class AppService {
           noCommitMinutes: run.noCommitMinutes ?? null,
           isLooping: run.isLooping ?? false,
           loopingCommand: run.loopingCommand ?? null,
+          paused: Boolean(run.paused),
+          pauseReason: run.pauseReason ?? null,
+          rss: run.rss ?? 0,
+          cpu: run.cpu ?? 0,
         } : null,
       };
     }) as TaskRow[];
@@ -1517,6 +1541,8 @@ export class AppService {
     const activeRun = this.scheduler.getRunning().get(taskId);
     return {
       ...apiTask(task),
+      paused: Boolean(activeRun?.paused),
+      pauseReason: activeRun?.pauseReason ?? null,
       currentRun: activeRun ? {
         startedAt: new Date(activeRun.startTime).toISOString(),
         lastOutputAt: new Date(activeRun.lastOutputAt).toISOString(),
@@ -1525,6 +1551,10 @@ export class AppService {
         noCommitMinutes: activeRun.noCommitMinutes ?? null,
         isLooping: activeRun.isLooping ?? false,
         loopingCommand: activeRun.loopingCommand ?? null,
+        paused: Boolean(activeRun.paused),
+        pauseReason: activeRun.pauseReason ?? null,
+        rss: activeRun.rss ?? 0,
+        cpu: activeRun.cpu ?? 0,
       } : null,
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
@@ -1786,6 +1816,34 @@ export class AppService {
 
     this.scheduler.cancelTask(taskId);
     return this.taskRepo.get(taskId)!;
+  }
+
+  pauseTask(idParam: string): { ok: boolean; paused: boolean } {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    const rt = this.scheduler.getRunning().get(taskId);
+    if (!rt) {
+      throw new HttpError(400, 'bad_request', `Task "${taskId}" không ở trạng thái running`);
+    }
+    this.scheduler.pauseTask(taskId, 'manual');
+    return { ok: true, paused: true };
+  }
+
+  resumeTask(idParam: string): { ok: boolean; paused: boolean } {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    const rt = this.scheduler.getRunning().get(taskId);
+    if (!rt) {
+      throw new HttpError(400, 'bad_request', `Task "${taskId}" không ở trạng thái running`);
+    }
+    this.scheduler.resumeTask(taskId);
+    return { ok: true, paused: false };
   }
 
   async reviewTask(idParam: string, raw: unknown): Promise<TaskRow> {

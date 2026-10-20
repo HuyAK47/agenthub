@@ -30,11 +30,11 @@ function defaultWorktreesDir(): string {
   return path.join(os.homedir(), '.agenthub', 'worktrees');
 }
 
-function cleanCwd(cwd: string): string {
+export function cleanCwd(cwd: string): string {
   return cwd.endsWith(DELETED_SUFFIX) ? cwd.slice(0, -DELETED_SUFFIX.length) : cwd;
 }
 
-function isInside(target: string, dir: string): boolean {
+export function isInside(target: string, dir: string): boolean {
   const resolvedTarget = resolveReal(cleanCwd(target));
   const resolvedDir = resolveReal(cleanCwd(dir));
   return resolvedTarget === resolvedDir || resolvedTarget.startsWith(resolvedDir + path.sep);
@@ -49,7 +49,7 @@ function resolveReal(target: string): string {
   }
 }
 
-function processAncestors(): Set<number> {
+export function processAncestors(): Set<number> {
   const ancestors = new Set<number>([process.pid]);
   let pid = process.pid;
   for (;;) {
@@ -61,6 +61,13 @@ function processAncestors(): Set<number> {
   return ancestors;
 }
 
+export function processIds(): number[] {
+  try {
+    return fs.readdirSync('/proc').filter((entry) => /^\d+$/.test(entry)).map(Number);
+  } catch {
+    return [];
+  }
+}
 function guard(dir: string, options: ReaperOptions): boolean {
   return isDeletableWorktreePath(
     options.worktreesDir || defaultWorktreesDir(),
