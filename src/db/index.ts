@@ -207,11 +207,6 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE tasks_new RENAME TO tasks;
   PRAGMA foreign_keys = ON;
   `,
-  // Migration 10: explicit chat lifecycle state
-  `
-  ALTER TABLE chat_sessions ADD COLUMN state TEXT NOT NULL DEFAULT 'idle'
-    CHECK(state IN ('idle','running','waiting_permission','error'));
-  `,
   // Migration 10: identify the reviewer that produced each decision
   `
   ALTER TABLE reviews ADD COLUMN actor TEXT NOT NULL DEFAULT 'claude';
@@ -292,6 +287,11 @@ export const MIGRATIONS: string[] = [
   // Migration 18: automatic merge configuration
   `
   ALTER TABLE projects ADD COLUMN merge TEXT;
+  `,
+  // Migration 19: explicit chat lifecycle state
+  `
+  ALTER TABLE chat_sessions ADD COLUMN state TEXT NOT NULL DEFAULT 'idle'
+    CHECK(state IN ('idle','running','waiting_permission','error'));
   `,
 ];
 
