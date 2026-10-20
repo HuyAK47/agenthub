@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import Markdown from 'react-markdown';
-import { createTask, getProjects, getTasks } from '../api/client';
+import { createTask, getProjects, getTasks, getConfig, getModelOptions } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { ArrowLeft, Eye, Edit3, Plus } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
@@ -19,6 +19,7 @@ export const CreateTaskPage: React.FC = () => {
   const [body, setBody] = useState('');
   const [selectedDeps, setSelectedDeps] = useState<string[]>([]);
   const [startImmediately, setStartImmediately] = useState(false);
+  const [modelChain, setModelChain] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'edit' | 'preview'>('edit');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -31,6 +32,11 @@ export const CreateTaskPage: React.FC = () => {
     queryKey: ['tasks'],
     queryFn: () => getTasks(),
   });
+  const { data: config } = useQuery({ queryKey: ['config'], queryFn: getConfig });
+  const { data: modelOptions } = useQuery({ queryKey: ['model-options'], queryFn: getModelOptions });
+  const modelSuggestions = modelOptions?.suggestions?.length
+    ? modelOptions.suggestions
+    : [...new Set([...(config?.modelChainHard || []), ...(config?.modelChainEasy || [])])];
 
   // Set default project when loaded
   React.useEffect(() => {
@@ -75,6 +81,7 @@ export const CreateTaskPage: React.FC = () => {
       level,
       body: body.trim(),
       dependsOn: selectedDeps,
+      modelChain: modelChain.length > 0 ? modelChain : undefined,
       start: startImmediately,
     });
   };
@@ -190,6 +197,21 @@ export const CreateTaskPage: React.FC = () => {
                 <span>{t('createTask.hardDesc')}</span>
               </label>
             </div>
+          </div>
+
+          {/* Dependencies (dependsOn) */}
+          <div>
+            <label className="block text-xs font-semibold text-[var(--t-text)] uppercase tracking-wider mb-2">{t('createTask.modelChainLabel')}</label>
+            <input
+              aria-label="Model chain"
+              value={modelChain.join(', ')}
+              onChange={(e) => setModelChain(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))}
+              list="create-task-model-suggestions"
+              placeholder={(level === 'hard' ? config?.modelChainHard : config?.modelChainEasy)?.join(', ') || 'gemini-3.8-flash-medium, codex:gpt-5.6-luna'}
+              className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]"
+            />
+            <datalist id="create-task-model-suggestions">{modelSuggestions.map((model) => <option key={model} value={model} />)}</datalist>
+            <p className="text-[11px] text-[var(--t-text-3)] mt-1">{t('createTask.modelChainHint')}</p>
           </div>
 
           {/* Dependencies (dependsOn) */}

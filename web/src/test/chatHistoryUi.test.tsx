@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChatPage } from '../pages/ChatPage';
 import { MessageList } from '../components/chat/MessageList';
+import { MessageItem } from '../components/chat/MessageItem';
 import { SessionList } from '../components/chat/SessionList';
 import { ContextMeter } from '../components/chat/ContextMeter';
 import { ToolStep } from '../components/chat/ToolStep';
@@ -128,6 +129,19 @@ describe('c-chat-history-ui Tests', () => {
       );
       fireEvent.scroll(container);
       expect(onLoadMoreMock).not.toHaveBeenCalled();
+    });
+
+    it('hiển thị tin system ("Đã nén ngữ cảnh") trong MessageItem', () => {
+      const systemMsg: ChatMessage = {
+        id: 'sys-1',
+        role: 'system',
+        content: 'Đã nén ngữ cảnh',
+        createdAt: new Date().toISOString(),
+      };
+      render(<MessageItem message={systemMsg} />);
+      const el = screen.getByTestId('system-message');
+      expect(el).toBeInTheDocument();
+      expect(el).toHaveTextContent('Đã nén ngữ cảnh');
     });
   });
 
@@ -374,6 +388,32 @@ describe('c-chat-history-ui Tests', () => {
       expect(compactBtn).toBeInTheDocument();
       fireEvent.click(compactBtn);
       expect(onCompactMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('khi ngữ cảnh > 80%: hiện nút Mở phiên mới kèm tóm tắt nếu có onForkSummary', () => {
+      const highSession: ChatSession = {
+        id: 's-high-fork',
+        title: 'High Context Session',
+        mode: 'safe',
+        busy: false,
+        updatedAt: new Date().toISOString(),
+        contextTokens: 180000,
+        inputTokens: 100000,
+        outputTokens: 80000,
+      };
+
+      const onForkSummaryMock = vi.fn();
+      render(
+        <ContextMeter
+          session={highSession}
+          onForkSummary={onForkSummaryMock}
+        />,
+      );
+
+      const forkBtn = screen.getByTestId('fork-summary-button');
+      expect(forkBtn).toBeInTheDocument();
+      fireEvent.click(forkBtn);
+      expect(onForkSummaryMock).toHaveBeenCalledTimes(1);
     });
   });
 

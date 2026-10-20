@@ -83,6 +83,23 @@ export class NotificationService {
         break;
       }
 
+      case 'task.paused':
+      case 'load.task_paused': {
+        const title = this.resolveTaskTitle(taskId, p);
+        const msg = p.reason === 'load'
+          ? `Tạm dừng task ${title} do quá tải hệ thống`
+          : `Tạm dừng task ${title}`;
+        this.notify(msg, 'normal');
+        break;
+      }
+
+      case 'task.resumed':
+      case 'load.task_resumed': {
+        const title = this.resolveTaskTitle(taskId, p);
+        this.notify(`Tiếp tục task ${title}`, 'normal');
+        break;
+      }
+
       case 'review.escalated': {
         const title = this.resolveTaskTitle(taskId, p);
         this.notify(`Cần người duyệt: ${title}`, 'normal');
@@ -128,6 +145,15 @@ export class NotificationService {
           : step?.type === 'engine' ? `engine ${String(step.engine)}`
           : step?.type === 'wait' ? 'chờ reset' : 'cấu hình chính';
         this.notify(`Claude fallback: đang dùng ${label}`, 'normal');
+        break;
+      }
+
+      case 'claude.auto_resumed': {
+        if (p.started === true) {
+          this.notify('Claude đã tự tiếp tục phiên sau khi hết giới hạn', 'normal');
+        } else if (p.ok === false) {
+          this.notify('Claude tự tiếp tục nhưng phiên đã lỗi', 'critical');
+        }
         break;
       }
 

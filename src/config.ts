@@ -12,8 +12,10 @@ export interface ChatConfig {
   maxConcurrent: number;
   idleTimeoutSec: number;
   model: string;
+  models: string[];
   permissionTimeoutSec: number;
   claudeProfile?: string;
+  autoCompactPercent: number;
 }
 
 export interface BrainConfig {
@@ -25,6 +27,7 @@ export interface ClaudeSessionsConfig {
   maxAgeDays: number;
   include: string[];
   weights: { cacheCreation: number; cacheRead: number };
+  autoResume: { enabled: boolean; prompt: string; allowFullMode: boolean };
 }
 
 export interface SavingsConfig {
@@ -348,8 +351,10 @@ export function updateConfigInMemory(
     }
     if (patch.chat.idleTimeoutSec !== undefined) config.chat.idleTimeoutSec = patch.chat.idleTimeoutSec;
     if (patch.chat.model !== undefined) config.chat.model = patch.chat.model;
+    if (patch.chat.models !== undefined) config.chat.models = [...patch.chat.models];
     if (patch.chat.permissionTimeoutSec !== undefined) config.chat.permissionTimeoutSec = patch.chat.permissionTimeoutSec;
     if (patch.chat.claudeProfile !== undefined) config.chat.claudeProfile = patch.chat.claudeProfile;
+    if (patch.chat.autoCompactPercent !== undefined) config.chat.autoCompactPercent = patch.chat.autoCompactPercent;
   }
   if (patch.brain?.fallback) config.brain.fallback = normalizeFallbackSteps(patch.brain.fallback);
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
@@ -477,8 +482,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : 2,
     idleTimeoutSec: typeof chatRaw.idleTimeoutSec === 'number' ? chatRaw.idleTimeoutSec : 300,
     model: typeof chatRaw.model === 'string' ? chatRaw.model : 'sonnet',
+    models: Array.isArray(chatRaw.models) && chatRaw.models.every((model): model is string => typeof model === 'string' && model.trim().length > 0)
+      ? [...chatRaw.models]
+      : ['opus', 'sonnet', 'haiku'],
     permissionTimeoutSec: typeof chatRaw.permissionTimeoutSec === 'number' ? chatRaw.permissionTimeoutSec : 600,
     claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-may',
+    autoCompactPercent: typeof chatRaw.autoCompactPercent === 'number' ? chatRaw.autoCompactPercent : 85,
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
   const brainRaw = (userConfig.brain as Record<string, unknown>) || {};
@@ -612,6 +621,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         cacheCreation: typeof rawClaudeWeights.cacheCreation === 'number' ? rawClaudeWeights.cacheCreation : 1.25,
         cacheRead: typeof rawClaudeWeights.cacheRead === 'number' ? rawClaudeWeights.cacheRead : 0.1,
       },
+      autoResume: {
+        enabled: (rawClaudeSessions.autoResume as Record<string, unknown> | undefined)?.enabled === true,
+        prompt: typeof (rawClaudeSessions.autoResume as Record<string, unknown> | undefined)?.prompt === 'string'
+          ? (rawClaudeSessions.autoResume as Record<string, unknown>).prompt as string
+          : 'Giới hạn 5 giờ đã reset. Tiếp tục công việc đang dở từ chỗ đã dừng; nếu đã xong thì tóm tắt trạng thái.',
+        allowFullMode: (rawClaudeSessions.autoResume as Record<string, unknown> | undefined)?.allowFullMode === true,
+      },
     },
     reviewer: {
       enabled: reviewerRaw.enabled !== false,
@@ -635,6 +651,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
+      pausePolicy: rawLoad.pausePolicy === 'rss' || rawLoad.pausePolicy === 'recent' ? rawLoad.pausePolicy : DEFAULT_LOAD_CONFIG.pausePolicy,
+      maxAutoPaused: typeof rawLoad.maxAutoPaused === 'number' ? rawLoad.maxAutoPaused : DEFAULT_LOAD_CONFIG.maxAutoPaused,
+      autoPauseThresholdSec: typeof rawLoad.autoPauseThresholdSec === 'number' ? rawLoad.autoPauseThresholdSec : DEFAULT_LOAD_CONFIG.autoPauseThresholdSec,
     },
     stall,
     context: {

@@ -134,6 +134,7 @@ export interface Task {
   worktreePath?: string | null;
   status: TaskStatus;
   waitReason?: WaitReason;
+  modelWarnings?: string[];
   dependsOn: string | string[];
   attempt: number;
   resume: number;
@@ -158,7 +159,13 @@ export interface Task {
     loopingCommand?: string | null;
     model?: string;
     profileName?: string;
+    paused?: boolean;
+    pauseReason?: 'manual' | 'load' | null;
+    rss?: number;
+    cpu?: number;
   } | null;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
   checks?: CheckResult[];
   sourceRef?: {
     taskId: string;
@@ -222,6 +229,10 @@ export interface RunningWorker {
   slug?: string;
   title?: string;
   worktreePath?: string | null;
+  rss?: number;
+  cpu?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
 }
 
 export type BrainActivity =
@@ -436,6 +447,7 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
+  reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
     fallback: Array<
       | { type: 'profile'; profile?: string }
@@ -455,6 +467,11 @@ export interface SystemConfig {
     minFreeMemGB: number;
     recoverAfterSec: number;
   };
+}
+
+export interface ModelOptions {
+  suggestions: string[];
+  configured: string[];
 }
 
 export type ChatMode = 'safe' | 'full';
@@ -478,7 +495,7 @@ export interface ChatSession {
   createdAt?: string;
 }
 
-export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error';
+export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
 
 export interface ChatMessageMeta {
   name?: string;
@@ -521,6 +538,7 @@ export interface UpdateChatSessionInput {
   title?: string;
   pinned?: boolean | number;
   archived?: boolean | number;
+  model?: string;
 }
 
 export interface SendMessageResponse {
@@ -536,8 +554,10 @@ export interface ChatConfig {
   claudeVersion?: string | null;
   maxConcurrent?: number;
   idleTimeoutSec?: number;
-  model?: '' | 'sonnet' | 'haiku';
+  model?: string;
+  models?: string[];
   claudeProfile?: string;
+  autoCompactPercent?: number;
 }
 
 export interface CreateProjectInput {

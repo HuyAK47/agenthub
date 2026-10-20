@@ -24,7 +24,12 @@ import {
   OrphanProcess,
   KnowledgeEntry,
   TaskGraphResponse,
+  ModelOptions,
 } from '../types/api';
+
+export async function getModelOptions(): Promise<ModelOptions> {
+  return apiFetch<ModelOptions>('/api/models');
+}
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
 
@@ -417,7 +422,22 @@ export async function cancelTask(id: string): Promise<Task> {
   });
 }
 
-export async function reviewTask(id: string, data: ReviewTaskInput): Promise<Task> {
+export async function pauseTask(id: string): Promise<{ ok: boolean; paused: boolean }> {
+  return apiFetch<{ ok: boolean; paused: boolean }>(`/api/tasks/${encodeURIComponent(id)}/pause`, {
+    method: 'POST',
+  });
+}
+
+export async function resumeTask(id: string): Promise<{ ok: boolean; paused: boolean }> {
+  return apiFetch<{ ok: boolean; paused: boolean }>(`/api/tasks/${encodeURIComponent(id)}/resume`, {
+    method: 'POST',
+  });
+}
+
+export async function reviewTask(
+  id: string,
+  data: ReviewTaskInput,
+): Promise<Task> {
   return apiFetch<Task>(`/api/tasks/${encodeURIComponent(id)}/review`, {
     method: 'POST',
     body: JSON.stringify(data),

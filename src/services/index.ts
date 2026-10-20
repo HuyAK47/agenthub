@@ -48,6 +48,7 @@ import { computeTaskGraph, filterTasksForGraph } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
+import { isKnownModel } from '../quota/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -130,6 +131,7 @@ export const modelValidator = z.string().refine(
   (m) => (m.startsWith('codex:') && m.length > 6) || VALID_AGY_MODELS.has(m),
   { message: 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:' },
 );
+const taskModelValidator = z.string().trim().min(1, 'Model không được để trống');
 
 export const ProjectHooksSchema = z.object({
   onWorktreeRemoved: z.array(z.string()).optional(),
@@ -198,7 +200,7 @@ export const CreateTaskSchema = z.object({
   dependsOn: z.array(z.string()).optional(),
   baseRef: z.string().optional(),
   branch: z.string().optional(),
-  modelChain: z.array(modelValidator).optional(),
+  modelChain: z.array(taskModelValidator).optional(),
   sourceRef: z.object({ taskId: z.string(), runId: z.string().nullable().optional(), checkName: z.string().nullable().optional(), excerptHash: z.string() }).optional(),
   start: z.boolean().optional(),
 });
@@ -216,7 +218,7 @@ export const CaptureTaskSchema = z.object({
 });
 
 export const UpdateTaskSchema = z.object({
-  modelChain: z.array(modelValidator).nullable().optional(),
+  modelChain: z.array(taskModelValidator).nullable().optional(),
   dependsOn: z.array(z.string()).optional(),
   level: z.enum(['easy', 'hard']).optional(),
   title: z.string().min(1).optional(),
@@ -303,7 +305,9 @@ export const UpdateConfigSchema = z.object({
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
-      model: z.enum(['', 'sonnet', 'haiku']).optional(),
+      model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
+      models: z.array(z.string().trim().min(1)).min(1).optional(),
+      autoCompactPercent: z.number().min(0).max(100).optional(),
     })
     .optional(),
   reviewer: z.object({
@@ -479,6 +483,20 @@ export function formatEventSummary(
     case 'task.cancelled':
       return `${taskLabel} đã bị hủy`;
 
+    case 'task.paused':
+      return p.reason === 'load'
+        ? `${taskLabel} tạm dừng do quá tải`
+        : `${taskLabel} đã tạm dừng`;
+
+    case 'task.resumed':
+      return `${taskLabel} tiếp tục chạy`;
+
+    case 'load.task_paused':
+      return `${taskLabel} tạm dừng do quá tải`;
+
+    case 'load.task_resumed':
+      return `${taskLabel} tiếp tục chạy sau khi tải giảm`;
+
     case 'task.timeout':
       return `${taskLabel} hết thời gian chạy`;
 
@@ -644,6 +662,12 @@ export class AppService {
     const turns = db.prepare(`SELECT turnId, MIN(ts) ts, SUM(input) input, SUM(output) output, SUM(cacheCreation) cacheCreation, SUM(cacheRead) cacheRead, SUM(effective) effectiveTokens FROM claude_usage WHERE sessionId=? GROUP BY turnId ORDER BY ts`).all(id) as Array<{ turnId: string; ts: string; input: number; output: number; cacheCreation: number; cacheRead: number; effectiveTokens: number }>;
     return { ...session, turns: turns.map((turn) => ({ ...turn, tasks: db.prepare('SELECT taskId,effectiveTokens FROM claude_task_usage WHERE sessionId=? AND turnId=?').all(id, turn.turnId) })) };
   }
+  setClaudeAutoResume(id: string, enabled: boolean) {
+    if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');
+    const session = this.claudeSessionRepo.get(id);
+    if (!session) throw new HttpError(404, 'not_found', `Claude session "${id}" không tồn tại`);
+    return this.claudeSessionRepo.setAutoResume(id, enabled);
+  }
   async rescanClaudeSessions() { await this.claudeScanner?.scan(); return { ok: true }; }
   getClaudeQuota() { const quota = this.claudeSessionRepo?.quota() || { status: null, resetsAt: null, rateLimitType: null, observedAt: null }; return { ...quota, limited: isClaudeQuotaLimited(quota.status || undefined) }; }
   getClaudeFailover() { return this.chatService?.getClaudeFailover() || { active: false, until: null, reason: null, activatedAt: null, evidence: null, lastActivityAt: null }; }
@@ -778,6 +802,10 @@ export class AppService {
         projectId: task?.projectId ?? (r.projectId || (r.taskId.includes('/') ? r.taskId.split('/')[0] : '')),
         slug: task?.slug ?? (r.taskId.includes('/') ? r.taskId.slice(r.taskId.indexOf('/') + 1) : r.taskId),
         worktreePath: task?.worktreePath ?? null,
+        rss: r.rss ?? 0,
+        cpu: r.cpu ?? 0,
+        paused: Boolean(r.paused),
+        pauseReason: r.pauseReason ?? null,
       };
     });
 
@@ -1451,6 +1479,8 @@ export class AppService {
         ...apiTask(task),
         reviewChain,
         checks: this.scheduler.getCheckResults(task.id),
+        paused: Boolean(run?.paused),
+        pauseReason: run?.pauseReason ?? null,
         currentRun: run ? {
           startedAt: new Date(run.startTime).toISOString(),
           lastOutputAt: new Date(run.lastOutputAt).toISOString(),
@@ -1459,6 +1489,10 @@ export class AppService {
           noCommitMinutes: run.noCommitMinutes ?? null,
           isLooping: run.isLooping ?? false,
           loopingCommand: run.loopingCommand ?? null,
+          paused: Boolean(run.paused),
+          pauseReason: run.pauseReason ?? null,
+          rss: run.rss ?? 0,
+          cpu: run.cpu ?? 0,
         } : null,
       };
     }) as TaskRow[];
@@ -1515,8 +1549,19 @@ export class AppService {
     }
 
     const activeRun = this.scheduler.getRunning().get(taskId);
+    let modelWarnings: string[] = [];
+    try {
+      const chain = task.modelChain ? JSON.parse(task.modelChain) as unknown : [];
+      if (Array.isArray(chain)) {
+        modelWarnings = chain.filter((model): model is string => typeof model === 'string' && !isKnownModel(model));
+      }
+    } catch {
+      modelWarnings = ['modelChain không phải JSON hợp lệ'];
+    }
     return {
       ...apiTask(task),
+      paused: Boolean(activeRun?.paused),
+      pauseReason: activeRun?.pauseReason ?? null,
       currentRun: activeRun ? {
         startedAt: new Date(activeRun.startTime).toISOString(),
         lastOutputAt: new Date(activeRun.lastOutputAt).toISOString(),
@@ -1525,6 +1570,10 @@ export class AppService {
         noCommitMinutes: activeRun.noCommitMinutes ?? null,
         isLooping: activeRun.isLooping ?? false,
         loopingCommand: activeRun.loopingCommand ?? null,
+        paused: Boolean(activeRun.paused),
+        pauseReason: activeRun.pauseReason ?? null,
+        rss: activeRun.rss ?? 0,
+        cpu: activeRun.cpu ?? 0,
       } : null,
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
@@ -1533,6 +1582,7 @@ export class AppService {
       reviewMaxRounds: reviewSettings?.maxRounds || 2,
       doneContent,
       blockedContent,
+      modelWarnings,
       commits,
       worktreePath: task.worktreePath,
       checks: this.scheduler.getCheckResults(taskId),
@@ -1786,6 +1836,34 @@ export class AppService {
 
     this.scheduler.cancelTask(taskId);
     return this.taskRepo.get(taskId)!;
+  }
+
+  pauseTask(idParam: string): { ok: boolean; paused: boolean } {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    const rt = this.scheduler.getRunning().get(taskId);
+    if (!rt) {
+      throw new HttpError(400, 'bad_request', `Task "${taskId}" không ở trạng thái running`);
+    }
+    this.scheduler.pauseTask(taskId, 'manual');
+    return { ok: true, paused: true };
+  }
+
+  resumeTask(idParam: string): { ok: boolean; paused: boolean } {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    const rt = this.scheduler.getRunning().get(taskId);
+    if (!rt) {
+      throw new HttpError(400, 'bad_request', `Task "${taskId}" không ở trạng thái running`);
+    }
+    this.scheduler.resumeTask(taskId);
+    return { ok: true, paused: false };
   }
 
   async reviewTask(idParam: string, raw: unknown): Promise<TaskRow> {
@@ -2199,6 +2277,8 @@ export class AppService {
         idleTimeoutSec: this.config.chat.idleTimeoutSec,
         permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
+        autoCompactPercent: this.config.chat.autoCompactPercent ?? 85,
+        models: this.config.chat.models,
       },
       brain: { fallback: this.config.brain.fallback },
       reviewer: this.config.reviewer,
@@ -2216,6 +2296,21 @@ export class AppService {
         notify: this.config.telegram.notify,
       },
     };
+  }
+
+  getModelOptions() {
+    const profiles = this.profileRepo.getAll().filter((profile) => Boolean(profile.enabled));
+    const suggestions = new Set<string>();
+    for (const profile of profiles) {
+      if (profile.engine === 'agy') {
+        for (const model of VALID_AGY_MODELS) suggestions.add(model);
+      } else if (profile.engine === 'codex') {
+        suggestions.add('codex:gpt-5.6-luna');
+      }
+    }
+    const configured = [...this.config.defaultModelChains.hard, ...this.config.defaultModelChains.easy, this.config.reviewer.model];
+    const configuredModels = [...new Set(configured.filter(Boolean))];
+    return { suggestions: [...suggestions].sort(), configured: configuredModels };
   }
 
   updateConfig(raw: unknown) {

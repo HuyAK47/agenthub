@@ -59,4 +59,42 @@ describe('LoadGuard', () => {
     now = 799_000;
     expect(guard.update().overloaded).toBe(false);
   });
+
+  it('triggers autoPauseTriggered after high load persists for autoPauseThresholdSec (60s)', () => {
+    let now = 100_000;
+    let load = 20;
+    const guard = new LoadGuard({
+      enabled: true,
+      high: 16,
+      ok: 11,
+      minFreeMemGB: 1.5,
+      recoverAfterSec: 300,
+      autoPauseThresholdSec: 60,
+      pausePolicy: 'recent',
+      maxAutoPaused: 2,
+    }, {
+      readLoad: () => load,
+      readFreeMemBytes: () => 4 * 1024 ** 3,
+      now: () => now,
+    });
+
+    // Initial update enters overloaded & high state
+    expect(guard.update().autoPauseTriggered).toBe(false);
+    expect(guard.isAutoPauseTriggered()).toBe(false);
+
+    // 30s later (under 60s threshold)
+    now = 130_000;
+    expect(guard.update().autoPauseTriggered).toBe(false);
+    expect(guard.isAutoPauseTriggered()).toBe(false);
+
+    // 60s later: triggered!
+    now = 160_000;
+    expect(guard.update().autoPauseTriggered).toBe(true);
+    expect(guard.isAutoPauseTriggered()).toBe(true);
+
+    // If load drops below high, highSince resets
+    load = 14; // between ok (11) and high (16)
+    guard.update();
+    expect(guard.isAutoPauseTriggered()).toBe(false);
+  });
 });

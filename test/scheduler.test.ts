@@ -1471,6 +1471,34 @@ describe('Env file generation', () => {
     scheduler.stop();
   });
 
+  it('skips unknown models, emits task.model_skipped, and fails when none are usable', () => {
+    const projectPath = path.join(tmpDir, 'repo-model-skip');
+    createTestProject(projectPath);
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    taskRepo.insert({
+      id: 'test-project/skip-known', projectId: 'test-project', slug: 'skip-known', title: 'Skip unknown',
+      level: 'easy', status: 'queued', modelChain: JSON.stringify(['made-up-model', 'gemini-3.8-flash-medium']),
+    });
+    taskRepo.insert({
+      id: 'test-project/skip-all', projectId: 'test-project', slug: 'skip-all', title: 'No usable model',
+      level: 'easy', status: 'queued', modelChain: JSON.stringify(['made-up-model']),
+    });
+    const skipped: unknown[] = [];
+    eventRepo.getRecent(100);
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]));
+
+    scheduler.getEventBus().on('task.model_skipped', (_taskId, payload) => skipped.push(payload));
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/skip-known')[0]?.model).toBe('gemini-3.8-flash-medium');
+    expect(taskRepo.get('test-project/skip-all')?.status).toBe('failed');
+    expect(skipped).toHaveLength(2);
+    expect(eventRepo.getRecent(100).some((event) => event.type === 'task.failed' && event.taskId === 'test-project/skip-all')).toBe(true);
+    scheduler.stop();
+  });
+
   it('fails clearly when all profiles have a non-ok authState', () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);

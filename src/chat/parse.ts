@@ -49,6 +49,11 @@ export type ParsedStreamEvent =
         cacheReadInputTokens?: number;
         cacheCreationInputTokens?: number;
       };
+    }
+  | {
+      type: 'rate_limit_info';
+      status: string;
+      resetsAt?: number;
     };
 
 export interface ClaudeQuotaSignal {
@@ -192,6 +197,13 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
     const msg = data.message as Record<string, unknown>;
     if (Array.isArray(msg.content) && msg.content.some((block) => block && typeof block === 'object' && (block as Record<string, unknown>).type === 'tool_result')) {
       return [{ type: 'tool_result' }];
+    }
+  }
+
+  if (data.type === 'rate_limit_info' && data.rate_limit_info && typeof data.rate_limit_info === 'object') {
+    const info = data.rate_limit_info as Record<string, unknown>;
+    if (typeof info.status === 'string') {
+      return [{ type: 'rate_limit_info', status: info.status, ...(typeof info.resetsAt === 'number' ? { resetsAt: info.resetsAt } : {}) }];
     }
   }
 

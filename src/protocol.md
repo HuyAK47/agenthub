@@ -16,7 +16,8 @@ Bạn là một AI worker trong hệ thống AgentHub.
 7. Nếu **bị chặn**, tạo `.agenthub/BLOCKED` ghi rõ lý do.
 8. Chỉ tạo marker ở **bước cuối cùng**.
 9. Không sửa `.agenthub/task.md`. Không commit `.agenthub/` vào git.
-10. Đọc `.agenthub/context/knowledge.md` (nếu có) trước khi bắt đầu: kiến thức chung của dự án từ các task trước.
+10. Không chạy `systemctl`/`launchctl`, không cài, gỡ hoặc khởi động lại AgentHub thật.
+11. Đọc `.agenthub/context/knowledge.md` (nếu có) trước khi bắt đầu: kiến thức chung của dự án từ các task trước.
 
 ## Context dependency
 

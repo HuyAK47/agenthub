@@ -318,6 +318,16 @@ export async function createServer(
     return service.cancelTask(id);
   });
 
+  fastify.post('/api/tasks/:id/pause', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.pauseTask(id);
+  });
+
+  fastify.post('/api/tasks/:id/resume', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.resumeTask(id);
+  });
+
   fastify.post('/api/tasks/:id/review', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.reviewTask(id, req.body);
@@ -369,6 +379,7 @@ export async function createServer(
   fastify.put('/api/config', async (req: FastifyRequest) => {
     return service.updateConfig(req.body);
   });
+  fastify.get('/api/models', async () => service.getModelOptions());
 
   // --- Savings API ---
   fastify.get('/api/savings', async (req: FastifyRequest) => {
@@ -385,6 +396,11 @@ export async function createServer(
 
   fastify.get('/api/claude/sessions', async (req: FastifyRequest) => service.listClaudeSessions(Number((req.query as { activeWithinMin?: string }).activeWithinMin || 5)));
   fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => service.getClaudeSession((req.params as { id: string }).id));
+  fastify.patch('/api/claude/sessions/:id/auto-resume', async (req: FastifyRequest) => {
+    const body = req.body as { enabled?: unknown };
+    if (typeof body?.enabled !== 'boolean') throw new HttpError(400, 'bad_request', 'enabled phải là boolean');
+    return service.setClaudeAutoResume((req.params as { id: string }).id, body.enabled);
+  });
   fastify.post('/api/claude/sessions/rescan', async () => service.rescanClaudeSessions());
   fastify.get('/api/claude/quota', async () => service.getClaudeQuota());
   fastify.get('/api/claude/failover', async () => service.getClaudeFailover());

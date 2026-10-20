@@ -21,6 +21,7 @@ import { getPlatform } from './platform/index.js';
 import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
 
 export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
+import { assertWorkerMayControlHub } from './worker-guard.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -139,6 +140,9 @@ export async function cmdDoctor(
 
 async function main() {
   const config = loadConfig();
+  if (command === 'install-service' || command === 'uninstall' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
+    assertWorkerMayControlHub(command === 'daemon' ? 'daemon stop' : command);
+  }
 
   switch (command) {
     case 'daemon':

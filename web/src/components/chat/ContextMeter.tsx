@@ -1,11 +1,12 @@
 import React from 'react';
 import { ChatSession } from '../../types/api';
-import { Sparkles, AlertTriangle } from 'lucide-react';
+import { Sparkles, AlertTriangle, GitFork } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
 
 export interface ContextMeterProps {
   session: ChatSession;
   onCompact?: () => void;
+  onForkSummary?: () => void;
   hasCompactApi?: boolean;
   className?: string;
 }
@@ -15,6 +16,7 @@ export const CONTEXT_WINDOW_LIMIT = 200000;
 export const ContextMeter: React.FC<ContextMeterProps> = ({
   session,
   onCompact,
+  onForkSummary,
   hasCompactApi = false,
   className = '',
 }) => {
@@ -71,22 +73,35 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
       </div>
 
       {isHigh && (
-        <div className="flex items-center justify-between gap-2 pt-0.5">
+        <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
           <span className="flex items-center gap-1 text-[var(--t-crit)] text-[10px] font-medium">
             <AlertTriangle className="w-3 h-3 shrink-0" />
             <span>{t('extra.compactWarning')}</span>
           </span>
-          {(hasCompactApi || onCompact) && (
-            <button
-              type="button"
-              onClick={onCompact}
-              data-testid="compact-button"
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-[10px] font-semibold transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-2.5 h-2.5" />
-              <span>{t('extra.compactContext')}</span>
-            </button>
-          )}
+          <div className="flex items-center gap-1">
+            {(hasCompactApi || onCompact) && (
+              <button
+                type="button"
+                onClick={onCompact}
+                data-testid="compact-button"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-[10px] font-semibold transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-2.5 h-2.5" />
+                <span>{t('extra.compactContext')}</span>
+              </button>
+            )}
+            {onForkSummary && (
+              <button
+                type="button"
+                onClick={onForkSummary}
+                data-testid="fork-summary-button"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-[10px] font-semibold transition-colors cursor-pointer"
+              >
+                <GitFork className="w-2.5 h-2.5" />
+                <span>{t('extra.forkSummary')}</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

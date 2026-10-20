@@ -7,7 +7,7 @@ import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
-import { BRAIN_PROMPT, buildClaudeArgs, buildHubSnapshot, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
+import { BRAIN_PROMPT, buildClaudeArgs, buildHubSnapshot, clearPartialSupportCache, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
 import { parseStreamJsonLine, formatToolSummary, StreamChunkParser } from '../src/chat/parse.js';
 
 let tmpDir: string;
@@ -141,6 +141,9 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     delete process.env.AGENTHUB_AGY_BIN;
     delete process.env.AGENTHUB_CLAUDE_BIN;
     delete process.env.FAKE_CLAUDE_LOG;
+    delete process.env.FAKE_CLAUDE_STREAM_JSON;
+    clearPartialSupportCache();
+    delete process.env.FAKE_QUOTA_ONCE_FILE;
   });
 
   it('unit test: parse.ts handles all stream-json line types and ignores invalid lines', () => {
@@ -833,6 +836,22 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(quotaError?.message).toContain('Usage limit');
   }, 60000);
 
+  it('persists a Claude limit retry and can send it immediately after the limit clears', async () => {
+    const marker = path.join(tmpDir, 'quota-once');
+    process.env.FAKE_QUOTA_ONCE_FILE = marker;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body) as { id: string };
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'quota-once' } });
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_limit'), { timeout: 15000 });
+    const pending = ctx.chatRetryRepo.getPending().find((retry) => retry.sessionId === session.id);
+    expect(pending).toMatchObject({ sessionId: session.id, status: 'pending' });
+    expect((await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/limit-retry/now`, headers: authHeaders() })).statusCode).toBe(200);
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('idle'), { timeout: 15000 });
+    expect(ctx.chatRetryRepo.getPending()).toHaveLength(0);
+    expect(ctx.chatRetryRepo.get(pending!.messageId)?.status).toBe('sent');
+    expect(ctx.chatMessageRepo.getBySession(session.id).some((message) => message.role === 'assistant')).toBe(true);
+  }, 60000);
+
   it('validates text bounds: rejects empty or > 20000 characters (400)', async () => {
     const createRes = await server.inject({
       method: 'POST',
@@ -1480,5 +1499,193 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
 
     expect(ctx.chatSessionRepo.get(session.id)).toBeUndefined();
     expect(ctx.chatMessageRepo.getBySession(session.id)).toHaveLength(0);
+  });
+
+  it('POST /api/chat/sessions/:id/compact sends /compact, updates contextTokens, and inserts system message', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Test Compact' },
+    });
+    const session = JSON.parse(sRes.body);
+    ctx.chatSessionRepo.addUsage(session.id, { inputTokens: 0, outputTokens: 0, contextTokens: 50000 });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/compact`,
+      headers: authHeaders(),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(true);
+    expect(body.contextTokens).toBe(15000);
+
+    const updated = ctx.chatSessionRepo.get(session.id);
+    expect(updated?.contextTokens).toBe(15000);
+    expect(updated?.busy).toBe(0);
+
+    const messages = ctx.chatMessageRepo.getBySession(session.id);
+    const systemMsg = messages.find((m) => m.role === 'system');
+    expect(systemMsg).toBeDefined();
+    expect(systemMsg?.content).toBe('Đã nén ngữ cảnh');
+
+    // 404 on unknown session
+    const notFoundRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions/unknown-sess-123/compact',
+      headers: authHeaders(),
+    });
+    expect(notFoundRes.statusCode).toBe(404);
+  });
+
+  it('POST /api/chat/sessions/:id/fork-summary requests summary and creates a new session with summary as first message', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Dự án Alpha' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/fork-summary`,
+      headers: authHeaders(),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.id).toBeDefined();
+    expect(body.sessionId).toBe(body.id);
+
+    const forkedSession = ctx.chatSessionRepo.get(body.id);
+    expect(forkedSession).toBeDefined();
+    expect(forkedSession?.title).toBe('Dự án Alpha (tóm tắt)');
+
+    const messages = ctx.chatMessageRepo.getBySession(body.id);
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].content).toContain('Đây là bản tóm tắt nội dung phiên trước.');
+
+    // 404 on unknown session
+    const notFoundRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions/unknown-sess-123/fork-summary',
+      headers: authHeaders(),
+    });
+    expect(notFoundRes.statusCode).toBe(404);
+  });
+
+  it('supports compact and fork-summary via persistent stream-json process and emits chat.compacted event', async () => {
+    process.env.FAKE_CLAUDE_STREAM_JSON = '1';
+    clearPartialSupportCache();
+
+    let compactedEvent: { sessionId?: string; contextTokens?: number } | null = null;
+    ctx.scheduler.getEventBus().on('chat.compacted', (_tid, payload) => {
+      compactedEvent = payload as { sessionId?: string; contextTokens?: number };
+    });
+
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Stream Session' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    // Compact
+    const cRes = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/compact`,
+      headers: authHeaders(),
+    });
+    expect(cRes.statusCode).toBe(200);
+    expect(JSON.parse(cRes.body).ok).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(compactedEvent).toBeDefined();
+      expect(compactedEvent?.sessionId).toBe(session.id);
+      expect(compactedEvent?.contextTokens).toBe(15000);
+    });
+
+    // Fork summary
+    const fRes = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/fork-summary`,
+      headers: authHeaders(),
+    });
+    expect(fRes.statusCode).toBe(201);
+    const forked = JSON.parse(fRes.body);
+    expect(forked.id).toBeDefined();
+    expect(ctx.chatSessionRepo.get(forked.id)?.title).toBe('Stream Session (tóm tắt)');
+  });
+
+  it('auto-compacts when contextTokens exceeds (autoCompactPercent / 100) * 200_000 threshold', async () => {
+    let compacted = false;
+    ctx.scheduler.getEventBus().on('chat.compacted', () => {
+      compacted = true;
+    });
+
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Auto Compact Session' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    // Send high-context prompt that generates 180,000 tokens (threshold is 85% of 200,000 = 170,000)
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'high-context load' },
+    });
+
+    await vi.waitFor(() => {
+      expect(compacted).toBe(true);
+      const messages = ctx.chatMessageRepo.getBySession(session.id);
+      const systemMsg = messages.find((m) => m.role === 'system');
+      expect(systemMsg).toBeDefined();
+      expect(systemMsg?.content).toBe('Đã nén ngữ cảnh');
+    }, { timeout: 10_000 });
+  });
+
+  it('respects autoCompactPercent=0 to disable auto-compacting', async () => {
+    ctx.service.updateConfig({ chat: { autoCompactPercent: 0 } });
+
+    let compacted = false;
+    ctx.scheduler.getEventBus().on('chat.compacted', () => {
+      compacted = true;
+    });
+
+    let done = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      done = true;
+    });
+
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Disabled Auto Compact' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'high-context load' },
+    });
+
+    await vi.waitFor(() => {
+      expect(done).toBe(true);
+    }, { timeout: 10_000 });
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(compacted).toBe(false);
+    const messages = ctx.chatMessageRepo.getBySession(session.id);
+    expect(messages.find((m) => m.role === 'system')).toBeUndefined();
   });
 });

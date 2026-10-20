@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ProfileRow } from '../db/index.js';
 import { LIMITED_TEST_ENV, lowPriority } from '../priority.js';
+import { workerEnvironment } from '../worker-guard.js';
 
 export interface SpawnOpts {
   profile: ProfileRow;
@@ -16,6 +17,7 @@ export interface SpawnOpts {
   outputPath?: string;
   readOnly?: boolean;
   env?: Record<string, string>;
+  hubHome?: string;
 }
 
 export interface QuotaDetection {
@@ -135,6 +137,7 @@ export class AgyEngine implements Engine {
     }
 
     Object.assign(env, LIMITED_TEST_ENV);
+    Object.assign(env, workerEnvironment(opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'), env));
     const [agyExe, agyArgs] = lowPriority(this.agyPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, agyExe, ...agyArgs] : agyArgs;
     const executable = opts.lockFile ? 'flock' : agyExe;
@@ -268,6 +271,7 @@ export class CodexEngine implements Engine {
     if (opts.env) {
       Object.assign(env, opts.env);
     }
+    Object.assign(env, workerEnvironment(opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'), env));
 
     const [codexExe, codexArgs] = lowPriority(codexPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;

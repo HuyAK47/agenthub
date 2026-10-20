@@ -14,8 +14,11 @@ export const SettingsPage: React.FC = () => {
   const [timeoutHours, setTimeoutHours] = useState<number>(3);
   const [claudeBin, setClaudeBin] = useState<string>('claude');
   const [allowFullMode, setAllowFullMode] = useState<boolean>(false);
-  const [chatModel, setChatModel] = useState<'' | 'sonnet' | 'haiku'>('sonnet');
+  const [chatModel, setChatModel] = useState<string>('sonnet');
+  const [chatModels, setChatModels] = useState<string[]>(['opus', 'sonnet', 'haiku']);
+  const [reviewerModel, setReviewerModel] = useState<string>('codex:gpt-5.6-luna');
   const [maxConcurrent, setMaxConcurrent] = useState<number>(2);
+  const [autoCompactPercent, setAutoCompactPercent] = useState<number>(85);
   const [bucketGemini, setBucketGemini] = useState<number>(5_000_000);
   const [bucketClaude, setBucketClaude] = useState<number>(5_000_000);
   const [claudeFactor, setClaudeFactor] = useState<number>(0.9);
@@ -46,8 +49,11 @@ export const SettingsPage: React.FC = () => {
       setTimeoutHours(Math.max(1, Math.round(timeoutSec / 3600)));
       setClaudeBin(config.chat?.claudeBin || 'claude');
       setAllowFullMode(Boolean(config.chat?.allowFullMode));
-      setChatModel(config.chat?.model === 'haiku' ? 'haiku' : 'sonnet');
+      setChatModel(config.chat?.model || 'sonnet');
+      setChatModels(config.chat?.models?.length ? config.chat.models : ['opus', 'sonnet', 'haiku']);
+      setReviewerModel(config.reviewer?.model || 'codex:gpt-5.6-luna');
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
+      setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);
       setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
       if (config.savings) {
         if (config.savings.bucketTokens?.gemini !== undefined) {
@@ -127,7 +133,10 @@ export const SettingsPage: React.FC = () => {
         allowFullMode,
         maxConcurrent: Number(maxConcurrent) || 2,
         model: chatModel,
+        autoCompactPercent: Number(autoCompactPercent) || 85,
+        models: chatModels,
       },
+      reviewer: { model: reviewerModel },
       savings: {
         bucketTokens: {
           gemini: Number(bucketGemini) || 5_000_000,
@@ -290,14 +299,30 @@ export const SettingsPage: React.FC = () => {
                 />
               </div>
 
+              {/* autoCompactPercent field */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('extra.autoCompactPercent')}
+                </label>
+                <input
+                  type="number"
+                  min={10}
+                  max={95}
+                  value={autoCompactPercent}
+                  onChange={(e) => setAutoCompactPercent(parseInt(e.target.value, 10) || 85)}
+                  className="w-32 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                  {t('extra.autoCompactPercentHint')}
+                </p>
+              </div>
+
               {/* allowFullMode selector */}
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">{t('extra.chatModel')}</label>
-                <select value={chatModel} onChange={(e) => setChatModel(e.target.value as '' | 'sonnet' | 'haiku')} className="w-full max-w-sm text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-3 py-2 text-[var(--t-text)]">
-                  <option value="">{t('extra.claudeDefault')}</option>
-                  <option value="sonnet">Sonnet</option>
-                  <option value="haiku">Haiku</option>
-                </select>
+                <input value={chatModel} onChange={(e) => setChatModel(e.target.value)} className="w-full max-w-sm text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-3 py-2 text-[var(--t-text)]" />
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">Model chat mặc định. Danh sách chọn: {chatModels.join(', ')}</p>
+                <input value={chatModels.join(', ')} onChange={(e) => setChatModels(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))} className="mt-2 w-full max-w-sm text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" aria-label="Danh sách model chat" />
               </div>
 
               {/* allowFullMode toggle */}
@@ -327,6 +352,12 @@ export const SettingsPage: React.FC = () => {
                 </label>
               </div>
             </div>
+          </div>
+
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-2 shadow-xs">
+            <h2 className="text-base font-semibold text-[var(--t-text)]">Reviewer</h2>
+            <label className="block text-xs font-semibold text-[var(--t-text)]">Model reviewer</label>
+            <input value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
           </div>
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs">

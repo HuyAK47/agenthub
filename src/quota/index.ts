@@ -93,3 +93,18 @@ export function getModelFamily(model: string): string {
 export function getModelEngine(model: string): 'agy' | 'codex' {
   return model.startsWith('codex:') ? 'codex' : 'agy';
 }
+
+const KNOWN_AGY_MODELS = new Set([
+  'gemini-3.8-flash-high',
+  'gemini-3.8-flash-medium',
+  'gemini-3.8-flash-low',
+  'claude-sonnet-4-6',
+  'claude-opus-4-6-thinking',
+  'gpt-oss-120b-medium',
+]);
+
+/** Task model chains intentionally allow custom strings, but the scheduler
+ * must not treat an unknown string as an agy model and wait forever. */
+export function isKnownModel(model: string): boolean {
+  return model.startsWith('codex:') ? model.length > 6 : KNOWN_AGY_MODELS.has(model);
+}

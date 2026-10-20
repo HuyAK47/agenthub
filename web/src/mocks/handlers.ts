@@ -991,6 +991,38 @@ export const handlers = [
     return HttpResponse.json(task);
   }),
 
+  // POST /api/tasks/:id/pause
+  http.post('/api/tasks/:id/pause', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const task = mockTasks.find((t) => t.id === id);
+    if (!task) {
+      return HttpResponse.json({ error: 'not_found', message: `Task "${id}" không tồn tại` }, { status: 404 });
+    }
+    task.paused = true;
+    task.pauseReason = 'manual';
+    task.updatedAt = new Date().toISOString();
+    return HttpResponse.json({ ok: true, paused: true });
+  }),
+
+  // POST /api/tasks/:id/resume
+  http.post('/api/tasks/:id/resume', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const task = mockTasks.find((t) => t.id === id);
+    if (!task) {
+      return HttpResponse.json({ error: 'not_found', message: `Task "${id}" không tồn tại` }, { status: 404 });
+    }
+    task.paused = false;
+    task.pauseReason = null;
+    task.updatedAt = new Date().toISOString();
+    return HttpResponse.json({ ok: true, paused: false });
+  }),
+
   // POST /api/tasks/:id/review
   http.post('/api/tasks/:id/review', async ({ params, request }) => {
     if (!checkAuth(request)) {
@@ -1118,6 +1150,17 @@ export const handlers = [
       modelChainEasy: mockConfig.modelChainEasy,
       defaultTimeout: mockConfig.defaultTimeout,
       chat: mockConfig.chat,
+    });
+  }),
+
+  // GET /api/models
+  http.get('/api/models', ({ request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    return HttpResponse.json({
+      suggestions: ['codex:gpt-5.6-luna', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium'],
+      configured: [...new Set([...mockConfig.modelChainHard, ...mockConfig.modelChainEasy])],
     });
   }),
 
@@ -1261,5 +1304,62 @@ export const handlers = [
       session.updatedAt = new Date().toISOString();
     }
     return HttpResponse.json({ ok: true });
+  }),
+
+  // POST /api/chat/sessions/:id/compact
+  http.post('/api/chat/sessions/:id/compact', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const session = mockChatSessions.find((s) => s.id === id);
+    if (!session) {
+      return HttpResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    session.contextTokens = 20000;
+    session.updatedAt = new Date().toISOString();
+    const systemMsg = {
+      id: `msg-${Date.now()}`,
+      sessionId: session.id,
+      role: 'system',
+      content: 'Đã nén ngữ cảnh',
+      createdAt: new Date().toISOString(),
+    };
+    if (!mockChatMessages[session.id]) {
+      mockChatMessages[session.id] = [];
+    }
+    mockChatMessages[session.id].push(systemMsg as any);
+    return HttpResponse.json({ ok: true, contextTokens: 20000 });
+  }),
+
+  // POST /api/chat/sessions/:id/fork-summary
+  http.post('/api/chat/sessions/:id/fork-summary', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const session = mockChatSessions.find((s) => s.id === id);
+    if (!session) {
+      return HttpResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    const newSession = {
+      id: `cs-${Date.now()}`,
+      title: `${session.title} (tóm tắt)`,
+      mode: session.mode,
+      busy: false,
+      updatedAt: new Date().toISOString(),
+      lastMessage: 'Tóm tắt phiên trước...',
+    };
+    mockChatSessions.unshift(newSession);
+    mockChatMessages[newSession.id] = [
+      {
+        id: `msg-${Date.now()}`,
+        sessionId: newSession.id,
+        role: 'user',
+        content: 'Tóm tắt phiên trước...',
+        createdAt: new Date().toISOString(),
+      } as any,
+    ];
+    return HttpResponse.json({ id: newSession.id, sessionId: newSession.id }, { status: 201 });
   }),
 ];
