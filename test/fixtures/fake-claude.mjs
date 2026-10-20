@@ -78,6 +78,13 @@ async function main() {
     await new Promise(() => {});
   }
 
+  if (prompt.includes('tool-wait')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-wait-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool_wait_1', name: 'Bash', input: { command: 'long-running' } }] } }));
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
+
   if (prompt.trim() === 'quota') {
     console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-quota-123' }));
     console.log(JSON.stringify({ type: 'result', session_id: 'sess-quota-123', is_error: true, result: 'Usage limit reached. Try again in 1m' }));

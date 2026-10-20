@@ -680,6 +680,34 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0), { timeout: 5000 });
   });
 
+  it('does not fire the idle watchdog while waiting for permission', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders(), payload: { mode: 'safe' } });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'permission' } });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(errors).toHaveLength(0);
+    expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_permission');
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+  });
+
+  it('does not fire the idle watchdog while a tool result is pending', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    let toolSeen = false;
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    ctx.scheduler.getEventBus().on('chat.tool', () => { toolSeen = true; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'tool-wait' } });
+    await vi.waitFor(() => expect(toolSeen).toBe(true), { timeout: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(errors).toHaveLength(0);
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+  });
+
   it('handles usage-limit errors and starts a new session when resume is invalid', async () => {
     const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
     const session = JSON.parse(createRes.body);

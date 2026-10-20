@@ -65,6 +65,8 @@ export interface RunningTurn {
   persistent?: boolean;
   cancelTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
+  waitingPermission?: boolean;
+  pendingToolUse?: boolean;
 }
 
 interface PersistentProcess {
@@ -183,7 +185,7 @@ export class ChatService {
     mode: 'safe' | 'full';
     model: string;
     busy: number;
-      state: ChatSessionRow['state'];
+    state: ChatSessionRow['state'];
     updatedAt: string;
     lastMessage?: {
       id: string;
@@ -584,6 +586,8 @@ export class ChatService {
             this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
           }
         } else if (ev.type === 'tool_use') {
+          runningTurn.pendingToolUse = true;
+          this.pauseTurnWatchdog(runningTurn);
           this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
           this.chatMessageRepo.insert({
             id: crypto.randomUUID(),
@@ -593,8 +597,14 @@ export class ChatService {
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
         } else if (ev.type === 'permission_request') {
+          runningTurn.waitingPermission = true;
+          this.pauseTurnWatchdog(runningTurn);
           this.setSessionState(turn.sessionId, 'waiting_permission');
           this.emitEvent('chat.permission', { sessionId: turn.sessionId, messageId: turn.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
+        } else if (ev.type === 'tool_result') {
+          runningTurn.pendingToolUse = false;
+          runningTurn.waitingPermission = false;
+          this.resetTurnWatchdog(runningTurn);
         } else if (ev.type === 'result') {
           resultHandled = true;
           if (ev.result) accumulatedText += ev.result;
@@ -668,6 +678,8 @@ export class ChatService {
             this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
           }
         } else if (ev.type === 'tool_use') {
+          runningTurn.pendingToolUse = true;
+          this.pauseTurnWatchdog(runningTurn);
           this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
           this.chatMessageRepo.insert({
             id: crypto.randomUUID(),
@@ -676,6 +688,10 @@ export class ChatService {
             content: ev.summary,
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
+        } else if (ev.type === 'tool_result') {
+          runningTurn.pendingToolUse = false;
+          runningTurn.waitingPermission = false;
+          this.resetTurnWatchdog(runningTurn);
         }
       }
 
@@ -777,11 +793,19 @@ export class ChatService {
       }
       if (ev.type === 'result' && proc.active) this.finishPersistentTurn(proc, ev);
       else if (ev.type === 'tool_use' && proc.active) {
+        proc.active.pendingToolUse = true;
+        this.pauseTurnWatchdog(proc.active);
         this.emitChatTool(proc.sessionId, proc.active.messageId, ev.name, ev.summary);
         this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }) });
       } else if (ev.type === 'permission_request' && proc.active) {
+        proc.active.waitingPermission = true;
+        this.pauseTurnWatchdog(proc.active);
         this.setSessionState(proc.sessionId, 'waiting_permission');
         this.emitEvent('chat.permission', { sessionId: proc.sessionId, messageId: proc.active.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
+      } else if (ev.type === 'tool_result' && proc.active) {
+        proc.active.pendingToolUse = false;
+        proc.active.waitingPermission = false;
+        this.resetTurnWatchdog(proc.active);
       } else if ((ev.type === 'text_delta' || ev.type === 'assistant_text') && proc.active) {
         this.emitChatDelta(proc.sessionId, proc.active.messageId, ev.text);
       }
@@ -904,6 +928,7 @@ export class ChatService {
   }
 
   private armTurnWatchdog(turn: RunningTurn): void {
+    if (turn.waitingPermission || turn.pendingToolUse) return;
     const timeoutMs = Math.max(1, this.config.chat.idleTimeoutSec || 300) * 1000;
     turn.idleTimer = setTimeout(() => {
       if (this.runningTurns.get(turn.sessionId) !== turn || turn.cancelled) return;
@@ -923,6 +948,13 @@ export class ChatService {
   private resetTurnWatchdog(turn: RunningTurn): void {
     if (turn.idleTimer) clearTimeout(turn.idleTimer);
     this.armTurnWatchdog(turn);
+  }
+
+  private pauseTurnWatchdog(turn: RunningTurn): void {
+    if (turn.idleTimer) {
+      clearTimeout(turn.idleTimer);
+      turn.idleTimer = undefined;
+    }
   }
 
   private emitEvent(type: string, payload: unknown): void {
