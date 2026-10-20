@@ -1543,6 +1543,7 @@ export class Scheduler {
         readOnly: true,
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
+        hubHome: this.config.hubHome,
       });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
@@ -2080,6 +2081,7 @@ export class Scheduler {
         logPath,
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
+        hubHome: this.config.hubHome,
       });
 
       const pid = child.pid!;

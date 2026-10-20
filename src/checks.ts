@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import type Database from 'better-sqlite3';
 import type { ProjectRow, TaskRow } from './db/index.js';
 import { runInProcessGroup } from './priority.js';
+import { workerEnvironment } from './worker-guard.js';
 
 const MAX_OUTPUT = 8192;
 const CONFLICT_MARKER_REGEX = /^(<{7}|={7}|>{7})( |$)/m;
@@ -71,12 +72,12 @@ export function mandatoryChecks(repo: string, task: TaskRow, project: ProjectRow
   return ['zero-byte', 'uncommitted', 'conflict-markers'].map((name) => ({ name, cmd: [], timeoutSec: 30, _files: files } as CheckDefinition & { _files: string[] }));
 }
 function tail(value: string): string { return value.length > MAX_OUTPUT ? value.slice(-MAX_OUTPUT) : value; }
-function envFromFiles(repo: string): NodeJS.ProcessEnv {
+function envFromFiles(repo: string, hubHome: string): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const file of ['.env', '.env.local']) if (fs.existsSync(path.join(repo, file))) for (const line of fs.readFileSync(path.join(repo, file), 'utf8').split('\n')) { const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^['"]|['"]$/g, ''); }
-  return env;
+  return workerEnvironment(hubHome, env);
 }
-async function runOne(check: CheckDefinition, repo: string): Promise<CheckResult> {
+async function runOne(check: CheckDefinition, repo: string, hubHome: string): Promise<CheckResult> {
   const started = Date.now();
   if (['zero-byte', 'uncommitted', 'conflict-markers'].includes(check.name)) {
     const files = (check as CheckDefinition & { _files?: string[] })._files || []; let output = '';
@@ -114,7 +115,7 @@ async function runOne(check: CheckDefinition, repo: string): Promise<CheckResult
     else output = files.filter((f) => { try { return CONFLICT_MARKER_REGEX.test(fs.readFileSync(path.join(repo, f), 'utf8')); } catch { return false; } }).join('\n');
     return { name: check.name, ok: !output, exitCode: output ? 1 : 0, durationMs: Date.now() - started, outputTail: tail(output || 'OK') };
   }
-  const r = await runInProcessGroup(check.cmd[0], check.cmd.slice(1), { cwd: repo, env: envFromFiles(repo), timeoutMs: (check.timeoutSec || 600) * 1000 });
+  const r = await runInProcessGroup(check.cmd[0], check.cmd.slice(1), { cwd: repo, env: envFromFiles(repo, hubHome), timeoutMs: (check.timeoutSec || 600) * 1000 });
   const ok = r.code === 0 && !r.timedOut;
   return { name: check.name, ok, exitCode: r.code, durationMs: Date.now() - started, outputTail: tail(`${r.output}${r.timedOut ? `\nTimeout sau ${check.timeoutSec || 600}s` : ''}`) };
 }
@@ -124,9 +125,10 @@ export class CheckRunner {
   constructor(private db: Database.Database) {}
   async run(task: TaskRow, project: ProjectRow, runId: string): Promise<{ passed: boolean; failed: string[]; results: CheckResult[] }> {
     const repo = task.worktreePath || project.path; await this.prepare(repo, project.path);
+    const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
     const configured = project.checks ? JSON.parse(project.checks) as CheckDefinition[] : detectChecks(repo);
     const results: CheckResult[] = [];
-    for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await runOne(check, repo); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
+    for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await runOne(check, repo, hubHome); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
     return { passed: results.every((r) => r.ok), failed: results.filter((r) => !r.ok).map((r) => r.name), results };
   }
   private async prepare(repo: string, projectPath?: string): Promise<void> {

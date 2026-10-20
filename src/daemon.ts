@@ -38,6 +38,7 @@ import { TelegramBotService } from './telegram.js';
 import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
+import fs from 'node:fs';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -355,7 +356,7 @@ export async function startDaemon(
     if (isShuttingDown) return;
     isShuttingDown = true;
     process.removeListener('SIGINT', shutdown);
-    process.removeListener('SIGTERM', shutdown);
+    process.removeListener('SIGTERM', onTerm);
 
     const startTime = Date.now();
     console.log('Shutting down...');
@@ -380,8 +381,18 @@ export async function startDaemon(
     }
   };
 
+  const onTerm = () => {
+    const workersRunning = ctx.scheduler.getRunning().size > 0 || ctx.scheduler.getReviewerStatus().running.length > 0;
+    let parentIsServiceManager = false;
+    try {
+      parentIsServiceManager = /^(?:systemd|launchd)$/i.test(fs.readFileSync(`/proc/${process.ppid}/comm`, 'utf8').trim());
+    } catch { /* platform does not expose the parent name */ }
+    if (workersRunning && !parentIsServiceManager) ctx.eventRepo.insert('daemon.stop_requested', undefined, { senderPid: process.ppid || null });
+    void shutdown();
+  };
+
   process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGTERM', onTerm);
 
   return { fastify, ctx, shutdown };
 }
