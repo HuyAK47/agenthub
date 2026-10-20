@@ -442,7 +442,9 @@ export interface CreateChatSessionInput {
 }
 
 export interface UpdateChatSessionInput {
-  title: string;
+  title?: string;
+  pinned?: boolean | number;
+  archived?: boolean | number;
 }
 
 export interface SendMessageResponse {

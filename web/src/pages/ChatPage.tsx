@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   stopChatSession,
   createChatSession,
+  updateChatSession,
   deleteChatSession,
   getChatMessages,
   getChatSessions,
@@ -11,16 +12,16 @@ import {
   warmChatSession,
   decideChatPermission,
   getChatPermissions,
+  compactChatSession,
   normalizeMessagesResponse,
 } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
-import { ChatMessage, ChatMode, ChatSession, ChatPermissionRequest } from '../types/api';
-import { ChatSessionList } from '../components/chat/ChatSessionList';
-import { ChatMessageItem } from '../components/chat/ChatMessageItem';
-import { ToolChipsGroup } from '../components/chat/ToolChipsGroup';
-import { ChatInput } from '../components/chat/ChatInput';
+import { ChatMessage, ChatMode, ChatSession, ChatPermissionRequest, UpdateChatSessionInput } from '../types/api';
+import { SessionList } from '../components/chat/SessionList';
+import { MessageList } from '../components/chat/MessageList';
+import { Composer } from '../components/chat/Composer';
+import { ContextMeter } from '../components/chat/ContextMeter';
 import { NewSessionModal } from '../components/chat/NewSessionModal';
-import { ScrollToBottomButton } from '../components/chat/ScrollToBottomButton';
 import { useLocale } from '../context/LocaleContext';
 import {
   Menu,
@@ -28,6 +29,8 @@ import {
   AlertCircle,
   Plus,
   Bot,
+  Square,
+  RotateCcw,
 } from 'lucide-react';
 
 const EMPTY_SESSIONS: ChatSession[] = [];
@@ -43,12 +46,7 @@ export const ChatPage: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [isLocalBusy, setIsLocalBusy] = useState(false);
-  const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [permission, setPermission] = useState<ChatPermissionRequest | null>(null);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const isAtBottomRef = useRef(true);
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -81,22 +79,26 @@ export const ChatPage: React.FC = () => {
     }
   }, [sessionId, sessions, isSessionsLoading, navigate]);
 
-  // Fetch messages for active session
+  // Pagination & Messages State
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  // Fetch initial messages for active session
   const {
     data: remoteMessages,
     isLoading: isMessagesLoading,
   } = useQuery({
     queryKey: ['chatMessages', activeSession?.id],
-    queryFn: () => getChatMessages(activeSession!.id),
+    queryFn: () => getChatMessages(activeSession!.id, { limit: 50 }),
     enabled: !!activeSession?.id,
   });
 
-  // Local messages state for responsive streaming
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-
   useEffect(() => {
     if (remoteMessages) {
-      setMessages(normalizeMessagesResponse(remoteMessages).messages);
+      const normalized = normalizeMessagesResponse(remoteMessages);
+      setMessages(normalized.messages);
+      setHasMore(normalized.hasMore);
     }
   }, [remoteMessages]);
 
@@ -123,41 +125,34 @@ export const ChatPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [isBusy, thinkingSince]);
 
-  // Scroll position management
-  const handleScroll = () => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-    const isAtBottom = distanceToBottom < 60;
-    isAtBottomRef.current = isAtBottom;
-    if (isAtBottom) {
-      setShowScrollBottom(false);
-    }
-  };
-
-  const scrollToBottom = (smooth = true) => {
-    if (messagesEndRef.current && typeof messagesEndRef.current.scrollIntoView === 'function') {
-      try {
-        messagesEndRef.current.scrollIntoView({
-          behavior: smooth ? 'smooth' : 'auto',
-        });
-      } catch {
-        // ignore in jsdom environments
-      }
-    }
-    setShowScrollBottom(false);
-    isAtBottomRef.current = true;
-  };
-
-  // Auto-scroll when messages update if user was at bottom
+  // Detect compact API availability
+  const [hasCompactApi, setHasCompactApi] = useState(false);
   useEffect(() => {
-    if (isAtBottomRef.current) {
-      scrollToBottom();
-    } else {
-      setShowScrollBottom(true);
+    if (!activeSession?.id) {
+      setHasCompactApi(false);
+      return;
     }
-  }, [messages, streamingMessageId]);
+    fetch(`/api/chat/sessions/${encodeURIComponent(activeSession.id)}/compact`, { method: 'OPTIONS' })
+      .then((r) => setHasCompactApi(r.status !== 404 && r.status !== 405))
+      .catch(() => setHasCompactApi(false));
+  }, [activeSession?.id]);
+
+  // Load older messages (infinite scroll up)
+  const handleLoadMore = async () => {
+    if (!activeSession?.id || isLoadingMore || !hasMore || messages.length === 0) return;
+    const oldestId = messages[0].id;
+    setIsLoadingMore(true);
+    try {
+      const res = await getChatMessages(activeSession.id, { before: oldestId, limit: 50 });
+      const normalized = normalizeMessagesResponse(res);
+      setMessages((prev) => [...normalized.messages, ...prev]);
+      setHasMore(normalized.hasMore);
+    } catch (err: any) {
+      setToastMessage(err.message || 'Không thể tải thêm tin nhắn');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   // Listen to SSE Events
   useEffect(() => {
@@ -185,7 +180,6 @@ export const ChatPage: React.FC = () => {
             };
             return updated;
           }
-          // If message does not exist yet, add new assistant message
           const newMsg: ChatMessage = {
             id: messageId,
             role: 'assistant',
@@ -252,14 +246,30 @@ export const ChatPage: React.FC = () => {
 
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       } else if (type === 'chat.status') {
-        queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) => prev.map((session) =>
-          session.id === targetSessionId ? { ...session, state: payload.status, busy: payload.status !== 'idle' && payload.status !== 'error' } : session));
+        queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) =>
+          prev.map((session) =>
+            session.id === targetSessionId
+              ? {
+                  ...session,
+                  state: payload.status,
+                  busy: payload.status !== 'idle' && payload.status !== 'error',
+                }
+              : session,
+          ),
+        );
       } else if (type === 'chat.permission_request') {
         let input: Record<string, unknown> = {};
-        try { input = typeof payload.input === 'string' ? JSON.parse(payload.input) : (payload.input || {}); } catch { /* malformed input stays empty */ }
+        try {
+          input = typeof payload.input === 'string' ? JSON.parse(payload.input) : (payload.input || {});
+        } catch { /* malformed stays empty */ }
         setPermission({
-          id: String(payload.id), sessionId: targetSessionId, messageId: payload.messageId,
-          toolName: String(payload.toolName || 'tool'), input, status: 'pending', message: null,
+          id: String(payload.id),
+          sessionId: targetSessionId,
+          messageId: payload.messageId,
+          toolName: String(payload.toolName || 'tool'),
+          input,
+          status: 'pending',
+          message: null,
           createdAt: String(payload.createdAt || new Date().toISOString()),
         });
       } else if (type === 'chat.permission_resolved' && permission?.id === payload.id) {
@@ -272,8 +282,12 @@ export const ChatPage: React.FC = () => {
 
   const resolvePermission = async (decision: 'allow' | 'deny' | 'allow_always') => {
     if (!permission) return;
-    try { await decideChatPermission(permission.id, decision); setPermission(null); }
-    catch (err: any) { setToastMessage(err.message || 'Không thể xử lý yêu cầu cấp quyền'); }
+    try {
+      await decideChatPermission(permission.id, decision);
+      setPermission(null);
+    } catch (err: any) {
+      setToastMessage(err.message || 'Không thể xử lý yêu cầu cấp quyền');
+    }
   };
 
   // Mutations
@@ -290,6 +304,19 @@ export const ChatPage: React.FC = () => {
     },
     onError: (err: any) => {
       alert(err.message || t('extra.createChatError'));
+    },
+  });
+
+  const updateSessionMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateChatSessionInput }) =>
+      updateChatSession(id, data),
+    onSuccess: (updatedSession) => {
+      queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) =>
+        prev.map((s) => (s.id === updatedSession.id ? { ...s, ...updatedSession } : s)),
+      );
+    },
+    onError: (err: any) => {
+      setToastMessage(err.message || 'Không thể cập nhật phiên trò chuyện');
     },
   });
 
@@ -318,7 +345,6 @@ export const ChatPage: React.FC = () => {
       sendChatMessage(sessId, text),
     onMutate: async ({ text }) => {
       setIsLocalBusy(true);
-      // Optimistic user message
       const tempUserMsgId = `temp-${Date.now()}`;
       const tempUserMsg: ChatMessage = {
         id: tempUserMsgId,
@@ -329,15 +355,17 @@ export const ChatPage: React.FC = () => {
       setMessages((prev) => [...prev, tempUserMsg]);
     },
     onSuccess: (res) => {
-      // Set assistant streaming id
       setStreamingMessageId(res.assistantMessageId);
     },
     onError: (err: any) => {
       setIsLocalBusy(false);
       setStreamingMessageId(null);
-
-      // Handle 409 Conflict while Claude is answering.
-      if (err.status === 409 || err.message?.includes('409') || err.message?.includes('busy') || err.message?.includes('answering')) {
+      if (
+        err.status === 409 ||
+        err.message?.includes('409') ||
+        err.message?.includes('busy') ||
+        err.message?.includes('answering')
+      ) {
         setToastMessage(t('extra.claudeAnswering'));
       } else {
         setToastMessage(err.message || t('extra.sendError'));
@@ -357,6 +385,20 @@ export const ChatPage: React.FC = () => {
     },
   });
 
+  const compactMutation = useMutation({
+    mutationFn: compactChatSession,
+    onSuccess: () => {
+      setToastMessage('Đã gửi yêu cầu nén ngữ cảnh');
+      queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+      if (activeSession?.id) {
+        queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession.id] });
+      }
+    },
+    onError: (err: any) => {
+      setToastMessage(err.message || 'Không thể nén ngữ cảnh');
+    },
+  });
+
   const handleSendMessage = (text: string) => {
     if (!activeSession) return;
     sendMessageMutation.mutate({ sessId: activeSession.id, text });
@@ -365,6 +407,29 @@ export const ChatPage: React.FC = () => {
   const handleCancelMessage = () => {
     if (!activeSession) return;
     cancelMutation.mutate(activeSession.id);
+  };
+
+  const handleRetryLastTurn = () => {
+    if (!activeSession) return;
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    if (lastUserMsg) {
+      handleSendMessage(lastUserMsg.content);
+    }
+  };
+
+  const handleRetryFromError = (errorMsg: ChatMessage) => {
+    if (!activeSession) return;
+    const idx = messages.findIndex((m) => m.id === errorMsg.id);
+    const previous =
+      idx > 0
+        ? [...messages]
+            .slice(0, idx)
+            .reverse()
+            .find((m) => m.role === 'user')
+        : undefined;
+    if (previous) {
+      handleSendMessage(previous.content);
+    }
   };
 
   const handleCreateSessionSubmit = (data: {
@@ -377,37 +442,11 @@ export const ChatPage: React.FC = () => {
     createSessionMutation.mutate(data);
   };
 
-  // Group consecutive tool messages
-  const groupedItems = useMemo(() => {
-    const result: Array<{ type: 'single'; message: ChatMessage } | { type: 'toolGroup'; messages: ChatMessage[] }> = [];
-    let currentToolGroup: ChatMessage[] = [];
-
-    for (const msg of messages) {
-      if (msg.role === 'tool') {
-        currentToolGroup.push(msg);
-      } else {
-        if (currentToolGroup.length > 0) {
-          result.push({ type: 'toolGroup', messages: currentToolGroup });
-          currentToolGroup = [];
-        }
-        result.push({ type: 'single', message: msg });
-      }
-    }
-
-    if (currentToolGroup.length > 0) {
-      result.push({ type: 'toolGroup', messages: currentToolGroup });
-    }
-
-    return result;
-  }, [messages]);
-
-  const lastToolGroupIndex = useMemo(() => {
-    return groupedItems.map((item) => item.type).lastIndexOf('toolGroup');
-  }, [groupedItems]);
+  const sessionState = activeSession?.state || (isBusy ? 'running' : 'idle');
 
   return (
     <div className="relative h-[calc(100vh-8.5rem)] flex rounded-2xl border border-[var(--border-default)] bg-[var(--bg-app)] overflow-hidden shadow-xs">
-      {/* Toast Notification (409 etc.) */}
+      {/* Toast Notification */}
       {toastMessage && (
         <div
           role="alert"
@@ -420,12 +459,15 @@ export const ChatPage: React.FC = () => {
 
       {/* Desktop Left Column (Session List) >= 900px */}
       <aside className="hidden min-[900px]:block w-72 lg:w-80 shrink-0 h-full">
-        <ChatSessionList
+        <SessionList
           sessions={sessions}
           activeSessionId={activeSession?.id}
           onSelectSession={(s) => navigate(`/chat/${s.id}`)}
           onNewSession={() => setIsModalOpen(true)}
           onDeleteSession={(id) => deleteSessionMutation.mutate(id)}
+          onPinSession={(id, pinned) => updateSessionMutation.mutate({ id, data: { pinned } })}
+          onRenameSession={(id, title) => updateSessionMutation.mutate({ id, data: { title } })}
+          onArchiveSession={(id, archived) => updateSessionMutation.mutate({ id, data: { archived } })}
           isDeletingId={deleteSessionMutation.variables}
         />
       </aside>
@@ -433,12 +475,10 @@ export const ChatPage: React.FC = () => {
       {/* Mobile Drawer Backdrop & Drawer < 900px */}
       {mobileDrawerOpen && (
         <div className="min-[900px]:hidden fixed inset-0 z-50 flex">
-          {/* Backdrop */}
           <div
             className="fixed inset-0 bg-black/60 backdrop-blur-xs"
             onClick={() => setMobileDrawerOpen(false)}
           />
-          {/* Drawer content */}
           <div className="relative w-72 max-w-[80vw] h-full bg-[var(--bg-surface)] shadow-2xl z-10 flex flex-col">
             <div className="flex items-center justify-between p-3 border-b border-[var(--border-default)]">
               <span className="font-semibold text-xs text-[var(--text-primary)]">
@@ -453,7 +493,7 @@ export const ChatPage: React.FC = () => {
               </button>
             </div>
             <div className="flex-1 overflow-hidden">
-              <ChatSessionList
+              <SessionList
                 sessions={sessions}
                 activeSessionId={activeSession?.id}
                 onSelectSession={(s) => {
@@ -465,6 +505,9 @@ export const ChatPage: React.FC = () => {
                   setMobileDrawerOpen(false);
                 }}
                 onDeleteSession={(id) => deleteSessionMutation.mutate(id)}
+                onPinSession={(id, pinned) => updateSessionMutation.mutate({ id, data: { pinned } })}
+                onRenameSession={(id, title) => updateSessionMutation.mutate({ id, data: { title } })}
+                onArchiveSession={(id, archived) => updateSessionMutation.mutate({ id, data: { archived } })}
                 isDeletingId={deleteSessionMutation.variables}
               />
             </div>
@@ -475,30 +518,72 @@ export const ChatPage: React.FC = () => {
       {/* Right Column (Chat Area) */}
       <section className="flex-1 flex flex-col h-full min-w-0 bg-[var(--bg-surface)]">
         {/* Top Chat Header */}
-        <div className="h-14 px-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3 bg-[var(--bg-surface)]">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="min-h-14 px-4 py-2 border-b border-[var(--border-default)] flex items-center justify-between gap-3 bg-[var(--bg-surface)]">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             {/* Mobile drawer button */}
             <button
               type="button"
               onClick={() => setMobileDrawerOpen(true)}
-              className="min-[900px]:hidden p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)]"
+              className="min-[900px]:hidden p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] cursor-pointer shrink-0"
               title={t('extra.openSessions')}
+              aria-label={t('extra.openSessions')}
             >
               <Menu className="w-5 h-5" />
             </button>
 
             {activeSession ? (
-              <div className="min-w-0 flex items-center gap-2">
+              <div className="min-w-0 flex items-center gap-2.5 flex-1">
                 <div className="w-7 h-7 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shrink-0">
                   C
                 </div>
-                <div className="min-w-0">
-                  <h2 className="text-xs sm:text-sm font-semibold text-[var(--text-primary)] truncate">
-                    {activeSession.title}
-                  </h2>
-                  <div className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xs sm:text-sm font-semibold text-[var(--text-primary)] truncate">
+                      {activeSession.title}
+                    </h2>
+
+                    {/* Session State Badge */}
+                    {sessionState === 'running' && (
+                      <span
+                        data-testid="session-state-running"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--t-accent)]/10 text-[var(--t-accent)] border border-[var(--t-accent)]/20 font-medium animate-pulse shrink-0"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-accent)]" />
+                        <span>Đang chạy</span>
+                      </span>
+                    )}
+                    {sessionState === 'waiting_permission' && (
+                      <span
+                        data-testid="session-state-waiting-permission"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--t-warn)]/10 text-[var(--t-warn)] border border-[var(--t-warn)]/20 font-medium shrink-0"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-warn)]" />
+                        <span>Chờ cấp quyền</span>
+                      </span>
+                    )}
+                    {sessionState === 'error' && (
+                      <span
+                        data-testid="session-state-error"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--t-crit)]/10 text-[var(--t-crit)] border border-[var(--t-crit)]/20 font-medium shrink-0"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-crit)]" />
+                        <span>Gặp lỗi</span>
+                      </span>
+                    )}
+                    {sessionState === 'idle' && (
+                      <span
+                        data-testid="session-state-idle"
+                        className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)] font-medium shrink-0"
+                      >
+                        <span>Nhàn rỗi</span>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)] mt-0.5">
                     <span>
-                      {t('extra.mode')}: {activeSession.mode === 'full' ? t('extra.fullMode') : t('extra.safeMode')}
+                      {t('extra.mode')}:{' '}
+                      {activeSession.mode === 'full' ? t('extra.fullMode') : t('extra.safeMode')}
                     </span>
                     {activeSession.projectId && (
                       <span>• {t('extra.project')}: {activeSession.projectId}</span>
@@ -514,118 +599,133 @@ export const ChatPage: React.FC = () => {
             )}
           </div>
 
-          {/* New chat button for convenience on mobile/header */}
-          <button
-            type="button"
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-primary)] transition-colors cursor-pointer shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{t('common.create')}</span>
-          </button>
+          {/* Right Header: Context Meter & Controls */}
+          <div className="flex items-center gap-2 shrink-0">
+            {activeSession && (
+              <>
+                {/* Context Meter */}
+                <div className="hidden md:block w-48 lg:w-56">
+                  <ContextMeter
+                    session={activeSession}
+                    hasCompactApi={hasCompactApi}
+                    onCompact={() => compactMutation.mutate(activeSession.id)}
+                  />
+                </div>
+
+                {/* State Control Buttons: Stop / Retry */}
+                {sessionState === 'running' && (
+                  <button
+                    type="button"
+                    onClick={handleCancelMessage}
+                    data-testid="header-stop-button"
+                    title={t('extra.stopResponse')}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-crit)]/10 hover:bg-[var(--t-crit)]/20 text-[var(--t-crit)] border border-[var(--t-crit)]/30 transition-colors cursor-pointer"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Dừng</span>
+                  </button>
+                )}
+
+                {sessionState === 'error' && (
+                  <button
+                    type="button"
+                    onClick={handleRetryLastTurn}
+                    data-testid="header-retry-button"
+                    title="Thử lại lượt gần nhất"
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white transition-colors cursor-pointer shadow-xs"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Thử lại</span>
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* New chat button */}
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-primary)] transition-colors cursor-pointer shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t('common.create')}</span>
+            </button>
+          </div>
         </div>
+
+        {/* Mobile Context Meter Bar */}
+        {activeSession && (
+          <div className="md:hidden px-4 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-subtle)]">
+            <ContextMeter
+              session={activeSession}
+              hasCompactApi={hasCompactApi}
+              onCompact={() => compactMutation.mutate(activeSession.id)}
+            />
+          </div>
+        )}
 
         {/* Messages Body */}
-        <div
-          ref={messagesContainerRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-2 relative"
-        >
-          {!activeSession ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
-              <div
-                className="w-14 h-14 rounded-full flex items-center justify-center text-white font-bold text-2xl shadow-lg"
-                style={{ backgroundColor: 'var(--t-claude)' }}
-              >
-                C
-              </div>
-              <div className="max-w-md space-y-1">
-                <h3 className="text-base font-bold text-[var(--text-primary)]">
-                  {t('extra.chatWelcome')}
-                </h3>
-                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                {t('extra.chatWelcomeDesc')}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(true)}
-                className="px-4 py-2 rounded-xl bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white font-semibold text-xs shadow-xs transition-colors cursor-pointer inline-flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>{t('extra.startChat')}</span>
-              </button>
-            </div>
-          ) : isMessagesLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3 text-[var(--text-secondary)]">
-              <div
-                className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-xl shadow-md"
-                style={{ backgroundColor: 'var(--t-claude)' }}
-              >
-                C
-              </div>
-              <p className="text-sm font-medium text-[var(--text-primary)]">
-                {t('extra.emptyChat')}
-              </p>
-              <p className="text-xs text-[var(--text-muted)] max-w-sm">
-                {t('extra.emptyChatDesc')}
-              </p>
-            </div>
-          ) : (
-            <>
-              {groupedItems.map((item, idx) => {
-                if (item.type === 'toolGroup') {
-                  return (
-                    <ToolChipsGroup
-                      key={`tools-${idx}-${item.messages[0].id}`}
-                      messages={item.messages}
-                      isRunning={isBusy && idx === lastToolGroupIndex}
-                    />
-                  );
-                }
-                const isStreaming = item.message.id === streamingMessageId;
-                return (
-                  <ChatMessageItem
-                    key={item.message.id}
-                    message={item.message}
-                    isStreaming={isStreaming}
-                    onRetry={item.message.role === 'error' ? () => {
-                      const index = messages.findIndex((message) => message.id === item.message.id);
-                      const previous = index > 0 ? [...messages].slice(0, index).reverse().find((message) => message.role === 'user') : undefined;
-                      if (previous && activeSession) sendMessageMutation.mutate({ sessId: activeSession.id, text: previous.content });
-                    } : undefined}
-                  />
-                );
-              })}
-              <div ref={messagesEndRef} className="h-2" />
-            </>
-          )}
-        </div>
-
-        {/* Scroll To Bottom Button */}
-        <ScrollToBottomButton
-          show={showScrollBottom}
-          onClick={() => scrollToBottom(true)}
-        />
+        {isMessagesLoading ? (
+          <div className="flex items-center justify-center flex-1 h-full">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
+          </div>
+        ) : (
+          <MessageList
+            messages={messages}
+            activeSession={activeSession}
+            streamingMessageId={streamingMessageId}
+            isBusy={isBusy}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={handleLoadMore}
+            onRetryMessage={handleRetryFromError}
+            onNewSession={() => setIsModalOpen(true)}
+          />
+        )}
 
         {/* Input Bar */}
         {activeSession && (
           <>
+            {/* Permission Request Dialog */}
             {permission && (
-              <div className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm" role="dialog" aria-label="Yêu cầu cấp quyền công cụ">
-                <div className="font-semibold text-[var(--text-primary)]">Claude cần quyền: {permission.toolName}</div>
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)]">{JSON.stringify(permission.input, null, 2)}</pre>
+              <div
+                className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm animate-fade-in"
+                role="dialog"
+                aria-label="Yêu cầu cấp quyền công cụ"
+              >
+                <div className="font-semibold text-[var(--text-primary)]">
+                  Claude cần quyền: {permission.toolName}
+                </div>
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)] font-mono">
+                  {JSON.stringify(permission.input, null, 2)}
+                </pre>
                 <div className="mt-2 flex gap-2">
-                  <button type="button" onClick={() => resolvePermission('allow')} className="rounded-lg bg-[var(--t-ok)] px-3 py-1.5 text-xs font-semibold text-white">Cho phép</button>
-                  <button type="button" onClick={() => resolvePermission('allow_always')} className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white">Luôn cho phép</button>
-                  <button type="button" onClick={() => resolvePermission('deny')} className="rounded-lg border border-[var(--t-crit)] px-3 py-1.5 text-xs font-semibold text-[var(--t-crit)]">Từ chối</button>
+                  <button
+                    type="button"
+                    onClick={() => resolvePermission('allow')}
+                    className="rounded-lg bg-[var(--t-ok)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
+                  >
+                    Cho phép
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => resolvePermission('allow_always')}
+                    className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
+                  >
+                    Luôn cho phép
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => resolvePermission('deny')}
+                    className="rounded-lg border border-[var(--t-crit)] px-3 py-1.5 text-xs font-semibold text-[var(--t-crit)] cursor-pointer"
+                  >
+                    Từ chối
+                  </button>
                 </div>
               </div>
             )}
+
+            {/* Status & Progress indicator */}
             {(isBusy || (activeSession.state && activeSession.state !== 'idle')) && (
               <div className="px-5 pb-2 text-xs text-[var(--text-muted)]" role="status">
                 {activeSession.state === 'waiting_permission'
@@ -633,11 +733,18 @@ export const ChatPage: React.FC = () => {
                   : activeSession.state === 'error'
                   ? 'Lượt chat gặp lỗi — bạn có thể thử lại.'
                   : currentTool
-                  ? t('extra.progress', { tool: currentTool, step: toolStepCount, time: `${Math.floor(thinkingSeconds / 60)}:${String(thinkingSeconds % 60).padStart(2, '0')}` })
+                  ? t('extra.progress', {
+                      tool: currentTool,
+                      step: toolStepCount,
+                      time: `${Math.floor(thinkingSeconds / 60)}:${String(
+                        thinkingSeconds % 60,
+                      ).padStart(2, '0')}`,
+                    })
                   : t('extra.thinking', { seconds: thinkingSeconds })}
               </div>
             )}
-            <ChatInput
+
+            <Composer
               onSend={handleSendMessage}
               onCancel={handleCancelMessage}
               busy={isBusy}
