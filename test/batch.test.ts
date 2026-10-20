@@ -78,7 +78,18 @@ describe('Batch Planning & Drafts (c-plan-drafts)', () => {
     } catch {
       // ignore
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    ctx.scheduler.stop();
+    ctx.db.close();
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    delete process.env.AGENTHUB_HOME;
+    delete process.env.AGENTHUB_AGY_HOMES;
+    delete process.env.AGENTHUB_DEFAULT_LOG_DIR;
+    delete process.env.AGENTHUB_AGY_BIN;
+    delete process.env.AGENTHUB_PORT;
   });
 
   it('detectCycle detects simple and multi-hop dependency cycles', () => {

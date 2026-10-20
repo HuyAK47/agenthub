@@ -55,7 +55,7 @@ describe('PlansPage', () => {
     batchId: 'b-1',
   };
 
-  const mockBatch1: TaskBatch = {
+  const mockBatch1: TaskBatch & { tasks: Task[] } = {
     id: 'b-1',
     projectId: 'agenthub',
     title: 'Kế hoạch Sprint 1',
@@ -66,7 +66,7 @@ describe('PlansPage', () => {
     tasks: [mockTask1, mockTask2],
   };
 
-  const mockBatch2: TaskBatch = {
+  const mockBatch2: TaskBatch & { tasks: Task[] } = {
     id: 'b-2',
     projectId: 'agenthub',
     title: 'Kế hoạch Sprint 2',
@@ -218,6 +218,7 @@ describe('PlansPage', () => {
   it('5. Giao cả đợt thành công', async () => {
     const dispatchSpy = vi.spyOn(client, 'dispatchBatch').mockResolvedValue({
       ok: true,
+      batchId: 'b-1',
       dispatchedCount: 2,
     });
 
@@ -251,7 +252,7 @@ describe('PlansPage', () => {
   });
 
   it('7. Huỷ đợt nháp qua modal xác nhận', async () => {
-    const discardSpy = vi.spyOn(client, 'discardBatch').mockResolvedValue({ ok: true });
+    const discardSpy = vi.spyOn(client, 'discardBatch').mockResolvedValue({ ok: true, batchId: 'b-1' });
 
     renderPlansPage();
 
