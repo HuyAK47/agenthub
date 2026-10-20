@@ -16,6 +16,7 @@ import {
   forkSummaryChatSession,
   normalizeMessagesResponse,
 } from '../api/chat';
+import { getConfig } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { ChatMessage, ChatMode, ChatSession, ChatPermissionRequest, UpdateChatSessionInput } from '../types/api';
 import { SessionList } from '../components/chat/SessionList';
@@ -64,6 +65,7 @@ export const ChatPage: React.FC = () => {
     queryKey: ['chatSessions'],
     queryFn: getChatSessions,
   });
+  const { data: systemConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig });
 
   // Resolve active session
   const activeSession = useMemo(() => {
@@ -604,6 +606,7 @@ export const ChatPage: React.FC = () => {
                     {activeSession.projectId && (
                       <span>• {t('extra.project')}: {activeSession.projectId}</span>
                     )}
+                    <span>• Model: {activeSession.model || systemConfig?.chat?.model || 'sonnet'}</span>
                   </div>
                 </div>
               </div>
@@ -620,6 +623,15 @@ export const ChatPage: React.FC = () => {
             {activeSession && (
               <>
                 {/* Context Meter */}
+                <select
+                  aria-label="Model chat"
+                  value={activeSession.model || systemConfig?.chat?.model || 'sonnet'}
+                  disabled={isBusy || updateSessionMutation.isPending}
+                  onChange={(event) => updateSessionMutation.mutate({ id: activeSession.id, data: { model: event.target.value } })}
+                  className="hidden sm:block max-w-28 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-2 py-1.5 text-[var(--text-primary)]"
+                >
+                  {(systemConfig?.chat?.models || ['opus', 'sonnet', 'haiku']).map((model) => <option key={model} value={model}>{model}</option>)}
+                </select>
                 <div className="hidden md:block w-56 lg:w-72">
                   <ContextMeter
                     session={activeSession}

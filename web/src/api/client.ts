@@ -24,7 +24,12 @@ import {
   OrphanProcess,
   KnowledgeEntry,
   TaskGraphResponse,
+  ModelOptions,
 } from '../types/api';
+
+export async function getModelOptions(): Promise<ModelOptions> {
+  return apiFetch<ModelOptions>('/api/models');
+}
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
 

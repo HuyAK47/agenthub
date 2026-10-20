@@ -149,6 +149,8 @@ export const vi = {
     createBtn: 'Tạo Task',
     creatingBtn: 'Đang tạo...',
     createError: 'Không thể tạo task',
+    modelChainLabel: 'Chuỗi model (ngăn cách bằng dấu phẩy)',
+    modelChainHint: 'Để trống để dùng chuỗi model mặc định.',
   },
   taskDetail: {
     notFound: 'Không tìm thấy task hoặc xảy ra lỗi khi tải dữ liệu.',
@@ -223,6 +225,9 @@ export const vi = {
     saving: 'Đang lưu...',
     updateSuccess: 'Đã cập nhật task thành công.',
     updateError: 'Lỗi khi cập nhật task.',
+    retryWithModel: 'Chạy lại bằng model khác',
+    modelWarningTitle: 'Cảnh báo chuỗi model',
+    modelWarningItem: 'Model "{model}" không thuộc engine đã cấu hình và sẽ bị bỏ qua.',
   },
   profiles: {
     antigravitySubtitle: 'Tài khoản Google và quota Gemini', codexSubtitle: 'Tài khoản ChatGPT và device auth', claudeSubtitle: 'Tài khoản Claude Code',
