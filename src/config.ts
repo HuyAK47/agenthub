@@ -100,6 +100,9 @@ export interface AgentHubConfig {
   savings: SavingsConfig;
   load: LoadConfig;
   stall: StallConfig;
+  context: {
+    depsMaxChars: number;
+  };
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -375,6 +378,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     loopThreshold: typeof rawStall.loopThreshold === 'number' ? rawStall.loopThreshold : DEFAULT_STALL_CONFIG.loopThreshold,
   };
 
+  const rawContext = (userConfig.context as Record<string, unknown>) || {};
+  const context = {
+    depsMaxChars: typeof rawContext.depsMaxChars === 'number' && rawContext.depsMaxChars > 0
+      ? Math.floor(rawContext.depsMaxChars)
+      : 16000,
+  };
+
   return {
     hubHome,
     agyHomesDir,
@@ -431,5 +441,6 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
     },
     stall,
+    context,
   };
 }

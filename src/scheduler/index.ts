@@ -19,7 +19,7 @@ import {
 } from '../db/index.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, QuotaService } from '../quota/index.js';
-import { WorktreeService } from '../worktrees/index.js';
+import { DependencyContext, WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
@@ -355,7 +355,7 @@ export class Scheduler {
       if (currentTask.worktreePath) {
         const donePath = path.join(currentTask.worktreePath, '.agenthub', 'DONE');
         if (fs.existsSync(donePath)) fs.unlinkSync(donePath);
-        this.worktreeService.writeTaskFile(currentTask.worktreePath, newBody, true, feedback);
+        this.writeTaskFiles(currentTask, newBody, true, feedback);
       }
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
     } else {
@@ -1476,6 +1476,60 @@ export class Scheduler {
       : this.config.defaultModelChains.easy;
   }
 
+  private getDependencyContext(task: TaskRow): DependencyContext[] {
+    let dependencyIds: string[];
+    try {
+      dependencyIds = JSON.parse(task.dependsOn || '[]') as string[];
+    } catch {
+      dependencyIds = [];
+    }
+
+    return dependencyIds.flatMap((dependencyId) => {
+      const dependency = this.taskRepo.get(dependencyId);
+      if (!dependency) return [];
+
+      const donePath = dependency.worktreePath
+        ? path.join(dependency.worktreePath, '.agenthub', 'DONE')
+        : null;
+      const doneContent = donePath && fs.existsSync(donePath)
+        ? fs.readFileSync(donePath, 'utf-8')
+        : undefined;
+      const reviews = this.reviewRepo?.getByTask(dependency.id) || [];
+      const lastReview = reviews[reviews.length - 1];
+      const review = lastReview?.verdict === 'approved'
+        ? `approved${lastReview.feedback ? ` — ${lastReview.feedback}` : ''}`
+        : undefined;
+
+      let diffStat: string | undefined;
+      const dependencyProject = this.projectRepo.get(dependency.projectId);
+      const baseRef = dependency.baseRef || dependencyProject?.defaultBranch;
+      if (dependencyProject && baseRef && dependency.branch) {
+        try {
+          diffStat = execFileSync('git', ['-C', dependencyProject.path, 'diff', '--stat', `${baseRef}...${dependency.branch}`], {
+            encoding: 'utf-8',
+            timeout: 30000,
+          }).trim();
+        } catch {
+          // The dependency may have been cleaned up or its branch may be unavailable.
+        }
+      }
+
+      return [{ id: dependency.id, title: dependency.title, doneContent, review, diffStat }];
+    });
+  }
+
+  private writeTaskFiles(task: TaskRow, body: string, resume: boolean, feedback?: string): void {
+    if (!task.worktreePath) return;
+    this.worktreeService.writeTaskFile(
+      task.worktreePath,
+      body,
+      resume,
+      feedback,
+      this.getDependencyContext(task),
+      this.config.context?.depsMaxChars,
+    );
+  }
+
   private isProfileBusy(profileName: string): boolean {
     const profile = this.profileRepo.get(profileName);
     if (!profile) return true;
@@ -1601,7 +1655,7 @@ export class Scheduler {
       prompt += '\n\nTask đã làm dở – kiểm tra git log/status rồi làm tiếp, không làm lại.';
     }
 
-    this.worktreeService.writeTaskFile(worktreePath, task.body || task.title, !!task.resume);
+    this.writeTaskFiles({ ...task, worktreePath }, task.body || task.title, !!task.resume);
 
     // Create run record
     const runId = crypto.randomUUID();
@@ -1784,7 +1838,7 @@ export class Scheduler {
         if (fs.existsSync(blockedPath)) fs.unlinkSync(blockedPath);
 
         // Re-write task.md with feedback
-        this.worktreeService.writeTaskFile(task.worktreePath, newBody, true, feedback);
+        this.writeTaskFiles(task, newBody, true, feedback);
       } else {
         this.taskRepo.update(taskId, { status: 'queued', resume: 1 });
       }
