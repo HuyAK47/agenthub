@@ -27,6 +27,18 @@ AgentHub runs locally on your machine. It breaks down development tasks and sche
 
 ## 2. Installation
 
+### Quick One-Line Install (inspect before running):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
+less /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh
+```
+
+Preview actions with `sh /tmp/agenthub-install.sh --dry-run`. Safe uninstallation preserving user data: `sh /tmp/agenthub-install.sh --uninstall`; use `--purge` only when you explicitly confirm wiping all data.
+
+### Manual Setup:
+
 ```bash
 git clone https://github.com/ducanh19020217/agenthub.git ~/agenthub
 cd ~/agenthub

@@ -110,6 +110,18 @@ flowchart TD
 
 ## Quick Start (5 Commands)
 
+### Quick One-Line Install (inspect before running):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
+less /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh
+```
+
+Supports safe updates and uninstallation; use `--dry-run` to preview commands. Data in `~/.agenthub/` is only wiped when explicitly requested via `--uninstall --purge` with confirmation.
+
+### Manual Setup (5 Commands):
+
 ```bash
 # 1. Clone repository and switch to Node 22
 git clone https://github.com/ducanh19020217/agenthub.git ~/agenthub && cd ~/agenthub
