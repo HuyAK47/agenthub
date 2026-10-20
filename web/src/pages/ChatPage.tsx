@@ -11,6 +11,7 @@ import {
   warmChatSession,
   decideChatPermission,
   getChatPermissions,
+  normalizeMessagesResponse,
 } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { ChatMessage, ChatMode, ChatSession, ChatPermissionRequest } from '../types/api';
@@ -95,7 +96,7 @@ export const ChatPage: React.FC = () => {
 
   useEffect(() => {
     if (remoteMessages) {
-      setMessages(remoteMessages);
+      setMessages(normalizeMessagesResponse(remoteMessages).messages);
     }
   }, [remoteMessages]);
 

@@ -394,6 +394,12 @@ export interface ChatSession {
   profileName?: string | null;
   updatedAt: string;
   lastMessage?: string | null;
+  pinned?: boolean | number;
+  archived?: boolean | number;
+  inputTokens?: number;
+  outputTokens?: number;
+  contextTokens?: number;
+  createdAt?: string;
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error';

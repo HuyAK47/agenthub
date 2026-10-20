@@ -1,4 +1,4 @@
-import { apiFetch } from './client';
+import { apiFetch, getToken } from './client';
 import {
   ChatMessage,
   ChatSession,
@@ -7,6 +7,22 @@ import {
   UpdateChatSessionInput,
   ChatPermissionRequest,
 } from '../types/api';
+
+export interface GetChatMessagesResponse {
+  messages: ChatMessage[];
+  hasMore: boolean;
+}
+
+export function normalizeMessagesResponse(
+  raw: GetChatMessagesResponse | ChatMessage[] | null | undefined,
+): { messages: ChatMessage[]; hasMore: boolean } {
+  if (!raw) return { messages: [], hasMore: false };
+  if (Array.isArray(raw)) return { messages: raw, hasMore: false };
+  return {
+    messages: Array.isArray(raw.messages) ? raw.messages : [],
+    hasMore: Boolean(raw.hasMore),
+  };
+}
 
 export async function getChatSessions(): Promise<ChatSession[]> {
   return apiFetch<ChatSession[]>('/api/chat/sessions');
@@ -54,10 +70,32 @@ export async function deleteChatSession(id: string): Promise<{ ok: boolean }> {
 
 export async function getChatMessages(
   sessionId: string,
-): Promise<ChatMessage[]> {
-  return apiFetch<ChatMessage[]>(
-    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+  options?: { limit?: number; before?: string },
+): Promise<GetChatMessagesResponse | ChatMessage[]> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.before) params.set('before', options.before);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return apiFetch<GetChatMessagesResponse | ChatMessage[]>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages${qs}`,
   );
+}
+
+export async function exportChatSession(sessionId: string): Promise<string> {
+  const token = getToken();
+  const res = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/export`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    throw new Error('Không thể xuất phiên trò chuyện');
+  }
+  return res.text();
+}
+
+export async function compactChatSession(sessionId: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`, {
+    method: 'POST',
+  });
 }
 
 export async function sendChatMessage(
