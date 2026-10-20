@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { readCodexRateLimits } from './codex-usage.js';
 import { promisify } from 'node:util';
 import { ProfileRepo, ProfileRow, QuotaMarkRepo, QuotaUsageRepo, QuotaUsageRow } from '../db/index.js';
 import { isProfileLoggedIn } from '../profiles/index.js';
+import { sameAccount } from '../profiles/account.js';
 import { parseAuthState } from '../profiles/auth.js';
 
 const execFileAsync = promisify(execFile);
@@ -108,6 +110,7 @@ export class QuotaUsageService {
   }
 
   start(): void {
+    // Drop stale codex rows (older versions stored agy groups); collectAll re-reads Codex logs.
     this.usage.deleteForEngine('codex');
     this.collectAll();
     this.timer = setInterval(() => this.collectAll(), 5 * 60 * 1000);
@@ -118,6 +121,28 @@ export class QuotaUsageService {
     for (const profile of this.profiles.getEnabled().filter((p) => p.engine === 'agy' && this.isLoggedIn(p))) {
       this.collect(profile);
     }
+    for (const profile of this.profiles.getEnabled().filter((p) => p.engine === 'codex')) {
+      this.collectCodex(profile);
+    }
+  }
+
+  /** Codex writes its rate limits into session logs; read them instead of spending quota. */
+  collectCodex(profile: ProfileRow, now = Math.floor(Date.now() / 1000)): QuotaUsageRow[] {
+    if (profile.engine !== 'codex') return [];
+    const codexDir = path.join(profile.home || os.homedir(), '.codex');
+    const limits = readCodexRateLimits(codexDir);
+    if (!limits) return [];
+    const rows: QuotaUsageRow[] = limits.windows.map((w) => ({
+      profileName: profile.name,
+      grp: 'Codex',
+      window: w.window,
+      // A window whose reset time has passed starts again from zero usage.
+      remainingPct: w.resetAt > 0 && w.resetAt <= now ? 100 : Math.max(0, Math.min(100, Math.round(100 - w.usedPercent))),
+      resetAt: w.resetAt,
+      fetchedAt: limits.observedAt,
+    }));
+    for (const row of rows) this.usage.upsert(row);
+    return rows;
   }
 
   async collect(profile: ProfileRow): Promise<QuotaUsageRow[]> {
@@ -154,14 +179,14 @@ export class QuotaUsageService {
   }
 
   private markForEmail(profile: ProfileRow, family: string, until: number): void {
-    for (const p of this.profiles.getAll().filter((p) => p.name === profile.name || (!!profile.email && p.email === profile.email))) {
+    for (const p of this.profiles.getAll().filter((p) => p.name === profile.name || sameAccount(p, profile))) {
       this.marks.mark(p.name, family, until, 'usage');
     }
   }
 
   bestRemaining(profile: ProfileRow, family: string): number | null {
     if (profile.engine !== 'agy') return null;
-    const names = profile.email ? this.profiles.getAll().filter((p) => p.email === profile.email).map((p) => p.name) : [profile.name];
+    const names = profile.email ? this.profiles.getAll().filter((p) => sameAccount(p, profile)).map((p) => p.name) : [profile.name];
     const group = family === 'gemini' ? 'Gemini Models' : family === 'claude' || family === 'gpt' ? 'Claude and GPT models' : null;
     if (!group) return null;
     const values = names.flatMap((name) => this.usage.getForProfile(name).filter((u) => u.window === '5h' && u.grp === group).map((u) => u.remainingPct));

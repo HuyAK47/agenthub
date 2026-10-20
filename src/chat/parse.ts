@@ -1,3 +1,11 @@
+export interface AssistantUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  contextTokens: number;
+}
+
 export type ParsedStreamEvent =
   | {
       type: 'init';
@@ -10,6 +18,7 @@ export type ParsedStreamEvent =
   | {
       type: 'assistant_text';
       text: string;
+      usage?: AssistantUsage;
     }
   | {
       type: 'tool_use';
@@ -17,6 +26,7 @@ export type ParsedStreamEvent =
       name: string;
       input?: Record<string, unknown>;
       summary: string;
+      usage?: AssistantUsage;
     }
   | {
       type: 'tool_result';
@@ -33,6 +43,12 @@ export type ParsedStreamEvent =
       numTurns?: number;
       isError: boolean;
       result?: string;
+      usage?: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadInputTokens?: number;
+        cacheCreationInputTokens?: number;
+      };
     };
 
 export interface ClaudeQuotaSignal {
@@ -122,6 +138,21 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
   // 2. type: "assistant"
   if (data.type === 'assistant' && data.message && typeof data.message === 'object') {
     const msg = data.message as Record<string, unknown>;
+    let usage: AssistantUsage | undefined;
+    if (msg.usage && typeof msg.usage === 'object') {
+      const u = msg.usage as Record<string, unknown>;
+      const input = Number(u.input_tokens ?? u.inputTokens ?? 0) || 0;
+      const output = Number(u.output_tokens ?? u.outputTokens ?? 0) || 0;
+      const cacheRead = Number(u.cache_read_input_tokens ?? u.cacheReadInputTokens ?? u.cache_read_tokens ?? 0) || 0;
+      const cacheCreation = Number(u.cache_creation_input_tokens ?? u.cacheCreationInputTokens ?? u.cache_creation_tokens ?? 0) || 0;
+      usage = {
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadInputTokens: cacheRead,
+        cacheCreationInputTokens: cacheCreation,
+        contextTokens: input + cacheRead + cacheCreation,
+      };
+    }
     if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
         if (!block || typeof block !== 'object') continue;
@@ -129,6 +160,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
           events.push({
             type: 'assistant_text',
             text: block.text,
+            ...(usage ? { usage } : {}),
           });
         } else if (block.type === 'tool_use' && typeof block.name === 'string') {
           const input = (block.input && typeof block.input === 'object' ? block.input : {}) as Record<
@@ -141,9 +173,17 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
             name: block.name,
             input,
             summary: formatToolSummary(block.name, input),
+            ...(usage ? { usage } : {}),
           });
         }
       }
+    }
+    if (events.length === 0 && usage) {
+      events.push({
+        type: 'assistant_text',
+        text: '',
+        usage,
+      });
     }
     return events;
   }
@@ -179,6 +219,28 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
   if (data.type === 'result') {
     const isError = Boolean(data.is_error);
     const resultStr = typeof data.result === 'string' ? data.result : undefined;
+    let usage:
+      | {
+          inputTokens: number;
+          outputTokens: number;
+          cacheReadInputTokens?: number;
+          cacheCreationInputTokens?: number;
+        }
+      | undefined;
+    if (data.usage && typeof data.usage === 'object') {
+      const u = data.usage as Record<string, unknown>;
+      const rawInput = Number(u.input_tokens ?? u.inputTokens ?? 0) || 0;
+      const cacheRead = Number(u.cache_read_input_tokens ?? u.cacheReadInputTokens ?? u.cache_read_tokens ?? 0) || 0;
+      const cacheCreation = Number(u.cache_creation_input_tokens ?? u.cacheCreationInputTokens ?? u.cache_creation_tokens ?? 0) || 0;
+      const output = Number(u.output_tokens ?? u.outputTokens ?? 0) || 0;
+      const totalInput = rawInput + cacheRead + cacheCreation;
+      usage = {
+        inputTokens: totalInput,
+        outputTokens: output,
+        ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
+        ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
+      };
+    }
     events.push({
       type: 'result',
       sessionId: typeof data.session_id === 'string' ? data.session_id : undefined,
@@ -187,6 +249,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
       numTurns: typeof data.num_turns === 'number' ? data.num_turns : undefined,
       isError,
       result: resultStr,
+      usage,
     });
     return events;
   }

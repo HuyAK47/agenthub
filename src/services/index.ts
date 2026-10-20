@@ -22,7 +22,7 @@ import {
   QuotaMarkRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
-import { ProfileService as CoreProfileService, isProfileLoggedIn } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -225,6 +225,7 @@ export const UpdateConfigSchema = z.object({
       allowFullMode: z.boolean().optional(),
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
+      permissionTimeoutSec: z.number().int().positive().optional(),
       model: z.enum(['', 'sonnet', 'haiku']).optional(),
     })
     .optional(),
@@ -679,7 +680,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        duplicateWarning: p.email ? dupes.has(p.email) : false,
+        duplicateWarning: dupes.has(accountKey(p) || ''),
       };
     });
 
@@ -870,7 +871,7 @@ export class AppService {
           return email;
         }
         const dupes = this.coreProfileService.getDuplicateEmails();
-        const duplicateWarning = dupes.has(email);
+        const duplicateWarning = dupes.has(`${profile.engine}:${email}`);
         this.scheduler.getEventBus().emit('profile.updated', undefined, {
           name: profile.name,
           email,
@@ -925,7 +926,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        duplicateWarning: p.email ? dupes.has(p.email) : false,
+        duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
@@ -1048,7 +1049,8 @@ export class AppService {
   async refreshUsage(name: string) {
     const profile = this.profileRepo.get(name);
     if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    await this.usageService.collect(profile);
+    if (profile.engine === 'codex') this.usageService.collectCodex(profile);
+    else await this.usageService.collect(profile);
     this.refreshProfileEmail(profile.name);
     return this.listProfiles().find((p) => p.name === name);
   }
@@ -1660,6 +1662,7 @@ export class AppService {
         allowFullMode: this.config.chat.allowFullMode,
         maxConcurrent: this.config.chat.maxConcurrent,
         idleTimeoutSec: this.config.chat.idleTimeoutSec,
+        permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
       },
       reviewer: this.config.reviewer,

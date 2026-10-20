@@ -5,6 +5,9 @@ import { ProfileRepo, QuotaMarkRepo, ProfileRow } from '../db/index.js';
 import { AgentHubConfig } from '../config.js';
 import { CodexEngine } from '../engines/index.js';
 import { findClaudeBin } from '../chat/claude.js';
+import { accountKey } from './account.js';
+
+export { accountKey, sameAccount } from './account.js';
 
 // Symlinks to create in isolated HOME per PLAN 2.1
 const SYMLINK_TARGETS = [
@@ -227,6 +230,10 @@ export class ProfileService {
       email: null,
       enabled: 1,
     });
+    // A new agy home has no OAuth token yet; keep it out of scheduling until login.
+    if (!isProfileLoggedIn(this.profileRepo.get(name)!)) {
+      this.profileRepo.updateAuthState(name, 'not_logged_in', 'Chưa đăng nhập', null);
+    }
   }
 
   readClaudeAccount(home: string): { email: string | null; plan: string | null } | null {
@@ -304,14 +311,20 @@ export class ProfileService {
   /**
    * Detect duplicate emails across profiles
    */
+  /**
+   * Profiles that share one provider account (same engine and email) share quota.
+   * Keys are `engine:email`; the same email on different engines (e.g. Claude and
+   * Antigravity) is not a duplicate.
+   */
   getDuplicateEmails(): Map<string, string[]> {
     const profiles = this.profileRepo.getAll();
     const emailMap = new Map<string, string[]>();
     for (const p of profiles) {
-      if (!p.email) continue;
-      const existing = emailMap.get(p.email) || [];
+      const key = accountKey(p);
+      if (!key) continue;
+      const existing = emailMap.get(key) || [];
       existing.push(p.name);
-      emailMap.set(p.email, existing);
+      emailMap.set(key, existing);
     }
     // Only return those with duplicates
     const result = new Map<string, string[]>();

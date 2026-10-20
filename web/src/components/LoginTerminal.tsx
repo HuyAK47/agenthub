@@ -24,6 +24,7 @@ export function getTerminalTheme(effectiveTheme: 'light' | 'dark') {
 }
 
 // Strip ANSI/OSC sequences before extracting a URL from agy output.
+// eslint-disable-next-line no-control-regex -- strips terminal escape sequences
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>]/g;
 
 /**
@@ -31,6 +32,10 @@ const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[
  * so join adjacent lines before matching.
  */
 export function extractLoginUrl(raw: string): string | null {
+  // Terminal hyperlinks (OSC 8) carry the full URL even when the visible text is short.
+  // eslint-disable-next-line no-control-regex -- matches OSC 8 escape sequences
+  const osc = [...raw.matchAll(/\x1b\]8;[^;\x07\x1b]*;(https:\/\/[^\x07\x1b]+)(?:\x07|\x1b\\)/g)].map((m) => m[1]);
+  if (osc.length > 0) return osc.sort((a, b) => b.length - a.length)[0];
   const text = raw.replace(ANSI_RE, '').replace(/\r/g, '');
   const joined = text.replace(/\n(?=[^\s])/g, '');
   const urls = joined.match(/https:\/\/[^\s"'<>]+/g);

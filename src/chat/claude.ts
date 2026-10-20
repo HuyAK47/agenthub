@@ -204,9 +204,15 @@ export function checkClaudeStreamJsonSupport(claudeBin: string): boolean {
   }
 }
 
-export function ensureChatMcpConfig(hubHome?: string): string {
+export function chatMcpConfigPath(hubHome?: string, sessionId?: string): string {
   const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
-  const mcpConfigFile = path.join(targetHome, 'chat-mcp.json');
+  const suffix = sessionId ? `-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+  return path.join(targetHome, `chat-mcp${suffix}.json`);
+}
+
+export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number): string {
+  const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
+  const mcpConfigFile = chatMcpConfigPath(targetHome, sessionId);
 
   if (!fs.existsSync(targetHome)) {
     fs.mkdirSync(targetHome, { recursive: true, mode: 0o700 });
@@ -221,11 +227,17 @@ export function ensureChatMcpConfig(hubHome?: string): string {
       agenthub: {
         command: nodePath,
         args: [cliPath, 'mcp'],
+        env: {
+          ...(sessionId ? { AGENTHUB_CHAT_SESSION_ID: sessionId } : {}),
+          AGENTHUB_PORT: String(port || process.env.AGENTHUB_PORT || 7700),
+          AGENTHUB_PERMISSION_TIMEOUT_SEC: String(permissionTimeoutSec || process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC || 600),
+        },
       },
     },
   };
 
-  fs.writeFileSync(mcpConfigFile, JSON.stringify(content, null, 2), 'utf-8');
+  fs.writeFileSync(mcpConfigFile, JSON.stringify(content, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  fs.chmodSync(mcpConfigFile, 0o600);
   return mcpConfigFile;
 }
 
@@ -270,6 +282,8 @@ export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
     args.push(
       '--permission-mode',
       'default',
+      '--permission-prompt-tool',
+      'mcp__agenthub__permission_prompt',
       '--allowedTools',
       'Read,Grep,Glob,LS,mcp__agenthub,Bash(git status:*),Bash(git log:*),Bash(npm test:*),Bash(npm run lint:*),Bash(npm run typecheck:*)',
     );
@@ -283,7 +297,7 @@ export function spawnClaude(
   args: string[],
   cwd: string,
   stdinText?: string,
-  options: { disableToolSearch?: boolean; claudeConfigDir?: string } = {},
+  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number; claudeConfigDir?: string } = {},
 ): ChildProcess {
   const child = spawn(claudeBin, args, {
     cwd,
@@ -292,6 +306,8 @@ export function spawnClaude(
       ...process.env,
       ...(options.claudeConfigDir ? { CLAUDE_CONFIG_DIR: options.claudeConfigDir } : {}),
       ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
+      ...(options.chatSessionId ? { AGENTHUB_CHAT_SESSION_ID: options.chatSessionId } : {}),
+      ...(options.port ? { AGENTHUB_PORT: String(options.port) } : {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
