@@ -15,6 +15,8 @@ import {
   updateTask,
   rerunChecks,
   getStatus,
+  getProjectNotes,
+  createTaskNote,
 } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { subscribeToRunOutput } from '../api/sse';
@@ -42,6 +44,7 @@ import {
   Plus,
   X,
   Edit3,
+  Bell,
 } from 'lucide-react';
 
 const VALID_MODELS = [
@@ -60,8 +63,9 @@ export const TaskDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Active Tab: 'log' | 'body' | 'runs' | 'report'
-  const [activeTab, setActiveTab] = useState<'log' | 'body' | 'runs' | 'report'>('log');
+  // Active Tab: 'log' | 'body' | 'runs' | 'report' | 'bulletin'
+  const [activeTab, setActiveTab] = useState<'log' | 'body' | 'runs' | 'report' | 'bulletin'>('log');
+  const [newNoteText, setNewNoteText] = useState('');
 
   // Modals
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -96,6 +100,21 @@ export const TaskDetailPage: React.FC = () => {
     queryFn: getStatus,
     enabled: task?.status === 'waiting_quota' && task?.waitReason === 'disk',
     refetchInterval: 10_000,
+  });
+
+  const { data: projectNotes = [], refetch: refetchNotes } = useQuery({
+    queryKey: ['projectNotes', task?.projectId],
+    queryFn: () => (task?.projectId ? getProjectNotes(task.projectId) : Promise.resolve([])),
+    enabled: Boolean(task?.projectId),
+    refetchInterval: 5000,
+  });
+
+  const sendNoteMutation = useMutation({
+    mutationFn: (content: string) => createTaskNote(task!.id, { content }),
+    onSuccess: () => {
+      setNewNoteText('');
+      refetchNotes();
+    },
   });
 
   // Fetch initial log
@@ -560,6 +579,19 @@ export const TaskDetailPage: React.FC = () => {
           <GitCommit className="w-4 h-4" />
           <span>{t('taskDetail.tabReport')}</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('bulletin')}
+          className={`pb-3 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'bulletin'
+              ? 'border-[var(--t-accent)] text-[var(--t-accent)] font-semibold'
+              : 'border-transparent text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+          }`}
+        >
+          <Bell className="w-4 h-4" />
+          <span>{t('taskDetail.tabBulletin')}</span>
+        </button>
       </div>
 
       {/* Tab Contents */}
@@ -680,6 +712,116 @@ export const TaskDetailPage: React.FC = () => {
               </ul>
             ) : (
               <p className="text-xs text-[var(--t-text-3)] italic">{t('taskDetail.noCommits')}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 5. Bulletin tab */}
+      {activeTab === 'bulletin' && (
+        <div data-testid="task-bulletin-tab" className="space-y-6">
+          {/* Overlaps section */}
+          <div className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-3">
+            <h3 className="text-sm font-semibold text-[var(--t-text)] flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-[var(--t-warn)]" />
+              <span>{t('taskDetail.bulletinOverlapsTitle')}</span>
+            </h3>
+            {projectNotes.filter(
+              (n) =>
+                n.kind === 'overlap' &&
+                (n.taskId === task.id ||
+                  n.content.includes(task.id) ||
+                  n.content.includes(task.slug)),
+            ).length > 0 ? (
+              <div className="space-y-2">
+                {projectNotes
+                  .filter(
+                    (n) =>
+                      n.kind === 'overlap' &&
+                      (n.taskId === task.id ||
+                        n.content.includes(task.id) ||
+                        n.content.includes(task.slug)),
+                  )
+                  .map((ov) => (
+                    <div
+                      key={ov.id}
+                      className="p-3 rounded-lg border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] text-xs flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-2 text-[var(--t-text)]">
+                        <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] border border-[var(--t-border)]">
+                          {ov.taskId}
+                        </span>
+                        <span className="font-medium">{ov.content}</span>
+                      </div>
+                      <span className="text-[var(--t-text-3)] text-[10px] shrink-0 font-mono">
+                        {ov.createdAt}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--t-text-3)] italic">
+                {t('taskDetail.bulletinNoOverlaps')}
+              </p>
+            )}
+          </div>
+
+          {/* Project notes section */}
+          <div className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-4">
+            <h3 className="text-sm font-semibold text-[var(--t-text)] flex items-center gap-2">
+              <FileText className="w-4 h-4 text-[var(--t-accent)]" />
+              <span>{t('taskDetail.bulletinNotesTitle')}</span>
+            </h3>
+
+            {/* Input to send note */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const text = newNoteText.trim();
+                if (!text || sendNoteMutation.isPending) return;
+                sendNoteMutation.mutate(text);
+              }}
+              className="flex gap-2"
+            >
+              <input
+                type="text"
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                placeholder={t('taskDetail.bulletinAddNotePlaceholder')}
+                className="flex-1 px-3 py-2 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-[var(--t-text)] focus:outline-none focus:border-[var(--t-accent)]"
+              />
+              <button
+                type="submit"
+                disabled={!newNoteText.trim() || sendNoteMutation.isPending}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-[var(--t-accent)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {sendNoteMutation.isPending ? t('taskDetail.bulletinSendingBtn') : t('taskDetail.bulletinSendBtn')}
+              </button>
+            </form>
+
+            {projectNotes.filter((n) => n.kind === 'note').length > 0 ? (
+              <div className="space-y-2">
+                {projectNotes
+                  .filter((n) => n.kind === 'note')
+                  .map((note) => (
+                    <div
+                      key={note.id}
+                      className="p-3 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between text-[11px] text-[var(--t-text-3)]">
+                        <span className="font-semibold text-[var(--t-text)]">
+                          {note.taskId}
+                        </span>
+                        <span className="font-mono text-[10px]">{note.createdAt}</span>
+                      </div>
+                      <p className="text-[var(--t-text)]">{note.content}</p>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--t-text-3)] italic">
+                {t('taskDetail.bulletinNoNotes')}
+              </p>
             )}
           </div>
         </div>

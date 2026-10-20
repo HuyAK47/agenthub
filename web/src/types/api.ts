@@ -206,10 +206,20 @@ export interface ClaudeQuota {
   limited?: boolean;
 }
 
+export interface TaskNote {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: 'note' | 'overlap';
+  content: string;
+  createdAt: string;
+}
+
 export interface HubStatus {
   tasks: Record<string, number>;
   profiles?: Profile[];
   running: RunningWorker[];
+  overlaps?: TaskNote[];
   brain?: BrainStatus;
   disk?: {
     freeGB: number;
@@ -406,6 +416,17 @@ export interface ChatMessageMeta {
   numTurns?: number;
   error?: string;
   retryText?: string;
+}
+
+export interface ChatPermissionRequest {
+  id: string;
+  sessionId: string;
+  messageId?: string | null;
+  toolName: string;
+  input: Record<string, unknown>;
+  status: 'pending' | 'allow' | 'deny' | 'allow_always';
+  message?: string | null;
+  createdAt: string;
 }
 
 export interface ChatMessage {

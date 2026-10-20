@@ -174,7 +174,7 @@ describe('Profile import from ~/.agy-homes', () => {
 
     const dupes = profileService.getDuplicateEmails();
     expect(dupes.size).toBeGreaterThanOrEqual(1);
-    const sameEmailProfiles = dupes.get('same@gmail.com');
+    const sameEmailProfiles = dupes.get('agy:same@gmail.com');
     expect(sameEmailProfiles).toBeTruthy();
     expect(sameEmailProfiles!.length).toBeGreaterThanOrEqual(2);
   });

@@ -23,6 +23,7 @@ import { WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
+import { sameAccount } from '../profiles/account.js';
 import { QuotaUsageService } from '../quota/usage.js';
 import { CheckRunner, getCheckResults } from '../checks.js';
 import { parseDbTime } from '../db/time.js';
@@ -133,6 +134,7 @@ export class Scheduler {
   private runMetricsRepo?: RunMetricsRepo;
   private reviewRepo?: ReviewRepo;
   private failoverState?: ClaudeFailoverState;
+  private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
@@ -186,6 +188,10 @@ export class Scheduler {
   configureReviewer(reviewRepo: ReviewRepo, failoverState: ClaudeFailoverState): void {
     this.reviewRepo = reviewRepo;
     this.failoverState = failoverState;
+  }
+
+  configureBulletinService(bulletinService: { updateBulletinForTask: (task: TaskRow) => void }): void {
+    this.bulletinService = bulletinService;
   }
 
   getReviewerStatus(): { active: boolean; running: string[]; waiting: number } {
@@ -1158,7 +1164,17 @@ export class Scheduler {
         runId: check.runId || 'unknown',
         runStartedAt: check.runStartedAt || 'unknown',
       }));
-      child = engine.spawn({ profile, model: reviewerModel, cwd: task.worktreePath, prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks), logPath, outputPath, readOnly: true, lockFile });
+      child = engine.spawn({
+        profile,
+        model: reviewerModel,
+        cwd: task.worktreePath,
+        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks),
+        logPath,
+        outputPath,
+        readOnly: true,
+        lockFile,
+        env: { AGENTHUB_TASK_ID: task.id },
+      });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
     } catch (error) {
@@ -1298,7 +1314,7 @@ export class Scheduler {
 
     if (targetEmail) {
       for (const p of this.profileRepo.getAll()) {
-        if (p.email === targetEmail) {
+        if (sameAccount(p, profile)) {
           sameEmailProfileNames.add(p.name);
         }
       }
@@ -1351,7 +1367,7 @@ export class Scheduler {
         const group = family === 'gemini' ? 'Gemini Models' : (family === 'claude' || family === 'gpt' ? 'Claude and GPT models' : null);
         if (group) {
           const names = profile.email
-            ? this.profileRepo.getAll().filter((p) => p.email === profile.email).map((p) => p.name)
+            ? this.profileRepo.getAll().filter((p) => sameAccount(p, profile)).map((p) => p.name)
             : [profile.name];
           if (names.length > 0) {
             const placeholders = names.map(() => '?').join(',');
@@ -1459,7 +1475,7 @@ export class Scheduler {
     const profile = this.profileRepo.get(profileName);
     if (!profile) return;
     const related = profile.email
-      ? this.profileRepo.getAll().filter((candidate) => candidate.email === profile.email)
+      ? this.profileRepo.getAll().filter((candidate) => sameAccount(candidate, profile))
       : [profile];
     for (const candidate of related) {
       this.profileRepo.updateAuthState(candidate.name, 'not_logged_in', 'Phiên đăng nhập hết hạn (401) – cần đăng nhập lại', null);
@@ -1637,6 +1653,7 @@ export class Scheduler {
         prompt,
         logPath,
         lockFile,
+        env: { AGENTHUB_TASK_ID: task.id },
       });
 
       const pid = child.pid!;
@@ -1645,6 +1662,10 @@ export class Scheduler {
 
       // Update task status
       this.taskRepo.update(task.id, { status: 'running' });
+
+      if (this.bulletinService) {
+        this.bulletinService.updateBulletinForTask({ ...task, status: 'running', worktreePath });
+      }
 
       // Track the running task
       const rt: RunningTask = {

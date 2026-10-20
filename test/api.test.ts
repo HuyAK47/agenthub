@@ -407,6 +407,8 @@ describe('AgentHub HTTP API Endpoints', () => {
     });
     expect(createProfRes.statusCode).toBe(201);
     expect(JSON.parse(createProfRes.body).name).toBe('worker1');
+    // New agy profiles start as not_logged_in; simulate a completed login.
+    ctx.profileRepo.updateAuthState('worker1', 'ok', null, null);
 
     // 2. Mark quota
     const markRes = await server.inject({

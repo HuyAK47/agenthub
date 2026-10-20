@@ -11,6 +11,7 @@ export interface ChatConfig {
   maxConcurrent: number;
   idleTimeoutSec: number;
   model: string;
+  permissionTimeoutSec: number;
   claudeProfile?: string;
 }
 
@@ -47,6 +48,14 @@ export interface StallConfig {
 export const DEFAULT_STALL_CONFIG: StallConfig = {
   noCommitMin: 45,
   loopThreshold: 6,
+};
+
+export interface ContextConfig {
+  overlapCheckSec: number;
+}
+
+export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
+  overlapCheckSec: 60,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -101,6 +110,7 @@ export interface AgentHubConfig {
   savings: SavingsConfig;
   load: LoadConfig;
   stall: StallConfig;
+  context: ContextConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -130,6 +140,7 @@ export function saveConfig(
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
+    context?: Partial<ContextConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -154,6 +165,7 @@ export function saveConfig(
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
     ...(patch.stall ? { stall: { ...((current.stall as Record<string, unknown>) || {}), ...patch.stall } } : {}),
+    ...(patch.context ? { context: { ...((current.context as Record<string, unknown>) || {}), ...patch.context } } : {}),
     ...(patch.savings
       ? {
           savings: {
@@ -195,6 +207,7 @@ export function updateConfigInMemory(
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
+    context?: Partial<ContextConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -231,6 +244,7 @@ export function updateConfigInMemory(
     }
     if (patch.chat.idleTimeoutSec !== undefined) config.chat.idleTimeoutSec = patch.chat.idleTimeoutSec;
     if (patch.chat.model !== undefined) config.chat.model = patch.chat.model;
+    if (patch.chat.permissionTimeoutSec !== undefined) config.chat.permissionTimeoutSec = patch.chat.permissionTimeoutSec;
     if (patch.chat.claudeProfile !== undefined) config.chat.claudeProfile = patch.chat.claudeProfile;
   }
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
@@ -271,6 +285,11 @@ export function updateConfigInMemory(
   }
   if (patch.load) config.load = { ...config.load, ...patch.load };
   if (patch.stall) config.stall = { ...config.stall, ...patch.stall };
+  if (patch.context) {
+    if (patch.context.overlapCheckSec !== undefined) {
+      config.context.overlapCheckSec = patch.context.overlapCheckSec;
+    }
+  }
 }
 
 export function loadConfig(overrideHome?: string): AgentHubConfig {
@@ -326,6 +345,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : 2,
     idleTimeoutSec: typeof chatRaw.idleTimeoutSec === 'number' ? chatRaw.idleTimeoutSec : 300,
     model: typeof chatRaw.model === 'string' ? chatRaw.model : 'sonnet',
+    permissionTimeoutSec: typeof chatRaw.permissionTimeoutSec === 'number' ? chatRaw.permissionTimeoutSec : 600,
     claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-may',
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
@@ -434,5 +454,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
     },
     stall,
+    context: {
+      overlapCheckSec: typeof (userConfig.context as Record<string, unknown> | undefined)?.overlapCheckSec === 'number'
+        ? ((userConfig.context as Record<string, unknown>).overlapCheckSec as number)
+        : DEFAULT_CONTEXT_CONFIG.overlapCheckSec,
+    },
   };
 }
