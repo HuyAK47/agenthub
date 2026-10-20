@@ -44,6 +44,7 @@ export interface Profile {
   authState?: 'ok' | 'not_logged_in' | 'needs_verification' | 'error' | null;
   authMessage?: string | null;
   verifyUrl?: string | null;
+  claudePlan?: string;
 }
 
 export interface ProjectHooks {

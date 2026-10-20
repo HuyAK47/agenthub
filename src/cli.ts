@@ -581,12 +581,16 @@ async function cmdProfile(
       }
 
       // Re-read email
+      const claudeAccount = profile.engine === 'claude'
+        ? ctx.profileService.readClaudeAccount(profile.home || os.homedir())
+        : null;
       const email = profile.engine === 'claude'
-        ? ctx.profileService.readClaudeAccount(profile.home || os.homedir())?.email
+        ? claudeAccount?.email
         : ctx.profileService.readEmailFromLog(path.join(profile.home || os.homedir(), '.gemini', 'antigravity-cli', 'log'));
       if (email) {
         ctx.profileRepo.upsert({ ...profile, email });
         console.log(`\n✓ Đã đăng nhập: ${email}`);
+        if (claudeAccount?.plan) console.log(`  Gói: ${claudeAccount.plan}`);
       } else {
         console.log('\n⚠ Không tìm thấy email trong log.');
       }

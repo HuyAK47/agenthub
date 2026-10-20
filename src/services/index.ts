@@ -872,6 +872,7 @@ export class AppService {
     const runningMap = this.scheduler.getRunning();
 
     return profiles.map((p) => {
+      const claudeAccount = p.engine === 'claude' ? this.coreProfileService.readClaudeAccount(p.home || os.homedir()) : null;
       const marks = quotaMarks.filter((m) => m.profileName === p.name);
       const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === p.name);
       const slots = this.lockService.getSlotsSync(p);
@@ -884,6 +885,7 @@ export class AppService {
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
         duplicateWarning: p.email ? dupes.has(p.email) : false,
+        ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
   }
