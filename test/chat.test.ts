@@ -889,6 +889,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const titleMatches = JSON.parse(searchTitleRes.body);
     expect(titleMatches.some((s: { id: string }) => s.id === s1.id)).toBe(true);
     expect(titleMatches.some((s: { id: string }) => s.id === s2.id)).toBe(false);
+    expect(titleMatches.some((s: { id: string }) => s.id === s3.id)).toBe(false);
 
     // 2. Search by message content
     const searchContentRes = await server.inject({
