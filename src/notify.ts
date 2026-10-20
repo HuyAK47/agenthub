@@ -125,6 +125,18 @@ export class NotificationService {
         this.notify(`Tài khoản ${name} cần đăng nhập lại`, 'normal');
         break;
       }
+
+      case 'task.overlap': {
+        const file = (p.file || p.filename || '') as string;
+        const otherTaskId = (p.otherTaskId || '') as string;
+        const taskTitle = this.resolveTaskTitle(taskId, p);
+        const otherTitle = this.resolveTaskTitle(otherTaskId);
+        const msg = file
+          ? `AgentHub: Trùng file ${file} giữa ${taskTitle} và ${otherTitle}`
+          : `AgentHub: Trùng sửa file giữa ${taskTitle} và ${otherTitle}`;
+        this.notify(msg, 'normal');
+        break;
+      }
     }
   }
 

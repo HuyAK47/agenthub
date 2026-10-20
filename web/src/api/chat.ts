@@ -55,9 +55,11 @@ export async function deleteChatSession(id: string): Promise<{ ok: boolean }> {
 export async function getChatMessages(
   sessionId: string,
 ): Promise<ChatMessage[]> {
-  return apiFetch<ChatMessage[]>(
-    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+  // The API returns { messages, hasMore } (cursor pagination); older servers return an array.
+  const res = await apiFetch<ChatMessage[] | { messages: ChatMessage[]; hasMore?: boolean }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages?limit=200`,
   );
+  return Array.isArray(res) ? res : res?.messages ?? [];
 }
 
 export async function sendChatMessage(

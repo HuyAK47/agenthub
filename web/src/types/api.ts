@@ -39,6 +39,7 @@ export interface Profile {
   duplicateWarning?: boolean;
   duplicateEmailWith?: string[];
   usage?: QuotaUsageItem[];
+  claudeTokens?: { today: number; week: number };
   slotsUsed?: number;
   slotsTotal?: number;
   authState?: 'ok' | 'not_logged_in' | 'needs_verification' | 'error' | null;
@@ -131,6 +132,7 @@ export interface Task {
     loopingCommand?: string | null;
   } | null;
   checks?: CheckResult[];
+  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
 }
 
 export interface CheckResult {
@@ -148,6 +150,8 @@ export interface TaskDetail extends Task {
   blockedContent?: string | null;
   commits?: string[] | null;
   gitCommits?: string[] | null;
+  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  derivedTasks?: Task[];
 }
 
 export interface EventItem {
@@ -206,10 +210,20 @@ export interface ClaudeQuota {
   limited?: boolean;
 }
 
+export interface TaskNote {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: 'note' | 'overlap';
+  content: string;
+  createdAt: string;
+}
+
 export interface HubStatus {
   tasks: Record<string, number>;
   profiles?: Profile[];
   running: RunningWorker[];
+  overlaps?: TaskNote[];
   brain?: BrainStatus;
   disk?: {
     freeGB: number;
@@ -231,11 +245,23 @@ export interface HubStatus {
     overloaded: boolean;
     recoveringSince: number | null;
   };
+  telegram?: {
+    enabled: boolean;
+    allowedChatsCount?: number;
+    hasToken?: boolean;
+  };
   // Backwards compatibility aliases
   tasksByStatus?: Record<TaskStatus, number>;
   runningWorkers?: RunningWorker[];
   recentEvents?: EventItem[];
   tasksByProject?: Record<string, Record<string, number>>;
+}
+
+export interface TelegramPairingResponse {
+  code: string;
+  expiresInSec: number;
+  enabled: boolean;
+  allowedChatIds: number[];
 }
 
 export interface OrphanProcess {
@@ -516,6 +542,18 @@ export interface CreateTaskInput {
   baseRef?: string;
   branch?: string;
   modelChain?: string[];
+  start?: boolean;
+}
+
+export interface CaptureTaskInput {
+  sourceTaskId: string;
+  runId?: string;
+  checkName?: string;
+  excerpt: string;
+  slug: string;
+  title?: string;
+  body?: string;
+  level: TaskLevel;
   start?: boolean;
 }
 

@@ -123,6 +123,27 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
+  fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+
+  // --- Telegram API ---
+  fastify.get('/api/telegram/pairing-code', async (req) => {
+    const query = req.query as { refresh?: string } | undefined;
+    const refresh = query?.refresh === '1' || query?.refresh === 'true';
+    return service.getTelegramPairingCode(refresh);
+  });
+  fastify.post('/api/telegram/pairing-code/refresh', async () => {
+    return service.getTelegramPairingCode(true);
+  });
+  fastify.get('/api/telegram/status', async () => {
+    return {
+      enabled: service.config.telegram?.enabled ?? false,
+      allowedChatIds: service.config.telegram?.allowedChatIds ?? [],
+      notify: service.config.telegram?.notify,
+      hasToken: Boolean(service.telegramBotService?.hasValidToken()),
+    };
+  });
+
   fastify.get('/api/system/orphans', async () => service.getOrphans());
   fastify.post('/api/system/orphans/reap', async () => service.reapOrphans());
 
@@ -154,6 +175,12 @@ export async function createServer(
   fastify.delete('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.deleteProject(id);
+  });
+
+  fastify.get('/api/projects/:id/notes', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { since?: string; runningOnly?: string; taskId?: string };
+    return service.getProjectNotes(id, query);
   });
 
   // --- Profiles API ---
@@ -213,6 +240,11 @@ export async function createServer(
     return reply.status(201).send(task);
   });
 
+  fastify.post('/api/tasks/from-error', async (req: FastifyRequest, reply: FastifyReply) => {
+    const task = service.captureTask(req.body);
+    return reply.status(201).send(task);
+  });
+
   fastify.get('/api/tasks/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.getTask(id);
@@ -263,6 +295,17 @@ export async function createServer(
   fastify.post('/api/tasks/:id/checks/rerun', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.rerunChecks(id);
+  });
+
+  fastify.post('/api/tasks/:id/notes', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const note = service.createTaskNote(id, req.body);
+    return reply.status(201).send(note);
+  });
+
+  fastify.get('/api/tasks/:id/notes', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getTaskNotes(id);
   });
 
   // --- Config API ---
