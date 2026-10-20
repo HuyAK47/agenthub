@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getProjects, getConfig } from '../../api/client';
-import { ChatMode } from '../../types/api';
+import { getProjects, getConfig, getProfiles } from '../../api/client';
+import { ChatMode, Profile } from '../../types/api';
 import { X, ShieldCheck, AlertTriangle, Sparkles } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
 import { useFocusTrap } from '../ui/useFocusTrap';
@@ -9,7 +9,7 @@ import { useFocusTrap } from '../ui/useFocusTrap';
 interface NewSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: { projectId?: string | null; title?: string; mode: ChatMode; model?: string }) => void;
+  onSubmit: (data: { projectId?: string | null; title?: string; mode: ChatMode; model?: string; profileName?: string | null }) => void;
   isSubmitting?: boolean;
 }
 
@@ -25,6 +25,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const [title, setTitle] = useState<string>('');
   const [mode, setMode] = useState<ChatMode>('safe');
   const [model, setModel] = useState<string>('');
+  const [profileName, setProfileName] = useState<string>('');
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -39,6 +40,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   });
 
   const allowFullMode = Boolean(config?.chat?.allowFullMode);
+  const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles, enabled: isOpen });
+  const claudeProfiles = profiles.filter((profile: Profile) => profile.engine === 'claude');
 
   if (!isOpen) return null;
 
@@ -49,6 +52,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       title: title.trim() || undefined,
       mode,
       model: model || undefined,
+      profileName: profileName || config?.chat?.claudeProfile || undefined,
     });
   };
 
@@ -117,6 +121,13 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
               placeholder={t('extra.chatTitlePlaceholder')}
               className="w-full text-sm rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)] focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]/30 focus:border-[var(--t-accent)]"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-1.5">Claude profile</label>
+            <select value={profileName} onChange={(e) => setProfileName(e.target.value)} className="w-full text-sm rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)]">
+              {claudeProfiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name}{profile.email ? ` · ${profile.email}` : ''}</option>)}
+            </select>
           </div>
 
           {/* Mode Selector */}
