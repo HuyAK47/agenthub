@@ -202,6 +202,35 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       },
     ]);
 
+    // 2b. assistant with usage and prompt caching
+    const assistantWithUsage = parseStreamJsonLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'Cached answer' }],
+          usage: {
+            input_tokens: 20,
+            output_tokens: 15,
+            cache_read_input_tokens: 300,
+            cache_creation_input_tokens: 100,
+          },
+        },
+      }),
+    );
+    expect(assistantWithUsage).toEqual([
+      {
+        type: 'assistant_text',
+        text: 'Cached answer',
+        usage: {
+          inputTokens: 20,
+          outputTokens: 15,
+          cacheReadInputTokens: 300,
+          cacheCreationInputTokens: 100,
+          contextTokens: 420,
+        },
+      },
+    ]);
+
     // 5b. result with usage
     const resultWithUsage = parseStreamJsonLine(
       JSON.stringify({
@@ -222,6 +251,34 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
         usage: {
           inputTokens: 150,
           outputTokens: 35,
+        },
+      },
+    ]);
+
+    // 5c. result with cache fields sums 3 types of input tokens
+    const resultWithCache = parseStreamJsonLine(
+      JSON.stringify({
+        type: 'result',
+        session_id: 'sess-cache',
+        is_error: false,
+        usage: {
+          input_tokens: 50,
+          cache_read_input_tokens: 400,
+          cache_creation_input_tokens: 150,
+          output_tokens: 30,
+        },
+      }),
+    );
+    expect(resultWithCache).toEqual([
+      {
+        type: 'result',
+        sessionId: 'sess-cache',
+        isError: false,
+        usage: {
+          inputTokens: 600, // 50 + 400 + 150
+          outputTokens: 30,
+          cacheReadInputTokens: 400,
+          cacheCreationInputTokens: 150,
         },
       },
     ]);
@@ -1012,6 +1069,97 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const allSessions = JSON.parse(allSessionsRes.body);
     expect(allSessions[0].id).toBe(s2.id);
     expect(allSessions[0].pinned).toBe(1);
+
+    // 5. Escaping special LIKE characters: %, _, \
+    const sPctRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Success rate 100% completed' },
+    });
+    const sPct = JSON.parse(sPctRes.body);
+
+    const sUnderRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'variable_name_convention' },
+    });
+    const sUnder = JSON.parse(sUnderRes.body);
+
+    const sSlashRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'c:\\windows\\system32' },
+    });
+    const sSlash = JSON.parse(sSlashRes.body);
+
+    // Searching for '%' should only match the literal '%', not all sessions
+    const searchPctRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=%',
+      headers: authHeaders(),
+    });
+    const pctMatches = JSON.parse(searchPctRes.body);
+    expect(pctMatches.some((s: { id: string }) => s.id === sPct.id)).toBe(true);
+    expect(pctMatches.some((s: { id: string }) => s.id === s1.id)).toBe(false);
+
+    // Searching for '_' should only match the literal '_', not all sessions with single chars
+    const searchUnderRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=_name_',
+      headers: authHeaders(),
+    });
+    const underMatches = JSON.parse(searchUnderRes.body);
+    expect(underMatches.some((s: { id: string }) => s.id === sUnder.id)).toBe(true);
+    expect(underMatches.some((s: { id: string }) => s.id === s1.id)).toBe(false);
+
+    // Searching for '\' should match literal '\'
+    const searchSlashRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=\\windows\\',
+      headers: authHeaders(),
+    });
+    const slashMatches = JSON.parse(searchSlashRes.body);
+    expect(slashMatches.some((s: { id: string }) => s.id === sSlash.id)).toBe(true);
+
+    // 6. Archived sessions are hidden by default, shown with ?archived=1
+    await server.inject({
+      method: 'PATCH',
+      url: `/api/chat/sessions/${s1.id}`,
+      headers: authHeaders(),
+      payload: { archived: true },
+    });
+
+    const searchHiddenRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=Docker',
+      headers: authHeaders(),
+    });
+    expect(JSON.parse(searchHiddenRes.body)).toHaveLength(0);
+
+    const searchArchivedRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=Docker&archived=1',
+      headers: authHeaders(),
+    });
+    const archivedMatches = JSON.parse(searchArchivedRes.body);
+    expect(archivedMatches.some((s: { id: string }) => s.id === s1.id)).toBe(true);
+
+    const allUnarchivedRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+    });
+    expect(JSON.parse(allUnarchivedRes.body).some((s: { id: string }) => s.id === s1.id)).toBe(false);
+
+    const allArchivedRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?archived=1',
+      headers: authHeaders(),
+    });
+    expect(JSON.parse(allArchivedRes.body).some((s: { id: string }) => s.id === s1.id)).toBe(true);
   });
 
   it('exports session to Markdown format', async () => {
@@ -1124,6 +1272,52 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(sessRow?.outputTokens).toBe(100);
     // contextTokens should be the input tokens of the latest turn (220)
     expect(sessRow?.contextTokens).toBe(220);
+  });
+
+  it('accumulates tokens with prompt caching: contextTokens is from the final assistant message (including cache_read and cache_creation), while inputTokens is total input from result.usage', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Prompt cache session' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    let done = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      done = true;
+    });
+
+    // Send a message with tool execution where fake-claude emits multiple assistant messages with cache usage
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Please use a tool with caching' },
+    });
+
+    await vi.waitFor(() => {
+      expect(done).toBe(true);
+    }, { timeout: 10_000 });
+
+    const sessRow = ctx.chatSessionRepo.get(session.id);
+    // In fake-claude tool branch:
+    // Assistant 1 (tool): input 100, cache_read 500, cache_creation 200 (context = 800)
+    // Assistant 2 (final assistant in turn): input 120, cache_read 700, cache_creation 100 (context = 920)
+    // Result: input 220, cache_read 1200, cache_creation 300 (total input = 1720), output 50
+    expect(sessRow?.contextTokens).toBe(920); // 120 + 700 + 100 from FINAL assistant event
+    expect(sessRow?.inputTokens).toBe(1720); // 220 + 1200 + 300 from result.usage
+    expect(sessRow?.outputTokens).toBe(50);
+  });
+
+  it('creates database index on chat_messages(sessionId, createdAt) for pagination query', () => {
+    const indices = ctx.db
+      .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chat_messages'")
+      .all() as Array<{ name: string; sql: string }>;
+    const createdIndex = indices.find((idx) => idx.name === 'idx_chat_messages_session_created');
+    expect(createdIndex).toBeDefined();
+    expect(createdIndex?.sql).toContain('sessionId');
+    expect(createdIndex?.sql).toContain('createdAt');
   });
 
   it('automatically sets session title from first user message up to 60 characters', async () => {

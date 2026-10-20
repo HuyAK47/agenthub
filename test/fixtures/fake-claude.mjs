@@ -111,6 +111,12 @@ async function main() {
               input: { file_path: 'docs/PLAN.md' },
             },
           ],
+          usage: {
+            input_tokens: 100,
+            cache_read_input_tokens: 500,
+            cache_creation_input_tokens: 200,
+            output_tokens: 20,
+          },
         },
       }),
     );
@@ -124,6 +130,12 @@ async function main() {
               text: 'Nội dung PLAN đã đọc.',
             },
           ],
+          usage: {
+            input_tokens: 120,
+            cache_read_input_tokens: 700,
+            cache_creation_input_tokens: 100,
+            output_tokens: 30,
+          },
         },
       }),
     );
@@ -137,8 +149,10 @@ async function main() {
         is_error: false,
         result: 'Nội dung PLAN đã đọc.',
         usage: {
-          input_tokens: 150,
-          output_tokens: 30,
+          input_tokens: 220,
+          cache_read_input_tokens: 1200,
+          cache_creation_input_tokens: 300,
+          output_tokens: 50,
         },
       }),
     );
@@ -209,6 +223,12 @@ async function main() {
       },
     }),
   );
+  const usageMatch = prompt.match(/usage:(\d+):(\d+)(?::(\d+):(\d+))?/);
+  const inputTokens = usageMatch ? parseInt(usageMatch[1], 10) : 100;
+  const outputTokens = usageMatch ? parseInt(usageMatch[2], 10) : 25;
+  const cacheReadTokens = usageMatch && usageMatch[3] ? parseInt(usageMatch[3], 10) : 0;
+  const cacheCreationTokens = usageMatch && usageMatch[4] ? parseInt(usageMatch[4], 10) : 0;
+
   console.log(
     JSON.stringify({
       type: 'assistant',
@@ -219,12 +239,15 @@ async function main() {
             text: 'Xin chào, tôi là Claude!',
           },
         ],
+        usage: {
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          ...(cacheReadTokens > 0 ? { cache_read_input_tokens: cacheReadTokens } : {}),
+          ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
+        },
       },
     }),
   );
-  const usageMatch = prompt.match(/usage:(\d+):(\d+)/);
-  const inputTokens = usageMatch ? parseInt(usageMatch[1], 10) : 100;
-  const outputTokens = usageMatch ? parseInt(usageMatch[2], 10) : 25;
 
   console.log(
     JSON.stringify({
@@ -238,6 +261,8 @@ async function main() {
       usage: {
         input_tokens: inputTokens,
         output_tokens: outputTokens,
+        ...(cacheReadTokens > 0 ? { cache_read_input_tokens: cacheReadTokens } : {}),
+        ...(cacheCreationTokens > 0 ? { cache_creation_input_tokens: cacheCreationTokens } : {}),
       },
     }),
   );
