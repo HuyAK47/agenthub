@@ -13,11 +13,15 @@ export interface GetChatMessagesResponse {
   hasMore: boolean;
 }
 
+export type ChatMessagesResult = ChatMessage[] & { hasMore?: boolean };
+
 export function normalizeMessagesResponse(
-  raw: GetChatMessagesResponse | ChatMessage[] | null | undefined,
+  raw: GetChatMessagesResponse | ChatMessage[] | ChatMessagesResult | null | undefined,
 ): { messages: ChatMessage[]; hasMore: boolean } {
   if (!raw) return { messages: [], hasMore: false };
-  if (Array.isArray(raw)) return { messages: raw, hasMore: false };
+  if (Array.isArray(raw)) {
+    return { messages: raw, hasMore: Boolean((raw as any).hasMore) };
+  }
   return {
     messages: Array.isArray(raw.messages) ? raw.messages : [],
     hasMore: Boolean(raw.hasMore),
@@ -71,14 +75,18 @@ export async function deleteChatSession(id: string): Promise<{ ok: boolean }> {
 export async function getChatMessages(
   sessionId: string,
   options?: { limit?: number; before?: string },
-): Promise<GetChatMessagesResponse | ChatMessage[]> {
+): Promise<ChatMessagesResult> {
   const params = new URLSearchParams();
   if (options?.limit) params.set('limit', String(options.limit));
   if (options?.before) params.set('before', options.before);
   const qs = params.toString() ? `?${params.toString()}` : '';
-  return apiFetch<GetChatMessagesResponse | ChatMessage[]>(
+  const res = await apiFetch<ChatMessage[] | { messages: ChatMessage[]; hasMore?: boolean }>(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages${qs}`,
   );
+  const messages: ChatMessage[] = Array.isArray(res) ? res : res?.messages ?? [];
+  return Object.assign(messages, {
+    hasMore: Array.isArray(res) ? false : Boolean(res?.hasMore),
+  });
 }
 
 export async function exportChatSession(sessionId: string): Promise<string> {

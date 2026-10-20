@@ -1,0 +1,12 @@
+$0.0000
+   Total duration (API):  0s
+   Total duration (wall): 17s
+   Total code changes:    0 lines added, 0 lines removed
+   Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+   Current session
+   ██████████████████████████████████████████        84%used
+   Resets 6:50pm (Asia/Ho_Chi_Minh)
+   Current week (all models)
+   ██████████████████████████████████████▌           77%used
+   Resets Oct 21, 5am (Asia/Ho_Chi_Minh)
+   What's contributing to your limits usage

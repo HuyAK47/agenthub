@@ -446,6 +446,15 @@ let mockEvents: EventItem[] = [
   },
 ];
 
+let mockTaskNotes: Array<{
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: 'note' | 'overlap';
+  content: string;
+  createdAt: string;
+}> = [];
+
 function checkAuth(request: Request): boolean {
   const auth = request.headers.get('Authorization');
   return !!auth && auth.startsWith('Bearer ');
@@ -599,6 +608,43 @@ export const handlers = [
     const { id } = params;
     mockProjects = mockProjects.filter((p) => p.id !== id);
     return HttpResponse.json({ ok: true });
+  }),
+
+  // GET /api/projects/:id/notes
+  http.get('/api/projects/:id/notes', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const url = new URL(request.url);
+    const since = url.searchParams.get('since');
+    const sinceId = since ? parseInt(since, 10) : undefined;
+    let notes = mockTaskNotes.filter((n) => n.projectId === id);
+    if (sinceId !== undefined && !isNaN(sinceId)) {
+      notes = notes.filter((n) => n.id > sinceId);
+    }
+    return HttpResponse.json(notes);
+  }),
+
+  // POST /api/tasks/:id/notes
+  http.post('/api/tasks/:id/notes', async ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const taskId = String(id).replace(/~/g, '/');
+    const body = (await request.json()) as { content: string; kind?: 'note' | 'overlap' };
+    const projectId = taskId.split('/')[0] || 'default';
+    const note = {
+      id: mockTaskNotes.length + 1,
+      projectId,
+      taskId,
+      kind: body.kind || ('note' as const),
+      content: body.content,
+      createdAt: new Date().toISOString(),
+    };
+    mockTaskNotes.push(note);
+    return HttpResponse.json(note, { status: 201 });
   }),
 
   // GET /api/profiles

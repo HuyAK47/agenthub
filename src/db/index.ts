@@ -342,6 +342,25 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
   UPDATE chat_sessions SET lastMessageAt = (SELECT MAX(createdAt) FROM chat_messages WHERE sessionId = chat_sessions.id);
   `,
+  // Migration 23: soft-deleted profiles (hidden and never scheduled; run history keeps the name)
+  `
+  ALTER TABLE profiles ADD COLUMN deletedAt TEXT;
+  `,
+  // Migration 24: task notes and overlaps
+  `
+  CREATE TABLE IF NOT EXISTS task_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projectId TEXT NOT NULL,
+    taskId TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('note', 'overlap')),
+    content TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (projectId) REFERENCES projects(id),
+    FOREIGN KEY (taskId) REFERENCES tasks(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_notes_project ON task_notes(projectId, id);
+  CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(taskId, id);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -537,7 +556,7 @@ export class ProfileRepo {
   constructor(private db: Database.Database) {}
 
   getAll(): ProfileRow[] {
-    return this.db.prepare('SELECT * FROM profiles ORDER BY name').all() as ProfileRow[];
+    return this.db.prepare('SELECT * FROM profiles WHERE deletedAt IS NULL ORDER BY name').all() as ProfileRow[];
   }
 
   get(name: string): ProfileRow | undefined {
@@ -590,13 +609,27 @@ export class ProfileRepo {
     this.db.prepare('DELETE FROM profiles WHERE name = ?').run(name);
   }
 
+  /** Hide a profile without touching run history (runs.profileName references it). */
+  softDelete(name: string): void {
+    this.db.prepare("UPDATE profiles SET deletedAt = datetime('now'), enabled = 0 WHERE name = ?").run(name);
+  }
+
+  restore(name: string): void {
+    this.db.prepare('UPDATE profiles SET deletedAt = NULL, enabled = 1 WHERE name = ?').run(name);
+  }
+
+  isDeleted(name: string): boolean {
+    const row = this.db.prepare('SELECT deletedAt FROM profiles WHERE name = ?').get(name) as { deletedAt: string | null } | undefined;
+    return !!row?.deletedAt;
+  }
+
   updateEnabled(name: string, enabled: number): void {
     this.db.prepare('UPDATE profiles SET enabled = ? WHERE name = ?').run(enabled, name);
   }
 
   getEnabled(): ProfileRow[] {
     return this.db
-      .prepare('SELECT * FROM profiles WHERE enabled = 1 ORDER BY name')
+      .prepare('SELECT * FROM profiles WHERE enabled = 1 AND deletedAt IS NULL ORDER BY name')
       .all() as ProfileRow[];
   }
 }
@@ -1340,4 +1373,78 @@ export class RunMetricsRepo {
       .run(taskId, keepRunId);
   }
 }
+
+export type TaskNoteKind = 'note' | 'overlap';
+
+export interface TaskNoteRow {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: TaskNoteKind;
+  content: string;
+  createdAt: string;
+}
+
+export class TaskNoteRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: {
+    projectId: string;
+    taskId: string;
+    kind: TaskNoteKind;
+    content: string;
+  }): TaskNoteRow {
+    const info = this.db
+      .prepare(
+        'INSERT INTO task_notes (projectId, taskId, kind, content) VALUES (?, ?, ?, ?)',
+      )
+      .run(row.projectId, row.taskId, row.kind, row.content);
+    return this.get(info.lastInsertRowid as number)!;
+  }
+
+  get(id: number): TaskNoteRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE id = ?')
+      .get(id) as TaskNoteRow | undefined;
+  }
+
+  getByProject(projectId: string, sinceId?: number): TaskNoteRow[] {
+    if (sinceId !== undefined && !Number.isNaN(sinceId)) {
+      return this.db
+        .prepare('SELECT * FROM task_notes WHERE projectId = ? AND id > ? ORDER BY id ASC')
+        .all(projectId, sinceId) as TaskNoteRow[];
+    }
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE projectId = ? ORDER BY id ASC')
+      .all(projectId) as TaskNoteRow[];
+  }
+
+  getByTask(taskId: string): TaskNoteRow[] {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE taskId = ? ORDER BY id ASC')
+      .all(taskId) as TaskNoteRow[];
+  }
+
+  hasOverlap(taskId: string, otherTaskId: string, file: string): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT id FROM task_notes WHERE taskId = ? AND kind = 'overlap' AND content LIKE ? LIMIT 1",
+      )
+      .get(taskId, `%${file}%${otherTaskId}%`);
+    return Boolean(row);
+  }
+
+  getActiveOverlaps(runningTaskIds: string[]): TaskNoteRow[] {
+    if (runningTaskIds.length === 0) return [];
+    const placeholders = runningTaskIds.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT * FROM task_notes
+         WHERE kind = 'overlap' AND taskId IN (${placeholders})
+         ORDER BY id DESC LIMIT 50`,
+      )
+      .all(...runningTaskIds) as TaskNoteRow[];
+  }
+}
+
 
