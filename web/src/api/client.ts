@@ -175,8 +175,13 @@ export async function getClaudeQuota(): Promise<ClaudeQuota> {
 export type ClaudeFailover = {
   active: boolean;
   until: number | null;
+  resetAt: number | null;
   reason: string | null;
   activatedAt: number | null;
+  step: { type: string; model?: string; profile?: string; engine?: string; dailyCapUSD?: number } | null;
+  stepIndex: number;
+  dailyCostUSD: number;
+  apiKeyConfigured: boolean;
   evidence?: { file: string; line: number; observedAt: string } | null;
   lastActivityAt?: string | null;
 };

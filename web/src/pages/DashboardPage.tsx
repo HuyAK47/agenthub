@@ -249,6 +249,7 @@ export const DashboardPage: React.FC = () => {
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
+            {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">Đang dùng: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? `tài khoản ${claudeFailover.step.profile || 'khác'}` : claudeFailover.step.type === 'apiKey' ? `API key (đã dùng $${claudeFailover.dailyCostUSD.toFixed(2)}/$${claudeFailover.step.dailyCapUSD ?? 0})` : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : 'chờ reset'}</div>}
             {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
             {claudeFailover.evidence && <div className="text-xs text-[var(--text-secondary)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
           </div>

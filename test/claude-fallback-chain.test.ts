@@ -46,6 +46,17 @@ describe('Claude fallback chain', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('writes the API key with restrictive permissions and never exposes it in status', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-fallback-key-'));
+    const keyPath = path.join(root, 'secrets', 'anthropic.key');
+    const state = new ClaudeFailoverState(path.join(root, 'state.json'), () => 1, { apiKeyPath: keyPath });
+    state.setApiKey('sk-test-secret');
+    expect(fs.statSync(keyPath).mode & 0o777).toBe(0o600);
+    expect(state.snapshot()).not.toHaveProperty('apiKey');
+    expect(state.getApiKey()).toBe('sk-test-secret');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('loads brain fallback settings while preserving the legacy default', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-fallback-config-'));
     expect(loadConfig(root).brain.fallback).toEqual([{ type: 'engine', engine: 'codex' }]);

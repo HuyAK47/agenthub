@@ -170,23 +170,27 @@ export class ChatService {
       until: snapshot.until,
       reason: snapshot.reason,
     });
-    this.eventBus.emit('claude.failover_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });
+    this.eventBus.emit('claude.fallback_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });
     this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until, step: snapshot.step });
   }
 
-  private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string> } {
+  private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string>; pausedUntil?: number } {
     const snapshot = this.failoverState.snapshot();
     const step = snapshot.active ? snapshot.step : null;
     if (!step) return { model: turn.model, profileName: turn.profileName };
+    if (step.type === 'wait') return { model: turn.model, profileName: turn.profileName, pausedUntil: snapshot.until || undefined };
     if (step.type === 'model') return { model: step.model, profileName: turn.profileName };
     if (step.type === 'profile') {
-      const selected = step.profile || this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude')?.name;
+      const selected = step.profile
+        ? this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude' && profile.name === step.profile)?.name
+        : this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude')?.name;
       return { model: turn.model, profileName: selected || turn.profileName };
     }
     if (step.type === 'apiKey') {
       const key = this.failoverState.getApiKey();
       if (key && snapshot.dailyCostUSD < step.dailyCapUSD) return { model: turn.model, profileName: turn.profileName, env: { ANTHROPIC_API_KEY: key } };
-      this.failoverState.advance(key ? 'daily_cap_reached' : 'api_key_unconfigured');
+      const next = this.failoverState.advance(key ? 'daily_cap_reached' : 'api_key_unconfigured');
+      this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt, dailyCostUSD: next.dailyCostUSD });
     }
     return { model: turn.model, profileName: turn.profileName };
   }
@@ -393,8 +397,6 @@ export class ChatService {
       throw new HttpError(409, 'conflict', 'Phiên đang bận');
     }
 
-    this.failoverState.noteActivity();
-
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
 
@@ -503,6 +505,15 @@ export class ChatService {
   }
 
   private executeTurn(turn: QueuedTurn): void {
+    const planned = this.failoverExecution(turn);
+    if (planned.pausedUntil) {
+      const delay = Math.max(100, planned.pausedUntil * 1000 - Date.now());
+      setTimeout(() => {
+        this.queue.push(turn);
+        this.processQueue();
+      }, delay);
+      return;
+    }
     const claudeBin = findClaudeBin(this.claudeBinOverride || this.config.chat?.claudeBin);
     if (!claudeBin) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
