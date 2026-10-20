@@ -940,8 +940,9 @@ export async function cmdNote(
     process.exit(1);
   }
 
+  const normalizedId = taskId.replace(/\//g, '~');
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/${encodeURIComponent(taskId)}/notes`, {
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/${encodeURIComponent(normalizedId)}/notes`, {
       method: 'POST',
       headers: {
         Host: `127.0.0.1:${port}`,
