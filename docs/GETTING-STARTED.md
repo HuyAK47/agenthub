@@ -33,6 +33,15 @@ sh /tmp/agenthub-install.sh
 
 Có thể xem trước thao tác bằng `sh /tmp/agenthub-install.sh --dry-run`. Gỡ cài đặt giữ nguyên dữ liệu bằng `sh /tmp/agenthub-install.sh --uninstall`; chỉ dùng `--purge` khi muốn xoá dữ liệu và đã xác nhận.
 
+Nếu đã có bản phát hành, không cần clone hoặc build mã nguồn:
+
+```bash
+sh /tmp/agenthub-install.sh --from-release
+agenthub setup
+```
+
+Installer kiểm tra `SHA256SUMS`, cài dependencies production theo máy hiện tại, và giữ lại hai bản cũ trong `~/.agenthub-app/` để rollback qua symlink `current`.
+
 ```bash
 git clone https://github.com/ducanh19020217/agenthub.git ~/agenthub
 cd ~/agenthub

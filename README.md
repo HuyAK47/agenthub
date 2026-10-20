@@ -63,6 +63,18 @@ npm run build:web
 
 Thư mục dữ liệu và cấu hình mặc định đặt tại `~/.agenthub/` (có thể tùy biến qua biến môi trường `AGENTHUB_HOME`).
 
+### Cài trên máy khác từ GitHub Release
+
+Máy mới chỉ cần Node.js 22, npm, `curl`, `tar` và trình biên dịch native:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh --from-release
+agenthub setup
+```
+
+Dùng `--from-release 0.1.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, chạy `npm ci --omit=dev` để build native module, rồi cập nhật symlink `current` và service. Hai bản cũ được giữ lại để rollback thủ công.
+
 ---
 
 ## 2. Các lệnh CLI chính
