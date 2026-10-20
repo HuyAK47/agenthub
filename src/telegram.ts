@@ -791,6 +791,13 @@ export class TelegramBotService {
     }
 
     switch (domain) {
+      case 'chatlimit': {
+        if (!this.chatService) { await this.answerCallbackQuery(query.id, 'Chat chưa sẵn sàng.'); return; }
+        const result = action === 'cancel' ? this.chatService.cancelLimitRetry(taskIdOrParam) : this.chatService.retryLimitNow(taskIdOrParam);
+        await this.answerCallbackQuery(query.id, result.ok ? (action === 'cancel' ? 'Đã huỷ retry.' : 'Đã gửi lại.') : 'Retry không còn tồn tại.');
+        if (result.ok) await this.sendMessage(chatId, action === 'cancel' ? '⏹ Đã huỷ tự gửi lại Claude.' : '▶️ Đã gửi lại lượt Claude ngay.');
+        break;
+      }
       case 'cancel': {
         if (action === 'confirm') {
           const resolved = this.resolveTask(taskIdOrParam);
@@ -1300,6 +1307,13 @@ export class TelegramBotService {
       case 'claude.quota_exhausted': {
         if (!notify.quota) return;
         this.broadcastMessage('⏳ <b>Claude hết quota</b>\nĐã kích hoạt failover hoặc cần chờ reset quota.');
+        break;
+      }
+
+      case 'chat.limit_waiting': {
+        if (!notify.quota || !this.chatService || typeof p.sessionId !== 'string') return;
+        const resetAt = typeof p.resetAt === 'number' ? new Date(p.resetAt * 1000 + 60_000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sau khi reset';
+        this.broadcastMessage(`⏳ <b>Claude đạt giới hạn 5 giờ</b>\nTự gửi lại lúc <b>${resetAt}</b>.`, { inline_keyboard: [[{ text: '⏹ Huỷ', callback_data: `chatlimit:cancel:${p.sessionId}` }, { text: '▶️ Gửi lại ngay', callback_data: `chatlimit:now:${p.sessionId}` }]] });
         break;
       }
 
