@@ -129,7 +129,9 @@ export class QuotaUsageService {
   /** Codex writes its rate limits into session logs; read them instead of spending quota. */
   collectCodex(profile: ProfileRow, now = Math.floor(Date.now() / 1000)): QuotaUsageRow[] {
     if (profile.engine !== 'codex') return [];
-    const codexDir = path.join(profile.home || os.homedir(), '.codex');
+    const codexDir = profile.kind === 'isolated' && profile.home
+      ? profile.home
+      : path.join(profile.home || os.homedir(), '.codex');
     const limits = readCodexRateLimits(codexDir);
     if (!limits) return [];
     const rows: QuotaUsageRow[] = limits.windows.map((w) => ({
