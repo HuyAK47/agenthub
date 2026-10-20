@@ -6,6 +6,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket } from 'ws';
 import { AppService, HttpError } from '../services/index.js';
 import { findClaudeBin } from '../chat/claude.js';
+import { isProfileLoggedIn } from '../profiles/index.js';
 
 interface PtySession {
   id: string;
@@ -134,6 +135,10 @@ export class PtyManager {
   }
 
   private scheduleEmailRefresh(profileName: string): void {
+    const profile = this.service.profileRepo.get(profileName);
+    if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
+      this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);
+    }
     this.service.refreshProfileEmail(profileName);
 
     const timer = setTimeout(() => {
