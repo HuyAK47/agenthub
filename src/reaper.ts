@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isDeletableWorktreePath } from './worktrees/index.js';
+import { getPlatform } from './platform/index.js';
 
 export interface ReaperOptions {
   worktreesDir?: string;
@@ -42,63 +43,16 @@ function resolveReal(target: string): string {
   }
 }
 
-function bootTimeMs(): number {
-  try {
-    const seconds = fs.readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)$/m)?.[1];
-    return Number(seconds || 0) * 1000;
-  } catch {
-    return 0;
-  }
-}
-
 function processAncestors(): Set<number> {
   const ancestors = new Set<number>([process.pid]);
   let pid = process.pid;
   for (;;) {
-    try {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-      const afterComm = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-      const parent = Number(afterComm[1]);
-      if (!parent || ancestors.has(parent)) break;
-      ancestors.add(parent);
-      pid = parent;
-    } catch {
-      break;
-    }
+    const parent = getPlatform().process.parentPid(pid);
+    if (!parent || ancestors.has(parent)) break;
+    ancestors.add(parent);
+    pid = parent;
   }
   return ancestors;
-}
-
-function processIds(): number[] {
-  try {
-    return fs.readdirSync('/proc').filter((entry) => /^\d+$/.test(entry)).map(Number);
-  } catch {
-    return [];
-  }
-}
-
-function readProcessInfo(pid: number): ProcessInfo | null {
-  try {
-    const cwd = fs.readlinkSync(`/proc/${pid}/cwd`);
-    const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
-    const rssMatch = status.match(/^VmRSS:\s+(\d+)\s+kB$/m);
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const afterComm = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-    const ticks = Number(afterComm[11] || 0) + Number(afterComm[12] || 0);
-    const startTicks = Number(afterComm[19] || 0);
-    let cpu = 0;
-    try {
-      const uptime = Number(fs.readFileSync('/proc/uptime', 'utf8').split(/\s+/)[0]);
-      const hz = 100;
-      cpu = uptime > 0 ? (ticks / hz / uptime) * 100 : 0;
-    } catch {
-      // proc/uptime may be unavailable outside Linux.
-    }
-    const startedAt = bootTimeMs() + startTicks * 10;
-    return { pid, cwd, cpu, rss: Number(rssMatch?.[1] || 0) * 1024, startedAt };
-  } catch {
-    return null;
-  }
 }
 
 function guard(dir: string, options: ReaperOptions): boolean {
@@ -113,9 +67,8 @@ export function listProcessesInDir(dir: string, options: ReaperOptions = {}): Pr
   if (!guard(dir, options)) return [];
   const excluded = processAncestors();
   const result: ProcessInfo[] = [];
-  for (const pid of processIds()) {
-    if (excluded.has(pid)) continue;
-    const info = readProcessInfo(pid);
+  for (const info of getPlatform().process.listProcesses()) {
+    if (excluded.has(info.pid)) continue;
     if (info && isInside(info.cwd, dir)) result.push(info);
   }
   return result;
@@ -187,9 +140,8 @@ export function listAllWorktreeProcesses(options: ReaperOptions = {}): ProcessIn
   if (!fs.existsSync(worktreesDir)) return [];
   const excluded = processAncestors();
   const result: ProcessInfo[] = [];
-  for (const pid of processIds()) {
-    if (excluded.has(pid)) continue;
-    const info = readProcessInfo(pid);
+  for (const info of getPlatform().process.listProcesses()) {
+    if (excluded.has(info.pid)) continue;
     if (info && isInside(info.cwd, worktreesDir) && isDeletableWorktreePath(worktreesDir, cleanCwd(info.cwd), options.protectedPaths || [])) {
       result.push(info);
     }
