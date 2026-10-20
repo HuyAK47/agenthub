@@ -32,6 +32,7 @@ export const ProjectsPage: React.FC = () => {
   const [hooksText, setHooksText] = useState('');
   const [projectChecks, setProjectChecks] = useState<Record<string, string>>({});
   const [projectHooks, setProjectHooks] = useState<Record<string, string>>({});
+  const [projectReview, setProjectReview] = useState<Record<string, string>>({});
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
@@ -71,6 +72,11 @@ export const ProjectsPage: React.FC = () => {
       const lines = hooks.split('\n').map((l) => l.trim()).filter(Boolean);
       return updateProject(id, { hooks: lines.length > 0 ? { onWorktreeRemoved: lines } : null });
     },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  });
+
+  const updateReviewMutation = useMutation({
+    mutationFn: ({ id, review }: { id: string; review: string }) => updateProject(id, { review: review.trim() ? JSON.parse(review) : null }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
   });
 
@@ -427,6 +433,18 @@ export const ProjectsPage: React.FC = () => {
                 <label className="block text-[11px] font-semibold text-[var(--t-text-3)] mb-1">{t('extra.checks')}</label>
                 <textarea rows={2} value={projectChecks[proj.id] ?? (typeof proj.checks === 'string' ? proj.checks : proj.checks ? JSON.stringify(proj.checks) : '')} onChange={(e) => setProjectChecks((current) => ({ ...current, [proj.id]: e.target.value }))} className="w-full text-[11px] font-mono rounded border border-[var(--t-border)] p-2 bg-[var(--t-surface-2)]" />
                 <button type="button" onClick={() => updateMutation.mutate({ id: proj.id, checks: projectChecks[proj.id] ?? '' })} disabled={updateMutation.isPending} className="mt-1 px-2 py-1 rounded bg-[var(--t-surface-2)] text-[11px]">{t('extra.saveChecks')}</button>
+              </div>
+
+              <div className="pt-2 border-t border-[var(--t-border)]">
+                <label className="block text-[11px] font-semibold text-[var(--t-text-3)] mb-1">{t('extra.reviewChainLabel')}</label>
+                <textarea
+                  rows={3}
+                  value={projectReview[proj.id] ?? (typeof proj.review === 'string' ? proj.review : proj.review ? JSON.stringify(proj.review, null, 2) : '')}
+                  onChange={(e) => setProjectReview((current) => ({ ...current, [proj.id]: e.target.value }))}
+                  placeholder={'{"chain":[{"reviewer":"codex:gpt-5.6-luna","mode":"gate"},{"reviewer":"claude","mode":"final"}],"maxRounds":2}' }
+                  className="w-full text-[11px] font-mono rounded border border-[var(--t-border)] p-2 bg-[var(--t-surface-2)]"
+                />
+                <button type="button" onClick={() => updateReviewMutation.mutate({ id: proj.id, review: projectReview[proj.id] ?? '' })} disabled={updateReviewMutation.isPending} className="mt-1 px-2 py-1 rounded bg-[var(--t-surface-2)] text-[11px]">{t('extra.saveReviewChain')}</button>
               </div>
             </div>
           ))

@@ -34,6 +34,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
+import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
 
@@ -452,7 +453,7 @@ export class Scheduler {
       }
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
     } else {
-      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null });
+      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
       if (this.runMetricsRepo) {
         await recalculateTaskLines(
           this.taskRepo,
@@ -462,7 +463,11 @@ export class Scheduler {
           taskId,
         );
       }
-      this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
+      if (this.reviewChainForTask(currentTask).length === 0) {
+        this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
+      } else {
+        this.eventBus.emit('review.gate_started', taskId, { step: 0 });
+      }
     }
     if (!this.stopped) this.triggerTick();
   }
@@ -1244,19 +1249,30 @@ export class Scheduler {
 
   private scheduleReviews(): void {
     const state = this.failoverState;
-    if (!state || !this.reviewRepo || this.config.reviewer?.enabled === false) return;
-    const snapshot = state.snapshot();
+    if (!this.reviewRepo || this.config.reviewer?.enabled === false) return;
+    const snapshot = state?.snapshot() || { active: false, step: undefined };
     if (this.failoverWasActive && !snapshot.active) {
       this.eventBus.emit('claude.failover_cleared', undefined);
     }
     this.failoverWasActive = snapshot.active;
-    if (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex') return;
-
     const codex = this.engines.get('codex');
     if (!codex) return;
     for (const task of this.taskRepo.getByStatus('review')) {
       if (this.reviewerRuns.has(task.id)) continue;
       if (task.reviewerEscalated) continue;
+      const chain = this.reviewChainForTask(task);
+      const step = chain[task.reviewStep ?? 0];
+      if (chain.length > 0 && (!step || step.mode !== 'gate')) {
+        if ((task.reviewStep ?? 0) >= chain.length) {
+          this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true });
+        }
+        continue;
+      }
+      if (chain.length > 0 && step?.reviewer === 'claude') {
+        this.eventBus.emit('review.gate_ready', task.id, { reviewStep: task.reviewStep ?? 0, reviewer: 'claude' });
+        continue;
+      }
+      if (chain.length === 0 && (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex')) continue;
       if (this.getCheckResults(task.id).length === 0) {
         this.escalateReview(task.id, 'missing_autocheck_results', 'Không có kết quả autocheck đã lưu; cần người xác minh trước khi tiếp tục.');
         continue;
@@ -1267,7 +1283,50 @@ export class Scheduler {
       if (codexProfiles.length === 0 || !task.worktreePath) continue;
       codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
       const profile = codexProfiles[0];
-      this.startReview(task, profile.name, codex);
+      const model = reviewerModel(step || { reviewer: this.config.reviewer?.model || 'codex:gpt-5.6-luna', mode: 'gate' }) || this.config.reviewer?.model || 'codex:gpt-5.6-luna';
+      const workerModel = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1)?.model;
+      if (chain.length > 0 && workerModel === model) {
+        this.advanceReviewStep(task, chain, 'reviewer_same_as_worker');
+        continue;
+      }
+      this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
+    }
+  }
+
+  private reviewChainForTask(task: TaskRow): ReviewChainStep[] {
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return [];
+    if (project.review) {
+      try {
+        const value = JSON.parse(project.review) as { chain?: unknown };
+        return parseReviewChain(JSON.stringify(value.chain || []));
+      } catch {
+        return [];
+      }
+    }
+    return parseReviewChain(project.reviewChain);
+  }
+
+  private reviewMaxRoundsForTask(task: TaskRow): number {
+    const project = this.projectRepo.get(task.projectId);
+    if (project?.review) {
+      try {
+        const value = JSON.parse(project.review) as { maxRounds?: unknown };
+        return typeof value.maxRounds === 'number' && value.maxRounds > 0 ? value.maxRounds : 2;
+      } catch {
+        return 2;
+      }
+    }
+    return this.config.reviewer?.maxChangesRequested || 2;
+  }
+
+  private advanceReviewStep(task: TaskRow, chain: ReviewChainStep[], reason: string): void {
+    const nextStep = (task.reviewStep ?? 0) + 1;
+    this.taskRepo.update(task.id, { reviewStep: nextStep, reviewerChangesRequested: 0 });
+    if (nextStep >= chain.length || chain[nextStep]?.mode === 'final') {
+      this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true, reviewStep: nextStep, reason });
+    } else {
+      this.eventBus.emit('review.gate_completed', task.id, { reviewStep: nextStep, reason });
     }
   }
 
@@ -1275,7 +1334,7 @@ export class Scheduler {
     return [...this.reviewerRuns.values()].some((run) => run.profileName === profileName);
   }
 
-  private startReview(task: TaskRow, profileName: string, engine: Engine): void {
+  private startReview(task: TaskRow, profileName: string, engine: Engine, reviewerModel: string, reviewerActor = 'codex-reviewer'): void {
     const profile = this.profileRepo.get(profileName);
     if (!profile || !task.worktreePath || this.reviewerRuns.has(task.id)) return;
     const lockSlot = this.locks.findFreeSlotSync(profile);
@@ -1286,7 +1345,6 @@ export class Scheduler {
     const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
     const logPath = path.join(logDir, `${runId}.log`);
     const outputPath = path.join(logDir, `${runId}.final.json`);
-    const reviewerModel = this.config.reviewer?.model || 'codex:gpt-5.6-luna';
     this.runRepo.insert({ id: runId, taskId: task.id, engine: 'codex', model: reviewerModel, profileName, logPath, kind: 'reviewer' });
     let child;
     try {
@@ -1324,7 +1382,7 @@ export class Scheduler {
     this.reviewerRuns.set(task.id, { taskId: task.id, runId, pid: child.pid, profileName, engine, outputPath, lockSlot, lockFile, startedAt: Date.now(), timeout });
     this.locks.invalidate(profileName);
     child.unref();
-    this.eventBus.emit('review.started', task.id, { actor: 'codex-reviewer', model: reviewerModel, profile: profileName, runId });
+    this.eventBus.emit('review.started', task.id, { actor: reviewerActor, model: reviewerModel, profile: profileName, runId });
     child.once('error', () => {
       if (!this.stopped) this.finishReview(task.id, runId, profileName, 'error', null);
     });
@@ -1402,7 +1460,7 @@ export class Scheduler {
     }
     this.runRepo.finish(runId, 'done');
     this.reviewTask(taskId, result.verdict, result.feedback, 'codex-reviewer');
-    this.eventBus.emit('review.completed', taskId, { actor: 'codex-reviewer', verdict: result.verdict, model: this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
+    this.eventBus.emit('review.completed', taskId, { actor: 'codex-reviewer', verdict: result.verdict, model: run?.model || this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
     if (!this.stopped) this.triggerTick();
   }
 
@@ -1935,10 +1993,16 @@ export class Scheduler {
   reviewTask(taskId: string, verdict: 'approved' | 'changes_requested', feedback?: string, by?: string): void {
     const task = this.taskRepo.get(taskId);
     if (!task || task.status !== 'review') return;
+    const chain = this.reviewChainForTask(task);
+    const step = chain[task.reviewStep ?? 0];
 
     if (verdict === 'approved') {
       if (by === 'codex-reviewer' && (!feedback || feedback.trim() === '')) return;
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback: feedback || null, actor: by });
+      if ((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') {
+        this.advanceReviewStep(task, chain, 'approved');
+        return;
+      }
       if (by !== 'codex-reviewer') this.resetReviewerEscalation(taskId);
       this.taskRepo.updateStatus(taskId, 'done');
       if (this.runMetricsRepo) {
@@ -1956,9 +2020,9 @@ export class Scheduler {
         throw new Error('Feedback is required when requesting changes');
       }
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback, actor: by });
-      if (by === 'codex-reviewer') {
+      if (((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') || (by === 'codex-reviewer' && chain.length === 0)) {
         const count = (task.reviewerChangesRequested || 0) + 1;
-        const max = this.config.reviewer?.maxChangesRequested || 2;
+        const max = this.reviewMaxRoundsForTask(task);
         if (count > max) {
           this.escalateReview(taskId, 'reviewer_changes_limit', feedback);
           return;
@@ -1974,6 +2038,7 @@ export class Scheduler {
           body: newBody,
           status: 'queued',
           resume: 1,
+          reviewStep: 0,
         });
 
         // Remove markers

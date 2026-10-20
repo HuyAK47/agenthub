@@ -60,6 +60,8 @@ export interface ProjectMerge {
   checks: string[];
   timeoutSec: number;
 }
+export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
+export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
 
 export interface Project {
   id: string;
@@ -71,6 +73,7 @@ export interface Project {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
+  review?: ProjectReview | string | null;
   createdAt?: string;
 }
 
@@ -131,6 +134,8 @@ export interface Task {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  reviewStep?: number;
+  reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
   currentRun?: {
@@ -157,6 +162,8 @@ export interface CheckResult {
 }
 
 export interface TaskDetail extends Task {
+  reviewChain?: ReviewChainStep[];
+  reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
   doneContent?: string | null;
@@ -516,6 +523,7 @@ export interface CreateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
 }
 
 export interface UpdateProjectInput {
@@ -526,6 +534,7 @@ export interface UpdateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
 }
 
 export interface CreateProfileInput {
