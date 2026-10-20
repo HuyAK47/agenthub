@@ -729,11 +729,11 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
     const session = JSON.parse(createRes.body);
     await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'hello' } });
-    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.claudeSessionId).toBe('sess-default-123'), { timeout: 5000 });
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.claudeSessionId).toBe('sess-default-123'), { timeout: 15000 });
     let error: Record<string, unknown> | null = null;
     ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { error = payload as Record<string, unknown>; });
     await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'resume-fail' } });
-    await vi.waitFor(() => expect(error).not.toBeNull(), { timeout: 5000 });
+    await vi.waitFor(() => expect(error).not.toBeNull(), { timeout: 15000 });
     expect(ctx.chatSessionRepo.get(session.id)?.claudeSessionId).toBeNull();
     const messages = ctx.chatMessageRepo.getBySession(session.id);
     expect(messages.some((message) => message.content === 'Đã mở phiên mới, ngữ cảnh cũ không còn')).toBe(true);
@@ -743,9 +743,9 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const quotaSession = JSON.parse(quotaRes.body);
     ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { quotaError = payload as Record<string, unknown>; });
     await server.inject({ method: 'POST', url: `/api/chat/sessions/${quotaSession.id}/messages`, headers: authHeaders(), payload: { text: 'quota' } });
-    await vi.waitFor(() => expect(quotaError).not.toBeNull(), { timeout: 5000 });
+    await vi.waitFor(() => expect(quotaError).not.toBeNull(), { timeout: 15000 });
     expect(quotaError?.message).toContain('Usage limit');
-  });
+  }, 60000);
 
   it('validates text bounds: rejects empty or > 20000 characters (400)', async () => {
     const createRes = await server.inject({

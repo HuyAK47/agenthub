@@ -1,5 +1,5 @@
 import { QuotaMarkRepo, ProfileRepo } from '../db/index.js';
-import { sameAccount } from '../profiles/index.js';
+import { sameAccount } from '../profiles/account.js';
 
 export class QuotaService {
   constructor(

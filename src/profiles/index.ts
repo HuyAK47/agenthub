@@ -5,6 +5,9 @@ import { ProfileRepo, QuotaMarkRepo, ProfileRow } from '../db/index.js';
 import { AgentHubConfig } from '../config.js';
 import { CodexEngine } from '../engines/index.js';
 import { findClaudeBin } from '../chat/claude.js';
+import { accountKey } from './account.js';
+
+export { accountKey, sameAccount } from './account.js';
 
 // Symlinks to create in isolated HOME per PLAN 2.1
 const SYMLINK_TARGETS = [
@@ -343,16 +346,6 @@ export class ProfileService {
   getAll(): ProfileRow[] {
     return this.profileRepo.getAll();
   }
-}
-
-/** Identity of the provider account behind a profile, or null when the email is unknown. */
-export function accountKey(profile: Pick<ProfileRow, 'engine' | 'email'>): string | null {
-  return profile.email ? `${profile.engine}:${profile.email}` : null;
-}
-
-/** True when two profiles log in to the same provider account (same engine and email). */
-export function sameAccount(a: Pick<ProfileRow, 'engine' | 'email'>, b: Pick<ProfileRow, 'engine' | 'email'>): boolean {
-  return !!a.email && a.email === b.email && a.engine === b.engine;
 }
 
 export function isProfileLoggedIn(profile: ProfileRow): boolean {

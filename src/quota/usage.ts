@@ -4,7 +4,8 @@ import path from 'node:path';
 import { readCodexRateLimits } from './codex-usage.js';
 import { promisify } from 'node:util';
 import { ProfileRepo, ProfileRow, QuotaMarkRepo, QuotaUsageRepo, QuotaUsageRow } from '../db/index.js';
-import { isProfileLoggedIn, sameAccount } from '../profiles/index.js';
+import { isProfileLoggedIn } from '../profiles/index.js';
+import { sameAccount } from '../profiles/account.js';
 import { parseAuthState } from '../profiles/auth.js';
 
 const execFileAsync = promisify(execFile);

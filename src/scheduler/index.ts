@@ -23,7 +23,7 @@ import { WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
-import { sameAccount } from '../profiles/index.js';
+import { sameAccount } from '../profiles/account.js';
 import { QuotaUsageService } from '../quota/usage.js';
 import { CheckRunner, getCheckResults } from '../checks.js';
 import { parseDbTime } from '../db/time.js';
