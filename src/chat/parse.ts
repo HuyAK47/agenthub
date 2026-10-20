@@ -26,6 +26,10 @@ export type ParsedStreamEvent =
       numTurns?: number;
       isError: boolean;
       result?: string;
+      usage?: {
+        inputTokens: number;
+        outputTokens: number;
+      };
     };
 
 export interface ClaudeQuotaSignal {
@@ -161,6 +165,13 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
   if (data.type === 'result') {
     const isError = Boolean(data.is_error);
     const resultStr = typeof data.result === 'string' ? data.result : undefined;
+    let usage: { inputTokens: number; outputTokens: number } | undefined;
+    if (data.usage && typeof data.usage === 'object') {
+      const u = data.usage as Record<string, unknown>;
+      const input = Number(u.input_tokens ?? u.inputTokens ?? 0) || 0;
+      const output = Number(u.output_tokens ?? u.outputTokens ?? 0) || 0;
+      usage = { inputTokens: input, outputTokens: output };
+    }
     events.push({
       type: 'result',
       sessionId: typeof data.session_id === 'string' ? data.session_id : undefined,
@@ -169,6 +180,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
       numTurns: typeof data.num_turns === 'number' ? data.num_turns : undefined,
       isError,
       result: resultStr,
+      usage,
     });
     return events;
   }
