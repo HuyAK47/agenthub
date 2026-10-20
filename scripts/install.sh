@@ -8,6 +8,7 @@ set -e
 AGENTHUB_DIR="${AGENTHUB_DIR:-$HOME/.agenthub-app}"
 AGENTHUB_DATA_DIR="${AGENTHUB_HOME:-$HOME/.agenthub}"
 AGENTHUB_REPO="${AGENTHUB_REPO:-https://github.com/ducanh19020217/agenthub.git}"
+AGENTHUB_RELEASE_REPO="${AGENTHUB_RELEASE_REPO:-ducanh19020217/agenthub}"
 AGENTHUB_LINK_DIR="${AGENTHUB_LINK_DIR:-$HOME/.local/bin}"
 SYSTEMCTL="${AGENTHUB_SYSTEMCTL:-systemctl}"
 LAUNCHCTL="${AGENTHUB_LAUNCHCTL:-launchctl}"
@@ -103,8 +104,11 @@ node_is_v22_or_higher() {
 UNINSTALL=0
 PURGE=0
 DRY_RUN=0
+FROM_RELEASE=0
+RELEASE_VERSION=""
 
-for arg in "$@"; do
+while [ "$#" -gt 0 ]; do
+  arg="$1"
   case "$arg" in
     --uninstall)
       UNINSTALL=1
@@ -115,6 +119,13 @@ for arg in "$@"; do
     --dry-run)
       DRY_RUN=1
       ;;
+    --from-release)
+      FROM_RELEASE=1
+      if [ "$#" -gt 1 ] && [ "${2#--}" = "$2" ]; then
+        RELEASE_VERSION="$2"
+        shift
+      fi
+      ;;
     --help|-h)
       echo "AgentHub Installer"
       echo ""
@@ -123,15 +134,107 @@ for arg in "$@"; do
       echo "  ./scripts/install.sh --uninstall          Gỡ service, symlink và app (giữ dữ liệu)"
       echo "  ./scripts/install.sh --uninstall --purge  Gỡ cài đặt và xoá sạch dữ liệu (hỏi xác nhận)"
       echo "  ./scripts/install.sh --dry-run            Chỉ in các lệnh, không thay đổi hệ thống"
+      echo "  ./scripts/install.sh --from-release [version]  Cài từ GitHub Release"
       echo ""
       echo "Biến môi trường:"
       echo "  AGENTHUB_DIR       Thư mục clone mã nguồn (mặc định: ~/.agenthub-app)"
       echo "  AGENTHUB_HOME      Thư mục lưu trữ dữ liệu (mặc định: ~/.agenthub)"
       echo "  AGENTHUB_REPO      URL git repository (mặc định: GitHub chính thức)"
+      echo "  AGENTHUB_RELEASE_REPO  owner/repo hoặc URL GitHub Release"
       exit 0
       ;;
   esac
+  shift
 done
+
+release_repo_path() {
+  case "$AGENTHUB_RELEASE_REPO" in
+    http://*|https://*) printf '%s' "$AGENTHUB_RELEASE_REPO" | sed 's#/$##' ;;
+    *) printf 'https://github.com/%s' "$AGENTHUB_RELEASE_REPO" ;;
+  esac
+}
+
+release_checksum() {
+  _file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$_file"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$_file"
+  else
+    echo "Lỗi: cần sha256sum hoặc shasum để kiểm tra bản tải xuống." >&2
+    return 1
+  fi
+}
+
+install_from_release() {
+  if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+    echo "Lỗi: --from-release cần curl và tar." >&2
+    return 1
+  fi
+
+  _base="$(release_repo_path)"
+  if [ -z "$RELEASE_VERSION" ]; then
+    _release_json="$(curl -fsSL "$_base/releases/latest" 2>/dev/null || true)"
+    RELEASE_VERSION="$(printf '%s' "$_release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9A-Za-z.-]*\)".*/\1/p' | head -n 1)"
+    [ -n "$RELEASE_VERSION" ] || { echo "Lỗi: không xác định được phiên bản release mới nhất." >&2; return 1; }
+  fi
+  case "$RELEASE_VERSION" in
+    v*) RELEASE_VERSION="${RELEASE_VERSION#v}" ;;
+  esac
+  case "$RELEASE_VERSION" in
+    ''|*[!0-9A-Za-z._-]*) echo "Lỗi: phiên bản release không hợp lệ." >&2; return 1 ;;
+  esac
+
+  _os="$(uname -s)"
+  case "$_os" in Linux*) _platform=linux ;; Darwin*) _platform=macos ;; *) echo "Lỗi: hệ điều hành $_os chưa được hỗ trợ." >&2; return 1 ;; esac
+  _archive="agenthub-${RELEASE_VERSION}-${_platform}-$(uname -m)"
+  case "$(uname -m)" in x86_64|amd64) _archive="agenthub-${RELEASE_VERSION}-${_platform}-x64" ;; aarch64|arm64) _archive="agenthub-${RELEASE_VERSION}-${_platform}-arm64" ;; esac
+  _archive="${_archive}.tar.gz"
+  _tmp="${TMPDIR:-/tmp}/agenthub-release.$$"
+  mkdir -p "$_tmp"
+  trap 'rm -rf "$_tmp"' EXIT HUP INT TERM
+  echo "==> Tải AgentHub v$RELEASE_VERSION..."
+  curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/$_archive" -o "$_tmp/$_archive"
+  curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/SHA256SUMS" -o "$_tmp/SHA256SUMS"
+  _expected="$(awk -v file="$_archive" '$2 == file { print $1; exit }' "$_tmp/SHA256SUMS")"
+  _actual="$(release_checksum "$_tmp/$_archive" | awk '{print $1}')"
+  [ -n "$_expected" ] && [ "$_expected" = "$_actual" ] || { echo "Lỗi: kiểm tra SHA256 thất bại cho $_archive." >&2; return 1; }
+
+  _release_root="$AGENTHUB_DIR"
+  _release_dir="$_release_root/$RELEASE_VERSION"
+  mkdir -p "$_release_root"
+  if [ -e "$_release_dir" ] || [ -L "$_release_dir" ]; then rm -rf "$_release_dir"; fi
+  mkdir -p "$_release_dir"
+  tar -xzf "$_tmp/$_archive" -C "$_release_dir"
+  ln -sfn "$RELEASE_VERSION" "$_release_root/current"
+  echo "==> Cài dependencies native theo máy..."
+  (cd "$_release_root/current" && npm ci --omit=dev)
+  "$_release_root/current/bin/agenthub" link
+  "$_release_root/current/bin/agenthub" install-service
+  "$_release_root/current/bin/agenthub" open --no-browser
+
+  _kept=0
+  for _old in $(find "$_release_root" -mindepth 1 -maxdepth 1 -type d -print | sort -V -r); do
+    _name="${_old##*/}"
+    [ "$_name" = "$RELEASE_VERSION" ] && continue
+    _kept=$((_kept + 1))
+    if [ "$_kept" -gt 2 ]; then
+      rm -rf "$_old"
+    fi
+  done
+  echo "✓ Đã cài AgentHub v$RELEASE_VERSION; bản hiện tại: $_release_root/current"
+}
+
+if [ "$FROM_RELEASE" = "1" ]; then
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] tải release v${RELEASE_VERSION:-latest} từ $(release_repo_path)"
+    echo "[dry-run] kiểm tra SHA256, giải nén vào $AGENTHUB_DIR/<version>, cập nhật symlink current"
+    echo "[dry-run] npm ci --omit=dev && agenthub link && agenthub install-service"
+    exit 0
+  fi
+  install_from_release
+  exit $?
+fi
 
 # ------------------------------------------------------------------------------
 # Handle --uninstall
