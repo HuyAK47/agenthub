@@ -170,7 +170,9 @@ export class AgyEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Authentication required|authentication timed out|not signed in/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {
@@ -248,12 +250,17 @@ export class CodexEngine implements Engine {
       try { fs.mkdirSync(path.dirname(opts.lockFile), { recursive: true }); } catch { /* ignore */ }
     }
 
+    const env: Record<string, string> = { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV };
+    if (opts.profile.kind === 'isolated' && opts.profile.home) {
+      env.CODEX_HOME = opts.profile.home;
+    }
+
     const [codexExe, codexArgs] = lowPriority(codexPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;
     const executable = opts.lockFile ? 'flock' : codexExe;
     const child = spawn(executable, command, {
       cwd: opts.cwd,
-      env: { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV },
+      env,
       detached: true,
       stdio: ['ignore', logFd, logFd],
     });
@@ -281,7 +288,9 @@ export class CodexEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Not logged in|\b401\b/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {
@@ -373,7 +382,9 @@ export class FakeEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Not logged in|\b401\b/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {

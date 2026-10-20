@@ -205,7 +205,7 @@ describe('NotificationService (Desktop Notifications)', () => {
     eventBus.emit('profile.auth_expired', undefined, { name: 'g3' });
     expect(execCalls[0]).toEqual({
       file: 'notify-send',
-      args: ['-t', '10000', '-a', 'AgentHub', 'Tài khoản g3 cần đăng nhập lại'],
+      args: ['-t', '10000', '-a', 'AgentHub', 'Hồ sơ g3 cần đăng nhập lại'],
     });
     notifier.stop();
   });
