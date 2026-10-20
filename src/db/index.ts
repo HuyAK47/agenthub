@@ -692,12 +692,14 @@ export class TaskRepo {
     status?: string;
     waitReason?: WaitReason;
     worktreePath?: string | null;
+    doneReport?: string | null;
+    diffStat?: string | null;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -713,6 +715,8 @@ export class TaskRepo {
         row.status || 'draft',
         row.waitReason || null,
         row.worktreePath || null,
+        row.doneReport || null,
+        row.diffStat || null,
       );
 
     // Populate task_deps

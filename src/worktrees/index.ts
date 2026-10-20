@@ -371,13 +371,21 @@ export class WorktreeService {
     let content = body;
 
     const contextPath = path.join(agentHubDir, 'context', 'deps.md');
+    const contextPrompt = 'Đọc `.agenthub/context/deps.md` trước khi bắt đầu.';
     if (dependencies.length > 0) {
       const contextContent = this.buildDependencyContext(dependencies, depsMaxChars);
       fs.mkdirSync(path.dirname(contextPath), { recursive: true });
       fs.writeFileSync(contextPath, contextContent, 'utf-8');
-      content = 'Đọc `.agenthub/context/deps.md` trước khi bắt đầu.\n\n' + content;
-    } else if (fs.existsSync(contextPath)) {
-      fs.rmSync(contextPath, { force: true });
+      if (!content.startsWith(contextPrompt)) {
+        content = `${contextPrompt}\n\n${content}`;
+      }
+    } else {
+      if (fs.existsSync(contextPath)) {
+        fs.rmSync(contextPath, { force: true });
+      }
+      if (content.startsWith(`${contextPrompt}\n\n`)) {
+        content = content.slice(`${contextPrompt}\n\n`.length);
+      }
     }
 
     if (feedback) {

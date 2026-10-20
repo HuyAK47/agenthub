@@ -936,7 +936,21 @@ export class Scheduler {
           // The branch may not be available yet; the context can still include DONE.
         }
       }
-      this.taskRepo.update(taskId, { doneReport: markers.doneContent, diffStat });
+      if (!diffStat && task.worktreePath && fs.existsSync(task.worktreePath)) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: task.worktreePath,
+            timeout: 10_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // ignore
+        }
+      }
+      this.taskRepo.update(taskId, {
+        doneReport: markers.doneContent || task.doneReport,
+        diffStat: diffStat ?? task.diffStat,
+      });
     }
 
     // Measure diff stats for run metrics.
