@@ -276,7 +276,7 @@ Cập nhật AgentHub lên phiên bản mới nhất từ git tag, build lại v
 }
 
 export async function cmdUninstallService(
-  extraArgs: string[] = [],
+  _extraArgs: string[] = [],
   deps?: { uninstall?: () => ServiceUninstallResult },
 ): Promise<ServiceUninstallResult> {
   const result = deps?.uninstall ? deps.uninstall() : getPlatform().uninstallService();

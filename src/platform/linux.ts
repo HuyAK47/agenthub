@@ -68,10 +68,22 @@ function openBrowser(url: string, openFn?: (file: string, args: string[], callba
   execFile('xdg-open', [url], () => {});
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : shellQuote(value);
+}
+
+function systemctlCommand(...args: string[]): string {
+  return [shellWord(process.env.AGENTHUB_SYSTEMCTL || 'systemctl'), ...args.map(shellWord)].join(' ');
+}
+
 function installService(opts: { nodePath: string; cliPath: string; currentPath: string; homeDir: string; print: boolean; exec?: (command: string, options: { stdio: 'inherit' }) => void }): ServiceInstallResult {
   const content = `[Unit]\nDescription=AgentHub Daemon\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=${opts.nodePath} ${opts.cliPath} daemon\nRestart=on-failure\nEnvironment=PATH=${opts.currentPath}\n\n[Install]\nWantedBy=default.target\n`;
   const file = path.join(opts.homeDir, '.config', 'systemd', 'user', 'agenthub.service');
-  const activate = 'systemctl --user daemon-reload && systemctl --user enable --now agenthub';
+  const activate = `${systemctlCommand('--user', 'daemon-reload')} && ${systemctlCommand('--user', 'enable', '--now', 'agenthub')}`;
   if (!opts.print) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content, 'utf8');
@@ -83,7 +95,7 @@ function installService(opts: { nodePath: string; cliPath: string; currentPath: 
 function restartService(opts?: { exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceRestartResult {
   const runner = opts?.exec || ((command, options) => execFileSync('sh', ['-c', command], options));
   try {
-    runner('systemctl --user restart agenthub', { stdio: 'inherit' });
+    runner(systemctlCommand('--user', 'restart', 'agenthub'), { stdio: 'inherit' });
     return { restarted: true, message: 'Đã khởi động lại service systemd agenthub' };
   } catch (err) {
     return { restarted: false, message: `Không thể khởi động lại service systemd: ${(err as Error).message}` };
@@ -95,7 +107,7 @@ function uninstallService(opts?: { homeDir?: string; exec?: (command: string, op
   const file = path.join(homeDir, '.config', 'systemd', 'user', 'agenthub.service');
   const runner = opts?.exec || ((command, options) => execFileSync('sh', ['-c', command], options));
   try {
-    runner('systemctl --user stop agenthub && systemctl --user disable agenthub', { stdio: 'ignore' });
+    runner(`${systemctlCommand('--user', 'stop', 'agenthub')} && ${systemctlCommand('--user', 'disable', 'agenthub')}`, { stdio: 'ignore' });
   } catch {
     // ignore
   }
@@ -107,7 +119,7 @@ function uninstallService(opts?: { homeDir?: string; exec?: (command: string, op
     }
   }
   try {
-    runner('systemctl --user daemon-reload', { stdio: 'ignore' });
+    runner(systemctlCommand('--user', 'daemon-reload'), { stdio: 'ignore' });
   } catch {
     // ignore
   }
