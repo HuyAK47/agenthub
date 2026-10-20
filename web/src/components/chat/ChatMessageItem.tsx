@@ -8,6 +8,7 @@ import { useLocale } from '../../context/LocaleContext';
 interface ChatMessageItemProps {
   message: ChatMessage;
   isStreaming?: boolean;
+  onRetry?: () => void;
 }
 
 function CodeBlock({ children, className }: { children: any; className?: string }) {
@@ -76,6 +77,7 @@ function formatStats(meta: ChatMessage['meta'] | undefined, secondLabel: string,
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
   message,
   isStreaming = false,
+  onRetry,
 }) => {
   const { t } = useLocale();
   // User message
@@ -100,6 +102,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
               {t('extra.error')}
             </div>
             <div className="whitespace-pre-wrap break-words">{message.content}</div>
+            {onRetry && (
+              <button type="button" onClick={onRetry} className="text-xs underline font-semibold">
+                {t('extra.retry') === 'extra.retry' ? 'Thử lại' : t('extra.retry')}
+              </button>
+            )}
           </div>
         </div>
       </div>
