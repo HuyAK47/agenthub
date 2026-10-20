@@ -18,3 +18,21 @@ describe('profile enabled flag', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('new agy profile auth state', () => {
+  it('đánh dấu chưa đăng nhập để scheduler không giao task', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const { ProfileService } = await import('../src/profiles/index.js');
+    const { QuotaMarkRepo } = await import('../src/db/index.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-newprof-'));
+    const config = loadConfig(dir);
+    config.agyHomesDir = path.join(dir, 'agy-homes');
+    const db = openDatabase(path.join(dir, 'hub.db'));
+    const repo = new ProfileRepo(db);
+    const service = new ProfileService(config, repo, new QuotaMarkRepo(db));
+    service.createProfile('g9');
+    expect(repo.get('g9')?.authState).toBe('not_logged_in');
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -210,6 +210,7 @@ export const UpdateConfigSchema = z.object({
       allowFullMode: z.boolean().optional(),
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
+      permissionTimeoutSec: z.number().int().positive().optional(),
       model: z.enum(['', 'sonnet', 'haiku']).optional(),
     })
     .optional(),
@@ -1548,6 +1549,7 @@ export class AppService {
         allowFullMode: this.config.chat.allowFullMode,
         maxConcurrent: this.config.chat.maxConcurrent,
         idleTimeoutSec: this.config.chat.idleTimeoutSec,
+        permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
       },
       reviewer: this.config.reviewer,

@@ -56,6 +56,12 @@ class FakeWS {
 }
 
 describe('extractLoginUrl', () => {
+  it('lấy URL đầy đủ từ hyperlink OSC 8 của agy mới', () => {
+    const url = 'https://accounts.google.com/o/oauth2/auth?client_id=abc&redirect_uri=http%3A%2F%2Flocalhost&state=xyz';
+    const raw = `Copy and paste the URL:\r\n \x1b]8;id=jk1;${url}\x07Click here to authenticate\x1b]8;;\x07\r\n`;
+    expect(extractLoginUrl(raw)).toBe(url);
+  });
+
   it('ghép URL bị cắt qua nhiều dòng và bỏ mã ANSI', () => {
     const raw =
       '\x1b[1mOpen this URL:\x1b[0m\r\nhttps://accounts.google.com/o/oauth2/auth?client_id=abc\r\n&scope=openid&state=xyz\r\n\r\nEnter the authorization code: ';

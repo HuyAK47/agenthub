@@ -315,7 +315,23 @@ export const MIGRATIONS: string[] = [
   PRAGMA foreign_keys = ON;
   ALTER TABLE chat_sessions ADD COLUMN profileName TEXT;
   `,
-  // Migration 21: persist dependency context before worktrees are cleaned up
+  // Migration 21: chat permission requests
+  `
+  CREATE TABLE IF NOT EXISTS chat_permissions (
+    id TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    messageId TEXT,
+    toolName TEXT NOT NULL,
+    input TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','allow','deny','allow_always')),
+    message TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    resolvedAt TEXT,
+    FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS chat_permissions_pending_idx ON chat_permissions(sessionId, status, createdAt);
+  `,
+  // Migration 22: persist dependency context before worktrees are cleaned up
   `
   ALTER TABLE tasks ADD COLUMN doneReport TEXT;
   ALTER TABLE tasks ADD COLUMN diffStat TEXT;
@@ -999,6 +1015,54 @@ export class ChatSessionRepo {
   delete(id: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE sessionId = ?').run(id);
     this.db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
+  }
+}
+
+export interface ChatPermissionRow {
+  id: string;
+  sessionId: string;
+  messageId: string | null;
+  toolName: string;
+  input: string;
+  status: 'pending' | 'allow' | 'deny' | 'allow_always';
+  message: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export class ChatPermissionRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: { id: string; sessionId: string; messageId?: string | null; toolName: string; input: string; status?: ChatPermissionRow['status'] }): ChatPermissionRow {
+    this.db.prepare('INSERT INTO chat_permissions (id, sessionId, messageId, toolName, input, status) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.sessionId, row.messageId || null, row.toolName, row.input, row.status || 'pending');
+    return this.get(row.id)!;
+  }
+
+  get(id: string): ChatPermissionRow | undefined {
+    return this.db.prepare('SELECT * FROM chat_permissions WHERE id = ?').get(id) as ChatPermissionRow | undefined;
+  }
+
+  listPending(sessionId?: string): ChatPermissionRow[] {
+    return (sessionId
+      ? this.db.prepare("SELECT * FROM chat_permissions WHERE sessionId = ? AND status = 'pending' ORDER BY createdAt").all(sessionId)
+      : this.db.prepare("SELECT * FROM chat_permissions WHERE status = 'pending' ORDER BY createdAt").all()) as ChatPermissionRow[];
+  }
+
+  expirePending(message = 'AgentHub khởi động lại'): number {
+    const result = this.db.prepare("UPDATE chat_permissions SET status = 'deny', message = ?, resolvedAt = datetime('now') WHERE status = 'pending'").run(message);
+    return result.changes;
+  }
+
+  getLatest(sessionId: string, messageId: string | null | undefined, toolName: string): ChatPermissionRow | undefined {
+    return this.db.prepare('SELECT * FROM chat_permissions WHERE sessionId = ? AND messageId IS ? AND toolName = ? ORDER BY createdAt DESC LIMIT 1')
+      .get(sessionId, messageId || null, toolName) as ChatPermissionRow | undefined;
+  }
+
+  resolve(id: string, status: Exclude<ChatPermissionRow['status'], 'pending'>, message: string | null): ChatPermissionRow | undefined {
+    this.db.prepare("UPDATE chat_permissions SET status = ?, message = ?, resolvedAt = datetime('now') WHERE id = ? AND status = 'pending'")
+      .run(status, message, id);
+    return this.get(id);
   }
 }
 

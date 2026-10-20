@@ -227,6 +227,10 @@ export class ProfileService {
       email: null,
       enabled: 1,
     });
+    // A new agy home has no OAuth token yet; keep it out of scheduling until login.
+    if (!isProfileLoggedIn(this.profileRepo.get(name)!)) {
+      this.profileRepo.updateAuthState(name, 'not_logged_in', 'Chưa đăng nhập', null);
+    }
   }
 
   readClaudeAccount(home: string): { email: string | null; plan: string | null } | null {
