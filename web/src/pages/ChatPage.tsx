@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  cancelChatSession,
+  stopChatSession,
   createChatSession,
   deleteChatSession,
   getChatMessages,
@@ -242,6 +242,9 @@ export const ChatPage: React.FC = () => {
         ]);
 
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+      } else if (type === 'chat.status') {
+        queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) => prev.map((session) =>
+          session.id === targetSessionId ? { ...session, state: payload.status, busy: payload.status !== 'idle' && payload.status !== 'error' } : session));
       }
     });
 
@@ -318,7 +321,7 @@ export const ChatPage: React.FC = () => {
   });
 
   const cancelMutation = useMutation({
-    mutationFn: cancelChatSession,
+    mutationFn: stopChatSession,
     onSuccess: () => {
       setIsLocalBusy(false);
       setStreamingMessageId(null);
@@ -344,6 +347,7 @@ export const ChatPage: React.FC = () => {
     title?: string;
     mode: ChatMode;
     model?: string;
+    profileName?: string | null;
   }) => {
     createSessionMutation.mutate(data);
   };
@@ -564,6 +568,11 @@ export const ChatPage: React.FC = () => {
                     key={item.message.id}
                     message={item.message}
                     isStreaming={isStreaming}
+                    onRetry={item.message.role === 'error' ? () => {
+                      const index = messages.findIndex((message) => message.id === item.message.id);
+                      const previous = index > 0 ? [...messages].slice(0, index).reverse().find((message) => message.role === 'user') : undefined;
+                      if (previous && activeSession) sendMessageMutation.mutate({ sessId: activeSession.id, text: previous.content });
+                    } : undefined}
                   />
                 );
               })}
@@ -581,9 +590,13 @@ export const ChatPage: React.FC = () => {
         {/* Input Bar */}
         {activeSession && (
           <>
-            {isBusy && (
+            {(isBusy || (activeSession.state && activeSession.state !== 'idle')) && (
               <div className="px-5 pb-2 text-xs text-[var(--text-muted)]" role="status">
-                {currentTool
+                {activeSession.state === 'waiting_permission'
+                  ? 'Claude đang chờ bạn cấp quyền công cụ…'
+                  : activeSession.state === 'error'
+                  ? 'Lượt chat gặp lỗi — bạn có thể thử lại.'
+                  : currentTool
                   ? t('extra.progress', { tool: currentTool, step: toolStepCount, time: `${Math.floor(thinkingSeconds / 60)}:${String(thinkingSeconds % 60).padStart(2, '0')}` })
                   : t('extra.thinking', { seconds: thinkingSeconds })}
               </div>

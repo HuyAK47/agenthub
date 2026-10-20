@@ -60,6 +60,43 @@ async function main() {
     return;
   }
 
+  if (prompt.trim() === 'crash') {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-crash-123' }));
+    process.exit(0);
+  }
+
+  if (prompt.trim() === 'idle') {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-idle-123' }));
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
+
+  if (prompt.trim() === 'permission') {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-permission-123' }));
+    console.log(JSON.stringify({ type: 'permission_request', message: 'Cần quyền chạy công cụ' }));
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
+
+  if (prompt.includes('tool-wait')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-wait-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool_wait_1', name: 'Bash', input: { command: 'long-running' } }] } }));
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
+
+  if (prompt.trim() === 'quota') {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-quota-123' }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-quota-123', is_error: true, result: 'Usage limit reached. Try again in 1m' }));
+    return;
+  }
+
+  if (prompt.includes('resume-fail') && resumeIdx >= 0) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-old-123' }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-old-123', is_error: true, result: 'Session not found for resume' }));
+    return;
+  }
+
   if (prompt.includes('tool')) {
     console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-123' }));
     console.log(

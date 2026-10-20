@@ -12,9 +12,9 @@ export type TaskStatus =
 
 export type TaskLevel = 'easy' | 'hard';
 
-export type EngineType = 'agy' | 'codex';
+export type EngineType = 'agy' | 'codex' | 'claude';
 
-export type ProfileKind = 'keyring' | 'isolated' | 'codex';
+export type ProfileKind = 'keyring' | 'isolated' | 'codex' | 'system';
 
 export interface QuotaMark {
   profileName: string;
@@ -44,6 +44,7 @@ export interface Profile {
   authState?: 'ok' | 'not_logged_in' | 'needs_verification' | 'error' | null;
   authMessage?: string | null;
   verifyUrl?: string | null;
+  claudePlan?: string;
 }
 
 export interface ProjectHooks {
@@ -400,7 +401,9 @@ export interface ChatSession {
   title: string;
   mode: ChatMode;
   busy: boolean;
+  state?: 'idle' | 'running' | 'waiting_permission' | 'error';
   model?: string;
+  profileName?: string | null;
   updatedAt: string;
   lastMessage?: string | null;
 }
@@ -414,6 +417,7 @@ export interface ChatMessageMeta {
   costUsd?: number;
   numTurns?: number;
   error?: string;
+  retryText?: string;
 }
 
 export interface ChatMessage {
@@ -429,6 +433,7 @@ export interface CreateChatSessionInput {
   title?: string;
   mode?: ChatMode;
   model?: string;
+  profileName?: string | null;
 }
 
 export interface UpdateChatSessionInput {
@@ -449,6 +454,7 @@ export interface ChatConfig {
   maxConcurrent?: number;
   idleTimeoutSec?: number;
   model?: '' | 'sonnet' | 'haiku';
+  claudeProfile?: string;
 }
 
 export interface CreateProjectInput {
@@ -474,6 +480,7 @@ export interface UpdateProjectInput {
 
 export interface CreateProfileInput {
   name: string;
+  engine?: 'agy' | 'claude';
 }
 
 export interface VersionResponse {

@@ -19,6 +19,13 @@ export type ParsedStreamEvent =
       summary: string;
     }
   | {
+      type: 'tool_result';
+    }
+  | {
+      type: 'permission_request';
+      message?: string;
+    }
+  | {
       type: 'result';
       sessionId?: string;
       costUsd?: number;
@@ -108,6 +115,10 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
     return events;
   }
 
+  if ((data.type === 'permission_request' || (data.type === 'system' && data.subtype === 'permission_request'))) {
+    return [{ type: 'permission_request', message: typeof data.message === 'string' ? data.message : undefined }];
+  }
+
   // 2. type: "assistant"
   if (data.type === 'assistant' && data.message && typeof data.message === 'object') {
     const msg = data.message as Record<string, unknown>;
@@ -135,6 +146,13 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
       }
     }
     return events;
+  }
+
+  if ((data.type === 'user' || data.type === 'tool_result') && data.message && typeof data.message === 'object') {
+    const msg = data.message as Record<string, unknown>;
+    if (Array.isArray(msg.content) && msg.content.some((block) => block && typeof block === 'object' && (block as Record<string, unknown>).type === 'tool_result')) {
+      return [{ type: 'tool_result' }];
+    }
   }
 
   // 3. type: "stream_event" (khi có partial)

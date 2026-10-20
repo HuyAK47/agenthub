@@ -8,6 +8,7 @@ import {
   updateProfile,
   refreshProfileUsage,
   deleteQuota,
+  deleteProfile,
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { QuotaUsage } from '../components/QuotaUsage';
@@ -38,6 +39,7 @@ export const ProfilesPage: React.FC = () => {
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
+  const [newProfileEngine, setNewProfileEngine] = useState<'agy' | 'claude'>('agy');
   const [addError, setAddError] = useState<string | null>(null);
 
   // Active terminal login session
@@ -223,10 +225,11 @@ export const ProfilesPage: React.FC = () => {
 
     try {
       const name = newProfileName.trim();
-      await createProfile({ name });
+      await createProfile({ name, engine: newProfileEngine });
       const loginRes = await loginProfile(name);
       setShowAddModal(false);
       setNewProfileName('');
+      setNewProfileEngine('agy');
       setActiveLogin({ name, sessionId: loginRes.sessionId });
     } catch (err: any) {
       setAddError(err.message || t('profiles.createFailed'));
@@ -356,7 +359,7 @@ export const ProfilesPage: React.FC = () => {
                   const isNotLoggedIn = profile.authState === 'not_logged_in' || (!isNeedsVerification && !isLoggedIn);
                   const needsReLogin = profile.authState === 'not_logged_in' &&
                     Boolean(profile.authMessage && /401|hết hạn|expired/i.test(profile.authMessage));
-                  const canLogin = profile.engine === 'agy' && profile.kind === 'isolated';
+                  const canLogin = (profile.engine === 'agy' && profile.kind === 'isolated') || profile.engine === 'claude';
 
                   return (
                     <tr
@@ -607,6 +610,13 @@ export const ProfilesPage: React.FC = () => {
                             {t('profiles.loginBtn')}
                           </button>
                         )}
+                        {profile.engine === 'claude' && profile.kind === 'isolated' && (
+                          <button type="button" onClick={async () => {
+                            if (!window.confirm(`Xóa hồ sơ Claude ${profile.name}?`)) return;
+                            await deleteProfile(profile.name);
+                            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+                          }} className="px-2.5 py-1 text-xs font-medium rounded text-[var(--t-crit)] border border-[var(--t-crit)] cursor-pointer">Đăng xuất</button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -647,6 +657,14 @@ export const ProfilesPage: React.FC = () => {
                   onChange={(e) => setNewProfileName(e.target.value)}
                   className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">Engine</label>
+                <select value={newProfileEngine} onChange={(e) => setNewProfileEngine(e.target.value as 'agy' | 'claude')} className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]">
+                  <option value="agy">Antigravity</option>
+                  <option value="claude">Claude Code</option>
+                </select>
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
