@@ -1,5 +1,7 @@
 # Bắt đầu với AgentHub
 
+[English](en/GETTING-STARTED.md) | **Tiếng Việt**
+
 Hướng dẫn cho người mới: cài AgentHub, kết nối tài khoản AI và giao việc cho các worker.
 
 AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các worker AI (Gemini qua Antigravity CLI, Codex CLI). Mỗi task chạy trong một git worktree riêng. Hub theo dõi quota, tải máy, dung lượng ổ đĩa và tự chạy kiểm tra (lint, test…) khi worker làm xong. **Claude Code** đóng vai trò "bộ não": lên kế hoạch, giao việc, review và merge.

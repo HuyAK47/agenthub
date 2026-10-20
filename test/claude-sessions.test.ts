@@ -56,6 +56,7 @@ describe('Claude session privacy and quota handling', () => {
     fs.utimesSync(file, hitAt, hitAt);
     const scanner = new ClaudeSessionScanner(db, {
       dir: path.join(root, 'projects'),
+      hubHome: root,
       autoResume: { enabled: true, prompt: 'resume safely', claudeBin: fakeClaudeBin, profileName: 'claude-test' },
     });
     await scanner.scan();

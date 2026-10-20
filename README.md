@@ -1,44 +1,116 @@
 # AgentHub
 
-AgentHub là "hệ điều hành" cục bộ quản lý các worker AI coding (Antigravity CLI và Codex CLI), được điều phối và giám sát bởi **Claude Code** qua giao thức MCP (Model Context Protocol) cùng giao diện Web Dashboard trực quan.
+**English** | [Tiếng Việt](README.vi.md)
 
-Hệ thống tự động hóa việc phân chia task độc lập trên từng git worktree riêng biệt, theo dõi và luân chuyển tài khoản/quota khi gặp giới hạn tốc độ (rate limit/quota exhaustion), lưu trữ nhật ký thực thi và hỗ trợ chu trình review code liên tục.
-
-**Người mới bắt đầu:** xem [Hướng dẫn cài đặt & sử dụng (docs/GETTING-STARTED.md)](docs/GETTING-STARTED.md).
-
-> **Điều khiển linh hoạt:** Bạn có thể điều khiển AgentHub (giao việc, review, quản lý task) thông qua **Chat với Claude trực tiếp trên Web Dashboard**, **Bot Telegram từ xa** trên điện thoại, hoặc **Claude Code trong VS Code** qua giao thức MCP (`agenthub mcp-install`). Dashboard cung cấp đầy đủ công cụ theo dõi tiến độ, log thời gian thực, quota tài khoản, tải máy và quản lý task.
-
-Chi tiết tính năng và mẹo sử dụng: xem [Danh sách tính năng (docs/FEATURES.md)](docs/FEATURES.md).  
-Hướng dẫn quy trình sử dụng và xử lý sự cố: xem [Hướng dẫn sử dụng (docs/USAGE.md)](docs/USAGE.md).  
-Kế hoạch kiến trúc và thiết kế hệ thống: xem [Kế hoạch chi tiết (docs/PLAN.md)](docs/PLAN.md).
+> A local operating system for AI coding workers that coordinates Antigravity (Gemini) and OpenAI Codex CLI across isolated git worktrees, orchestrated by Claude Code via MCP, Web Chat, and Telegram.
 
 ---
 
-## Tính năng chính
+AgentHub transforms standalone AI coding assistants into an autonomous, quota-aware local engineering team. It automates task dispatch across dedicated git worktrees, tracks provider rate limits to rotate models seamlessly, runs automated verification suites (lint, typecheck, test, build), and supports continuous code review and merging—all supervised by **Claude Code** acting as the central reasoning Brain.
 
-- **Điều phối AI Worker thông minh**: Tự động chia task độc lập trên từng git worktree riêng biệt, luân chuyển linh hoạt giữa các tài khoản và chuỗi model (Gemini Flash, Codex Luna); trang bị watchdog giám sát chống treo worker.
-- **Chat với Claude trực tiếp trên Web Dashboard**: Trò chuyện điều phối cùng Claude Code ở chế độ An toàn (`safe`) hoặc Đầy đủ (`full`), hỗ trợ chọn model (`sonnet`, `haiku`), giao diện lịch sử ảo hóa cuộn tải dần, quản lý phiên (tìm kiếm, ghim, tóm tắt, xuất Markdown), duyệt quyền công cụ tương tác (Cho phép/Từ chối), nén ngữ cảnh tự động (`/compact`, `/fork-summary`) và duy trì tiến trình chạy liên tục (persistent stream-json).
-- **Điều khiển từ xa an toàn qua Telegram Bot**: Nhận thông báo tức thời về task và quota, xem log, duyệt/trả về task, phê duyệt quyền công cụ bằng nút bấm inline và trò chuyện trực tiếp với Claude từ điện thoại. Xác thực ghép đôi an toàn bằng mã 6 số, bảo mật nghiêm ngặt với token lưu quyền `0600` và chỉ nhận lệnh từ chat đã ghép đôi.
-- **Đăng nhập & Quản lý đa hồ sơ Claude**: Lưu trữ cấu hình và token biệt lập tại `~/.agenthub/claude-homes/<tên_hồ_sơ>/` (quyền thư mục `0700`), hỗ trợ các gói tài khoản Cá nhân (`personal`), Đội ngũ (`team`) và API key (`api_key`).
-- **Chuỗi dự phòng Claude thông minh (Fallback Chain)**: Tự động đổi hồ sơ Claude đã đăng nhập khác, hạ cấp model (`haiku`), sử dụng Anthropic API key có trần chi phí bảo vệ (`dailyCapUSD`) hoặc kích hoạt Codex reviewer dự phòng khi Claude gặp giới hạn tốc độ (rate limit / 429) hoặc hết hạn mức.
-- **Hệ thống Review kép & Autocheck**: Tự động chạy bộ kiểm tra (lint, typecheck, test, build, `check:migrate`) khi worker xong việc; tự động kích hoạt Codex reviewer dự phòng khi Claude hết quota và chuyển trạng thái "Chờ người duyệt" khi cần con người can thiệp.
-- **Quản lý tài nguyên & Ổ đĩa chủ động**: Thu thập % hạn mức thực tế từ máy chủ (`/usage`), phát hiện tài khoản cần xác minh; cơ chế chặn khởi chạy khi ổ đĩa gần đầy và tự động dọn dẹp `node_modules` qua lệnh `agenthub clean`.
-- **Phân tích Hiệu quả ủy quyền (Savings Page)**: Lượng hóa số token Claude tiết kiệm được, chi phí token điều phối, tỷ lệ tiết kiệm và thống kê chi tiết theo từng model, engine và ngày thực hiện.
-- **Trải nghiệm người dùng hiện đại**: Giao diện hỗ trợ Dark/Light mode, song ngữ Tiếng Việt / Tiếng Anh, terminal tương tác trực tiếp trên web và thông báo nổi desktop khi có sự kiện quan trọng.
+**New to AgentHub?** Start with the [Getting Started Guide (docs/en/GETTING-STARTED.md)](docs/en/GETTING-STARTED.md) ([Bản tiếng Việt](docs/GETTING-STARTED.md)).
 
-### Accounts & provider terms
+> **Multi-Channel Control:** Direct your local AI team through your preferred interface: **Interactive Web Dashboard Chat**, **Telegram Remote Control** on your phone, or **Claude Code in VS Code** via Model Context Protocol (MCP).
 
-AgentHub mặc định giới hạn một hồ sơ cá nhân trên mỗi engine; hồ sơ API key hoặc Team vẫn được phép. Có thể bật `multiplePerProvider` khi bạn hiểu và chấp nhận điều khoản của nhà cung cấp. Nhiều gói cá nhân cấm chia sẻ hoặc vượt giới hạn, vì vậy nên dùng API key hoặc gói Team cho nhu cầu dùng chung.
-
-👉 Xem chi tiết tại [Danh sách tính năng đầy đủ (docs/FEATURES.md)](docs/FEATURES.md).
+- Deep dive into features: [Feature Catalog (docs/FEATURES.md)](docs/FEATURES.md)
+- Operational guides & workflows: [Usage Guide (docs/USAGE.md)](docs/USAGE.md)
+- Architecture decisions & internals: [System Plan (docs/PLAN.md)](docs/PLAN.md)
+- Contributing guidelines & CLA: [Contributing Guide (CONTRIBUTING.md)](CONTRIBUTING.md)
 
 ---
 
-## 1. Cài đặt
+## The Problem AgentHub Solves
 
-Yêu cầu môi trường: **Node.js >= 22** (khuyến nghị thông qua NVM) và **npm**.
+Developers increasingly rely on multiple AI coding tools (Google Antigravity CLI, OpenAI Codex CLI, Claude Code), each offering distinct strengths, pricing tiers, and rate limits. However, running multiple AI agents directly on a local workstation introduces significant bottlenecks:
 
-Cài đặt nhanh (nên đọc và kiểm tra script trước khi chạy):
+1. **Workspace and Resource Collisions**: Running parallel coding agents in a shared folder causes file overwrites, git index conflicts, and database/port clashes.
+2. **Quota Exhaustion & Rate Limits**: 5-hour and weekly usage caps abruptly freeze development. Developers must manually track resets, switch logins, or halt work.
+3. **Unverified Agent Output**: Agents frequently declare tasks complete without running test suites, leaving regressions, lint errors, or broken builds for developers to discover.
+4. **Host Machine Exhaustion**: Multiple unconstrained compilation and test runs can pin CPU cores, deplete RAM, fill disk partitions, and freeze your desktop.
+5. **Context Window Waste**: Using expensive reasoning models for mechanical tasks (like running tests or syntax fixes) burns through costly token allowances.
+
+**AgentHub eliminates these bottlenecks** by providing a local scheduling daemon: managing worker accounts, quota schedules, parallel git worktrees, automated verification, failover chains, and machine safety guards.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+  subgraph Brain ["Brain & Orchestration Interfaces"]
+    CC["Claude Code (VS Code / Terminal via MCP)"]
+    WebChat["Web Dashboard Chat (Safe / Full Mode)"]
+    TG["Telegram Bot (Mobile Remote Control)"]
+  end
+
+  subgraph AgentHubDaemon ["AgentHub Daemon (Localhost:7700)"]
+    API["Fastify HTTP / SSE / PTY Engine"]
+    Scheduler["Quota-Aware Scheduler & DAG Batching"]
+    Safety["Host Protection (Load Guard, Disk Guard, Watchdogs)"]
+    CheckEngine["Automated Check Engine (Lint, Test, Build)"]
+    Failover["Claude Fallback Chain & Failover"]
+  end
+
+  subgraph Workers ["Isolated Execution Workers"]
+    W1["Worker 1 (Gemini / Antigravity) -> git worktree A"]
+    W2["Worker 2 (OpenAI Codex) -> git worktree B"]
+    W3["Worker 3 (Codex Reviewer) -> git worktree C"]
+  end
+
+  CC <-->|MCP stdio / HTTP| API
+  WebChat <-->|HTTP / WebSocket / SSE| API
+  TG <-->|Telegram API (Paired Chat)| API
+
+  API --> Scheduler
+  Scheduler --> Safety
+  Scheduler --> Workers
+  Workers --> CheckEngine
+  CheckEngine --> Failover
+```
+
+---
+
+## Key Features
+
+### 1. Quota-Aware Scheduling & Account Rotation
+- Tracks 5-hour and weekly rate limits across worker profiles (`agy`, `codex`).
+- Automatically shifts tasks to standby accounts or alternative models (Gemini Flash, Codex Luna) when quotas expire, resuming paused tasks when reset windows clear.
+
+### 2. Dedicated Git Worktree Isolation
+- Spawns each task in a fresh, isolated git worktree branch.
+- Generates dynamic `.env` templates per worktree (`PORT=4{slot}50`, `DB_NAME=app_t_{slug_underscored}`) to prevent port and database collisions across concurrent runs.
+
+### 3. Automated Check Engine (Autochecks)
+- Automatically triggers quality verification once a worker marks code complete: `lint`, `typecheck`, `test`, `build`, and migration integrity checks (`check:migrate`).
+- Records structured check summaries before human or AI review.
+
+### 4. Cross-Review & Automated Merge
+- Supports multi-tier review workflows: automated review by Claude Code, fallback review via Codex CLI, or manual human approval.
+- Automatically merges verified task branches into configured integration branches, running post-merge checks with automatic rollback on conflict or failure.
+
+### 5. Proactive Host Machine Protection
+- **Load Guard**: Monitors system CPU and free memory. When host load spikes, it dynamically throttles concurrency to 1 task per project and resumes when safe.
+- **Disk Guard**: Halts new task dispatch if disk space falls below safe headroom (supports custom directories like `/var/lib/docker`).
+- **Orphan Reaper & Watchdogs**: Automatically detects and terminates orphaned worker subprocesses, loops without commits, or frozen sessions.
+- **Low-Priority Execution**: Tasks run under reduced scheduling priority (`nice` / `ionice` on Linux, `nice` on macOS) to ensure your primary IDE and browser stay responsive.
+
+### 6. Multi-Channel Control
+- **Web Dashboard**: Modern responsive UI with dark/light mode, live streaming terminal output, task DAG visualizer, and account management.
+- **Interactive Chat & Permission Broker**: Converse directly with Claude in Safe or Full mode, monitor token capacity with ContextMeter, compress sessions (`/compact`), fork summaries (`/fork-summary`), and approve sensitive commands via interactive dialogs.
+- **Telegram Remote Control**: Monitor queue status, review test outputs, approve/reject tasks with inline buttons, and chat with Claude from your mobile device via secure 6-digit pairing.
+
+### 7. Multi-Profile Claude Management & Fallback Chain
+- Manages isolated Claude configurations at `~/.agenthub/claude-homes/<profile>/` (restricted to `0700` permissions).
+- **Fallback Chain**: Seamlessly cascades to secondary profiles, lighter models (`haiku`), budget-capped Anthropic API keys (`dailyCapUSD`), or Codex reviewer when Claude encounters rate limits.
+
+### 8. Delegation Savings Analytics
+- Quantifies token savings gained by delegating boilerplate coding tasks to cost-effective worker models instead of expensive primary reasoning models.
+
+---
+
+## Quick Start (5 Commands)
+
+### Quick One-Line Install (inspect before running):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
@@ -46,22 +118,40 @@ less /tmp/agenthub-install.sh
 sh /tmp/agenthub-install.sh
 ```
 
-Script có thể cập nhật/gỡ cài đặt an toàn; dùng `--dry-run` để xem lệnh trước. Dữ liệu `~/.agenthub/` chỉ bị xoá khi chạy `--uninstall --purge` và xác nhận.
+Supports safe updates and uninstallation; use `--dry-run` to preview commands. Data in `~/.agenthub/` is only wiped when explicitly requested via `--uninstall --purge` with confirmation.
+
+### Manual Setup (5 Commands):
 
 ```bash
-# Kích hoạt môi trường Node 22
-source ~/.nvm/nvm.sh && nvm use 22
+# 1. Clone repository and switch to Node 22
+git clone https://github.com/ducanh19020217/agenthub.git ~/agenthub && cd ~/agenthub
+source ~/.nvm/nvm.sh && nvm install 22 && nvm use 22
 
-# Cài đặt dependencies cho backend và frontend web
-npm ci
-npm --prefix web ci
+# 2. Install dependencies and build backend & web UI
+npm ci && npm --prefix web ci && npm run build && npm run build:web
 
-# Build backend và frontend web
-npm run build
-npm run build:web
+# 3. Create global CLI link and verify environment health
+node dist/cli.js link && agenthub doctor
+
+# 4. Install background daemon service
+agenthub install-service
+
+# 5. Open Web Dashboard and connect worker profiles
+agenthub open
 ```
 
-Thư mục dữ liệu và cấu hình mặc định đặt tại `~/.agenthub/` (có thể tùy biến qua biến môi trường `AGENTHUB_HOME`).
+---
+
+## Comparison with IDE-Based Coding Tools
+
+| Feature / Aspect | IDE-Based AI Extensions | AgentHub Local Orchestrator |
+|---|---|---|
+| **Execution Environment** | Runs inside your primary editor; operates directly on your open working tree. | Runs as a local daemon; provisions isolated, ephemeral git worktrees per task. |
+| **Concurrency & Parallelism** | Typically limited to a single active prompt or thread in the current workspace. | Concurrently coordinates multiple parallel tasks across independent worker processes. |
+| **Quota Management** | Bound to a single logged-in account; halts completely upon hitting rate limits. | Pools multiple worker accounts; schedules around quota resets and model chains. |
+| **Verification & Quality Gates** | Requires manual user prompting or manual execution of test commands. | Automatically runs automated test suites (`lint`, `typecheck`, `test`, `build`) before review. |
+| **Machine Safety & Throttling** | Rare host resource awareness; can exhaust memory during unmonitored compilation. | Built-in Load Guard, Disk Guard, Orphan Process Reaper, and `nice`/`ionice` CPU scheduling. |
+| **Supervisory Model** | User acts as the sole prompt engineer and manual tester. | Claude Code acts as tech lead / Brain, delegating tasks and reviewing code diffs. |
 
 ### Cài trên máy khác từ GitHub Release
 
@@ -82,80 +172,65 @@ agenthub rollback 0.1.0    # chọn rõ phiên bản
 
 ---
 
-## 2. Các lệnh CLI chính
+## Visual Tour & Screenshots
 
-AgentHub cung cấp bộ lệnh CLI để khởi động daemon, tích hợp công cụ và quản lý hệ thống:
+Documentation screenshots and UI walkthroughs are cataloged in [`docs/assets/`](docs/assets/README.md):
+- **Dashboard Overview**: Monitor active tasks, worker quota rings, and hardware metrics.
+- **Interactive Chat**: Conversational interface with ContextMeter and permission broker dialogs.
+- **Telegram Remote Control**: Task notifications, inline action buttons, and mobile chat.
+- **Plan & Batch DAG Visualizer**: Staging and dispatching multi-task dependency graphs.
+- **Savings Analytics**: Token efficiency and cost savings breakdown.
 
-- `agenthub daemon`: Khởi chạy tiến trình daemon của AgentHub (HTTP REST API, WebSocket PTY, Server-Sent Events và Web UI tại `http://127.0.0.1:7700`).
-- `agenthub open`: Lấy token xác thực cục bộ và tự động mở Web Dashboard trên trình duyệt mặc định (`http://127.0.0.1:7700/#token=...`). Có thể dùng cờ `--no-browser` để chỉ in URL.
-- `agenthub doctor`: Kiểm tra, chẩn đoán sức khỏe hệ thống và môi trường thực thi (phiên bản Node.js, CLI `agy`, `codex`, git worktree, cổng mạng và tình trạng các tài khoản).
-- `agenthub install-service`: Tạo và kích hoạt systemd user service (`~/.config/systemd/user/agenthub.service`) để daemon tự động chạy nền khi đăng nhập hệ thống (hỗ trợ cờ `--print` để xem trước nội dung file service).
-- `agenthub mcp-install`: Đăng ký AgentHub MCP server với Claude Code ở phạm vi người dùng (`claude mcp add --scope user agenthub ...`), cho phép Claude Code tương tác trực tiếp với AgentHub từ bất kỳ dự án nào (hỗ trợ cờ `--print`).
-- `agenthub link`: Tạo symlink tiện ích tại `~/.local/bin/agenthub` trỏ tới script wrapper, giúp chạy lệnh `agenthub` từ bất kỳ thư mục nào trong terminal.
-
-### Các lệnh quản lý bổ trợ:
-- `agenthub status`: Xem nhanh số lượng hồ sơ, quota marks và trạng thái các task trong hàng đợi.
-- `agenthub profile list|check|login`: Quản lý hồ sơ AI worker / Claude, kiểm tra kết nối quota và mở terminal đăng nhập tài khoản.
-- `agenthub profile add <name> [--engine agy|claude|codex]`: Thêm hồ sơ worker (`agy`, `codex`) hoặc bộ não điều phối (`claude`).
-- `agenthub project add <name> <path>`: Đăng ký một git repository vào AgentHub.
-- `agenthub task add|list|show|log`: Thêm task mới, liệt kê danh sách task, xem chi tiết và tra cứu log thực thi.
-- `agenthub clean`: Dọn dẹp các thư mục `node_modules` của các task đã hoàn thành để giải phóng dung lượng đĩa (hỗ trợ cờ `--dry-run`).
+*(See [docs/assets/README.md](docs/assets/README.md) for contribution guidelines and image asset placeholders).*
 
 ---
 
-## 3. Điều khiển từ xa qua Telegram & Chuỗi dự phòng Claude
+## Security Architecture
 
-### Điều khiển từ xa qua Telegram
-AgentHub tích hợp bot Telegram cho phép theo dõi task, duyệt code và trò chuyện trực tiếp với Claude từ điện thoại:
-1. **Tạo bot**: Mở Telegram, chat với `@BotFather`, gửi lệnh `/newbot` để tạo bot và lấy mã HTTP API Bot Token.
-2. **Cấu hình Token**: Nhập token trên trang **Settings** của Web Dashboard (hoặc ghi vào file `~/.agenthub/secrets/telegram.token` với quyền bảo mật `0600`).
-3. **Ghép đôi an toàn (Pairing)**: Bấm **Tạo mã ghép đôi** trên Dashboard để nhận mã 6 chữ số (hiệu lực 5 phút), sau đó gửi mã này cho bot qua Telegram.
-4. **Lệnh điều khiển**:
-   - Quản lý hệ thống & task: `/status`, `/tasks [trạng thái]`, `/task <id>`, `/log <id>`, `/approve <id>`, `/reject <id> <nhận xét>`, `/cancel <id>`, `/retry <id>`, `/pause`, `/resume`.
-   - Trò chuyện với Claude: Gửi tin nhắn văn bản thông thường, `/new` (mở phiên mới), `/stop` (dừng lượt chat).
-   - Phê duyệt quyền công cụ: Khi Claude cần chạy lệnh kiểm tra, bot gửi tin nhắn kèm các nút inline: **Cho phép**, **Luôn cho phép**, **Từ chối**.
-   - Bảo mật: Chỉ chat đã ghép đôi mới được phép gửi lệnh; bot token lưu biệt lập với quyền `0600` và không bao giờ để lộ ra ngoài.
-
-### Chuỗi dự phòng khi hết token (Claude Fallback Chain)
-Khi tài khoản Claude gặp lỗi giới hạn tốc độ (HTTP 429) hoặc hết hạn mức, AgentHub tự động kích hoạt chuỗi dự phòng cấu hình trong `brain.fallback`:
-```json
-{
-  "brain": {
-    "fallback": [
-      { "type": "profile", "profile": "claude-team" },
-      { "type": "model", "model": "haiku" },
-      { "type": "apiKey", "dailyCapUSD": 5 },
-      { "type": "engine", "engine": "codex" },
-      { "type": "wait" }
-    ]
-  }
-}
-```
-- Các bước dự phòng gồm: đổi hồ sơ Claude khác (`profile`), hạ model nhẹ hơn (`model: haiku`), dùng Anthropic API key có trần chi phí (`apiKey`), chuyển sang Codex reviewer (`engine: codex`), hoặc chờ mở khóa hạn mức (`wait`).
-- **Cảnh báo chi phí API key**: Anthropic API key tính phí theo lượng token thực tế (pay-as-you-go). Luôn đặt trần chi phí hàng ngày (`dailyCapUSD`, ví dụ 5 USD/ngày) để tránh phát sinh chi phí ngoài ý muốn; API key được lưu tại `~/.agenthub/secrets/anthropic.key` với quyền `0600`.
+- **Localhost Binding**: The daemon strictly binds to `127.0.0.1:7700`. It does not expose listening ports to external networks.
+- **Token Authentication**: All HTTP API routes require a bearer token generated randomly at startup and saved to `~/.agenthub/token` (file permission `0600`).
+- **DNS Rebinding Protection**: Enforces strict `Host` and `Origin` header validation against `127.0.0.1:7700` and `localhost:7700`.
+- **Credential Hygiene**: Worker credentials, OAuth refresh tokens, and system keyring entries are never printed in logs or transmitted across API responses.
+- **Interactive Permission Broker**: Sensitive commands executed during chat require explicit user authorization via Web UI or Telegram confirmation buttons.
+- **Secure Telegram Remote Access**: The Telegram bot accepts commands exclusively from paired chats verified by temporary 6-digit codes; bot tokens are stored in `0600` files and redacted from APIs.
 
 ---
 
-## 4. Kiểm thử và Kiểm tra chất lượng mã nguồn
+## Honest Limitations
 
-Chạy bộ kiểm tra tự động trước khi đóng gói hoặc triển khai:
+- **Single-User Architecture**: AgentHub is designed for local developer workstations. It does not provide multi-tenant isolation or role-based user management.
+- **Host User Privileges**: Worker tasks execute with the privileges of your local operating system user account. Only register trusted repositories, and avoid storing unencrypted production credentials in `.env` templates.
+- **Codex Reviewer Merge Policy**: When Claude quota is exhausted and the system falls back to the Codex reviewer, approved tasks **are not automatically merged**; human confirmation is required.
+- **Operating System Support**: Linux (Ubuntu, Debian) and macOS are fully supported. Windows is supported exclusively through WSL2.
+- **Provider Terms**: By default, AgentHub limits each provider to one personal profile to prevent unauthorized quota evasion. Team or API key configurations should be used for high-volume shared usage.
 
-```bash
-# Kiểm tra lint, typecheck và chạy toàn bộ unit/integration test
-npm run lint
-npm run typecheck
-npm test
+---
 
-# Kiểm thử giao diện web
-npm run test:web
-```
+## Frequently Asked Questions (FAQ)
 
-## Giấy phép
+### Does AgentHub call Claude APIs directly or require an Anthropic API key?
+No. In its default configuration, AgentHub does not require an Anthropic API key. It connects to your existing Claude Code session in VS Code or via the local Claude CLI. An optional Anthropic API key can be configured solely as an emergency fallback step with strict daily spending limits (`dailyCapUSD`).
 
-AgentHub phát hành theo giấy phép [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+### What happens when an AI worker runs out of quota?
+The scheduler marks the profile and model family as exhausted, calculates the reset timestamp from provider headers or error messages, and either switches the task to an available alternative model/profile or places it in a `waiting_quota` state until the reset window passes.
 
-- Bạn được dùng, sửa và phân phối lại miễn phí, kể cả cho mục đích thương mại.
-- Nếu bạn phân phối bản đã sửa, hoặc cho người khác dùng bản đã sửa qua mạng (dịch vụ, SaaS), bạn phải công khai mã nguồn phần đã sửa theo cùng giấy phép.
-- Cần dùng AgentHub mà không muốn chịu các điều kiện trên (ví dụ tích hợp vào sản phẩm đóng mã): liên hệ tác giả để có giấy phép thương mại.
+### Can I use AgentHub without Claude Code?
+Yes. You can create, manage, and inspect tasks manually using the Web Dashboard or CLI (`agenthub task add`). However, having Claude Code active allows automated decomposition, prompt generation, code review, and merging.
 
-Copyright (C) 2026 ducanh19020217
+### How does git worktree isolation prevent database and port collisions?
+AgentHub assigns a unique slot number to each concurrent worktree and interpolates variables into a project `.envTemplate`. For example, `PORT=4{slot}50` maps slot 1 to port 4150 and slot 2 to port 4250.
+
+### Can I monitor tasks remotely?
+Yes. You can pair the integrated Telegram bot to receive real-time notifications, approve/reject tasks, and converse with Claude from anywhere. Alternatively, you can open an SSH tunnel (`ssh -L 7700:127.0.0.1:7700 user@machine`) to access the Web Dashboard securely.
+
+---
+
+## License & Commercial Licensing
+
+AgentHub is free and open-source software licensed under the **[GNU Affero General Public License v3.0 (AGPL-3.0-only)](LICENSE)**.
+
+- **Open Source Freedom**: You are free to run, study, modify, and redistribute AgentHub, including for commercial purposes.
+- **Network Copyleft Obligation**: If you modify AgentHub and run it as a network service or distribute modified versions, you must make the complete corresponding source code available under the AGPLv3.
+- **Commercial Licensing (Dual Licensing)**: If your organization wishes to embed or distribute AgentHub without being bound by the copyleft provisions of the AGPLv3, commercial licenses are available. Please contact the project author for commercial licensing inquiries.
+
+Copyright (C) 2026 ducanh19020217 / AgentHub contributors.
