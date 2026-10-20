@@ -73,3 +73,9 @@ export async function cancelChatSession(
     },
   );
 }
+
+export async function stopChatSession(sessionId: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' },
+  );
+}

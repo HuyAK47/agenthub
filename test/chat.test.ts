@@ -670,6 +670,91 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(errorEvent?.message).toBe('Rate limit exceeded');
   });
 
+  it('reports a crashed Claude process instead of leaving the spinner running', async () => {
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'crash' } });
+    await vi.waitFor(() => expect(errors.length).toBe(1), { timeout: 5000 });
+    expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('error');
+    expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
+  });
+
+  it('watchdogs a Claude process that produces no output', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    let error: Record<string, unknown> | null = null;
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { error = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'idle' } });
+    await vi.waitFor(() => expect(error).not.toBeNull(), { timeout: 5000 });
+    expect(error?.message).toContain('không có output');
+  });
+
+  it('publishes waiting_permission and supports stopping a safe-mode turn', async () => {
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders(), payload: { mode: 'safe' } });
+    const session = JSON.parse(createRes.body);
+    let permission: Record<string, unknown> | null = null;
+    ctx.scheduler.getEventBus().on('chat.permission', (_taskId, payload) => { permission = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'permission' } });
+    await vi.waitFor(() => expect(permission).not.toBeNull(), { timeout: 5000 });
+    expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_permission');
+    const stop = await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+    expect(stop.statusCode).toBe(200);
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0), { timeout: 5000 });
+  });
+
+  it('does not fire the idle watchdog while waiting for permission', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders(), payload: { mode: 'safe' } });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'permission' } });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(errors).toHaveLength(0);
+    expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_permission');
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+  });
+
+  it('does not fire the idle watchdog while a tool result is pending', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    let toolSeen = false;
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    ctx.scheduler.getEventBus().on('chat.tool', () => { toolSeen = true; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'tool-wait' } });
+    await vi.waitFor(() => expect(toolSeen).toBe(true), { timeout: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(errors).toHaveLength(0);
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+  });
+
+  it('handles usage-limit errors and starts a new session when resume is invalid', async () => {
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'hello' } });
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.claudeSessionId).toBe('sess-default-123'), { timeout: 5000 });
+    let error: Record<string, unknown> | null = null;
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { error = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'resume-fail' } });
+    await vi.waitFor(() => expect(error).not.toBeNull(), { timeout: 5000 });
+    expect(ctx.chatSessionRepo.get(session.id)?.claudeSessionId).toBeNull();
+    const messages = ctx.chatMessageRepo.getBySession(session.id);
+    expect(messages.some((message) => message.content === 'Đã mở phiên mới, ngữ cảnh cũ không còn')).toBe(true);
+
+    let quotaError: Record<string, unknown> | null = null;
+    const quotaRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const quotaSession = JSON.parse(quotaRes.body);
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { quotaError = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${quotaSession.id}/messages`, headers: authHeaders(), payload: { text: 'quota' } });
+    await vi.waitFor(() => expect(quotaError).not.toBeNull(), { timeout: 5000 });
+    expect(quotaError?.message).toContain('Usage limit');
+  });
+
   it('validates text bounds: rejects empty or > 20000 characters (400)', async () => {
     const createRes = await server.inject({
       method: 'POST',

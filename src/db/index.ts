@@ -288,7 +288,12 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE projects ADD COLUMN merge TEXT;
   `,
-  // Migration 19: chat session metadata, token tracking, and message indexing
+  // Migration 19: explicit chat lifecycle state
+  `
+  ALTER TABLE chat_sessions ADD COLUMN state TEXT NOT NULL DEFAULT 'idle'
+    CHECK(state IN ('idle','running','waiting_permission','error'));
+  `,
+  // Migration 20: chat session metadata, token tracking, and message indexing
   `
   ALTER TABLE chat_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE chat_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
@@ -296,7 +301,7 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE chat_sessions ADD COLUMN inputTokens INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE chat_sessions ADD COLUMN outputTokens INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE chat_sessions ADD COLUMN contextTokens INTEGER NOT NULL DEFAULT 0;
-  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(sessionId, id);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
   UPDATE chat_sessions SET lastMessageAt = (SELECT MAX(createdAt) FROM chat_messages WHERE sessionId = chat_sessions.id);
   `,
 ];
@@ -859,6 +864,7 @@ export interface ChatSessionRow {
   mode: 'safe' | 'full';
   model: string;
   busy: number;
+  state: 'idle' | 'running' | 'waiting_permission' | 'error';
   pinned: number;
   archived: number;
   lastMessageAt: string | null;
@@ -881,26 +887,44 @@ export interface ChatMessageRow {
 export class ChatSessionRepo {
   constructor(private db: Database.Database) {}
 
-  getAll(): ChatSessionRow[] {
+  getAll(options?: { archived?: number | null }): ChatSessionRow[] {
+    const archived = options?.archived !== undefined ? options.archived : 0;
+    if (archived === null) {
+      return this.db
+        .prepare('SELECT * FROM chat_sessions ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
+        .all() as ChatSessionRow[];
+    }
     return this.db
-      .prepare('SELECT * FROM chat_sessions ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
-      .all() as ChatSessionRow[];
+      .prepare('SELECT * FROM chat_sessions WHERE archived = ? ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
+      .all(archived) as ChatSessionRow[];
   }
 
-  search(query: string): ChatSessionRow[] {
+  search(query: string, options?: { archived?: number | null }): ChatSessionRow[] {
     const trimmed = query.trim();
+    const archived = options?.archived !== undefined ? options.archived : 0;
     if (!trimmed) {
-      return this.getAll();
+      return this.getAll(options);
     }
-    const pattern = `%${trimmed}%`;
+    const escaped = trimmed.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const pattern = `%${escaped}%`;
+    if (archived === null) {
+      return this.db
+        .prepare(
+          `SELECT DISTINCT s.* FROM chat_sessions s
+           LEFT JOIN chat_messages m ON m.sessionId = s.id
+           WHERE (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
+           ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
+        )
+        .all(pattern, pattern) as ChatSessionRow[];
+    }
     return this.db
       .prepare(
         `SELECT DISTINCT s.* FROM chat_sessions s
          LEFT JOIN chat_messages m ON m.sessionId = s.id
-         WHERE s.title LIKE ? OR m.content LIKE ?
+         WHERE s.archived = ? AND (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
          ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
       )
-      .all(pattern, pattern) as ChatSessionRow[];
+      .all(archived, pattern, pattern) as ChatSessionRow[];
   }
 
   get(id: string): ChatSessionRow | undefined {
@@ -917,6 +941,7 @@ export class ChatSessionRepo {
     mode?: 'safe' | 'full';
     model?: string;
     busy?: number;
+    state?: ChatSessionRow['state'];
     pinned?: number;
     archived?: number;
     lastMessageAt?: string | null;
@@ -926,8 +951,8 @@ export class ChatSessionRepo {
   }): void {
     this.db
       .prepare(
-        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, pinned, archived, lastMessageAt, inputTokens, outputTokens, contextTokens)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, state, pinned, archived, lastMessageAt, inputTokens, outputTokens, contextTokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         row.id,
@@ -937,6 +962,7 @@ export class ChatSessionRepo {
         row.mode || 'safe',
         row.busy ?? 0,
         row.model || '',
+        row.state || 'idle',
         row.pinned ?? 0,
         row.archived ?? 0,
         row.lastMessageAt || null,
@@ -976,18 +1002,21 @@ export class ChatSessionRepo {
       .run(timestamp || null, id);
   }
 
-  addUsage(id: string, usage: { inputTokens: number; outputTokens: number }): void {
+  addUsage(
+    id: string,
+    usage: { inputTokens: number; outputTokens: number; contextTokens?: number },
+  ): void {
     this.db
       .prepare(
         `UPDATE chat_sessions
          SET inputTokens = inputTokens + ?,
              outputTokens = outputTokens + ?,
-             contextTokens = ?,
+             contextTokens = COALESCE(?, contextTokens),
              lastMessageAt = datetime('now'),
              updatedAt = datetime('now')
          WHERE id = ?`
       )
-      .run(usage.inputTokens, usage.outputTokens, usage.inputTokens, id);
+      .run(usage.inputTokens, usage.outputTokens, usage.contextTokens ?? null, id);
   }
 
   updateClaudeSessionId(id: string, claudeSessionId: string): void {
@@ -1002,6 +1031,14 @@ export class ChatSessionRepo {
       .run(busy, id);
   }
 
+  updateState(id: string, state: ChatSessionRow['state']): void {
+    this.db.prepare("UPDATE chat_sessions SET state = ?, updatedAt = datetime('now') WHERE id = ?").run(state, id);
+  }
+
+  clearClaudeSessionId(id: string): void {
+    this.db.prepare("UPDATE chat_sessions SET claudeSessionId = NULL, updatedAt = datetime('now') WHERE id = ?").run(id);
+  }
+
   touchUpdatedAt(id: string): void {
     this.db
       .prepare("UPDATE chat_sessions SET updatedAt = datetime('now') WHERE id = ?")
@@ -1009,7 +1046,7 @@ export class ChatSessionRepo {
   }
 
   resetAllBusy(): void {
-    this.db.prepare('UPDATE chat_sessions SET busy = 0 WHERE busy != 0').run();
+    this.db.prepare("UPDATE chat_sessions SET busy = 0, state = 'idle' WHERE busy != 0 OR state != 'idle'").run();
   }
 
   delete(id: string): void {

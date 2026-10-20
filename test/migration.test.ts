@@ -12,6 +12,25 @@ afterEach(() => {
 });
 
 describe('database migrations', () => {
+  it('adds chat state when reopening a database at the previous latest schema version', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-migration-state-test-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'hub.db');
+    const oldDb = new Database(dbPath);
+    for (let version = 0; version < MIGRATIONS.length - 1; version += 1) {
+      oldDb.exec(MIGRATIONS[version]);
+      oldDb.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(version));
+    }
+    oldDb.close();
+
+    const db = openDatabase(dbPath);
+    expect(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").pluck().get()).toBe(String(MIGRATIONS.length - 1));
+    expect(db.prepare('PRAGMA table_info(chat_sessions)').all()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'state' })]),
+    );
+    db.close();
+  });
+
   it('migrates a populated schema 0-6 database without breaking check_results foreign keys', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-migration-test-'));
     tempDirs.push(dir);
