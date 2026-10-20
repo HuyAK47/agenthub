@@ -135,8 +135,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-1.5">{t('extra.claudeModel')}</label>
             <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full text-sm rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)]">
               <option value="">{t('extra.claudeDefault')}</option>
-              <option value="sonnet">Sonnet ({t('extra.fast')})</option>
-              <option value="haiku">Haiku ({t('extra.fastest')})</option>
+              {(config?.chat?.models || ['opus', 'sonnet', 'haiku']).map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </div>
 

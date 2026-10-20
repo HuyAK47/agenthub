@@ -409,6 +409,7 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
+  reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
     fallback: Array<{ type: 'profile'; profile?: string } | { type: 'model'; model: string } | { type: 'apiKey'; dailyCapUSD: number } | { type: 'engine'; engine: 'codex' } | { type: 'wait' }>;
   };
@@ -488,6 +489,7 @@ export interface UpdateChatSessionInput {
   title?: string;
   pinned?: boolean | number;
   archived?: boolean | number;
+  model?: string;
 }
 
 export interface SendMessageResponse {
@@ -503,7 +505,8 @@ export interface ChatConfig {
   claudeVersion?: string | null;
   maxConcurrent?: number;
   idleTimeoutSec?: number;
-  model?: '' | 'sonnet' | 'haiku';
+  model?: string;
+  models?: string[];
   claudeProfile?: string;
 }
 

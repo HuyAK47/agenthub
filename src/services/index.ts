@@ -119,6 +119,7 @@ export const modelValidator = z.string().refine(
   (m) => (m.startsWith('codex:') && m.length > 6) || VALID_AGY_MODELS.has(m),
   { message: 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:' },
 );
+const taskModelValidator = z.string().trim().min(1, 'Model không được để trống');
 
 export const ProjectHooksSchema = z.object({
   onWorktreeRemoved: z.array(z.string()).optional(),
@@ -179,7 +180,7 @@ export const CreateTaskSchema = z.object({
   dependsOn: z.array(z.string()).optional(),
   baseRef: z.string().optional(),
   branch: z.string().optional(),
-  modelChain: z.array(modelValidator).optional(),
+  modelChain: z.array(taskModelValidator).optional(),
   sourceRef: z.object({ taskId: z.string(), runId: z.string().nullable().optional(), checkName: z.string().nullable().optional(), excerptHash: z.string() }).optional(),
   start: z.boolean().optional(),
 });
@@ -197,7 +198,7 @@ export const CaptureTaskSchema = z.object({
 });
 
 export const UpdateTaskSchema = z.object({
-  modelChain: z.array(modelValidator).nullable().optional(),
+  modelChain: z.array(taskModelValidator).nullable().optional(),
   dependsOn: z.array(z.string()).optional(),
   level: z.enum(['easy', 'hard']).optional(),
   title: z.string().min(1).optional(),
@@ -284,7 +285,8 @@ export const UpdateConfigSchema = z.object({
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
-      model: z.enum(['', 'sonnet', 'haiku']).optional(),
+      model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
+      models: z.array(z.string().trim().min(1)).min(1).optional(),
     })
     .optional(),
   reviewer: z.object({
@@ -2164,6 +2166,7 @@ export class AppService {
         idleTimeoutSec: this.config.chat.idleTimeoutSec,
         permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
+        models: this.config.chat.models,
       },
       brain: { fallback: this.config.brain.fallback },
       reviewer: this.config.reviewer,
@@ -2181,6 +2184,21 @@ export class AppService {
         notify: this.config.telegram.notify,
       },
     };
+  }
+
+  getModelOptions() {
+    const profiles = this.profileRepo.getAll().filter((profile) => Boolean(profile.enabled));
+    const suggestions = new Set<string>();
+    for (const profile of profiles) {
+      if (profile.engine === 'agy') {
+        for (const model of VALID_AGY_MODELS) suggestions.add(model);
+      } else if (profile.engine === 'codex') {
+        suggestions.add('codex:gpt-5.6-luna');
+      }
+    }
+    const configured = [...this.config.defaultModelChains.hard, ...this.config.defaultModelChains.easy, this.config.reviewer.model];
+    const configuredModels = [...new Set(configured.filter(Boolean))];
+    return { suggestions: [...suggestions].sort(), configured: configuredModels };
   }
 
   updateConfig(raw: unknown) {

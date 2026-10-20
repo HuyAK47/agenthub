@@ -422,7 +422,7 @@ export class ChatService {
       throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
     }
     const model = body.model ?? this.config.chat.model;
-    const allowedModels = new Set(['', 'sonnet', 'haiku', this.config.chat.model]);
+    const allowedModels = new Set(['', ...(this.config.chat.models || ['opus', 'sonnet', 'haiku']), this.config.chat.model]);
     if (!allowedModels.has(model)) {
       throw new HttpError(400, 'bad_request', 'Model chat phải là mặc định, sonnet hoặc haiku');
     }
@@ -435,11 +435,22 @@ export class ChatService {
       title?: string;
       pinned?: boolean | number;
       archived?: boolean | number;
+      model?: string;
     },
   ): ChatSessionRow {
     const session = this.chatSessionRepo.get(id);
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${id}" không tồn tại`);
+    }
+
+    if (body.model !== undefined) {
+      const { model } = this.validateSessionOptions({ model: body.model });
+      if (session.busy === 1 || this.runningTurns.has(id)) {
+        throw new HttpError(409, 'conflict', 'Hãy đợi lượt chat hiện tại kết thúc trước khi đổi model');
+      }
+      const proc = this.persistentProcesses.get(id);
+      if (proc) this.closePersistentProcess(proc);
+      this.chatSessionRepo.updateModel(id, model);
     }
 
     if (body.title !== undefined) {

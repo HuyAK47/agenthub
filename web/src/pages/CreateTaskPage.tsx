@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import Markdown from 'react-markdown';
-import { createTask, getProjects, getTasks } from '../api/client';
+import { createTask, getProjects, getTasks, getConfig } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { ArrowLeft, Eye, Edit3, Plus } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
@@ -19,6 +19,7 @@ export const CreateTaskPage: React.FC = () => {
   const [body, setBody] = useState('');
   const [selectedDeps, setSelectedDeps] = useState<string[]>([]);
   const [startImmediately, setStartImmediately] = useState(false);
+  const [modelChain, setModelChain] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'edit' | 'preview'>('edit');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -31,6 +32,7 @@ export const CreateTaskPage: React.FC = () => {
     queryKey: ['tasks'],
     queryFn: () => getTasks(),
   });
+  const { data: config } = useQuery({ queryKey: ['config'], queryFn: getConfig });
 
   // Set default project when loaded
   React.useEffect(() => {
@@ -75,6 +77,7 @@ export const CreateTaskPage: React.FC = () => {
       level,
       body: body.trim(),
       dependsOn: selectedDeps,
+      modelChain: modelChain.length > 0 ? modelChain : undefined,
       start: startImmediately,
     });
   };
@@ -190,6 +193,19 @@ export const CreateTaskPage: React.FC = () => {
                 <span>{t('createTask.hardDesc')}</span>
               </label>
             </div>
+          </div>
+
+          {/* Dependencies (dependsOn) */}
+          <div>
+            <label className="block text-xs font-semibold text-[var(--t-text)] uppercase tracking-wider mb-2">Model chain</label>
+            <input
+              aria-label="Model chain"
+              value={modelChain.join(', ')}
+              onChange={(e) => setModelChain(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))}
+              placeholder={(level === 'hard' ? config?.modelChainHard : config?.modelChainEasy)?.join(', ') || 'gemini-3.8-flash-medium, codex:gpt-5.6-luna'}
+              className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]"
+            />
+            <p className="text-[11px] text-[var(--t-text-3)] mt-1">Enter comma-separated models; leave blank to use the default.</p>
           </div>
 
           {/* Dependencies (dependsOn) */}

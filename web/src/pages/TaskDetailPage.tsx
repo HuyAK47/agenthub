@@ -1011,18 +1011,14 @@ export const TaskDetailPage: React.FC = () => {
                   {t('taskDetail.modelChainLabel')}
                 </label>
                 <div className="flex gap-2">
-                  <select
+                  <input
                     data-testid="add-model-select"
                     value={selectedModelToAdd}
                     onChange={(e) => setSelectedModelToAdd(e.target.value)}
+                    list="task-model-suggestions"
                     className="flex-1 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2.5 py-1.5 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
-                  >
-                    {VALID_MODELS.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
+                  />
+                  <datalist id="task-model-suggestions">{VALID_MODELS.map((m) => <option key={m} value={m} />)}</datalist>
                   <button
                     type="button"
                     data-testid="add-model-btn"
