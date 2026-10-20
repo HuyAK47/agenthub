@@ -83,6 +83,23 @@ export class NotificationService {
         break;
       }
 
+      case 'task.paused':
+      case 'load.task_paused': {
+        const title = this.resolveTaskTitle(taskId, p);
+        const msg = p.reason === 'load'
+          ? `Tạm dừng task ${title} do quá tải hệ thống`
+          : `Tạm dừng task ${title}`;
+        this.notify(msg, 'normal');
+        break;
+      }
+
+      case 'task.resumed':
+      case 'load.task_resumed': {
+        const title = this.resolveTaskTitle(taskId, p);
+        this.notify(`Tiếp tục task ${title}`, 'normal');
+        break;
+      }
+
       case 'review.escalated': {
         const title = this.resolveTaskTitle(taskId, p);
         this.notify(`Cần người duyệt: ${title}`, 'normal');

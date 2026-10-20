@@ -158,7 +158,13 @@ export interface Task {
     loopingCommand?: string | null;
     model?: string;
     profileName?: string;
+    paused?: boolean;
+    pauseReason?: 'manual' | 'load' | null;
+    rss?: number;
+    cpu?: number;
   } | null;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
   checks?: CheckResult[];
   sourceRef?: {
     taskId: string;
@@ -222,6 +228,10 @@ export interface RunningWorker {
   slug?: string;
   title?: string;
   worktreePath?: string | null;
+  rss?: number;
+  cpu?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
 }
 
 export type BrainActivity =
