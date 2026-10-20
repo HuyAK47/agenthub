@@ -21,6 +21,8 @@ interface RecordedFetchCall {
   body?: Record<string, unknown>;
 }
 
+const fakeClaudeBin = path.resolve(__dirname, 'fixtures', 'fake-claude.mjs');
+
 describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
   let tmpDir: string;
   let config: ReturnType<typeof loadConfig>;
@@ -122,7 +124,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
     delete process.env.AGENTHUB_AGY_HOMES;
   });
 
-  function createTestBotService(opts?: { allowedChatIds?: number[]; execStdout?: string }) {
+  function createTestBotService(opts?: { allowedChatIds?: number[]; execStdout?: string; chatService?: typeof ctx.chatService }) {
     config.telegram.allowedChatIds = opts?.allowedChatIds ? [...opts.allowedChatIds] : [];
     return new TelegramBotService({
       config,
@@ -136,6 +138,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       sleepFn: async () => {},
       execFile: async () => ({ stdout: opts?.execStdout || '1 file changed, 10 insertions(+)' }),
       tokenOverride: 'test-bot-token-123456',
+      chatService: opts?.chatService,
     });
   }
 
@@ -943,7 +946,86 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
     });
   });
 
-  describe('6. HTTP API Endpoints for Telegram', () => {
+  describe('6. Claude chat bridge', () => {
+    it('routes ordinary messages to one telegram:<chatId> session and supports /new and /stop', async () => {
+      ctx.chatService.setClaudeBinOverride(fakeClaudeBin);
+      const bot = createTestBotService({ allowedChatIds: [321], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 1000, message: {
+        message_id: 1000, date: 1, chat: { id: 321, type: 'private' }, text: 'Xin chào',
+      } });
+      await vi.waitFor(() => expect(ctx.chatSessionRepo.get('telegram:321')?.busy).toBe(0), { timeout: 10_000 });
+      expect(ctx.chatMessageRepo.getBySession('telegram:321', 10).some((m) => m.content === 'Xin chào')).toBe(true);
+
+      await bot.handleUpdate({ update_id: 1001, message: {
+        message_id: 1001, date: 1, chat: { id: 321, type: 'private' }, text: '/new',
+      } });
+      const sessions = ctx.chatSessionRepo.getAll({ archived: null });
+      expect(sessions.filter((session) => session.id.startsWith('telegram:321:'))).toHaveLength(1);
+
+      await bot.handleUpdate({ update_id: 1002, message: {
+        message_id: 1002, date: 1, chat: { id: 321, type: 'private' }, text: '/stop',
+      } });
+      expect(recordedCalls.some((call) => call.body?.text === '⏹ Đã dừng lượt chat hiện tại.')).toBe(true);
+    });
+
+    it('keeps newlines, rate-limits progress edits, and splits long final replies', async () => {
+      const bot = createTestBotService({ allowedChatIds: [321], chatService: ctx.chatService });
+      const botAny = bot as unknown as { chatProgressText(text: string): string };
+      expect(botAny.chatProgressText('a\nb')).toBe('a\nb');
+
+      const editTimes: number[] = [];
+      const originalFetch = fakeFetch;
+      fakeFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/editMessageText')) editTimes.push(currentTime);
+        return originalFetch(input, init);
+      }) as unknown as typeof fetch;
+      (bot as unknown as { fetchFn: typeof fetch }).fetchFn = fakeFetch;
+
+      (bot as unknown as { chatReplies: Map<string, unknown> }).chatReplies.set('telegram:321', {
+        chatId: 321, messageId: 1010, text: '⏳ Đang xử lý…', lastEditAt: currentTime, editing: false,
+      });
+      const handleChatEvent = (type: string, payload: unknown) => (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void }).handleChatEvent(type, undefined, payload);
+      handleChatEvent('chat.delta', { sessionId: 'telegram:321', text: 'x\ny' });
+      handleChatEvent('chat.delta', { sessionId: 'telegram:321', text: 'z' });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(editTimes.length).toBeLessThanOrEqual(1);
+
+      const longText = 'x'.repeat(8_001);
+      const chunks = (bot as unknown as { splitTelegramText(text: string): string[] }).splitTelegramText(longText);
+      expect(chunks).toHaveLength(3);
+      expect(chunks.every((chunk) => chunk.length).valueOf()).toBe(true);
+    });
+
+    it('renders permission buttons and sends the selected decision to ChatService', async () => {
+      ctx.chatService.setClaudeBinOverride(fakeClaudeBin);
+      const bot = createTestBotService({ allowedChatIds: [321], chatService: ctx.chatService });
+      await bot.handleUpdate({ update_id: 1020, message: {
+        message_id: 1020, date: 1, chat: { id: 321, type: 'private' }, text: 'permission',
+      } });
+      const pendingPermission = ctx.chatService.permissionBroker.request({
+        sessionId: 'telegram:321', messageId: null, toolName: 'Bash', input: { command: 'git status' },
+      });
+      const permissionId = ctx.chatPermissionRepo.listPending('telegram:321')[0].id;
+      (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void }).handleChatEvent('chat.permission_request', undefined, {
+        id: permissionId, sessionId: 'telegram:321', toolName: 'Bash', input: { command: 'git status' },
+      });
+      await vi.waitFor(() => expect(recordedCalls.some((call) => {
+        const keyboard = call.body?.reply_markup as { inline_keyboard?: Array<Array<{ callback_data?: string }>> } | undefined;
+        return keyboard?.inline_keyboard?.[0]?.some((button) => button.callback_data?.startsWith('permission:'));
+      })).toBe(true), { timeout: 5_000 });
+
+      await bot.handleUpdate({ update_id: 1021, callback_query: {
+        id: 'callback-1', from: { id: 321 }, message: { message_id: 1, chat: { id: 321 } }, data: `permission:allow:${permissionId}`,
+      } });
+      expect(ctx.chatService.permissionBroker.get(permissionId)?.status).toBe('allow');
+      ctx.chatService.stop();
+      await pendingPermission;
+    });
+  });
+
+  describe('7. HTTP API Endpoints for Telegram', () => {
     it('GET /api/telegram/pairing-code returns active code and remaining seconds', async () => {
       const res = await server.inject({
         method: 'GET',
