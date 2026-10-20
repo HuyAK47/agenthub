@@ -20,6 +20,8 @@ import {
   ProfileRow,
   TaskRow,
   QuotaMarkRow,
+  KnowledgeRepo,
+  KnowledgeEntryRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
@@ -79,6 +81,20 @@ export function apiTaskNote(note: TaskNoteRow): TaskNoteRow {
     ...note,
     createdAt: toApiTime(note.createdAt) || note.createdAt,
   };
+}
+
+export function apiKnowledgeEntry(entry: KnowledgeEntryRow): KnowledgeEntryRow {
+  return { ...entry, createdAt: toApiTime(entry.createdAt) || entry.createdAt };
+}
+
+export function extractKnowledgeSection(doneContent: string): string | null {
+  const heading = /^##\s+Ghi chú cho task sau\s*$/m.exec(doneContent);
+  if (!heading) return null;
+  const start = heading.index + heading[0].length;
+  const remainder = doneContent.slice(start).replace(/^\r?\n/, '');
+  const nextHeading = /^##\s/m.exec(remainder);
+  const content = remainder.slice(0, nextHeading?.index ?? remainder.length).trim();
+  return content ? content : null;
 }
 
 function apiRun<T extends { startedAt: string; endedAt: string | null }>(run: T): T {
@@ -207,6 +223,17 @@ export const CreateTaskNoteSchema = z.object({
   kind: z.enum(['note', 'overlap']).optional().default('note'),
 });
 
+export const CreateKnowledgeSchema = z.object({
+  content: z.string().min(1, 'Nội dung kiến thức không được để trống'),
+  taskId: z.string().min(1).optional(),
+  pinned: z.boolean().optional(),
+});
+
+export const UpdateKnowledgeSchema = z.object({
+  content: z.string().min(1).optional(),
+  pinned: z.boolean().optional(),
+});
+
 export const CreateProfileSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
   engine: z.enum(['agy', 'claude']).default('agy'),
@@ -226,6 +253,12 @@ export const UpdateConfigSchema = z.object({
   modelChainHard: z.array(modelValidator).min(1).optional(),
   modelChainEasy: z.array(modelValidator).min(1).optional(),
   defaultTimeout: z.number().int().positive().optional(),
+  context: z.object({
+    overlapCheckSec: z.number().positive().optional(),
+    depsMaxChars: z.number().int().positive().optional(),
+    knowledgeMaxChars: z.number().int().positive().optional(),
+    knowledgeFile: z.string().optional(),
+  }).optional(),
   slotsPerAgyProfile: z.number().int().positive().optional(),
   slotsPerCodexProfile: z.number().int().positive().optional(),
   watchdog: z.object({
@@ -284,9 +317,6 @@ export const UpdateConfigSchema = z.object({
   stall: z.object({
     noCommitMin: z.number().positive().optional(),
     loopThreshold: z.number().int().positive().optional(),
-  }).optional(),
-  context: z.object({
-    overlapCheckSec: z.number().int().positive().optional(),
   }).optional(),
   disk: z.object({
     minFreeGB: z.number().positive().optional(),
@@ -568,6 +598,7 @@ export class AppService {
     public taskNoteRepo?: TaskNoteRepo,
     public bulletinService?: BulletinService,
     public telegramBotService?: TelegramBotService,
+    public knowledgeRepo?: KnowledgeRepo,
   ) {}
 
   listClaudeSessions(activeWithinMin = 5) {
@@ -1553,7 +1584,17 @@ export class AppService {
     });
 
     this.scheduler.reviewTask(taskId, parsed.verdict, parsed.feedback, parsed.by);
-    if (mergeResult) this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
+    if (parsed.verdict === 'approved' && this.knowledgeRepo) {
+      const completed = this.taskRepo.get(taskId);
+      const donePath = completed?.worktreePath ? path.join(completed.worktreePath, '.agenthub', 'DONE') : null;
+      const doneContent = completed?.doneReport || (donePath && fs.existsSync(donePath) ? fs.readFileSync(donePath, 'utf-8') : '');
+      const knowledge = extractKnowledgeSection(doneContent);
+      if (knowledge) this.knowledgeRepo.insert({ projectId: task.projectId, taskId, content: knowledge });
+    }
+    if (mergeResult) {
+      this.exportKnowledgeFile(task.projectId);
+      this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
+    }
     return this.taskRepo.get(taskId)!;
   }
 
@@ -1779,6 +1820,50 @@ export class AppService {
 
     const notes = this.taskNoteRepo ? this.taskNoteRepo.getByTask(taskId) : [];
     return notes.map(apiTaskNote);
+  }
+
+  listKnowledge(projectId: string): KnowledgeEntryRow[] {
+    if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
+  }
+
+  addKnowledge(projectId: string, raw: unknown): KnowledgeEntryRow {
+    if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    const parsed = CreateKnowledgeSchema.parse(raw);
+    const taskId = parsed.taskId ? toTaskId(parsed.taskId) : `manual/${projectId}`;
+    if (parsed.taskId && (!this.taskRepo.get(taskId) || this.taskRepo.get(taskId)!.projectId !== projectId)) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không thuộc project`);
+    }
+    if (!this.knowledgeRepo) throw new HttpError(500, 'internal_error', 'KnowledgeRepo chưa được khởi tạo');
+    return apiKnowledgeEntry(this.knowledgeRepo.insert({ projectId, taskId, content: parsed.content, pinned: parsed.pinned }));
+  }
+
+  updateKnowledge(projectId: string, id: string, raw: unknown): KnowledgeEntryRow {
+    const entryId = Number(id);
+    const entry = this.knowledgeRepo?.get(entryId);
+    if (!entry || entry.projectId !== projectId) throw new HttpError(404, 'not_found', 'Mục kiến thức không tồn tại');
+    const parsed = UpdateKnowledgeSchema.parse(raw);
+    const updated = this.knowledgeRepo!.update(entryId, parsed);
+    return apiKnowledgeEntry(updated!);
+  }
+
+  deleteKnowledge(projectId: string, id: string): { ok: boolean } {
+    const entryId = Number(id);
+    const entry = this.knowledgeRepo?.get(entryId);
+    if (!entry || entry.projectId !== projectId) throw new HttpError(404, 'not_found', 'Mục kiến thức không tồn tại');
+    this.knowledgeRepo!.delete(entryId);
+    return { ok: true };
+  }
+
+  private exportKnowledgeFile(projectId: string): void {
+    const target = this.config.context.knowledgeFile;
+    const project = this.projectRepo.get(projectId);
+    if (!target || !project || !this.knowledgeRepo) return;
+    const entries = this.knowledgeRepo.getByProject(projectId);
+    const content = ['# Sổ kiến thức dự án', '', ...entries.map((entry) => `- ${entry.content} _(task: ${entry.taskId})`)].join('\n') + '\n';
+    const filePath = path.resolve(project.path, target);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf-8');
   }
 
   // --- Scheduler control ---

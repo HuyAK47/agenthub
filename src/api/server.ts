@@ -186,6 +186,38 @@ export async function createServer(
     return service.deleteProject(id);
   });
 
+  fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.listKnowledge(id);
+  });
+
+  fastify.post('/api/projects/:id/knowledge', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    return reply.status(201).send(service.addKnowledge(id, req.body));
+  });
+
+  fastify.patch('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { id?: number };
+    return service.updateKnowledge(id, String(body.id), body);
+  });
+
+  fastify.delete('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { id?: number };
+    return service.deleteKnowledge(id, String(body.id));
+  });
+
+  fastify.patch('/api/projects/:id/knowledge/:entryId', async (req: FastifyRequest) => {
+    const { id, entryId } = req.params as { id: string; entryId: string };
+    return service.updateKnowledge(id, entryId, req.body);
+  });
+
+  fastify.delete('/api/projects/:id/knowledge/:entryId', async (req: FastifyRequest) => {
+    const { id, entryId } = req.params as { id: string; entryId: string };
+    return service.deleteKnowledge(id, entryId);
+  });
+
   fastify.get('/api/projects/:id/notes', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     const query = req.query as { since?: string; runningOnly?: string; taskId?: string };
