@@ -592,6 +592,21 @@ export class AppService {
     return { effectiveTokens: total.effectiveTokens, sessions: sessions.length, tasks };
   }
 
+  getClaudeTokenTotals() {
+    const db = this.scheduler.getDatabase();
+    if (!db) return { today: 0, week: 0 };
+    const now = new Date();
+    const today = new Date(now); today.setHours(0, 0, 0, 0);
+    const week = new Date(today); week.setDate(week.getDate() - 6);
+    const row = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ts >= ? THEN effective ELSE 0 END), 0) AS today,
+        COALESCE(SUM(CASE WHEN ts >= ? THEN effective ELSE 0 END), 0) AS week
+      FROM claude_usage
+    `).get(today.toISOString(), week.toISOString()) as { today: number; week: number };
+    return { today: row.today, week: row.week };
+  }
+
   // --- Savings ---
   getSavings(query?: { project?: string; since?: string }) {
     if (!this.savingsService) {
@@ -708,6 +723,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
+        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
       };
     });
@@ -960,6 +976,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
+        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };

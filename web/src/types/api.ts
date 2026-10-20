@@ -39,6 +39,7 @@ export interface Profile {
   duplicateWarning?: boolean;
   duplicateEmailWith?: string[];
   usage?: QuotaUsageItem[];
+  claudeTokens?: { today: number; week: number };
   slotsUsed?: number;
   slotsTotal?: number;
   authState?: 'ok' | 'not_logged_in' | 'needs_verification' | 'error' | null;

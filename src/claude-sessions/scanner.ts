@@ -67,6 +67,10 @@ export class ClaudeSessionScanner {
         if (!event || typeof event !== 'object') continue;
         if (typeof event.sessionId === 'string') sessionId = event.sessionId;
         if (!eligible && this.isAllowed(event, sessionId)) eligible = true;
+        const quota = quotaInfo(event);
+        if (eligible && quota) {
+          repo.setQuota({ ...quota, observedAt: typeof event.timestamp === 'string' ? event.timestamp : new Date().toISOString() });
+        }
         if (!eligible) continue;
         if (event.type === 'user' && !hasToolResult(event)) { turnId = `${sessionId}:${event.uuid || offset}`; turnTasks = new Set(); }
         if (event.type === 'ai-title' && typeof event.aiTitle === 'string') repo.upsert({ sessionId, cwd: String(event.cwd || ''), title: event.aiTitle.slice(0, 120) });
@@ -91,7 +95,8 @@ export class ClaudeSessionScanner {
           const model = typeof event.message?.model === 'string' ? event.message.model : null;
           const messageId = String(event.message?.id || event.requestId || `${record.sessionId}:${offset}`);
           repo.addUsage({ sessionId: record.sessionId, messageId, ts, turnId: record.turnId, model, input, output, cacheCreation, cacheRead, effective, isSidechain: event.isSidechain ? 1 : 0 });
-          if (event.quotaLimits) repo.setQuota({ status: String(event.quotaLimits.status || ''), resetsAt: numberOrNull(event.quotaLimits.resetsAt), rateLimitType: typeof event.quotaLimits.rateLimitType === 'string' ? event.quotaLimits.rateLimitType : null, isUsingOverage: event.quotaLimits.isUsingOverage === true, observedAt: ts });
+          const quota = quotaInfo(event);
+          if (quota) repo.setQuota({ ...quota, observedAt: ts });
         }
         for (const [id, refs] of turns) {
           const total = repo.turnTotal(sessionId, id).effective;
@@ -117,7 +122,8 @@ export class ClaudeSessionScanner {
       const observedAt = typeof record.event.timestamp === 'string' ? record.event.timestamp : null;
       if (!observedAt || Number.isNaN(Date.parse(observedAt))) continue;
       if (record.event.type === 'assistant' || record.event.type === 'user') latestActivity = observedAt;
-      if (record.event.quotaLimits && isClaudeQuotaLimited(String(record.event.quotaLimits.status || ''))) {
+      const quota = quotaInfo(record.event);
+      if (quota && isClaudeQuotaLimited(quota.status)) {
         latestQuota = { event: record.event, line: record.line, observedAt };
       }
     }
@@ -128,7 +134,7 @@ export class ClaudeSessionScanner {
     if (!latestQuota) return;
     const quotaAt = Date.parse(latestQuota.observedAt);
     if (now - quotaAt > maxAge) return;
-    const resetsAt = numberOrNull(latestQuota.event.quotaLimits?.resetsAt);
+    const resetsAt = numberOrNull(quotaInfo(latestQuota.event)?.resetsAt);
     if (!resetsAt || resetsAt <= now / 1000) return;
     const resetSeconds = Math.ceil(resetsAt - now / 1000);
     state.activate(resetSeconds, 'claude_usage_limit', { file, line: latestQuota.line, observedAt: latestQuota.observedAt });
@@ -159,9 +165,18 @@ type ClaudeTranscriptEvent = {
   aiTitle?: string;
   isSidechain?: boolean;
   quotaLimits?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown; isUsingOverage?: unknown };
+  rate_limit_info?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown; utilization?: unknown };
+  rateLimitInfo?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown; utilization?: unknown };
   message?: { id?: unknown; model?: unknown; usage?: Record<string, unknown>; content?: unknown };
   content?: unknown;
 };
+function quotaInfo(event: ClaudeTranscriptEvent): { status: string; resetsAt: number | null; rateLimitType: string | null; isUsingOverage: boolean } | null {
+  const info = event.quotaLimits || event.rate_limit_info || event.rateLimitInfo;
+  if (!info) return null;
+  const status = typeof info.status === 'string' ? info.status : '';
+  const rateLimitType = typeof info.rateLimitType === 'string' ? info.rateLimitType : null;
+  return { status, resetsAt: numberOrNull(info.resetsAt), rateLimitType, isUsingOverage: false };
+}
 function hasToolResult(event: ClaudeTranscriptEvent) { return JSON.stringify(event.message?.content || event.content || '').includes('tool_result'); }
 function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object'; }
 export function isClaudeQuotaLimited(status?: string): boolean {
