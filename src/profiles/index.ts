@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { ProfileRepo, QuotaMarkRepo, ProfileRow } from '../db/index.js';
-import { AgentHubConfig } from '../config.js';
+import { AgentHubConfig, saveConfig } from '../config.js';
 import { CodexEngine } from '../engines/index.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { accountKey } from './account.js';
@@ -40,6 +40,12 @@ export class ProfileService {
    * - All subdirectories in ~/.agy-homes/ (except .state)
    */
   registerAll(): void {
+    if (!this.config.multiplePerProviderConfigured && this.profileRepo.hasMetaFlag('multiple_per_provider_legacy')) {
+      this.config.multiplePerProvider = true;
+      this.config.multiplePerProviderConfigured = true;
+      // Persist the migration choice so subsequent daemon starts are stable.
+      saveConfig(this.config.hubHome, { multiplePerProvider: true });
+    }
     // Register keyring agy profile if none exists (handles renamed "chinh" -> "g0")
     const hasKeyring = this.profileRepo.getAll(true).some((p) => p.kind === 'keyring' && p.engine === 'agy');
     if (!hasKeyring) {
@@ -206,17 +212,17 @@ export class ProfileService {
   /**
    * Create a new isolated agy profile
    */
-  createProfile(name: string, engine: 'agy' | 'claude' | 'codex' = 'agy'): void {
+  createProfile(name: string, engine: 'agy' | 'claude' | 'codex' = 'agy', accountType: ProfileRow['accountType'] = 'personal'): void {
     if (engine === 'claude') {
       const homeDir = path.join(this.config.hubHome, 'claude-homes', name);
       fs.mkdirSync(homeDir, { recursive: true, mode: 0o700 });
-      this.profileRepo.upsert({ name, engine: 'claude', kind: 'isolated', home: homeDir, email: null, enabled: 1 });
+      this.profileRepo.upsert({ name, engine: 'claude', kind: 'isolated', home: homeDir, email: null, enabled: 1, accountType });
       return;
     }
     if (engine === 'codex') {
       const homeDir = path.join(this.config.hubHome, 'codex-homes', name);
       fs.mkdirSync(homeDir, { recursive: true, mode: 0o700 });
-      this.profileRepo.upsert({ name, engine: 'codex', kind: 'isolated', home: homeDir, email: null, enabled: 1 });
+      this.profileRepo.upsert({ name, engine: 'codex', kind: 'isolated', home: homeDir, email: null, enabled: 1, accountType });
       if (!isProfileLoggedIn(this.profileRepo.get(name)!)) {
         this.profileRepo.updateAuthState(name, 'not_logged_in', 'Chưa đăng nhập', null);
       }
@@ -261,6 +267,7 @@ export class ProfileService {
       home: homeDir,
       email: null,
       enabled: 1,
+      accountType,
     });
     // A new agy home has no OAuth token yet; keep it out of scheduling until login.
     if (!isProfileLoggedIn(this.profileRepo.get(name)!)) {
