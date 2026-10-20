@@ -214,8 +214,8 @@ export const SessionList: React.FC<SessionListProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Tìm kiếm phiên chat..."
-            aria-label="Tìm kiếm phiên chat"
+            placeholder={t('extra.searchSessionsPlaceholder')}
+            aria-label={t('extra.searchSessionsAria')}
             className="w-full pl-8 pr-7 py-1.5 rounded-lg text-xs bg-[var(--bg-surface-subtle)] border border-[var(--border-default)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-hidden focus:border-[var(--t-accent)]"
           />
           {searchQuery && (
@@ -240,7 +240,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            Hoạt động
+            {t('extra.tabActive')}
           </button>
           <button
             type="button"
@@ -251,7 +251,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            Lưu trữ
+            {t('extra.tabArchived')}
           </button>
         </div>
       </div>
@@ -311,14 +311,14 @@ export const SessionList: React.FC<SessionListProps> = ({
                             if (e.key === 'Escape') setEditingId(null);
                           }}
                           autoFocus
-                          aria-label="Tên mới của phiên"
+                          aria-label={t('extra.newNameAria')}
                           className="w-full px-2 py-0.5 text-xs rounded border border-[var(--t-accent)] bg-[var(--bg-surface)] text-[var(--text-primary)] focus:outline-hidden"
                         />
                         <button
                           type="button"
                           onClick={(e) => handleSaveRename(session.id, e)}
-                          title="Lưu"
-                          aria-label="Lưu tên"
+                          title={t('extra.saveName')}
+                          aria-label={t('extra.saveName')}
                           className="p-1 rounded text-[var(--t-ok)] hover:bg-[var(--bg-surface-subtle)]"
                         >
                           <Check className="w-3.5 h-3.5" />
@@ -326,8 +326,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                         <button
                           type="button"
                           onClick={handleCancelRename}
-                          title="Hủy"
-                          aria-label="Hủy đổi tên"
+                          title={t('extra.cancelRename')}
+                          aria-label={t('extra.cancelRename')}
                           className="p-1 rounded text-[var(--text-muted)] hover:bg-[var(--bg-surface-subtle)]"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -352,8 +352,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                       {onPinSession && (
                         <button
                           type="button"
-                          title={isPinned ? 'Bỏ ghim phiên' : 'Ghim phiên'}
-                          aria-label={isPinned ? 'Bỏ ghim phiên' : 'Ghim phiên'}
+                          title={isPinned ? t('extra.unpinSession') : t('extra.pinSession')}
+                          aria-label={isPinned ? t('extra.unpinSession') : t('extra.pinSession')}
                           onClick={(e) => {
                             e.stopPropagation();
                             onPinSession(session.id, !isPinned);
@@ -370,8 +370,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                       {onRenameSession && (
                         <button
                           type="button"
-                          title="Đổi tên phiên"
-                          aria-label="Đổi tên phiên"
+                          title={t('extra.renameSession')}
+                          aria-label={t('extra.renameSession')}
                           onClick={(e) => handleStartRename(session, e)}
                           className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-subtle)] transition-colors"
                         >
@@ -383,8 +383,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                       {onArchiveSession && (
                         <button
                           type="button"
-                          title={isArchived ? 'Bỏ lưu trữ phiên' : 'Lưu trữ phiên'}
-                          aria-label={isArchived ? 'Bỏ lưu trữ phiên' : 'Lưu trữ phiên'}
+                          title={isArchived ? t('extra.unarchiveSession') : t('extra.archiveSession')}
+                          aria-label={isArchived ? t('extra.unarchiveSession') : t('extra.archiveSession')}
                           onClick={(e) => {
                             e.stopPropagation();
                             onArchiveSession(session.id, !isArchived);
@@ -402,8 +402,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                       {/* Export Markdown button */}
                       <button
                         type="button"
-                        title="Xuất Markdown"
-                        aria-label="Xuất Markdown"
+                        title={t('extra.exportMarkdown')}
+                        aria-label={t('extra.exportMarkdown')}
                         onClick={(e) => handleExport(session, e)}
                         className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-subtle)] transition-colors"
                       >
@@ -482,21 +482,17 @@ export const SessionList: React.FC<SessionListProps> = ({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Xác nhận xóa phiên"
+          aria-label={t('extra.confirmDeleteTitle')}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in"
         >
           <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-4">
             <div className="flex items-center gap-2.5 text-[var(--t-crit)] font-semibold text-sm">
               <AlertTriangle className="w-5 h-5 shrink-0" />
-              <span>Xác nhận xóa cuộc trò chuyện</span>
+              <span>{t('extra.confirmDeleteTitle')}</span>
             </div>
 
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-              Bạn có chắc chắn muốn xóa phiên{' '}
-              <strong className="text-[var(--text-primary)]">
-                "{sessionToDelete.title || 'Cuộc trò chuyện'}"
-              </strong>
-              ? Thao tác này sẽ xóa toàn bộ lịch sử tin nhắn và không thể hoàn tác.
+              {t('extra.confirmDeleteDesc', { title: sessionToDelete.title || t('extra.chat') })}
             </p>
 
             <div className="flex items-center justify-end gap-2 pt-1">
@@ -505,7 +501,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 onClick={() => setSessionToDelete(null)}
                 className="px-3 py-1.5 rounded-xl border border-[var(--border-default)] hover:bg-[var(--bg-surface-hover)] text-xs text-[var(--text-secondary)] font-medium cursor-pointer"
               >
-                Hủy
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -513,7 +509,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 data-testid="confirm-delete-button"
                 className="px-3 py-1.5 rounded-xl bg-[var(--t-crit)] hover:bg-[var(--t-crit)]/90 text-white text-xs font-semibold shadow-xs cursor-pointer"
               >
-                Xác nhận xóa
+                {t('extra.confirmDeleteBtn')}
               </button>
             </div>
           </div>

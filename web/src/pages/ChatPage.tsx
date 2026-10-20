@@ -148,7 +148,7 @@ export const ChatPage: React.FC = () => {
       setMessages((prev) => [...normalized.messages, ...prev]);
       setHasMore(normalized.hasMore);
     } catch (err: any) {
-      setToastMessage(err.message || 'Không thể tải thêm tin nhắn');
+      setToastMessage(err.message || t('extra.failedLoadMessages'));
     } finally {
       setIsLoadingMore(false);
     }
@@ -286,7 +286,7 @@ export const ChatPage: React.FC = () => {
       await decideChatPermission(permission.id, decision);
       setPermission(null);
     } catch (err: any) {
-      setToastMessage(err.message || 'Không thể xử lý yêu cầu cấp quyền');
+      setToastMessage(err.message || t('extra.failedHandlePermission'));
     }
   };
 
@@ -316,7 +316,7 @@ export const ChatPage: React.FC = () => {
       );
     },
     onError: (err: any) => {
-      setToastMessage(err.message || 'Không thể cập nhật phiên trò chuyện');
+      setToastMessage(err.message || t('extra.failedUpdateSession'));
     },
   });
 
@@ -388,14 +388,14 @@ export const ChatPage: React.FC = () => {
   const compactMutation = useMutation({
     mutationFn: compactChatSession,
     onSuccess: () => {
-      setToastMessage('Đã gửi yêu cầu nén ngữ cảnh');
+      setToastMessage(t('extra.compactRequested'));
       queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       if (activeSession?.id) {
         queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession.id] });
       }
     },
     onError: (err: any) => {
-      setToastMessage(err.message || 'Không thể nén ngữ cảnh');
+      setToastMessage(err.message || t('extra.failedCompact'));
     },
   });
 
@@ -549,7 +549,7 @@ export const ChatPage: React.FC = () => {
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--t-accent)]/10 text-[var(--t-accent)] border border-[var(--t-accent)]/20 font-medium animate-pulse shrink-0"
                       >
                         <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-accent)]" />
-                        <span>Đang chạy</span>
+                        <span>{t('extra.stateRunning')}</span>
                       </span>
                     )}
                     {sessionState === 'waiting_permission' && (
@@ -558,7 +558,7 @@ export const ChatPage: React.FC = () => {
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--t-warn)]/10 text-[var(--t-warn)] border border-[var(--t-warn)]/20 font-medium shrink-0"
                       >
                         <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-warn)]" />
-                        <span>Chờ cấp quyền</span>
+                        <span>{t('extra.stateWaitingPermission')}</span>
                       </span>
                     )}
                     {sessionState === 'error' && (
@@ -567,7 +567,7 @@ export const ChatPage: React.FC = () => {
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--t-crit)]/10 text-[var(--t-crit)] border border-[var(--t-crit)]/20 font-medium shrink-0"
                       >
                         <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-crit)]" />
-                        <span>Gặp lỗi</span>
+                        <span>{t('extra.stateError')}</span>
                       </span>
                     )}
                     {sessionState === 'idle' && (
@@ -575,7 +575,7 @@ export const ChatPage: React.FC = () => {
                         data-testid="session-state-idle"
                         className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)] font-medium shrink-0"
                       >
-                        <span>Nhàn rỗi</span>
+                        <span>{t('extra.stateIdle')}</span>
                       </span>
                     )}
                   </div>
@@ -622,7 +622,7 @@ export const ChatPage: React.FC = () => {
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-crit)]/10 hover:bg-[var(--t-crit)]/20 text-[var(--t-crit)] border border-[var(--t-crit)]/30 transition-colors cursor-pointer"
                   >
                     <Square className="w-3.5 h-3.5 fill-current" />
-                    <span>Dừng</span>
+                    <span>{t('extra.stop')}</span>
                   </button>
                 )}
 
@@ -631,11 +631,11 @@ export const ChatPage: React.FC = () => {
                     type="button"
                     onClick={handleRetryLastTurn}
                     data-testid="header-retry-button"
-                    title="Thử lại lượt gần nhất"
+                    title={t('extra.retryLastTurn')}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white transition-colors cursor-pointer shadow-xs"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Thử lại</span>
+                    <span>{t('common.retry')}</span>
                   </button>
                 )}
               </>
@@ -691,10 +691,10 @@ export const ChatPage: React.FC = () => {
               <div
                 className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm animate-fade-in"
                 role="dialog"
-                aria-label="Yêu cầu cấp quyền công cụ"
+                aria-label={t('extra.permissionAria')}
               >
                 <div className="font-semibold text-[var(--text-primary)]">
-                  Claude cần quyền: {permission.toolName}
+                  {t('extra.permissionTitle', { tool: permission.toolName })}
                 </div>
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)] font-mono">
                   {JSON.stringify(permission.input, null, 2)}
@@ -705,21 +705,21 @@ export const ChatPage: React.FC = () => {
                     onClick={() => resolvePermission('allow')}
                     className="rounded-lg bg-[var(--t-ok)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
                   >
-                    Cho phép
+                    {t('extra.allow')}
                   </button>
                   <button
                     type="button"
                     onClick={() => resolvePermission('allow_always')}
                     className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
                   >
-                    Luôn cho phép
+                    {t('extra.allowAlways')}
                   </button>
                   <button
                     type="button"
                     onClick={() => resolvePermission('deny')}
                     className="rounded-lg border border-[var(--t-crit)] px-3 py-1.5 text-xs font-semibold text-[var(--t-crit)] cursor-pointer"
                   >
-                    Từ chối
+                    {t('extra.deny')}
                   </button>
                 </div>
               </div>
@@ -729,9 +729,9 @@ export const ChatPage: React.FC = () => {
             {(isBusy || (activeSession.state && activeSession.state !== 'idle')) && (
               <div className="px-5 pb-2 text-xs text-[var(--text-muted)]" role="status">
                 {activeSession.state === 'waiting_permission'
-                  ? 'Claude đang chờ bạn cấp quyền công cụ…'
+                  ? t('extra.waitingPermissionStatus')
                   : activeSession.state === 'error'
-                  ? 'Lượt chat gặp lỗi — bạn có thể thử lại.'
+                  ? t('extra.chatErrorStatus')
                   : currentTool
                   ? t('extra.progress', {
                       tool: currentTool,
