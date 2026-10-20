@@ -12,6 +12,39 @@ AGENTHUB_LINK_DIR="${AGENTHUB_LINK_DIR:-$HOME/.local/bin}"
 SYSTEMCTL="${AGENTHUB_SYSTEMCTL:-systemctl}"
 LAUNCHCTL="${AGENTHUB_LAUNCHCTL:-launchctl}"
 
+canonical_dir() {
+  (cd "$1" 2>/dev/null && pwd -P)
+}
+
+is_safe_app_dir() {
+  [ -d "$AGENTHUB_DIR" ] || return 1
+  [ -f "$AGENTHUB_DIR/.agenthub-app" ] || return 1
+
+  _app_dir="$(canonical_dir "$AGENTHUB_DIR")" || return 1
+  _home_dir="$(canonical_dir "$HOME")" || return 1
+  _data_dir="$(canonical_dir "$AGENTHUB_DATA_DIR")" 2>/dev/null || _data_dir="$AGENTHUB_DATA_DIR"
+
+  [ "$_app_dir" != "/" ] || return 1
+  [ "$_app_dir" != "$_home_dir" ] || return 1
+  [ "$_app_dir" != "$_data_dir" ] || return 1
+  case "$_data_dir/" in
+    "$_app_dir/"*) return 1 ;;
+  esac
+
+  [ "$(git -C "$AGENTHUB_DIR" config --get agenthub.installed 2>/dev/null)" = "true" ] || return 1
+  return 0
+}
+
+is_safe_data_dir() {
+  [ -d "$AGENTHUB_DATA_DIR" ] || return 1
+  _data_dir="$(canonical_dir "$AGENTHUB_DATA_DIR")" || return 1
+  _home_dir="$(canonical_dir "$HOME")" || return 1
+  [ "$_data_dir" != "/" ] || return 1
+  [ "$_data_dir" != "$_home_dir" ] || return 1
+  [ -f "$AGENTHUB_DATA_DIR/hub.db" ] || [ -f "$AGENTHUB_DATA_DIR/config.json" ] || return 1
+  return 0
+}
+
 # Helper: Prompt Yes/No
 prompt_yes_no() {
   _question="$1"
@@ -112,9 +145,17 @@ if [ "$UNINSTALL" = "1" ]; then
     echo "[dry-run] $SYSTEMCTL --user daemon-reload"
     echo "[dry-run] $LAUNCHCTL bootout gui/$(id -u)/dev.agenthub"
     echo "[dry-run] rm -f $AGENTHUB_LINK_DIR/agenthub"
-    echo "[dry-run] rm -rf $AGENTHUB_DIR"
+    if is_safe_app_dir; then
+      echo "[dry-run] rm -rf $AGENTHUB_DIR"
+    else
+      echo "[dry-run] bỏ qua xoá app: không có dấu installer an toàn tại $AGENTHUB_DIR"
+    fi
     if [ "$PURGE" = "1" ]; then
-      echo "[dry-run] rm -rf $AGENTHUB_DATA_DIR (sau khi xác nhận)"
+      if is_safe_data_dir; then
+        echo "[dry-run] rm -rf $AGENTHUB_DATA_DIR (sau khi xác nhận)"
+      else
+        echo "[dry-run] bỏ qua purge: thư mục dữ liệu không có dấu hiệu an toàn tại $AGENTHUB_DATA_DIR"
+      fi
     fi
     exit 0
   fi
@@ -151,20 +192,26 @@ if [ "$UNINSTALL" = "1" ]; then
   fi
 
   # 3. Gỡ thư mục mã nguồn app
-  if [ -d "$AGENTHUB_DIR" ]; then
+  if is_safe_app_dir; then
     rm -rf "$AGENTHUB_DIR"
     echo "✓ Đã xoá thư mục ứng dụng: $AGENTHUB_DIR"
+  elif [ -d "$AGENTHUB_DIR" ]; then
+    echo "! Bỏ qua xoá thư mục ứng dụng không có dấu installer an toàn: $AGENTHUB_DIR"
   fi
 
   # 4. Xử lý dữ liệu ~/.agenthub
   if [ "$PURGE" = "1" ]; then
     echo "CẢNH BÁO: Bạn đã chọn cờ --purge."
     echo "Thao tác này sẽ xoá TOÀN BỘ dữ liệu cấu hình, task, và database tại: $AGENTHUB_DATA_DIR"
-    if prompt_yes_no "Bạn có chắc chắn muốn xoá toàn bộ dữ liệu AgentHub không?" "n"; then
-      rm -rf "$AGENTHUB_DATA_DIR"
-      echo "✓ Đã xoá toàn bộ dữ liệu tại: $AGENTHUB_DATA_DIR"
+    if is_safe_data_dir; then
+      if prompt_yes_no "Bạn có chắc chắn muốn xoá toàn bộ dữ liệu AgentHub không?" "n"; then
+        rm -rf "$AGENTHUB_DATA_DIR"
+        echo "✓ Đã xoá toàn bộ dữ liệu tại: $AGENTHUB_DATA_DIR"
+      else
+        echo "Đã huỷ xoá dữ liệu. Dữ liệu tại $AGENTHUB_DATA_DIR vẫn được giữ nguyên."
+      fi
     else
-      echo "Đã huỷ xoá dữ liệu. Dữ liệu tại $AGENTHUB_DATA_DIR vẫn được giữ nguyên."
+      echo "! Bỏ qua purge: thư mục không có dấu hiệu dữ liệu AgentHub an toàn (cần hub.db hoặc config.json)."
     fi
   else
     echo "Dữ liệu cấu hình và task tại $AGENTHUB_DATA_DIR được giữ nguyên."
@@ -284,6 +331,17 @@ echo "==> Cài đặt dependencies và build..."
   npm run build
   npm run build:web
 )
+
+# 3b. Đánh dấu thư mục do installer quản lý để uninstall có thể tự bảo vệ.
+_installed_version="unknown"
+if [ -f "$AGENTHUB_DIR/package.json" ]; then
+  _installed_version="$(sed -n 's/.*\"version\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' "$AGENTHUB_DIR/package.json" | head -n 1)"
+  [ -n "$_installed_version" ] || _installed_version="unknown"
+fi
+printf 'version=%s\ndate=%s\n' "$_installed_version" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$AGENTHUB_DIR/.agenthub-app"
+if [ -d "$AGENTHUB_DIR/.git" ]; then
+  git -C "$AGENTHUB_DIR" config agenthub.installed true
+fi
 
 # 4. agenthub link
 echo "==> Thiết lập symlink binary CLI..."

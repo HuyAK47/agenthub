@@ -22,6 +22,9 @@ describe('safe installer and updater commands', () => {
     fs.mkdirSync(data, { recursive: true });
     fs.mkdirSync(linkDir, { recursive: true });
     fs.writeFileSync(path.join(app, 'sentinel'), 'app');
+    fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
+    expect(spawnSync('git', ['-C', app, 'init'], { encoding: 'utf8' }).status).toBe(0);
+    expect(spawnSync('git', ['-C', app, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
     fs.writeFileSync(path.join(data, 'sentinel'), 'data');
     fs.symlinkSync(path.join(app, 'sentinel'), path.join(linkDir, 'agenthub'));
     fs.writeFileSync(fakeSystemctl, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$AGENTHUB_FAKE_LOG"\n');
@@ -48,6 +51,86 @@ describe('safe installer and updater commands', () => {
     expect(fs.readFileSync(log, 'utf8')).toContain('--user stop agenthub');
     expect(fs.readFileSync(log, 'utf8')).toContain('--user disable agenthub');
     expect(fs.readFileSync(log, 'utf8')).toContain('--user daemon-reload');
+  });
+
+  it('does not delete an ordinary git directory without the installer marker', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-unmarked-'));
+    const app = path.join(home, 'repo');
+    fs.mkdirSync(app, { recursive: true });
+    fs.writeFileSync(path.join(app, 'sentinel'), 'keep');
+    expect(spawnSync('git', ['-C', app, 'init'], { encoding: 'utf8' }).status).toBe(0);
+
+    const result = spawnSync('/bin/sh', [installer, '--uninstall'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin',
+        AGENTHUB_DIR: app,
+        AGENTHUB_HOME: path.join(home, 'data'),
+        AGENTHUB_LINK_DIR: path.join(home, 'links'),
+        AGENTHUB_SYSTEMCTL: '/bin/false',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.existsSync(path.join(app, 'sentinel'))).toBe(true);
+    expect(result.stdout).toContain('Bỏ qua xoá thư mục ứng dụng');
+  });
+
+  it('refuses to delete HOME even when it has an installer marker', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-home-'));
+    fs.writeFileSync(path.join(home, '.agenthub-app'), 'version=0.1.0\n');
+    expect(spawnSync('git', ['-C', home, 'init'], { encoding: 'utf8' }).status).toBe(0);
+    expect(spawnSync('git', ['-C', home, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
+
+    const result = spawnSync('/bin/sh', [installer, '--uninstall'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin',
+        AGENTHUB_DIR: home,
+        AGENTHUB_HOME: path.join(home, 'data'),
+        AGENTHUB_LINK_DIR: path.join(home, 'links'),
+        AGENTHUB_SYSTEMCTL: '/bin/false',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.existsSync(path.join(home, '.agenthub-app'))).toBe(true);
+    expect(result.stdout).toContain('Bỏ qua xoá thư mục ứng dụng');
+  });
+
+  it('does not purge a data directory without AgentHub data markers', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-purge-'));
+    const app = path.join(home, 'app');
+    const data = path.join(home, 'data');
+    const linkDir = path.join(home, 'links');
+    fs.mkdirSync(app, { recursive: true });
+    fs.mkdirSync(data, { recursive: true });
+    fs.mkdirSync(linkDir, { recursive: true });
+    fs.writeFileSync(path.join(data, 'unrelated'), 'keep');
+    fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
+    expect(spawnSync('git', ['-C', app, 'init'], { encoding: 'utf8' }).status).toBe(0);
+    expect(spawnSync('git', ['-C', app, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
+
+    const result = spawnSync('/bin/sh', [installer, '--uninstall', '--purge'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin',
+        AGENTHUB_DIR: app,
+        AGENTHUB_HOME: data,
+        AGENTHUB_LINK_DIR: linkDir,
+        AGENTHUB_SYSTEMCTL: '/bin/false',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.existsSync(path.join(data, 'unrelated'))).toBe(true);
+    expect(result.stdout).toContain('Bỏ qua purge');
   });
 
   it('dry-run never invokes the injected service command or changes paths', () => {
