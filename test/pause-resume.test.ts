@@ -1,0 +1,446 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawn, execFileSync } from 'node:child_process';
+import { loadConfig } from '../src/config.js';
+import { createContext } from '../src/daemon.js';
+import { FakeEngine, Engine } from '../src/engines/index.js';
+import { measureProcessTree } from '../src/process-tree.js';
+import { createServer } from '../src/api/server.js';
+import { getOrCreateToken } from '../src/auth.js';
+
+function getProcessState(pid: number): string | null {
+  try {
+    const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+    const m = status.match(/^State:\s+([A-Z])/m);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+describe('Task Pause and Resume (c-pause-resume)', () => {
+  let tmpDir: string;
+  let config: ReturnType<typeof loadConfig>;
+  let ctx: ReturnType<typeof createContext>;
+  let fakeEngine: FakeEngine;
+  let projectPath: string;
+  let token: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-pause-test-'));
+    const agyHomesDir = path.join(tmpDir, 'agy-homes');
+    fs.mkdirSync(agyHomesDir, { recursive: true });
+
+    process.env.AGENTHUB_HOME = tmpDir;
+    process.env.AGENTHUB_AGY_HOMES = agyHomesDir;
+    process.env.FAKE_MODE = 'sleep-loop';
+
+    config = loadConfig(tmpDir);
+    config.port = 0;
+    token = getOrCreateToken(config.tokenPath);
+
+    fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
+
+    ctx = createContext(config, engines);
+    ctx.scheduler.stop();
+
+    projectPath = path.join(tmpDir, 'repo');
+    fs.mkdirSync(projectPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: projectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
+    fs.writeFileSync(path.join(projectPath, 'README.md'), '# Main Repo');
+    execFileSync('git', ['add', '.'], { cwd: projectPath });
+    execFileSync('git', ['commit', '-m', 'initial commit', '--allow-empty'], {
+      cwd: projectPath,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@test.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@test.com',
+      },
+    });
+
+    ctx.projectRepo.insert({
+      id: 'p-test',
+      name: 'Project Test',
+      path: projectPath,
+      defaultBranch: 'main',
+      maxParallel: 5,
+    });
+
+    for (let i = 1; i <= 5; i++) {
+      ctx.profileRepo.upsert({
+        name: `p${i}`,
+        engine: 'agy',
+        kind: 'isolated',
+        home: path.join(agyHomesDir, `p${i}`),
+        email: `p${i}@example.com`,
+        enabled: 1,
+      });
+    }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    ctx.scheduler.stop();
+    ctx.db.close();
+    delete process.env.FAKE_MODE;
+    delete process.env.AGENTHUB_HOME;
+    delete process.env.AGENTHUB_AGY_HOMES;
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it('1. measureProcessTree đo tổng RSS và %CPU của tiến trình thực', async () => {
+    const child = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      detached: true,
+    });
+    try {
+      expect(child.pid).toBeDefined();
+      const pid = child.pid!;
+
+      // Chờ tiến trình khởi động
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const measurement1 = measureProcessTree(pid);
+      expect(measurement1.rss).toBeGreaterThan(0);
+      expect(measurement1.cpu).toBeGreaterThanOrEqual(0);
+
+      // Đo lần 2 sau một khoảng thời gian
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const measurement2 = measureProcessTree(pid, undefined, {
+        ticks: measurement1.totalTicks,
+        at: measurement1.measuredAt,
+      });
+      expect(measurement2.rss).toBeGreaterThan(0);
+      expect(measurement2.cpu).toBeGreaterThanOrEqual(0);
+    } finally {
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          try {
+            process.kill(child.pid, 'SIGKILL');
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+  });
+
+  it('2. Scheduler pauseTask và resumeTask gửi SIGSTOP/SIGCONT thật, cập nhật trạng thái trong /proc', async () => {
+    ctx.taskRepo.insert({
+      id: 'p-test/t1',
+      projectId: 'p-test',
+      slug: 't1',
+      title: 'Sleep Task',
+      status: 'queued',
+    });
+
+    ctx.scheduler.tick();
+
+    const rt = ctx.scheduler.getRunning().get('p-test/t1');
+    expect(rt).toBeDefined();
+    expect(rt!.paused).toBe(false);
+    expect(rt!.pid).toBeGreaterThan(0);
+
+    // Chờ process chạy
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Ban đầu process đang chạy (S hoặc R)
+    const initialState = getProcessState(rt!.pid);
+    expect(['S', 'R']).toContain(initialState);
+
+    // Bắt event
+    let pausedEventReceived = false;
+    ctx.scheduler.getEventBus().once('task.paused', (taskId: string, payload: any) => {
+      if (taskId === 'p-test/t1' && payload?.reason === 'manual') {
+        pausedEventReceived = true;
+      }
+    });
+
+    // 1. Pause task
+    const pauseOk = ctx.scheduler.pauseTask('p-test/t1', 'manual');
+    expect(pauseOk).toBe(true);
+    expect(rt!.paused).toBe(true);
+    expect(rt!.pauseReason).toBe('manual');
+    expect(pausedEventReceived).toBe(true);
+
+    // Kiểm tra /proc/<pid>/status chuyển sang T (stopped)
+    const stoppedState = getProcessState(rt!.pid);
+    expect(stoppedState).toBe('T');
+
+    // Bắt event resumed
+    let resumedEventReceived = false;
+    ctx.scheduler.getEventBus().once('task.resumed', (taskId: string) => {
+      if (taskId === 'p-test/t1') {
+        resumedEventReceived = true;
+      }
+    });
+
+    // 2. Resume task
+    const resumeOk = ctx.scheduler.resumeTask('p-test/t1');
+    expect(resumeOk).toBe(true);
+    expect(rt!.paused).toBe(false);
+    expect(rt!.pauseReason).toBeNull();
+    expect(resumedEventReceived).toBe(true);
+
+    // Chờ một chút để tiến trình nhận signal
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Kiểm tra /proc/<pid>/status quay lại S hoặc R
+    const resumedState = getProcessState(rt!.pid);
+    expect(['S', 'R']).toContain(resumedState);
+  });
+
+  it('3. Đóng băng đồng hồ timeout và stall watchdog khi task bị pause', async () => {
+    ctx.taskRepo.insert({
+      id: 'p-test/t-timeout',
+      projectId: 'p-test',
+      slug: 't-timeout',
+      title: 'Timeout Test',
+      status: 'queued',
+    });
+
+    ctx.scheduler.tick();
+    const rt = ctx.scheduler.getRunning().get('p-test/t-timeout')!;
+    expect(rt).toBeDefined();
+
+    const originalTimeoutAt = rt.timeoutAt;
+
+    // Pause task
+    ctx.scheduler.pauseTask('p-test/t-timeout', 'manual');
+    expect(rt.paused).toBe(true);
+
+    // Giả lập thời gian đã quá timeout
+    const savedTimeoutAt = Date.now() - 5000;
+    rt.timeoutAt = savedTimeoutAt;
+
+    // Gọi checkRunningTasks: task không được coi là timeout hay stall vì đang paused
+    await (ctx.scheduler as any).checkRunningTasks();
+    expect(ctx.scheduler.getRunning().has('p-test/t-timeout')).toBe(true);
+    const taskInDb = ctx.taskRepo.get('p-test/t-timeout')!;
+    expect(taskInDb.status).toBe('running');
+
+    // Chờ 100ms pause duration rồi resume
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    ctx.scheduler.resumeTask('p-test/t-timeout');
+    expect(rt.paused).toBe(false);
+
+    // TimeoutAt được đẩy lùi về tương lai theo thời gian đã pause
+    expect(rt.timeoutAt).toBeGreaterThan(savedTimeoutAt);
+  });
+
+  it('4. Load guard tự động pause task theo chính sách (recent vs rss) và tự động resume tuần tự khi tải giảm', async () => {
+    // 3 tasks
+    for (const slug of ['t1', 't2', 't3']) {
+      ctx.taskRepo.insert({
+        id: `p-test/${slug}`,
+        projectId: 'p-test',
+        slug,
+        title: `Task ${slug}`,
+        status: 'queued',
+      });
+    }
+
+    ctx.scheduler.tick();
+    const running = Array.from(ctx.scheduler.getRunning().values());
+    expect(running.length).toBe(3);
+
+    // Gán thời gian bắt đầu và RSS giả lập
+    const t1 = ctx.scheduler.getRunning().get('p-test/t1')!;
+    const t2 = ctx.scheduler.getRunning().get('p-test/t2')!;
+    const t3 = ctx.scheduler.getRunning().get('p-test/t3')!;
+
+    t1.startTime = 1000;
+    t2.startTime = 2000;
+    t3.startTime = 3000; // Most recent
+
+    t1.rss = 100 * 1024 * 1024;
+    t2.rss = 500 * 1024 * 1024; // Highest RSS
+    t3.rss = 200 * 1024 * 1024;
+
+    const loadGuard = (ctx.scheduler as any).loadGuard;
+    expect(loadGuard).toBeDefined();
+
+    // 4.1 Chính sách 'recent': task gần nhất (t3) bị pause trước
+    ctx.config.load.enabled = true;
+    ctx.config.load.pausePolicy = 'recent';
+    ctx.config.load.maxAutoPaused = 1;
+    vi.spyOn(loadGuard, 'isAutoPauseTriggered').mockReturnValue(true);
+
+    ctx.scheduler.tick();
+
+    expect(t3.paused).toBe(true);
+    expect(t3.pauseReason).toBe('load');
+    expect(t1.paused).toBe(false);
+    expect(t2.paused).toBe(false);
+
+    // 4.2 maxAutoPaused = 1 ngăn không pause thêm task thứ 2
+    ctx.scheduler.tick();
+    expect(running.filter((t) => t.paused).length).toBe(1);
+
+    // 4.3 Tăng maxAutoPaused = 2 -> task recent tiếp theo (t2) bị pause
+    ctx.config.load.maxAutoPaused = 2;
+    ctx.scheduler.tick();
+    expect(t2.paused).toBe(true);
+    expect(t2.pauseReason).toBe('load');
+    expect(t1.paused).toBe(false);
+
+    // 4.4 Load hồi phục: tự động resume tuần tự (mỗi tick resume 1 task)
+    vi.spyOn(loadGuard, 'isAutoPauseTriggered').mockReturnValue(false);
+    vi.spyOn(loadGuard, 'isOverloaded').mockReturnValue(false);
+
+    // Tick 1: resume 1 task
+    ctx.scheduler.tick();
+    expect(running.filter((t) => t.paused).length).toBe(1);
+
+    // Tick 2: resume task còn lại
+    ctx.scheduler.tick();
+    expect(running.filter((t) => t.paused).length).toBe(0);
+
+    // 4.5 Chính sách 'rss': task có RSS cao nhất (t2: 500MB) bị pause trước
+    ctx.config.load.pausePolicy = 'rss';
+    ctx.config.load.maxAutoPaused = 1;
+    vi.spyOn(loadGuard, 'isAutoPauseTriggered').mockReturnValue(true);
+    vi.spyOn(loadGuard, 'isOverloaded').mockReturnValue(true);
+
+    ctx.scheduler.tick();
+    expect(t2.paused).toBe(true);
+    expect(t2.pauseReason).toBe('load');
+    expect(t1.paused).toBe(false);
+    expect(t3.paused).toBe(false);
+  });
+
+  it('5. Daemon stop() gửi SIGCONT tới tất cả các task paused để dọn sạch tiến trình', async () => {
+    ctx.taskRepo.insert({
+      id: 'p-test/t-stop',
+      projectId: 'p-test',
+      slug: 't-stop',
+      title: 'Stop Test',
+      status: 'queued',
+    });
+
+    ctx.scheduler.tick();
+    const rt = ctx.scheduler.getRunning().get('p-test/t-stop')!;
+    expect(rt).toBeDefined();
+
+    // Chờ process chạy
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Pause task
+    ctx.scheduler.pauseTask('p-test/t-stop', 'manual');
+    expect(rt.paused).toBe(true);
+    expect(getProcessState(rt.pid)).toBe('T');
+
+    // Dừng scheduler -> Requirement 4: gửi SIGCONT tới mọi task paused
+    ctx.scheduler.stop();
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Task không còn bị treo ở trạng thái T (đã được SIGCONT, trở lại S hoặc R)
+    expect(rt.paused).toBe(false);
+    expect(['S', 'R']).toContain(getProcessState(rt.pid));
+
+    // Dọn tiến trình để kết thúc test
+    try {
+      process.kill(-rt.pid, 'SIGKILL');
+    } catch {
+      try {
+        process.kill(rt.pid, 'SIGKILL');
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  it('6. API POST /api/tasks/:id/pause và /resume và các trường tài nguyên lộ qua /api/status', async () => {
+    const server = await createServer(ctx.service, config);
+    await server.listen({ port: 0, host: '127.0.0.1' });
+    const port = (server.server.address() as any).port;
+
+    ctx.taskRepo.insert({
+      id: 'p-test/t-api',
+      projectId: 'p-test',
+      slug: 't-api',
+      title: 'API Test',
+      status: 'queued',
+    });
+
+    ctx.scheduler.tick();
+    const rt = ctx.scheduler.getRunning().get('p-test/t-api')!;
+    expect(rt).toBeDefined();
+    rt.rss = 157286400; // 150 MB
+    rt.cpu = 18.2;
+
+    try {
+      // 1. Kiểm tra /api/status ban đầu
+      const statusRes1 = await fetch(`http://127.0.0.1:${port}/api/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const statusData1 = (await statusRes1.json()) as any;
+      const worker1 = statusData1.running.find((w: any) => w.taskId === 'p-test/t-api');
+      expect(worker1).toBeDefined();
+      expect(worker1.rss).toBe(157286400);
+      expect(worker1.cpu).toBe(18.2);
+      expect(worker1.paused).toBe(false);
+
+      // 2. Gọi POST /api/tasks/:id/pause
+      const pauseRes = await fetch(`http://127.0.0.1:${port}/api/tasks/p-test~t-api/pause`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(pauseRes.status).toBe(200);
+      const pauseData = (await pauseRes.json()) as any;
+      expect(pauseData.ok).toBe(true);
+      expect(pauseData.paused).toBe(true);
+
+      // 3. /api/status phản ánh trạng thái paused
+      const statusRes2 = await fetch(`http://127.0.0.1:${port}/api/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const statusData2 = (await statusRes2.json()) as any;
+      const worker2 = statusData2.running.find((w: any) => w.taskId === 'p-test/t-api');
+      expect(worker2.paused).toBe(true);
+      expect(worker2.pauseReason).toBe('manual');
+
+      // 4. /api/tasks/:id phản ánh paused
+      const taskDetailRes = await fetch(`http://127.0.0.1:${port}/api/tasks/p-test~t-api`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const taskDetailData = (await taskDetailRes.json()) as any;
+      expect(taskDetailData.paused).toBe(true);
+      expect(taskDetailData.pauseReason).toBe('manual');
+
+      // 5. Gọi POST /api/tasks/:id/resume
+      const resumeRes = await fetch(`http://127.0.0.1:${port}/api/tasks/p-test~t-api/resume`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(resumeRes.status).toBe(200);
+      const resumeData = (await resumeRes.json()) as any;
+      expect(resumeData.ok).toBe(true);
+      expect(resumeData.paused).toBe(false);
+
+      // 6. /api/status phản ánh unpaused
+      const statusRes3 = await fetch(`http://127.0.0.1:${port}/api/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const statusData3 = (await statusRes3.json()) as any;
+      const worker3 = statusData3.running.find((w: any) => w.taskId === 'p-test/t-api');
+      expect(worker3.paused).toBe(false);
+      expect(worker3.pauseReason).toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+});
