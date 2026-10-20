@@ -138,8 +138,8 @@ export async function cmdDoctor(
   return report;
 }
 
-export async function cmdRollback(extraArgs: string[] = []): Promise<string> {
-  const currentRoot = findProjectRoot();
+export async function cmdRollback(extraArgs: string[] = [], projectRootOverride?: string): Promise<string> {
+  const currentRoot = projectRootOverride || findProjectRoot();
   const appRoot = path.dirname(currentRoot);
   const currentLink = path.join(appRoot, 'current');
   if (!fs.existsSync(currentLink) || !fs.lstatSync(currentLink).isSymbolicLink()) {
@@ -178,7 +178,11 @@ export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = [])
   const tokenPath = config.tokenPath || getTokenPath();
   getOrCreateToken(tokenPath);
   console.log(`✓ Đã chuẩn bị token tại ${tokenPath}`);
-  await cmdInstallService([]);
+  if (process.env.AGENTHUB_WORKER === '1') {
+    console.log('! Bỏ qua cài service trong worker/test mode');
+  } else {
+    await cmdInstallService([]);
+  }
   await cmdOpen(config, extraArgs.includes('--no-browser') ? ['--no-browser'] : []);
   console.log('Tiếp theo: mở trang Profiles để đăng nhập worker, rồi chạy `agenthub mcp-install` để kết nối Claude Code.');
 }
