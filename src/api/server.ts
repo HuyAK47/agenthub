@@ -123,6 +123,9 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
+  fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+
   fastify.get('/api/system/orphans', async () => service.getOrphans());
   fastify.post('/api/system/orphans/reap', async () => service.reapOrphans());
 

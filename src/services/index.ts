@@ -247,6 +247,18 @@ export const UpdateConfigSchema = z.object({
     minFreeGB: z.number().positive().optional(),
     extraPaths: z.array(z.object({ path: z.string().min(1), minFreeGB: z.number().positive(), label: z.string().min(1) })).optional(),
   }).optional(),
+  telegram: z.object({
+    enabled: z.boolean().optional(),
+    botTokenFile: z.string().optional(),
+    allowedChatIds: z.array(z.number()).optional(),
+    notify: z.object({
+      reviewReady: z.boolean().optional(),
+      failed: z.boolean().optional(),
+      blocked: z.boolean().optional(),
+      quota: z.boolean().optional(),
+      fallback: z.boolean().optional(),
+    }).optional(),
+  }).optional(),
 });
 
 export function toTaskId(idOrParam: string): string {
@@ -676,6 +688,7 @@ export class AppService {
       codexReviewer: this.scheduler.getReviewerStatus(),
       recentEvents,
       brain: this.brainService?.getStatus(),
+      schedulerPaused: this.scheduler.isPaused(),
       disk: {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
@@ -1493,6 +1506,21 @@ export class AppService {
     return new CheckRunner(db).run(task, project, run.id);
   }
 
+  // --- Scheduler control ---
+  pauseScheduler(): { ok: boolean; paused: boolean } {
+    this.scheduler.pause();
+    return { ok: true, paused: true };
+  }
+
+  resumeScheduler(): { ok: boolean; paused: boolean } {
+    this.scheduler.resume();
+    return { ok: true, paused: false };
+  }
+
+  isSchedulerPaused(): boolean {
+    return this.scheduler.isPaused();
+  }
+
   // --- Config ---
   getConfig() {
     return {
@@ -1519,6 +1547,12 @@ export class AppService {
       load: this.config.load,
       stall: this.config.stall,
       disk: this.config.disk,
+      telegram: {
+        enabled: this.config.telegram.enabled,
+        botTokenFile: this.config.telegram.botTokenFile,
+        allowedChatIds: this.config.telegram.allowedChatIds,
+        notify: this.config.telegram.notify,
+      },
     };
   }
 
