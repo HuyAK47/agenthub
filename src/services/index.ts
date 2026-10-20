@@ -894,7 +894,11 @@ export class AppService {
   createProfile(raw: unknown): ProfileRow {
     const parsed = CreateProfileSchema.parse(raw);
     if (this.profileRepo.get(parsed.name)) {
-      throw new HttpError(409, 'conflict', `Hồ sơ "${parsed.name}" đã tồn tại`);
+      if (!this.profileRepo.isDeleted(parsed.name)) {
+        throw new HttpError(409, 'conflict', `Hồ sơ "${parsed.name}" đã tồn tại`);
+      }
+      // Re-adding a deleted profile brings the same name back.
+      this.profileRepo.restore(parsed.name);
     }
 
     this.coreProfileService.createProfile(parsed.name, parsed.engine);
@@ -907,13 +911,21 @@ export class AppService {
   deleteProfile(name: string): { ok: boolean } {
     const profile = this.profileRepo.get(name);
     if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.engine !== 'claude' || profile.kind === 'system') {
-      throw new HttpError(400, 'bad_request', 'Chỉ có thể xóa hồ sơ Claude riêng');
+    if (profile.kind === 'system') {
+      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống');
     }
-    try {
-      this.coreProfileService.deleteProfile(name);
-    } catch (error) {
-      throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+    const running = Array.from(this.scheduler.getRunning().values()).some((r) => r.profileName === name);
+    if (running) throw new HttpError(409, 'conflict', `Hồ sơ "${name}" đang chạy task, hãy đợi task xong`);
+    if (profile.engine === 'claude' && profile.kind === 'isolated') {
+      // Claude profiles own their config dir under claude-homes; remove it (path-guarded).
+      try {
+        this.coreProfileService.deleteProfile(name);
+      } catch (error) {
+        throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+      }
+    } else {
+      // Other profiles keep their files and run history; hide them from lists and scheduling.
+      this.profileRepo.softDelete(name);
     }
     this.scheduler.getEventBus().emit('profile.deleted', undefined, { name });
     return { ok: true };

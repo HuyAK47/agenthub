@@ -63,3 +63,23 @@ describe('trùng email theo nhà cung cấp', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('xoá hồ sơ (soft delete)', () => {
+  it('ẩn hồ sơ, không hồi sinh khi đăng ký lại, tạo lại được', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-softdel-'));
+    const db = openDatabase(path.join(dir, 'hub.db'));
+    const repo = new ProfileRepo(db);
+    const row = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: dir, email: 'a@x.com', enabled: 1, authState: null, authMessage: null, verifyUrl: null };
+    repo.upsert(row);
+    repo.softDelete('chinh');
+    expect(repo.getAll().map((p) => p.name)).not.toContain('chinh');
+    expect(repo.getEnabled().map((p) => p.name)).not.toContain('chinh');
+    repo.upsert(row); // startup registration must not bring it back
+    expect(repo.isDeleted('chinh')).toBe(true);
+    expect(repo.get('chinh')?.name).toBe('chinh'); // history lookups still work
+    repo.restore('chinh');
+    expect(repo.getEnabled().map((p) => p.name)).toContain('chinh');
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

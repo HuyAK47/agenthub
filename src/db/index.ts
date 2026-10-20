@@ -342,6 +342,10 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
   UPDATE chat_sessions SET lastMessageAt = (SELECT MAX(createdAt) FROM chat_messages WHERE sessionId = chat_sessions.id);
   `,
+  // Migration 23: soft-deleted profiles (hidden and never scheduled; run history keeps the name)
+  `
+  ALTER TABLE profiles ADD COLUMN deletedAt TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -537,7 +541,7 @@ export class ProfileRepo {
   constructor(private db: Database.Database) {}
 
   getAll(): ProfileRow[] {
-    return this.db.prepare('SELECT * FROM profiles ORDER BY name').all() as ProfileRow[];
+    return this.db.prepare('SELECT * FROM profiles WHERE deletedAt IS NULL ORDER BY name').all() as ProfileRow[];
   }
 
   get(name: string): ProfileRow | undefined {
@@ -590,13 +594,27 @@ export class ProfileRepo {
     this.db.prepare('DELETE FROM profiles WHERE name = ?').run(name);
   }
 
+  /** Hide a profile without touching run history (runs.profileName references it). */
+  softDelete(name: string): void {
+    this.db.prepare("UPDATE profiles SET deletedAt = datetime('now'), enabled = 0 WHERE name = ?").run(name);
+  }
+
+  restore(name: string): void {
+    this.db.prepare('UPDATE profiles SET deletedAt = NULL, enabled = 1 WHERE name = ?').run(name);
+  }
+
+  isDeleted(name: string): boolean {
+    const row = this.db.prepare('SELECT deletedAt FROM profiles WHERE name = ?').get(name) as { deletedAt: string | null } | undefined;
+    return !!row?.deletedAt;
+  }
+
   updateEnabled(name: string, enabled: number): void {
     this.db.prepare('UPDATE profiles SET enabled = ? WHERE name = ?').run(enabled, name);
   }
 
   getEnabled(): ProfileRow[] {
     return this.db
-      .prepare('SELECT * FROM profiles WHERE enabled = 1 ORDER BY name')
+      .prepare('SELECT * FROM profiles WHERE enabled = 1 AND deletedAt IS NULL ORDER BY name')
       .all() as ProfileRow[];
   }
 }
