@@ -15,6 +15,7 @@ export type TaskLevel = 'easy' | 'hard';
 export type EngineType = 'agy' | 'codex' | 'claude';
 
 export type ProfileKind = 'keyring' | 'isolated' | 'codex' | 'system';
+export type ProfileAccountType = 'personal' | 'team' | 'api';
 
 export interface QuotaMark {
   profileName: string;
@@ -34,6 +35,7 @@ export interface Profile {
   name: string;
   engine: EngineType;
   kind: ProfileKind;
+  accountType?: ProfileAccountType;
   home?: string;
   email?: string | null;
   loggedIn?: boolean;
@@ -414,6 +416,7 @@ export interface SystemConfig {
   modelChainHard: string[];
   modelChainEasy: string[];
   defaultTimeout: number;
+  multiplePerProvider?: boolean;
   slotsPerAgyProfile?: number;
   slotsPerCodexProfile?: number;
   watchdog?: { stallMinutes: number; waitingMinutes: number };
@@ -554,6 +557,7 @@ export interface UpdateProjectInput {
 export interface CreateProfileInput {
   name: string;
   engine?: 'agy' | 'codex' | 'claude';
+  accountType?: ProfileAccountType;
 }
 
 export interface VersionResponse {

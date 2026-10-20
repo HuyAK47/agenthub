@@ -17,6 +17,7 @@ import {
   deleteProfile,
   deleteQuota,
   getProfiles,
+  getConfig,
   getStatus,
   loginProfile,
   refreshProfileUsage,
@@ -31,23 +32,24 @@ import { useLocale } from '../context/LocaleContext';
 import { Profile } from '../types/api';
 
 type Provider = 'agy' | 'codex' | 'claude';
-const providers: Array<{ id: Provider; title: string; subtitle: string; color: string }> = [
+const providers: Array<{ id: Provider; title: string; subtitleKey: string; color: string }> = [
   {
     id: 'agy',
     title: 'Antigravity (Gemini)',
-    subtitle: 'Tài khoản Google và quota Gemini',
+    subtitleKey: 'profiles.antigravitySubtitle',
     color: 'var(--t-accent)',
   },
   {
     id: 'codex',
     title: 'Codex (OpenAI)',
-    subtitle: 'Tài khoản ChatGPT và device auth',
+    subtitleKey: 'profiles.codexSubtitle',
     color: 'var(--t-ok)',
   },
-  { id: 'claude', title: 'Claude', subtitle: 'Tài khoản Claude Code', color: 'var(--t-warn)' },
+  { id: 'claude', title: 'Claude', subtitleKey: 'profiles.claudeSubtitle', color: 'var(--t-warn)' },
 ];
 
 function StatusBadge({ profile }: { profile: Profile }) {
+  const { t } = useLocale();
   const loggedIn = profile.loggedIn ?? Boolean(profile.email);
   const state =
     profile.authState === 'needs_verification'
@@ -58,10 +60,10 @@ function StatusBadge({ profile }: { profile: Profile }) {
           ? 'off'
           : 'on';
   const labels = {
-    on: 'Đã đăng nhập',
-    off: 'Chưa đăng nhập',
-    verify: 'Cần xác minh',
-    error: 'Lỗi',
+    on: t('profiles.loggedIn'),
+    off: t('profiles.notLoggedIn'),
+    verify: t('profiles.needsVerification'),
+    error: t('profiles.error'),
   };
   const colors = {
     on: 'text-[var(--t-ok)] border-[var(--t-ok)]',
@@ -79,21 +81,24 @@ function StatusBadge({ profile }: { profile: Profile }) {
   );
 }
 function usageText(profile: Profile) {
+  const { t } = useLocale();
   if (profile.claudeTokens)
-    return `${profile.claudeTokens.today.toLocaleString()} token hôm nay · ${profile.claudeTokens.week.toLocaleString()} / tuần`;
+    return t('profiles.claudeUsage', { today: profile.claudeTokens.today.toLocaleString(), week: profile.claudeTokens.week.toLocaleString() });
   const five = profile.usage?.find((u) => u.window === '5h');
   const week = profile.usage?.find((u) => u.window === 'week');
   return five || week
-    ? `${five ? `${five.remainingPct}% / 5h` : '—'} · ${week ? `${week.remainingPct}% / tuần` : '—'}`
-    : 'Chưa có dữ liệu quota';
+    ? t('profiles.quotaUsage', { five: five ? `${five.remainingPct}% / 5h` : '—', week: week ? `${week.remainingPct}% / ${t('profiles.week')}` : '—' })
+    : t('profiles.noQuotaData');
 }
 function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; }
 
 export const ProfilesPage: React.FC = () => {
+  const { t } = useLocale();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
   const [newEngine, setNewEngine] = useState<Provider>('agy');
+  const [newAccountType, setNewAccountType] = useState<'personal' | 'team' | 'api'>('personal');
   const [addError, setAddError] = useState('');
   const [activeLogin, setActiveLogin] = useState<{ name: string; engine: Provider; sessionId: string } | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
@@ -108,6 +113,7 @@ export const ProfilesPage: React.FC = () => {
     isLoading,
     error,
   } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles, refetchInterval: 5000 });
+  const { data: systemConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig });
   const { data: status } = useQuery({
     queryKey: ['status'],
     queryFn: getStatus,
@@ -129,10 +135,11 @@ export const ProfilesPage: React.FC = () => {
         setChecking((old) => ({ ...old, [name]: false }));
         const ok = Boolean((event.payload as any)?.ok);
         toast(
-          (event.payload as any)?.message || (ok ? 'Kiểm tra thành công' : 'Kiểm tra thất bại'),
+          `${ok ? '✓' : '✗'} ${(event.payload as any)?.message || (ok ? 'Kiểm tra thành công' : 'Kiểm tra thất bại')}${(event.payload as any)?.durationMs ? ` (${(event.payload as any).durationMs}ms)` : ''}`,
           !ok,
         );
         queryClient.invalidateQueries({ queryKey: ['profiles'] });
+        void refreshProfileUsage(name);
       }),
     [queryClient],
   );
@@ -146,7 +153,10 @@ export const ProfilesPage: React.FC = () => {
   const runCheck = async (name: string) => {
     setChecking((old) => ({ ...old, [name]: true }));
     checkTimers.current[name] = setTimeout(
-      () => setChecking((old) => ({ ...old, [name]: false })),
+      () => {
+        setChecking((old) => ({ ...old, [name]: false }));
+        toast(t('profiles.checkTimeout'), true);
+      },
       75_000,
     );
     try {
@@ -154,7 +164,7 @@ export const ProfilesPage: React.FC = () => {
     } catch (err: any) {
       clearTimeout(checkTimers.current[name]);
       setChecking((old) => ({ ...old, [name]: false }));
-      toast(err?.message || 'Kiểm tra thất bại', true);
+      toast(err?.status === 409 ? t('profiles.checkAlreadyRunning') : err?.message || 'Kiểm tra thất bại', true);
     }
   };
   const createAndLogin = async (event: React.FormEvent) => {
@@ -165,9 +175,10 @@ export const ProfilesPage: React.FC = () => {
     }
     try {
       const name = newName.trim();
-      await createProfile({ name, engine: newEngine });
+      await createProfile({ name, engine: newEngine, accountType: newAccountType });
       setShowAdd(false);
       setNewName('');
+      setNewAccountType('personal');
       setAddError('');
       await runLogin(name, newEngine);
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
@@ -180,9 +191,9 @@ export const ProfilesPage: React.FC = () => {
     <div className="space-y-6" onClick={() => menu && setMenu(null)}>
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Tài khoản</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t('profiles.title')}</h1>
           <p className="text-sm text-[var(--t-text-3)]">
-            Quản lý hồ sơ, đăng nhập và quota theo từng nhà cung cấp.
+            {t('profiles.subtitle')}
           </p>
         </div>
         <button
@@ -194,7 +205,7 @@ export const ProfilesPage: React.FC = () => {
           className="inline-flex items-center gap-2 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-semibold text-white"
         >
           <Plus className="h-4 w-4" />
-          Thêm tài khoản
+          {t('profiles.addBtn')}
         </button>
       </div>
       <div className="fixed bottom-5 right-5 z-[60] space-y-2">
@@ -209,10 +220,10 @@ export const ProfilesPage: React.FC = () => {
         ))}
       </div>
       {isLoading ? (
-        <div className="p-12 text-center">Đang tải tài khoản…</div>
+        <div className="p-12 text-center">{t('profiles.loading')}</div>
       ) : error ? (
         <div className="p-8 text-center text-[var(--t-crit)]">
-          Không thể tải danh sách tài khoản.
+          {t('profiles.loadError')}
         </div>
       ) : (
         <div className="space-y-8">
@@ -226,15 +237,20 @@ export const ProfilesPage: React.FC = () => {
                     <h2 id={`provider-${provider.id}`} className="text-lg font-semibold">
                       {provider.title}
                     </h2>
-                    <p className="text-xs text-[var(--t-text-3)]">{provider.subtitle}</p>
+                    <p className="text-xs text-[var(--t-text-3)]">{t(provider.subtitleKey)}</p>
                   </div>
                   <span className="rounded-full bg-[var(--t-surface-2)] px-2 py-0.5 text-xs text-[var(--t-text-3)]">
                     {grouped.length}
                   </span>
                 </div>
+                {systemConfig?.multiplePerProvider && grouped.filter((profile) => profile.accountType === 'personal').length > 1 && (
+                  <div className="mb-3 rounded-lg border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm text-[var(--t-warn)]">
+                    {t('profiles.multiplePersonalWarning')}
+                  </div>
+                )}
                 {grouped.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--t-border)] p-6 text-sm text-[var(--t-text-3)]">
-                    Chưa có tài khoản {provider.title}.
+                    {t('profiles.emptyProvider', { provider: provider.title })}
                   </div>
                 ) : (
                   <div className="grid gap-4 xl:grid-cols-2">
@@ -261,6 +277,7 @@ export const ProfilesPage: React.FC = () => {
                             queryClient.invalidateQueries({ queryKey: ['profiles'] }),
                           )
                         }
+                        onQuotaRemoved={(family) => toast(t('profiles.removeQuotaSuccess', { family, name: profile.name }))}
                       />
                     ))}
                   </div>
@@ -272,10 +289,10 @@ export const ProfilesPage: React.FC = () => {
       )}
       <DailyUsageTable />
       {showAdd && (
-        <Modal title="Thêm tài khoản" onClose={() => setShowAdd(false)}>
+        <Modal title={t('profiles.addBtn')} onClose={() => setShowAdd(false)}>
           <form onSubmit={createAndLogin} className="space-y-4">
             <p className="text-sm text-[var(--t-text-3)]">
-              Chọn nhà cung cấp và mở trình hướng dẫn đăng nhập.
+              {t('profiles.addDescription')}
             </p>
             {addError && (
               <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
@@ -283,17 +300,17 @@ export const ProfilesPage: React.FC = () => {
               </p>
             )}
             <label className="block text-sm">
-              Tên tài khoản
+              {t('profiles.accountName')}
               <input
                 autoFocus
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="vd: g4, work-codex"
+                placeholder={t('profiles.accountNamePlaceholder')}
                 className="field mt-1"
               />
             </label>
             <label className="block text-sm">
-              Nhà cung cấp
+              {t('profiles.provider')}
               <select
                 value={newEngine}
                 onChange={(e) => setNewEngine(e.target.value as Provider)}
@@ -304,12 +321,20 @@ export const ProfilesPage: React.FC = () => {
                 <option value="claude">Claude</option>
               </select>
             </label>
+            <label className="block text-sm">
+              {t('profiles.accountType')}
+              <select value={newAccountType} onChange={(e) => setNewAccountType(e.target.value as typeof newAccountType)} className="field mt-1">
+                <option value="personal">{t('profiles.personal')}</option>
+                <option value="team">{t('profiles.team')}</option>
+                <option value="api">{t('profiles.api')}</option>
+              </select>
+            </label>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setShowAdd(false)} className="button-secondary">
-                Huỷ
+                {t('common.cancel')}
               </button>
               <button type="submit" className="button-primary">
-                Tạo và mở hướng dẫn
+                {t('profiles.createAndGuide')}
               </button>
             </div>
           </form>
@@ -373,6 +398,7 @@ function ProfileCard({
   onDelete,
   onToggle,
   onRefresh,
+  onQuotaRemoved,
 }: {
   profile: Profile;
   run?: any;
@@ -386,6 +412,7 @@ function ProfileCard({
   onDelete: (profile: Profile) => void;
   onToggle: (enabled: boolean) => void;
   onRefresh: () => void;
+  onQuotaRemoved: (family: string) => void;
 }) {
   const { t } = useLocale();
   const logged = profile.loggedIn ?? Boolean(profile.email);
@@ -410,21 +437,21 @@ function ProfileCard({
               )}
               {busy && (
                 <span className="rounded bg-[var(--t-accent-bg)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--t-accent)]">
-                  ĐANG BẬN
+                  {t('profiles.busyTag')}
                 </span>
               )}
             </div>
             <p className="truncate text-sm text-[var(--t-text-3)]">
               {logged
-                ? profile.email || (profile.engine === 'codex' ? 'Codex (ChatGPT)' : 'Đã xác thực')
-                : 'Chưa có email'}
+                ? profile.email || (profile.engine === 'codex' ? 'Codex (ChatGPT)' : t('profiles.authenticated'))
+                : t('profiles.noEmail')}
             </p>
           </div>
         </div>
         <div className="relative">
           <button
             type="button"
-            aria-label={`Thao tác ${profile.name}`}
+            aria-label={t('profiles.actionsAria', { name: profile.name })}
             onClick={(e) => {
               e.stopPropagation();
               setMenu(menu === profile.name ? null : profile.name);
@@ -446,7 +473,7 @@ function ProfileCard({
                   onLogin(profile.name, profile.engine);
                 }}
               >
-                {logged ? 'Đăng nhập lại' : 'Đăng nhập ngay'}
+                {logged ? t('extra.reLogin') : t('profiles.loginNow')}
               </button>
               <button
                 type="button"
@@ -456,7 +483,7 @@ function ProfileCard({
                   onCheck(profile.name);
                 }}
               >
-                Kiểm tra
+                {t('profiles.checkBtn')}
               </button>
               <button
                 type="button"
@@ -466,7 +493,7 @@ function ProfileCard({
                   onEdit(profile);
                 }}
               >
-                Sửa hồ sơ
+                {t('common.edit')}
               </button>
               <button
                 type="button"
@@ -476,7 +503,7 @@ function ProfileCard({
                   onRename(profile);
                 }}
               >
-                Đổi tên
+                {t('profiles.rename')}
               </button>
               {profile.kind !== 'system' && (
                 <button
@@ -487,7 +514,7 @@ function ProfileCard({
                     onDelete(profile);
                   }}
                 >
-                  Xoá hồ sơ
+                  {t('extra.deleteProfile')}
                 </button>
               )}
             </div>
@@ -499,26 +526,32 @@ function ProfileCard({
         {profile.duplicateWarning && (
           <span className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[11px] font-semibold text-[var(--t-crit)]">
             <AlertTriangle className="h-3 w-3" />
-            Trùng email
+            {t('profiles.duplicateEmail')}
             {profile.duplicateEmailWith?.length ? `: ${profile.duplicateEmailWith.join(', ')}` : ''}
           </span>
         )}
-        <span className="text-xs text-[var(--t-text-3)]">Ưu tiên {profile.priority ?? 0}</span>
+        <span className="text-xs text-[var(--t-text-3)]">{t('profiles.priority', { value: profile.priority ?? 0 })}</span>
+        <span className="rounded-full bg-[var(--t-surface-2)] px-2 py-0.5 text-[11px] text-[var(--t-text-3)]">
+          {t(`profiles.accountTypes.${profile.accountType || 'personal'}`)}
+        </span>
       </div>
       {profile.authState === 'needs_verification' && profile.verifyUrl && (
         <a
           href={profile.verifyUrl}
           target="_blank"
-          rel="noreferrer"
+          rel="noopener"
           className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--t-warn)] hover:underline"
         >
           <ExternalLink className="h-3 w-3" />
-          Mở trang xác minh
+          {t('profiles.openVerification')}
         </a>
+      )}
+      {profile.authState === 'needs_verification' && (
+        <p className="mt-1 text-xs text-[var(--t-text-3)]">{t('profiles.verificationTip')}</p>
       )}
       <div className="mt-4 rounded-lg bg-[var(--t-surface-2)] p-3">
         <div className="flex items-center justify-between text-xs">
-          <span className="font-medium">Quota 5h / tuần</span>
+          <span className="font-medium">{t('profiles.quotaTitle')}</span>
           <span className="text-[var(--t-text-3)]">{usageText(profile)}</span>
         </div>
         <div className="mt-2">
@@ -527,7 +560,7 @@ function ProfileCard({
         {activeMarks.map((mark) => (
           <div key={mark.family} data-testid={`quota-mark-${mark.family}`} title={mark.reason || undefined} className="mt-2 flex items-center justify-between rounded border border-[var(--t-warn)] px-2 py-1 text-xs text-[var(--t-warn)]">
             <span>{t('profiles.quotaLocked', { family: mark.family, time: formatHHMM(mark.until) })}</span>
-            <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
+            <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
           </div>
         ))}
       </div>
@@ -535,13 +568,13 @@ function ProfileCard({
         {run ? (
           <>
             <span className="h-2 w-2 rounded-full bg-[var(--t-ok)]" />
-            Đang chạy:{' '}
+            {t('profiles.runningTask')}:{' '}
             <span className="truncate text-[var(--t-text)]">{run.title || run.taskId}</span>
           </>
         ) : (
           <>
             <span className="h-2 w-2 rounded-full bg-[var(--t-text-3)]" />
-            Chưa chạy task
+            {t('profiles.idleTask')}
           </>
         )}
       </div>
@@ -552,15 +585,11 @@ function ProfileCard({
       )}
       <div className="mt-4 flex items-center justify-between border-t border-[var(--t-border)] pt-3">
         <label className="flex items-center gap-2 text-xs text-[var(--t-text-3)]">
-          <input
-            type="checkbox"
-            checked={Boolean(profile.enabled)}
-            disabled={profile.kind === 'system'}
-            onChange={(e) => onToggle(e.target.checked)}
-          />
-          Bật hồ sơ
+          <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-5 w-9 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'}`}>
+            <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-4' : ''}`} />
+          </button>
+          {t('profiles.enable')}
         </label>
-        <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} className="sr-only" onClick={() => onToggle(!Boolean(profile.enabled))} />
         <div className="flex gap-2">
           <button
             type="button"
@@ -578,6 +607,7 @@ function ProfileCard({
           {canLogin && (
             <button
               type="button"
+              aria-label={logged ? t('extra.reLogin') : t('profiles.loginBtn')}
               onClick={() => onLogin(profile.name, profile.engine)}
               className="rounded bg-[var(--t-accent-bg)] px-2.5 py-1 text-xs font-medium text-[var(--t-accent)]"
             >
