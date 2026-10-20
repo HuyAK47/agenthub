@@ -12,7 +12,9 @@ AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các wo
 
 | Thành phần | Ghi chú |
 |---|---|
-| **Linux** | Đã kiểm chứng trên Ubuntu. Vài tính năng dùng `/proc`, `nice`/`ionice`, `systemd` (macOS chưa thử). |
+| **Linux** | Đã kiểm chứng trên Ubuntu. Dùng `/proc`, `nice`/`ionice` và systemd user service. |
+| **macOS** | Được hỗ trợ: tiến trình đọc bằng `ps`/`lsof`, ưu tiên chỉ dùng `nice`, trình duyệt dùng `open`, service dùng LaunchAgent. `ionice` và systemd không có trên macOS. |
+| **Windows** | Không hỗ trợ trực tiếp. Dùng WSL2 và chạy AgentHub trong môi trường Linux. |
 | **Node.js 22** | Khuyến nghị cài qua [nvm](https://github.com/nvm-sh/nvm). |
 | **git** | Các dự án được giao việc phải là git repository. |
 | **Ít nhất một worker CLI** | `agy` (Antigravity CLI, đăng nhập Google) và/hoặc `codex` (Codex CLI, đăng nhập OpenAI). |
@@ -40,7 +42,7 @@ Dữ liệu (DB SQLite, token, log, worktree) nằm ở `~/.agenthub/`. Muốn �
 ## 3. Chạy hub nền và mở dashboard
 
 ```bash
-agenthub install-service          # tạo systemd user service, tự chạy khi đăng nhập
+agenthub install-service          # Linux: systemd; macOS: ~/Library/LaunchAgents/dev.agenthub.plist
 loginctl enable-linger "$USER"    # (tuỳ chọn) chạy cả khi chưa đăng nhập màn hình
 systemctl --user status agenthub  # kiểm tra đang chạy
 
@@ -143,7 +145,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 - **disk**: ổ dưới ngưỡng thì không giao task mới. Thêm ổ chứa dữ liệu Docker nếu dự án dùng Docker.
 - **defaultTimeout**: giới hạn thời gian mỗi lượt chạy (giây). Ngoài ra hub cảnh báo khi task chạy lâu mà không commit, hoặc khi chạy lặp lại một lệnh.
 
-Worker và lệnh kiểm tra đã chạy với ưu tiên CPU/IO thấp (`nice`/`ionice`), nên IDE và trình duyệt của bạn vẫn mượt.
+Worker và lệnh kiểm tra chạy với ưu tiên thấp (`nice`/`ionice` trên Linux, chỉ `nice` trên macOS), nên IDE và trình duyệt của bạn vẫn mượt.
 
 ## 9. Hạn chế và lưu ý
 

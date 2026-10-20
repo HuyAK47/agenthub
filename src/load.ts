@@ -1,5 +1,5 @@
-import fs from 'node:fs';
 import os from 'node:os';
+import { getPlatform } from './platform/index.js';
 
 export interface LoadConfig {
   enabled: boolean;
@@ -31,13 +31,7 @@ export const DEFAULT_LOAD_CONFIG: LoadConfig = {
 };
 
 function readFreeMemBytes(): number {
-  try {
-    const line = fs.readFileSync('/proc/meminfo', 'utf8').split('\n').find((entry) => entry.startsWith('MemAvailable:'));
-    const kilobytes = line ? Number.parseInt(line.replace(/[^0-9]/g, ''), 10) : Number.NaN;
-    return Number.isFinite(kilobytes) ? kilobytes * 1024 : os.freemem();
-  } catch {
-    return os.freemem();
-  }
+  return getPlatform().freeMemoryBytes();
 }
 
 export class LoadGuard {
