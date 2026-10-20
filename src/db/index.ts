@@ -315,6 +315,21 @@ export const MIGRATIONS: string[] = [
   PRAGMA foreign_keys = ON;
   ALTER TABLE chat_sessions ADD COLUMN profileName TEXT;
   `,
+  // Migration 21: task notes and overlaps
+  `
+  CREATE TABLE IF NOT EXISTS task_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projectId TEXT NOT NULL,
+    taskId TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('note', 'overlap')),
+    content TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (projectId) REFERENCES projects(id),
+    FOREIGN KEY (taskId) REFERENCES tasks(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_notes_project ON task_notes(projectId, id);
+  CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(taskId, id);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -1134,4 +1149,66 @@ export class RunMetricsRepo {
       .run(taskId, keepRunId);
   }
 }
+
+export type TaskNoteKind = 'note' | 'overlap';
+
+export interface TaskNoteRow {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: TaskNoteKind;
+  content: string;
+  createdAt: string;
+}
+
+export class TaskNoteRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: {
+    projectId: string;
+    taskId: string;
+    kind: TaskNoteKind;
+    content: string;
+  }): TaskNoteRow {
+    const info = this.db
+      .prepare(
+        'INSERT INTO task_notes (projectId, taskId, kind, content) VALUES (?, ?, ?, ?)',
+      )
+      .run(row.projectId, row.taskId, row.kind, row.content);
+    return this.get(info.lastInsertRowid as number)!;
+  }
+
+  get(id: number): TaskNoteRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE id = ?')
+      .get(id) as TaskNoteRow | undefined;
+  }
+
+  getByProject(projectId: string, sinceId?: number): TaskNoteRow[] {
+    if (sinceId !== undefined && !Number.isNaN(sinceId)) {
+      return this.db
+        .prepare('SELECT * FROM task_notes WHERE projectId = ? AND id > ? ORDER BY id ASC')
+        .all(projectId, sinceId) as TaskNoteRow[];
+    }
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE projectId = ? ORDER BY id ASC')
+      .all(projectId) as TaskNoteRow[];
+  }
+
+  getByTask(taskId: string): TaskNoteRow[] {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE taskId = ? ORDER BY id ASC')
+      .all(taskId) as TaskNoteRow[];
+  }
+
+  hasOverlap(taskId: string, otherTaskId: string, file: string): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT id FROM task_notes WHERE taskId = ? AND kind = 'overlap' AND content LIKE ? LIMIT 1",
+      )
+      .get(taskId, `%${file}%${otherTaskId}%`);
+    return Boolean(row);
+  }
+}
+
 

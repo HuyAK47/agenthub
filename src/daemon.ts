@@ -14,6 +14,7 @@ import {
   ChatSessionRepo,
   ChatMessageRepo,
   RunMetricsRepo,
+  TaskNoteRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
@@ -41,6 +42,7 @@ export interface DaemonContext {
   runMetricsRepo: RunMetricsRepo;
   reviewRepo: ReviewRepo;
   eventRepo: EventRepo;
+  taskNoteRepo: TaskNoteRepo;
   chatSessionRepo: ChatSessionRepo;
   chatMessageRepo: ChatMessageRepo;
   profileService: ProfileService;
@@ -66,6 +68,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const runMetricsRepo = new RunMetricsRepo(db);
   const reviewRepo = new ReviewRepo(db);
   const eventRepo = new EventRepo(db);
+  const taskNoteRepo = new TaskNoteRepo(db);
   const usageRepo = new QuotaUsageRepo(db);
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
@@ -180,6 +183,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     runMetricsRepo,
     reviewRepo,
     eventRepo,
+    taskNoteRepo,
     chatSessionRepo,
     chatMessageRepo,
     profileService,
