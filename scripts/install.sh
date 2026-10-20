@@ -9,6 +9,8 @@ AGENTHUB_DIR="${AGENTHUB_DIR:-$HOME/.agenthub-app}"
 AGENTHUB_DATA_DIR="${AGENTHUB_HOME:-$HOME/.agenthub}"
 AGENTHUB_REPO="${AGENTHUB_REPO:-https://github.com/ducanh19020217/agenthub.git}"
 AGENTHUB_LINK_DIR="${AGENTHUB_LINK_DIR:-$HOME/.local/bin}"
+SYSTEMCTL="${AGENTHUB_SYSTEMCTL:-systemctl}"
+LAUNCHCTL="${AGENTHUB_LAUNCHCTL:-launchctl}"
 
 # Helper: Prompt Yes/No
 prompt_yes_no() {
@@ -67,6 +69,7 @@ node_is_v22_or_higher() {
 # ------------------------------------------------------------------------------
 UNINSTALL=0
 PURGE=0
+DRY_RUN=0
 
 for arg in "$@"; do
   case "$arg" in
@@ -76,6 +79,9 @@ for arg in "$@"; do
     --purge)
       PURGE=1
       ;;
+    --dry-run)
+      DRY_RUN=1
+      ;;
     --help|-h)
       echo "AgentHub Installer"
       echo ""
@@ -83,6 +89,7 @@ for arg in "$@"; do
       echo "  ./scripts/install.sh                      Cài đặt hoặc cập nhật AgentHub"
       echo "  ./scripts/install.sh --uninstall          Gỡ service, symlink và app (giữ dữ liệu)"
       echo "  ./scripts/install.sh --uninstall --purge  Gỡ cài đặt và xoá sạch dữ liệu (hỏi xác nhận)"
+      echo "  ./scripts/install.sh --dry-run            Chỉ in các lệnh, không thay đổi hệ thống"
       echo ""
       echo "Biến môi trường:"
       echo "  AGENTHUB_DIR       Thư mục clone mã nguồn (mặc định: ~/.agenthub-app)"
@@ -99,6 +106,19 @@ done
 if [ "$UNINSTALL" = "1" ]; then
   echo "==> Đang gỡ bỏ AgentHub..."
 
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] $SYSTEMCTL --user stop agenthub"
+    echo "[dry-run] $SYSTEMCTL --user disable agenthub"
+    echo "[dry-run] $SYSTEMCTL --user daemon-reload"
+    echo "[dry-run] $LAUNCHCTL bootout gui/$(id -u)/dev.agenthub"
+    echo "[dry-run] rm -f $AGENTHUB_LINK_DIR/agenthub"
+    echo "[dry-run] rm -rf $AGENTHUB_DIR"
+    if [ "$PURGE" = "1" ]; then
+      echo "[dry-run] rm -rf $AGENTHUB_DATA_DIR (sau khi xác nhận)"
+    fi
+    exit 0
+  fi
+
   # 1. Gỡ service theo nền tảng
   OS="$(uname -s)"
   case "$OS" in
@@ -106,7 +126,7 @@ if [ "$UNINSTALL" = "1" ]; then
       UID_NUM="$(id -u)"
       PLIST_FILE="$HOME/Library/LaunchAgents/dev.agenthub.plist"
       if [ -f "$PLIST_FILE" ]; then
-        launchctl bootout "gui/$UID_NUM/dev.agenthub" 2>/dev/null || launchctl bootout "gui/$UID_NUM" "$PLIST_FILE" 2>/dev/null || true
+        "$LAUNCHCTL" bootout "gui/$UID_NUM/dev.agenthub" 2>/dev/null || "$LAUNCHCTL" bootout "gui/$UID_NUM" "$PLIST_FILE" 2>/dev/null || true
         rm -f "$PLIST_FILE"
         echo "✓ Đã gỡ LaunchAgent dev.agenthub"
       fi
@@ -114,10 +134,10 @@ if [ "$UNINSTALL" = "1" ]; then
     Linux*)
       SERVICE_FILE="$HOME/.config/systemd/user/agenthub.service"
       if [ -f "$SERVICE_FILE" ] || command -v systemctl >/dev/null 2>&1; then
-        systemctl --user stop agenthub 2>/dev/null || true
-        systemctl --user disable agenthub 2>/dev/null || true
+        "$SYSTEMCTL" --user stop agenthub 2>/dev/null || true
+        "$SYSTEMCTL" --user disable agenthub 2>/dev/null || true
         rm -f "$SERVICE_FILE"
-        systemctl --user daemon-reload 2>/dev/null || true
+        "$SYSTEMCTL" --user daemon-reload 2>/dev/null || true
         echo "✓ Đã gỡ systemd user service agenthub"
       fi
       ;;
@@ -168,6 +188,15 @@ case "$OS" in
     exit 1
     ;;
 esac
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "[dry-run] git clone/fetch $AGENTHUB_REPO -> $AGENTHUB_DIR"
+  echo "[dry-run] npm ci && npm run build && npm run build:web (tại $AGENTHUB_DIR)"
+  echo "[dry-run] agenthub link"
+  echo "[dry-run] agenthub install-service"
+  echo "[dry-run] agenthub open --no-browser"
+  exit 0
+fi
 
 echo "========================================="
 echo " Cài đặt AgentHub"
