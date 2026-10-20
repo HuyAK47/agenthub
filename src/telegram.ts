@@ -96,6 +96,11 @@ interface SendQueueItem {
   reject: (err: unknown) => void;
 }
 
+export function redactTelegramToken(value: unknown, token: string | null): string {
+  const text = value instanceof Error ? value.message : String(value);
+  return token ? text.split(token).join('<redacted>') : text;
+}
+
 export function readTelegramToken(tokenPath: string): string | null {
   if (!fs.existsSync(tokenPath)) {
     return null;
@@ -136,6 +141,8 @@ export class TelegramBotService {
   // Pairing state (6 digits, expires in 10 minutes)
   private pairingCode: string | null = null;
   private pairingExpiresAt = 0;
+  private pairingInvalidAttempts = 0;
+  private pairingAttemptsByChat = new Map<number, number[]>();
 
   // Pending user input state per chat (e.g. entering feedback for reject)
   private chatStates = new Map<number, PendingChatState>();
@@ -200,6 +207,8 @@ export class TelegramBotService {
     // Generate new 6-digit code
     this.pairingCode = crypto.randomInt(100000, 1000000).toString();
     this.pairingExpiresAt = now + 10 * 60 * 1000;
+    this.pairingInvalidAttempts = 0;
+    this.pairingAttemptsByChat.clear();
 
     return {
       code: this.pairingCode,
@@ -311,16 +320,21 @@ export class TelegramBotService {
     if (!this.token) return [];
 
     const url = `https://api.telegram.org/bot${this.token}/getUpdates`;
-    const res = await this.fetchFn(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        offset,
-        timeout: timeoutSec,
-        allowed_updates: ['message', 'callback_query'],
-      }),
-      signal,
-    });
+    let res: Response;
+    try {
+      res = await this.fetchFn(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offset,
+          timeout: timeoutSec,
+          allowed_updates: ['message', 'callback_query'],
+        }),
+        signal,
+      });
+    } catch (err) {
+      throw new Error(`Telegram getUpdates request failed: ${redactTelegramToken(err, this.token)}`);
+    }
 
     if (!res.ok) {
       throw new Error(`Telegram getUpdates failed with status ${res.status}`);
@@ -361,7 +375,7 @@ export class TelegramBotService {
     if (!isAllowed) {
       // Check for /start <mã> pairing command
       const match = rawText.match(/^\/start(?:\s+(\d{6}))?$/i);
-      if (match && match[1]) {
+      if (match && match[1] && msg.chat.type === 'private') {
         const code = match[1];
         const now = this.now();
         if (this.pairingCode && this.pairingCode === code && this.pairingExpiresAt > now) {
@@ -369,11 +383,34 @@ export class TelegramBotService {
           this.addAllowedChatId(chatId);
           this.pairingCode = null;
           this.pairingExpiresAt = 0;
+          this.pairingInvalidAttempts = 0;
+          this.pairingAttemptsByChat.delete(chatId);
           await this.sendDirectMessage(
             chatId,
             '✅ Ghép đôi thành công! Bạn đã được cấp quyền điều khiển AgentHub từ xa.\nGõ /help để xem danh sách các lệnh.',
           );
           return;
+        }
+
+        if (this.pairingCode && this.pairingExpiresAt > now) {
+          const attempts = (this.pairingAttemptsByChat.get(chatId) || []).filter(
+            (timestamp) => now - timestamp < 10 * 60 * 1000,
+          );
+          if (attempts.length < 3) {
+            attempts.push(now);
+            this.pairingAttemptsByChat.set(chatId, attempts);
+            this.pairingInvalidAttempts += 1;
+            if (this.pairingInvalidAttempts >= 5) {
+              this.pairingCode = null;
+              this.pairingExpiresAt = 0;
+              this.pairingInvalidAttempts = 0;
+              this.pairingAttemptsByChat.clear();
+              this.eventBus.emit('telegram.pairing_failed', undefined, {
+                reason: 'too_many_invalid_attempts',
+                message: 'Mã ghép đôi đã bị huỷ do nhập sai quá nhiều lần.',
+              });
+            }
+          }
         }
       }
       // REQUIREMENT 2: "Chat lạ khác bị bỏ qua (không trả lời)."
@@ -482,9 +519,11 @@ export class TelegramBotService {
   private async handleCallbackQuery(query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
     const chatId = query.message?.chat.id;
     const userId = query.from.id;
-    const isAllowed =
-      (chatId && this.config.telegram?.allowedChatIds?.includes(chatId)) ||
-      this.config.telegram?.allowedChatIds?.includes(userId);
+    const isAllowed = Boolean(
+      chatId &&
+      userId === chatId &&
+      this.config.telegram?.allowedChatIds?.includes(chatId),
+    );
 
     if (!isAllowed || !chatId) {
       await this.answerCallbackQuery(query.id);
@@ -1138,11 +1177,16 @@ export class TelegramBotService {
       body.reply_markup = replyMarkup;
     }
 
-    const res = await this.fetchFn(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchFn(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      throw new Error(`Telegram sendMessage request failed: ${redactTelegramToken(err, this.token)}`);
+    }
 
     if (!res.ok) {
       throw new Error(`Telegram sendMessage failed with status ${res.status}`);

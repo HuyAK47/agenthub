@@ -11,6 +11,7 @@ import {
   TelegramBotService,
   readTelegramToken,
   isProjectMergeEnabled,
+  redactTelegramToken,
 } from '../src/telegram.js';
 
 interface RecordedFetchCall {
@@ -253,6 +254,95 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
     });
 
+    it('cancels the pairing code after five invalid attempts and records a dashboard event', async () => {
+      const bot = createTestBotService({ allowedChatIds: [] });
+      const { code } = bot.getPairingCode();
+      const pairingFailed = vi.fn();
+      ctx.scheduler.getEventBus().on('telegram.pairing_failed', pairingFailed);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await bot.handleUpdate({
+          update_id: 20 + attempt,
+          message: {
+            message_id: 20 + attempt,
+            date: 123456,
+            chat: { id: 900 + attempt, type: 'private' },
+            text: `/start ${code === '000000' ? '000001' : '000000'}`,
+          },
+        });
+      }
+
+      expect(pairingFailed).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          reason: 'too_many_invalid_attempts',
+          message: expect.stringContaining('đã bị huỷ'),
+        }),
+      );
+
+      await bot.handleUpdate({
+        update_id: 30,
+        message: {
+          message_id: 30,
+          date: 123456,
+          chat: { id: 999, type: 'private' },
+          text: `/start ${code}`,
+        },
+      });
+      expect(config.telegram.allowedChatIds).not.toContain(999);
+    });
+
+    it('limits invalid pairing attempts from one chat to three per ten minutes', async () => {
+      const bot = createTestBotService({ allowedChatIds: [] });
+      const { code } = bot.getPairingCode();
+      const pairingFailed = vi.fn();
+      ctx.scheduler.getEventBus().on('telegram.pairing_failed', pairingFailed);
+
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await bot.handleUpdate({
+          update_id: 40 + attempt,
+          message: {
+            message_id: 40 + attempt,
+            date: 123456,
+            chat: { id: 901, type: 'private' },
+            text: '/start 000000',
+          },
+        });
+      }
+      expect(pairingFailed).not.toHaveBeenCalled();
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await bot.handleUpdate({
+          update_id: 50 + attempt,
+          message: {
+            message_id: 50 + attempt,
+            date: 123456,
+            chat: { id: 902 + attempt, type: 'private' },
+            text: '/start 000000',
+          },
+        });
+      }
+      expect(pairingFailed).toHaveBeenCalledTimes(1);
+      expect(code).toMatch(/^\d{6}$/);
+    });
+
+    it('does not pair a group chat even with the correct code', async () => {
+      const bot = createTestBotService({ allowedChatIds: [] });
+      const { code } = bot.getPairingCode();
+
+      await bot.handleUpdate({
+        update_id: 60,
+        message: {
+          message_id: 60,
+          date: 123456,
+          chat: { id: -123, type: 'group' },
+          text: `/start ${code}`,
+        },
+      });
+      expect(config.telegram.allowedChatIds).not.toContain(-123);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+    });
+
     it('ignores commands and callback queries from unauthorized chats', async () => {
       const bot = createTestBotService({ allowedChatIds: [12345] });
 
@@ -281,6 +371,56 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         },
       });
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+    });
+
+    it('requires the callback sender to be the paired private chat', async () => {
+      const bot = createTestBotService({ allowedChatIds: [12345] });
+      await bot.handleUpdate({
+        update_id: 8,
+        callback_query: {
+          id: 'cb-group-user',
+          from: { id: 999 },
+          message: { message_id: 8, chat: { id: 12345 } },
+          data: 'task:retry:missing-task',
+        },
+      });
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+    });
+  });
+
+  describe('7. Telegram token redaction', () => {
+    it('redacts tokens from fetch errors before they reach callers', async () => {
+      config.telegram.allowedChatIds = [12345];
+      expect(redactTelegramToken(new Error('fetch failed https://api.telegram.org/bottest-bot-token-123456/sendMessage'), 'test-bot-token-123456'))
+        .toContain('bot<redacted>');
+      expect(redactTelegramToken(new Error('https://api.telegram.org/bottest-bot-token-123456/sendMessage'), 'test-bot-token-123456'))
+        .toContain('<redacted>');
+
+      fakeFetch = vi.fn(async () => {
+        throw new Error('fetch failed: https://api.telegram.org/bottest-bot-token-123456/sendMessage');
+      }) as unknown as typeof fetch;
+      const failingBot = new TelegramBotService({
+        config,
+        service: ctx.service,
+        eventBus: ctx.scheduler.getEventBus(),
+        taskRepo: ctx.taskRepo,
+        projectRepo: ctx.projectRepo,
+        quotaMarkRepo: ctx.quotaMarkRepo,
+        fetch: fakeFetch,
+        now: () => currentTime,
+        sleep: async () => {},
+        tokenOverride: 'test-bot-token-123456',
+      });
+
+      await expect(failingBot.handleUpdate({
+        update_id: 70,
+        message: {
+          message_id: 70,
+          date: 123456,
+          chat: { id: 12345, type: 'private' },
+          text: '/help',
+        },
+      })).rejects.toThrow('<redacted>');
     });
   });
 
