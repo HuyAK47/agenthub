@@ -14,6 +14,7 @@ export interface ChatConfig {
   model: string;
   permissionTimeoutSec: number;
   claudeProfile?: string;
+  autoCompactPercent: number;
 }
 
 export interface BrainConfig {
@@ -329,6 +330,7 @@ export function updateConfigInMemory(
     if (patch.chat.model !== undefined) config.chat.model = patch.chat.model;
     if (patch.chat.permissionTimeoutSec !== undefined) config.chat.permissionTimeoutSec = patch.chat.permissionTimeoutSec;
     if (patch.chat.claudeProfile !== undefined) config.chat.claudeProfile = patch.chat.claudeProfile;
+    if (patch.chat.autoCompactPercent !== undefined) config.chat.autoCompactPercent = patch.chat.autoCompactPercent;
   }
   if (patch.brain?.fallback) config.brain.fallback = normalizeFallbackSteps(patch.brain.fallback);
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
@@ -455,6 +457,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     model: typeof chatRaw.model === 'string' ? chatRaw.model : 'sonnet',
     permissionTimeoutSec: typeof chatRaw.permissionTimeoutSec === 'number' ? chatRaw.permissionTimeoutSec : 600,
     claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-may',
+    autoCompactPercent: typeof chatRaw.autoCompactPercent === 'number' ? chatRaw.autoCompactPercent : 85,
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
   const brainRaw = (userConfig.brain as Record<string, unknown>) || {};

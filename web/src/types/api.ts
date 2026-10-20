@@ -488,7 +488,7 @@ export interface ChatSession {
   createdAt?: string;
 }
 
-export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error';
+export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
 
 export interface ChatMessageMeta {
   name?: string;
@@ -548,6 +548,7 @@ export interface ChatConfig {
   idleTimeoutSec?: number;
   model?: '' | 'sonnet' | 'haiku';
   claudeProfile?: string;
+  autoCompactPercent?: number;
 }
 
 export interface CreateProjectInput {

@@ -16,6 +16,7 @@ export const SettingsPage: React.FC = () => {
   const [allowFullMode, setAllowFullMode] = useState<boolean>(false);
   const [chatModel, setChatModel] = useState<'' | 'sonnet' | 'haiku'>('sonnet');
   const [maxConcurrent, setMaxConcurrent] = useState<number>(2);
+  const [autoCompactPercent, setAutoCompactPercent] = useState<number>(85);
   const [bucketGemini, setBucketGemini] = useState<number>(5_000_000);
   const [bucketClaude, setBucketClaude] = useState<number>(5_000_000);
   const [claudeFactor, setClaudeFactor] = useState<number>(0.9);
@@ -48,6 +49,7 @@ export const SettingsPage: React.FC = () => {
       setAllowFullMode(Boolean(config.chat?.allowFullMode));
       setChatModel(config.chat?.model === 'haiku' ? 'haiku' : 'sonnet');
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
+      setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);
       setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
       if (config.savings) {
         if (config.savings.bucketTokens?.gemini !== undefined) {
@@ -127,6 +129,7 @@ export const SettingsPage: React.FC = () => {
         allowFullMode,
         maxConcurrent: Number(maxConcurrent) || 2,
         model: chatModel,
+        autoCompactPercent: Number(autoCompactPercent) || 85,
       },
       savings: {
         bucketTokens: {
@@ -288,6 +291,24 @@ export const SettingsPage: React.FC = () => {
                   onChange={(e) => setMaxConcurrent(parseInt(e.target.value, 10) || 1)}
                   className="w-32 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
                 />
+              </div>
+
+              {/* autoCompactPercent field */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('extra.autoCompactPercent')}
+                </label>
+                <input
+                  type="number"
+                  min={10}
+                  max={95}
+                  value={autoCompactPercent}
+                  onChange={(e) => setAutoCompactPercent(parseInt(e.target.value, 10) || 85)}
+                  className="w-32 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+                />
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                  {t('extra.autoCompactPercentHint')}
+                </p>
               </div>
 
               {/* allowFullMode selector */}

@@ -100,12 +100,6 @@ export async function exportChatSession(sessionId: string): Promise<string> {
   return res.text();
 }
 
-export async function compactChatSession(sessionId: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`, {
-    method: 'POST',
-  });
-}
-
 export async function sendChatMessage(
   sessionId: string,
   text: string,
@@ -139,5 +133,23 @@ export async function cancelChatSession(
 export async function stopChatSession(sessionId: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' },
+  );
+}
+
+export async function compactChatSession(sessionId: string): Promise<{ ok: boolean; contextTokens?: number }> {
+  return apiFetch<{ ok: boolean; contextTokens?: number }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function forkSummaryChatSession(sessionId: string): Promise<{ id: string; sessionId?: string }> {
+  return apiFetch<{ id: string; sessionId?: string }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/fork-summary`,
+    {
+      method: 'POST',
+    },
   );
 }

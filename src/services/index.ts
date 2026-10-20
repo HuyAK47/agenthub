@@ -304,6 +304,7 @@ export const UpdateConfigSchema = z.object({
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
       model: z.enum(['', 'sonnet', 'haiku']).optional(),
+      autoCompactPercent: z.number().min(0).max(100).optional(),
     })
     .optional(),
   reviewer: z.object({
@@ -2257,6 +2258,7 @@ export class AppService {
         idleTimeoutSec: this.config.chat.idleTimeoutSec,
         permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
+        autoCompactPercent: this.config.chat.autoCompactPercent ?? 85,
       },
       brain: { fallback: this.config.brain.fallback },
       reviewer: this.config.reviewer,

@@ -13,6 +13,7 @@ import {
   decideChatPermission,
   getChatPermissions,
   compactChatSession,
+  forkSummaryChatSession,
   normalizeMessagesResponse,
 } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
@@ -245,6 +246,10 @@ export const ChatPage: React.FC = () => {
         ]);
 
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+      } else if (type === 'chat.compacted') {
+        setToastMessage(t('extra.compacted'));
+        queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession?.id] });
+        queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       } else if (type === 'chat.status') {
         queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) =>
           prev.map((session) =>
@@ -278,7 +283,7 @@ export const ChatPage: React.FC = () => {
     });
 
     return () => unsub();
-  }, [activeSession?.id, queryClient, permission?.id]);
+  }, [activeSession?.id, queryClient, permission?.id, t]);
 
   const resolvePermission = async (decision: 'allow' | 'deny' | 'allow_always') => {
     if (!permission) return;
@@ -396,6 +401,17 @@ export const ChatPage: React.FC = () => {
     },
     onError: (err: any) => {
       setToastMessage(err.message || t('extra.failedCompact'));
+    },
+  });
+
+  const forkSummaryMutation = useMutation({
+    mutationFn: (sessId: string) => forkSummaryChatSession(sessId),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+      navigate(`/chat/${res.id || res.sessionId}`);
+    },
+    onError: (err: any) => {
+      setToastMessage(err.message || t('extra.forkSummaryError'));
     },
   });
 
@@ -604,11 +620,12 @@ export const ChatPage: React.FC = () => {
             {activeSession && (
               <>
                 {/* Context Meter */}
-                <div className="hidden md:block w-48 lg:w-56">
+                <div className="hidden md:block w-56 lg:w-72">
                   <ContextMeter
                     session={activeSession}
                     hasCompactApi={hasCompactApi}
                     onCompact={() => compactMutation.mutate(activeSession.id)}
+                    onForkSummary={() => forkSummaryMutation.mutate(activeSession.id)}
                   />
                 </div>
 
@@ -660,6 +677,7 @@ export const ChatPage: React.FC = () => {
               session={activeSession}
               hasCompactApi={hasCompactApi}
               onCompact={() => compactMutation.mutate(activeSession.id)}
+              onForkSummary={() => forkSummaryMutation.mutate(activeSession.id)}
             />
           </div>
         )}
