@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -6,6 +6,7 @@ import { DailyUsageTable } from '../components/DailyUsageTable';
 import { LocaleProvider } from '../context/LocaleContext';
 import * as client from '../api/client';
 import { DailyUsageReport } from '../types/api';
+import { formatNumber } from '../utils/format';
 
 const mockReport: DailyUsageReport = {
   days: 7,
@@ -134,6 +135,12 @@ function renderWithProviders(ui: React.ReactElement) {
 describe('DailyUsageTable Component', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-20T12:00:00+07:00'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders loading state initially', () => {
@@ -189,7 +196,7 @@ describe('DailyUsageTable Component', () => {
 
     // Check metric values for today (2026-10-20)
     // chinh has 3 runs, 65,000 tokens
-    expect(screen.getByText('65.000')).toBeInTheDocument();
+    expect(screen.getByText(formatNumber(65000))).toBeInTheDocument();
   });
 
   it('allows switching dates via date selector pills', async () => {
@@ -207,7 +214,7 @@ describe('DailyUsageTable Component', () => {
 
     // In 10-19: g1 has 4 runs, 90,000 tokens
     await waitFor(() => {
-      expect(screen.getByText('90.000')).toBeInTheDocument();
+      expect(screen.getByText(formatNumber(90000))).toBeInTheDocument();
     });
   });
 

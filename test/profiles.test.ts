@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { loadConfig } from '../src/config.js';
 import { openDatabase, ProfileRepo, QuotaMarkRepo } from '../src/db/index.js';
-import { ProfileService } from '../src/profiles/index.js';
+import { ProfileService, isProfileLoggedIn } from '../src/profiles/index.js';
 import { parseAuthState } from '../src/profiles/auth.js';
 
 let tmpDir: string;
@@ -34,6 +34,48 @@ describe('Profile import from ~/.agy-homes', () => {
     profileRepo = new ProfileRepo(db);
     quotaMarkRepo = new QuotaMarkRepo(db);
     profileService = new ProfileService(config, profileRepo, quotaMarkRepo);
+  });
+
+  it('reads Claude oauthAccount metadata and login state without accepting legacy files', () => {
+    const home = path.join(config.hubHome, 'claude-homes', 'alice');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'alice@example.com',
+        billingType: 'max',
+        organizationName: 'Example Org',
+        userRateLimitTier: 'tier-2',
+      },
+    }));
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'config.json'), JSON.stringify({ email: 'wrong@example.com' }));
+
+    expect(profileService.readClaudeAccount(home)).toEqual({ email: 'alice@example.com', plan: 'max' });
+    profileRepo.upsert({ name: 'alice', engine: 'claude', kind: 'isolated', home, email: null, enabled: 1 });
+    expect(isProfileLoggedIn(profileRepo.get('alice')!)).toBe(true);
+  });
+
+  it('considers Claude credentials existence logged in even before oauthAccount metadata', () => {
+    const home = path.join(config.hubHome, 'claude-homes', 'credentials');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, '.credentials.json'), 'do not read this');
+    profileRepo.upsert({ name: 'credentials', engine: 'claude', kind: 'isolated', home, email: null, enabled: 1 });
+    expect(isProfileLoggedIn(profileRepo.get('credentials')!)).toBe(true);
+  });
+
+  it('refuses to delete Claude homes outside the managed root, including symlinks', () => {
+    const homesRoot = path.join(config.hubHome, 'claude-homes');
+    fs.mkdirSync(homesRoot, { recursive: true });
+    const outside = path.join(tmpDir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'keep');
+    const linked = path.join(homesRoot, 'linked');
+    fs.symlinkSync(outside, linked);
+    profileRepo.upsert({ name: 'linked', engine: 'claude', kind: 'isolated', home: linked, email: null, enabled: 1 });
+
+    expect(() => profileService.deleteProfile('linked')).toThrow(/ngoài claude-homes/);
+    expect(fs.existsSync(path.join(outside, 'keep.txt'))).toBe(true);
+    expect(profileRepo.get('linked')).toBeTruthy();
   });
 
   afterEach(() => {

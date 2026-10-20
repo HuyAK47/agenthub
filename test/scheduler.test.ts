@@ -115,6 +115,27 @@ describe('Quota mark propagation to same-email profiles', () => {
   });
 });
 
+describe('Claude profiles are never worker scheduler profiles', () => {
+  beforeEach(setupTestEnv);
+  afterEach(teardownTestEnv);
+
+  it('does not select an engine=claude profile for the default worker chain', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    profileRepo.upsert({ name: 'claude-may', engine: 'claude', kind: 'system', home: os.homedir(), email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/t1', projectId: 'test-project', slug: 't1', title: 'Task 1', status: 'queued' });
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]));
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/t1')).toHaveLength(0);
+    expect(taskRepo.get('test-project/t1')?.status).toBe('waiting_quota');
+    scheduler.stop();
+  });
+});
+
 describe('Task dependencies', () => {
   beforeEach(setupTestEnv);
   afterEach(teardownTestEnv);
