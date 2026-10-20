@@ -529,7 +529,6 @@ export class ProfileRepo {
            kind=excluded.kind,
            home=excluded.home,
            email=excluded.email,
-           enabled=excluded.enabled,
            authState=COALESCE(excluded.authState, profiles.authState),
            authMessage=COALESCE(excluded.authMessage, profiles.authMessage),
            verifyUrl=COALESCE(excluded.verifyUrl, profiles.verifyUrl)`,
