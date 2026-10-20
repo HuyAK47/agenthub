@@ -22,6 +22,8 @@ const SYMLINK_TARGETS = [
 ];
 
 export class ProfileService {
+  private claudeAccountCache = new Map<string, { mtimeMs: number; account: { email: string | null; plan: string | null } | null }>();
+
   constructor(
     private config: AgentHubConfig,
     private profileRepo: ProfileRepo,
@@ -228,32 +230,55 @@ export class ProfileService {
   }
 
   readClaudeAccount(home: string): { email: string | null; plan: string | null } | null {
-    const candidates = [
-      path.join(home, '.claude.json'),
-      path.join(home, '.claude', 'config.json'),
-      path.join(home, '.claude', 'account.json'),
-      path.join(home, '.claude', 'settings.json'),
-    ];
-    for (const file of candidates) {
-      try {
-        if (!fs.existsSync(file)) continue;
-        const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
-        const account = value.account && typeof value.account === 'object' ? value.account as Record<string, unknown> : value;
-        const email = [account.email, account.emailAddress, value.email].find((v): v is string => typeof v === 'string' && v.includes('@')) || null;
-        const planValue = [account.plan, account.planType, account.subscriptionType, value.plan].find((v): v is string => typeof v === 'string') || null;
-        if (email || planValue) return { email, plan: planValue };
-      } catch {
-        // Ignore malformed or unrelated Claude configuration files.
-      }
+    const file = path.join(home, '.claude.json');
+    let mtimeMs = -1;
+    try {
+      mtimeMs = fs.statSync(file).mtimeMs;
+    } catch {
+      this.claudeAccountCache.set(file, { mtimeMs, account: null });
+      return null;
     }
-    return null;
+    const cached = this.claudeAccountCache.get(file);
+    if (cached?.mtimeMs === mtimeMs) return cached.account;
+
+    let account: { email: string | null; plan: string | null } | null = null;
+    try {
+      const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const oauthAccount = value.oauthAccount;
+      if (oauthAccount && typeof oauthAccount === 'object') {
+        const data = oauthAccount as Record<string, unknown>;
+        const email = typeof data.emailAddress === 'string' && data.emailAddress.includes('@') ? data.emailAddress : null;
+        const plan = [data.billingType, data.organizationName, data.userRateLimitTier]
+          .find((v): v is string => typeof v === 'string' && v.length > 0) || null;
+        account = { email, plan };
+      }
+    } catch {
+      // Ignore malformed or unrelated Claude configuration files.
+    }
+    this.claudeAccountCache.set(file, { mtimeMs, account });
+    return account;
   }
 
   deleteProfile(name: string): void {
     const profile = this.profileRepo.get(name);
     if (!profile) throw new Error(`Hồ sơ "${name}" không tồn tại`);
     if (profile.engine !== 'claude' || profile.kind === 'system') throw new Error('Chỉ có thể xóa hồ sơ Claude riêng');
-    if (profile.home && fs.existsSync(profile.home)) fs.rmSync(profile.home, { recursive: true, force: true });
+    if (profile.home && fs.existsSync(profile.home)) {
+      const homesRoot = path.resolve(this.config.hubHome, 'claude-homes');
+      let realRoot: string;
+      let realHome: string;
+      try {
+        realRoot = fs.realpathSync(homesRoot);
+        realHome = fs.realpathSync(profile.home);
+      } catch {
+        throw new Error('Từ chối xóa hồ sơ Claude: không xác định được đường dẫn thật');
+      }
+      const relative = path.relative(realRoot, realHome);
+      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new Error('Từ chối xóa hồ sơ Claude: thư mục nằm ngoài claude-homes');
+      }
+      fs.rmSync(profile.home, { recursive: true, force: true });
+    }
     this.profileRepo.delete(name);
   }
 
@@ -313,10 +338,20 @@ export class ProfileService {
 export function isProfileLoggedIn(profile: ProfileRow): boolean {
   if (profile.engine === 'codex') return fs.existsSync(path.join(profile.home || os.homedir(), '.codex', 'auth.json'));
   if (profile.kind === 'keyring') return true;
-  if (profile.engine === 'claude') return !!profile.home && (
-    fs.existsSync(path.join(profile.home, '.claude.json')) ||
-    fs.existsSync(path.join(profile.home, '.claude', 'account.json')) ||
-    fs.existsSync(path.join(profile.home, '.claude', 'config.json'))
-  );
+  if (profile.engine === 'claude') {
+    const home = profile.home || os.homedir();
+    const accountFile = path.join(home, '.claude.json');
+    try {
+      const value = JSON.parse(fs.readFileSync(accountFile, 'utf8')) as Record<string, unknown>;
+      const oauthAccount = value.oauthAccount;
+      if (oauthAccount && typeof oauthAccount === 'object' && typeof (oauthAccount as Record<string, unknown>).emailAddress === 'string') {
+        return true;
+      }
+    } catch { /* fall through to credentials existence check */ }
+    const credentialsPath = profile.kind === 'system'
+      ? path.join(home, '.claude', '.credentials.json')
+      : path.join(home, '.credentials.json');
+    return fs.existsSync(credentialsPath);
+  }
   return !!profile.home && fs.existsSync(path.join(profile.home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'));
 }
