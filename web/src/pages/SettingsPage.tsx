@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getConfig, updateConfig } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { TelegramCard } from '../components/TelegramCard';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
@@ -399,6 +400,8 @@ export const SettingsPage: React.FC = () => {
               </div>
             </div>
           </div>
+
+          <TelegramCard />
 
           <div className="flex justify-end">
             <button
