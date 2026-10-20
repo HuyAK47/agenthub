@@ -79,7 +79,7 @@ export function lastNLines(text: string, n: number): string {
 
 // Transient error regex per PLAN 2.1
 const TRANSIENT_ERROR_RE =
-  /UNAVAILABLE \(code 503\)|code 50[0-4]|DEADLINE_EXCEEDED|ECONNRESET|ETIMEDOUT|service is currently unavailable|Eligibility check failed|model is at capacity|overloaded/i;
+  /UNAVAILABLE \(code 503\)|code 50[0-4]|DEADLINE_EXCEEDED|ECONNRESET|ETIMEDOUT|service is currently unavailable|Eligibility check failed|model is at capacity|overloaded|TLS handshake timeout|network issue connecting|"retryable":true/i;
 
 export class AgyEngine implements Engine {
   id = 'agy' as const;
