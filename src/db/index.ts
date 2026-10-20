@@ -366,6 +366,8 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE tasks ADD COLUMN doneReport TEXT;
   ALTER TABLE tasks ADD COLUMN diffStat TEXT;
   `,
+  // Migration 26: task provenance for captured errors
+  `ALTER TABLE tasks ADD COLUMN sourceRef TEXT;`,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -458,6 +460,7 @@ export interface TaskRow {
   baseRef: string | null;
   branch: string | null;
   worktreePath: string | null;
+  sourceRef?: string | null;
   status: string;
   waitReason?: WaitReason;
   dependsOn: string;
@@ -738,6 +741,10 @@ export class TaskRepo {
     return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
   }
 
+  getDerivedFrom(sourceTaskId: string): TaskRow[] {
+    return this.db.prepare("SELECT * FROM tasks WHERE json_extract(sourceRef, '$.taskId') = ? ORDER BY createdAt").all(sourceTaskId) as TaskRow[];
+  }
+
   insert(row: {
     id: string;
     projectId: string;
@@ -754,12 +761,13 @@ export class TaskRepo {
     worktreePath?: string | null;
     doneReport?: string | null;
     diffStat?: string | null;
+    sourceRef?: string | null;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -777,6 +785,7 @@ export class TaskRepo {
         row.worktreePath || null,
         row.doneReport || null,
         row.diffStat || null,
+        row.sourceRef || null,
       );
 
     // Populate task_deps

@@ -131,6 +131,7 @@ export interface Task {
     loopingCommand?: string | null;
   } | null;
   checks?: CheckResult[];
+  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
 }
 
 export interface CheckResult {
@@ -148,6 +149,8 @@ export interface TaskDetail extends Task {
   blockedContent?: string | null;
   commits?: string[] | null;
   gitCommits?: string[] | null;
+  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  derivedTasks?: Task[];
 }
 
 export interface EventItem {
@@ -522,6 +525,18 @@ export interface CreateTaskInput {
   baseRef?: string;
   branch?: string;
   modelChain?: string[];
+  start?: boolean;
+}
+
+export interface CaptureTaskInput {
+  sourceTaskId: string;
+  runId?: string;
+  checkName?: string;
+  excerpt: string;
+  slug: string;
+  title?: string;
+  body?: string;
+  level: TaskLevel;
   start?: boolean;
 }
 

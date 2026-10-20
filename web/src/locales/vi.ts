@@ -352,7 +352,7 @@ export const vi = {
     invalidJson: 'Cú pháp JSON không hợp lệ: {error}',
     updateAvailable: 'Có phiên bản dashboard mới', reload: 'Tải lại', silent: 'im lặng {minutes} phút',
     noData: 'Chưa có dữ liệu', refresh: 'Làm mới', checkResults: 'Kết quả kiểm tra', rerunCheck: 'Chạy lại kiểm tra',
-    noCheckResults: 'Chưa có kết quả kiểm tra.', noOutput: '(không có output)',
+    noCheckResults: 'Chưa có kết quả kiểm tra.', noOutput: '(không có output)', captureFix: 'Tạo task sửa', captureFromSelection: 'Tạo task từ đoạn này', captureTitle: 'Tạo task sửa lỗi', reLogin: 'Đăng nhập lại', reLoginTip: 'Đăng nhập lại khi phiên hết hạn hoặc muốn đổi tài khoản', deleteProfile: 'Xoá', deleteProfileTip: 'Xoá hồ sơ khỏi hub (lịch sử chạy vẫn giữ)', deleteBusyTip: 'Hồ sơ đang chạy task, đợi task xong rồi xoá', deleteConfirm: 'Xoá hồ sơ "{name}"?', deleteClaudeNote: 'Hồ sơ và thư mục cấu hình Claude của nó sẽ bị xoá.', deleteSoftNote: 'Hồ sơ sẽ bị ẩn và không được giao task nữa. Thư mục đăng nhập và lịch sử chạy vẫn được giữ.', deleteFailed: 'Xoá hồ sơ thất bại',
     brainPlanning: 'Đang lập kế hoạch', brainDispatching: 'Đang giao việc', brainReviewing: 'Đang review', brainMerging: 'Đang ghép code', brainDeploying: 'Đang triển khai', brainWaiting: 'Đang chờ worker', brainIdle: 'Rảnh', brainTalking: 'Đang trao đổi với bạn',
     justNow: 'vừa xong', updatedMinutes: 'cập nhật {count} phút trước', updatedHours: 'cập nhật {count} giờ trước', updatedDays: 'cập nhật {count} ngày trước',
     coordinator: 'Claude · Điều phối viên', staleBrain: 'Claude chưa cập nhật trong 15 phút',
