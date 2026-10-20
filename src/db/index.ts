@@ -288,6 +288,28 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE projects ADD COLUMN merge TEXT;
   `,
+  // Migration 19: Claude Code profiles and chat account selection
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE profiles_new (
+    name TEXT PRIMARY KEY,
+    engine TEXT NOT NULL CHECK(engine IN ('agy', 'codex', 'claude')),
+    kind TEXT NOT NULL CHECK(kind IN ('keyring', 'isolated', 'codex', 'system')),
+    home TEXT,
+    email TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    authState TEXT CHECK(authState IS NULL OR authState IN ('ok', 'not_logged_in', 'needs_verification', 'error')),
+    authMessage TEXT,
+    verifyUrl TEXT
+  );
+  INSERT INTO profiles_new (name, engine, kind, home, email, enabled, createdAt, authState, authMessage, verifyUrl)
+    SELECT name, engine, kind, home, email, enabled, createdAt, authState, authMessage, verifyUrl FROM profiles;
+  DROP TABLE profiles;
+  ALTER TABLE profiles_new RENAME TO profiles;
+  PRAGMA foreign_keys = ON;
+  ALTER TABLE chat_sessions ADD COLUMN profileName TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -340,8 +362,8 @@ export type ProfileAuthState = 'ok' | 'not_logged_in' | 'needs_verification' | '
 
 export interface ProfileRow {
   name: string;
-  engine: string;
-  kind: string;
+  engine: 'agy' | 'codex' | 'claude';
+  kind: 'keyring' | 'isolated' | 'codex' | 'system';
   home: string | null;
   email: string | null;
   enabled: number;
@@ -527,6 +549,12 @@ export class ProfileRepo {
     this.db
       .prepare('UPDATE profiles SET authState = ?, authMessage = ?, verifyUrl = ? WHERE name = ?')
       .run(authState, authMessage, verifyUrl, name);
+  }
+
+  delete(name: string): void {
+    this.db.prepare('DELETE FROM quota_marks WHERE profileName = ?').run(name);
+    this.db.prepare('DELETE FROM quota_usage WHERE profileName = ?').run(name);
+    this.db.prepare('DELETE FROM profiles WHERE name = ?').run(name);
   }
 
   updateEnabled(name: string, enabled: number): void {
@@ -847,6 +875,7 @@ export interface ChatSessionRow {
   title: string | null;
   mode: 'safe' | 'full';
   model: string;
+  profileName: string | null;
   busy: number;
   createdAt: string;
   updatedAt: string;
@@ -883,12 +912,13 @@ export class ChatSessionRepo {
     title?: string | null;
     mode?: 'safe' | 'full';
     model?: string;
+    profileName?: string | null;
     busy?: number;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, profileName)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         row.id,
@@ -898,7 +928,12 @@ export class ChatSessionRepo {
         row.mode || 'safe',
         row.busy ?? 0,
         row.model || '',
+        row.profileName || null,
       );
+  }
+
+  updateProfileName(id: string, profileName: string | null): void {
+    this.db.prepare("UPDATE chat_sessions SET profileName = ?, updatedAt = datetime('now') WHERE id = ?").run(profileName, id);
   }
 
   updateModel(id: string, model: string): void {
