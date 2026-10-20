@@ -9,6 +9,8 @@ Tài liệu này mô tả chi tiết các tính năng chính của AgentHub dàn
 ### Làm gì
 Tính năng Chat cho phép bạn trò chuyện trực tiếp với **Claude Code** ngay trên giao diện Web Dashboard (thông qua bảng điều khiển hoặc biểu tượng Brain). Claude đóng vai trò là "bộ não điều phối" của AgentHub: nắm rõ toàn bộ trạng thái hệ thống qua các công cụ MCP `hub_*` (tạo task, xem log, review, retry, hủy task, xem quota...). Thay vì tự viết code trực tiếp, Claude sẽ phân tích yêu cầu của bạn, chia nhỏ thành các task độc lập và giao việc cho các AI worker (Gemini/Codex) thực thi.
 
+Hệ thống trang bị giao diện lịch sử tin nhắn ảo hóa (virtualized) cuộn tải dần mượt mà, quản lý phiên toàn diện (tìm kiếm, ghim, xuất Markdown), cơ chế phê duyệt quyền công cụ (Tool Permissions), nén ngữ cảnh tự động (`/compact`, `/fork-summary`) và duy trì tiến trình chạy liên tục (persistent stream-json).
+
 ### Dùng thế nào
 1. Nhấp vào mục **Trò chuyện** (Chat) trên thanh điều hướng hoặc biểu tượng avatar Claude.
 2. **Chọn Model**: Bạn có thể chọn model Claude mong muốn cho phiên trò chuyện:
@@ -22,11 +24,25 @@ Tính năng Chat cho phép bạn trò chuyện trực tiếp với **Claude Code
    - Nếu CLI `claude` của bạn hỗ trợ stream-json (`--input-format stream-json`), AgentHub tự động duy trì một tiến trình Claude chạy nền liên tục cho phiên chat.
    - Giao tiếp qua luồng JSON hai chiều giúp phản hồi tức thì mà không cần khởi động lại tiến trình ở từng lượt chat.
    - Tiến trình tự động tắt sau khoảng thời gian nhàn rỗi `idleTimeoutSec` (mặc định 600 giây = 10 phút) để giải phóng tài nguyên RAM.
+5. **Giao diện lịch sử & Quản lý phiên (SessionList & MessageList)**:
+   - **Cuộn tải dần**: Sử dụng danh sách ảo hóa với tham số phân trang `before=`, giữ nguyên vị trí cuộn khi tải thêm tin nhắn cũ và tự động cuộn xuống cuối khi có tin nhắn mới hoặc streaming.
+   - **Thu gọn bước công cụ (Tool Steps)**: Các bước gọi công cụ được tự động gom nhóm, có thể bấm mở rộng để xem chi tiết hoặc thu gọn cho gọn gàng; hiển thị trạng thái đang chạy kèm hiệu ứng quay cho bước hiện tại.
+   - **Quản lý phiên**: Tìm kiếm phiên theo tiêu đề hoặc nội dung tin nhắn, ghim phiên quan trọng lên đầu, đổi tên phiên, lưu trữ (archive), xóa phiên an toàn và xuất toàn bộ nội dung ra định dạng Markdown (`.md`).
+6. **Hộp thoại duyệt quyền công cụ (Permission Broker)**:
+   - Khi Claude cần thực thi lệnh hoặc công cụ ngoài danh mục an toàn, hộp thoại xin quyền sẽ hiển thị với 3 lựa chọn: **Cho phép**, **Luôn cho phép** (ghi nhớ cho lệnh tương tự trong phiên) hoặc **Từ chối**.
+   - Watchdog tự động tạm dừng đếm thời gian im lặng khi đang chờ người dùng quyết định và khởi động lại sau khi có quyết định.
+   - Cấu hình MCP riêng cho từng phiên chat được lưu tại `~/.agenthub/sessions/<id>/mcp.json` với quyền bảo mật `0600` và tự dọn dẹp khi xóa phiên.
+7. **Nén ngữ cảnh & Mở phiên tóm tắt (Context Management)**:
+   - **ContextMeter**: Đo lường và hiển thị trực quan số lượng token ngữ cảnh đang chiếm dụng (bao gồm cả cache read và cache creation) so với giới hạn 200k tokens.
+   - **Nén ngữ cảnh (`/compact`)**: Gửi lệnh `/compact` tới Claude CLI để tinh gọn bối cảnh và cập nhật lại số token ngữ cảnh.
+   - **Mở phiên mới kèm tóm tắt (`/fork-summary`)**: Claude tóm tắt nội dung phiên hiện tại và mở ra một phiên chat mới sạch sẽ với bản tóm tắt làm tin nhắn đầu vào.
+   - **Tự động nén (Auto-compact)**: Khi số token ngữ cảnh vượt ngưỡng `autoCompactPercent` (mặc định 85% của 200.000 tokens), hệ thống sẽ tự động kích hoạt nén ngữ cảnh sau mỗi lượt phản hồi.
 
 ### Mẹo hoặc lỗi thường gặp
 - **Lỗi 403 Forbidden khi chọn Full Mode**: Nếu bạn chọn chế độ Đầy đủ mà hệ thống báo lỗi 403, nghĩa là file cấu hình `~/.agenthub/config.json` chưa cho phép `chat.allowFullMode = true`. Đây là cơ chế bảo vệ chủ động để tránh thao tác ngoài ý muốn.
 - **Hủy lượt chat**: Khi một lượt phản hồi bị treo hoặc bạn muốn dừng sớm, hãy bấm nút **Hủy** (Cancel). Hệ thống sẽ gửi tín hiệu ngắt `SIGINT` nhã nhặn trước, và nếu sau 3 giây tiến trình chưa dừng mới cưỡng chế đóng nhóm tiến trình.
 - **Không tìm thấy lệnh `claude`**: Đảm bảo bạn đã cài đặt Claude Code (`npm i -g @anthropic-ai/claude-code`) và lệnh `claude` có trong `$PATH` (hoặc kiểm tra đường dẫn trong `chat.claudeBin`).
+- **Tắt tự động nén**: Nếu muốn quản lý nén ngữ cảnh hoàn toàn thủ công, bạn có thể đặt `chat.autoCompactPercent = 0` trong cài đặt.
 
 ---
 
@@ -269,3 +285,174 @@ Các thông báo đều được thiết lập:
   }
   ```
 - **Thông báo không tự tắt trên một số desktop Linux**: Nếu bạn dùng các trình quản lý thông báo tối giản (như một số phiên bản cũ của `dunst` hoặc `mako`) không hỗ trợ tham số timeout `-t`, thông báo có thể lưu lại trên màn hình. Bạn có thể kiểm tra cấu hình timeout trong file cấu hình của notification daemon trên máy hoặc khởi động lại daemon thông báo (`pkill dunst && dunst &`).
+
+---
+
+## 10. Đăng nhập tài khoản Claude & Quản lý hồ sơ Claude
+
+### Làm gì
+AgentHub hỗ trợ quản lý đa hồ sơ Claude Code (`claude`), cho phép phân tách bối cảnh, lưu trữ phiên làm việc biệt lập theo từng dự án hoặc tài khoản và tích hợp liền mạch với cơ chế luân chuyển tài khoản trong chuỗi dự phòng.
+
+### Dùng thế nào
+1. **Thư mục lưu trữ biệt lập**:
+   - Mỗi hồ sơ Claude được lưu trữ tại:
+     ```
+     ~/.agenthub/claude-homes/<tên_hồ_sơ>/
+     ```
+   - Thư mục được cấp quyền truy cập nghiêm ngặt `0700` (chỉ user sở hữu có quyền đọc/ghi), chứa cấu hình Claude cục bộ `.claude.json` và chứng thực `.credentials.json`.
+2. **Tạo và đăng nhập hồ sơ**:
+   - **Qua Web Dashboard**: Mở trang **Tài khoản (Profiles)** -> bấm **Thêm tài khoản** -> chọn engine **Claude** -> nhập tên hồ sơ -> chọn loại tài khoản (`personal`, `team`, `api_key`) -> bấm **Tạo & Đăng nhập**. Giao diện mở terminal tương tác PTY và tự động gửi lệnh `/login`. Bạn mở liên kết trình duyệt được cung cấp, xác thực tài khoản Anthropic, sao chép mã ủy quyền một lần (OAuth code) và dán vào ô nhập trên dashboard.
+   - **Qua dòng lệnh CLI**:
+     ```bash
+     agenthub profile add claude-work --engine claude
+     agenthub profile login claude-work
+     ```
+3. **Trạng thái xác thực tự động**:
+   - Hệ thống tự động phân tích file `.claude.json` để trích xuất email tài khoản và xác minh phiên đăng nhập.
+   - Thẻ hồ sơ hiển thị trạng thái:
+     - **Đã đăng nhập**: Hiển thị email và sẵn sàng nhận lệnh điều phối.
+     - **Chưa đăng nhập**: Phiên đăng nhập hết hạn hoặc chưa cấu hình, kèm nút đăng nhập nhanh.
+     - **Lỗi**: Không đọc được thông tin cấu hình hoặc tiến trình CLI bị lỗi.
+4. **Hỗ trợ đa loại tài khoản (Account Types)**:
+   - `personal`: Gói cá nhân (Claude Pro).
+   - `team`: Gói đội ngũ (Claude Team / Enterprise).
+   - `api_key`: Dùng token API trả trước hoặc theo mức dùng.
+   - Mặc định AgentHub chỉ cho phép 1 hồ sơ `personal` để tránh xoay vòng tài khoản cá nhân; hồ sơ `team` và `api_key` có thể thêm không giới hạn.
+
+### Mẹo hoặc lỗi thường gặp
+- **Mã xác thực hết hạn**: Mã OAuth của Claude thường chỉ có hiệu lực trong khoảng 60 giây. Nếu bị chậm, hãy bấm **Đăng nhập lại** trên dashboard để nhận mã mới.
+- **Xóa hồ sơ an toàn**: Khi xóa một hồ sơ Claude, bạn có thể chọn giữ lại thư mục đăng nhập (chỉ ẩn hồ sơ khỏi hub) hoặc xóa sạch hoàn toàn thư mục `~/.agenthub/claude-homes/<tên>`.
+
+---
+
+## 11. Chuỗi dự phòng khi hết token (Claude Fallback Chain)
+
+### Làm gì
+Khi Claude đóng vai trò là bộ não điều phối hoặc reviewer, việc gặp lỗi giới hạn tốc độ (HTTP 429) hoặc cạn kiệt hạn mức sử dụng (usage limits / quota exhaustion) có thể làm tê liệt toàn bộ quy trình phát triển tự động. Tính năng **Chuỗi dự phòng Claude (Fallback Chain)** giải quyết vấn đề này bằng cách tự động kích hoạt tuần tự các bước dự phòng đã định nghĩa trong cấu hình `brain.fallback` mà không làm gián đoạn các task đang chạy.
+
+### Dùng thế nào
+1. **Các bước dự phòng hỗ trợ**:
+   Hệ thống hỗ trợ 5 loại bước dự phòng có thể tùy biến thứ tự ưu tiên:
+   - **`profile` (Đổi hồ sơ Claude)**: Chuyển sang một hồ sơ Claude khác đã đăng nhập và đang kích hoạt (ví dụ: chuyển từ gói cá nhân sang gói Team).
+     ```json
+     { "type": "profile", "profile": "claude-team" }
+     ```
+     *(Nếu không khai báo thuộc tính `profile`, hub sẽ tự động tìm hồ sơ Claude bất kỳ khác đang ở trạng thái đã đăng nhập).*
+   - **`model` (Hạ cấp model)**: Chuyển sang model Claude nhẹ hơn (như Claude 3.5 Haiku) để tiếp tục phản hồi với mức tiêu thụ quota thấp hơn.
+     ```json
+     { "type": "model", "model": "haiku" }
+     ```
+   - **`apiKey` (Dùng Anthropic API Key có trần chi phí)**: Kích hoạt API key Anthropic trả phí trực tiếp.
+     ```json
+     { "type": "apiKey", "dailyCapUSD": 5 }
+     ```
+   - **`engine` (Chuyển sang Codex reviewer / engine)**: Kích hoạt OpenAI Codex CLI (chế độ chỉ đọc `readOnly: true`) để tiếp tục review code.
+     ```json
+     { "type": "engine", "engine": "codex" }
+     ```
+   - **`wait` (Chờ reset quota)**: Tạm dừng và chờ đợi đến thời điểm mở khóa quota tiếp theo của Claude (`resetAt`).
+     ```json
+     { "type": "wait" }
+     ```
+2. **Ví dụ cấu hình toàn diện trong `~/.agenthub/config.json`**:
+   ```json
+   {
+     "brain": {
+       "fallback": [
+         { "type": "profile", "profile": "claude-team" },
+         { "type": "model", "model": "haiku" },
+         { "type": "apiKey", "dailyCapUSD": 5 },
+         { "type": "engine", "engine": "codex" },
+         { "type": "wait" }
+       ]
+     }
+   }
+   ```
+3. **Cơ chế kiểm soát chi phí & Bảo mật API Key**:
+   > [!WARNING] **Cảnh báo chi phí khi sử dụng API key**
+   > Khác với các gói thuê bao cố định tháng (Claude Pro / Team), Anthropic API key tính phí trực tiếp trên từng token gửi nhận (pay-as-you-go). Khi giao việc cho các task lớn, chi phí API key có thể tăng nhanh nếu không có cơ chế giới hạn.
+   > AgentHub bảo vệ ngân sách của bạn thông qua các nguyên tắc nghiêm ngặt:
+   > - **Trần chi phí hàng ngày (`dailyCapUSD`)**: Bắt buộc phải khai báo mức chi phí tối đa cho phép mỗi ngày (ví dụ 5 USD/ngày). Chi phí được theo dõi chính xác theo từng lượt gọi và tự động reset vào 00:00 UTC mỗi ngày. Khi chi phí trong ngày chạm ngưỡng trần, hệ thống lập tức khóa bước API key và chuyển tiếp sang bước dự phòng tiếp theo.
+   > - **Bảo mật tuyệt đối**: API key được lưu tại file `~/.agenthub/secrets/anthropic.key` với quyền truy cập `0600`. Key không bao giờ được lưu vào database `hub.db`, không xuất hiện trong log và không trả về qua API (chỉ báo `{ apiKeyConfigured: true }`).
+4. **Theo dõi trạng thái Fallback**:
+   - Trên Dashboard, thẻ trạng thái Brain và mục Cài đặt (Settings) hiển thị bước dự phòng đang kích hoạt, lý do kích hoạt, thời điểm reset dự kiến và tổng chi phí API key đã tiêu thụ trong ngày.
+   - Khi có sự kiện chuyển đổi bước dự phòng, hệ thống phát sự kiện `claude.fallback_changed`, gửi thông báo desktop và tin nhắn Telegram tức thời.
+
+### Mẹo hoặc lỗi thường gặp
+- **Không tự động merge khi Codex review**: Khi bước dự phòng chuyển sang Codex review, để đảm bảo an toàn tuyệt đối, các quyết định `approved` của Codex sẽ không tự động merge code vào nhánh chính mà giữ ở trạng thái chờ người dùng kiểm tra lại.
+- **Hồ sơ chưa đăng nhập bị bỏ qua**: Khi chuyển bước sang một profile Claude cụ thể, nếu profile đó chưa đăng nhập hoặc bị vô hiệu hóa, hệ thống sẽ tự động bỏ qua và chuyển tiếp ngay sang bước kế tiếp.
+
+---
+
+## 12. Điều khiển từ xa qua Telegram (Telegram Remote Control)
+
+### Làm gì
+Tính năng Điều khiển từ xa qua Telegram Bot cho phép bạn giám sát toàn bộ hoạt động của AgentHub, nhận cảnh báo thời gian thực, duyệt code hoàn thành, phê duyệt quyền công cụ bằng nút bấm và trò chuyện trực tiếp với Claude Code ngay trên điện thoại di động mà không cần mở máy tính hay mở cổng mạng ra Internet.
+
+### Dùng thế nào
+1. **Tạo bot với @BotFather**:
+   - Mở ứng dụng Telegram, tìm kiếm tài khoản chính thức **`@BotFather`**.
+   - Gửi lệnh `/newbot`, nhập tên hiển thị (ví dụ: `MyAgentHubBot`) và username kết thúc bằng `bot` (ví dụ: `my_agenthub_bot`).
+   - Sao chép chuỗi mã HTTP API Bot Token được cung cấp (dạng: `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ`).
+2. **Cấu hình Token vào AgentHub**:
+   - **Qua Web Dashboard**: Mở trang **Settings**, tìm mục **Telegram Bot**, nhập token và bấm **Lưu token**.
+   - **Qua file bí mật**:
+     ```bash
+     mkdir -p ~/.agenthub/secrets
+     echo "YOUR_BOT_TOKEN_HERE" > ~/.agenthub/secrets/telegram.token
+     chmod 0600 ~/.agenthub/secrets/telegram.token
+     ```
+   - Cấu hình các loại thông báo trong `~/.agenthub/config.json`:
+     ```json
+     {
+       "telegram": {
+         "enabled": true,
+         "botTokenFile": "~/.agenthub/secrets/telegram.token",
+         "allowedChatIds": [],
+         "notify": {
+           "reviewReady": true,
+           "failed": true,
+           "blocked": true,
+           "quota": true,
+           "fallback": true
+         }
+       }
+     }
+     ```
+3. **Quy trình Ghép đôi an toàn (Pairing Flow)**:
+   - Trên Web Dashboard (trang **Settings** -> mục Telegram) hoặc gọi API `POST /api/telegram/pair-code`, bấm **Tạo mã ghép đôi**.
+   - Hệ thống sinh một mã xác thực 6 chữ số ngẫu nhiên (có hiệu lực trong 5 phút).
+   - Mở bot Telegram của bạn, bấm **Start** hoặc gửi tin nhắn chứa mã 6 chữ số (hoặc cú pháp `/start <mã>` / `/pair <mã>`).
+   - Bot đối chiếu mã, xác nhận kết nối thành công và lưu `chatId` của bạn vào danh sách cho phép (`allowedChatIds`).
+4. **Danh sách lệnh điều khiển từ xa**:
+   - **Quản lý hệ thống**:
+     - `/status`: Báo cáo tình trạng hệ thống: số task đang chạy/chờ, mức sử dụng CPU/RAM, ổ đĩa, tình trạng quota các tài khoản.
+     - `/pause`: Tạm dừng giao task mới cho worker (task đang chạy vẫn tiếp tục).
+     - `/resume`: Khôi phục việc giao task mới.
+     - `/help`: Xem danh sách lệnh và hướng dẫn cú pháp.
+   - **Quản lý Task**:
+     - `/tasks [trạng thái]`: Liệt kê các task (ví dụ: `/tasks review` xem task chờ duyệt, `/tasks running` xem task đang chạy).
+     - `/task <id>`: Xem chi tiết task (đề bài, kết quả autocheck, commit mới nhất) kèm các nút bấm thao tác nhanh.
+     - `/log <id>`: Trích xuất 30 dòng log thực thi mới nhất của task.
+     - `/approve <id>`: Duyệt task hoàn thành (tự động merge nếu dự án đã cấu hình worktree merge).
+     - `/reject <id> <nhận xét>`: Trả về task yêu cầu worker sửa lại kèm nhận xét cụ thể.
+     - `/cancel <id>`: Hủy task đang chạy hoặc chờ (hiển thị nút inline xác nhận an toàn trước khi hủy).
+     - `/retry <id>`: Chạy lại task bị lỗi hoặc bị chặn.
+   - **Trò chuyện trực tiếp với Claude**:
+     - Mọi tin nhắn văn bản thông thường (không có dấu `/` ở đầu) gửi tới bot được tự động định tuyến vào phiên trò chuyện Claude riêng biệt (`telegram:<chatId>`).
+     - `/new`: Khởi tạo một phiên trò chuyện mới với Claude.
+     - `/stop`: Dừng lượt phản hồi hiện tại của Claude.
+   - **Duyệt quyền công cụ (Permission Prompt)**:
+     - Khi Claude ở chế độ an toàn cần thực thi lệnh hoặc công cụ, bot sẽ gửi tin nhắn yêu cầu kèm 3 nút inline: **Cho phép**, **Luôn cho phép** và **Từ chối**. Bạn chỉ cần bấm nút trực tiếp trên điện thoại để phê duyệt.
+   - **Thông báo sự kiện tự động**:
+     - Nhận tin nhắn thông báo khi task hoàn thành autocheck (`reviewReady`), kèm các nút bấm inline để Duyệt (`approve`), Trả về (`reject`), hoặc Xem log (`log`) ngay lập tức.
+     - Cảnh báo khi task gặp lỗi (`failed`), worker bị chặn (`blocked`), tài khoản hết quota (`quota`), hoặc khi kích hoạt chuỗi dự phòng (`fallback`).
+5. **Kiến trúc Bảo mật**:
+   - **Chỉ chat đã ghép đôi mới có quyền điều khiển**: Mọi tin nhắn từ người dùng hoặc nhóm chat lạ chưa qua ghép đôi đều bị từ chối ngay lập tức và ghi log cảnh báo; người ngoài không thể gửi lệnh hay truy cập dữ liệu máy chủ.
+   - **Token bot lưu với quyền 0600**: File token `telegram.token` chỉ cho phép tài khoản người dùng hệ thống sở hữu file đọc/ghi (`chmod 0600`).
+   - **Che giấu token an toàn**: Token không bao giờ được lưu trong cơ sở dữ liệu `hub.db`, không xuất hiện trong file log hay trả về qua API/UI (chỉ hiển thị cờ `configured: true`).
+
+### Mẹo hoặc lỗi thường gặp
+- **Tin nhắn Telegram dài quá 4096 ký tự**: AgentHub tự động chia nhỏ các phản hồi dài thành nhiều tin nhắn tuần tự để đảm bảo không bị lỗi giới hạn độ dài của Telegram API.
+- **Giới hạn tốc độ cập nhật tin nhắn (Rate Limit)**: Trong lúc Claude streaming phản hồi, AgentHub điều tiết tần suất chỉnh sửa tin nhắn (`editMessageText`) tối thiểu 1.5 giây một lần để tránh bị Telegram chặn vì spam API.
+- **Gỡ bỏ chat đã ghép đôi**: Bạn có thể dễ dàng hủy quyền điều khiển của một chat ID bất kỳ trên trang Cài đặt (Settings) của Web Dashboard hoặc gọi API `DELETE /api/telegram/chats/:id`.
