@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { getPlatform } from './platform/index.js';
 
+const processGroups = new Set<number>();
+
 /**
  * Giới hạn worker của test runner trong tiến trình con của worker và bước kiểm tra.
  * Máy người dùng 12 nhân chạy 4–6 worker song song; vitest mặc định bật số thread = số nhân.
@@ -47,6 +49,7 @@ export function runInProcessGroup(
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    if (child.pid) processGroups.add(child.pid);
     const append = (chunk: Buffer) => {
       output += chunk.toString();
       if (output.length > maxOutput) output = output.slice(-maxOutput);
@@ -73,9 +76,23 @@ export function runInProcessGroup(
       clearTimeout(timer);
       // Dọn tiến trình cháu còn sót trong group sau khi lệnh chính đã thoát.
       killGroup('SIGKILL');
+      if (child.pid) processGroups.delete(child.pid);
       resolve({ code, output: output + extra, timedOut });
     };
     child.on('error', (err) => finish(null, String(err)));
     child.on('close', (code) => finish(code));
   });
+}
+
+/** Stop every check/merge process group started by this daemon instance. */
+export function stopProcessGroups(signal: NodeJS.Signals = 'SIGTERM'): void {
+  for (const pid of processGroups) {
+    try { process.kill(-pid, signal); } catch { /* group already exited */ }
+    if (signal === 'SIGTERM') {
+      const timer = setTimeout(() => {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* group already exited */ }
+      }, 10_000);
+      timer.unref();
+    }
+  }
 }

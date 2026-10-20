@@ -34,7 +34,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
-import { listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
+import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
@@ -285,6 +285,15 @@ export class Scheduler {
    * Re-queue their tasks.
    */
   private recoverOnStartup(): void {
+    const shutdownRuns = this.runRepo.getShutdownRuns();
+    for (const run of shutdownRuns) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task && task.status === 'running') {
+        this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
+        this.eventBus.emit('task.queued', run.taskId, { reason: 'daemon_shutdown' });
+      }
+    }
+
     const runningRuns = this.runRepo.getRunning();
     for (const run of runningRuns) {
       if (run.kind === 'reviewer') {
@@ -299,6 +308,7 @@ export class Scheduler {
         continue;
       }
       if (!this.isProcessAlive(run.pid, run.pidStart)) {
+        if (this.recoverFinishedWork(run)) continue;
         this.runRepo.finish(run.id, 'crashed');
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
         this.eventBus.emit('run.crashed', run.taskId, { runId: run.id });
@@ -341,6 +351,62 @@ export class Scheduler {
 
     // Re-check tasks that were in 'checking' status when daemon restarted
     void this.recoverCheckingTasks();
+  }
+
+  private markerForRun(task: TaskRow, startedAt: number): 'done' | 'blocked' | null {
+    if (!task.worktreePath) return null;
+    for (const [name, marker] of [['done', 'DONE'], ['blocked', 'BLOCKED']] as const) {
+      try {
+        const stat = fs.statSync(path.join(task.worktreePath, '.agenthub', marker));
+        if (stat.mtimeMs > startedAt) return name;
+      } catch { /* marker absent */ }
+    }
+    return null;
+  }
+
+  private hasCommitAfter(task: TaskRow, startedAt: number): boolean {
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return false;
+    try {
+      // The worktree HEAD is authoritative here. During restart the branch ref
+      // may not be visible from the project checkout yet, while the commit is
+      // already present in the worktree the worker was using.
+      const output = execFileSync('git', ['log', '-1', '--format=%ct'], {
+        cwd: task.worktreePath && fs.existsSync(task.worktreePath) ? task.worktreePath : project.path,
+        encoding: 'utf8',
+      }).trim();
+      return Boolean(output) && Number(output) * 1000 > startedAt;
+    } catch {
+      return false;
+    }
+  }
+
+  private recoverFinishedWork(run: { id: string; taskId: string; startedAt: string }): boolean {
+    const task = this.taskRepo.get(run.taskId);
+    if (!task) return false;
+    const parsedStartedAt = parseDbTime(run.startedAt);
+    const startedAt = Number.isNaN(parsedStartedAt) ? 0 : parsedStartedAt;
+    const marker = this.markerForRun(task, startedAt);
+    if (marker === 'done') {
+      this.runRepo.finish(run.id, 'done');
+      this.taskRepo.update(run.taskId, { status: 'checking' });
+      this.eventBus.emit('task.checking', run.taskId, { reason: 'restart_marker' });
+      void this.recoverCheckingTasks();
+      return true;
+    }
+    if (marker === 'blocked') {
+      this.runRepo.finish(run.id, 'done');
+      this.taskRepo.update(run.taskId, { status: 'blocked', transientRetries: 0, notBefore: null });
+      this.eventBus.emit('task.blocked', run.taskId, { reason: 'restart_marker' });
+      return true;
+    }
+    if (this.hasCommitAfter(task, startedAt)) {
+      this.runRepo.finish(run.id, 'crashed', undefined, 'resume_after_progress');
+      this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
+      this.eventBus.emit('task.queued', run.taskId, { reason: 'resume_after_progress' });
+      return true;
+    }
+    return false;
   }
 
   async recoverCheckingTasks(): Promise<void> {
@@ -496,9 +562,17 @@ export class Scheduler {
 
   /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
   reapOrphans(): void {
-    const tasks = this.taskRepo.getAll();
     const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
     const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    const activeWorktrees = new Set<string>();
+    for (const run of this.running.values()) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task?.worktreePath) activeWorktrees.add(path.resolve(task.worktreePath));
+    }
+    for (const run of this.reviewerRuns.values()) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task?.worktreePath) activeWorktrees.add(path.resolve(task.worktreePath));
+    }
     for (const info of processes) {
       const dir = info.cwd.replace(/ \(deleted\)$/, '');
       if (info.cwd.endsWith(' (deleted)')) {
@@ -506,15 +580,10 @@ export class Scheduler {
         continue;
       }
 
-      const task = tasks.find((candidate) => {
-        if (!candidate.worktreePath) return false;
-        const worktreePath = path.resolve(candidate.worktreePath);
-        const cwd = path.resolve(info.cwd);
-        return cwd === worktreePath || cwd.startsWith(worktreePath + path.sep);
-      });
-      const taskCanBeReaped = task && (task.status === 'done' || task.status === 'cancelled');
-      if (info.startedAt > oldProcessCutoff) continue;
-      if (task && !taskCanBeReaped) continue;
+      const processCwd = path.resolve(info.cwd);
+      const active = [...activeWorktrees].some((worktree) => processCwd === worktree || processCwd.startsWith(worktree + path.sep));
+      if (active) continue;
+      if (info.startedAt > oldProcessCutoff && !isOrphanProcess(info)) continue;
       reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
   }
@@ -916,6 +985,11 @@ export class Scheduler {
       if (this.stopped) return;
       const task = this.taskRepo.get(taskId);
       if (!task) return;
+
+      // A worker may have exited while the daemon was still alive. Preserve
+      // completed work exactly as startup recovery does.
+      const persistedRun = this.runRepo.get(rt.runId);
+      if (persistedRun && this.recoverFinishedWork(persistedRun)) return;
 
       if (task.worktreePath) {
         await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
@@ -1974,11 +2048,18 @@ export class Scheduler {
     if (!this.stopped) this.triggerTick();
   }
 
-  private killProcessGroup(pid: number): void {
+  private killProcessGroup(pid: number, signal: NodeJS.Signals = 'SIGKILL'): void {
+    if (pid === process.pid) return;
     try {
-      process.kill(-pid, 'SIGKILL');
+      process.kill(-pid, signal);
     } catch {
-      try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      if (this.isProcessAlive(pid)) {
+        try { process.kill(pid, signal); } catch { /* already dead */ }
+      }
+    }
+    if (signal === 'SIGTERM') {
+      const timer = setTimeout(() => this.killProcessGroup(pid), 10_000);
+      timer.unref();
     }
   }
 

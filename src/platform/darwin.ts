@@ -13,7 +13,9 @@ function listProcesses(): PlatformProcessInfo[] {
     if (!match) return [];
     const pid = Number(match[1]);
     const cwd = command(['lsof', '-a', '-d', 'cwd', '-p', String(pid)]).split('\n').find((line) => /cwd/i.test(line))?.trim().split(/\s+/).at(-1) || '';
-    return [{ pid, ppid: Number(match[2]), rss: Number(match[3]) * 1024, cpu: Number(match[4]), cwd, startedAt: 0 } satisfies PlatformProcessInfo];
+    const ppid = Number(match[2]);
+    const parentName = command(['ps', '-o', 'comm=', '-p', String(ppid)]).trim();
+    return [{ pid, ppid, parentName, rss: Number(match[3]) * 1024, cpu: Number(match[4]), cwd, startedAt: 0 } satisfies PlatformProcessInfo];
   });
 }
 

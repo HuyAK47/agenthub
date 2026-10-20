@@ -3,6 +3,7 @@ import type { SyncExecFn } from '../doctor.js';
 export interface PlatformProcessInfo {
   pid: number;
   ppid: number;
+  parentName: string;
   cwd: string;
   cpu: number;
   rss: number;

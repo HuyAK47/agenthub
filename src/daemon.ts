@@ -36,6 +36,7 @@ import { BulletinService } from './bulletin.js';
 import { TelegramBotService } from './telegram.js';
 import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
+import { stopProcessGroups } from './priority.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -262,6 +263,11 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.bulletinService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    stopProcessGroups('SIGTERM');
   } catch {
     // ignore
   }

@@ -21,7 +21,10 @@ function listProcesses(): PlatformProcessInfo[] {
         const rss = Number(status.match(/^VmRSS:\s+(\d+)\s+kB$/m)?.[1] || 0) * 1024;
         const uptime = Number(fs.readFileSync('/proc/uptime', 'utf8').split(/\s+/)[0]);
         const ticks = Number(fields[11] || 0) + Number(fields[12] || 0);
-        result.push({ pid, ppid: Number(fields[1] || 0), cwd, rss, cpu: uptime > 0 ? (ticks / 100 / uptime) * 100 : 0, startedAt: bootTimeMs() + Number(fields[19] || 0) * 10 });
+        const ppid = Number(fields[1] || 0);
+        let parentName = '';
+        try { parentName = fs.readFileSync(`/proc/${ppid}/comm`, 'utf8').trim(); } catch { /* process exited */ }
+        result.push({ pid, ppid, parentName, cwd, rss, cpu: uptime > 0 ? (ticks / 100 / uptime) * 100 : 0, startedAt: bootTimeMs() + Number(fields[19] || 0) * 10 });
       } catch { /* process exited between reads */ }
     }
   } catch { /* /proc is unavailable */ }

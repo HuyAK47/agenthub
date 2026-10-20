@@ -12,10 +12,16 @@ export interface ReaperOptions {
 
 export interface ProcessInfo {
   pid: number;
+  ppid: number;
+  parentName: string;
   cwd: string;
   cpu: number;
   rss: number;
   startedAt: number;
+}
+
+export function isOrphanProcess(info: Pick<ProcessInfo, 'ppid' | 'parentName'>): boolean {
+  return info.ppid === 1 || /^(init|systemd)$/i.test(info.parentName);
 }
 
 const DELETED_SUFFIX = ' (deleted)';
