@@ -36,11 +36,16 @@ import { isClaudeQuotaLimited } from '../claude-sessions/scanner.js';
 import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
+import { mergeTaskIntoBase, MergeError } from '../merge.js';
 
 const execFileAsync = promisify(execFile);
 
 function apiProject(project: ProjectRow): ProjectRow {
-  return { ...project, createdAt: toApiTime(project.createdAt)! };
+  let merge: unknown = null;
+  if (project.merge) {
+    try { merge = JSON.parse(project.merge); } catch { merge = null; }
+  }
+  return { ...project, merge, createdAt: toApiTime(project.createdAt)! } as ProjectRow;
 }
 
 function apiProfile(profile: ProfileRow): ProfileRow {
@@ -104,6 +109,14 @@ export const ProjectHooksInputSchema = z.union([
   }),
 ]);
 
+export const ProjectMergeSchema = z.object({
+  enabled: z.boolean().default(false),
+  worktrees: z.record(z.string().min(1), z.string().min(1)).default({}),
+  checks: z.array(z.string().min(1)).default([]),
+  timeoutSec: z.number().int().positive().default(600),
+});
+export type ProjectMerge = z.infer<typeof ProjectMergeSchema>;
+
 export const CreateProjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1),
@@ -113,6 +126,7 @@ export const CreateProjectSchema = z.object({
   maxParallel: z.number().int().positive().default(3),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
+  merge: ProjectMergeSchema.nullable().optional(),
 });
 
 export const UpdateProjectSchema = z.object({
@@ -122,6 +136,7 @@ export const UpdateProjectSchema = z.object({
   maxParallel: z.number().int().positive().optional(),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
+  merge: ProjectMergeSchema.nullable().optional(),
 });
 
 export const CreateTaskSchema = z.object({
@@ -150,6 +165,7 @@ export const ReviewTaskSchema = z.object({
   verdict: z.enum(['approved', 'changes_requested']),
   feedback: z.string().optional(),
   by: z.string().optional(),
+  merge: z.boolean().optional().default(false),
 }).refine(
   (d) => d.verdict !== 'changes_requested' || (typeof d.feedback === 'string' && d.feedback.trim().length > 0),
   { message: 'Feedback là bắt buộc khi changes_requested' },
@@ -716,6 +732,7 @@ export class AppService {
       maxParallel: parsed.maxParallel,
       checks: parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks ? JSON.stringify(parsed.hooks) : null,
+      merge: parsed.merge ? JSON.stringify(parsed.merge) : null,
     });
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -729,6 +746,7 @@ export class AppService {
       ...parsed,
       checks: parsed.checks === undefined ? undefined : parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks === undefined ? undefined : parsed.hooks ? JSON.stringify(parsed.hooks) : null,
+      merge: parsed.merge === undefined ? undefined : parsed.merge ? JSON.stringify(parsed.merge) : null,
     });
     this.invalidateOutOfScopeClaudeScanStates();
     return this.getProject(id);
@@ -1288,7 +1306,7 @@ export class AppService {
     return this.taskRepo.get(taskId)!;
   }
 
-  reviewTask(idParam: string, raw: unknown): TaskRow {
+  async reviewTask(idParam: string, raw: unknown): Promise<TaskRow> {
     const taskId = toTaskId(idParam);
     const task = this.taskRepo.get(taskId);
     if (!task) {
@@ -1300,6 +1318,18 @@ export class AppService {
 
     const parsed = ReviewTaskSchema.parse(raw);
 
+    let mergeResult: { mergeCommit: string; checks: string[] } | undefined;
+    if (parsed.verdict === 'approved' && parsed.merge) {
+      const project = this.projectRepo.get(task.projectId);
+      if (!project) throw new HttpError(404, 'not_found', `Project "${task.projectId}" không tồn tại`);
+      try {
+        mergeResult = await mergeTaskIntoBase(task, project);
+      } catch (error) {
+        if (error instanceof MergeError) throw new HttpError(error.statusCode, error.error, error.message);
+        throw error;
+      }
+    }
+
     const reviewId = crypto.randomUUID();
     this.reviewRepo.insert({
       id: reviewId,
@@ -1310,6 +1340,7 @@ export class AppService {
     });
 
     this.scheduler.reviewTask(taskId, parsed.verdict, parsed.feedback, parsed.by);
+    if (mergeResult) this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
     return this.taskRepo.get(taskId)!;
   }
 

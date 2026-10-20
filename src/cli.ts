@@ -214,6 +214,10 @@ async function main() {
       await cmdTask(config, subcommand, args.slice(2));
       break;
 
+    case 'review':
+      await cmdReview(config, args.slice(1));
+      break;
+
     case 'brain':
       await cmdBrain(config, args.slice(1));
       break;
@@ -245,6 +249,7 @@ Cách dùng:
   agenthub profile list|check|login   Quản lý hồ sơ
   agenthub project add <name> <path>  Thêm project
   agenthub task add|list|show|log     Quản lý task
+  agenthub review <id> --approve [--merge]  Duyệt task, có thể merge vào base worktree
   agenthub brain <act> "<detail>" [--task id] Cập nhật trạng thái Claude
   agenthub savings import-legacy [dir] Nhập lịch sử token từ log cũ
   agenthub savings backfill-lines [--project x] Tính lại số dòng cho các task có nhánh còn tồn tại
@@ -719,6 +724,25 @@ async function cmdTask(
   }
 
   ctx.db.close();
+}
+
+async function cmdReview(config: ReturnType<typeof loadConfig>, extraArgs: string[]): Promise<void> {
+  const taskId = extraArgs[0];
+  if (!taskId || !extraArgs.includes('--approve')) {
+    console.error('Cách dùng: agenthub review <id> --approve [--merge]');
+    process.exit(1);
+  }
+  const ctx = createContext(config);
+  try {
+    const task = await ctx.service.reviewTask(taskId, {
+      verdict: 'approved',
+      merge: extraArgs.includes('--merge'),
+      by: 'cli',
+    });
+    console.log(`✓ Đã duyệt task "${task.id}"${extraArgs.includes('--merge') ? ' và merge' : ''}`);
+  } finally {
+    ctx.db.close();
+  }
 }
 
 export async function cmdSavings(
