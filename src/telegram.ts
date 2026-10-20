@@ -7,6 +7,7 @@ import { AgentHubConfig, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
+import type { ChatService } from './chat/service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -81,6 +82,7 @@ export interface TelegramServiceOptions {
   sleep?: (ms: number) => Promise<void>;
   execFile?: GitDiffFn;
   tokenOverride?: string;
+  chatService?: ChatService;
 }
 
 interface PendingChatState {
@@ -94,6 +96,15 @@ interface SendQueueItem {
   replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] };
   resolve: (res: unknown) => void;
   reject: (err: unknown) => void;
+}
+
+interface ChatReplyState {
+  chatId: number;
+  messageId: number;
+  text: string;
+  lastEditAt: number;
+  editTimer?: NodeJS.Timeout;
+  editing: boolean;
 }
 
 export function redactTelegramToken(value: unknown, token: string | null): string {
@@ -132,6 +143,7 @@ export class TelegramBotService {
   private now: () => number;
   private sleepFn: (ms: number) => Promise<void>;
   private execFileFn: GitDiffFn;
+  private chatService?: ChatService;
 
   private token: string | null = null;
   private running = false;
@@ -157,6 +169,8 @@ export class TelegramBotService {
 
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
+  private chatReplies = new Map<string, ChatReplyState>();
+  private chatSessions = new Map<number, string>();
 
   constructor(opts: TelegramServiceOptions) {
     this.config = opts.config;
@@ -169,6 +183,7 @@ export class TelegramBotService {
     this.now = opts.now || (() => Date.now());
     this.sleepFn = opts.sleep || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
+    this.chatService = opts.chatService;
 
     if (opts.tokenOverride) {
       this.token = opts.tokenOverride;
@@ -243,6 +258,7 @@ export class TelegramBotService {
     if (!this.boundEventHandler) {
       this.boundEventHandler = (type: string, taskId?: string, payload?: unknown) => {
         this.handleEvent(type, taskId, payload);
+        this.handleChatEvent(type, taskId, payload);
       };
       this.eventBus.on('*', this.boundEventHandler);
     }
@@ -266,6 +282,10 @@ export class TelegramBotService {
       this.eventBus.off('*', this.boundEventHandler);
       this.boundEventHandler = null;
     }
+    for (const reply of this.chatReplies.values()) {
+      if (reply.editTimer) clearTimeout(reply.editTimer);
+    }
+    this.chatReplies.clear();
 
     if (this.pollPromise) {
       try {
@@ -446,6 +466,7 @@ export class TelegramBotService {
 
     // 3. Command processing
     if (!rawText.startsWith('/')) {
+      await this.handleChatMessage(chatId, rawText);
       return;
     }
 
@@ -460,6 +481,23 @@ export class TelegramBotService {
           chatId,
           '👋 Chào bạn! Bạn đã kết nối với AgentHub.\nGõ /help để xem danh sách các lệnh.',
         );
+        break;
+
+      case '/new':
+        if (!this.chatService) {
+          await this.sendMessage(chatId, 'Chat Claude chưa được bật.');
+          break;
+        }
+        this.chatSessions.set(chatId, `telegram:${chatId}:${crypto.randomUUID()}`);
+        await this.sendMessage(chatId, '🆕 Đã mở phiên chat mới.');
+        break;
+
+      case '/stop':
+        await this.stopChat(chatId);
+        break;
+
+      case '/compact':
+        await this.sendMessage(chatId, 'ℹ️ Tính năng nén ngữ cảnh chưa được bật.');
         break;
 
       case '/help':
@@ -514,6 +552,155 @@ export class TelegramBotService {
     }
   }
 
+  private sessionIdForChat(chatId: number): string {
+    const existing = this.chatSessions.get(chatId);
+    if (existing) return existing;
+    const sessionId = `telegram:${chatId}`;
+    this.chatSessions.set(chatId, sessionId);
+    return sessionId;
+  }
+
+  private async handleChatMessage(chatId: number, text: string): Promise<void> {
+    if (!this.chatService) {
+      await this.sendMessage(chatId, 'ℹ️ Tin nhắn thường chỉ được dùng để chat khi Chat Claude đã bật.');
+      return;
+    }
+    if (!text) return;
+    const sessionId = this.sessionIdForChat(chatId);
+    let initial: unknown;
+    try {
+      initial = await this.sendMessage(chatId, '⏳ Đang xử lý…');
+      const messageId = this.telegramMessageId(initial);
+      if (messageId === null) throw new Error('Telegram không trả về message_id');
+      this.chatReplies.set(sessionId, { chatId, messageId, text: '⏳ Đang xử lý…', lastEditAt: this.now(), editing: false });
+      this.chatService.sendMessage(sessionId, text);
+    } catch (err: unknown) {
+      await this.sendMessage(chatId, `❌ ${this.escapeHtml(err instanceof Error ? err.message : String(err))}`);
+    }
+  }
+
+  private async stopChat(chatId: number): Promise<void> {
+    if (!this.chatService) {
+      await this.sendMessage(chatId, 'Chat Claude chưa được bật.');
+      return;
+    }
+    try {
+      this.chatService.cancelSession(this.sessionIdForChat(chatId));
+      await this.sendMessage(chatId, '⏹ Đã dừng lượt chat hiện tại.');
+    } catch (err: unknown) {
+      await this.sendMessage(chatId, `❌ ${this.escapeHtml(err instanceof Error ? err.message : String(err))}`);
+    }
+  }
+
+  private handleChatEvent(type: string, taskId?: string, payload?: unknown): void {
+    if (!this.chatService) return;
+    const data = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const sessionId = typeof data.sessionId === 'string' ? data.sessionId : taskId;
+    if (!sessionId) return;
+    const reply = this.chatReplies.get(sessionId);
+    if (!reply) return;
+    if (type === 'chat.delta' && typeof data.text === 'string') {
+      reply.text += data.text;
+      this.scheduleChatEdit(sessionId);
+    } else if (type === 'chat.done') {
+      void this.finishChatReply(sessionId, false);
+    } else if (type === 'chat.error') {
+      reply.text = `❌ ${typeof data.message === 'string' ? data.message : 'Lỗi chat'}`;
+      void this.finishChatReply(sessionId, true);
+    } else if (type === 'chat.permission_request') {
+      void this.sendPermissionRequest(reply.chatId, data);
+    }
+  }
+
+  private scheduleChatEdit(sessionId: string): void {
+    const reply = this.chatReplies.get(sessionId);
+    if (!reply || reply.editing || reply.editTimer) return;
+    const wait = Math.max(0, 2000 - (this.now() - reply.lastEditAt));
+    reply.editTimer = setTimeout(() => {
+      reply.editTimer = undefined;
+      void this.editChatReply(sessionId);
+    }, wait);
+  }
+
+  private async editChatReply(sessionId: string): Promise<void> {
+    const reply = this.chatReplies.get(sessionId);
+    if (!reply || reply.editing) return;
+    reply.editing = true;
+    try {
+      await this.editMessage(reply.chatId, reply.messageId, this.chatProgressText(reply.text));
+      reply.lastEditAt = this.now();
+    } catch {
+      // The final reply is attempted again when the turn completes.
+    } finally {
+      reply.editing = false;
+    }
+    if (this.chatReplies.has(sessionId) && this.chatReplies.get(sessionId)?.text !== reply.text) this.scheduleChatEdit(sessionId);
+  }
+
+  private async finishChatReply(sessionId: string, keepText: boolean): Promise<void> {
+    const reply = this.chatReplies.get(sessionId);
+    if (!reply) return;
+    if (reply.editTimer) clearTimeout(reply.editTimer);
+    let text = reply.text;
+    if (!keepText) {
+      try {
+        const last = this.chatService?.listMessages(sessionId, 5).messages.filter((m) => m.role === 'assistant').pop();
+        if (last) text = last.content;
+      } catch {
+        // Keep streamed text when the session is already gone.
+      }
+    }
+    this.chatReplies.delete(sessionId);
+    const chunks = this.splitTelegramText(text || '');
+    await this.editMessage(reply.chatId, reply.messageId, chunks.shift() || '');
+    for (const chunk of chunks) await this.sendMessage(reply.chatId, chunk);
+  }
+
+  private async sendPermissionRequest(chatId: number, data: Record<string, unknown>): Promise<void> {
+    const id = typeof data.id === 'string' ? data.id : undefined;
+    if (!id) return;
+    const tool = typeof data.toolName === 'string' ? data.toolName : 'công cụ';
+    await this.sendMessage(chatId, `🔐 Claude cần quyền dùng <b>${this.escapeHtml(tool)}</b>.`, {
+      inline_keyboard: [[
+        { text: 'Cho phép', callback_data: `permission:allow:${id}` },
+        { text: 'Luôn cho phép', callback_data: `permission:always:${id}` },
+        { text: 'Từ chối', callback_data: `permission:deny:${id}` },
+      ]],
+    });
+  }
+
+  private telegramMessageId(value: unknown): number | null {
+    const messageId = (value && typeof value === 'object' ? (value as { result?: { message_id?: unknown } }).result?.message_id : undefined);
+    return typeof messageId === 'number' ? messageId : null;
+  }
+
+  private chatProgressText(text: string): string {
+    return this.escapeHtml(text.slice(-3900)).replace(/\n/g, '<br>');
+  }
+
+  private splitTelegramText(text: string): string[] {
+    const safe = text || ' ';
+    const chunks: string[] = [];
+    for (let i = 0; i < safe.length; i += 3900) chunks.push(this.escapeHtml(safe.slice(i, i + 3900)));
+    return chunks;
+  }
+
+  private async editMessage(chatId: number, messageId: number, text: string): Promise<unknown> {
+    if (!this.token) return null;
+    const url = `https://api.telegram.org/bot${this.token}/editMessageText`;
+    try {
+      const res = await this.fetchFn(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: text || ' ', parse_mode: 'HTML' }),
+      });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      return res.json();
+    } catch (err) {
+      throw new Error(`Telegram editMessageText request failed: ${redactTelegramToken(err, this.token)}`);
+    }
+  }
+
   // --- Callback Query Handling (Inline Buttons) ---
 
   private async handleCallbackQuery(query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
@@ -535,6 +722,23 @@ export class TelegramBotService {
     const domain = parts[0];
     const action = parts[1];
     const taskIdOrParam = parts.slice(2).join(':');
+
+    if (domain === 'permission') {
+      if (!this.chatService) {
+        await this.answerCallbackQuery(query.id, 'Chat chưa sẵn sàng.');
+        return;
+      }
+      const decision = action === 'allow' ? 'allow' : action === 'always' ? 'allow_always' : 'deny';
+      try {
+        this.chatService.decidePermission(taskIdOrParam, decision);
+        await this.answerCallbackQuery(query.id, decision === 'deny' ? 'Đã từ chối.' : 'Đã cho phép.');
+        await this.sendMessage(chatId, decision === 'deny' ? '🚫 Đã từ chối quyền công cụ.' : '✅ Đã cấp quyền công cụ.');
+      } catch (err: unknown) {
+        await this.answerCallbackQuery(query.id, 'Yêu cầu đã hết hạn.');
+        await this.sendMessage(chatId, `⚠️ ${this.escapeHtml(err instanceof Error ? err.message : String(err))}`);
+      }
+      return;
+    }
 
     switch (domain) {
       case 'cancel': {

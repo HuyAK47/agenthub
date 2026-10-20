@@ -357,6 +357,35 @@ export class ChatService {
     return session;
   }
 
+  getOrCreateSession(id: string, body: {
+    title?: string | null;
+    projectId?: string | null;
+    mode?: 'safe' | 'full';
+    model?: string;
+    profileName?: string | null;
+  }): ChatSessionRow {
+    const existing = this.chatSessionRepo.get(id);
+    if (existing) return existing;
+    const mode = body.mode || 'safe';
+    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
+      throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
+    }
+    const model = body.model ?? this.config.chat.model;
+    if (model !== '' && model !== 'sonnet' && model !== 'haiku') {
+      throw new HttpError(400, 'bad_request', 'Model chat phải là mặc định, sonnet hoặc haiku');
+    }
+    this.chatSessionRepo.insert({
+      id,
+      projectId: body.projectId || null,
+      title: body.title || 'Cuộc trò chuyện Telegram',
+      mode,
+      model,
+      busy: 0,
+      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+    });
+    return this.chatSessionRepo.get(id)!;
+  }
+
   updateSession(
     id: string,
     body: {
