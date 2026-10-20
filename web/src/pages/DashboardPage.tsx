@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans } from '../api/client';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -17,6 +17,8 @@ import {
   Radio,
   Send,
   HardDrive,
+  Play,
+  Pause,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
 import { TelegramCard } from '../components/TelegramCard';
@@ -89,6 +91,20 @@ export const DashboardPage: React.FC = () => {
   const { data: claudeFailover } = useQuery({ queryKey: ['claude-failover'], queryFn: getClaudeFailover, refetchInterval: 5000 });
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
+
+  const queryClient = useQueryClient();
+  const pauseMutation = useMutation({
+    mutationFn: (id: string) => pauseTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
+  const resumeMutation = useMutation({
+    mutationFn: (id: string) => resumeTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
 
   const handleReap = async () => {
     if (isReaping) return;
@@ -448,6 +464,7 @@ export const DashboardPage: React.FC = () => {
                   <th className="px-6 py-3">Model</th>
                   <th className="px-6 py-3">{t('dashboard.thProfile')}</th>
                   <th className="px-6 py-3">{t('dashboard.thElapsed')}</th>
+                  <th className="px-6 py-3">{t('dashboard.thResources')}</th>
                   <th className="px-6 py-3 text-right">{t('dashboard.thDetails')}</th>
                 </tr>
               </thead>
@@ -472,6 +489,20 @@ export const DashboardPage: React.FC = () => {
                         </Link>
                         {worker.title && worker.title !== worker.taskId && (
                           <div className="text-xs text-[var(--text-muted)] font-mono mt-0.5">{worker.taskId}</div>
+                        )}
+                        {worker.paused && (
+                          <div className="mt-1.5">
+                            <span
+                              data-testid={`worker-paused-${worker.taskId}`}
+                              className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium border ${
+                                worker.pauseReason === 'load'
+                                  ? 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]'
+                                  : 'bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border-[var(--border-subtle)]'
+                              }`}
+                            >
+                              {worker.pauseReason === 'load' ? t('status.pausedOverload') : t('status.paused')}
+                            </span>
+                          </div>
                         )}
                         {((worker.noCommitMinutes != null && worker.noCommitMinutes > 0) || worker.isLooping) && (
                           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -500,13 +531,46 @@ export const DashboardPage: React.FC = () => {
                       <td className="px-6 py-4 text-[var(--text-secondary)]">
                         <RunningDuration startedAt={worker.startedAt} />
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <Link
-                          to={`/tasks/${encodeURIComponent(routeId)}`}
-                          className="text-xs font-medium text-[var(--t-accent)] hover:text-[var(--t-accent)] inline-flex items-center gap-1"
-                        >
-                          {t('common.view')} <ArrowRight className="w-3.5 h-3.5" />
-                        </Link>
+                      <td className="px-6 py-4 text-xs text-[var(--text-secondary)] whitespace-nowrap">
+                        <div className="font-mono">
+                          {worker.rss ? `${(worker.rss / (1024 * 1024)).toFixed(0)} MB` : '0 MB'}
+                        </div>
+                        <div className="text-[11px] text-[var(--text-muted)] font-mono">
+                          {(worker.cpu ?? 0).toFixed(1)}% CPU
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-2">
+                          {worker.paused ? (
+                            <button
+                              type="button"
+                              onClick={() => resumeMutation.mutate(worker.taskId)}
+                              disabled={resumeMutation.isPending}
+                              className="px-2.5 py-1 text-xs font-medium rounded-md bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] hover:bg-[color-mix(in_srgb,var(--t-ok)_25%,transparent)] border border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)] inline-flex items-center gap-1 cursor-pointer"
+                              title={t('dashboard.btnResume')}
+                            >
+                              <Play className="w-3 h-3" />
+                              <span>{t('dashboard.btnResume')}</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => pauseMutation.mutate(worker.taskId)}
+                              disabled={pauseMutation.isPending}
+                              className="px-2.5 py-1 text-xs font-medium rounded-md bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] inline-flex items-center gap-1 cursor-pointer"
+                              title={t('dashboard.btnPause')}
+                            >
+                              <Pause className="w-3 h-3" />
+                              <span>{t('dashboard.btnPause')}</span>
+                            </button>
+                          )}
+                          <Link
+                            to={`/tasks/${encodeURIComponent(routeId)}`}
+                            className="text-xs font-medium text-[var(--t-accent)] hover:text-[var(--t-accent)] inline-flex items-center gap-1"
+                          >
+                            {t('common.view')} <ArrowRight className="w-3.5 h-3.5" />
+                          </Link>
+                        </div>
                       </td>
                     </tr>
                   );

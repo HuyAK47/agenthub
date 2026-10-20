@@ -341,6 +341,18 @@ export async function cancelTask(id: string): Promise<Task> {
   });
 }
 
+export async function pauseTask(id: string): Promise<{ ok: boolean; paused: boolean }> {
+  return apiFetch<{ ok: boolean; paused: boolean }>(`/api/tasks/${encodeURIComponent(id)}/pause`, {
+    method: 'POST',
+  });
+}
+
+export async function resumeTask(id: string): Promise<{ ok: boolean; paused: boolean }> {
+  return apiFetch<{ ok: boolean; paused: boolean }>(`/api/tasks/${encodeURIComponent(id)}/resume`, {
+    method: 'POST',
+  });
+}
+
 export async function reviewTask(
   id: string,
   data: ReviewTaskInput,

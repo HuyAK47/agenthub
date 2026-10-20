@@ -130,7 +130,13 @@ export interface Task {
     noCommitMinutes?: number | null;
     isLooping?: boolean;
     loopingCommand?: string | null;
+    paused?: boolean;
+    pauseReason?: 'manual' | 'load' | null;
+    rss?: number;
+    cpu?: number;
   } | null;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
   checks?: CheckResult[];
   sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
 }
@@ -182,6 +188,10 @@ export interface RunningWorker {
   slug?: string;
   title?: string;
   worktreePath?: string | null;
+  rss?: number;
+  cpu?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
 }
 
 export type BrainActivity =
