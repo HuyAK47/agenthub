@@ -488,7 +488,11 @@ export class TelegramBotService {
           await this.sendMessage(chatId, 'Chat Claude chưa được bật.');
           break;
         }
-        this.chatSessions.set(chatId, `telegram:${chatId}:${crypto.randomUUID()}`);
+        {
+          const sessionId = `telegram:${chatId}:${crypto.randomUUID()}`;
+          this.chatSessions.set(chatId, sessionId);
+          this.chatService.getOrCreateSession(sessionId, { title: 'Cuộc trò chuyện Telegram' });
+        }
         await this.sendMessage(chatId, '🆕 Đã mở phiên chat mới.');
         break;
 
@@ -569,6 +573,7 @@ export class TelegramBotService {
     const sessionId = this.sessionIdForChat(chatId);
     let initial: unknown;
     try {
+      this.chatService.getOrCreateSession(sessionId, { title: 'Cuộc trò chuyện Telegram' });
       initial = await this.sendMessage(chatId, '⏳ Đang xử lý…');
       const messageId = this.telegramMessageId(initial);
       if (messageId === null) throw new Error('Telegram không trả về message_id');
@@ -607,7 +612,7 @@ export class TelegramBotService {
     } else if (type === 'chat.error') {
       reply.text = `❌ ${typeof data.message === 'string' ? data.message : 'Lỗi chat'}`;
       void this.finishChatReply(sessionId, true);
-    } else if (type === 'chat.permission_request') {
+    } else if ((type === 'chat.permission_request' || type === 'chat.permission') && typeof data.id === 'string') {
       void this.sendPermissionRequest(reply.chatId, data);
     }
   }
@@ -675,7 +680,7 @@ export class TelegramBotService {
   }
 
   private chatProgressText(text: string): string {
-    return this.escapeHtml(text.slice(-3900)).replace(/\n/g, '<br>');
+    return this.escapeHtml(text.slice(-3900));
   }
 
   private splitTelegramText(text: string): string[] {
@@ -688,12 +693,19 @@ export class TelegramBotService {
   private async editMessage(chatId: number, messageId: number, text: string): Promise<unknown> {
     if (!this.token) return null;
     const url = `https://api.telegram.org/bot${this.token}/editMessageText`;
-    try {
-      const res = await this.fetchFn(url, {
+    const request = async (parseMode: boolean): Promise<Response> => this.fetchFn(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: text || ' ', parse_mode: 'HTML' }),
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          text: text || ' ',
+          ...(parseMode ? { parse_mode: 'HTML' } : {}),
+        }),
       });
+    try {
+      let res = await request(true);
+      if (!res.ok) res = await request(false);
       if (!res.ok) throw new Error(`status ${res.status}`);
       return res.json();
     } catch (err) {
