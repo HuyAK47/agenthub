@@ -856,13 +856,13 @@ export class ChatService {
                   title: session.title ? `${session.title} (tóm tắt)` : 'Phiên mới (tóm tắt)',
                   mode: session.mode,
                   model: session.model,
-                  profileName: session.profileName,
+                  profileName: (session.profileName && this.profileRepo?.get(session.profileName)) ? session.profileName : undefined,
                 });
 
                 this.chatMessageRepo.insert({
                   id: crypto.randomUUID(),
                   sessionId: newSession.id,
-                  role: 'assistant',
+                  role: 'user',
                   content: summaryText,
                 });
                 this.chatSessionRepo.touchLastMessage(newSession.id);
@@ -964,13 +964,13 @@ export class ChatService {
               title: session.title ? `${session.title} (tóm tắt)` : 'Phiên mới (tóm tắt)',
               mode: session.mode,
               model: session.model,
-              profileName: session.profileName,
+              profileName: (session.profileName && this.profileRepo?.get(session.profileName)) ? session.profileName : undefined,
             });
 
             this.chatMessageRepo.insert({
               id: crypto.randomUUID(),
               sessionId: newSession.id,
-              role: 'assistant',
+              role: 'user',
               content: summaryText,
             });
             this.chatSessionRepo.touchLastMessage(newSession.id);

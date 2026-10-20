@@ -1087,7 +1087,7 @@ export class ChatSessionRepo {
              updatedAt = datetime('now')
          WHERE id = ?`
       )
-      .run(usage.inputTokens, usage.outputTokens, usage.contextTokens ?? null, id);
+      .run(usage.inputTokens ?? 0, usage.outputTokens ?? 0, usage.contextTokens ?? null, id);
   }
 
   updateClaudeSessionId(id: string, claudeSessionId: string): void {
