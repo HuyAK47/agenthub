@@ -175,13 +175,20 @@ export class ChatService {
     this.queue = [];
   }
 
-  listSessions(): Array<{
+  listSessions(options?: { search?: string }): Array<{
     id: string;
     projectId: string | null;
     title: string | null;
     mode: 'safe' | 'full';
     model: string;
     busy: number;
+    pinned: number;
+    archived: number;
+    lastMessageAt: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    contextTokens: number;
+    createdAt: string;
     updatedAt: string;
     lastMessage?: {
       id: string;
@@ -190,7 +197,10 @@ export class ChatService {
       createdAt: string;
     };
   }> {
-    const sessions = this.chatSessionRepo.getAll();
+    const search = options?.search?.trim();
+    const sessions = search
+      ? this.chatSessionRepo.search(search)
+      : this.chatSessionRepo.getAll();
     return sessions.map((s) => {
       const last = this.chatMessageRepo.getLastBySession(s.id);
       const res: {
@@ -200,6 +210,13 @@ export class ChatService {
         mode: 'safe' | 'full';
         model: string;
         busy: number;
+        pinned: number;
+        archived: number;
+        lastMessageAt: string | null;
+        inputTokens: number;
+        outputTokens: number;
+        contextTokens: number;
+        createdAt: string;
         updatedAt: string;
         lastMessage?: {
           id: string;
@@ -214,6 +231,13 @@ export class ChatService {
         mode: s.mode,
         model: s.model,
         busy: s.busy,
+        pinned: s.pinned ?? 0,
+        archived: s.archived ?? 0,
+        lastMessageAt: s.lastMessageAt ?? last?.createdAt ?? null,
+        inputTokens: s.inputTokens ?? 0,
+        outputTokens: s.outputTokens ?? 0,
+        contextTokens: s.contextTokens ?? 0,
+        createdAt: s.createdAt,
         updatedAt: s.updatedAt,
       };
       if (last) {
@@ -258,7 +282,14 @@ export class ChatService {
     return this.chatSessionRepo.get(id)!;
   }
 
-  updateSession(id: string, body: { title?: string }): ChatSessionRow {
+  updateSession(
+    id: string,
+    body: {
+      title?: string;
+      pinned?: boolean | number;
+      archived?: boolean | number;
+    },
+  ): ChatSessionRow {
     const session = this.chatSessionRepo.get(id);
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${id}" không tồn tại`);
@@ -266,6 +297,12 @@ export class ChatService {
 
     if (body.title !== undefined) {
       this.chatSessionRepo.updateTitle(id, body.title);
+    }
+    if (body.pinned !== undefined) {
+      this.chatSessionRepo.updatePinned(id, body.pinned ? 1 : 0);
+    }
+    if (body.archived !== undefined) {
+      this.chatSessionRepo.updateArchived(id, body.archived ? 1 : 0);
     }
 
     return this.chatSessionRepo.get(id)!;
@@ -281,6 +318,12 @@ export class ChatService {
       throw new HttpError(409, 'conflict', 'Không thể xóa phiên đang bận');
     }
 
+    // Close persistent process if any
+    const proc = this.persistentProcesses.get(id);
+    if (proc) {
+      this.closePersistentProcess(proc);
+    }
+
     // Remove from queue if any
     this.queue = this.queue.filter((t) => t.sessionId !== id);
     this.chatSessionRepo.delete(id);
@@ -289,39 +332,104 @@ export class ChatService {
 
   listMessages(
     sessionId: string,
-    limit = 200,
-  ): Array<{
-    id: string;
-    sessionId: string;
-    role: string;
-    content: string;
-    meta: unknown;
-    createdAt: string;
-  }> {
+    optionsOrLimit?: number | { limit?: number; before?: string },
+  ): {
+    messages: Array<{
+      id: string;
+      sessionId: string;
+      role: string;
+      content: string;
+      meta: unknown;
+      createdAt: string;
+    }>;
+    hasMore: boolean;
+  } {
     const session = this.chatSessionRepo.get(sessionId);
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
     }
 
-    const messages = this.chatMessageRepo.getBySession(sessionId, limit);
-    return messages.map((m) => {
-      let parsedMeta: unknown = null;
-      if (m.meta) {
-        try {
-          parsedMeta = JSON.parse(m.meta);
-        } catch {
-          parsedMeta = m.meta;
+    const limit = typeof optionsOrLimit === 'number'
+      ? optionsOrLimit
+      : optionsOrLimit?.limit ?? 50;
+    const before = typeof optionsOrLimit === 'object'
+      ? optionsOrLimit?.before
+      : undefined;
+    const safeLimit = isNaN(limit) || limit <= 0 ? 50 : limit;
+
+    const { messages, hasMore } = this.chatMessageRepo.getPaginated(sessionId, before, safeLimit);
+
+    return {
+      messages: messages.map((m) => {
+        let parsedMeta: unknown = null;
+        if (m.meta) {
+          try {
+            parsedMeta = JSON.parse(m.meta);
+          } catch {
+            parsedMeta = m.meta;
+          }
         }
+        return {
+          id: m.id,
+          sessionId: m.sessionId,
+          role: m.role,
+          content: m.content,
+          meta: parsedMeta,
+          createdAt: m.createdAt,
+        };
+      }),
+      hasMore,
+    };
+  }
+
+  exportSession(sessionId: string): string {
+    const session = this.chatSessionRepo.get(sessionId);
+    if (!session) {
+      throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
+    }
+
+    const messages = this.chatMessageRepo.getBySession(sessionId, 100000);
+    const lines: string[] = [];
+    lines.push(`# ${session.title || 'Cuộc trò chuyện'}\n`);
+    lines.push(`- **ID:** \`${session.id}\``);
+    lines.push(`- **Mode:** \`${session.mode}\``);
+    if (session.model) {
+      lines.push(`- **Model:** \`${session.model}\``);
+    }
+    lines.push(`- **Created:** ${session.createdAt}`);
+    if (session.inputTokens > 0 || session.outputTokens > 0) {
+      lines.push(
+        `- **Tokens:** ${session.inputTokens} input, ${session.outputTokens} output (${session.contextTokens} context)`,
+      );
+    }
+    lines.push('\n---\n');
+
+    for (const msg of messages) {
+      let roleLabel = 'User';
+      if (msg.role === 'assistant') {
+        roleLabel = 'Assistant';
+      } else if (msg.role === 'tool') {
+        let toolName = '';
+        if (msg.meta) {
+          try {
+            const parsed = JSON.parse(msg.meta);
+            if (parsed && typeof parsed.name === 'string') {
+              toolName = `: ${parsed.name}`;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        roleLabel = `Tool${toolName}`;
+      } else if (msg.role === 'error') {
+        roleLabel = 'Error';
       }
-      return {
-        id: m.id,
-        sessionId: m.sessionId,
-        role: m.role,
-        content: m.content,
-        meta: parsedMeta,
-        createdAt: m.createdAt,
-      };
-    });
+
+      lines.push(`### ${roleLabel}\n`);
+      lines.push(`${msg.content}\n`);
+    }
+
+    return lines.join('\n');
   }
 
   sendMessage(
@@ -348,6 +456,19 @@ export class ChatService {
 
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
+
+    // Auto set title from first user message (cut to 60 chars) if not yet set
+    const isFirstMessage = this.chatMessageRepo.getBySession(sessionId, 1).length === 0;
+    const needsTitle = !session.title || session.title.trim() === '' || session.title === 'Cuộc trò chuyện mới';
+    if (isFirstMessage && needsTitle) {
+      const autoTitle = text.trim().slice(0, 60);
+      if (autoTitle) {
+        this.chatSessionRepo.updateTitle(sessionId, autoTitle);
+        session.title = autoTitle;
+      }
+    }
+
+    this.chatSessionRepo.touchLastMessage(sessionId);
 
     // Store user message
     this.chatMessageRepo.insert({
@@ -578,6 +699,7 @@ export class ChatService {
             content: ev.summary,
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
+
         } else if (ev.type === 'result') {
           resultHandled = true;
           if (ev.result) accumulatedText += ev.result;
@@ -586,6 +708,9 @@ export class ChatService {
             if (sess && !sess.claudeSessionId) {
               this.chatSessionRepo.updateClaudeSessionId(turn.sessionId, ev.sessionId);
             }
+          }
+          if (ev.usage) {
+            this.chatSessionRepo.addUsage(turn.sessionId, ev.usage);
           }
 
           if (ev.isError) {
@@ -608,12 +733,14 @@ export class ChatService {
                 costUsd: ev.costUsd,
                 numTurns: ev.numTurns,
                 durationMs: ev.durationMs,
+                ...(ev.usage ? { usage: ev.usage } : {}),
               }),
             });
             this.emitChatDone(turn.sessionId, turn.messageId, {
               durationMs: ev.durationMs ?? (Date.now() - startTime),
               costUsd: ev.costUsd,
               numTurns: ev.numTurns,
+              usage: ev.usage,
             });
           }
         }
@@ -652,6 +779,7 @@ export class ChatService {
             content: ev.summary,
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
+
         }
       }
 
@@ -776,12 +904,15 @@ export class ChatService {
     this.runningTurns.delete(proc.sessionId);
     this.recordClaudeQuota(ev.result || '', proc.stderrOutput, 0);
     this.chatSessionRepo.setBusy(proc.sessionId, 0);
+    if (ev.usage) {
+      this.chatSessionRepo.addUsage(proc.sessionId, ev.usage);
+    }
     if (ev.isError) {
       this.chatMessageRepo.insert({ id: running.messageId, sessionId: proc.sessionId, role: 'error', content: ev.result || 'Claude error' });
       this.emitChatError(proc.sessionId, running.messageId, ev.result || 'Claude error');
     } else {
-      this.chatMessageRepo.insert({ id: running.messageId, sessionId: proc.sessionId, role: 'assistant', content: ev.result || '', meta: JSON.stringify({ costUsd: ev.costUsd, durationMs: ev.durationMs, numTurns: ev.numTurns }) });
-      this.emitChatDone(proc.sessionId, running.messageId, { durationMs: ev.durationMs || 0, costUsd: ev.costUsd, numTurns: ev.numTurns });
+      this.chatMessageRepo.insert({ id: running.messageId, sessionId: proc.sessionId, role: 'assistant', content: ev.result || '', meta: JSON.stringify({ costUsd: ev.costUsd, durationMs: ev.durationMs, numTurns: ev.numTurns, ...(ev.usage ? { usage: ev.usage } : {}) }) });
+      this.emitChatDone(proc.sessionId, running.messageId, { durationMs: ev.durationMs || 0, costUsd: ev.costUsd, numTurns: ev.numTurns, usage: ev.usage });
     }
     proc.lastUsedAt = Date.now();
     this.armIdleTimer(proc);
@@ -851,7 +982,12 @@ export class ChatService {
   private emitChatDone(
     sessionId: string,
     messageId: string,
-    data: { durationMs: number; costUsd?: number; numTurns?: number },
+    data: {
+      durationMs: number;
+      costUsd?: number;
+      numTurns?: number;
+      usage?: { inputTokens: number; outputTokens: number };
+    },
   ): void {
     this.emitEvent('chat.done', {
       sessionId,
@@ -859,6 +995,7 @@ export class ChatService {
       durationMs: data.durationMs,
       ...(data.costUsd !== undefined ? { costUsd: data.costUsd } : {}),
       ...(data.numTurns !== undefined ? { numTurns: data.numTurns } : {}),
+      ...(data.usage !== undefined ? { usage: data.usage } : {}),
     });
   }
 
@@ -881,8 +1018,9 @@ export class ChatService {
 
 export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatService): void {
   // GET /api/chat/sessions
-  fastify.get('/api/chat/sessions', async () => {
-    return chatService.listSessions();
+  fastify.get('/api/chat/sessions', async (req: FastifyRequest) => {
+    const query = req.query as { search?: string };
+    return chatService.listSessions(query);
   });
 
   // POST /api/chat/sessions
@@ -907,10 +1045,12 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   // PATCH /api/chat/sessions/:id
   fastify.patch('/api/chat/sessions/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return chatService.updateSession(
-      id,
-      (req.body && typeof req.body === 'object' ? req.body : {}) as { title?: string },
-    );
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+      title?: string;
+      pinned?: boolean | number;
+      archived?: boolean | number;
+    };
+    return chatService.updateSession(id, body);
   });
 
   // DELETE /api/chat/sessions/:id
@@ -919,12 +1059,22 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
     return chatService.deleteSession(id);
   });
 
-  // GET /api/chat/sessions/:id/messages?limit=200
+  // GET /api/chat/sessions/:id/messages?before=<messageId>&limit=50
   fastify.get('/api/chat/sessions/:id/messages', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    const query = req.query as { limit?: string };
-    const limit = query?.limit ? parseInt(query.limit, 10) : 200;
-    return chatService.listMessages(id, isNaN(limit) ? 200 : limit);
+    const query = req.query as { limit?: string; before?: string };
+    const limit = query?.limit ? parseInt(query.limit, 10) : 50;
+    return chatService.listMessages(id, {
+      limit: isNaN(limit) ? 50 : limit,
+      before: query?.before,
+    });
+  });
+
+  // GET /api/chat/sessions/:id/export
+  fastify.get('/api/chat/sessions/:id/export', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const markdown = chatService.exportSession(id);
+    return reply.type('text/markdown; charset=utf-8').send(markdown);
   });
 
   // POST /api/chat/sessions/:id/messages
