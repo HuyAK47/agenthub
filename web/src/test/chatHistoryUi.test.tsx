@@ -389,7 +389,7 @@ describe('c-chat-history-ui Tests', () => {
       };
 
       vi.spyOn(chatApi, 'getChatSessions').mockResolvedValue([runningSession]);
-      vi.spyOn(chatApi, 'getChatMessages').mockResolvedValue({ messages: [], hasMore: false });
+      vi.spyOn(chatApi, 'getChatMessages').mockResolvedValue(Object.assign([], { hasMore: false }));
       const stopSpy = vi.spyOn(chatApi, 'stopChatSession').mockResolvedValue({ ok: true });
 
       render(
@@ -428,7 +428,7 @@ describe('c-chat-history-ui Tests', () => {
       ];
 
       vi.spyOn(chatApi, 'getChatSessions').mockResolvedValue([errorSession]);
-      vi.spyOn(chatApi, 'getChatMessages').mockResolvedValue({ messages, hasMore: false });
+      vi.spyOn(chatApi, 'getChatMessages').mockResolvedValue(Object.assign([...messages], { hasMore: false }));
       const sendSpy = vi.spyOn(chatApi, 'sendChatMessage').mockResolvedValue({
         userMessageId: 'u2',
         assistantMessageId: 'a2',
