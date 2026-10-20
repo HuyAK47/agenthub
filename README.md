@@ -4,6 +4,10 @@ AgentHub là "hệ điều hành" cục bộ quản lý các worker AI coding (A
 
 Hệ thống tự động hóa việc phân chia task độc lập trên từng git worktree riêng biệt, theo dõi và luân chuyển tài khoản/quota khi gặp giới hạn tốc độ (rate limit/quota exhaustion), lưu trữ nhật ký thực thi và hỗ trợ chu trình review code liên tục.
 
+**Người mới bắt đầu:** xem [Hướng dẫn cài đặt & sử dụng (docs/GETTING-STARTED.md)](docs/GETTING-STARTED.md).
+
+> **Hạn chế hiện tại:** khung Chat với Claude trên dashboard chưa dùng được ổn định. Để điều khiển hub (giao việc, review, merge), hãy mở **Claude Code trong VS Code** và dùng các công cụ MCP `hub_*` (`agenthub mcp-install`). Dashboard vẫn dùng tốt để theo dõi tiến độ, log, quota và tải máy.
+
 Chi tiết tính năng và mẹo sử dụng: xem [Danh sách tính năng (docs/FEATURES.md)](docs/FEATURES.md).  
 Hướng dẫn quy trình sử dụng và xử lý sự cố: xem [Hướng dẫn sử dụng (docs/USAGE.md)](docs/USAGE.md).  
 Kế hoạch kiến trúc và thiết kế hệ thống: xem [Kế hoạch chi tiết (docs/PLAN.md)](docs/PLAN.md).
