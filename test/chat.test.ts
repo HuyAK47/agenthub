@@ -794,7 +794,11 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
     const session = JSON.parse(createRes.body);
     await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'hello' } });
-    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.claudeSessionId).toBe('sess-default-123'), { timeout: 5000 });
+    await vi.waitFor(() => {
+      const s = ctx.chatSessionRepo.get(session.id);
+      expect(s?.claudeSessionId).toBe('sess-default-123');
+      expect(s?.busy).toBe(0);
+    }, { timeout: 5000 });
     let error: Record<string, unknown> | null = null;
     ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { error = payload as Record<string, unknown>; });
     await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'resume-fail' } });
