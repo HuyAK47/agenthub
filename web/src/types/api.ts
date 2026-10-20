@@ -15,6 +15,7 @@ export type TaskLevel = 'easy' | 'hard';
 export type EngineType = 'agy' | 'codex' | 'claude';
 
 export type ProfileKind = 'keyring' | 'isolated' | 'codex' | 'system';
+export type ProfileAccountType = 'personal' | 'team' | 'api';
 
 export interface QuotaMark {
   profileName: string;
@@ -28,6 +29,7 @@ export interface Profile {
   name: string;
   engine: EngineType;
   kind: ProfileKind;
+  accountType?: ProfileAccountType;
   home?: string;
   email?: string | null;
   loggedIn?: boolean;
@@ -70,6 +72,15 @@ export interface Project {
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
   createdAt?: string;
+}
+
+export interface KnowledgeEntry {
+  id: number;
+  projectId: string;
+  taskId: string;
+  content: string;
+  createdAt: string;
+  pinned: number;
 }
 
 export interface Run {
@@ -130,6 +141,8 @@ export interface Task {
     noCommitMinutes?: number | null;
     isLooping?: boolean;
     loopingCommand?: string | null;
+    model?: string;
+    profileName?: string;
     paused?: boolean;
     pauseReason?: 'manual' | 'load' | null;
     rss?: number;
@@ -393,6 +406,7 @@ export interface SystemConfig {
   modelChainHard: string[];
   modelChainEasy: string[];
   defaultTimeout: number;
+  multiplePerProvider?: boolean;
   slotsPerAgyProfile?: number;
   slotsPerCodexProfile?: number;
   watchdog?: { stallMinutes: number; waitingMinutes: number };
@@ -433,6 +447,12 @@ export interface ChatSession {
   profileName?: string | null;
   updatedAt: string;
   lastMessage?: string | null;
+  pinned?: boolean | number;
+  archived?: boolean | number;
+  inputTokens?: number;
+  outputTokens?: number;
+  contextTokens?: number;
+  createdAt?: string;
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error';
@@ -475,7 +495,9 @@ export interface CreateChatSessionInput {
 }
 
 export interface UpdateChatSessionInput {
-  title: string;
+  title?: string;
+  pinned?: boolean | number;
+  archived?: boolean | number;
 }
 
 export interface SendMessageResponse {
@@ -518,7 +540,8 @@ export interface UpdateProjectInput {
 
 export interface CreateProfileInput {
   name: string;
-  engine?: 'agy' | 'claude';
+  engine?: 'agy' | 'claude' | 'codex';
+  accountType?: ProfileAccountType;
 }
 
 export interface VersionResponse {
@@ -583,4 +606,35 @@ export interface UpdateTaskInput {
   title?: string;
   body?: string;
   appendBody?: string;
+}
+
+export interface TaskGraphNode {
+  id: string;
+  projectId: string;
+  slug: string;
+  title: string;
+  status: TaskStatus;
+  level: TaskLevel;
+  modelChain?: string[];
+  currentRun?: {
+    model?: string;
+    profileName?: string;
+  } | null;
+  blockedCount: number;
+  isCritical: boolean;
+  isMaxBlocker: boolean;
+}
+
+export interface TaskGraphEdge {
+  from: string;
+  to: string;
+  isCritical: boolean;
+}
+
+export interface TaskGraphResponse {
+  nodes: TaskGraphNode[];
+  edges: TaskGraphEdge[];
+  criticalPath: string[];
+  maxBlockingTaskId: string | null;
+  maxBlockedCount: number;
 }

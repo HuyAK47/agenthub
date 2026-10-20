@@ -16,6 +16,7 @@ import {
   ChatPermissionRepo,
   RunMetricsRepo,
   TaskNoteRepo,
+  KnowledgeRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
@@ -48,6 +49,7 @@ export interface DaemonContext {
   reviewRepo: ReviewRepo;
   eventRepo: EventRepo;
   taskNoteRepo: TaskNoteRepo;
+  knowledgeRepo: KnowledgeRepo;
   chatSessionRepo: ChatSessionRepo;
   chatMessageRepo: ChatMessageRepo;
   chatPermissionRepo: ChatPermissionRepo;
@@ -64,6 +66,7 @@ export interface DaemonContext {
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
+  usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
 }
 
@@ -78,6 +81,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const reviewRepo = new ReviewRepo(db);
   const eventRepo = new EventRepo(db);
   const taskNoteRepo = new TaskNoteRepo(db);
+  const knowledgeRepo = new KnowledgeRepo(db);
   const usageRepo = new QuotaUsageRepo(db);
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
@@ -143,6 +147,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     locks,
     db,
     runMetricsRepo,
+    knowledgeRepo,
   );
   scheduler.configureReviewer(reviewRepo, failoverState);
 
@@ -193,6 +198,8 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     claudeScanner,
     taskNoteRepo,
     bulletinService,
+    undefined,
+    knowledgeRepo,
   );
 
   const notifier = new NotificationService({
@@ -209,6 +216,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     taskRepo,
     projectRepo,
     quotaMarkRepo,
+    chatService,
   });
   service.setTelegramBotService(telegramService);
 
@@ -224,6 +232,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     reviewRepo,
     eventRepo,
     taskNoteRepo,
+    knowledgeRepo,
     chatSessionRepo,
     chatMessageRepo,
     chatPermissionRepo,
@@ -240,6 +249,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    usageRepo,
     telegramService,
   };
 }

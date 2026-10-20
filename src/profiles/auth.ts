@@ -93,3 +93,39 @@ export function parseAuthState(output: string, hasUsage = false): AuthStateResul
     verifyUrl: null,
   };
 }
+
+export interface CodexLoginStatus {
+  loggedIn: boolean;
+  notLoggedIn: boolean;
+  email: string | null;
+  plan: string | null;
+}
+
+export function parseCodexLoginStatus(output: string): CodexLoginStatus {
+  const clean = output.replace(ANSI_RE, '').replace(/\r/g, '');
+  if (/not logged in/i.test(clean)) {
+    return { loggedIn: false, notLoggedIn: true, email: null, plan: null };
+  }
+
+  // Find email: e.g. "Logged in as user@example.com" or "user@example.com"
+  const emailMatch = clean.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+  const email = emailMatch ? emailMatch[1] : null;
+
+  // Find plan / subscription: e.g. "ChatGPT Plus", "Team", "Plus", "Pro", etc.
+  let plan: string | null = null;
+  const planMatch =
+    clean.match(/(?:subscription|plan)[:\s]+([^\n,]+)/i) ||
+    clean.match(/\((ChatGPT [^)]+|Plus|Pro|Team|Enterprise|Free)\)/i) ||
+    clean.match(/using (ChatGPT[a-zA-Z0-9 ]*|API key|workload identity|access token)/i);
+  if (planMatch) {
+    plan = planMatch[1].trim();
+  }
+
+  const loggedIn = /logged in/i.test(clean);
+  return {
+    loggedIn,
+    notLoggedIn: !loggedIn,
+    email,
+    plan,
+  };
+}

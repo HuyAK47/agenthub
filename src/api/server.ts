@@ -186,6 +186,38 @@ export async function createServer(
     return service.deleteProject(id);
   });
 
+  fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.listKnowledge(id);
+  });
+
+  fastify.post('/api/projects/:id/knowledge', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    return reply.status(201).send(service.addKnowledge(id, req.body));
+  });
+
+  fastify.patch('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { id?: number };
+    return service.updateKnowledge(id, String(body.id), body);
+  });
+
+  fastify.delete('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { id?: number };
+    return service.deleteKnowledge(id, String(body.id));
+  });
+
+  fastify.patch('/api/projects/:id/knowledge/:entryId', async (req: FastifyRequest) => {
+    const { id, entryId } = req.params as { id: string; entryId: string };
+    return service.updateKnowledge(id, entryId, req.body);
+  });
+
+  fastify.delete('/api/projects/:id/knowledge/:entryId', async (req: FastifyRequest) => {
+    const { id, entryId } = req.params as { id: string; entryId: string };
+    return service.deleteKnowledge(id, entryId);
+  });
+
   fastify.get('/api/projects/:id/notes', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     const query = req.query as { since?: string; runningOnly?: string; taskId?: string };
@@ -204,7 +236,14 @@ export async function createServer(
 
   fastify.delete('/api/profiles/:name', async (req: FastifyRequest) => {
     const { name } = req.params as { name: string };
-    return service.deleteProfile(name);
+    const query = req.query as { purgeHome?: string | boolean };
+    const purgeHome = query?.purgeHome === '1' || query?.purgeHome === 'true' || query?.purgeHome === true;
+    return service.deleteProfile(name, purgeHome);
+  });
+
+  fastify.post('/api/profiles/:name/rename', async (req: FastifyRequest) => {
+    const { name } = req.params as { name: string };
+    return service.renameProfile(name, req.body);
   });
 
   fastify.post('/api/profiles', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -242,6 +281,11 @@ export async function createServer(
   fastify.get('/api/tasks', async (req: FastifyRequest) => {
     const query = req.query as { project?: string; status?: string };
     return service.listTasks(query);
+  });
+
+  fastify.get('/api/tasks/graph', async (req: FastifyRequest) => {
+    const query = req.query as { project?: string; includeDone?: string };
+    return service.getTasksGraph(query);
   });
 
   fastify.post('/api/tasks', async (req: FastifyRequest, reply: FastifyReply) => {

@@ -88,11 +88,14 @@ export const DEFAULT_STALL_CONFIG: StallConfig = {
 export interface ContextConfig {
   overlapCheckSec: number;
   depsMaxChars: number;
+  knowledgeMaxChars: number;
+  knowledgeFile?: string;
 }
 
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   overlapCheckSec: 60,
   depsMaxChars: 16000,
+  knowledgeMaxChars: 12000,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -115,6 +118,8 @@ export interface AgentHubConfig {
     easy: string[];
   };
   defaultTimeout: number;
+  multiplePerProvider: boolean;
+  multiplePerProviderConfigured: boolean;
   slotsPerAgyProfile: number;
   slotsPerCodexProfile: number;
   watchdog: {
@@ -163,6 +168,7 @@ export function saveConfig(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
@@ -256,6 +262,7 @@ export function updateConfigInMemory(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
@@ -290,6 +297,10 @@ export function updateConfigInMemory(
   }
   if (patch.defaultTimeout !== undefined) {
     config.defaultTimeout = patch.defaultTimeout;
+  }
+  if (patch.multiplePerProvider !== undefined) {
+    config.multiplePerProvider = patch.multiplePerProvider;
+    config.multiplePerProviderConfigured = true;
   }
   if (patch.slotsPerAgyProfile !== undefined) {
     config.slotsPerAgyProfile = patch.slotsPerAgyProfile;
@@ -364,6 +375,12 @@ export function updateConfigInMemory(
     }
     if (patch.context.depsMaxChars !== undefined) {
       config.context.depsMaxChars = patch.context.depsMaxChars;
+    }
+    if (patch.context.knowledgeMaxChars !== undefined) {
+      config.context.knowledgeMaxChars = patch.context.knowledgeMaxChars;
+    }
+    if (patch.context.knowledgeFile !== undefined) {
+      config.context.knowledgeFile = patch.context.knowledgeFile;
     }
   }
   if (patch.telegram) {
@@ -495,6 +512,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     depsMaxChars: typeof rawContext.depsMaxChars === 'number' && rawContext.depsMaxChars > 0
       ? Math.floor(rawContext.depsMaxChars)
       : 16000,
+    knowledgeMaxChars: typeof rawContext.knowledgeMaxChars === 'number' && rawContext.knowledgeMaxChars > 0
+      ? Math.floor(rawContext.knowledgeMaxChars)
+      : DEFAULT_CONTEXT_CONFIG.knowledgeMaxChars,
+    knowledgeFile: typeof rawContext.knowledgeFile === 'string' && rawContext.knowledgeFile.trim()
+      ? rawContext.knowledgeFile.trim()
+      : undefined,
   };
 
   const defaultBotTokenFile = path.join(hubHome, 'secrets', 'telegram.token');
@@ -537,6 +560,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
+    multiplePerProvider: userConfig.multiplePerProvider === true,
+    multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,
     slotsPerCodexProfile: (userConfig.slotsPerCodexProfile as number) || 2,
     watchdog: {
@@ -588,6 +613,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         ? rawContext.overlapCheckSec
         : DEFAULT_CONTEXT_CONFIG.overlapCheckSec,
       depsMaxChars: context.depsMaxChars,
+      knowledgeMaxChars: context.knowledgeMaxChars,
+      knowledgeFile: context.knowledgeFile,
     },
     telegram,
   };

@@ -22,6 +22,8 @@ import {
   SavingsReport,
   DailyUsageReport,
   OrphanProcess,
+  KnowledgeEntry,
+  TaskGraphResponse,
 } from '../types/api';
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
@@ -232,6 +234,22 @@ export async function deleteProject(id: string): Promise<{ ok: boolean }> {
   });
 }
 
+export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
+  return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
+}
+
+export async function addProjectKnowledge(projectId: string, data: { content: string; pinned?: boolean }): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateProjectKnowledge(projectId: string, id: number, data: { content?: string; pinned?: boolean }): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteProjectKnowledge(projectId: string, id: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'DELETE' });
+}
+
 export async function getProfiles(): Promise<Profile[]> {
   return apiFetch<Profile[]>('/api/profiles');
 }
@@ -301,6 +319,17 @@ export async function getTasks(params?: {
   if (params?.status) query.set('status', params.status);
   const qStr = query.toString();
   return apiFetch<Task[]>(`/api/tasks${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getTaskGraph(params?: {
+  project?: string;
+  includeDone?: string | boolean;
+}): Promise<TaskGraphResponse> {
+  const query = new URLSearchParams();
+  if (params?.project) query.set('project', params.project);
+  if (params?.includeDone !== undefined) query.set('includeDone', String(params.includeDone));
+  const qStr = query.toString();
+  return apiFetch<TaskGraphResponse>(`/api/tasks/graph${qStr ? `?${qStr}` : ''}`);
 }
 
 export async function createTask(data: CreateTaskInput): Promise<Task> {
