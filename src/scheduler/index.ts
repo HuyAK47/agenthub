@@ -1946,7 +1946,7 @@ export class Scheduler {
         throw new Error('Feedback is required when requesting changes');
       }
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback, actor: by });
-      if ((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') {
+      if (((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') || (by === 'codex-reviewer' && chain.length === 0)) {
         const count = (task.reviewerChangesRequested || 0) + 1;
         const max = this.reviewMaxRoundsForTask(task);
         if (count > max) {
