@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { attributeTurn, taskRefsFromToolInput } from './attribution.js';
 import { ClaudeSessionRepo } from './repo.js';
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildClaudeArgs, ensureChatMcpConfig, findClaudeBin, spawnClaude } from '../chat/claude.js';
+import { EventBus } from '../scheduler/index.js';
 
 export interface ClaudeScanOptions {
   dir: string;
@@ -16,7 +18,8 @@ export interface ClaudeScanOptions {
   weights?: { cacheCreation?: number; cacheRead?: number };
   failoverState?: ClaudeFailoverState;
   failoverIdleSec?: number;
-  autoResume?: { enabled: boolean; prompt: string; allowFullMode?: boolean; claudeBin?: string };
+  autoResume?: { enabled: boolean; prompt: string; allowFullMode?: boolean; claudeBin?: string; claudeConfigDir?: string; profileName?: string | null };
+  eventBus?: EventBus;
 }
 
 export class ClaudeSessionScanner {
@@ -25,6 +28,7 @@ export class ClaudeSessionScanner {
   constructor(private db: Database.Database, private options: ClaudeScanOptions) {
     this.weights = { cacheCreation: options.weights?.cacheCreation ?? 1.25, cacheRead: options.weights?.cacheRead ?? 0.1 };
   }
+  setEventBus(eventBus: EventBus) { this.options.eventBus = eventBus; }
   start() {
     void this.scan().catch(() => undefined);
     this.timer = setInterval(() => void this.scan().catch(() => undefined), 60_000);
@@ -126,18 +130,41 @@ export class ClaudeSessionScanner {
   private async maybeAutoResume(file: string, sessionId: string, repo: ClaudeSessionRepo, existing: { size: number; eligible: number } | undefined, stat: fs.Stats) {
     const auto = this.options.autoResume;
     const session = repo.get(sessionId);
-    if (!auto?.enabled || !session?.autoResumeEnabled || !session.limitResetAt || session.limitResetAt * 1000 + 60_000 > Date.now()) return;
+    const now = Date.now();
+    if (!auto?.enabled || !session?.autoResumeEnabled || !session.limitResetAt || !session.limitHitAt) return;
+    if (session.limitResetAt * 1000 + 10 * 60_000 > now) return;
     if (existing && (existing.size !== stat.size || existing.eligible !== 1)) return;
-    if (isClaudeProcessOpen(sessionId)) return;
+    if (stat.mtimeMs > Date.parse(session.limitHitAt)) return;
+    if (isClaudeProcessOpen(session.cwd)) return;
     const bin = findClaudeBin(auto.claudeBin);
-    if (!bin) return;
-    const cwd = session.cwd || path.dirname(file);
-    const mcp = ensureChatMcpConfig(this.options.hubHome, `auto-resume-${sessionId}`);
-    const args = buildClaudeArgs({ text: auto.prompt, claudeSessionId: sessionId, mode: 'safe', mcpConfigPath: mcp });
+    if (!bin || !session.cwd) return;
+    const chatSessionId = crypto.randomUUID();
+    const project = this.db.prepare('SELECT id FROM projects WHERE path = ? LIMIT 1').get(session.cwd) as { id: string } | undefined;
+    this.db.prepare(`INSERT INTO chat_sessions (id,projectId,claudeSessionId,title,mode,busy,model,profileName,state)
+      VALUES (?,?,?,?,?,0,? ,?,'running')`).run(
+      chatSessionId, project?.id || null, sessionId, `Tự tiếp tục: ${session.title || sessionId}`,
+      auto.allowFullMode ? 'full' : 'safe', '', auto.profileName || null,
+    );
+    const messageId = crypto.randomUUID();
+    this.db.prepare('INSERT INTO chat_messages (id,sessionId,role,content) VALUES (?,?,?,?)').run(messageId, chatSessionId, 'user', auto.prompt);
+    const mcp = ensureChatMcpConfig(this.options.hubHome, chatSessionId);
+    const args = buildClaudeArgs({ text: auto.prompt, claudeSessionId: sessionId, mode: auto.allowFullMode ? 'full' : 'safe', mcpConfigPath: mcp });
+    const claudeConfigDir = auto.claudeConfigDir || path.dirname(path.dirname(path.dirname(file)));
     repo.setLimit(sessionId, null, null);
-    const child = spawnClaude(bin, args, cwd, auto.prompt, { chatSessionId: `auto-resume-${sessionId}`, claudeConfigDir: undefined });
-    child.stdout?.resume(); child.stderr?.resume();
+    const child = spawnClaude(bin, args, session.cwd, auto.prompt, { chatSessionId, claudeConfigDir });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    child.on('close', (code) => {
+      const content = stdout.trim() || stderr.trim() || `Claude process exited with code ${code ?? 'unknown'}`;
+      const role = code === 0 ? 'assistant' : 'error';
+      this.db.prepare('INSERT INTO chat_messages (id,sessionId,role,content) VALUES (?,?,?,?)').run(crypto.randomUUID(), chatSessionId, role, content);
+      this.db.prepare("UPDATE chat_sessions SET busy=0,state=?,lastMessageAt=datetime('now'),updatedAt=datetime('now') WHERE id=?").run(role === 'assistant' ? 'idle' : 'error', chatSessionId);
+      this.options.eventBus?.emit('claude.auto_resumed', chatSessionId, { sessionId, chatSessionId, ok: code === 0, error: code === 0 ? undefined : content });
+    });
     child.unref();
+    this.options.eventBus?.emit('claude.auto_resumed', chatSessionId, { sessionId, chatSessionId, started: true, cwd: session.cwd });
   }
   private updateFailover(file: string, records: Array<{ event: ClaudeTranscriptEvent; line: number }>) {
     const state = this.options.failoverState;
@@ -238,14 +265,16 @@ function countNewlines(file: string, end: number): number {
   } catch { return 0; }
 }
 
-export function isClaudeProcessOpen(sessionId: string): boolean {
+export function isClaudeProcessOpen(cwd: string): boolean {
   let entries: string[];
   try { entries = fs.readdirSync('/proc'); } catch { return false; }
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     try {
       const cmdline = fs.readFileSync(path.join('/proc', entry, 'cmdline'), 'utf8');
-      if (cmdline.includes('claude') && cmdline.includes(sessionId)) return true;
+      if (!cmdline.includes('claude')) continue;
+      const processCwd = fs.realpathSync(path.join('/proc', entry, 'cwd'));
+      if (processCwd === fs.realpathSync(cwd)) return true;
     } catch { /* process exited */ }
   }
   return false;

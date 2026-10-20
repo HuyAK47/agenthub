@@ -100,7 +100,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     steps: config.brain.fallback,
     apiKeyPath: path.join(config.hubHome, 'secrets', 'anthropic.key'),
   });
-  const claudeScanner = new ClaudeSessionScanner(db, { ...config.claudeSessions, hubHome: config.hubHome, worktreesDir: config.worktreesDir, failoverState, autoResume: { ...config.claudeSessions.autoResume, claudeBin: config.chat.claudeBin } });
+  const claudeScanner = new ClaudeSessionScanner(db, { ...config.claudeSessions, hubHome: config.hubHome, worktreesDir: config.worktreesDir, failoverState, autoResume: { ...config.claudeSessions.autoResume, claudeBin: config.chat.claudeBin, profileName: config.chat.claudeProfile || null } });
   usageRepo.deleteForEngine('codex');
 
   const profileService = new ProfileService(config, profileRepo, quotaMarkRepo);
@@ -154,6 +154,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     knowledgeRepo,
   );
   scheduler.configureReviewer(reviewRepo, failoverState);
+  claudeScanner.setEventBus(scheduler.getEventBus());
 
   const brainRepo = new BrainRepo(db);
   const brainService = new BrainService(brainRepo, eventRepo, () => scheduler.getEventBus());

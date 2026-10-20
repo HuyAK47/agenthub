@@ -1347,7 +1347,7 @@ export class ChatRetryRepo {
   markSent(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='sent', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
   markCancelled(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='cancelled', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
   markFailed(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='failed', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
-  defer(messageId: string, resetAt: number): void { this.db.prepare("UPDATE chat_retries SET attempts=attempts+1, resetAt=?, updatedAt=datetime('now') WHERE messageId=?").run(resetAt, messageId); }
+  defer(messageId: string, resetAt: number): void { this.db.prepare("UPDATE chat_retries SET attempts=attempts+1, resetAt=?, status='pending', updatedAt=datetime('now') WHERE messageId=?").run(resetAt, messageId); }
 }
 
 export interface ChatPermissionRow {
