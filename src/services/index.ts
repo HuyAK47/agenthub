@@ -14,11 +14,14 @@ import {
   RunRepo,
   ReviewRepo,
   EventRepo,
+  TaskNoteRepo,
+  TaskNoteRow,
   ProjectRow,
   ProfileRow,
   TaskRow,
   QuotaMarkRow,
 } from '../db/index.js';
+import { BulletinService } from '../bulletin.js';
 import { ProfileService as CoreProfileService, isProfileLoggedIn } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
@@ -66,6 +69,13 @@ function apiTask(task: TaskRow): TaskRow {
     waitReason: task.waitReason ?? null,
     createdAt: toApiTime(task.createdAt)!,
     updatedAt: toApiTime(task.updatedAt)!,
+  };
+}
+
+export function apiTaskNote(note: TaskNoteRow): TaskNoteRow {
+  return {
+    ...note,
+    createdAt: toApiTime(note.createdAt) || note.createdAt,
   };
 }
 
@@ -177,6 +187,11 @@ export const RetryTaskSchema = z.object({
   note: z.string().optional(),
 });
 
+export const CreateTaskNoteSchema = z.object({
+  content: z.string().min(1, 'Nội dung ghi chú không được để trống'),
+  kind: z.enum(['note', 'overlap']).optional().default('note'),
+});
+
 export const CreateProfileSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
   engine: z.enum(['agy', 'claude']).default('agy'),
@@ -244,6 +259,9 @@ export const UpdateConfigSchema = z.object({
   stall: z.object({
     noCommitMin: z.number().positive().optional(),
     loopThreshold: z.number().int().positive().optional(),
+  }).optional(),
+  context: z.object({
+    overlapCheckSec: z.number().int().positive().optional(),
   }).optional(),
   disk: z.object({
     minFreeGB: z.number().positive().optional(),
@@ -466,6 +484,22 @@ export function formatEventSummary(
     case 'config.updated':
       return 'Cập nhật cấu hình hệ thống';
 
+    case 'task.overlap': {
+      const file = (p.file || p.filename) as string | undefined;
+      const other = p.otherTaskId
+        ? (String(p.otherTaskId).includes('/') ? String(p.otherTaskId).split('/')[1] : String(p.otherTaskId))
+        : undefined;
+      if (file && other) {
+        return `Cảnh báo trùng file ${file} giữa ${taskLabel} và ${other}`;
+      }
+      return `${taskLabel} cảnh báo trùng sửa file`;
+    }
+
+    case 'task.note': {
+      const content = typeof p.content === 'string' ? p.content : '';
+      return `${taskLabel} ghi chú: ${content.length > 50 ? content.slice(0, 50) + '...' : content}`;
+    }
+
     default:
       if (taskId) {
         return `${taskLabel}: ${type}`;
@@ -494,6 +528,8 @@ export class AppService {
     public savingsService?: SavingsService,
     public claudeSessionRepo?: ClaudeSessionRepo,
     public claudeScanner?: ClaudeSessionScanner,
+    public taskNoteRepo?: TaskNoteRepo,
+    public bulletinService?: BulletinService,
   ) {}
 
   listClaudeSessions(activeWithinMin = 5) {
@@ -668,12 +704,17 @@ export class AppService {
 
     const disk = getDiskSpaceSync(this.config.worktreesDir);
     const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    const runningTaskIds = runningTasks.map((r) => r.taskId);
+    const overlaps = this.taskNoteRepo
+      ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)
+      : [];
 
     return {
       tasks: byStatus,
       tasksByProject,
       profiles: profilesStatus,
       running: runningTasks,
+      overlaps,
       claudeFailover: this.chatService?.getClaudeFailover(),
       codexReviewer: this.scheduler.getReviewerStatus(),
       recentEvents,
@@ -1528,6 +1569,79 @@ export class AppService {
     return new CheckRunner(db).run(task, project, run.id);
   }
 
+  // --- Task Notes ---
+  createTaskNote(idParam: string, raw: unknown): TaskNoteRow {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+
+    const parsed = CreateTaskNoteSchema.parse(raw);
+    if (!this.taskNoteRepo) {
+      throw new HttpError(500, 'internal_error', 'TaskNoteRepo chưa được khởi tạo');
+    }
+
+    const note = this.taskNoteRepo.insert({
+      projectId: task.projectId,
+      taskId: task.id,
+      kind: parsed.kind,
+      content: parsed.content,
+    });
+
+    if (this.bulletinService) {
+      this.bulletinService.updateBulletinsForProject(task.projectId);
+    }
+
+    this.scheduler.getEventBus().emit(
+      parsed.kind === 'overlap' ? 'task.overlap' : 'task.note',
+      task.id,
+      {
+        id: note.id,
+        content: note.content,
+        projectId: task.projectId,
+      },
+    );
+
+    return apiTaskNote(note);
+  }
+
+  getProjectNotes(
+    projectId: string,
+    query?: { since?: string; runningOnly?: string; taskId?: string },
+  ): TaskNoteRow[] {
+    const project = this.projectRepo.get(projectId);
+    if (!project) {
+      throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    }
+
+    const sinceId = query?.since ? parseInt(query.since, 10) : undefined;
+    let notes = this.taskNoteRepo ? this.taskNoteRepo.getByProject(projectId, sinceId) : [];
+
+    if (query?.taskId) {
+      const filterTaskId = toTaskId(query.taskId);
+      notes = notes.filter((n) => n.taskId === filterTaskId);
+    }
+
+    if (query?.runningOnly === 'true' || query?.runningOnly === '1') {
+      const runningTaskIds = new Set(this.taskRepo.getByStatus('running').map((t) => t.id));
+      notes = notes.filter((n) => runningTaskIds.has(n.taskId));
+    }
+
+    return notes.map(apiTaskNote);
+  }
+
+  getTaskNotes(idParam: string): TaskNoteRow[] {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+
+    const notes = this.taskNoteRepo ? this.taskNoteRepo.getByTask(taskId) : [];
+    return notes.map(apiTaskNote);
+  }
+
   // --- Config ---
   getConfig() {
     return {
@@ -1554,6 +1668,7 @@ export class AppService {
       load: this.config.load,
       stall: this.config.stall,
       disk: this.config.disk,
+      context: this.config.context,
     };
   }
 
