@@ -19,6 +19,10 @@ export interface ProcessInfo {
   startedAt: number;
 }
 
+export function isOrphanProcess(info: Pick<ProcessInfo, 'ppid' | 'parentName'>): boolean {
+  return info.ppid === 1 || /^(init|systemd)$/i.test(info.parentName);
+}
+
 const DELETED_SUFFIX = ' (deleted)';
 
 function defaultWorktreesDir(): string {

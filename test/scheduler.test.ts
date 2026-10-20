@@ -371,7 +371,7 @@ describe('Scheduler regression fixes', () => {
     delete process.env.FAKE_MODE;
   });
 
-  it('shutdown stops detached workers and records a resumable run', async () => {
+  it('stop leaves detached workers running and cancelAll cancels them explicitly', async () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);
     profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
@@ -380,9 +380,9 @@ describe('Scheduler regression fixes', () => {
     const scheduler = makeScheduler();
     scheduler.tick();
     scheduler.stop();
-    expect(taskRepo.get('test-project/a')!.status).toBe('queued');
-    expect(taskRepo.get('test-project/a')!.resume).toBe(1);
-    expect(runRepo.getByTask('test-project/a')[0]).toMatchObject({ outcome: 'crashed', reason: 'daemon_shutdown' });
+    expect(taskRepo.get('test-project/a')!.status).toBe('running');
+    expect(runRepo.getByTask('test-project/a')[0].outcome).toBeNull();
+    scheduler.cancelAll();
     delete process.env.FAKE_MODE;
   });
 
@@ -1236,6 +1236,58 @@ describe('Crash recovery on startup', () => {
     expect(task.status).toBe('queued');
     expect(task.resume).toBe(1);
 
+    scheduler.stop();
+  });
+
+  it('recovers a newer DONE marker as done and restarts checks', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'DONE'), 'done');
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/done', projectId: 'test-project', slug: 'done', title: 'Done', status: 'running', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-done', taskId: 'test-project/done', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+    db.prepare("UPDATE runs SET startedAt = datetime('now', '-1 minute') WHERE id = 'run-done'").run();
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map(), undefined, undefined, db);
+    scheduler.start();
+    expect(runRepo.get('run-done')?.outcome).toBe('done');
+    expect(taskRepo.get('test-project/done')?.status).toBe('checking');
+    await vi.waitFor(() => expect(taskRepo.get('test-project/done')?.status).toBe('review'));
+    scheduler.stop();
+  });
+
+  it('recovers a newer BLOCKED marker without marking the run crashed', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'BLOCKED'), 'blocked');
+    taskRepo.insert({ id: 'test-project/blocked', projectId: 'test-project', slug: 'blocked', title: 'Blocked', status: 'running', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-blocked', taskId: 'test-project/blocked', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+    db.prepare("UPDATE runs SET startedAt = datetime('now', '-1 minute') WHERE id = 'run-blocked'").run();
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map());
+    scheduler.start();
+    expect(runRepo.get('run-blocked')).toMatchObject({ outcome: 'done' });
+    expect(taskRepo.get('test-project/blocked')?.status).toBe('blocked');
+    scheduler.stop();
+  });
+
+  it('re-queues progress after a dead worker without increasing attempt', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    execFileSync('git', ['checkout', '-b', 'agenthub/progress'], { cwd: projectPath });
+    fs.writeFileSync(path.join(projectPath, 'progress.txt'), 'progress');
+    execFileSync('git', ['add', '.'], { cwd: projectPath });
+    execFileSync('git', ['commit', '-m', 'progress'], { cwd: projectPath, env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
+    taskRepo.insert({ id: 'test-project/progress', projectId: 'test-project', slug: 'progress', title: 'Progress', status: 'running', branch: 'agenthub/progress', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-progress', taskId: 'test-project/progress', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+    db.prepare("UPDATE runs SET startedAt = datetime('now', '-1 minute') WHERE id = 'run-progress'").run();
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map());
+    scheduler.start();
+    expect(runRepo.get('run-progress')).toMatchObject({ outcome: 'crashed', reason: 'resume_after_progress' });
+    expect(taskRepo.get('test-project/progress')).toMatchObject({ status: 'queued', resume: 1, attempt: 0 });
     scheduler.stop();
   });
 });

@@ -34,7 +34,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
-import { listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
+import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
@@ -378,10 +378,11 @@ export class Scheduler {
   private hasCommitAfter(task: TaskRow, startedAt: number): boolean {
     const project = this.projectRepo.get(task.projectId);
     if (!project) return false;
-    const base = task.baseRef || project.defaultBranch || 'main';
-    const branch = task.branch || `agenthub/${task.slug}`;
     try {
-      const output = execFileSync('git', ['log', '-1', '--format=%ct', `${base}..${branch}`], {
+      // The worktree HEAD is authoritative here. During restart the branch ref
+      // may not be visible from the project checkout yet, while the commit is
+      // already present in the worktree the worker was using.
+      const output = execFileSync('git', ['log', '-1', '--format=%ct'], {
         cwd: task.worktreePath && fs.existsSync(task.worktreePath) ? task.worktreePath : project.path,
         encoding: 'utf8',
       }).trim();
@@ -593,8 +594,7 @@ export class Scheduler {
       const processCwd = path.resolve(info.cwd);
       const active = [...activeWorktrees].some((worktree) => processCwd === worktree || processCwd.startsWith(worktree + path.sep));
       if (active) continue;
-      const orphanParent = info.ppid === 1 || /^(init|systemd)$/i.test(info.parentName);
-      if (info.startedAt > oldProcessCutoff && !orphanParent) continue;
+      if (info.startedAt > oldProcessCutoff && !isOrphanProcess(info)) continue;
       reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
   }
