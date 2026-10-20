@@ -244,11 +244,23 @@ export interface HubStatus {
     overloaded: boolean;
     recoveringSince: number | null;
   };
+  telegram?: {
+    enabled: boolean;
+    allowedChatsCount?: number;
+    hasToken?: boolean;
+  };
   // Backwards compatibility aliases
   tasksByStatus?: Record<TaskStatus, number>;
   runningWorkers?: RunningWorker[];
   recentEvents?: EventItem[];
   tasksByProject?: Record<string, Record<string, number>>;
+}
+
+export interface TelegramPairingResponse {
+  code: string;
+  expiresInSec: number;
+  enabled: boolean;
+  allowedChatIds: number[];
 }
 
 export interface OrphanProcess {

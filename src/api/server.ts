@@ -123,6 +123,27 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
+  fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+
+  // --- Telegram API ---
+  fastify.get('/api/telegram/pairing-code', async (req) => {
+    const query = req.query as { refresh?: string } | undefined;
+    const refresh = query?.refresh === '1' || query?.refresh === 'true';
+    return service.getTelegramPairingCode(refresh);
+  });
+  fastify.post('/api/telegram/pairing-code/refresh', async () => {
+    return service.getTelegramPairingCode(true);
+  });
+  fastify.get('/api/telegram/status', async () => {
+    return {
+      enabled: service.config.telegram?.enabled ?? false,
+      allowedChatIds: service.config.telegram?.allowedChatIds ?? [],
+      notify: service.config.telegram?.notify,
+      hasToken: Boolean(service.telegramBotService?.hasValidToken()),
+    };
+  });
+
   fastify.get('/api/system/orphans', async () => service.getOrphans());
   fastify.post('/api/system/orphans/reap', async () => service.reapOrphans());
 

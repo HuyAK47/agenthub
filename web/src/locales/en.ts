@@ -323,6 +323,17 @@ export const en: typeof vi = {
     claudeWeek: 'Claude week: {pct}%',
     selectDay: 'Select day',
   },
+  telegram: {
+    cardTitle: 'Telegram Bot Remote Control',
+    pairingCode: 'Pairing code',
+    expiresIn: 'Expires in {min}:{sec}',
+    expired: 'Code has expired',
+    refreshCode: 'Get new code',
+    instructions: 'Send message /start {code} to the Telegram bot to connect.',
+    connectedChats: '{count} paired chats',
+    noTokenWarning: 'Missing token file at secrets/telegram.token (chmod 0600)',
+    hasTokenBadge: 'Telegram token ready',
+  },
   extra: {
     claudeVersion: 'Claude version in use',
     connected: 'Connected', disconnected: 'Disconnected', connectionAria: 'Connection status', quickPrompts: 'Quick prompts:', claudeAnswering: 'Claude is answering...', chatPlaceholder: 'Type a message... (Enter to send, Shift+Enter for a new line)', stopResponse: 'Stop response', stop: 'Stop', sendMessage: 'Send message', newChat: 'New conversation', noChats: 'No conversations yet. Click the button above to start!', chat: 'Conversation', deleteSession: 'Delete session', busySession: 'Cannot delete a busy session', fullMode: 'Full', safeMode: 'Safe', answering: 'answering…', tool: 'Tool', toolCount: '{count} tool actions', stepsDone: '{count} steps completed', collapse: 'collapse', expand: 'click to expand', newMessages: 'New messages',

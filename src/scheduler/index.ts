@@ -216,6 +216,23 @@ export class Scheduler {
     return this.loadGuard.getStatus();
   }
 
+  private paused = false;
+
+  pause(): void {
+    this.paused = true;
+    this.eventBus.emit('scheduler.paused', undefined, { paused: true });
+  }
+
+  resume(): void {
+    this.paused = false;
+    this.eventBus.emit('scheduler.resumed', undefined, { paused: false });
+    this.triggerTick();
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
   start(): void {
     this.stopped = false;
     // The orphan pass is periodic; do not scan and potentially reap processes
@@ -1088,6 +1105,9 @@ export class Scheduler {
   }
 
   private scheduleNewTasks(): void {
+    if (this.paused) {
+      return;
+    }
     if (this.skipSchedulingOnce) {
       this.skipSchedulingOnce = false;
       return;

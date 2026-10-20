@@ -424,3 +424,7 @@ export async function getDailyUsage(days = 7): Promise<DailyUsageReport> {
   const qStr = query.toString();
   return apiFetch<DailyUsageReport>(`/api/usage/daily${qStr ? `?${qStr}` : ''}`);
 }
+
+export async function getTelegramPairingCode(refresh = false): Promise<{ code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] }> {
+  return apiFetch(`/api/telegram/pairing-code${refresh ? '?refresh=1' : ''}`);
+}

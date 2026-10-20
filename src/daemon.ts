@@ -32,6 +32,7 @@ import { ClaudeFailoverState } from './chat/failover.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { ClaudeSessionScanner } from './claude-sessions/scanner.js';
 import { BulletinService } from './bulletin.js';
+import { TelegramBotService } from './telegram.js';
 import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 
@@ -63,6 +64,7 @@ export interface DaemonContext {
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
+  telegramService: TelegramBotService;
 }
 
 export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>): DaemonContext {
@@ -197,6 +199,16 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     quotaMarkRepo,
   });
 
+  const telegramService = new TelegramBotService({
+    config,
+    service,
+    eventBus: scheduler.getEventBus(),
+    taskRepo,
+    projectRepo,
+    quotaMarkRepo,
+  });
+  service.setTelegramBotService(telegramService);
+
   return {
     config,
     db,
@@ -225,6 +237,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    telegramService,
   };
 }
 
@@ -251,6 +264,11 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.claudeScanner?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    void ctx.telegramService?.stop();
   } catch {
     // ignore
   }
@@ -289,6 +307,11 @@ export async function startDaemon(
   ctx.notifier.start();
   ctx.claudeScanner.start();
   ctx.bulletinService.start();
+
+  // Start Telegram bot if enabled
+  if (config.telegram?.enabled) {
+    ctx.telegramService.start();
+  }
 
   // Start Fastify HTTP server with security and API endpoints
   const fastify = await createServer(ctx.service, config);

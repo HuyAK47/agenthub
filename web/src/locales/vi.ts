@@ -322,6 +322,17 @@ export const vi = {
     claudeWeek: 'Claude tuần: {pct}%',
     selectDay: 'Chọn ngày',
   },
+  telegram: {
+    cardTitle: 'Điều khiển Telegram Bot',
+    pairingCode: 'Mã ghép đôi',
+    expiresIn: 'Hết hạn sau {min}:{sec}',
+    expired: 'Mã đã hết hạn',
+    refreshCode: 'Lấy mã mới',
+    instructions: 'Gửi tin nhắn /start {code} cho bot Telegram để kết nối điều khiển.',
+    connectedChats: '{count} chat đã ghép đôi',
+    noTokenWarning: 'Chưa có token tại secrets/telegram.token (chmod 0600)',
+    hasTokenBadge: 'Token Telegram sẵn sàng',
+  },
   extra: {
     claudeVersion: 'Phiên bản Claude đang dùng',
     connected: 'Đã kết nối', disconnected: 'Mất kết nối', connectionAria: 'Trạng thái kết nối',
