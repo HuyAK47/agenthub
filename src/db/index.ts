@@ -284,6 +284,10 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE projects ADD COLUMN hooks TEXT;
   `,
+  // Migration 18: automatic merge configuration
+  `
+  ALTER TABLE projects ADD COLUMN merge TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -328,6 +332,7 @@ export interface ProjectRow {
   maxParallel: number;
   checks: string | null;
   hooks: string | null;
+  merge?: string | null;
   createdAt: string;
 }
 
@@ -429,14 +434,15 @@ export class ProjectRepo {
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge'> & {
       checks?: string | null;
       hooks?: string | null;
+      merge?: string | null;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -447,12 +453,13 @@ export class ProjectRepo {
         row.maxParallel,
         row.checks || null,
         row.hooks || null,
+        row.merge || null,
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];

@@ -129,6 +129,7 @@ export const en: typeof vi = {
     btnCancel: 'Cancel',
     btnRetry: 'Retry',
     btnReview: 'Approve',
+    btnMerge: 'Approve & merge',
     btnRequestChanges: 'Request Changes',
     btnDeleteWorktree: 'Delete worktree',
     noLog: 'No log output from worker yet...',

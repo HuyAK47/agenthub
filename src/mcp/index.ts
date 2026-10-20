@@ -673,6 +673,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       id: z.string().describe('ID của task'),
       verdict: z.enum(['approved', 'changes_requested']).describe('Kết quả review'),
       feedback: z.string().optional().describe('Góp ý hoặc yêu cầu sửa (bắt buộc khi verdict là changes_requested)'),
+      merge: z.boolean().optional().describe('Khi approved, merge vào worktree tích hợp đã cấu hình'),
     },
     async (args) => {
       try {
@@ -680,6 +681,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         await callApi('POST', `/api/tasks/${routeId}/review`, {
           verdict: args.verdict,
           feedback: args.feedback,
+          merge: args.merge,
           by: 'claude-review',
         });
         try {
