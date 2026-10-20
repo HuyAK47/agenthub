@@ -34,8 +34,10 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
-import { listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
+import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
+import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
+import { measureProcessTree } from '../process-tree.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -91,6 +93,14 @@ interface RunningTask {
   loopingCommand?: string;
   commandOccurrences?: Array<{ command: string; timestamp: number }>;
   lastLogOffset?: number;
+  // Resource metrics & Pause/Resume
+  rss?: number;
+  cpu?: number;
+  lastTicks?: number;
+  lastTicksAt?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
+  pausedAt?: number | null;
 }
 
 interface StartingTask {
@@ -143,6 +153,7 @@ export class Scheduler {
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
+  private resourceTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private config: AgentHubConfig,
@@ -237,6 +248,81 @@ export class Scheduler {
     return this.paused;
   }
 
+  pauseTask(taskId: string, reason: 'manual' | 'load' = 'manual'): boolean {
+    const rt = this.running.get(taskId);
+    if (!rt) return false;
+    if (rt.paused) return true;
+
+    try {
+      process.kill(-rt.pid, 'SIGSTOP');
+    } catch {
+      try {
+        process.kill(rt.pid, 'SIGSTOP');
+      } catch {
+        // process may have exited
+      }
+    }
+
+    rt.paused = true;
+    rt.pauseReason = reason;
+    rt.pausedAt = Date.now();
+
+    this.eventBus.emit('task.paused', taskId, { reason, runId: rt.runId });
+    return true;
+  }
+
+  resumeTask(taskId: string): boolean {
+    const rt = this.running.get(taskId);
+    if (!rt) return false;
+    if (!rt.paused) return true;
+
+    try {
+      process.kill(-rt.pid, 'SIGCONT');
+    } catch {
+      try {
+        process.kill(rt.pid, 'SIGCONT');
+      } catch {
+        // process may have exited
+      }
+    }
+
+    if (rt.pausedAt) {
+      const pausedDuration = Date.now() - rt.pausedAt;
+      rt.timeoutAt += pausedDuration;
+    }
+
+    rt.paused = false;
+    rt.pauseReason = null;
+    rt.pausedAt = null;
+    rt.lastActivityAt = Date.now();
+    rt.lastOutputAt = Date.now();
+    if (rt.lastCommitCheckAt) {
+      rt.lastCommitCheckAt = Date.now();
+    }
+
+    this.eventBus.emit('task.resumed', taskId, { runId: rt.runId });
+    return true;
+  }
+
+  measureTaskResources(rt: RunningTask): void {
+    const task = this.taskRepo.get(rt.taskId);
+    const prev = rt.lastTicks !== undefined && rt.lastTicksAt !== undefined
+      ? { ticks: rt.lastTicks, time: rt.lastTicksAt }
+      : undefined;
+
+    const metrics = measureProcessTree(rt.pid, task?.worktreePath, prev);
+    rt.rss = metrics.rss;
+    rt.cpu = metrics.cpu;
+    rt.lastTicks = metrics.totalTicks;
+    rt.lastTicksAt = metrics.measuredAt;
+  }
+
+  measureAllRunningTaskResources(): void {
+    for (const rt of this.running.values()) {
+      this.measureTaskResources(rt);
+    }
+  }
+
   start(): void {
     this.stopped = false;
     // The orphan pass is periodic; do not scan and potentially reap processes
@@ -248,6 +334,10 @@ export class Scheduler {
 
     // Start the scheduler loop (every 2 seconds)
     this.timer = setInterval(() => this.tick(), 2000);
+    // Measure task resources every 15s
+    this.measureAllRunningTaskResources();
+    this.resourceTimer = setInterval(() => this.measureAllRunningTaskResources(), 15000);
+    this.resourceTimer.unref();
     // Also run immediately
     this.tick();
   }
@@ -256,6 +346,27 @@ export class Scheduler {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.resourceTimer) {
+      clearInterval(this.resourceTimer);
+      this.resourceTimer = null;
+    }
+
+    // Requirement 4: Khi daemon tắt/khởi động lại: mọi task đang paused phải được SIGCONT trước (không để tiến trình đứng mãi).
+    for (const rt of this.running.values()) {
+      if (rt.paused) {
+        try {
+          process.kill(-rt.pid, 'SIGCONT');
+        } catch {
+          try {
+            process.kill(rt.pid, 'SIGCONT');
+          } catch {
+            // ignore
+          }
+        }
+        rt.paused = false;
+        rt.pauseReason = null;
+      }
     }
 
     this.stopped = true;
@@ -285,6 +396,15 @@ export class Scheduler {
    * Re-queue their tasks.
    */
   private recoverOnStartup(): void {
+    const shutdownRuns = this.runRepo.getShutdownRuns();
+    for (const run of shutdownRuns) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task && task.status === 'running') {
+        this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
+        this.eventBus.emit('task.queued', run.taskId, { reason: 'daemon_shutdown' });
+      }
+    }
+
     const runningRuns = this.runRepo.getRunning();
     for (const run of runningRuns) {
       if (run.kind === 'reviewer') {
@@ -299,6 +419,7 @@ export class Scheduler {
         continue;
       }
       if (!this.isProcessAlive(run.pid, run.pidStart)) {
+        if (this.recoverFinishedWork(run)) continue;
         this.runRepo.finish(run.id, 'crashed');
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
         this.eventBus.emit('run.crashed', run.taskId, { runId: run.id });
@@ -309,6 +430,17 @@ export class Scheduler {
       const task = this.taskRepo.get(run.taskId);
       const engine = this.engines.get(run.engine);
       if (!task || !engine || !run.pid) continue;
+
+      try {
+        process.kill(-run.pid, 'SIGCONT');
+      } catch {
+        try {
+          process.kill(run.pid, 'SIGCONT');
+        } catch {
+          // ignore
+        }
+      }
+
       const startTime = parseDbTime(run.startedAt);
       const timeoutMs = this.config.defaultTimeout * 1000;
       const timeoutAt = Math.max(startTime + timeoutMs, Date.now() + 30 * 60 * 1000);
@@ -336,11 +468,72 @@ export class Scheduler {
         cachedConversationMtime: 0,
         cachedWorktreeMtime: 0,
         usageBefore: null,
+        rss: 0,
+        cpu: 0,
+        paused: false,
+        pauseReason: null,
+        pausedAt: null,
       });
     }
 
     // Re-check tasks that were in 'checking' status when daemon restarted
     void this.recoverCheckingTasks();
+  }
+
+  private markerForRun(task: TaskRow, startedAt: number): 'done' | 'blocked' | null {
+    if (!task.worktreePath) return null;
+    for (const [name, marker] of [['done', 'DONE'], ['blocked', 'BLOCKED']] as const) {
+      try {
+        const stat = fs.statSync(path.join(task.worktreePath, '.agenthub', marker));
+        if (stat.mtimeMs > startedAt) return name;
+      } catch { /* marker absent */ }
+    }
+    return null;
+  }
+
+  private hasCommitAfter(task: TaskRow, startedAt: number): boolean {
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return false;
+    try {
+      // The worktree HEAD is authoritative here. During restart the branch ref
+      // may not be visible from the project checkout yet, while the commit is
+      // already present in the worktree the worker was using.
+      const output = execFileSync('git', ['log', '-1', '--format=%ct'], {
+        cwd: task.worktreePath && fs.existsSync(task.worktreePath) ? task.worktreePath : project.path,
+        encoding: 'utf8',
+      }).trim();
+      return Boolean(output) && Number(output) * 1000 > startedAt;
+    } catch {
+      return false;
+    }
+  }
+
+  private recoverFinishedWork(run: { id: string; taskId: string; startedAt: string }): boolean {
+    const task = this.taskRepo.get(run.taskId);
+    if (!task) return false;
+    const parsedStartedAt = parseDbTime(run.startedAt);
+    const startedAt = Number.isNaN(parsedStartedAt) ? 0 : parsedStartedAt;
+    const marker = this.markerForRun(task, startedAt);
+    if (marker === 'done') {
+      this.runRepo.finish(run.id, 'done');
+      this.taskRepo.update(run.taskId, { status: 'checking' });
+      this.eventBus.emit('task.checking', run.taskId, { reason: 'restart_marker' });
+      void this.recoverCheckingTasks();
+      return true;
+    }
+    if (marker === 'blocked') {
+      this.runRepo.finish(run.id, 'done');
+      this.taskRepo.update(run.taskId, { status: 'blocked', transientRetries: 0, notBefore: null });
+      this.eventBus.emit('task.blocked', run.taskId, { reason: 'restart_marker' });
+      return true;
+    }
+    if (this.hasCommitAfter(task, startedAt)) {
+      this.runRepo.finish(run.id, 'crashed', undefined, 'resume_after_progress');
+      this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
+      this.eventBus.emit('task.queued', run.taskId, { reason: 'resume_after_progress' });
+      return true;
+    }
+    return false;
   }
 
   async recoverCheckingTasks(): Promise<void> {
@@ -386,7 +579,7 @@ export class Scheduler {
       }
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
     } else {
-      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null });
+      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
       if (this.runMetricsRepo) {
         await recalculateTaskLines(
           this.taskRepo,
@@ -396,7 +589,11 @@ export class Scheduler {
           taskId,
         );
       }
-      this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
+      if (this.reviewChainForTask(currentTask).length === 0) {
+        this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
+      } else {
+        this.eventBus.emit('review.gate_started', taskId, { step: 0 });
+      }
     }
     if (!this.stopped) this.triggerTick();
   }
@@ -410,6 +607,43 @@ export class Scheduler {
     if (load.overloaded !== this.lastLoadOverloaded) {
       this.lastLoadOverloaded = load.overloaded;
       this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
+    }
+
+    // Auto-pause / resume by load guard
+    if (this.config.load.enabled) {
+      if (this.loadGuard.isAutoPauseTriggered()) {
+        const maxAutoPaused = this.config.load.maxAutoPaused ?? 2;
+        const autoPausedCount = Array.from(this.running.values()).filter((rt) => rt.paused && rt.pauseReason === 'load').length;
+        if (autoPausedCount < maxAutoPaused) {
+          const candidates = Array.from(this.running.values()).filter((rt) => !rt.paused);
+          if (candidates.length > 0) {
+            const policy = this.config.load.pausePolicy || 'recent';
+            if (policy === 'rss') {
+              candidates.sort((a, b) => (b.rss || 0) - (a.rss || 0) || (b.startTime - a.startTime));
+            } else {
+              candidates.sort((a, b) => b.startTime - a.startTime);
+            }
+            const victim = candidates[0];
+            this.pauseTask(victim.taskId, 'load');
+            this.eventBus.emit('load.task_paused', victim.taskId, {
+              reason: 'load',
+              policy,
+              rss: victim.rss,
+              startTime: victim.startTime,
+            });
+          }
+        }
+      } else if (!load.overloaded) {
+        const autoPaused = Array.from(this.running.values())
+          .filter((rt) => rt.paused && rt.pauseReason === 'load')
+          .sort((a, b) => (a.pausedAt || 0) - (b.pausedAt || 0));
+
+        if (autoPaused.length > 0) {
+          const nextToResume = autoPaused[0];
+          this.resumeTask(nextToResume.taskId);
+          this.eventBus.emit('load.task_resumed', nextToResume.taskId, { reason: 'recovered' });
+        }
+      }
     }
     // 0. Check disk space: if sufficient, resume any tasks waiting for disk
     const disks = this.getMonitoredDisks();
@@ -496,9 +730,17 @@ export class Scheduler {
 
   /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
   reapOrphans(): void {
-    const tasks = this.taskRepo.getAll();
     const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
     const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    const activeWorktrees = new Set<string>();
+    for (const run of this.running.values()) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task?.worktreePath) activeWorktrees.add(path.resolve(task.worktreePath));
+    }
+    for (const run of this.reviewerRuns.values()) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task?.worktreePath) activeWorktrees.add(path.resolve(task.worktreePath));
+    }
     for (const info of processes) {
       const dir = info.cwd.replace(/ \(deleted\)$/, '');
       if (info.cwd.endsWith(' (deleted)')) {
@@ -506,15 +748,10 @@ export class Scheduler {
         continue;
       }
 
-      const task = tasks.find((candidate) => {
-        if (!candidate.worktreePath) return false;
-        const worktreePath = path.resolve(candidate.worktreePath);
-        const cwd = path.resolve(info.cwd);
-        return cwd === worktreePath || cwd.startsWith(worktreePath + path.sep);
-      });
-      const taskCanBeReaped = task && (task.status === 'done' || task.status === 'cancelled');
-      if (info.startedAt > oldProcessCutoff) continue;
-      if (task && !taskCanBeReaped) continue;
+      const processCwd = path.resolve(info.cwd);
+      const active = [...activeWorktrees].some((worktree) => processCwd === worktree || processCwd.startsWith(worktree + path.sep));
+      if (active) continue;
+      if (info.startedAt > oldProcessCutoff && !isOrphanProcess(info)) continue;
       reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
   }
@@ -551,16 +788,21 @@ export class Scheduler {
     if (this.running.size === 0) return;
     const now = Date.now();
     for (const [taskId, rt] of this.running) {
-      // Check timeout
-      if (now > rt.timeoutAt) {
-        this.killTask(taskId, 'timeout');
-        continue;
-      }
-
       // Check if process is still alive
       if (!this.isProcessAlive(rt.pid, rt.pidStart)) {
         // Process has ended, check results
         void this.handleRunCompletion(taskId, rt);
+        continue;
+      }
+
+      if (rt.paused) {
+        // Paused tasks: do NOT check timeout, stall, or no-commit watch
+        continue;
+      }
+
+      // Check timeout
+      if (now > rt.timeoutAt) {
+        this.killTask(taskId, 'timeout');
         continue;
       }
 
@@ -917,6 +1159,11 @@ export class Scheduler {
       const task = this.taskRepo.get(taskId);
       if (!task) return;
 
+      // A worker may have exited while the daemon was still alive. Preserve
+      // completed work exactly as startup recovery does.
+      const persistedRun = this.runRepo.get(rt.runId);
+      if (persistedRun && this.recoverFinishedWork(persistedRun)) return;
+
       if (task.worktreePath) {
         await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
       }
@@ -1078,8 +1325,7 @@ export class Scheduler {
           this.runRepo.finish(rt.runId, 'crashed', undefined, 'auth');
           this.markProfileAuthExpired(rt.profileName);
 
-          const attempt = (task.attempt || 0) + 1;
-          this.taskRepo.update(taskId, { status: 'queued', attempt, resume: 1, transientRetries: 0, notBefore: null });
+          this.taskRepo.update(taskId, { status: 'queued', attempt: task.attempt, resume: 1, transientRetries: 0, notBefore: null });
           this.eventBus.emit('task.queued', taskId, { reason: 'auth_retry', profile: rt.profileName });
         } else {
           // Check for transient errors
@@ -1171,36 +1417,92 @@ export class Scheduler {
 
   private scheduleReviews(): void {
     const state = this.failoverState;
-    if (!state || !this.reviewRepo || this.config.reviewer?.enabled === false) return;
-    const snapshot = state.snapshot();
+    if (!this.reviewRepo || this.config.reviewer?.enabled === false) return;
+    const snapshot = state?.snapshot() || { active: false, step: undefined };
     if (this.failoverWasActive && !snapshot.active) {
       this.eventBus.emit('claude.failover_cleared', undefined);
     }
     this.failoverWasActive = snapshot.active;
-    if (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex') return;
-
     const codex = this.engines.get('codex');
     if (!codex) return;
     for (const task of this.taskRepo.getByStatus('review')) {
       if (this.reviewerRuns.has(task.id)) continue;
       if (task.reviewerEscalated) continue;
+      const chain = this.reviewChainForTask(task);
+      const step = chain[task.reviewStep ?? 0];
+      if (chain.length > 0 && (!step || step.mode !== 'gate')) {
+        if ((task.reviewStep ?? 0) >= chain.length) {
+          this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true });
+        }
+        continue;
+      }
+      if (chain.length > 0 && step?.reviewer === 'claude') {
+        this.eventBus.emit('review.gate_ready', task.id, { reviewStep: task.reviewStep ?? 0, reviewer: 'claude' });
+        continue;
+      }
+      if (chain.length === 0 && (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex')) continue;
       if (this.getCheckResults(task.id).length === 0) {
         this.escalateReview(task.id, 'missing_autocheck_results', 'Không có kết quả autocheck đã lưu; cần người xác minh trước khi tiếp tục.');
         continue;
       }
-      const profile = this.profileRepo.getEnabled().find((p) => p.engine === 'codex' &&
+      const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex' &&
         !this.quotaService.isExhausted(p.name, 'codex') &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
-      if (!profile || !task.worktreePath) continue;
-      this.startReview(task, profile.name, codex);
+      if (codexProfiles.length === 0 || !task.worktreePath) continue;
+      codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+      const profile = codexProfiles[0];
+      const model = reviewerModel(step || { reviewer: this.config.reviewer?.model || 'codex:gpt-5.6-luna', mode: 'gate' }) || this.config.reviewer?.model || 'codex:gpt-5.6-luna';
+      const workerModel = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1)?.model;
+      if (chain.length > 0 && workerModel === model) {
+        this.advanceReviewStep(task, chain, 'reviewer_same_as_worker');
+        continue;
+      }
+      this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
     }
   }
 
-  private reviewerRunsForProfile(profileName: string): boolean {
+  private reviewChainForTask(task: TaskRow): ReviewChainStep[] {
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return [];
+    if (project.review) {
+      try {
+        const value = JSON.parse(project.review) as { chain?: unknown };
+        return parseReviewChain(JSON.stringify(value.chain || []));
+      } catch {
+        return [];
+      }
+    }
+    return parseReviewChain(project.reviewChain);
+  }
+
+  private reviewMaxRoundsForTask(task: TaskRow): number {
+    const project = this.projectRepo.get(task.projectId);
+    if (project?.review) {
+      try {
+        const value = JSON.parse(project.review) as { maxRounds?: unknown };
+        return typeof value.maxRounds === 'number' && value.maxRounds > 0 ? value.maxRounds : 2;
+      } catch {
+        return 2;
+      }
+    }
+    return this.config.reviewer?.maxChangesRequested || 2;
+  }
+
+  private advanceReviewStep(task: TaskRow, chain: ReviewChainStep[], reason: string): void {
+    const nextStep = (task.reviewStep ?? 0) + 1;
+    this.taskRepo.update(task.id, { reviewStep: nextStep, reviewerChangesRequested: 0 });
+    if (nextStep >= chain.length || chain[nextStep]?.mode === 'final') {
+      this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true, reviewStep: nextStep, reason });
+    } else {
+      this.eventBus.emit('review.gate_completed', task.id, { reviewStep: nextStep, reason });
+    }
+  }
+
+  reviewerRunsForProfile(profileName: string): boolean {
     return [...this.reviewerRuns.values()].some((run) => run.profileName === profileName);
   }
 
-  private startReview(task: TaskRow, profileName: string, engine: Engine): void {
+  private startReview(task: TaskRow, profileName: string, engine: Engine, reviewerModel: string, reviewerActor = 'codex-reviewer'): void {
     const profile = this.profileRepo.get(profileName);
     if (!profile || !task.worktreePath || this.reviewerRuns.has(task.id)) return;
     const lockSlot = this.locks.findFreeSlotSync(profile);
@@ -1211,7 +1513,6 @@ export class Scheduler {
     const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
     const logPath = path.join(logDir, `${runId}.log`);
     const outputPath = path.join(logDir, `${runId}.final.json`);
-    const reviewerModel = this.config.reviewer?.model || 'codex:gpt-5.6-luna';
     this.runRepo.insert({ id: runId, taskId: task.id, engine: 'codex', model: reviewerModel, profileName, logPath, kind: 'reviewer' });
     let child;
     try {
@@ -1249,7 +1550,7 @@ export class Scheduler {
     this.reviewerRuns.set(task.id, { taskId: task.id, runId, pid: child.pid, profileName, engine, outputPath, lockSlot, lockFile, startedAt: Date.now(), timeout });
     this.locks.invalidate(profileName);
     child.unref();
-    this.eventBus.emit('review.started', task.id, { actor: 'codex-reviewer', model: reviewerModel, profile: profileName, runId });
+    this.eventBus.emit('review.started', task.id, { actor: reviewerActor, model: reviewerModel, profile: profileName, runId });
     child.once('error', () => {
       if (!this.stopped) this.finishReview(task.id, runId, profileName, 'error', null);
     });
@@ -1327,7 +1628,7 @@ export class Scheduler {
     }
     this.runRepo.finish(runId, 'done');
     this.reviewTask(taskId, result.verdict, result.feedback, 'codex-reviewer');
-    this.eventBus.emit('review.completed', taskId, { actor: 'codex-reviewer', verdict: result.verdict, model: this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
+    this.eventBus.emit('review.completed', taskId, { actor: 'codex-reviewer', verdict: result.verdict, model: run?.model || this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
     if (!this.stopped) this.triggerTick();
   }
 
@@ -1477,6 +1778,7 @@ export class Scheduler {
       const ranked = eligibleProfiles.map((profile, originalIndex) => ({
         profile,
         originalIndex,
+        priority: profile.priority ?? 0,
         emailRuns: this.getEmailRunningCount(profile),
         quotaRemaining: this.getQuotaRemainingPct(profile, family),
       }));
@@ -1487,6 +1789,9 @@ export class Scheduler {
         }
         if (a.quotaRemaining !== b.quotaRemaining) {
           return b.quotaRemaining - a.quotaRemaining;
+        }
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority;
         }
         return a.originalIndex - b.originalIndex;
       });
@@ -1797,8 +2102,14 @@ export class Scheduler {
         lastNoCommitThresholdEmitted: 0,
         commandOccurrences: [],
         lastLogOffset: 0,
+        rss: 0,
+        cpu: 0,
+        paused: false,
+        pauseReason: null,
+        pausedAt: null,
       };
       this.running.set(task.id, rt);
+      this.measureTaskResources(rt);
       this.starting.delete(task.id);
       this.locks.invalidate(profileName);
 
@@ -1856,10 +2167,16 @@ export class Scheduler {
   reviewTask(taskId: string, verdict: 'approved' | 'changes_requested', feedback?: string, by?: string): void {
     const task = this.taskRepo.get(taskId);
     if (!task || task.status !== 'review') return;
+    const chain = this.reviewChainForTask(task);
+    const step = chain[task.reviewStep ?? 0];
 
     if (verdict === 'approved') {
       if (by === 'codex-reviewer' && (!feedback || feedback.trim() === '')) return;
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback: feedback || null, actor: by });
+      if ((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') {
+        this.advanceReviewStep(task, chain, 'approved');
+        return;
+      }
       if (by !== 'codex-reviewer') this.resetReviewerEscalation(taskId);
       this.taskRepo.updateStatus(taskId, 'done');
       if (this.runMetricsRepo) {
@@ -1877,9 +2194,9 @@ export class Scheduler {
         throw new Error('Feedback is required when requesting changes');
       }
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback, actor: by });
-      if (by === 'codex-reviewer') {
+      if (((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') || (by === 'codex-reviewer' && chain.length === 0)) {
         const count = (task.reviewerChangesRequested || 0) + 1;
-        const max = this.config.reviewer?.maxChangesRequested || 2;
+        const max = this.reviewMaxRoundsForTask(task);
         if (count > max) {
           this.escalateReview(taskId, 'reviewer_changes_limit', feedback);
           return;
@@ -1895,6 +2212,7 @@ export class Scheduler {
           body: newBody,
           status: 'queued',
           resume: 1,
+          reviewStep: 0,
         });
 
         // Remove markers
@@ -1969,11 +2287,24 @@ export class Scheduler {
     if (!this.stopped) this.triggerTick();
   }
 
-  private killProcessGroup(pid: number): void {
+  private killProcessGroup(pid: number, signal: NodeJS.Signals = 'SIGKILL'): void {
+    if (pid === process.pid) return;
     try {
-      process.kill(-pid, 'SIGKILL');
+      // A paused (SIGSTOP) group cannot act on SIGTERM until it is continued.
+      process.kill(-pid, 'SIGCONT');
     } catch {
-      try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      try { process.kill(pid, 'SIGCONT'); } catch { /* ignore */ }
+    }
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      if (this.isProcessAlive(pid)) {
+        try { process.kill(pid, signal); } catch { /* already dead */ }
+      }
+    }
+    if (signal === 'SIGTERM') {
+      const timer = setTimeout(() => this.killProcessGroup(pid), 10_000);
+      timer.unref();
     }
   }
 

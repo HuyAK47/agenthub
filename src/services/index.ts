@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z, ZodError } from 'zod';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
@@ -37,7 +37,7 @@ import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
 import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
-import { parseAuthState } from '../profiles/auth.js';
+import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
@@ -49,6 +49,7 @@ import { mergeTaskIntoBase, MergeError } from '../merge.js';
 import { computeTaskGraph, filterTasksForGraph, detectCycle, parseDependsOn } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
+import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -57,7 +58,17 @@ function apiProject(project: ProjectRow): ProjectRow {
   if (project.merge) {
     try { merge = JSON.parse(project.merge); } catch { merge = null; }
   }
-  return { ...project, merge, createdAt: toApiTime(project.createdAt)! } as ProjectRow;
+  let reviewChain: unknown = null;
+  if (project.reviewChain) {
+    try { reviewChain = JSON.parse(project.reviewChain); } catch { reviewChain = null; }
+  }
+  let review: unknown = null;
+  if (project.review) {
+    try { review = JSON.parse(project.review); } catch { review = null; }
+  } else if (reviewChain) {
+    review = { chain: reviewChain, maxRounds: 2 };
+  }
+  return { ...project, merge, reviewChain, review, createdAt: toApiTime(project.createdAt)! } as ProjectRow;
 }
 
 function apiProfile(profile: ProfileRow): ProfileRow {
@@ -156,6 +167,10 @@ export const ProjectMergeSchema = z.object({
   timeoutSec: z.number().int().positive().default(600),
 });
 export type ProjectMerge = z.infer<typeof ProjectMergeSchema>;
+export const ProjectReviewSchema = z.object({
+  chain: ReviewChainSchema.default([]),
+  maxRounds: z.number().int().positive().default(2),
+});
 
 export const CreateProjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
@@ -167,6 +182,8 @@ export const CreateProjectSchema = z.object({
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
+  reviewChain: ReviewChainSchema.nullable().optional(),
+  review: ProjectReviewSchema.nullable().optional(),
 });
 
 export const UpdateProjectSchema = z.object({
@@ -177,6 +194,8 @@ export const UpdateProjectSchema = z.object({
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
+  reviewChain: ReviewChainSchema.nullable().optional(),
+  review: ProjectReviewSchema.nullable().optional(),
 });
 
 export const CreateTaskSchema = z.object({
@@ -271,11 +290,19 @@ export const UpdateKnowledgeSchema = z.object({
 
 export const CreateProfileSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
-  engine: z.enum(['agy', 'claude']).default('agy'),
+  engine: z.enum(['agy', 'claude', 'codex']).default('agy'),
+  accountType: z.enum(['personal', 'team', 'api']).default('personal'),
+});
+
+export const RenameProfileSchema = z.object({
+  newName: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
 export const UpdateProfileSchema = z.object({
-  enabled: z.union([z.boolean(), z.number().int().min(0).max(1)]),
+  enabled: z.union([z.boolean(), z.number().int().min(0).max(1)]).optional(),
+  label: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  priority: z.number().int().optional(),
 });
 
 export const MarkQuotaSchema = z.object({
@@ -296,6 +323,7 @@ export const UpdateConfigSchema = z.object({
   }).optional(),
   slotsPerAgyProfile: z.number().int().positive().optional(),
   slotsPerCodexProfile: z.number().int().positive().optional(),
+  multiplePerProvider: z.boolean().optional(),
   watchdog: z.object({
     stallMinutes: z.number().positive().optional(),
     waitingMinutes: z.number().positive().optional(),
@@ -484,6 +512,20 @@ export function formatEventSummary(
 
     case 'task.cancelled':
       return `${taskLabel} đã bị hủy`;
+
+    case 'task.paused':
+      return p.reason === 'load'
+        ? `${taskLabel} tạm dừng do quá tải`
+        : `${taskLabel} đã tạm dừng`;
+
+    case 'task.resumed':
+      return `${taskLabel} tiếp tục chạy`;
+
+    case 'load.task_paused':
+      return `${taskLabel} tạm dừng do quá tải`;
+
+    case 'load.task_resumed':
+      return `${taskLabel} tiếp tục chạy sau khi tải giảm`;
 
     case 'task.timeout':
       return `${taskLabel} hết thời gian chạy`;
@@ -785,6 +827,10 @@ export class AppService {
         projectId: task?.projectId ?? (r.projectId || (r.taskId.includes('/') ? r.taskId.split('/')[0] : '')),
         slug: task?.slug ?? (r.taskId.includes('/') ? r.taskId.slice(r.taskId.indexOf('/') + 1) : r.taskId),
         worktreePath: task?.worktreePath ?? null,
+        rss: r.rss ?? 0,
+        cpu: r.cpu ?? 0,
+        paused: Boolean(r.paused),
+        pauseReason: r.pauseReason ?? null,
       };
     });
 
@@ -920,6 +966,8 @@ export class AppService {
       checks: parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks ? JSON.stringify(parsed.hooks) : null,
       merge: parsed.merge ? JSON.stringify(parsed.merge) : null,
+      reviewChain: parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
+      review: parsed.review ? JSON.stringify(parsed.review) : null,
     });
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -934,6 +982,8 @@ export class AppService {
       checks: parsed.checks === undefined ? undefined : parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks === undefined ? undefined : parsed.hooks ? JSON.stringify(parsed.hooks) : null,
       merge: parsed.merge === undefined ? undefined : parsed.merge ? JSON.stringify(parsed.merge) : null,
+      reviewChain: parsed.reviewChain === undefined ? undefined : parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
+      review: parsed.review === undefined ? undefined : parsed.review ? JSON.stringify(parsed.review) : null,
     });
     this.invalidateOutOfScopeClaudeScanStates();
     return this.getProject(id);
@@ -1033,6 +1083,16 @@ export class AppService {
           }
         }
       }
+      if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
+        const lastCheck = this.emailCheckCache.get(p.name) || 0;
+        if (now - lastCheck > 30_000) {
+          this.emailCheckCache.set(p.name, now);
+          const email = this.refreshCodexEmail(p);
+          if (email) {
+            p.email = email;
+          }
+        }
+      }
     }
 
     const quotaMarks = this.quotaMarkRepo.getActive();
@@ -1061,6 +1121,12 @@ export class AppService {
 
   createProfile(raw: unknown): ProfileRow {
     const parsed = CreateProfileSchema.parse(raw);
+    if (!this.config.multiplePerProvider && parsed.accountType === 'personal') {
+      const existing = this.profileRepo.getAll().find((profile) => profile.engine === parsed.engine && profile.accountType === 'personal');
+      if (existing) {
+        throw new HttpError(409, 'provider_policy', `Đã có hồ sơ cá nhân cho engine ${parsed.engine}; hãy dùng hồ sơ API/Team hoặc bật multiplePerProvider`);
+      }
+    }
     if (this.profileRepo.get(parsed.name)) {
       if (!this.profileRepo.isDeleted(parsed.name)) {
         throw new HttpError(409, 'conflict', `Hồ sơ "${parsed.name}" đã tồn tại`);
@@ -1069,34 +1135,145 @@ export class AppService {
       this.profileRepo.restore(parsed.name);
     }
 
-    this.coreProfileService.createProfile(parsed.name, parsed.engine);
+    this.coreProfileService.createProfile(parsed.name, parsed.engine, parsed.accountType);
     this.scheduler.getEventBus().emit('profile.created', undefined, { name: parsed.name });
     this.scheduler.wakeWaitingQuotaTasks('profile_created');
 
     return apiProfile(this.profileRepo.get(parsed.name)!);
   }
 
-  deleteProfile(name: string): { ok: boolean } {
+  deleteProfile(name: string, purgeHome = false): { ok: boolean } {
     const profile = this.profileRepo.get(name);
-    if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.kind === 'system') {
-      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống');
+    if (!profile || profile.deletedAt) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    if (profile.kind === 'system' || profile.kind === 'keyring') {
+      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống hoặc keyring');
     }
-    const running = Array.from(this.scheduler.getRunning().values()).some((r) => r.profileName === name);
-    if (running) throw new HttpError(409, 'conflict', `Hồ sơ "${name}" đang chạy task, hãy đợi task xong`);
-    if (profile.engine === 'claude' && profile.kind === 'isolated') {
-      // Claude profiles own their config dir under claude-homes; remove it (path-guarded).
-      try {
-        this.coreProfileService.deleteProfile(name);
-      } catch (error) {
-        throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
-      }
-    } else {
-      // Other profiles keep their files and run history; hide them from lists and scheduling.
-      this.profileRepo.softDelete(name);
+
+    const runningMap = this.scheduler.getRunning();
+    const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);
+    const hasReviewer = this.scheduler.reviewerRunsForProfile(name);
+    if (isBusy || hasReviewer) {
+      throw new HttpError(409, 'conflict', `Không thể xóa hồ sơ "${name}" đang chạy task`);
     }
+
+    try {
+      this.coreProfileService.deleteProfile(name, purgeHome);
+    } catch (error) {
+      throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+    }
+    this.emailCheckCache.delete(name);
+    this.profileChecks.delete(name);
     this.scheduler.getEventBus().emit('profile.deleted', undefined, { name });
     return { ok: true };
+  }
+
+  renameProfile(name: string, raw: unknown): ProfileRow {
+    const profile = this.profileRepo.get(name);
+    if (!profile || profile.deletedAt) {
+      throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    }
+
+    const parsed = RenameProfileSchema.parse(raw);
+    const newName = parsed.newName;
+    if (newName === name) {
+      return apiProfile(profile);
+    }
+
+    const existing = this.profileRepo.get(newName);
+    if (existing) {
+      throw new HttpError(409, 'conflict', `Hồ sơ "${newName}" đã tồn tại`);
+    }
+
+    const runningMap = this.scheduler.getRunning();
+    const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);
+    const hasReviewer = this.scheduler.reviewerRunsForProfile(name);
+    if (isBusy || hasReviewer) {
+      throw new HttpError(409, 'conflict', `Không thể đổi tên hồ sơ "${name}" đang chạy task`);
+    }
+
+    let newHome: string | undefined;
+    let oldHomeToRollback: string | undefined;
+
+    if (profile.home && fs.existsSync(profile.home)) {
+      const managedRoots = [
+        path.resolve(this.config.agyHomesDir),
+        path.resolve(this.config.hubHome, 'codex-homes'),
+        path.resolve(this.config.hubHome, 'claude-homes'),
+      ];
+
+      let realHome: string;
+      try {
+        realHome = fs.realpathSync(profile.home);
+      } catch {
+        realHome = path.resolve(profile.home);
+      }
+
+      const matchedRoot = managedRoots.find((rootPath) => {
+        try {
+          const realRoot = fs.existsSync(rootPath) ? fs.realpathSync(rootPath) : rootPath;
+          if (realHome === realRoot) return false;
+          const rel = path.relative(realRoot, realHome);
+          return !!rel && rel !== '.' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+        } catch {
+          return false;
+        }
+      });
+
+      if (matchedRoot) {
+        const targetDir = path.join(path.dirname(profile.home), newName);
+        if (fs.existsSync(targetDir)) {
+          throw new HttpError(409, 'conflict', `Thư mục "${targetDir}" đã tồn tại trên đĩa`);
+        }
+        try {
+          fs.renameSync(profile.home, targetDir);
+          newHome = targetDir;
+          oldHomeToRollback = profile.home;
+        } catch (err) {
+          throw new HttpError(500, 'internal_error', `Không thể đổi tên thư mục: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    try {
+      this.profileRepo.rename(name, newName, newHome);
+    } catch (err) {
+      if (oldHomeToRollback && newHome) {
+        try {
+          fs.renameSync(newHome, oldHomeToRollback);
+        } catch {
+          // ignore rollback failure
+        }
+      }
+      throw err;
+    }
+
+    this.emailCheckCache.delete(name);
+    this.profileChecks.delete(name);
+
+    this.scheduler.getEventBus().emit('profile.updated', undefined, { name: newName, oldName: name });
+
+    return apiProfile(this.profileRepo.get(newName)!);
+  }
+
+  private refreshCodexEmail(profile: ProfileRow): string | null {
+    if (profile.engine !== 'codex') return null;
+    const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
+    if (!codexPath) return null;
+    const checkEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (profile.kind === 'isolated' && profile.home) {
+      checkEnv.CODEX_HOME = profile.home;
+    }
+    try {
+      const res = execFileSync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' });
+      const parsed = parseCodexLoginStatus(res);
+      if (parsed.email && parsed.email !== profile.email) {
+        this.profileRepo.upsert({ ...profile, email: parsed.email });
+        return parsed.email;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   startProfileCheck(name: string): { started: true } {
@@ -1140,16 +1317,57 @@ export class AppService {
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
       } else {
-        const codexPath = CodexEngine.findCodexPath();
+        const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
         if (!codexPath) {
           message = 'Không tìm thấy Codex CLI';
           this.profileRepo.updateAuthState(profile.name, 'error', message, null);
         } else {
-          const result = await execFileAsync(codexPath, ['--version'], { timeout: 20_000 });
-          output = `${result.stdout}${result.stderr}`;
-          ok = true;
-          message = output.trim() || 'Codex CLI sẵn sàng';
-          this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+          const checkEnv: NodeJS.ProcessEnv = { ...process.env };
+          if (profile.kind === 'isolated' && profile.home) {
+            checkEnv.CODEX_HOME = profile.home;
+          }
+          try {
+            const result = await execFileAsync(codexPath, ['login', 'status'], {
+              env: checkEnv,
+              timeout: 20_000,
+            });
+            output = `${result.stdout}${result.stderr}`;
+            const parsed = parseCodexLoginStatus(output);
+            if (parsed.notLoggedIn) {
+              ok = false;
+              message = 'Chưa đăng nhập';
+              this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
+            } else {
+              ok = true;
+              message = parsed.plan ? `Đã đăng nhập (${parsed.plan})` : 'Đã đăng nhập';
+              if (parsed.email) {
+                email = parsed.email;
+                this.profileRepo.upsert({ ...profile, email: parsed.email });
+              }
+              this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+            }
+          } catch (execErr) {
+            const err = execErr as { stdout?: string; stderr?: string; message?: string };
+            output = `${err.stdout || ''}${err.stderr || ''}`;
+            const parsed = parseCodexLoginStatus(output);
+            if (parsed.notLoggedIn) {
+              ok = false;
+              message = 'Chưa đăng nhập';
+              this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
+            } else {
+              try {
+                const verResult = await execFileAsync(codexPath, ['--version'], { env: checkEnv, timeout: 5000 });
+                output = `${verResult.stdout}${verResult.stderr}`;
+                ok = true;
+                message = output.trim() || 'Codex CLI sẵn sàng';
+                this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+              } catch {
+                ok = false;
+                message = err.message || 'Kiểm tra thất bại';
+                this.profileRepo.updateAuthState(profile.name, 'error', message, null);
+              }
+            }
+          }
         }
       }
     } catch (error) {
@@ -1197,17 +1415,39 @@ export class AppService {
 
   updateProfile(name: string, raw: unknown): ProfileRow {
     const profile = this.profileRepo.get(name);
-    if (!profile) {
+    if (!profile || profile.deletedAt) {
       throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
     }
 
     const parsed = UpdateProfileSchema.parse(raw);
-    const enabledNum = typeof parsed.enabled === 'boolean' ? (parsed.enabled ? 1 : 0) : parsed.enabled;
+    const updates: Partial<Pick<ProfileRow, 'label' | 'notes' | 'priority' | 'enabled'>> = {};
 
-    const wasDisabled = profile.enabled === 0;
-    this.profileRepo.updateEnabled(name, enabledNum);
+    let wasDisabled = false;
+    let enabledNum: number | undefined;
+    if (parsed.enabled !== undefined) {
+      enabledNum = typeof parsed.enabled === 'boolean' ? (parsed.enabled ? 1 : 0) : parsed.enabled;
+      updates.enabled = enabledNum;
+      wasDisabled = profile.enabled === 0;
+    }
+    if (parsed.label !== undefined) {
+      updates.label = parsed.label;
+    }
+    if (parsed.notes !== undefined) {
+      updates.notes = parsed.notes;
+    }
+    if (parsed.priority !== undefined) {
+      updates.priority = parsed.priority;
+    }
 
-    this.scheduler.getEventBus().emit('profile.updated', undefined, { name, enabled: enabledNum });
+    this.profileRepo.update(name, updates);
+
+    this.scheduler.getEventBus().emit('profile.updated', undefined, {
+      name,
+      ...(enabledNum !== undefined ? { enabled: enabledNum } : {}),
+      ...(parsed.label !== undefined ? { label: parsed.label } : {}),
+      ...(parsed.notes !== undefined ? { notes: parsed.notes } : {}),
+      ...(parsed.priority !== undefined ? { priority: parsed.priority } : {}),
+    });
 
     // When re-enabling a profile, wake up waiting_quota tasks
     if (wasDisabled && enabledNum === 1) {
@@ -1255,9 +1495,17 @@ export class AppService {
     const running = this.scheduler.getRunning();
     return tasks.map((task) => {
       const run = running.get(task.id);
+      const project = this.projectRepo.get(task.projectId);
+      let reviewChain = parseReviewChain(project?.reviewChain);
+      if (project?.review) {
+        try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
+      }
       return {
         ...apiTask(task),
+        reviewChain,
         checks: this.scheduler.getCheckResults(task.id),
+        paused: Boolean(run?.paused),
+        pauseReason: run?.pauseReason ?? null,
         currentRun: run ? {
           startedAt: new Date(run.startTime).toISOString(),
           lastOutputAt: new Date(run.lastOutputAt).toISOString(),
@@ -1266,6 +1514,10 @@ export class AppService {
           noCommitMinutes: run.noCommitMinutes ?? null,
           isLooping: run.isLooping ?? false,
           loopingCommand: run.loopingCommand ?? null,
+          paused: Boolean(run.paused),
+          pauseReason: run.pauseReason ?? null,
+          rss: run.rss ?? 0,
+          cpu: run.cpu ?? 0,
         } : null,
       };
     }) as TaskRow[];
@@ -1312,6 +1564,9 @@ export class AppService {
     }
 
     const project = this.projectRepo.get(task.projectId);
+    const reviewSettings = project?.review ? (() => {
+      try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
+    })() : null;
     let commits: string[] = [];
     if (project && task.branch) {
       const baseRef = task.baseRef || project.defaultBranch;
@@ -1321,6 +1576,8 @@ export class AppService {
     const activeRun = this.scheduler.getRunning().get(taskId);
     return {
       ...apiTask(task),
+      paused: Boolean(activeRun?.paused),
+      pauseReason: activeRun?.pauseReason ?? null,
       currentRun: activeRun ? {
         startedAt: new Date(activeRun.startTime).toISOString(),
         lastOutputAt: new Date(activeRun.lastOutputAt).toISOString(),
@@ -1329,9 +1586,16 @@ export class AppService {
         noCommitMinutes: activeRun.noCommitMinutes ?? null,
         isLooping: activeRun.isLooping ?? false,
         loopingCommand: activeRun.loopingCommand ?? null,
+        paused: Boolean(activeRun.paused),
+        pauseReason: activeRun.pauseReason ?? null,
+        rss: activeRun.rss ?? 0,
+        cpu: activeRun.cpu ?? 0,
       } : null,
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
+      reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
+      reviewStep: task.reviewStep ?? 0,
+      reviewMaxRounds: reviewSettings?.maxRounds || 2,
       doneContent,
       blockedContent,
       commits,
@@ -1884,6 +2148,34 @@ export class AppService {
     return this.taskRepo.get(taskId)!;
   }
 
+  pauseTask(idParam: string): { ok: boolean; paused: boolean } {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    const rt = this.scheduler.getRunning().get(taskId);
+    if (!rt) {
+      throw new HttpError(400, 'bad_request', `Task "${taskId}" không ở trạng thái running`);
+    }
+    this.scheduler.pauseTask(taskId, 'manual');
+    return { ok: true, paused: true };
+  }
+
+  resumeTask(idParam: string): { ok: boolean; paused: boolean } {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    const rt = this.scheduler.getRunning().get(taskId);
+    if (!rt) {
+      throw new HttpError(400, 'bad_request', `Task "${taskId}" không ở trạng thái running`);
+    }
+    this.scheduler.resumeTask(taskId);
+    return { ok: true, paused: false };
+  }
+
   async reviewTask(idParam: string, raw: unknown): Promise<TaskRow> {
     const taskId = toTaskId(idParam);
     const task = this.taskRepo.get(taskId);
@@ -2281,6 +2573,7 @@ export class AppService {
       modelChainEasy: this.config.defaultModelChains.easy,
       defaultTimeout: this.config.defaultTimeout,
       slotsPerAgyProfile: this.config.slotsPerAgyProfile,
+      multiplePerProvider: this.config.multiplePerProvider,
       slotsPerCodexProfile: this.config.slotsPerCodexProfile,
       watchdog: this.config.watchdog,
       autoFixOnFail: this.config.autoFixOnFail,

@@ -17,6 +17,7 @@ import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
 import { findClaudeBin } from './chat/claude.js';
+import { getPlatform } from './platform/index.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -47,12 +48,8 @@ export async function cmdOpen(
   const noBrowser = extraArgs.includes('--no-browser') || process.env.AGENTHUB_NO_BROWSER === '1';
   if (!noBrowser) {
     try {
-      if (openFn) {
-        openFn('xdg-open', [url]);
-      } else {
-        const { execFile } = await import('node:child_process');
-        execFile('xdg-open', [url], () => {});
-      }
+      // Linux implementation delegates to execFile('xdg-open', [url]); macOS uses open.
+      getPlatform().openBrowser(url, openFn);
     } catch {
       // Ignore in headless environments
     }
@@ -67,39 +64,17 @@ export async function cmdInstallService(extraArgs: string[]): Promise<string> {
   const nodePath = process.execPath;
   const currentPath = process.env.PATH || '';
 
-  const serviceContent = `[Unit]
-Description=AgentHub Daemon
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${nodePath} ${cliPath} daemon
-Restart=on-failure
-Environment=PATH=${currentPath}
-
-[Install]
-WantedBy=default.target
-`;
-
-  const serviceDir = path.join(os.homedir(), '.config', 'systemd', 'user');
-  const serviceFile = path.join(serviceDir, 'agenthub.service');
+  const result = getPlatform().installService({ nodePath, cliPath, currentPath, homeDir: os.homedir(), print: isPrint });
 
   if (isPrint) {
-    const output = `File: ${serviceFile}\n\n${serviceContent}\nCác lệnh kích hoạt:\n  systemctl --user daemon-reload\n  systemctl --user enable --now agenthub`;
+    const output = `File: ${result.file}\n\n${result.content}\nCác lệnh kích hoạt:\n  ${result.activate}`;
     console.log(output);
     return output;
   }
 
-  fs.mkdirSync(serviceDir, { recursive: true });
-  fs.writeFileSync(serviceFile, serviceContent, 'utf-8');
-  console.log(`✓ Đã tạo service file tại ${serviceFile}`);
-
-  const { execSync } = await import('node:child_process');
-  execSync('systemctl --user daemon-reload && systemctl --user enable --now agenthub', {
-    stdio: 'inherit',
-  });
-  console.log('✓ Đã bật và khởi chạy service agenthub');
-  return serviceContent;
+  console.log(`✓ Đã tạo service file tại ${result.file}`);
+  console.log(`✓ Đã bật và khởi chạy service agenthub (${result.activate})`);
+  return result.content;
 }
 
 export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
@@ -253,7 +228,7 @@ Cách dùng:
   agenthub status                     Xem trạng thái
   agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
   agenthub usage                      Xem usage quota các hồ sơ
-  agenthub profile list|check|login   Quản lý hồ sơ
+  agenthub profile list|check|login|add|rename|remove   Quản lý hồ sơ
   agenthub project add <name> <path>  Thêm project
   agenthub task add|list|show|log     Quản lý task
   agenthub review <id> --approve [--merge]  Duyệt task, có thể merge vào base worktree
@@ -460,7 +435,7 @@ export async function cmdClean(
   return { tasks, removed, freedBytes };
 }
 
-async function cmdProfile(
+export async function cmdProfile(
   config: ReturnType<typeof loadConfig>,
   sub: string | undefined,
   extraArgs: string[],
@@ -473,8 +448,8 @@ async function cmdProfile(
       const name = extraArgs[0];
       const engineArg = extraArgs.find((arg) => arg.startsWith('--engine='))?.split('=')[1]
         || (extraArgs.includes('--engine') ? extraArgs[extraArgs.indexOf('--engine') + 1] : 'agy');
-      if (!name || (engineArg !== 'agy' && engineArg !== 'claude')) {
-        console.error('Cách dùng: agenthub profile add <name> --engine claude|agy');
+      if (!name || (engineArg !== 'agy' && engineArg !== 'claude' && engineArg !== 'codex')) {
+        console.error('Cách dùng: agenthub profile add <name> [--engine agy|claude|codex]');
         process.exitCode = 1;
         break;
       }
@@ -483,8 +458,43 @@ async function cmdProfile(
         process.exitCode = 1;
         break;
       }
-      ctx.profileService.createProfile(name, engineArg);
+      ctx.profileService.createProfile(name, engineArg as 'agy' | 'claude' | 'codex');
       console.log(`✓ Đã tạo hồ sơ ${engineArg}: ${name}`);
+      break;
+    }
+    case 'rename': {
+      const oldName = extraArgs[0];
+      const newName = extraArgs[1];
+      if (!oldName || !newName) {
+        console.error('Cách dùng: agenthub profile rename <tên-cũ> <tên-mới>');
+        process.exitCode = 1;
+        break;
+      }
+      try {
+        ctx.service.renameProfile(oldName, { newName });
+        console.log(`✓ Đã đổi tên hồ sơ: ${oldName} → ${newName}`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+      break;
+    }
+    case 'remove':
+    case 'delete': {
+      const name = extraArgs.find((arg) => !arg.startsWith('--'));
+      const purgeHome = extraArgs.includes('--purge-home') || extraArgs.includes('--purgeHome=1') || extraArgs.includes('--purge');
+      if (!name) {
+        console.error('Cách dùng: agenthub profile remove <tên> [--purge-home]');
+        process.exitCode = 1;
+        break;
+      }
+      try {
+        ctx.service.deleteProfile(name, purgeHome);
+        console.log(`✓ Đã xoá hồ sơ: ${name}`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
       break;
     }
     case 'list': {
@@ -606,7 +616,7 @@ async function cmdProfile(
     }
 
     default:
-      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>');
+      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>|add <tên>|rename <cũ> <mới>|remove <tên>');
   }
 
   ctx.db.close();

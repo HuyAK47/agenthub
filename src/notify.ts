@@ -91,6 +91,23 @@ export class NotificationService {
         break;
       }
 
+      case 'task.paused':
+      case 'load.task_paused': {
+        const title = this.resolveTaskTitle(taskId, p);
+        const msg = p.reason === 'load'
+          ? `Tạm dừng task ${title} do quá tải hệ thống`
+          : `Tạm dừng task ${title}`;
+        this.notify(msg, 'normal');
+        break;
+      }
+
+      case 'task.resumed':
+      case 'load.task_resumed': {
+        const title = this.resolveTaskTitle(taskId, p);
+        this.notify(`Tiếp tục task ${title}`, 'normal');
+        break;
+      }
+
       case 'review.escalated': {
         const title = this.resolveTaskTitle(taskId, p);
         this.notify(`Cần người duyệt: ${title}`, 'normal');
@@ -141,7 +158,7 @@ export class NotificationService {
 
       case 'profile.auth_expired': {
         const name = typeof p.name === 'string' ? p.name : 'tài khoản';
-        this.notify(`Tài khoản ${name} cần đăng nhập lại`, 'normal');
+        this.notify(`Hồ sơ ${name} cần đăng nhập lại`, 'normal');
         break;
       }
 

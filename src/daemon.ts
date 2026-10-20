@@ -37,6 +37,7 @@ import { BulletinService } from './bulletin.js';
 import { TelegramBotService } from './telegram.js';
 import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
+import { stopProcessGroups } from './priority.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -67,6 +68,7 @@ export interface DaemonContext {
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
+  usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
 }
 
@@ -218,6 +220,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     taskRepo,
     projectRepo,
     quotaMarkRepo,
+    chatService,
   });
   service.setTelegramBotService(telegramService);
 
@@ -250,6 +253,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    usageRepo,
     telegramService,
   };
 }
@@ -262,6 +266,11 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.bulletinService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    stopProcessGroups('SIGTERM');
   } catch {
     // ignore
   }

@@ -175,7 +175,9 @@ export class AgyEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Authentication required|authentication timed out|not signed in/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {
@@ -202,8 +204,14 @@ export class CodexEngine implements Engine {
       if (entries.length === 0) return null;
       entries.sort();
       const latest = entries[entries.length - 1];
-      const codexBin = path.join(base, latest, 'bin', 'linux-x86_64', 'codex');
-      return fs.existsSync(codexBin) ? codexBin : null;
+      const targets = process.platform === 'darwin'
+        ? ['darwin-arm64', 'darwin-x64', 'macos-arm64', 'macos-x64']
+        : process.platform === 'win32' ? ['win32-x64'] : ['linux-x86_64'];
+      for (const target of targets) {
+        const codexBin = path.join(base, latest, 'bin', target, 'codex');
+        if (fs.existsSync(codexBin)) return codexBin;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -253,13 +261,17 @@ export class CodexEngine implements Engine {
       try { fs.mkdirSync(path.dirname(opts.lockFile), { recursive: true }); } catch { /* ignore */ }
     }
 
-    const [codexExe, codexArgs] = lowPriority(codexPath, args);
-    const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;
-    const executable = opts.lockFile ? 'flock' : codexExe;
     const env: Record<string, string> = { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV };
+    if (opts.profile.kind === 'isolated' && opts.profile.home) {
+      env.CODEX_HOME = opts.profile.home;
+    }
     if (opts.env) {
       Object.assign(env, opts.env);
     }
+
+    const [codexExe, codexArgs] = lowPriority(codexPath, args);
+    const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;
+    const executable = opts.lockFile ? 'flock' : codexExe;
     const child = spawn(executable, command, {
       cwd: opts.cwd,
       env,
@@ -290,7 +302,9 @@ export class CodexEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Not logged in|\b401\b/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {
@@ -383,7 +397,9 @@ export class FakeEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Not logged in|\b401\b/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {

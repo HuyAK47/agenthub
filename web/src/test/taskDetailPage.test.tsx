@@ -598,5 +598,60 @@ describe('TaskDetailPage', () => {
     expect(screen.getByText('Chưa commit 50 phút')).toBeInTheDocument();
     expect(screen.getByText('Lặp lệnh')).toBeInTheDocument();
   });
+
+  it('15. Nút Tạm dừng khi task running, gọi pauseTask và hiển thị tài nguyên RSS/CPU', async () => {
+    const pauseSpy = vi.spyOn(client, 'pauseTask').mockResolvedValue({ ok: true, paused: true });
+
+    vi.spyOn(client, 'getTask').mockResolvedValue({
+      ...baseTask,
+      status: 'running',
+      paused: false,
+      currentRun: {
+        startedAt: '2026-10-15T00:00:00Z',
+        lastOutputAt: '2026-10-15T00:10:00Z',
+        lastActivityAt: '2026-10-15T00:10:00Z',
+        activitySource: 'log',
+        rss: 104857600,
+        cpu: 15.5,
+      },
+    });
+
+    renderPage();
+    expect(await screen.findByText('Task Alpha')).toBeInTheDocument();
+    expect(screen.getByText('100 MB · 15.5% CPU')).toBeInTheDocument();
+
+    const pauseBtn = screen.getByRole('button', { name: /^Tạm dừng$/i });
+    fireEvent.click(pauseBtn);
+    await vi.waitFor(() => {
+      expect(pauseSpy).toHaveBeenCalledWith('proj-1~t1');
+    });
+  });
+
+  it('16. Nút Tiếp tục khi task paused, nhãn Tạm dừng do quá tải, gọi resumeTask', async () => {
+    const resumeSpy = vi.spyOn(client, 'resumeTask').mockResolvedValue({ ok: true, paused: false });
+
+    vi.spyOn(client, 'getTask').mockResolvedValue({
+      ...baseTask,
+      status: 'running',
+      paused: true,
+      pauseReason: 'load',
+      currentRun: {
+        startedAt: '2026-10-15T00:00:00Z',
+        lastOutputAt: '2026-10-15T00:10:00Z',
+        lastActivityAt: '2026-10-15T00:10:00Z',
+        activitySource: 'log',
+        paused: true,
+        pauseReason: 'load',
+      },
+    });
+
+    renderPage();
+    expect(await screen.findByText('Tạm dừng do quá tải')).toBeInTheDocument();
+    const resumeBtn = screen.getByRole('button', { name: /^Tiếp tục$/i });
+    fireEvent.click(resumeBtn);
+    await vi.waitFor(() => {
+      expect(resumeSpy).toHaveBeenCalledWith('proj-1~t1');
+    });
+  });
 });
 

@@ -15,6 +15,7 @@ export type TaskLevel = 'easy' | 'hard';
 export type EngineType = 'agy' | 'codex' | 'claude';
 
 export type ProfileKind = 'keyring' | 'isolated' | 'codex' | 'system';
+export type ProfileAccountType = 'personal' | 'team' | 'api';
 
 export interface QuotaMark {
   profileName: string;
@@ -22,12 +23,19 @@ export interface QuotaMark {
   until: number; // epoch seconds
   reason?: string;
 }
-export interface QuotaUsageItem { grp: string; window: '5h' | 'week'; remainingPct: number; resetAt: number; fetchedAt: number; }
+export interface QuotaUsageItem {
+  grp: string;
+  window: '5h' | 'week';
+  remainingPct: number;
+  resetAt: number;
+  fetchedAt: number;
+}
 
 export interface Profile {
   name: string;
   engine: EngineType;
   kind: ProfileKind;
+  accountType?: ProfileAccountType;
   home?: string;
   email?: string | null;
   loggedIn?: boolean;
@@ -46,6 +54,10 @@ export interface Profile {
   authMessage?: string | null;
   verifyUrl?: string | null;
   claudePlan?: string;
+  label?: string | null;
+  notes?: string | null;
+  priority?: number;
+  currentTask?: { id?: string; title?: string } | null;
 }
 
 export interface ProjectHooks {
@@ -58,6 +70,8 @@ export interface ProjectMerge {
   checks: string[];
   timeoutSec: number;
 }
+export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
+export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
 
 export interface Project {
   id: string;
@@ -69,6 +83,7 @@ export interface Project {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
+  review?: ProjectReview | string | null;
   createdAt?: string;
 }
 
@@ -129,6 +144,8 @@ export interface Task {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  reviewStep?: number;
+  reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
   currentRun?: {
@@ -141,9 +158,20 @@ export interface Task {
     loopingCommand?: string | null;
     model?: string;
     profileName?: string;
+    paused?: boolean;
+    pauseReason?: 'manual' | 'load' | null;
+    rss?: number;
+    cpu?: number;
   } | null;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
   checks?: CheckResult[];
-  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
   batchId?: string | null;
 }
 
@@ -184,13 +212,20 @@ export interface CheckResult {
 }
 
 export interface TaskDetail extends Task {
+  reviewChain?: ReviewChainStep[];
+  reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
   doneContent?: string | null;
   blockedContent?: string | null;
   commits?: string[] | null;
   gitCommits?: string[] | null;
-  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
   derivedTasks?: Task[];
 }
 
@@ -222,6 +257,10 @@ export interface RunningWorker {
   slug?: string;
   title?: string;
   worktreePath?: string | null;
+  rss?: number;
+  cpu?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
 }
 
 export type BrainActivity =
@@ -423,6 +462,7 @@ export interface SystemConfig {
   modelChainHard: string[];
   modelChainEasy: string[];
   defaultTimeout: number;
+  multiplePerProvider?: boolean;
   slotsPerAgyProfile?: number;
   slotsPerCodexProfile?: number;
   watchdog?: { stallMinutes: number; waitingMinutes: number };
@@ -436,7 +476,13 @@ export interface SystemConfig {
   runTimeoutHours?: number;
   chat?: ChatConfig;
   brain?: {
-    fallback: Array<{ type: 'profile'; profile?: string } | { type: 'model'; model: string } | { type: 'apiKey'; dailyCapUSD: number } | { type: 'engine'; engine: 'codex' } | { type: 'wait' }>;
+    fallback: Array<
+      | { type: 'profile'; profile?: string }
+      | { type: 'model'; model: string }
+      | { type: 'apiKey'; dailyCapUSD: number }
+      | { type: 'engine'; engine: 'codex' }
+      | { type: 'wait' }
+    >;
   };
   notifications?: {
     desktop: boolean;
@@ -542,6 +588,7 @@ export interface CreateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
 }
 
 export interface UpdateProjectInput {
@@ -552,11 +599,13 @@ export interface UpdateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
 }
 
 export interface CreateProfileInput {
   name: string;
-  engine?: 'agy' | 'claude';
+  engine?: 'agy' | 'codex' | 'claude';
+  accountType?: ProfileAccountType;
 }
 
 export interface VersionResponse {

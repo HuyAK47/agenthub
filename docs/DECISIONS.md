@@ -14,6 +14,15 @@
 - **Quyết định**: Chỉ dùng cache cho dependency đã chuẩn bị; khi lockfile đổi hoặc kiểm tra native thất bại thì cài riêng trong worktree. Lệnh `agenthub clean --dedupe --verify` (hoặc một bước verify tương đương trong tương lai) cần được dùng để phát hiện cache bị thay đổi và cảnh báo trước khi tái sử dụng.
 - **Hệ quả**: Hardlink không bảo vệ cache khỏi thao tác ghi của worker; việc kiểm tra integrity/verify là trách nhiệm của quy trình dọn dẹp và chuẩn bị dependency.
 
+## DEC-005: Dùng cờ paused trên running task thay vì thêm status mới vào schema SQLite
+
+- **Bối cảnh**: Bảng `tasks` trong SQLite có ràng buộc `CHECK(status IN ('draft', 'queued', 'running', 'review', 'done', 'failed', 'waiting_quota'))`. Việc thêm trạng thái `paused` vào SQLite CHECK constraint yêu cầu tạo bảng tạm và migrate toàn bộ dữ liệu, đồng thời có thể gây lỗi các truy vấn hiện hữu dựa trên giả định task đang chạy có `status = 'running'`.
+- **Quyết định**: Áp dụng phương án được đề bài cho phép ("hoặc cờ `paused` trên task running — chọn cách ít ảnh hưởng nhất"). Giữ nguyên `status = 'running'` và quản lý trạng thái tạm dừng thông qua cờ `paused: boolean`, `pauseReason: 'manual' | 'load' | null`, `pausedAt: number | null` trên `RunningTask` của Scheduler và đối tượng task trả về qua API (`/api/status`, `/api/tasks/:id`).
+- **Hệ quả**:
+  - Không phá vỡ cấu trúc cơ sở dữ liệu SQLite hay yêu cầu database migration phức tạp.
+  - Tích hợp trơn tru với các logic hiện hữu: khi `paused = true`, scheduler đóng băng đồng hồ `timeoutAt` (cộng thêm thời gian đã dừng khi resume), bỏ qua kiểm tra stall và no-commit watchdog.
+  - Phục hồi an toàn: khi daemon tắt hoặc khởi động lại, các tiến trình đang paused đều được gửi `SIGCONT` để tránh bị kẹt trong trạng thái dừng `T`.
+
 ## DEC-001: Bổ sung endpoint GET/PUT /api/config cho cấu hình hệ thống và chuỗi model mặc định
 
 - **Bối cảnh**: Theo đề bài `docs/tasks/a2-web.md` (mục 4 - Cài đặt) và `docs/PLAN.md` (mục 3.5, 3.9), trang Cài đặt trên Web dashboard cần xem và chỉnh sửa chuỗi model mặc định (hard / easy) và cấu hình liên quan (như timeout). Hợp đồng API ban đầu tại mục 3.7 chưa có endpoint cấu hình.

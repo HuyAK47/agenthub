@@ -12,7 +12,9 @@ AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các wo
 
 | Thành phần | Ghi chú |
 |---|---|
-| **Linux** | Đã kiểm chứng trên Ubuntu. Vài tính năng dùng `/proc`, `nice`/`ionice`, `systemd` (macOS chưa thử). |
+| **Linux** | Đã kiểm chứng trên Ubuntu. Dùng `/proc`, `nice`/`ionice` và systemd user service. |
+| **macOS** | Được hỗ trợ: tiến trình đọc bằng `ps`/`lsof`, ưu tiên chỉ dùng `nice`, trình duyệt dùng `open`, service dùng LaunchAgent. `ionice` và systemd không có trên macOS. |
+| **Windows** | Không hỗ trợ trực tiếp. Dùng WSL2 và chạy AgentHub trong môi trường Linux. |
 | **Node.js 22** | Khuyến nghị cài qua [nvm](https://github.com/nvm-sh/nvm). |
 | **git** | Các dự án được giao việc phải là git repository. |
 | **Ít nhất một worker CLI** | `agy` (Antigravity CLI, đăng nhập Google) và/hoặc `codex` (Codex CLI, đăng nhập OpenAI). |
@@ -40,7 +42,7 @@ Dữ liệu (DB SQLite, token, log, worktree) nằm ở `~/.agenthub/`. Muốn �
 ## 3. Chạy hub nền và mở dashboard
 
 ```bash
-agenthub install-service          # tạo systemd user service, tự chạy khi đăng nhập
+agenthub install-service          # Linux: systemd; macOS: ~/Library/LaunchAgents/dev.agenthub.plist
 loginctl enable-linger "$USER"    # (tuỳ chọn) chạy cả khi chưa đăng nhập màn hình
 systemctl --user status agenthub  # kiểm tra đang chạy
 
@@ -54,13 +56,19 @@ agenthub open                     # mở http://127.0.0.1:7700/#token=...
 
 ## 4. Kết nối tài khoản worker
 
-```bash
-agenthub profile list
-agenthub profile login <tên>      # mở terminal đăng nhập tài khoản agy/codex
-agenthub profile check            # kiểm tra quota từng tài khoản
-```
+Mở **Tài khoản (Profiles)**, bấm **Thêm tài khoản**, chọn nhà cung cấp và nhập tên. Dashboard mở trình hướng dẫn cạnh terminal; mỗi bước sẽ được đánh dấu theo output terminal.
 
-Trang **Profiles** trên dashboard hiển thị % quota còn lại theo cửa sổ 5 giờ và theo tuần, cùng bảng mức dùng theo ngày. Hub tự ưu tiên tài khoản đang rảnh và còn nhiều quota.
+- **Antigravity (Gemini):** Hub chọn `Google OAuth` trong menu `agy` (nếu menu còn hiện, bấm Enter). Bấm **Mở trang đăng nhập Google**, đăng nhập đúng tài khoản muốn thêm. Khi Google chuyển tới `antigravity.google`, copy mã xác thực, dán vào ô mã trên dashboard và bấm **Gửi**. Chờ thông báo đăng nhập thành công; Hub tự đọc email. Mã chỉ có hiệu lực khoảng 60 giây, nên bấm **Đăng nhập lại** nếu hết hạn. Dùng tài khoản Google khác các hồ sơ hiện có để có quota riêng.
+- **Codex (OpenAI):** Hub chạy `codex login --device-auth`. Mở link, đăng nhập ChatGPT, copy mã thiết bị hiển thị trên dashboard và dán vào ô mã; chờ xác nhận.
+- **Claude:** Hub gửi `/login`. Chọn loại gói Claude, mở link, đăng nhập, copy mã rồi dán vào ô mã trên dashboard.
+
+Trạng thái hồ sơ gồm **Đã đăng nhập**, **Chưa đăng nhập**, **Cần xác minh** và **Lỗi**. Thẻ cũng hiển thị quota 5 giờ/tuần, task đang chạy, cảnh báo trùng email và menu **Kiểm tra**, **Sửa**, **Đổi tên**, **Xoá**. Xoá có thể giữ lại hoặc xoá cả thư mục dữ liệu đăng nhập.
+
+Nếu không thấy link, kiểm tra terminal đầy đủ và dùng **Kết nối lại**. Nếu mã hết hạn, bấm **Đăng nhập lại**; nếu tài khoản cần xác minh, mở link xác minh trên thẻ rồi bấm **Kiểm tra**. Khi thấy cảnh báo trùng email, đăng nhập lại bằng tài khoản Google khác.
+
+### Accounts & provider terms
+
+Mặc định AgentHub chỉ cho một hồ sơ **personal** trên mỗi engine để tránh khuyến khích xoay vòng nhiều tài khoản cá nhân nhằm vượt giới hạn. Hồ sơ **API key** và **Team** vẫn được phép thêm. Nếu bật `multiplePerProvider`, dashboard sẽ cảnh báo và bạn chịu trách nhiệm tuân thủ điều khoản của nhà cung cấp; nhiều gói cá nhân cấm chia sẻ hoặc vượt giới hạn. Khi dùng chung, nên ưu tiên API key hoặc gói Team thay vì nhiều gói cá nhân.
 
 ## 5. Đăng ký dự án
 
@@ -128,7 +136,8 @@ Trang **Settings** (hoặc `PUT /api/config`):
     "minFreeGB": 3,
     "extraPaths": [{ "path": "/var/lib/docker", "minFreeGB": 1.5, "label": "Docker" }]
   },
-  "defaultTimeout": 5400
+  "defaultTimeout": 5400,
+  "multiplePerProvider": false
 }
 ```
 
@@ -136,7 +145,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 - **disk**: ổ dưới ngưỡng thì không giao task mới. Thêm ổ chứa dữ liệu Docker nếu dự án dùng Docker.
 - **defaultTimeout**: giới hạn thời gian mỗi lượt chạy (giây). Ngoài ra hub cảnh báo khi task chạy lâu mà không commit, hoặc khi chạy lặp lại một lệnh.
 
-Worker và lệnh kiểm tra đã chạy với ưu tiên CPU/IO thấp (`nice`/`ionice`), nên IDE và trình duyệt của bạn vẫn mượt.
+Worker và lệnh kiểm tra chạy với ưu tiên thấp (`nice`/`ionice` trên Linux, chỉ `nice` trên macOS), nên IDE và trình duyệt của bạn vẫn mượt.
 
 ## 9. Hạn chế và lưu ý
 

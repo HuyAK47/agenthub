@@ -382,7 +382,32 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_entries(projectId, pinned DESC, createdAt DESC);
   `,
-  // Migration 28: task batches and batchId for tasks
+  // Migration 28: profile management (label, notes, priority)
+  `
+  ALTER TABLE profiles ADD COLUMN label TEXT;
+  ALTER TABLE profiles ADD COLUMN notes TEXT;
+  ALTER TABLE profiles ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+  `,
+  // Migration 29: provider account type and legacy multiple-profile policy
+  `
+  ALTER TABLE profiles ADD COLUMN accountType TEXT NOT NULL DEFAULT 'personal'
+    CHECK(accountType IN ('personal', 'team', 'api'));
+  INSERT OR REPLACE INTO meta (key, value)
+    SELECT 'multiple_per_provider_legacy', 'true'
+    WHERE EXISTS (
+      SELECT 1 FROM profiles
+      WHERE accountType = 'personal' AND deletedAt IS NULL
+      GROUP BY engine HAVING COUNT(*) > 1
+    );
+  `,
+  // Migration 30: per-project multi-step review chains
+  `
+  ALTER TABLE projects ADD COLUMN reviewChain TEXT;
+  ALTER TABLE tasks ADD COLUMN reviewStep INTEGER NOT NULL DEFAULT 0;
+  `,
+  // Migration 31: review settings (chain and gate round limit)
+  `ALTER TABLE projects ADD COLUMN review TEXT;`,
+  // Migration 32: task batches and batchId for tasks
   `
   CREATE TABLE IF NOT EXISTS task_batches (
     id TEXT PRIMARY KEY,
@@ -443,6 +468,8 @@ export interface ProjectRow {
   checks: string | null;
   hooks: string | null;
   merge?: string | null;
+  reviewChain?: string | null;
+  review?: string | null;
   createdAt: string;
 }
 
@@ -459,6 +486,11 @@ export interface ProfileRow {
   authState?: ProfileAuthState | null;
   authMessage?: string | null;
   verifyUrl?: string | null;
+  label?: string | null;
+  notes?: string | null;
+  priority?: number;
+  accountType?: 'personal' | 'team' | 'api';
+  deletedAt?: string | null;
 }
 
 export interface QuotaMarkRow {
@@ -503,6 +535,7 @@ export interface TaskRow {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  reviewStep?: number;
   doneReport?: string | null;
   diffStat?: string | null;
   slot: number | null;
@@ -560,15 +593,17 @@ export class ProjectRepo {
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'> & {
       checks?: string | null;
       hooks?: string | null;
       merge?: string | null;
+      reviewChain?: string | null;
+      review?: string | null;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -580,12 +615,14 @@ export class ProjectRepo {
         row.checks || null,
         row.hooks || null,
         row.merge || null,
+        row.reviewChain || null,
+        row.review || null,
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -608,7 +645,10 @@ export class ProjectRepo {
 export class ProfileRepo {
   constructor(private db: Database.Database) {}
 
-  getAll(): ProfileRow[] {
+  getAll(includeDeleted = false): ProfileRow[] {
+    if (includeDeleted) {
+      return this.db.prepare('SELECT * FROM profiles ORDER BY name').all() as ProfileRow[];
+    }
     return this.db.prepare('SELECT * FROM profiles WHERE deletedAt IS NULL ORDER BY name').all() as ProfileRow[];
   }
 
@@ -621,8 +661,8 @@ export class ProfileRepo {
   upsert(row: Omit<ProfileRow, 'createdAt'>): void {
     this.db
       .prepare(
-        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt, accountType)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            engine=excluded.engine,
            kind=excluded.kind,
@@ -630,7 +670,12 @@ export class ProfileRepo {
            email=excluded.email,
            authState=COALESCE(excluded.authState, profiles.authState),
            authMessage=COALESCE(excluded.authMessage, profiles.authMessage),
-           verifyUrl=COALESCE(excluded.verifyUrl, profiles.verifyUrl)`,
+           verifyUrl=COALESCE(excluded.verifyUrl, profiles.verifyUrl),
+           label=COALESCE(excluded.label, profiles.label),
+           notes=COALESCE(excluded.notes, profiles.notes),
+           priority=COALESCE(excluded.priority, profiles.priority),
+           accountType=COALESCE(excluded.accountType, profiles.accountType),
+           deletedAt=COALESCE(excluded.deletedAt, profiles.deletedAt)`,
       )
       .run(
         row.name,
@@ -642,7 +687,28 @@ export class ProfileRepo {
         row.authState ?? null,
         row.authMessage ?? null,
         row.verifyUrl ?? null,
+        row.label ?? null,
+        row.notes ?? null,
+        row.priority ?? 0,
+        row.deletedAt ?? null,
+        row.accountType ?? 'personal',
       );
+  }
+
+  update(
+    name: string,
+    fields: Partial<Pick<ProfileRow, 'label' | 'notes' | 'priority' | 'enabled'>>,
+  ): void {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      sets.push(`${key} = ?`);
+      values.push(value);
+    }
+    if (sets.length === 0) return;
+    values.push(name);
+    this.db.prepare(`UPDATE profiles SET ${sets.join(', ')} WHERE name = ?`).run(...values);
   }
 
   updateAuthState(
@@ -656,15 +722,36 @@ export class ProfileRepo {
       .run(authState, authMessage, verifyUrl, name);
   }
 
+  softDelete(name: string): void {
+    this.db.prepare('DELETE FROM quota_marks WHERE profileName = ?').run(name);
+    this.db.prepare('DELETE FROM quota_usage WHERE profileName = ?').run(name);
+    this.db.prepare("UPDATE profiles SET deletedAt = datetime('now'), enabled = 0 WHERE name = ?").run(name);
+  }
+
   delete(name: string): void {
     this.db.prepare('DELETE FROM quota_marks WHERE profileName = ?').run(name);
     this.db.prepare('DELETE FROM quota_usage WHERE profileName = ?').run(name);
     this.db.prepare('DELETE FROM profiles WHERE name = ?').run(name);
   }
 
-  /** Hide a profile without touching run history (runs.profileName references it). */
-  softDelete(name: string): void {
-    this.db.prepare("UPDATE profiles SET deletedAt = datetime('now'), enabled = 0 WHERE name = ?").run(name);
+  rename(oldName: string, newName: string, newHome?: string): void {
+    this.db.pragma('foreign_keys = OFF');
+    try {
+      this.db.transaction(() => {
+        if (newHome !== undefined) {
+          this.db.prepare('UPDATE profiles SET name = ?, home = ? WHERE name = ?').run(newName, newHome, oldName);
+        } else {
+          this.db.prepare('UPDATE profiles SET name = ? WHERE name = ?').run(newName, oldName);
+        }
+        this.db.prepare('UPDATE quota_marks SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE quota_usage SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE runs SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE run_metrics SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE chat_sessions SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+      })();
+    } finally {
+      this.db.pragma('foreign_keys = ON');
+    }
   }
 
   restore(name: string): void {
@@ -684,6 +771,11 @@ export class ProfileRepo {
     return this.db
       .prepare('SELECT * FROM profiles WHERE enabled = 1 AND deletedAt IS NULL ORDER BY name')
       .all() as ProfileRow[];
+  }
+
+  hasMetaFlag(key: string): boolean {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value?: string } | undefined;
+    return row?.value === 'true';
   }
 }
 
@@ -878,7 +970,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
@@ -1009,6 +1101,12 @@ export class RunRepo {
   getRunning(): RunRow[] {
     return this.db
       .prepare('SELECT * FROM runs WHERE outcome IS NULL')
+      .all() as RunRow[];
+  }
+
+  getShutdownRuns(): RunRow[] {
+    return this.db
+      .prepare("SELECT * FROM runs WHERE outcome = 'crashed' AND reason = 'daemon_shutdown'")
       .all() as RunRow[];
   }
 

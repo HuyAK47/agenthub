@@ -201,9 +201,8 @@ describe('ProjectsPage', () => {
 
     expect(await screen.findByText('XFarm')).toBeInTheDocument();
 
-    const checksInputs = screen.getAllByRole('textbox');
-    // In project card, the textarea for checks
-    const cardChecksTextarea = checksInputs[checksInputs.length - 1];
+    // The checks textarea sits next to its "Lưu checks" button (other textareas follow it, e.g. review chain)
+    const cardChecksTextarea = screen.getByRole('button', { name: /Lưu checks/i }).parentElement!.querySelector('textarea')!;
 
     fireEvent.change(cardChecksTextarea, {
       target: { value: '[{"name":"lint","cmd":["npm","run","lint"]}]' },

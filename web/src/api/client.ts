@@ -167,7 +167,9 @@ export async function getOrphans(): Promise<OrphanProcess[]> {
 }
 
 export async function reapOrphans(): Promise<{ ok: boolean; reaped: number[] }> {
-  return apiFetch<{ ok: boolean; reaped: number[] }>('/api/system/orphans/reap', { method: 'POST' });
+  return apiFetch<{ ok: boolean; reaped: number[] }>('/api/system/orphans/reap', {
+    method: 'POST',
+  });
 }
 
 export async function getBrain(): Promise<BrainStatus> {
@@ -184,7 +186,13 @@ export type ClaudeFailover = {
   resetAt: number | null;
   reason: string | null;
   activatedAt: number | null;
-  step: { type: string; model?: string; profile?: string; engine?: string; dailyCapUSD?: number } | null;
+  step: {
+    type: string;
+    model?: string;
+    profile?: string;
+    engine?: string;
+    dailyCapUSD?: number;
+  } | null;
   stepIndex: number;
   dailyCostUSD: number;
   apiKeyConfigured: boolean;
@@ -205,7 +213,10 @@ export async function getClaudeApiKeyStatus(): Promise<{ configured: boolean }> 
 }
 
 export async function setClaudeApiKey(apiKey: string): Promise<{ configured: boolean }> {
-  return apiFetch<{ configured: boolean }>('/api/claude/api-key', { method: 'PUT', body: JSON.stringify({ apiKey }) });
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key', {
+    method: 'PUT',
+    body: JSON.stringify({ apiKey }),
+  });
 }
 
 export async function rescanClaudeSessions(): Promise<{ ok: boolean }> {
@@ -240,16 +251,35 @@ export async function getProjectKnowledge(projectId: string): Promise<KnowledgeE
   return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
 }
 
-export async function addProjectKnowledge(projectId: string, data: { content: string; pinned?: boolean }): Promise<KnowledgeEntry> {
-  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`, { method: 'POST', body: JSON.stringify(data) });
+export async function addProjectKnowledge(
+  projectId: string,
+  data: { content: string; pinned?: boolean },
+): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
 }
 
-export async function updateProjectKnowledge(projectId: string, id: number, data: { content?: string; pinned?: boolean }): Promise<KnowledgeEntry> {
-  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+export async function updateProjectKnowledge(
+  projectId: string,
+  id: number,
+  data: { content?: string; pinned?: boolean },
+): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(
+    `/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`,
+    { method: 'PATCH', body: JSON.stringify(data) },
+  );
 }
 
-export async function deleteProjectKnowledge(projectId: string, id: number): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'DELETE' });
+export async function deleteProjectKnowledge(
+  projectId: string,
+  id: number,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(
+    `/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`,
+    { method: 'DELETE' },
+  );
 }
 
 export async function getProfiles(): Promise<Profile[]> {
@@ -257,7 +287,9 @@ export async function getProfiles(): Promise<Profile[]> {
 }
 
 export async function refreshProfileUsage(name: string): Promise<Profile> {
-  return apiFetch<Profile>(`/api/profiles/${encodeURIComponent(name)}/usage/refresh`, { method: 'POST' });
+  return apiFetch<Profile>(`/api/profiles/${encodeURIComponent(name)}/usage/refresh`, {
+    method: 'POST',
+  });
 }
 
 export async function createProfile(data: CreateProfileInput): Promise<Profile> {
@@ -267,8 +299,18 @@ export async function createProfile(data: CreateProfileInput): Promise<Profile> 
   });
 }
 
-export async function deleteProfile(name: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+export async function deleteProfile(name: string, purgeHome = false): Promise<{ ok: boolean }> {
+  const query = purgeHome ? '?purgeHome=1' : '';
+  return apiFetch<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(name)}${query}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function renameProfile(name: string, newName: string): Promise<Profile> {
+  return apiFetch<Profile>(`/api/profiles/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    body: JSON.stringify({ newName }),
+  });
 }
 
 export async function loginProfile(name: string): Promise<LoginSessionResponse> {
@@ -285,7 +327,12 @@ export async function checkProfile(name: string): Promise<CheckProfileResponse> 
 
 export async function updateProfile(
   name: string,
-  data: { enabled: boolean | number },
+  data: {
+    enabled?: boolean | number;
+    label?: string | null;
+    notes?: string | null;
+    priority?: number;
+  },
 ): Promise<Profile> {
   return apiFetch<Profile>(`/api/profiles/${encodeURIComponent(name)}`, {
     method: 'PATCH',
@@ -312,10 +359,7 @@ export async function deleteQuota(name: string, family: string): Promise<{ ok: b
   );
 }
 
-export async function getTasks(params?: {
-  project?: string;
-  status?: string;
-}): Promise<Task[]> {
+export async function getTasks(params?: { project?: string; status?: string }): Promise<Task[]> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.status) query.set('status', params.status);
@@ -357,7 +401,10 @@ export async function updateTask(id: string, data: UpdateTaskInput): Promise<Tas
 }
 
 export async function rerunChecks(id: string): Promise<{ passed: boolean; failed: string[] }> {
-  return apiFetch<{ passed: boolean; failed: string[] }>(`/api/tasks/${encodeURIComponent(id)}/checks/rerun`, { method: 'POST' });
+  return apiFetch<{ passed: boolean; failed: string[] }>(
+    `/api/tasks/${encodeURIComponent(id)}/checks/rerun`,
+    { method: 'POST' },
+  );
 }
 
 export async function startTask(id: string): Promise<Task> {
@@ -368,6 +415,18 @@ export async function startTask(id: string): Promise<Task> {
 
 export async function cancelTask(id: string): Promise<Task> {
   return apiFetch<Task>(`/api/tasks/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  });
+}
+
+export async function pauseTask(id: string): Promise<{ ok: boolean; paused: boolean }> {
+  return apiFetch<{ ok: boolean; paused: boolean }>(`/api/tasks/${encodeURIComponent(id)}/pause`, {
+    method: 'POST',
+  });
+}
+
+export async function resumeTask(id: string): Promise<{ ok: boolean; paused: boolean }> {
+  return apiFetch<{ ok: boolean; paused: boolean }>(`/api/tasks/${encodeURIComponent(id)}/resume`, {
     method: 'POST',
   });
 }
@@ -424,7 +483,6 @@ export async function removeTaskFromBatch(batchId: string, taskId: string): Prom
     method: 'DELETE',
   });
 }
-
 export async function reviewTask(
   id: string,
   data: ReviewTaskInput,
@@ -435,10 +493,7 @@ export async function reviewTask(
   });
 }
 
-export async function retryTask(
-  id: string,
-  data?: RetryTaskInput,
-): Promise<Task> {
+export async function retryTask(id: string, data?: RetryTaskInput): Promise<Task> {
   return apiFetch<Task>(`/api/tasks/${encodeURIComponent(id)}/retry`, {
     method: 'POST',
     body: JSON.stringify(data || {}),
@@ -477,7 +532,9 @@ export async function getProjectNotes(
   if (params?.runningOnly) query.set('runningOnly', 'true');
   if (params?.taskId) query.set('taskId', params.taskId);
   const qStr = query.toString();
-  return apiFetch<TaskNote[]>(`/api/projects/${encodeURIComponent(projectId)}/notes${qStr ? `?${qStr}` : ''}`);
+  return apiFetch<TaskNote[]>(
+    `/api/projects/${encodeURIComponent(projectId)}/notes${qStr ? `?${qStr}` : ''}`,
+  );
 }
 
 export async function getTaskNotes(id: string): Promise<TaskNote[]> {
@@ -507,7 +564,10 @@ export async function updateConfig(data: SystemConfig): Promise<SystemConfig> {
   });
 }
 
-export async function getSavings(params?: { project?: string; since?: string }): Promise<SavingsReport> {
+export async function getSavings(params?: {
+  project?: string;
+  since?: string;
+}): Promise<SavingsReport> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.since) query.set('since', params.since);
@@ -533,7 +593,13 @@ export interface TelegramStatus {
   hasToken: boolean;
   chats: TelegramChat[];
   allowedChatIds: number[];
-  notify: { reviewReady: boolean; failed: boolean; blocked: boolean; quota: boolean; fallback: boolean };
+  notify: {
+    reviewReady: boolean;
+    failed: boolean;
+    blocked: boolean;
+    quota: boolean;
+    fallback: boolean;
+  };
 }
 
 export interface TelegramPairingCode {
@@ -549,10 +615,16 @@ export async function getTelegramStatus(): Promise<TelegramStatus> {
 }
 
 export async function putTelegramToken(token: string): Promise<{ hasToken: boolean }> {
-  return apiFetch<{ hasToken: boolean }>('/api/telegram/token', { method: 'PUT', body: JSON.stringify({ token }) });
+  return apiFetch<{ hasToken: boolean }>('/api/telegram/token', {
+    method: 'PUT',
+    body: JSON.stringify({ token }),
+  });
 }
 
-export async function testTelegram(): Promise<{ ok: boolean; bot: { id: number; name: string; username?: string } }> {
+export async function testTelegram(): Promise<{
+  ok: boolean;
+  bot: { id: number; name: string; username?: string };
+}> {
   return apiFetch('/api/telegram/test', { method: 'POST' });
 }
 
@@ -565,9 +637,17 @@ export async function createTelegramPairCode(): Promise<TelegramPairingCode> {
 }
 
 export async function removeTelegramChat(id: number): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/telegram/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  return apiFetch<{ ok: boolean }>(`/api/telegram/chats/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
 }
 
-export async function updateTelegramConfig(data: { enabled?: boolean; notify?: Partial<TelegramStatus['notify']> }): Promise<SystemConfig> {
-  return apiFetch<SystemConfig>('/api/config', { method: 'PUT', body: JSON.stringify({ telegram: data }) });
+export async function updateTelegramConfig(data: {
+  enabled?: boolean;
+  notify?: Partial<TelegramStatus['notify']>;
+}): Promise<SystemConfig> {
+  return apiFetch<SystemConfig>('/api/config', {
+    method: 'PUT',
+    body: JSON.stringify({ telegram: data }),
+  });
 }
