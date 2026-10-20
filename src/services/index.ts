@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z, ZodError } from 'zod';
-import { AgentHubConfig, saveConfig, updateConfigInMemory } from '../config.js';
+import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
 import {
   ProjectRepo,
   ProfileRepo,
@@ -283,6 +283,15 @@ export const UpdateConfigSchema = z.object({
     timeoutSec: z.number().int().positive().optional(),
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
+  }).optional(),
+  brain: z.object({
+    fallback: z.array(z.discriminatedUnion('type', [
+      z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
+      z.object({ type: z.literal('model'), model: z.string().min(1) }),
+      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive() }),
+      z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
+      z.object({ type: z.literal('wait') }),
+    ])).max(10),
   }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
@@ -1877,7 +1886,17 @@ export class AppService {
     this.telegramBotService = botService;
   }
 
-  getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] } {
+  getTelegramStatus() {
+    return {
+      enabled: this.config.telegram.enabled,
+      hasToken: Boolean(this.telegramBotService?.hasValidToken()),
+      chats: this.config.telegram.chats || [],
+      allowedChatIds: this.config.telegram.allowedChatIds,
+      notify: this.config.telegram.notify,
+    };
+  }
+
+  getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[]; chats: TelegramChat[] } {
     if (!this.telegramBotService) {
       throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
     }
@@ -1886,7 +1905,36 @@ export class AppService {
       ...pairing,
       enabled: this.config.telegram?.enabled ?? false,
       allowedChatIds: this.config.telegram?.allowedChatIds ?? [],
+      chats: this.config.telegram?.chats ?? [],
     };
+  }
+
+  saveTelegramToken(token: string): { hasToken: boolean } {
+    const value = token.trim();
+    if (!value) throw new HttpError(400, 'bad_request', 'Bot token không được để trống');
+    const tokenPath = this.config.telegram.botTokenFile;
+    fs.mkdirSync(path.dirname(tokenPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tokenPath, `${value}\n`, { mode: 0o600 });
+    fs.chmodSync(tokenPath, 0o600);
+    this.telegramBotService?.setToken(value);
+    return { hasToken: true };
+  }
+
+  async testTelegram(): Promise<{ ok: boolean; bot: { id: number; name: string; username?: string } }> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try {
+      return { ok: true, bot: await this.telegramBotService.testConnection() };
+    } catch (error) {
+      throw new HttpError(502, 'telegram_error', error instanceof Error ? error.message : 'Không thể kết nối Telegram');
+    }
+  }
+
+  removeTelegramChat(chatId: number): { ok: boolean } {
+    this.config.telegram.allowedChatIds = this.config.telegram.allowedChatIds.filter((id) => id !== chatId);
+    this.config.telegram.chats = (this.config.telegram.chats || []).filter((chat) => chat.id !== chatId);
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+    return { ok: true };
   }
 
   // --- Config ---
@@ -1910,6 +1958,7 @@ export class AppService {
         permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
       },
+      brain: { fallback: this.config.brain.fallback },
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
@@ -1921,6 +1970,7 @@ export class AppService {
         enabled: this.config.telegram.enabled,
         botTokenFile: this.config.telegram.botTokenFile,
         allowedChatIds: this.config.telegram.allowedChatIds,
+        chats: this.config.telegram.chats,
         notify: this.config.telegram.notify,
       },
     };
@@ -1931,6 +1981,7 @@ export class AppService {
 
     // Apply in-memory
     updateConfigInMemory(this.config, parsed);
+    if (parsed.brain?.fallback) this.chatService?.configureFailoverSteps(this.config.brain.fallback);
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
@@ -1946,5 +1997,16 @@ export class AppService {
     this.scheduler.getEventBus().emit('config.updated', undefined, parsed);
 
     return this.getConfig();
+  }
+
+  getClaudeApiKeyStatus() {
+    return { configured: this.chatService?.getClaudeApiKeyStatus().configured || false };
+  }
+
+  setClaudeApiKey(value: string) {
+    if (!this.chatService) throw new HttpError(503, 'unavailable', 'Chat service chưa sẵn sàng');
+    this.chatService.setClaudeApiKey(value);
+    this.scheduler.getEventBus().emit('config.updated', undefined, { brain: { apiKey: 'configured' } });
+    return this.getClaudeApiKeyStatus();
   }
 }

@@ -98,6 +98,15 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
+  it('notifies when Claude changes fallback step without including credentials', () => {
+    const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
+    notifier.start();
+    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'apiKey' }, reason: 'quota' });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toBe('Claude fallback: đang dùng API key');
+    expect(execCalls.join(' ')).not.toContain('sk-');
+  });
+
   it('uses critical urgency only for task.failed', () => {
     taskRepo.insert({
       id: 'proj/task-fail',

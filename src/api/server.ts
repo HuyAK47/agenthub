@@ -135,13 +135,22 @@ export async function createServer(
   fastify.post('/api/telegram/pairing-code/refresh', async () => {
     return service.getTelegramPairingCode(true);
   });
+  fastify.post('/api/telegram/pair-code', async () => service.getTelegramPairingCode(true));
+  fastify.put('/api/telegram/token', async (req) => {
+    const body = req.body as { token?: unknown; botToken?: unknown };
+    const token = typeof body?.token === 'string' ? body.token : body?.botToken;
+    if (typeof token !== 'string') throw new HttpError(400, 'bad_request', 'token phải là chuỗi');
+    return service.saveTelegramToken(token);
+  });
+  fastify.post('/api/telegram/test', async () => service.testTelegram());
+  fastify.delete('/api/telegram/chats/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const chatId = Number(id);
+    if (!Number.isSafeInteger(chatId)) throw new HttpError(400, 'bad_request', 'chat id không hợp lệ');
+    return service.removeTelegramChat(chatId);
+  });
   fastify.get('/api/telegram/status', async () => {
-    return {
-      enabled: service.config.telegram?.enabled ?? false,
-      allowedChatIds: service.config.telegram?.allowedChatIds ?? [],
-      notify: service.config.telegram?.notify,
-      hasToken: Boolean(service.telegramBotService?.hasValidToken()),
-    };
+    return service.getTelegramStatus();
   });
 
   fastify.get('/api/system/orphans', async () => service.getOrphans());
@@ -368,6 +377,12 @@ export async function createServer(
   fastify.get('/api/claude/quota', async () => service.getClaudeQuota());
   fastify.get('/api/claude/failover', async () => service.getClaudeFailover());
   fastify.post('/api/claude/failover/clear', async () => service.clearClaudeFailover());
+  fastify.get('/api/claude/api-key', async () => service.getClaudeApiKeyStatus());
+  fastify.put('/api/claude/api-key', async (req: FastifyRequest) => {
+    const body = req.body as { apiKey?: unknown };
+    if (typeof body?.apiKey !== 'string') throw new HttpError(400, 'bad_request', 'apiKey là bắt buộc');
+    return service.setClaudeApiKey(body.apiKey);
+  });
   fastify.get('/api/claude/usage/today', async () => service.getClaudeToday());
 
   // --- SSE Route ---

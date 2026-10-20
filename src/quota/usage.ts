@@ -97,7 +97,7 @@ export class QuotaUsageService {
   }
 
   private claude: { bin: () => string | null; cwd: string } | null = null;
-  private claudeInFlight = new Set<string>();
+  private claudeInFlight = new Map<string, Promise<QuotaUsageRow[]>>();
   private static CLAUDE_MIN_INTERVAL_SEC = 15 * 60;
 
   /** Enable Claude `/usage` collection (bin resolver avoids importing chat code here). */
@@ -142,13 +142,26 @@ export class QuotaUsageService {
    * Periodic calls run at most every 15 minutes per profile; `force` is for the refresh button.
    */
   async collectClaude(profile: ProfileRow, force = false): Promise<QuotaUsageRow[]> {
-    if (profile.engine !== 'claude' || !this.claude || this.claudeInFlight.has(profile.name)) return [];
+    if (profile.engine !== 'claude' || !this.claude) return [];
+    // A refresh during the periodic run waits for that run instead of returning nothing.
+    const running = this.claudeInFlight.get(profile.name);
+    if (running) return running;
     const now = Math.floor(Date.now() / 1000);
     const last = Math.max(0, ...this.usage.getForProfile(profile.name).map((u) => u.fetchedAt));
     if (!force && now - last < QuotaUsageService.CLAUDE_MIN_INTERVAL_SEC) return [];
     const bin = this.claude.bin();
     if (!bin) return [];
-    this.claudeInFlight.add(profile.name);
+    const run = this.runClaudeCollection(profile, bin);
+    this.claudeInFlight.set(profile.name, run);
+    try {
+      return await run;
+    } finally {
+      this.claudeInFlight.delete(profile.name);
+    }
+  }
+
+  private async runClaudeCollection(profile: ProfileRow, bin: string): Promise<QuotaUsageRow[]> {
+    if (!this.claude) return [];
     try {
       const raw = await runClaudeUsage({
         claudeBin: bin,
@@ -168,8 +181,6 @@ export class QuotaUsageService {
       return rows;
     } catch {
       return [];
-    } finally {
-      this.claudeInFlight.delete(profile.name);
     }
   }
 

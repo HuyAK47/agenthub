@@ -1177,7 +1177,7 @@ export class Scheduler {
       this.eventBus.emit('claude.failover_cleared', undefined);
     }
     this.failoverWasActive = snapshot.active;
-    if (!snapshot.active) return;
+    if (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex') return;
 
     const codex = this.engines.get('codex');
     if (!codex) return;
