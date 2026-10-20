@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ChildProcess } from 'node:child_process';
@@ -16,6 +17,7 @@ import {
   EventRepo,
   ChatSessionRow,
 } from '../db/index.js';
+import { PermissionBroker } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage } from './parse.js';
@@ -25,6 +27,7 @@ import {
   checkClaudePartialSupport,
   checkClaudeStreamJsonSupport,
   ensureChatMcpConfig,
+  chatMcpConfigPath,
   buildClaudeArgs,
   spawnClaude,
   killProcessGroup,
@@ -95,6 +98,7 @@ export class ChatService {
     public config: AgentHubConfig,
     public chatSessionRepo: ChatSessionRepo,
     public chatMessageRepo: ChatMessageRepo,
+    public permissionBroker: PermissionBroker,
     public projectRepo: ProjectRepo,
     public eventBus: EventBus,
     public taskRepo?: TaskRepo,
@@ -147,6 +151,51 @@ export class ChatService {
     this.failoverState.clear();
     this.eventBus.emit('claude.failover_cleared', undefined, { reason: 'manual' });
     return this.failoverState.snapshot();
+  }
+
+  listPermissions(sessionId?: string) {
+    return this.permissionBroker.listPending(sessionId).map((row) => ({
+      ...row,
+      input: JSON.parse(row.input) as Record<string, unknown>,
+    }));
+  }
+
+  decidePermission(id: string, decision: 'allow' | 'deny' | 'allow_always', message?: string): { ok: boolean } {
+    if (!this.permissionBroker.resolve(id, decision, message)) {
+      throw new HttpError(404, 'not_found', 'Yêu cầu cấp quyền không tồn tại hoặc đã được xử lý');
+    }
+    const request = this.permissionBroker.get(id);
+    if (request) {
+      this.emitEvent('chat.permission_resolved', {
+        id,
+        sessionId: request.sessionId,
+        messageId: request.messageId,
+        decision,
+        message: message || null,
+      });
+      this.chatSessionRepo.updateState(request.sessionId, 'running');
+    }
+    return { ok: true };
+  }
+
+  async requestPermission(input: { sessionId: string; messageId?: string | null; toolName: string; input: Record<string, unknown> }) {
+    const running = this.runningTurns.get(input.sessionId);
+    if (running) {
+      running.waitingPermission = true;
+      this.pauseTurnWatchdog(running);
+    }
+    this.setSessionState(input.sessionId, 'waiting_permission');
+    const result = await this.permissionBroker.request(input);
+    if (running && this.runningTurns.get(input.sessionId) === running && !running.cancelled) {
+      running.waitingPermission = false;
+      this.resetTurnWatchdog(running);
+    }
+    const latest = this.permissionBroker.getLatest(input.sessionId, input.messageId, input.toolName);
+    if (latest) this.emitEvent('chat.permission_resolved', { id: latest.id, sessionId: input.sessionId, decision: latest.status });
+    if (this.chatSessionRepo.get(input.sessionId)?.state === 'waiting_permission') {
+      this.setSessionState(input.sessionId, 'running');
+    }
+    return result;
   }
 
   private recordClaudeQuota(streamText: string, stderr: string, exitCode?: number | null): void {
@@ -352,6 +401,7 @@ export class ChatService {
 
     // Remove from queue if any
     this.queue = this.queue.filter((t) => t.sessionId !== id);
+    this.removeChatMcpConfig(id);
     this.chatSessionRepo.delete(id);
     return { ok: true };
   }
@@ -632,7 +682,7 @@ export class ChatService {
       }
     }
 
-    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome);
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec);
     const supportsPartial = checkClaudePartialSupport(claudeBin);
 
     const session = this.chatSessionRepo.get(turn.sessionId);
@@ -651,7 +701,7 @@ export class ChatService {
 
     let child: ChildProcess;
     try {
-      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
+      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: turn.sessionId, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
     } catch (err: unknown) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
       this.setSessionState(turn.sessionId, 'error');
@@ -937,12 +987,12 @@ export class ChatService {
     const proc = spawnClaude(claudeBin, buildClaudeArgs({
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
-      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome),
+      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
       model: session.model,
       hubSnapshot: this.hubSnapshot(session, (this.snapshotAt.get(session.id) || 0) > 0 && Date.now() - (this.snapshotAt.get(session.id) || 0) > 10 * 60 * 1000),
-    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
+    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: session.id, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
     const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, profileName: session.profileName, stderrOutput: '' };
     this.persistentProcesses.set(session.id, state);
     proc.stdout?.on('data', (chunk: Buffer) => this.handlePersistentOutput(state, chunk));
@@ -1069,6 +1119,10 @@ export class ChatService {
     if (proc.child.pid) killProcessGroup(proc.child.pid);
   }
 
+  private removeChatMcpConfig(sessionId: string): void {
+    try { fs.rmSync(chatMcpConfigPath(this.config.hubHome, sessionId), { force: true }); } catch { /* best effort */ }
+  }
+
   private handlePersistentClose(proc: PersistentProcess): void {
     if (proc.active) {
       const active = proc.active;
@@ -1172,6 +1226,36 @@ export class ChatService {
 }
 
 export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatService): void {
+  // MCP permission-prompt-tool calls this endpoint and waits for the dashboard decision.
+  fastify.post('/api/chat/permissions', async (req: FastifyRequest) => {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+      sessionId?: string; messageId?: string; tool_name?: string; input?: unknown;
+    };
+    if (!body.sessionId || !body.tool_name || !body.input || typeof body.input !== 'object') {
+      throw new HttpError(400, 'bad_request', 'Thiếu sessionId, tool_name hoặc input');
+    }
+    return chatService.requestPermission({
+      sessionId: body.sessionId,
+      messageId: body.messageId,
+      toolName: body.tool_name,
+      input: body.input as Record<string, unknown>,
+    });
+  });
+
+  fastify.get('/api/chat/permissions', async (req: FastifyRequest) => {
+    const sessionId = (req.query as { sessionId?: string }).sessionId;
+    return chatService.listPermissions(sessionId);
+  });
+
+  fastify.post('/api/chat/permissions/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { decision?: string; message?: string };
+    if (body.decision !== 'allow' && body.decision !== 'deny' && body.decision !== 'allow_always') {
+      throw new HttpError(400, 'bad_request', 'decision phải là allow, deny hoặc allow_always');
+    }
+    return chatService.decidePermission(id, body.decision, body.message);
+  });
+
   // GET /api/chat/sessions
   fastify.get('/api/chat/sessions', async (req: FastifyRequest) => {
     const query = req.query as { search?: string; archived?: string };

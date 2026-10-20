@@ -7,7 +7,7 @@ import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
-import { BRAIN_PROMPT, buildClaudeArgs, buildHubSnapshot, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
+import { BRAIN_PROMPT, buildClaudeArgs, buildHubSnapshot, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
 import { parseStreamJsonLine, formatToolSummary, StreamChunkParser } from '../src/chat/parse.js';
 
 let tmpDir: string;
@@ -47,6 +47,23 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const args = buildClaudeArgs({ mcpConfigPath: '/tmp/mcp.json', hubSnapshot: snapshot });
     expect(args).toContain(BRAIN_PROMPT);
     expect(args).toContain(snapshot);
+  });
+
+  it('builds a private MCP config scoped to the chat session', () => {
+    const hubHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-'));
+    try {
+      const configPath = ensureChatMcpConfig(hubHome, 'session/one', 7792, 12);
+      expect(path.basename(configPath)).toBe('chat-mcp-session_one.json');
+      expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { mcpServers: { agenthub: { env: Record<string, string> } } };
+      expect(config.mcpServers.agenthub.env).toEqual({
+        AGENTHUB_CHAT_SESSION_ID: 'session/one',
+        AGENTHUB_PORT: '7792',
+        AGENTHUB_PERMISSION_TIMEOUT_SEC: '12',
+      });
+    } finally {
+      fs.rmSync(hubHome, { recursive: true, force: true });
+    }
   });
 
   it('prefers configured Claude binary and otherwise safely falls back to PATH', () => {
