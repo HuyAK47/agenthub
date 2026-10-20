@@ -22,6 +22,7 @@ import {
   SavingsReport,
   DailyUsageReport,
   OrphanProcess,
+  KnowledgeEntry,
 } from '../types/api';
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
@@ -217,6 +218,22 @@ export async function deleteProject(id: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
+}
+
+export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
+  return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
+}
+
+export async function addProjectKnowledge(projectId: string, data: { content: string; pinned?: boolean }): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateProjectKnowledge(projectId: string, id: number, data: { content?: string; pinned?: boolean }): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteProjectKnowledge(projectId: string, id: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'DELETE' });
 }
 
 export async function getProfiles(): Promise<Profile[]> {

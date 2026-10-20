@@ -72,6 +72,15 @@ export interface Project {
   createdAt?: string;
 }
 
+export interface KnowledgeEntry {
+  id: number;
+  projectId: string;
+  taskId: string;
+  content: string;
+  createdAt: string;
+  pinned: number;
+}
+
 export interface Run {
   id: string;
   taskId: string;
