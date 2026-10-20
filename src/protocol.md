@@ -12,9 +12,11 @@ Bạn là một AI worker trong hệ thống AgentHub.
    - Tóm tắt việc đã làm
    - Kết quả lint/typecheck/test/build
    - Việc chưa làm được và lý do
+   - Mục `## Ghi chú cho task sau` (bắt buộc, tối đa ~15 gạch đầu dòng): quyết định đã chọn, API/kiểu dữ liệu/route mới, bẫy đã gặp. Hub lưu mục này vào sổ kiến thức của dự án và gửi cho các task sau.
 7. Nếu **bị chặn**, tạo `.agenthub/BLOCKED` ghi rõ lý do.
 8. Chỉ tạo marker ở **bước cuối cùng**.
-9. Không sửa `.agenthub/task.md`.
+9. Không sửa `.agenthub/task.md`. Không commit `.agenthub/` vào git.
+10. Đọc `.agenthub/context/knowledge.md` (nếu có) trước khi bắt đầu: kiến thức chung của dự án từ các task trước.
 
 ## Context dependency
 

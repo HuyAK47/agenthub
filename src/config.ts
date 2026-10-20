@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
 import type { ExtraDiskPath } from './disk.js';
+import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -14,6 +15,10 @@ export interface ChatConfig {
   permissionTimeoutSec: number;
   claudeProfile?: string;
   autoCompactPercent: number;
+}
+
+export interface BrainConfig {
+  fallback: ClaudeFallbackStep[];
 }
 
 export interface ClaudeSessionsConfig {
@@ -54,10 +59,17 @@ export interface TelegramNotifyConfig {
   fallback: boolean;
 }
 
+export interface TelegramChat {
+  id: number;
+  name: string;
+  username?: string;
+}
+
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
+  chats: TelegramChat[];
   notify: TelegramNotifyConfig;
 }
 
@@ -77,11 +89,14 @@ export const DEFAULT_STALL_CONFIG: StallConfig = {
 export interface ContextConfig {
   overlapCheckSec: number;
   depsMaxChars: number;
+  knowledgeMaxChars: number;
+  knowledgeFile?: string;
 }
 
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   overlapCheckSec: 60,
   depsMaxChars: 16000,
+  knowledgeMaxChars: 12000,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -113,6 +128,7 @@ export interface AgentHubConfig {
   defaultLogDir: string;
   autoFixOnFail: boolean;
   chat: ChatConfig;
+  brain: BrainConfig;
   claudeSessions: ClaudeSessionsConfig;
   reviewer: {
     enabled: boolean;
@@ -157,6 +173,7 @@ export function saveConfig(
     port: number;
     autoFixOnFail?: boolean;
     chat: Partial<ChatConfig>;
+    brain?: Partial<BrainConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications: {
       desktop: boolean;
@@ -172,6 +189,7 @@ export function saveConfig(
       enabled?: boolean;
       botTokenFile?: string;
       allowedChatIds?: number[];
+      chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
   }>,
@@ -191,6 +209,7 @@ export function saveConfig(
     ...(patch.chat && typeof patch.chat === 'object'
       ? { chat: { ...((current.chat as Record<string, unknown>) || {}), ...patch.chat } }
       : {}),
+    ...(patch.brain && typeof patch.brain === 'object' ? { brain: { ...((current.brain as Record<string, unknown>) || {}), ...patch.brain } } : {}),
     ...(patch.reviewer && typeof patch.reviewer === 'object'
       ? { reviewer: { ...((current.reviewer as Record<string, unknown>) || {}), ...patch.reviewer } }
       : {}),
@@ -246,6 +265,7 @@ export function updateConfigInMemory(
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
     autoFixOnFail: boolean;
     chat: Partial<ChatConfig>;
+    brain?: Partial<BrainConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications: {
       desktop: boolean;
@@ -261,6 +281,7 @@ export function updateConfigInMemory(
       enabled?: boolean;
       botTokenFile?: string;
       allowedChatIds?: number[];
+      chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
   }>,
@@ -303,6 +324,7 @@ export function updateConfigInMemory(
     if (patch.chat.claudeProfile !== undefined) config.chat.claudeProfile = patch.chat.claudeProfile;
     if (patch.chat.autoCompactPercent !== undefined) config.chat.autoCompactPercent = patch.chat.autoCompactPercent;
   }
+  if (patch.brain?.fallback) config.brain.fallback = normalizeFallbackSteps(patch.brain.fallback);
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
   if (patch.notifications) {
     config.notifications = {
@@ -348,6 +370,12 @@ export function updateConfigInMemory(
     if (patch.context.depsMaxChars !== undefined) {
       config.context.depsMaxChars = patch.context.depsMaxChars;
     }
+    if (patch.context.knowledgeMaxChars !== undefined) {
+      config.context.knowledgeMaxChars = patch.context.knowledgeMaxChars;
+    }
+    if (patch.context.knowledgeFile !== undefined) {
+      config.context.knowledgeFile = patch.context.knowledgeFile;
+    }
   }
   if (patch.telegram) {
     config.telegram = {
@@ -357,6 +385,7 @@ export function updateConfigInMemory(
         patch.telegram.allowedChatIds !== undefined
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
+      chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -423,6 +452,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     autoCompactPercent: typeof chatRaw.autoCompactPercent === 'number' ? chatRaw.autoCompactPercent : 85,
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
+  const brainRaw = (userConfig.brain as Record<string, unknown>) || {};
 
   const userDisk = (userConfig.disk as { minFreeGB?: number; extraPaths?: unknown } | undefined);
   const userCleanup = (userConfig.cleanup as { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number } | undefined);
@@ -477,6 +507,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     depsMaxChars: typeof rawContext.depsMaxChars === 'number' && rawContext.depsMaxChars > 0
       ? Math.floor(rawContext.depsMaxChars)
       : 16000,
+    knowledgeMaxChars: typeof rawContext.knowledgeMaxChars === 'number' && rawContext.knowledgeMaxChars > 0
+      ? Math.floor(rawContext.knowledgeMaxChars)
+      : DEFAULT_CONTEXT_CONFIG.knowledgeMaxChars,
+    knowledgeFile: typeof rawContext.knowledgeFile === 'string' && rawContext.knowledgeFile.trim()
+      ? rawContext.knowledgeFile.trim()
+      : undefined,
   };
 
   const defaultBotTokenFile = path.join(hubHome, 'secrets', 'telegram.token');
@@ -490,6 +526,11 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : defaultBotTokenFile,
     allowedChatIds: Array.isArray(rawTelegram.allowedChatIds)
       ? rawTelegram.allowedChatIds.filter((id): id is number => typeof id === 'number')
+      : [],
+    chats: Array.isArray(rawTelegram.chats)
+      ? rawTelegram.chats.filter((chat): chat is TelegramChat =>
+          Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
+        )
       : [],
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,
@@ -523,6 +564,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     defaultLogDir,
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
+    brain: { fallback: normalizeFallbackSteps(brainRaw.fallback) },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
       maxAgeDays: typeof rawClaudeSessions.maxAgeDays === 'number' ? rawClaudeSessions.maxAgeDays : 14,
@@ -561,6 +603,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         ? rawContext.overlapCheckSec
         : DEFAULT_CONTEXT_CONFIG.overlapCheckSec,
       depsMaxChars: context.depsMaxChars,
+      knowledgeMaxChars: context.knowledgeMaxChars,
+      knowledgeFile: context.knowledgeFile,
     },
     telegram,
   };

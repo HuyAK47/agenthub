@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createProject, deleteProject, getProjects, updateProject } from '../api/client';
-import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code } from 'lucide-react';
+import { addProjectKnowledge, createProject, deleteProject, deleteProjectKnowledge, getProjectKnowledge, getProjects, updateProject, updateProjectKnowledge } from '../api/client';
+import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { Project } from '../types/api';
 
@@ -34,6 +34,8 @@ export const ProjectsPage: React.FC = () => {
   const [projectHooks, setProjectHooks] = useState<Record<string, string>>({});
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
+  const [knowledgeDraft, setKnowledgeDraft] = useState('');
 
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
@@ -70,6 +72,24 @@ export const ProjectsPage: React.FC = () => {
       return updateProject(id, { hooks: lines.length > 0 ? { onWorktreeRemoved: lines } : null });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  });
+
+  const knowledgeQuery = useQuery({
+    queryKey: ['project-knowledge', knowledgeProject],
+    queryFn: () => getProjectKnowledge(knowledgeProject!),
+    enabled: knowledgeProject !== null,
+  });
+  const addKnowledgeMutation = useMutation({
+    mutationFn: () => addProjectKnowledge(knowledgeProject!, { content: knowledgeDraft.trim() }),
+    onSuccess: () => { setKnowledgeDraft(''); queryClient.invalidateQueries({ queryKey: ['project-knowledge', knowledgeProject] }); },
+  });
+  const updateKnowledgeMutation = useMutation({
+    mutationFn: ({ id, content, pinned }: { id: number; content?: string; pinned?: boolean }) => updateProjectKnowledge(knowledgeProject!, id, { content, pinned }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-knowledge', knowledgeProject] }),
+  });
+  const deleteKnowledgeMutation = useMutation({
+    mutationFn: (id: number) => deleteProjectKnowledge(knowledgeProject!, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-knowledge', knowledgeProject] }),
   });
 
   const resetForm = () => {
@@ -349,6 +369,28 @@ export const ProjectsPage: React.FC = () => {
                   <span className="font-mono font-medium">{proj.maxParallel}</span>
                 </div>
               </div>
+
+              <button type="button" onClick={() => setKnowledgeProject(knowledgeProject === proj.id ? null : proj.id)} className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)]">
+                <BookOpen className="w-3.5 h-3.5" /> Kiến thức
+              </button>
+
+              {knowledgeProject === proj.id && (
+                <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
+                  <div className="flex gap-2">
+                    <input value={knowledgeDraft} onChange={(e) => setKnowledgeDraft(e.target.value)} placeholder="Thêm ghi chú kiến thức..." className="min-w-0 flex-1 text-xs rounded border border-[var(--t-border)] p-2 bg-[var(--t-surface-2)]" />
+                    <button type="button" disabled={!knowledgeDraft.trim() || addKnowledgeMutation.isPending} onClick={() => addKnowledgeMutation.mutate()} className="px-2 rounded bg-[var(--t-accent)] text-white text-xs">Thêm</button>
+                  </div>
+                  {(knowledgeQuery.data || []).map((entry) => (
+                    <div key={entry.id} className="flex items-start gap-2 text-xs">
+                      <button type="button" title="Ghim/bỏ ghim" onClick={() => updateKnowledgeMutation.mutate({ id: entry.id, pinned: !entry.pinned })} className={entry.pinned ? 'text-[var(--t-accent)]' : 'text-[var(--t-text-3)]'}>
+                        <Pin className="w-3.5 h-3.5 mt-0.5" />
+                      </button>
+                      <textarea defaultValue={entry.content} onBlur={(e) => { if (e.target.value !== entry.content) updateKnowledgeMutation.mutate({ id: entry.id, content: e.target.value }); }} rows={2} className="min-w-0 flex-1 rounded border border-[var(--t-border)] p-1.5 bg-[var(--t-surface-2)]" />
+                      <button type="button" onClick={() => deleteKnowledgeMutation.mutate(entry.id)} className="text-[var(--t-crit)]">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {proj.envTemplate && (
                 <div className="pt-2">

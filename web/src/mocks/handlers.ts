@@ -11,6 +11,7 @@ import {
   TaskDetail,
 } from '../types/api';
 import { parseApiTime } from '../lib/time';
+import { filterTasksForDag, layoutTaskDag } from '../components/dag/dagUtils';
 
 let mockBrain: BrainStatus = {
   activity: 'idle',
@@ -843,6 +844,51 @@ export const handlers = [
       tasks = tasks.filter((t) => t.status === status);
     }
     return HttpResponse.json(tasks);
+  }),
+
+  // GET /api/tasks/graph
+  http.get('/api/tasks/graph', ({ request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const url = new URL(request.url);
+    const project = url.searchParams.get('project');
+    const includeDone = url.searchParams.get('includeDone');
+
+    let tasks = [...mockTasks];
+    if (project && project !== 'all') {
+      tasks = tasks.filter((t) => t.projectId === project);
+    }
+
+    const filtered = filterTasksForDag(tasks, {
+      project: project || undefined,
+      doneFilter: (includeDone as any) || 'active_chains',
+    });
+    const layout = layoutTaskDag(filtered);
+
+    return HttpResponse.json({
+      nodes: layout.nodes.map((n) => ({
+        id: n.id,
+        projectId: n.task.projectId,
+        slug: n.task.slug,
+        title: n.task.title,
+        status: n.task.status,
+        level: n.task.level,
+        modelChain: Array.isArray(n.task.modelChain) ? n.task.modelChain : undefined,
+        currentRun: n.task.currentRun,
+        blockedCount: n.blockedCount,
+        isCritical: n.isCritical,
+        isMaxBlocker: n.isMaxBlocker,
+      })),
+      edges: layout.edges.map((e) => ({
+        from: e.from,
+        to: e.to,
+        isCritical: e.isCritical,
+      })),
+      criticalPath: layout.criticalPath,
+      maxBlockingTaskId: layout.maxBlockingTaskId,
+      maxBlockedCount: layout.maxBlockedCount,
+    });
   }),
 
   // POST /api/tasks

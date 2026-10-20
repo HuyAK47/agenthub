@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z, ZodError } from 'zod';
-import { AgentHubConfig, saveConfig, updateConfigInMemory } from '../config.js';
+import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
 import {
   ProjectRepo,
   ProfileRepo,
@@ -20,6 +20,8 @@ import {
   ProfileRow,
   TaskRow,
   QuotaMarkRow,
+  KnowledgeRepo,
+  KnowledgeEntryRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
@@ -33,7 +35,7 @@ import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
 import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
-import { parseAuthState } from '../profiles/auth.js';
+import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
@@ -42,6 +44,7 @@ import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
+import { computeTaskGraph, filterTasksForGraph } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
 
@@ -79,6 +82,20 @@ export function apiTaskNote(note: TaskNoteRow): TaskNoteRow {
     ...note,
     createdAt: toApiTime(note.createdAt) || note.createdAt,
   };
+}
+
+export function apiKnowledgeEntry(entry: KnowledgeEntryRow): KnowledgeEntryRow {
+  return { ...entry, createdAt: toApiTime(entry.createdAt) || entry.createdAt };
+}
+
+export function extractKnowledgeSection(doneContent: string): string | null {
+  const heading = /^##\s+Ghi chú cho task sau\s*$/m.exec(doneContent);
+  if (!heading) return null;
+  const start = heading.index + heading[0].length;
+  const remainder = doneContent.slice(start).replace(/^\r?\n/, '');
+  const nextHeading = /^##\s/m.exec(remainder);
+  const content = remainder.slice(0, nextHeading?.index ?? remainder.length).trim();
+  return content ? content : null;
 }
 
 function apiRun<T extends { startedAt: string; endedAt: string | null }>(run: T): T {
@@ -207,13 +224,31 @@ export const CreateTaskNoteSchema = z.object({
   kind: z.enum(['note', 'overlap']).optional().default('note'),
 });
 
+export const CreateKnowledgeSchema = z.object({
+  content: z.string().min(1, 'Nội dung kiến thức không được để trống'),
+  taskId: z.string().min(1).optional(),
+  pinned: z.boolean().optional(),
+});
+
+export const UpdateKnowledgeSchema = z.object({
+  content: z.string().min(1).optional(),
+  pinned: z.boolean().optional(),
+});
+
 export const CreateProfileSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
-  engine: z.enum(['agy', 'claude']).default('agy'),
+  engine: z.enum(['agy', 'claude', 'codex']).default('agy'),
+});
+
+export const RenameProfileSchema = z.object({
+  newName: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
 export const UpdateProfileSchema = z.object({
-  enabled: z.union([z.boolean(), z.number().int().min(0).max(1)]),
+  enabled: z.union([z.boolean(), z.number().int().min(0).max(1)]).optional(),
+  label: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  priority: z.number().int().optional(),
 });
 
 export const MarkQuotaSchema = z.object({
@@ -226,6 +261,12 @@ export const UpdateConfigSchema = z.object({
   modelChainHard: z.array(modelValidator).min(1).optional(),
   modelChainEasy: z.array(modelValidator).min(1).optional(),
   defaultTimeout: z.number().int().positive().optional(),
+  context: z.object({
+    overlapCheckSec: z.number().positive().optional(),
+    depsMaxChars: z.number().int().positive().optional(),
+    knowledgeMaxChars: z.number().int().positive().optional(),
+    knowledgeFile: z.string().optional(),
+  }).optional(),
   slotsPerAgyProfile: z.number().int().positive().optional(),
   slotsPerCodexProfile: z.number().int().positive().optional(),
   watchdog: z.object({
@@ -252,6 +293,15 @@ export const UpdateConfigSchema = z.object({
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
   }).optional(),
+  brain: z.object({
+    fallback: z.array(z.discriminatedUnion('type', [
+      z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
+      z.object({ type: z.literal('model'), model: z.string().min(1) }),
+      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive() }),
+      z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
+      z.object({ type: z.literal('wait') }),
+    ])).max(10),
+  }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
   }).optional(),
@@ -276,9 +326,6 @@ export const UpdateConfigSchema = z.object({
   stall: z.object({
     noCommitMin: z.number().positive().optional(),
     loopThreshold: z.number().int().positive().optional(),
-  }).optional(),
-  context: z.object({
-    overlapCheckSec: z.number().int().positive().optional(),
   }).optional(),
   disk: z.object({
     minFreeGB: z.number().positive().optional(),
@@ -560,6 +607,7 @@ export class AppService {
     public taskNoteRepo?: TaskNoteRepo,
     public bulletinService?: BulletinService,
     public telegramBotService?: TelegramBotService,
+    public knowledgeRepo?: KnowledgeRepo,
   ) {}
 
   listClaudeSessions(activeWithinMin = 5) {
@@ -958,6 +1006,16 @@ export class AppService {
           }
         }
       }
+      if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
+        const lastCheck = this.emailCheckCache.get(p.name) || 0;
+        if (now - lastCheck > 30_000) {
+          this.emailCheckCache.set(p.name, now);
+          const email = this.refreshCodexEmail(p);
+          if (email) {
+            p.email = email;
+          }
+        }
+      }
     }
 
     const quotaMarks = this.quotaMarkRepo.getActive();
@@ -1001,27 +1059,138 @@ export class AppService {
     return apiProfile(this.profileRepo.get(parsed.name)!);
   }
 
-  deleteProfile(name: string): { ok: boolean } {
+  deleteProfile(name: string, purgeHome = false): { ok: boolean } {
     const profile = this.profileRepo.get(name);
-    if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.kind === 'system') {
-      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống');
+    if (!profile || profile.deletedAt) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    if (profile.kind === 'system' || profile.kind === 'keyring') {
+      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống hoặc keyring');
     }
-    const running = Array.from(this.scheduler.getRunning().values()).some((r) => r.profileName === name);
-    if (running) throw new HttpError(409, 'conflict', `Hồ sơ "${name}" đang chạy task, hãy đợi task xong`);
-    if (profile.engine === 'claude' && profile.kind === 'isolated') {
-      // Claude profiles own their config dir under claude-homes; remove it (path-guarded).
-      try {
-        this.coreProfileService.deleteProfile(name);
-      } catch (error) {
-        throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
-      }
-    } else {
-      // Other profiles keep their files and run history; hide them from lists and scheduling.
-      this.profileRepo.softDelete(name);
+
+    const runningMap = this.scheduler.getRunning();
+    const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);
+    const hasReviewer = this.scheduler.reviewerRunsForProfile(name);
+    if (isBusy || hasReviewer) {
+      throw new HttpError(409, 'conflict', `Không thể xóa hồ sơ "${name}" đang chạy task`);
     }
+
+    try {
+      this.coreProfileService.deleteProfile(name, purgeHome);
+    } catch (error) {
+      throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+    }
+    this.emailCheckCache.delete(name);
+    this.profileChecks.delete(name);
     this.scheduler.getEventBus().emit('profile.deleted', undefined, { name });
     return { ok: true };
+  }
+
+  renameProfile(name: string, raw: unknown): ProfileRow {
+    const profile = this.profileRepo.get(name);
+    if (!profile || profile.deletedAt) {
+      throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    }
+
+    const parsed = RenameProfileSchema.parse(raw);
+    const newName = parsed.newName;
+    if (newName === name) {
+      return apiProfile(profile);
+    }
+
+    const existing = this.profileRepo.get(newName);
+    if (existing) {
+      throw new HttpError(409, 'conflict', `Hồ sơ "${newName}" đã tồn tại`);
+    }
+
+    const runningMap = this.scheduler.getRunning();
+    const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);
+    const hasReviewer = this.scheduler.reviewerRunsForProfile(name);
+    if (isBusy || hasReviewer) {
+      throw new HttpError(409, 'conflict', `Không thể đổi tên hồ sơ "${name}" đang chạy task`);
+    }
+
+    let newHome: string | undefined;
+    let oldHomeToRollback: string | undefined;
+
+    if (profile.home && fs.existsSync(profile.home)) {
+      const managedRoots = [
+        path.resolve(this.config.agyHomesDir),
+        path.resolve(this.config.hubHome, 'codex-homes'),
+        path.resolve(this.config.hubHome, 'claude-homes'),
+      ];
+
+      let realHome: string;
+      try {
+        realHome = fs.realpathSync(profile.home);
+      } catch {
+        realHome = path.resolve(profile.home);
+      }
+
+      const matchedRoot = managedRoots.find((rootPath) => {
+        try {
+          const realRoot = fs.existsSync(rootPath) ? fs.realpathSync(rootPath) : rootPath;
+          if (realHome === realRoot) return false;
+          const rel = path.relative(realRoot, realHome);
+          return !!rel && rel !== '.' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+        } catch {
+          return false;
+        }
+      });
+
+      if (matchedRoot) {
+        const targetDir = path.join(path.dirname(profile.home), newName);
+        if (fs.existsSync(targetDir)) {
+          throw new HttpError(409, 'conflict', `Thư mục "${targetDir}" đã tồn tại trên đĩa`);
+        }
+        try {
+          fs.renameSync(profile.home, targetDir);
+          newHome = targetDir;
+          oldHomeToRollback = profile.home;
+        } catch (err) {
+          throw new HttpError(500, 'internal_error', `Không thể đổi tên thư mục: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    try {
+      this.profileRepo.rename(name, newName, newHome);
+    } catch (err) {
+      if (oldHomeToRollback && newHome) {
+        try {
+          fs.renameSync(newHome, oldHomeToRollback);
+        } catch {
+          // ignore rollback failure
+        }
+      }
+      throw err;
+    }
+
+    this.emailCheckCache.delete(name);
+    this.profileChecks.delete(name);
+
+    this.scheduler.getEventBus().emit('profile.updated', undefined, { name: newName, oldName: name });
+
+    return apiProfile(this.profileRepo.get(newName)!);
+  }
+
+  private refreshCodexEmail(profile: ProfileRow): string | null {
+    if (profile.engine !== 'codex') return null;
+    const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
+    if (!codexPath) return null;
+    const checkEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (profile.kind === 'isolated' && profile.home) {
+      checkEnv.CODEX_HOME = profile.home;
+    }
+    try {
+      const res = execFileSync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' });
+      const parsed = parseCodexLoginStatus(res);
+      if (parsed.email && parsed.email !== profile.email) {
+        this.profileRepo.upsert({ ...profile, email: parsed.email });
+        return parsed.email;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   startProfileCheck(name: string): { started: true } {
@@ -1065,16 +1234,57 @@ export class AppService {
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
       } else {
-        const codexPath = CodexEngine.findCodexPath();
+        const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
         if (!codexPath) {
           message = 'Không tìm thấy Codex CLI';
           this.profileRepo.updateAuthState(profile.name, 'error', message, null);
         } else {
-          const result = await execFileAsync(codexPath, ['--version'], { timeout: 20_000 });
-          output = `${result.stdout}${result.stderr}`;
-          ok = true;
-          message = output.trim() || 'Codex CLI sẵn sàng';
-          this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+          const checkEnv: NodeJS.ProcessEnv = { ...process.env };
+          if (profile.kind === 'isolated' && profile.home) {
+            checkEnv.CODEX_HOME = profile.home;
+          }
+          try {
+            const result = await execFileAsync(codexPath, ['login', 'status'], {
+              env: checkEnv,
+              timeout: 20_000,
+            });
+            output = `${result.stdout}${result.stderr}`;
+            const parsed = parseCodexLoginStatus(output);
+            if (parsed.notLoggedIn) {
+              ok = false;
+              message = 'Chưa đăng nhập';
+              this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
+            } else {
+              ok = true;
+              message = parsed.plan ? `Đã đăng nhập (${parsed.plan})` : 'Đã đăng nhập';
+              if (parsed.email) {
+                email = parsed.email;
+                this.profileRepo.upsert({ ...profile, email: parsed.email });
+              }
+              this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+            }
+          } catch (execErr) {
+            const err = execErr as { stdout?: string; stderr?: string; message?: string };
+            output = `${err.stdout || ''}${err.stderr || ''}`;
+            const parsed = parseCodexLoginStatus(output);
+            if (parsed.notLoggedIn) {
+              ok = false;
+              message = 'Chưa đăng nhập';
+              this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
+            } else {
+              try {
+                const verResult = await execFileAsync(codexPath, ['--version'], { env: checkEnv, timeout: 5000 });
+                output = `${verResult.stdout}${verResult.stderr}`;
+                ok = true;
+                message = output.trim() || 'Codex CLI sẵn sàng';
+                this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+              } catch {
+                ok = false;
+                message = err.message || 'Kiểm tra thất bại';
+                this.profileRepo.updateAuthState(profile.name, 'error', message, null);
+              }
+            }
+          }
         }
       }
     } catch (error) {
@@ -1122,17 +1332,39 @@ export class AppService {
 
   updateProfile(name: string, raw: unknown): ProfileRow {
     const profile = this.profileRepo.get(name);
-    if (!profile) {
+    if (!profile || profile.deletedAt) {
       throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
     }
 
     const parsed = UpdateProfileSchema.parse(raw);
-    const enabledNum = typeof parsed.enabled === 'boolean' ? (parsed.enabled ? 1 : 0) : parsed.enabled;
+    const updates: Partial<Pick<ProfileRow, 'label' | 'notes' | 'priority' | 'enabled'>> = {};
 
-    const wasDisabled = profile.enabled === 0;
-    this.profileRepo.updateEnabled(name, enabledNum);
+    let wasDisabled = false;
+    let enabledNum: number | undefined;
+    if (parsed.enabled !== undefined) {
+      enabledNum = typeof parsed.enabled === 'boolean' ? (parsed.enabled ? 1 : 0) : parsed.enabled;
+      updates.enabled = enabledNum;
+      wasDisabled = profile.enabled === 0;
+    }
+    if (parsed.label !== undefined) {
+      updates.label = parsed.label;
+    }
+    if (parsed.notes !== undefined) {
+      updates.notes = parsed.notes;
+    }
+    if (parsed.priority !== undefined) {
+      updates.priority = parsed.priority;
+    }
 
-    this.scheduler.getEventBus().emit('profile.updated', undefined, { name, enabled: enabledNum });
+    this.profileRepo.update(name, updates);
+
+    this.scheduler.getEventBus().emit('profile.updated', undefined, {
+      name,
+      ...(enabledNum !== undefined ? { enabled: enabledNum } : {}),
+      ...(parsed.label !== undefined ? { label: parsed.label } : {}),
+      ...(parsed.notes !== undefined ? { notes: parsed.notes } : {}),
+      ...(parsed.priority !== undefined ? { priority: parsed.priority } : {}),
+    });
 
     // When re-enabling a profile, wake up waiting_quota tasks
     if (wasDisabled && enabledNum === 1) {
@@ -1194,6 +1426,12 @@ export class AppService {
         } : null,
       };
     }) as TaskRow[];
+  }
+
+  getTasksGraph(options?: { project?: string; includeDone?: string | boolean }) {
+    const tasks = this.listTasks({ project: options?.project });
+    const filtered = filterTasksForGraph(tasks, options);
+    return computeTaskGraph(filtered);
   }
 
   async getTask(idParam: string) {
@@ -1545,7 +1783,17 @@ export class AppService {
     });
 
     this.scheduler.reviewTask(taskId, parsed.verdict, parsed.feedback, parsed.by);
-    if (mergeResult) this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
+    if (parsed.verdict === 'approved' && this.knowledgeRepo) {
+      const completed = this.taskRepo.get(taskId);
+      const donePath = completed?.worktreePath ? path.join(completed.worktreePath, '.agenthub', 'DONE') : null;
+      const doneContent = completed?.doneReport || (donePath && fs.existsSync(donePath) ? fs.readFileSync(donePath, 'utf-8') : '');
+      const knowledge = extractKnowledgeSection(doneContent);
+      if (knowledge) this.knowledgeRepo.insert({ projectId: task.projectId, taskId, content: knowledge });
+    }
+    if (mergeResult) {
+      this.exportKnowledgeFile(task.projectId);
+      this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
+    }
     return this.taskRepo.get(taskId)!;
   }
 
@@ -1773,6 +2021,50 @@ export class AppService {
     return notes.map(apiTaskNote);
   }
 
+  listKnowledge(projectId: string): KnowledgeEntryRow[] {
+    if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
+  }
+
+  addKnowledge(projectId: string, raw: unknown): KnowledgeEntryRow {
+    if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    const parsed = CreateKnowledgeSchema.parse(raw);
+    const taskId = parsed.taskId ? toTaskId(parsed.taskId) : `manual/${projectId}`;
+    if (parsed.taskId && (!this.taskRepo.get(taskId) || this.taskRepo.get(taskId)!.projectId !== projectId)) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không thuộc project`);
+    }
+    if (!this.knowledgeRepo) throw new HttpError(500, 'internal_error', 'KnowledgeRepo chưa được khởi tạo');
+    return apiKnowledgeEntry(this.knowledgeRepo.insert({ projectId, taskId, content: parsed.content, pinned: parsed.pinned }));
+  }
+
+  updateKnowledge(projectId: string, id: string, raw: unknown): KnowledgeEntryRow {
+    const entryId = Number(id);
+    const entry = this.knowledgeRepo?.get(entryId);
+    if (!entry || entry.projectId !== projectId) throw new HttpError(404, 'not_found', 'Mục kiến thức không tồn tại');
+    const parsed = UpdateKnowledgeSchema.parse(raw);
+    const updated = this.knowledgeRepo!.update(entryId, parsed);
+    return apiKnowledgeEntry(updated!);
+  }
+
+  deleteKnowledge(projectId: string, id: string): { ok: boolean } {
+    const entryId = Number(id);
+    const entry = this.knowledgeRepo?.get(entryId);
+    if (!entry || entry.projectId !== projectId) throw new HttpError(404, 'not_found', 'Mục kiến thức không tồn tại');
+    this.knowledgeRepo!.delete(entryId);
+    return { ok: true };
+  }
+
+  private exportKnowledgeFile(projectId: string): void {
+    const target = this.config.context.knowledgeFile;
+    const project = this.projectRepo.get(projectId);
+    if (!target || !project || !this.knowledgeRepo) return;
+    const entries = this.knowledgeRepo.getByProject(projectId);
+    const content = ['# Sổ kiến thức dự án', '', ...entries.map((entry) => `- ${entry.content} _(task: ${entry.taskId})`)].join('\n') + '\n';
+    const filePath = path.resolve(project.path, target);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf-8');
+  }
+
   // --- Scheduler control ---
   pauseScheduler(): { ok: boolean; paused: boolean } {
     this.scheduler.pause();
@@ -1793,7 +2085,17 @@ export class AppService {
     this.telegramBotService = botService;
   }
 
-  getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] } {
+  getTelegramStatus() {
+    return {
+      enabled: this.config.telegram.enabled,
+      hasToken: Boolean(this.telegramBotService?.hasValidToken()),
+      chats: this.config.telegram.chats || [],
+      allowedChatIds: this.config.telegram.allowedChatIds,
+      notify: this.config.telegram.notify,
+    };
+  }
+
+  getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[]; chats: TelegramChat[] } {
     if (!this.telegramBotService) {
       throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
     }
@@ -1802,7 +2104,36 @@ export class AppService {
       ...pairing,
       enabled: this.config.telegram?.enabled ?? false,
       allowedChatIds: this.config.telegram?.allowedChatIds ?? [],
+      chats: this.config.telegram?.chats ?? [],
     };
+  }
+
+  saveTelegramToken(token: string): { hasToken: boolean } {
+    const value = token.trim();
+    if (!value) throw new HttpError(400, 'bad_request', 'Bot token không được để trống');
+    const tokenPath = this.config.telegram.botTokenFile;
+    fs.mkdirSync(path.dirname(tokenPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tokenPath, `${value}\n`, { mode: 0o600 });
+    fs.chmodSync(tokenPath, 0o600);
+    this.telegramBotService?.setToken(value);
+    return { hasToken: true };
+  }
+
+  async testTelegram(): Promise<{ ok: boolean; bot: { id: number; name: string; username?: string } }> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try {
+      return { ok: true, bot: await this.telegramBotService.testConnection() };
+    } catch (error) {
+      throw new HttpError(502, 'telegram_error', error instanceof Error ? error.message : 'Không thể kết nối Telegram');
+    }
+  }
+
+  removeTelegramChat(chatId: number): { ok: boolean } {
+    this.config.telegram.allowedChatIds = this.config.telegram.allowedChatIds.filter((id) => id !== chatId);
+    this.config.telegram.chats = (this.config.telegram.chats || []).filter((chat) => chat.id !== chatId);
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+    return { ok: true };
   }
 
   // --- Config ---
@@ -1827,6 +2158,7 @@ export class AppService {
         model: this.config.chat.model,
         autoCompactPercent: this.config.chat.autoCompactPercent ?? 85,
       },
+      brain: { fallback: this.config.brain.fallback },
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
@@ -1838,6 +2170,7 @@ export class AppService {
         enabled: this.config.telegram.enabled,
         botTokenFile: this.config.telegram.botTokenFile,
         allowedChatIds: this.config.telegram.allowedChatIds,
+        chats: this.config.telegram.chats,
         notify: this.config.telegram.notify,
       },
     };
@@ -1848,6 +2181,7 @@ export class AppService {
 
     // Apply in-memory
     updateConfigInMemory(this.config, parsed);
+    if (parsed.brain?.fallback) this.chatService?.configureFailoverSteps(this.config.brain.fallback);
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
@@ -1863,5 +2197,16 @@ export class AppService {
     this.scheduler.getEventBus().emit('config.updated', undefined, parsed);
 
     return this.getConfig();
+  }
+
+  getClaudeApiKeyStatus() {
+    return { configured: this.chatService?.getClaudeApiKeyStatus().configured || false };
+  }
+
+  setClaudeApiKey(value: string) {
+    if (!this.chatService) throw new HttpError(503, 'unavailable', 'Chat service chưa sẵn sàng');
+    this.chatService.setClaudeApiKey(value);
+    this.scheduler.getEventBus().emit('config.updated', undefined, { brain: { apiKey: 'configured' } });
+    return this.getClaudeApiKeyStatus();
   }
 }

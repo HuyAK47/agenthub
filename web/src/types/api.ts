@@ -72,6 +72,15 @@ export interface Project {
   createdAt?: string;
 }
 
+export interface KnowledgeEntry {
+  id: number;
+  projectId: string;
+  taskId: string;
+  content: string;
+  createdAt: string;
+  pinned: number;
+}
+
 export interface Run {
   id: string;
   taskId: string;
@@ -130,6 +139,8 @@ export interface Task {
     noCommitMinutes?: number | null;
     isLooping?: boolean;
     loopingCommand?: string | null;
+    model?: string;
+    profileName?: string;
   } | null;
   checks?: CheckResult[];
   sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
@@ -395,6 +406,9 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
+  brain?: {
+    fallback: Array<{ type: 'profile'; profile?: string } | { type: 'model'; model: string } | { type: 'apiKey'; dailyCapUSD: number } | { type: 'engine'; engine: 'codex' } | { type: 'wait' }>;
+  };
   notifications?: {
     desktop: boolean;
   };
@@ -418,11 +432,14 @@ export interface ChatSession {
   state?: 'idle' | 'running' | 'waiting_permission' | 'error';
   model?: string;
   profileName?: string | null;
+  updatedAt: string;
+  lastMessage?: string | null;
+  pinned?: boolean | number;
+  archived?: boolean | number;
   inputTokens?: number;
   outputTokens?: number;
   contextTokens?: number;
-  updatedAt: string;
-  lastMessage?: string | null;
+  createdAt?: string;
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
@@ -465,7 +482,9 @@ export interface CreateChatSessionInput {
 }
 
 export interface UpdateChatSessionInput {
-  title: string;
+  title?: string;
+  pinned?: boolean | number;
+  archived?: boolean | number;
 }
 
 export interface SendMessageResponse {
@@ -574,4 +593,35 @@ export interface UpdateTaskInput {
   title?: string;
   body?: string;
   appendBody?: string;
+}
+
+export interface TaskGraphNode {
+  id: string;
+  projectId: string;
+  slug: string;
+  title: string;
+  status: TaskStatus;
+  level: TaskLevel;
+  modelChain?: string[];
+  currentRun?: {
+    model?: string;
+    profileName?: string;
+  } | null;
+  blockedCount: number;
+  isCritical: boolean;
+  isMaxBlocker: boolean;
+}
+
+export interface TaskGraphEdge {
+  from: string;
+  to: string;
+  isCritical: boolean;
+}
+
+export interface TaskGraphResponse {
+  nodes: TaskGraphNode[];
+  edges: TaskGraphEdge[];
+  criticalPath: string[];
+  maxBlockingTaskId: string | null;
+  maxBlockedCount: number;
 }

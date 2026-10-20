@@ -253,7 +253,7 @@ Cách dùng:
   agenthub status                     Xem trạng thái
   agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
   agenthub usage                      Xem usage quota các hồ sơ
-  agenthub profile list|check|login   Quản lý hồ sơ
+  agenthub profile list|check|login|add|rename|remove   Quản lý hồ sơ
   agenthub project add <name> <path>  Thêm project
   agenthub task add|list|show|log     Quản lý task
   agenthub review <id> --approve [--merge]  Duyệt task, có thể merge vào base worktree
@@ -460,7 +460,7 @@ export async function cmdClean(
   return { tasks, removed, freedBytes };
 }
 
-async function cmdProfile(
+export async function cmdProfile(
   config: ReturnType<typeof loadConfig>,
   sub: string | undefined,
   extraArgs: string[],
@@ -473,8 +473,8 @@ async function cmdProfile(
       const name = extraArgs[0];
       const engineArg = extraArgs.find((arg) => arg.startsWith('--engine='))?.split('=')[1]
         || (extraArgs.includes('--engine') ? extraArgs[extraArgs.indexOf('--engine') + 1] : 'agy');
-      if (!name || (engineArg !== 'agy' && engineArg !== 'claude')) {
-        console.error('Cách dùng: agenthub profile add <name> --engine claude|agy');
+      if (!name || (engineArg !== 'agy' && engineArg !== 'claude' && engineArg !== 'codex')) {
+        console.error('Cách dùng: agenthub profile add <name> [--engine agy|claude|codex]');
         process.exitCode = 1;
         break;
       }
@@ -483,8 +483,43 @@ async function cmdProfile(
         process.exitCode = 1;
         break;
       }
-      ctx.profileService.createProfile(name, engineArg);
+      ctx.profileService.createProfile(name, engineArg as 'agy' | 'claude' | 'codex');
       console.log(`✓ Đã tạo hồ sơ ${engineArg}: ${name}`);
+      break;
+    }
+    case 'rename': {
+      const oldName = extraArgs[0];
+      const newName = extraArgs[1];
+      if (!oldName || !newName) {
+        console.error('Cách dùng: agenthub profile rename <tên-cũ> <tên-mới>');
+        process.exitCode = 1;
+        break;
+      }
+      try {
+        ctx.service.renameProfile(oldName, { newName });
+        console.log(`✓ Đã đổi tên hồ sơ: ${oldName} → ${newName}`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+      break;
+    }
+    case 'remove':
+    case 'delete': {
+      const name = extraArgs.find((arg) => !arg.startsWith('--'));
+      const purgeHome = extraArgs.includes('--purge-home') || extraArgs.includes('--purgeHome=1') || extraArgs.includes('--purge');
+      if (!name) {
+        console.error('Cách dùng: agenthub profile remove <tên> [--purge-home]');
+        process.exitCode = 1;
+        break;
+      }
+      try {
+        ctx.service.deleteProfile(name, purgeHome);
+        console.log(`✓ Đã xoá hồ sơ: ${name}`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
       break;
     }
     case 'list': {
@@ -606,7 +641,7 @@ async function cmdProfile(
     }
 
     default:
-      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>');
+      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>|add <tên>|rename <cũ> <mới>|remove <tên>');
   }
 
   ctx.db.close();
