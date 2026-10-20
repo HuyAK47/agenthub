@@ -7,6 +7,9 @@ export interface LoadConfig {
   ok: number;
   minFreeMemGB: number;
   recoverAfterSec: number;
+  pausePolicy?: 'recent' | 'rss';
+  maxAutoPaused?: number;
+  autoPauseThresholdSec?: number;
 }
 
 export interface LoadSnapshot {
@@ -14,6 +17,8 @@ export interface LoadSnapshot {
   freeMemGB: number;
   overloaded: boolean;
   recoveringSince: number | null;
+  highSince?: number | null;
+  autoPauseTriggered?: boolean;
 }
 
 export interface LoadGuardOptions {
@@ -28,6 +33,9 @@ export const DEFAULT_LOAD_CONFIG: LoadConfig = {
   ok: 11,
   minFreeMemGB: 1.5,
   recoverAfterSec: 300,
+  pausePolicy: 'recent',
+  maxAutoPaused: 2,
+  autoPauseThresholdSec: 60,
 };
 
 function readFreeMemBytes(): number {
@@ -43,7 +51,8 @@ function readFreeMemBytes(): number {
 export class LoadGuard {
   private overloaded = false;
   private recoveringSince: number | null = null;
-  private snapshot: LoadSnapshot = { load1: 0, freeMemGB: 0, overloaded: false, recoveringSince: null };
+  private highSince: number | null = null;
+  private snapshot: LoadSnapshot = { load1: 0, freeMemGB: 0, overloaded: false, recoveringSince: null, highSince: null, autoPauseTriggered: false };
 
   constructor(private config: LoadConfig, private options: LoadGuardOptions = {}) {}
 
@@ -59,10 +68,22 @@ export class LoadGuard {
     if (!this.config.enabled) {
       this.overloaded = false;
       this.recoveringSince = null;
+      this.highSince = null;
     } else if (!this.overloaded && high) {
       this.overloaded = true;
       this.recoveringSince = null;
+      if (this.highSince === null) {
+        this.highSince = now;
+      }
     } else if (this.overloaded) {
+      if (high) {
+        if (this.highSince === null) {
+          this.highSince = now;
+        }
+      } else {
+        this.highSince = null;
+      }
+
       if (!ok) {
         this.recoveringSince = null;
       } else if (this.recoveringSince === null) {
@@ -73,11 +94,24 @@ export class LoadGuard {
       }
     }
 
-    this.snapshot = { load1, freeMemGB, overloaded: this.overloaded, recoveringSince: this.recoveringSince };
+    const autoPauseThresholdMs = (this.config.autoPauseThresholdSec ?? 60) * 1000;
+    const autoPauseTriggered = Boolean(
+      this.config.enabled && this.highSince !== null && now - this.highSince >= autoPauseThresholdMs,
+    );
+
+    this.snapshot = {
+      load1,
+      freeMemGB,
+      overloaded: this.overloaded,
+      recoveringSince: this.recoveringSince,
+      highSince: this.highSince,
+      autoPauseTriggered,
+    };
     return this.snapshot;
   }
 
   getStatus(): LoadSnapshot { return this.snapshot; }
   isOverloaded(): boolean { return this.overloaded; }
+  isAutoPauseTriggered(): boolean { return Boolean(this.snapshot.autoPauseTriggered); }
   effectiveParallel(maxParallel: number): number { return this.overloaded ? 1 : maxParallel; }
 }

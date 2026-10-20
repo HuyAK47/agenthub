@@ -35,6 +35,7 @@ import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
+import { measureProcessTree } from '../process-tree.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -90,6 +91,14 @@ interface RunningTask {
   loopingCommand?: string;
   commandOccurrences?: Array<{ command: string; timestamp: number }>;
   lastLogOffset?: number;
+  // Resource metrics & Pause/Resume
+  rss?: number;
+  cpu?: number;
+  lastTicks?: number;
+  lastTicksAt?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
+  pausedAt?: number | null;
 }
 
 interface StartingTask {
@@ -141,6 +150,7 @@ export class Scheduler {
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
+  private resourceTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private config: AgentHubConfig,
@@ -233,6 +243,81 @@ export class Scheduler {
     return this.paused;
   }
 
+  pauseTask(taskId: string, reason: 'manual' | 'load' = 'manual'): boolean {
+    const rt = this.running.get(taskId);
+    if (!rt) return false;
+    if (rt.paused) return true;
+
+    try {
+      process.kill(-rt.pid, 'SIGSTOP');
+    } catch {
+      try {
+        process.kill(rt.pid, 'SIGSTOP');
+      } catch {
+        // process may have exited
+      }
+    }
+
+    rt.paused = true;
+    rt.pauseReason = reason;
+    rt.pausedAt = Date.now();
+
+    this.eventBus.emit('task.paused', taskId, { reason, runId: rt.runId });
+    return true;
+  }
+
+  resumeTask(taskId: string): boolean {
+    const rt = this.running.get(taskId);
+    if (!rt) return false;
+    if (!rt.paused) return true;
+
+    try {
+      process.kill(-rt.pid, 'SIGCONT');
+    } catch {
+      try {
+        process.kill(rt.pid, 'SIGCONT');
+      } catch {
+        // process may have exited
+      }
+    }
+
+    if (rt.pausedAt) {
+      const pausedDuration = Date.now() - rt.pausedAt;
+      rt.timeoutAt += pausedDuration;
+    }
+
+    rt.paused = false;
+    rt.pauseReason = null;
+    rt.pausedAt = null;
+    rt.lastActivityAt = Date.now();
+    rt.lastOutputAt = Date.now();
+    if (rt.lastCommitCheckAt) {
+      rt.lastCommitCheckAt = Date.now();
+    }
+
+    this.eventBus.emit('task.resumed', taskId, { runId: rt.runId });
+    return true;
+  }
+
+  measureTaskResources(rt: RunningTask): void {
+    const task = this.taskRepo.get(rt.taskId);
+    const prev = rt.lastTicks !== undefined && rt.lastTicksAt !== undefined
+      ? { ticks: rt.lastTicks, time: rt.lastTicksAt }
+      : undefined;
+
+    const metrics = measureProcessTree(rt.pid, task?.worktreePath, prev);
+    rt.rss = metrics.rss;
+    rt.cpu = metrics.cpu;
+    rt.lastTicks = metrics.totalTicks;
+    rt.lastTicksAt = metrics.measuredAt;
+  }
+
+  measureAllRunningTaskResources(): void {
+    for (const rt of this.running.values()) {
+      this.measureTaskResources(rt);
+    }
+  }
+
   start(): void {
     this.stopped = false;
     // The orphan pass is periodic; do not scan and potentially reap processes
@@ -244,6 +329,10 @@ export class Scheduler {
 
     // Start the scheduler loop (every 2 seconds)
     this.timer = setInterval(() => this.tick(), 2000);
+    // Measure task resources every 15s
+    this.measureAllRunningTaskResources();
+    this.resourceTimer = setInterval(() => this.measureAllRunningTaskResources(), 15000);
+    this.resourceTimer.unref();
     // Also run immediately
     this.tick();
   }
@@ -252,6 +341,27 @@ export class Scheduler {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.resourceTimer) {
+      clearInterval(this.resourceTimer);
+      this.resourceTimer = null;
+    }
+
+    // Requirement 4: Khi daemon tắt/khởi động lại: mọi task đang paused phải được SIGCONT trước (không để tiến trình đứng mãi).
+    for (const rt of this.running.values()) {
+      if (rt.paused) {
+        try {
+          process.kill(-rt.pid, 'SIGCONT');
+        } catch {
+          try {
+            process.kill(rt.pid, 'SIGCONT');
+          } catch {
+            // ignore
+          }
+        }
+        rt.paused = false;
+        rt.pauseReason = null;
+      }
     }
 
     this.stopped = true;
@@ -305,6 +415,17 @@ export class Scheduler {
       const task = this.taskRepo.get(run.taskId);
       const engine = this.engines.get(run.engine);
       if (!task || !engine || !run.pid) continue;
+
+      try {
+        process.kill(-run.pid, 'SIGCONT');
+      } catch {
+        try {
+          process.kill(run.pid, 'SIGCONT');
+        } catch {
+          // ignore
+        }
+      }
+
       const startTime = parseDbTime(run.startedAt);
       const timeoutMs = this.config.defaultTimeout * 1000;
       const timeoutAt = Math.max(startTime + timeoutMs, Date.now() + 30 * 60 * 1000);
@@ -332,6 +453,11 @@ export class Scheduler {
         cachedConversationMtime: 0,
         cachedWorktreeMtime: 0,
         usageBefore: null,
+        rss: 0,
+        cpu: 0,
+        paused: false,
+        pauseReason: null,
+        pausedAt: null,
       });
     }
 
@@ -406,6 +532,43 @@ export class Scheduler {
     if (load.overloaded !== this.lastLoadOverloaded) {
       this.lastLoadOverloaded = load.overloaded;
       this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
+    }
+
+    // Auto-pause / resume by load guard
+    if (this.config.load.enabled) {
+      if (this.loadGuard.isAutoPauseTriggered()) {
+        const maxAutoPaused = this.config.load.maxAutoPaused ?? 2;
+        const autoPausedCount = Array.from(this.running.values()).filter((rt) => rt.paused && rt.pauseReason === 'load').length;
+        if (autoPausedCount < maxAutoPaused) {
+          const candidates = Array.from(this.running.values()).filter((rt) => !rt.paused);
+          if (candidates.length > 0) {
+            const policy = this.config.load.pausePolicy || 'recent';
+            if (policy === 'rss') {
+              candidates.sort((a, b) => (b.rss || 0) - (a.rss || 0) || (b.startTime - a.startTime));
+            } else {
+              candidates.sort((a, b) => b.startTime - a.startTime);
+            }
+            const victim = candidates[0];
+            this.pauseTask(victim.taskId, 'load');
+            this.eventBus.emit('load.task_paused', victim.taskId, {
+              reason: 'load',
+              policy,
+              rss: victim.rss,
+              startTime: victim.startTime,
+            });
+          }
+        }
+      } else if (!load.overloaded) {
+        const autoPaused = Array.from(this.running.values())
+          .filter((rt) => rt.paused && rt.pauseReason === 'load')
+          .sort((a, b) => (a.pausedAt || 0) - (b.pausedAt || 0));
+
+        if (autoPaused.length > 0) {
+          const nextToResume = autoPaused[0];
+          this.resumeTask(nextToResume.taskId);
+          this.eventBus.emit('load.task_resumed', nextToResume.taskId, { reason: 'recovered' });
+        }
+      }
     }
     // 0. Check disk space: if sufficient, resume any tasks waiting for disk
     const disks = this.getMonitoredDisks();
@@ -547,16 +710,21 @@ export class Scheduler {
     if (this.running.size === 0) return;
     const now = Date.now();
     for (const [taskId, rt] of this.running) {
-      // Check timeout
-      if (now > rt.timeoutAt) {
-        this.killTask(taskId, 'timeout');
-        continue;
-      }
-
       // Check if process is still alive
       if (!this.isProcessAlive(rt.pid, rt.pidStart)) {
         // Process has ended, check results
         void this.handleRunCompletion(taskId, rt);
+        continue;
+      }
+
+      if (rt.paused) {
+        // Paused tasks: do NOT check timeout, stall, or no-commit watch
+        continue;
+      }
+
+      // Check timeout
+      if (now > rt.timeoutAt) {
+        this.killTask(taskId, 'timeout');
         continue;
       }
 
@@ -1791,8 +1959,14 @@ export class Scheduler {
         lastNoCommitThresholdEmitted: 0,
         commandOccurrences: [],
         lastLogOffset: 0,
+        rss: 0,
+        cpu: 0,
+        paused: false,
+        pauseReason: null,
+        pausedAt: null,
       };
       this.running.set(task.id, rt);
+      this.measureTaskResources(rt);
       this.starting.delete(task.id);
       this.locks.invalidate(profileName);
 
@@ -1964,6 +2138,11 @@ export class Scheduler {
   }
 
   private killProcessGroup(pid: number): void {
+    try {
+      process.kill(-pid, 'SIGCONT');
+    } catch {
+      try { process.kill(pid, 'SIGCONT'); } catch { /* ignore */ }
+    }
     try {
       process.kill(-pid, 'SIGKILL');
     } catch {
