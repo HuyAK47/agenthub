@@ -48,6 +48,7 @@ import { computeTaskGraph, filterTasksForGraph } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
+import { isKnownModel } from '../quota/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1517,6 +1518,15 @@ export class AppService {
     }
 
     const activeRun = this.scheduler.getRunning().get(taskId);
+    let modelWarnings: string[] = [];
+    try {
+      const chain = task.modelChain ? JSON.parse(task.modelChain) as unknown : [];
+      if (Array.isArray(chain)) {
+        modelWarnings = chain.filter((model): model is string => typeof model === 'string' && !isKnownModel(model));
+      }
+    } catch {
+      modelWarnings = ['modelChain không phải JSON hợp lệ'];
+    }
     return {
       ...apiTask(task),
       currentRun: activeRun ? {
@@ -1535,6 +1545,7 @@ export class AppService {
       reviewMaxRounds: reviewSettings?.maxRounds || 2,
       doneContent,
       blockedContent,
+      modelWarnings,
       commits,
       worktreePath: task.worktreePath,
       checks: this.scheduler.getCheckResults(taskId),
