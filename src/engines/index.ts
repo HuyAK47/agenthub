@@ -204,8 +204,14 @@ export class CodexEngine implements Engine {
       if (entries.length === 0) return null;
       entries.sort();
       const latest = entries[entries.length - 1];
-      const codexBin = path.join(base, latest, 'bin', 'linux-x86_64', 'codex');
-      return fs.existsSync(codexBin) ? codexBin : null;
+      const targets = process.platform === 'darwin'
+        ? ['darwin-arm64', 'darwin-x64', 'macos-arm64', 'macos-x64']
+        : process.platform === 'win32' ? ['win32-x64'] : ['linux-x86_64'];
+      for (const target of targets) {
+        const codexBin = path.join(base, latest, 'bin', target, 'codex');
+        if (fs.existsSync(codexBin)) return codexBin;
+      }
+      return null;
     } catch {
       return null;
     }

@@ -23,7 +23,13 @@ export interface QuotaMark {
   until: number; // epoch seconds
   reason?: string;
 }
-export interface QuotaUsageItem { grp: string; window: '5h' | 'week'; remainingPct: number; resetAt: number; fetchedAt: number; }
+export interface QuotaUsageItem {
+  grp: string;
+  window: '5h' | 'week';
+  remainingPct: number;
+  resetAt: number;
+  fetchedAt: number;
+}
 
 export interface Profile {
   name: string;
@@ -48,6 +54,10 @@ export interface Profile {
   authMessage?: string | null;
   verifyUrl?: string | null;
   claudePlan?: string;
+  label?: string | null;
+  notes?: string | null;
+  priority?: number;
+  currentTask?: { id?: string; title?: string } | null;
 }
 
 export interface ProjectHooks {
@@ -150,7 +160,12 @@ export interface Task {
     profileName?: string;
   } | null;
   checks?: CheckResult[];
-  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
 }
 
 export interface CheckResult {
@@ -170,7 +185,12 @@ export interface TaskDetail extends Task {
   blockedContent?: string | null;
   commits?: string[] | null;
   gitCommits?: string[] | null;
-  sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
   derivedTasks?: Task[];
 }
 
@@ -417,7 +437,13 @@ export interface SystemConfig {
   runTimeoutHours?: number;
   chat?: ChatConfig;
   brain?: {
-    fallback: Array<{ type: 'profile'; profile?: string } | { type: 'model'; model: string } | { type: 'apiKey'; dailyCapUSD: number } | { type: 'engine'; engine: 'codex' } | { type: 'wait' }>;
+    fallback: Array<
+      | { type: 'profile'; profile?: string }
+      | { type: 'model'; model: string }
+      | { type: 'apiKey'; dailyCapUSD: number }
+      | { type: 'engine'; engine: 'codex' }
+      | { type: 'wait' }
+    >;
   };
   notifications?: {
     desktop: boolean;
@@ -539,7 +565,7 @@ export interface UpdateProjectInput {
 
 export interface CreateProfileInput {
   name: string;
-  engine?: 'agy' | 'claude' | 'codex';
+  engine?: 'agy' | 'codex' | 'claude';
   accountType?: ProfileAccountType;
 }
 

@@ -17,6 +17,7 @@ import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
 import { findClaudeBin } from './chat/claude.js';
+import { getPlatform } from './platform/index.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -47,12 +48,8 @@ export async function cmdOpen(
   const noBrowser = extraArgs.includes('--no-browser') || process.env.AGENTHUB_NO_BROWSER === '1';
   if (!noBrowser) {
     try {
-      if (openFn) {
-        openFn('xdg-open', [url]);
-      } else {
-        const { execFile } = await import('node:child_process');
-        execFile('xdg-open', [url], () => {});
-      }
+      // Linux implementation delegates to execFile('xdg-open', [url]); macOS uses open.
+      getPlatform().openBrowser(url, openFn);
     } catch {
       // Ignore in headless environments
     }
@@ -67,39 +64,17 @@ export async function cmdInstallService(extraArgs: string[]): Promise<string> {
   const nodePath = process.execPath;
   const currentPath = process.env.PATH || '';
 
-  const serviceContent = `[Unit]
-Description=AgentHub Daemon
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${nodePath} ${cliPath} daemon
-Restart=on-failure
-Environment=PATH=${currentPath}
-
-[Install]
-WantedBy=default.target
-`;
-
-  const serviceDir = path.join(os.homedir(), '.config', 'systemd', 'user');
-  const serviceFile = path.join(serviceDir, 'agenthub.service');
+  const result = getPlatform().installService({ nodePath, cliPath, currentPath, homeDir: os.homedir(), print: isPrint });
 
   if (isPrint) {
-    const output = `File: ${serviceFile}\n\n${serviceContent}\nCác lệnh kích hoạt:\n  systemctl --user daemon-reload\n  systemctl --user enable --now agenthub`;
+    const output = `File: ${result.file}\n\n${result.content}\nCác lệnh kích hoạt:\n  ${result.activate}`;
     console.log(output);
     return output;
   }
 
-  fs.mkdirSync(serviceDir, { recursive: true });
-  fs.writeFileSync(serviceFile, serviceContent, 'utf-8');
-  console.log(`✓ Đã tạo service file tại ${serviceFile}`);
-
-  const { execSync } = await import('node:child_process');
-  execSync('systemctl --user daemon-reload && systemctl --user enable --now agenthub', {
-    stdio: 'inherit',
-  });
-  console.log('✓ Đã bật và khởi chạy service agenthub');
-  return serviceContent;
+  console.log(`✓ Đã tạo service file tại ${result.file}`);
+  console.log(`✓ Đã bật và khởi chạy service agenthub (${result.activate})`);
+  return result.content;
 }
 
 export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
