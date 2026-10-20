@@ -1209,6 +1209,18 @@ export class TaskNoteRepo {
       .get(taskId, `%${file}%${otherTaskId}%`);
     return Boolean(row);
   }
+
+  getActiveOverlaps(runningTaskIds: string[]): TaskNoteRow[] {
+    if (runningTaskIds.length === 0) return [];
+    const placeholders = runningTaskIds.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT * FROM task_notes
+         WHERE kind = 'overlap' AND taskId IN (${placeholders})
+         ORDER BY id DESC LIMIT 50`,
+      )
+      .all(...runningTaskIds) as TaskNoteRow[];
+  }
 }
 
 

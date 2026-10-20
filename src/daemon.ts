@@ -30,6 +30,7 @@ import { SavingsService } from './savings.js';
 import { ClaudeFailoverState } from './chat/failover.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { ClaudeSessionScanner } from './claude-sessions/scanner.js';
+import { BulletinService } from './bulletin.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -53,6 +54,7 @@ export interface DaemonContext {
   brainRepo: BrainRepo;
   brainService: BrainService;
   notifier: NotificationService;
+  bulletinService: BulletinService;
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
@@ -145,6 +147,15 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     { failoverState },
   );
 
+  const bulletinService = new BulletinService({
+    config,
+    taskRepo,
+    projectRepo,
+    taskNoteRepo,
+    eventBus: scheduler.getEventBus(),
+  });
+  scheduler.configureBulletinService(bulletinService);
+
   const service = new AppService(
     config,
     projectRepo,
@@ -163,6 +174,8 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    taskNoteRepo,
+    bulletinService,
   );
 
   const notifier = new NotificationService({
@@ -194,6 +207,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     brainRepo,
     brainService,
     notifier,
+    bulletinService,
     savingsService,
     claudeSessionRepo,
     claudeScanner,
@@ -203,6 +217,11 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
 export function closeContext(ctx: DaemonContext): void {
   try {
     ctx.notifier?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.bulletinService?.stop();
   } catch {
     // ignore
   }
@@ -248,6 +267,7 @@ export async function startDaemon(
   // Start notification service and claude transcript scanner
   ctx.notifier.start();
   ctx.claudeScanner.start();
+  ctx.bulletinService.start();
 
   // Start Fastify HTTP server with security and API endpoints
   const fastify = await createServer(ctx.service, config);

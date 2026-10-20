@@ -133,6 +133,7 @@ export class Scheduler {
   private runMetricsRepo?: RunMetricsRepo;
   private reviewRepo?: ReviewRepo;
   private failoverState?: ClaudeFailoverState;
+  private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
@@ -186,6 +187,10 @@ export class Scheduler {
   configureReviewer(reviewRepo: ReviewRepo, failoverState: ClaudeFailoverState): void {
     this.reviewRepo = reviewRepo;
     this.failoverState = failoverState;
+  }
+
+  configureBulletinService(bulletinService: { updateBulletinForTask: (task: TaskRow) => void }): void {
+    this.bulletinService = bulletinService;
   }
 
   getReviewerStatus(): { active: boolean; running: string[]; waiting: number } {
@@ -1656,6 +1661,10 @@ export class Scheduler {
 
       // Update task status
       this.taskRepo.update(task.id, { status: 'running' });
+
+      if (this.bulletinService) {
+        this.bulletinService.updateBulletinForTask({ ...task, status: 'running', worktreePath });
+      }
 
       // Track the running task
       const rt: RunningTask = {
