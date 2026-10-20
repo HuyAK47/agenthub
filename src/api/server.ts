@@ -354,6 +354,48 @@ export async function createServer(
     return service.getTaskNotes(id);
   });
 
+  fastify.delete('/api/tasks/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.deleteTask(id);
+  });
+
+  // --- Batches API ---
+  fastify.get('/api/batches', async (req: FastifyRequest) => {
+    const query = req.query as { project?: string; status?: string };
+    return service.listBatches(query);
+  });
+
+  fastify.get('/api/batches/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getBatch(id);
+  });
+
+  fastify.post('/api/batches', async (req: FastifyRequest, reply: FastifyReply) => {
+    const batch = service.createBatch(req.body);
+    return reply.status(201).send(batch);
+  });
+
+  fastify.post('/api/batches/:id/dispatch', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.dispatchBatch(id);
+  });
+
+  fastify.post('/api/batches/:id/discard', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.discardBatch(id);
+  });
+
+  fastify.post('/api/batches/:id/tasks', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const task = service.addTaskToBatch(id, req.body);
+    return reply.status(201).send(task);
+  });
+
+  fastify.delete('/api/batches/:id/tasks/:taskId', async (req: FastifyRequest) => {
+    const { id, taskId } = req.params as { id: string; taskId: string };
+    return service.removeTaskFromBatch(id, taskId);
+  });
+
   // --- Config API ---
   fastify.get('/api/config', async () => {
     return service.getConfig();
