@@ -1157,7 +1157,9 @@ export class AppService {
     let doneContent: string | null = null;
     let blockedContent: string | null = null;
 
-    if (task.worktreePath && fs.existsSync(task.worktreePath)) {
+    if (task.doneReport !== null && task.doneReport !== undefined) {
+      doneContent = task.doneReport;
+    } else if (task.worktreePath && fs.existsSync(task.worktreePath)) {
       const donePath = path.join(task.worktreePath, '.agenthub', 'DONE');
       const blockedPath = path.join(task.worktreePath, '.agenthub', 'BLOCKED');
       if (fs.existsSync(donePath)) {

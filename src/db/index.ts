@@ -361,6 +361,11 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_task_notes_project ON task_notes(projectId, id);
   CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(taskId, id);
   `,
+  // Migration 25: persist dependency context before worktrees are cleaned up
+  `
+  ALTER TABLE tasks ADD COLUMN doneReport TEXT;
+  ALTER TABLE tasks ADD COLUMN diffStat TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -465,6 +470,8 @@ export interface TaskRow {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  doneReport?: string | null;
+  diffStat?: string | null;
   slot: number | null;
   createdAt: string;
   updatedAt: string;
@@ -745,12 +752,14 @@ export class TaskRepo {
     status?: string;
     waitReason?: WaitReason;
     worktreePath?: string | null;
+    doneReport?: string | null;
+    diffStat?: string | null;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -766,6 +775,8 @@ export class TaskRepo {
         row.status || 'draft',
         row.waitReason || null,
         row.worktreePath || null,
+        row.doneReport || null,
+        row.diffStat || null,
       );
 
     // Populate task_deps
@@ -791,7 +802,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];

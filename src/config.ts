@@ -52,10 +52,12 @@ export const DEFAULT_STALL_CONFIG: StallConfig = {
 
 export interface ContextConfig {
   overlapCheckSec: number;
+  depsMaxChars: number;
 }
 
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   overlapCheckSec: 60,
+  depsMaxChars: 16000,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -398,6 +400,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     loopThreshold: typeof rawStall.loopThreshold === 'number' ? rawStall.loopThreshold : DEFAULT_STALL_CONFIG.loopThreshold,
   };
 
+  const rawContext = (userConfig.context as Record<string, unknown>) || {};
+  const context = {
+    depsMaxChars: typeof rawContext.depsMaxChars === 'number' && rawContext.depsMaxChars > 0
+      ? Math.floor(rawContext.depsMaxChars)
+      : 16000,
+  };
+
   return {
     hubHome,
     agyHomesDir,
@@ -455,9 +464,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     },
     stall,
     context: {
-      overlapCheckSec: typeof (userConfig.context as Record<string, unknown> | undefined)?.overlapCheckSec === 'number'
-        ? ((userConfig.context as Record<string, unknown>).overlapCheckSec as number)
+      overlapCheckSec: typeof rawContext.overlapCheckSec === 'number'
+        ? rawContext.overlapCheckSec
         : DEFAULT_CONTEXT_CONFIG.overlapCheckSec,
+      depsMaxChars: context.depsMaxChars,
     },
   };
 }
