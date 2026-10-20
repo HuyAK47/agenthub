@@ -400,7 +400,14 @@ export const MIGRATIONS: string[] = [
       GROUP BY engine HAVING COUNT(*) > 1
     );
   `,
-  // Migration 30: allow system role in chat_messages
+  // Migration 30: per-project multi-step review chains
+  `
+  ALTER TABLE projects ADD COLUMN reviewChain TEXT;
+  ALTER TABLE tasks ADD COLUMN reviewStep INTEGER NOT NULL DEFAULT 0;
+  `,
+  // Migration 31: review settings (chain and gate round limit)
+  `ALTER TABLE projects ADD COLUMN review TEXT;`,
+  // Migration 32: allow system role in chat_messages
   `
   PRAGMA foreign_keys = OFF;
   CREATE TABLE chat_messages_new (
@@ -464,6 +471,8 @@ export interface ProjectRow {
   checks: string | null;
   hooks: string | null;
   merge?: string | null;
+  reviewChain?: string | null;
+  review?: string | null;
   createdAt: string;
 }
 
@@ -529,6 +538,7 @@ export interface TaskRow {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  reviewStep?: number;
   doneReport?: string | null;
   diffStat?: string | null;
   slot: number | null;
@@ -573,15 +583,17 @@ export class ProjectRepo {
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'> & {
       checks?: string | null;
       hooks?: string | null;
       merge?: string | null;
+      reviewChain?: string | null;
+      review?: string | null;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -593,12 +605,14 @@ export class ProjectRepo {
         row.checks || null,
         row.hooks || null,
         row.merge || null,
+        row.reviewChain || null,
+        row.review || null,
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -922,7 +936,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];

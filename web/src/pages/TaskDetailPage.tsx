@@ -382,6 +382,21 @@ export const TaskDetailPage: React.FC = () => {
           {task.reviewerEscalationReason ? ` (${task.reviewerEscalationReason})` : ''}.
         </div>
       ) : null}
+      {task.reviewChain && task.reviewChain.length > 0 ? (
+        <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] px-4 py-3 text-xs">
+          <div className="font-semibold mb-2">Review chain</div>
+          <div className="flex flex-wrap items-center gap-2">
+            {task.reviewChain.map((step, index) => (
+              <React.Fragment key={`${step.reviewer}-${index}`}>
+                {index > 0 ? <span className="text-[var(--t-text-3)]">→</span> : null}
+                <span className={`rounded-full px-2 py-1 border ${index < (task.reviewStep ?? 0) ? 'border-[var(--t-ok)] text-[var(--t-ok)]' : index === (task.reviewStep ?? 0) ? 'border-[var(--t-accent)] text-[var(--t-accent)]' : 'border-[var(--t-border)] text-[var(--t-text-3)]'}`}>
+                  {step.reviewer} · {step.mode}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[var(--t-border)]">
         <div className="flex items-start gap-3">
