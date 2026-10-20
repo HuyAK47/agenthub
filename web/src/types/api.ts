@@ -139,6 +139,8 @@ export interface Task {
     noCommitMinutes?: number | null;
     isLooping?: boolean;
     loopingCommand?: string | null;
+    model?: string;
+    profileName?: string;
   } | null;
   checks?: CheckResult[];
   sourceRef?: { taskId: string; runId?: string | null; checkName?: string | null; excerptHash: string } | null;
@@ -590,4 +592,35 @@ export interface UpdateTaskInput {
   title?: string;
   body?: string;
   appendBody?: string;
+}
+
+export interface TaskGraphNode {
+  id: string;
+  projectId: string;
+  slug: string;
+  title: string;
+  status: TaskStatus;
+  level: TaskLevel;
+  modelChain?: string[];
+  currentRun?: {
+    model?: string;
+    profileName?: string;
+  } | null;
+  blockedCount: number;
+  isCritical: boolean;
+  isMaxBlocker: boolean;
+}
+
+export interface TaskGraphEdge {
+  from: string;
+  to: string;
+  isCritical: boolean;
+}
+
+export interface TaskGraphResponse {
+  nodes: TaskGraphNode[];
+  edges: TaskGraphEdge[];
+  criticalPath: string[];
+  maxBlockingTaskId: string | null;
+  maxBlockedCount: number;
 }

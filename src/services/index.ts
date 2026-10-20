@@ -44,6 +44,7 @@ import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
+import { computeTaskGraph, filterTasksForGraph } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
 
@@ -1233,6 +1234,12 @@ export class AppService {
         } : null,
       };
     }) as TaskRow[];
+  }
+
+  getTasksGraph(options?: { project?: string; includeDone?: string | boolean }) {
+    const tasks = this.listTasks({ project: options?.project });
+    const filtered = filterTasksForGraph(tasks, options);
+    return computeTaskGraph(filtered);
   }
 
   async getTask(idParam: string) {
