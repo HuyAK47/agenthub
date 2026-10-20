@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { AgentHubConfig, loadConfig } from './config.js';
 import { createContext } from './daemon.js';
 import { CodexEngine } from './engines/index.js';
+import { getPlatform } from './platform/index.js';
 
 export type CheckStatus = 'ok' | 'error' | 'skip' | 'warn';
 
@@ -106,9 +107,12 @@ export function findCodexPath(customHome?: string, existsFn: (filePath: string) 
         if (entries.length > 0) {
           entries.sort();
           const latest = entries[entries.length - 1];
-          const codexBin = path.join(base, latest, 'bin', 'linux-x86_64', 'codex');
-          if (existsFn(codexBin)) {
-            return codexBin;
+          const targets = process.platform === 'darwin'
+            ? ['darwin-arm64', 'darwin-x64', 'macos-arm64', 'macos-x64']
+            : process.platform === 'win32' ? ['win32-x64'] : ['linux-x86_64'];
+          for (const target of targets) {
+            const codexBin = path.join(base, latest, 'bin', target, 'codex');
+            if (existsFn(codexBin)) return codexBin;
           }
         }
       } catch {
@@ -364,6 +368,9 @@ export interface CheckSystemdDeps {
 }
 
 export async function checkSystemd(deps?: CheckSystemdDeps): Promise<DoctorCheckItem> {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    return getPlatform().serviceCheck(deps?.exec ?? defaultExecSync, deps?.timeoutMs ?? 5000);
+  }
   const exec = deps?.exec ?? defaultExecSync;
   const timeoutMs = deps?.timeoutMs ?? 5000;
 
