@@ -536,6 +536,11 @@ export const ProfilesPage: React.FC = () => {
                             onRefresh={() => usageMutation.mutate(profile.name)}
                             refreshing={usageMutation.isPending && usageMutation.variables === profile.name}
                           />
+                          {profile.engine === 'claude' && profile.claudeTokens && (
+                            <div className="text-xs text-[var(--t-text-3)]" data-testid={`claude-tokens-${profile.name}`}>
+                              Token hôm nay: {Math.round(profile.claudeTokens.today).toLocaleString()} · tuần: {Math.round(profile.claudeTokens.week).toLocaleString()}
+                            </div>
+                          )}
                         </div>
                       </td>
 
@@ -605,12 +610,12 @@ export const ProfilesPage: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleManualLogin(profile.name)}
-                            title={isLoggedIn && !isNotLoggedIn ? 'Đăng nhập lại khi phiên hết hạn hoặc muốn đổi tài khoản' : undefined}
+                            title={isLoggedIn && !isNotLoggedIn ? t('extra.reLoginTip') : undefined}
                             className={isLoggedIn && !isNotLoggedIn && !needsReLogin
                               ? 'px-2.5 py-1 text-xs font-medium rounded text-[var(--t-text-3)] border border-[var(--t-border)] hover:text-[var(--t-text)] cursor-pointer'
                               : 'px-2.5 py-1 text-xs font-medium rounded bg-[var(--t-accent-bg)] text-[var(--t-accent)] border border-[var(--t-accent)] hover:bg-[var(--t-accent-bg)] cursor-pointer'}
                           >
-                            {isLoggedIn && !isNotLoggedIn && !needsReLogin ? 'Đăng nhập lại' : t('profiles.loginBtn')}
+                            {isLoggedIn && !isNotLoggedIn && !needsReLogin ? t('extra.reLogin') : t('profiles.loginBtn')}
                           </button>
                         )}
                         {profile.kind !== 'system' && (
@@ -618,22 +623,22 @@ export const ProfilesPage: React.FC = () => {
                             type="button"
                             data-testid={`delete-profile-${profile.name}`}
                             disabled={isBusy}
-                            title={isBusy ? 'Hồ sơ đang chạy task, đợi task xong rồi xoá' : 'Xoá hồ sơ khỏi hub (lịch sử chạy vẫn giữ)'}
+                            title={isBusy ? t('extra.deleteBusyTip') : t('extra.deleteProfileTip')}
                             onClick={async () => {
                               const what = profile.engine === 'claude' && profile.kind === 'isolated'
-                                ? 'Hồ sơ và thư mục cấu hình Claude của nó sẽ bị xoá.'
-                                : 'Hồ sơ sẽ bị ẩn và không được giao task nữa. Thư mục đăng nhập và lịch sử chạy vẫn được giữ.';
-                              if (!window.confirm(`Xoá hồ sơ "${profile.name}"?\n\n${what}`)) return;
+                                ? t('extra.deleteClaudeNote')
+                                : t('extra.deleteSoftNote');
+                              if (!window.confirm(`${t('extra.deleteConfirm', { name: profile.name })}\n\n${what}`)) return;
                               try {
                                 await deleteProfile(profile.name);
                               } catch (err: any) {
-                                alert(err?.message || 'Xoá hồ sơ thất bại');
+                                alert(err?.message || t('extra.deleteFailed'));
                               }
                               queryClient.invalidateQueries({ queryKey: ['profiles'] });
                             }}
                             className="px-2.5 py-1 text-xs font-medium rounded text-[var(--t-crit)] border border-[var(--t-crit)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
-                            Xoá
+                            {t('extra.deleteProfile')}
                           </button>
                         )}
                       </td>

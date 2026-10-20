@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig } from '../api/client';
+import { getConfig, updateConfig, getClaudeApiKeyStatus, setClaudeApiKey } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 
@@ -19,6 +19,9 @@ export const SettingsPage: React.FC = () => {
   const [bucketClaude, setBucketClaude] = useState<number>(5_000_000);
   const [claudeFactor, setClaudeFactor] = useState<number>(0.9);
   const [claudeOverhead, setClaudeOverhead] = useState<number>(40_000);
+  const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
+  const [apiKey, setApiKey] = useState('');
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -44,6 +47,7 @@ export const SettingsPage: React.FC = () => {
       setAllowFullMode(Boolean(config.chat?.allowFullMode));
       setChatModel(config.chat?.model === 'haiku' ? 'haiku' : 'sonnet');
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
+      setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
       if (config.savings) {
         if (config.savings.bucketTokens?.gemini !== undefined) {
           setBucketGemini(config.savings.bucketTokens.gemini);
@@ -61,10 +65,16 @@ export const SettingsPage: React.FC = () => {
     }
   }, [config]);
 
+  const { data: apiKeyStatus } = useQuery({ queryKey: ['claude-api-key'], queryFn: getClaudeApiKeyStatus });
+  useEffect(() => setApiKeyConfigured(Boolean(apiKeyStatus?.configured)), [apiKeyStatus]);
+
   const mutation = useMutation({
     mutationFn: updateConfig,
     onSuccess: (updated) => {
       queryClient.setQueryData(['config'], updated);
+      if (apiKey.trim()) {
+        setClaudeApiKey(apiKey).then(() => { setApiKey(''); setApiKeyConfigured(true); }).catch(() => undefined);
+      }
       setSaveSuccess(true);
       setSaveError(null);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -125,6 +135,7 @@ export const SettingsPage: React.FC = () => {
         claudeFactor: Number(claudeFactor) || 0.9,
         claudeOverheadPerTask: Number(claudeOverhead) || 40_000,
       },
+      brain: { fallback },
     });
   };
 
@@ -314,6 +325,30 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 </label>
               </div>
+            </div>
+          </div>
+
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs">
+            <div>
+              <h2 className="text-base font-semibold text-[var(--t-text)]">Claude fallback chain</h2>
+              <p className="text-xs text-[var(--t-text-3)]">Drag steps to reorder. The API key is write-only.</p>
+            </div>
+            {fallback.map((step, index) => (
+              <div key={`${step.type}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const from = Number(event.dataTransfer.getData('text/plain')); if (!Number.isInteger(from) || from === index) return; const next = [...fallback]; const [moved] = next.splice(from, 1); next.splice(index, 0, moved); setFallback(next); }} className="flex items-center gap-2 p-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-grab">
+                <span className="text-xs text-[var(--t-text-3)]">⠿</span>
+                <select value={step.type} onChange={(event) => { const next = [...fallback]; const type = event.target.value; next[index] = type === 'model' ? { type: 'model', model: 'sonnet' } : type === 'apiKey' ? { type: 'apiKey', dailyCapUSD: 5 } : type === 'profile' ? { type: 'profile', profile: '' } : type === 'wait' ? { type: 'wait' } : { type: 'engine', engine: 'codex' }; setFallback(next); }} className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]">
+                  <option value="profile">profile</option><option value="model">model</option><option value="apiKey">apiKey</option><option value="engine">engine: codex</option><option value="wait">wait</option>
+                </select>
+                {step.type === 'profile' && <input value={step.profile || ''} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, profile: event.target.value }; setFallback(next); }} placeholder="profile name" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
+                {step.type === 'model' && <input value={step.model} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, model: event.target.value }; setFallback(next); }} placeholder="sonnet" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
+                {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
+                <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">Remove</button>
+              </div>
+            ))}
+            <button type="button" onClick={() => setFallback([...fallback, { type: 'wait' }])} className="text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)]">Add step</button>
+            <div className="pt-3 border-t border-[var(--t-border)]">
+              <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">Anthropic API key</label>
+              <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={apiKeyConfigured ? 'Configured (enter to replace)' : 'sk-ant-…'} autoComplete="new-password" className="w-full text-xs font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-[var(--t-text)]" />
             </div>
           </div>
 

@@ -19,7 +19,7 @@ import {
 } from '../db/index.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, QuotaService } from '../quota/index.js';
-import { WorktreeService } from '../worktrees/index.js';
+import { DependencyContext, WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
@@ -216,6 +216,23 @@ export class Scheduler {
     return this.loadGuard.getStatus();
   }
 
+  private paused = false;
+
+  pause(): void {
+    this.paused = true;
+    this.eventBus.emit('scheduler.paused', undefined, { paused: true });
+  }
+
+  resume(): void {
+    this.paused = false;
+    this.eventBus.emit('scheduler.resumed', undefined, { paused: false });
+    this.triggerTick();
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
   start(): void {
     this.stopped = false;
     // The orphan pass is periodic; do not scan and potentially reap processes
@@ -361,7 +378,7 @@ export class Scheduler {
       if (currentTask.worktreePath) {
         const donePath = path.join(currentTask.worktreePath, '.agenthub', 'DONE');
         if (fs.existsSync(donePath)) fs.unlinkSync(donePath);
-        this.worktreeService.writeTaskFile(currentTask.worktreePath, newBody, true, feedback);
+        this.writeTaskFiles(currentTask, newBody, true, feedback);
       }
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
     } else {
@@ -925,7 +942,41 @@ export class Scheduler {
       markers = this.worktreeService.checkMarkers(task.worktreePath) as typeof markers;
     }
 
-    // Measure diff stats if moving to review
+    // Persist dependency context while the marker and branch are still available.
+    if (markers.done) {
+      let diffStat: string | null = null;
+      const project = this.projectRepo.get(task.projectId);
+      const baseRef = task.baseRef || project?.defaultBranch || 'main';
+      const branch = task.branch || `agenthub/${task.slug}`;
+      if (project?.path) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: project.path,
+            timeout: 30_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // The branch may not be available yet; the context can still include DONE.
+        }
+      }
+      if (!diffStat && task.worktreePath && fs.existsSync(task.worktreePath)) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: task.worktreePath,
+            timeout: 10_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // ignore
+        }
+      }
+      this.taskRepo.update(taskId, {
+        doneReport: markers.doneContent || task.doneReport,
+        diffStat: diffStat ?? task.diffStat,
+      });
+    }
+
+    // Measure diff stats for run metrics.
     let diffStats = { linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
     if (markers.done) {
       const project = this.projectRepo.get(task.projectId);
@@ -1054,6 +1105,9 @@ export class Scheduler {
   }
 
   private scheduleNewTasks(): void {
+    if (this.paused) {
+      return;
+    }
     if (this.skipSchedulingOnce) {
       this.skipSchedulingOnce = false;
       return;
@@ -1119,7 +1173,7 @@ export class Scheduler {
       this.eventBus.emit('claude.failover_cleared', undefined);
     }
     this.failoverWasActive = snapshot.active;
-    if (!snapshot.active) return;
+    if (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex') return;
 
     const codex = this.engines.get('codex');
     if (!codex) return;
@@ -1492,6 +1546,46 @@ export class Scheduler {
       : this.config.defaultModelChains.easy;
   }
 
+  private getDependencyContext(task: TaskRow): DependencyContext[] {
+    let dependencyIds: string[];
+    try {
+      dependencyIds = JSON.parse(task.dependsOn || '[]') as string[];
+    } catch {
+      dependencyIds = [];
+    }
+
+    return dependencyIds.flatMap((dependencyId) => {
+      const dependency = this.taskRepo.get(dependencyId);
+      if (!dependency) return [];
+
+      const donePath = dependency.worktreePath
+        ? path.join(dependency.worktreePath, '.agenthub', 'DONE')
+        : null;
+      const doneContent = dependency.doneReport ?? (donePath && fs.existsSync(donePath)
+        ? fs.readFileSync(donePath, 'utf-8')
+        : undefined);
+      const reviews = this.reviewRepo?.getByTask(dependency.id) || [];
+      const lastReview = reviews[reviews.length - 1];
+      const review = lastReview?.verdict === 'approved'
+        ? `approved${lastReview.feedback ? ` — ${lastReview.feedback}` : ''}`
+        : undefined;
+
+      return [{ id: dependency.id, title: dependency.title, doneContent, review, diffStat: dependency.diffStat ?? undefined }];
+    });
+  }
+
+  private writeTaskFiles(task: TaskRow, body: string, resume: boolean, feedback?: string): void {
+    if (!task.worktreePath) return;
+    this.worktreeService.writeTaskFile(
+      task.worktreePath,
+      body,
+      resume,
+      feedback,
+      this.getDependencyContext(task),
+      this.config.context?.depsMaxChars,
+    );
+  }
+
   private isProfileBusy(profileName: string): boolean {
     const profile = this.profileRepo.get(profileName);
     if (!profile) return true;
@@ -1617,7 +1711,7 @@ export class Scheduler {
       prompt += '\n\nTask đã làm dở – kiểm tra git log/status rồi làm tiếp, không làm lại.';
     }
 
-    this.worktreeService.writeTaskFile(worktreePath, task.body || task.title, !!task.resume);
+    this.writeTaskFiles({ ...task, worktreePath }, task.body || task.title, !!task.resume);
 
     // Create run record
     const runId = crypto.randomUUID();
@@ -1805,7 +1899,7 @@ export class Scheduler {
         if (fs.existsSync(blockedPath)) fs.unlinkSync(blockedPath);
 
         // Re-write task.md with feedback
-        this.worktreeService.writeTaskFile(task.worktreePath, newBody, true, feedback);
+        this.writeTaskFiles(task, newBody, true, feedback);
       } else {
         this.taskRepo.update(taskId, { status: 'queued', resume: 1 });
       }

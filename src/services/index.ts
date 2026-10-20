@@ -43,6 +43,8 @@ import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
 import { computeTaskGraph, filterTasksForGraph } from './dag.js';
+import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
+import type { TelegramBotService } from '../telegram.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -162,6 +164,19 @@ export const CreateTaskSchema = z.object({
   baseRef: z.string().optional(),
   branch: z.string().optional(),
   modelChain: z.array(modelValidator).optional(),
+  sourceRef: z.object({ taskId: z.string(), runId: z.string().nullable().optional(), checkName: z.string().nullable().optional(), excerptHash: z.string() }).optional(),
+  start: z.boolean().optional(),
+});
+
+export const CaptureTaskSchema = z.object({
+  sourceTaskId: z.string().min(1),
+  runId: z.string().min(1).optional(),
+  checkName: z.string().min(1).optional(),
+  excerpt: z.string().min(1),
+  slug: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+  title: z.string().min(1).optional(),
+  body: z.string().optional(),
+  level: z.enum(['easy', 'hard']).default('easy'),
   start: z.boolean().optional(),
 });
 
@@ -237,6 +252,15 @@ export const UpdateConfigSchema = z.object({
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
   }).optional(),
+  brain: z.object({
+    fallback: z.array(z.discriminatedUnion('type', [
+      z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
+      z.object({ type: z.literal('model'), model: z.string().min(1) }),
+      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive() }),
+      z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
+      z.object({ type: z.literal('wait') }),
+    ])).max(10),
+  }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
   }).optional(),
@@ -268,6 +292,18 @@ export const UpdateConfigSchema = z.object({
   disk: z.object({
     minFreeGB: z.number().positive().optional(),
     extraPaths: z.array(z.object({ path: z.string().min(1), minFreeGB: z.number().positive(), label: z.string().min(1) })).optional(),
+  }).optional(),
+  telegram: z.object({
+    enabled: z.boolean().optional(),
+    botTokenFile: z.string().optional(),
+    allowedChatIds: z.array(z.number()).optional(),
+    notify: z.object({
+      reviewReady: z.boolean().optional(),
+      failed: z.boolean().optional(),
+      blocked: z.boolean().optional(),
+      quota: z.boolean().optional(),
+      fallback: z.boolean().optional(),
+    }).optional(),
   }).optional(),
 });
 
@@ -532,6 +568,7 @@ export class AppService {
     public claudeScanner?: ClaudeSessionScanner,
     public taskNoteRepo?: TaskNoteRepo,
     public bulletinService?: BulletinService,
+    public telegramBotService?: TelegramBotService,
   ) {}
 
   listClaudeSessions(activeWithinMin = 5) {
@@ -563,6 +600,21 @@ export class AppService {
     const tasks = db.prepare('SELECT ctu.taskId, SUM(ctu.effectiveTokens) effectiveTokens FROM claude_task_usage ctu JOIN (SELECT DISTINCT sessionId,turnId FROM claude_usage WHERE ts >= ?) cu ON cu.sessionId=ctu.sessionId AND cu.turnId=ctu.turnId GROUP BY ctu.taskId ORDER BY effectiveTokens DESC LIMIT 5').all(since.toISOString()) as Array<{ taskId: string; effectiveTokens: number }>;
     const total = db.prepare('SELECT COALESCE(SUM(effective),0) effectiveTokens FROM claude_usage WHERE ts >= ?').get(since.toISOString()) as { effectiveTokens: number };
     return { effectiveTokens: total.effectiveTokens, sessions: sessions.length, tasks };
+  }
+
+  getClaudeTokenTotals() {
+    const db = this.scheduler.getDatabase();
+    if (!db) return { today: 0, week: 0 };
+    const now = new Date();
+    const today = new Date(now); today.setHours(0, 0, 0, 0);
+    const week = new Date(today); week.setDate(week.getDate() - 6);
+    const row = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ts >= ? THEN effective ELSE 0 END), 0) AS today,
+        COALESCE(SUM(CASE WHEN ts >= ? THEN effective ELSE 0 END), 0) AS week
+      FROM claude_usage
+    `).get(today.toISOString(), week.toISOString()) as { today: number; week: number };
+    return { today: row.today, week: row.week };
   }
 
   // --- Savings ---
@@ -681,6 +733,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
+        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
       };
     });
@@ -721,6 +774,7 @@ export class AppService {
       codexReviewer: this.scheduler.getReviewerStatus(),
       recentEvents,
       brain: this.brainService?.getStatus(),
+      schedulerPaused: this.scheduler.isPaused(),
       disk: {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
@@ -728,6 +782,11 @@ export class AppService {
       },
       disks,
       load: this.scheduler.getLoadStatus(),
+      telegram: {
+        enabled: this.config.telegram?.enabled ?? false,
+        allowedChatsCount: this.config.telegram?.allowedChatIds?.length ?? 0,
+        hasToken: Boolean(this.telegramBotService?.hasValidToken()),
+      },
     };
   }
 
@@ -927,6 +986,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
+        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
@@ -1164,7 +1224,9 @@ export class AppService {
     let doneContent: string | null = null;
     let blockedContent: string | null = null;
 
-    if (task.worktreePath && fs.existsSync(task.worktreePath)) {
+    if (task.doneReport !== null && task.doneReport !== undefined) {
+      doneContent = task.doneReport;
+    } else if (task.worktreePath && fs.existsSync(task.worktreePath)) {
       const donePath = path.join(task.worktreePath, '.agenthub', 'DONE');
       const blockedPath = path.join(task.worktreePath, '.agenthub', 'BLOCKED');
       if (fs.existsSync(donePath)) {
@@ -1209,6 +1271,8 @@ export class AppService {
       commits,
       worktreePath: task.worktreePath,
       checks: this.scheduler.getCheckResults(taskId),
+      sourceRef: task.sourceRef ? JSON.parse(task.sourceRef) : null,
+      derivedTasks: this.taskRepo.getDerivedFrom(taskId).map(apiTask),
       claudeCost: (() => { const measured = this.claudeSessionRepo?.taskCost(taskId); return measured ? { measured: measured.effectiveTokens > 0, ...measured } : { measured: false, effectiveTokens: 0, sessions: 0 }; })(),
     };
   }
@@ -1238,6 +1302,7 @@ export class AppService {
       branch: parsed.branch,
       dependsOn: parsed.dependsOn,
       status: initialStatus,
+      sourceRef: parsed.sourceRef ? JSON.stringify(parsed.sourceRef) : null,
     });
 
     if (parsed.start) {
@@ -1246,6 +1311,43 @@ export class AppService {
     }
 
     return this.taskRepo.get(taskId)!;
+  }
+
+  captureTask(raw: unknown): TaskRow {
+    const parsed = CaptureTaskSchema.parse(raw);
+    const sourceTaskId = toTaskId(parsed.sourceTaskId);
+    const source = this.taskRepo.get(sourceTaskId);
+    if (!source) throw new HttpError(404, 'not_found', `Task nguồn "${sourceTaskId}" không tồn tại`);
+    const project = this.projectRepo.get(source.projectId);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${source.projectId}" không tồn tại`);
+    const excerpt = truncateExcerpt(parsed.excerpt);
+    const location = extractFileLocations(excerpt)[0];
+    const sourceRef = {
+      taskId: source.id,
+      runId: parsed.runId || null,
+      checkName: parsed.checkName || null,
+      excerptHash: excerptHash(excerpt),
+    };
+    const body = parsed.body || [
+      `## Lỗi phát sinh từ ${source.id}`,
+      '',
+      `- Check: ${parsed.checkName || 'log'}`,
+      `- Nhánh nguồn: ${source.branch || source.baseRef || project.defaultBranch}`,
+      location ? `- Vị trí: ${location.file}:${location.line}` : '- Vị trí: không trích xuất được từ stack trace',
+      '',
+      toMarkdownCodeBlock(excerpt),
+    ].join('\n');
+    const baseRef = source.status === 'done' ? (source.baseRef || project.defaultBranch) : (source.branch || source.baseRef || project.defaultBranch);
+    return this.createTask({
+      project: source.projectId,
+      slug: parsed.slug,
+      title: parsed.title || `${parsed.checkName || 'Lỗi'}: ${excerpt.split(/\r?\n/).find((line) => line.trim())?.trim().slice(0, 100) || source.title}`,
+      body,
+      level: parsed.level,
+      baseRef,
+      sourceRef,
+      start: parsed.start,
+    });
   }
 
   updateTask(idParam: string, raw: unknown): TaskRow {
@@ -1440,7 +1542,10 @@ export class AppService {
       try {
         mergeResult = await mergeTaskIntoBase(task, project);
       } catch (error) {
-        if (error instanceof MergeError) throw new HttpError(error.statusCode, error.error, error.message);
+        if (error instanceof MergeError) {
+          this.createMergeFailureDraft(task, error.message);
+          throw new HttpError(error.statusCode, error.error, error.message);
+        }
         throw error;
       }
     }
@@ -1457,6 +1562,25 @@ export class AppService {
     this.scheduler.reviewTask(taskId, parsed.verdict, parsed.feedback, parsed.by);
     if (mergeResult) this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
     return this.taskRepo.get(taskId)!;
+  }
+
+  private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
+    const slugBase = `${source.slug}-fix-merge`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
+    let slug = slugBase;
+    for (let index = 2; this.taskRepo.get(`${source.projectId}/${slug}`); index += 1) slug = `${slugBase}-${index}`;
+    try {
+      return this.captureTask({
+        sourceTaskId: source.id,
+        slug,
+        checkName: 'merge',
+        excerpt: output,
+        title: `Sửa lỗi merge: ${source.title}`,
+        level: 'easy',
+        start: false,
+      });
+    } catch {
+      return null;
+    }
   }
 
   retryTask(idParam: string, raw: unknown): TaskRow {
@@ -1664,6 +1788,38 @@ export class AppService {
     return notes.map(apiTaskNote);
   }
 
+  // --- Scheduler control ---
+  pauseScheduler(): { ok: boolean; paused: boolean } {
+    this.scheduler.pause();
+    return { ok: true, paused: true };
+  }
+
+  resumeScheduler(): { ok: boolean; paused: boolean } {
+    this.scheduler.resume();
+    return { ok: true, paused: false };
+  }
+
+  isSchedulerPaused(): boolean {
+    return this.scheduler.isPaused();
+  }
+
+  // --- Telegram ---
+  setTelegramBotService(botService: TelegramBotService): void {
+    this.telegramBotService = botService;
+  }
+
+  getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] } {
+    if (!this.telegramBotService) {
+      throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    }
+    const pairing = this.telegramBotService.getPairingCode(refresh);
+    return {
+      ...pairing,
+      enabled: this.config.telegram?.enabled ?? false,
+      allowedChatIds: this.config.telegram?.allowedChatIds ?? [],
+    };
+  }
+
   // --- Config ---
   getConfig() {
     return {
@@ -1685,6 +1841,7 @@ export class AppService {
         permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
       },
+      brain: { fallback: this.config.brain.fallback },
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
@@ -1692,6 +1849,12 @@ export class AppService {
       stall: this.config.stall,
       disk: this.config.disk,
       context: this.config.context,
+      telegram: {
+        enabled: this.config.telegram.enabled,
+        botTokenFile: this.config.telegram.botTokenFile,
+        allowedChatIds: this.config.telegram.allowedChatIds,
+        notify: this.config.telegram.notify,
+      },
     };
   }
 
@@ -1700,12 +1863,32 @@ export class AppService {
 
     // Apply in-memory
     updateConfigInMemory(this.config, parsed);
+    if (parsed.brain?.fallback) this.chatService?.configureFailoverSteps(this.config.brain.fallback);
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
 
+    if (parsed.telegram?.enabled !== undefined && this.telegramBotService) {
+      if (parsed.telegram.enabled) {
+        this.telegramBotService.start();
+      } else {
+        void this.telegramBotService.stop();
+      }
+    }
+
     this.scheduler.getEventBus().emit('config.updated', undefined, parsed);
 
     return this.getConfig();
+  }
+
+  getClaudeApiKeyStatus() {
+    return { configured: this.chatService?.getClaudeApiKeyStatus().configured || false };
+  }
+
+  setClaudeApiKey(value: string) {
+    if (!this.chatService) throw new HttpError(503, 'unavailable', 'Chat service chưa sẵn sàng');
+    this.chatService.setClaudeApiKey(value);
+    this.scheduler.getEventBus().emit('config.updated', undefined, { brain: { apiKey: 'configured' } });
+    return this.getClaudeApiKeyStatus();
   }
 }

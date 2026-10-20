@@ -5,6 +5,7 @@ import {
   CreateProfileInput,
   CreateProjectInput,
   CreateTaskInput,
+  CaptureTaskInput,
   HubStatus,
   LoginSessionResponse,
   Profile,
@@ -177,8 +178,13 @@ export async function getClaudeQuota(): Promise<ClaudeQuota> {
 export type ClaudeFailover = {
   active: boolean;
   until: number | null;
+  resetAt: number | null;
   reason: string | null;
   activatedAt: number | null;
+  step: { type: string; model?: string; profile?: string; engine?: string; dailyCapUSD?: number } | null;
+  stepIndex: number;
+  dailyCostUSD: number;
+  apiKeyConfigured: boolean;
   evidence?: { file: string; line: number; observedAt: string } | null;
   lastActivityAt?: string | null;
 };
@@ -189,6 +195,14 @@ export async function getClaudeFailover(): Promise<ClaudeFailover> {
 
 export async function clearClaudeFailover(): Promise<ClaudeFailover> {
   return apiFetch<ClaudeFailover>('/api/claude/failover/clear', { method: 'POST' });
+}
+
+export async function getClaudeApiKeyStatus(): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key');
+}
+
+export async function setClaudeApiKey(apiKey: string): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key', { method: 'PUT', body: JSON.stringify({ apiKey }) });
 }
 
 export async function rescanClaudeSessions(): Promise<{ ok: boolean }> {
@@ -306,6 +320,10 @@ export async function createTask(data: CreateTaskInput): Promise<Task> {
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+export async function createTaskFromError(data: CaptureTaskInput): Promise<Task> {
+  return apiFetch<Task>('/api/tasks/from-error', { method: 'POST', body: JSON.stringify(data) });
 }
 
 export async function getTask(id: string): Promise<TaskDetail> {
@@ -430,4 +448,8 @@ export async function getDailyUsage(days = 7): Promise<DailyUsageReport> {
   if (days != null) query.set('days', String(days));
   const qStr = query.toString();
   return apiFetch<DailyUsageReport>(`/api/usage/daily${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getTelegramPairingCode(refresh = false): Promise<{ code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] }> {
+  return apiFetch(`/api/telegram/pairing-code${refresh ? '?refresh=1' : ''}`);
 }
