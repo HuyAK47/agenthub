@@ -25,6 +25,7 @@ export interface ClaudeSessionsConfig {
   maxAgeDays: number;
   include: string[];
   weights: { cacheCreation: number; cacheRead: number };
+  autoResume: { enabled: boolean; prompt: string; allowFullMode: boolean };
 }
 
 export interface SavingsConfig {
@@ -579,6 +580,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       weights: {
         cacheCreation: typeof rawClaudeWeights.cacheCreation === 'number' ? rawClaudeWeights.cacheCreation : 1.25,
         cacheRead: typeof rawClaudeWeights.cacheRead === 'number' ? rawClaudeWeights.cacheRead : 0.1,
+      },
+      autoResume: {
+        enabled: (rawClaudeSessions.autoResume as Record<string, unknown> | undefined)?.enabled === true,
+        prompt: typeof (rawClaudeSessions.autoResume as Record<string, unknown> | undefined)?.prompt === 'string'
+          ? (rawClaudeSessions.autoResume as Record<string, unknown>).prompt as string
+          : 'Giới hạn 5 giờ đã reset. Tiếp tục công việc đang dở từ chỗ đã dừng; nếu đã xong thì tóm tắt trạng thái.',
+        allowFullMode: (rawClaudeSessions.autoResume as Record<string, unknown> | undefined)?.allowFullMode === true,
       },
     },
     reviewer: {

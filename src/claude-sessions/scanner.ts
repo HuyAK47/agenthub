@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { attributeTurn, taskRefsFromToolInput } from './attribution.js';
 import { ClaudeSessionRepo } from './repo.js';
 import { ClaudeFailoverState } from '../chat/failover.js';
+import { buildClaudeArgs, ensureChatMcpConfig, findClaudeBin, spawnClaude } from '../chat/claude.js';
 
 export interface ClaudeScanOptions {
   dir: string;
@@ -15,6 +16,7 @@ export interface ClaudeScanOptions {
   weights?: { cacheCreation?: number; cacheRead?: number };
   failoverState?: ClaudeFailoverState;
   failoverIdleSec?: number;
+  autoResume?: { enabled: boolean; prompt: string; allowFullMode?: boolean; claudeBin?: string };
 }
 
 export class ClaudeSessionScanner {
@@ -51,6 +53,8 @@ export class ClaudeSessionScanner {
     let eligible = reset ? (!!repo.get(sessionId) || this.isHubChat(sessionId)) : existing.eligible === 1;
     let turnId = reset ? `${sessionId}:initial` : (existing.turnId || `${sessionId}:initial`);
     let turnTasks = new Set<string>(reset ? [] : parseTaskState(existing.turnTasks));
+    let latestLimit: { resetAt: number; observedAt: string } | null = null;
+    let latestActivity: string | null = null;
     const records: Array<{ event: ClaudeTranscriptEvent; sessionId: string; turnId: string; tasks: string[]; line: number }> = [];
     const turns = new Map<string, Set<string>>();
     const stream = fs.createReadStream(file, { start, encoding: 'utf8' });
@@ -70,7 +74,9 @@ export class ClaudeSessionScanner {
         const quota = quotaInfo(event);
         if (eligible && quota) {
           repo.setQuota({ ...quota, observedAt: typeof event.timestamp === 'string' ? event.timestamp : new Date().toISOString() });
+          if (isClaudeQuotaLimited(quota.status) && quota.resetsAt) latestLimit = { resetAt: quota.resetsAt, observedAt: typeof event.timestamp === 'string' ? event.timestamp : new Date().toISOString() };
         }
+        if (event.type === 'assistant' || event.type === 'user') latestActivity = typeof event.timestamp === 'string' ? event.timestamp : latestActivity;
         if (!eligible) continue;
         if (event.type === 'user' && !hasToolResult(event)) { turnId = `${sessionId}:${event.uuid || offset}`; turnTasks = new Set(); }
         if (event.type === 'ai-title' && typeof event.aiTitle === 'string') repo.upsert({ sessionId, cwd: String(event.cwd || ''), title: event.aiTitle.slice(0, 120) });
@@ -109,7 +115,29 @@ export class ClaudeSessionScanner {
       tx();
       this.updateFailover(file, records);
     }
+    if (eligible && latestLimit) {
+      const stillLimited = !latestActivity || Date.parse(latestActivity) <= Date.parse(latestLimit.observedAt);
+      repo.upsert({ sessionId, cwd: '', limitResetAt: stillLimited ? latestLimit.resetAt : null, limitHitAt: stillLimited ? latestLimit.observedAt : null });
+      repo.setLimit(sessionId, stillLimited ? latestLimit.resetAt : null, stillLimited ? latestLimit.observedAt : null);
+    }
+    await this.maybeAutoResume(file, sessionId, repo, existing, stat);
     this.db.prepare('INSERT OR REPLACE INTO claude_scan_state (path,inode,size,offset,mtime,turnId,turnTasks,eligible) VALUES (?,?,?,?,?,?,?,?)').run(file, stat.ino, stat.size, offset, stat.mtimeMs, turnId, JSON.stringify([...turnTasks]), eligible ? 1 : 0);
+  }
+  private async maybeAutoResume(file: string, sessionId: string, repo: ClaudeSessionRepo, existing: { size: number; eligible: number } | undefined, stat: fs.Stats) {
+    const auto = this.options.autoResume;
+    const session = repo.get(sessionId);
+    if (!auto?.enabled || !session?.autoResumeEnabled || !session.limitResetAt || session.limitResetAt * 1000 + 60_000 > Date.now()) return;
+    if (existing && (existing.size !== stat.size || existing.eligible !== 1)) return;
+    if (isClaudeProcessOpen(sessionId)) return;
+    const bin = findClaudeBin(auto.claudeBin);
+    if (!bin) return;
+    const cwd = session.cwd || path.dirname(file);
+    const mcp = ensureChatMcpConfig(this.options.hubHome, `auto-resume-${sessionId}`);
+    const args = buildClaudeArgs({ text: auto.prompt, claudeSessionId: sessionId, mode: 'safe', mcpConfigPath: mcp });
+    repo.setLimit(sessionId, null, null);
+    const child = spawnClaude(bin, args, cwd, auto.prompt, { chatSessionId: `auto-resume-${sessionId}`, claudeConfigDir: undefined });
+    child.stdout?.resume(); child.stderr?.resume();
+    child.unref();
   }
   private updateFailover(file: string, records: Array<{ event: ClaudeTranscriptEvent; line: number }>) {
     const state = this.options.failoverState;
@@ -208,4 +236,17 @@ function countNewlines(file: string, end: number): number {
     for (const byte of prefix) if (byte === 10) count += 1;
     return count;
   } catch { return 0; }
+}
+
+export function isClaudeProcessOpen(sessionId: string): boolean {
+  let entries: string[];
+  try { entries = fs.readdirSync('/proc'); } catch { return false; }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const cmdline = fs.readFileSync(path.join('/proc', entry, 'cmdline'), 'utf8');
+      if (cmdline.includes('claude') && cmdline.includes(sessionId)) return true;
+    } catch { /* process exited */ }
+  }
+  return false;
 }

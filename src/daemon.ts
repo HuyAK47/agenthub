@@ -14,6 +14,7 @@ import {
   ChatSessionRepo,
   ChatMessageRepo,
   ChatPermissionRepo,
+  ChatRetryRepo,
   RunMetricsRepo,
   TaskNoteRepo,
   KnowledgeRepo,
@@ -54,6 +55,7 @@ export interface DaemonContext {
   chatSessionRepo: ChatSessionRepo;
   chatMessageRepo: ChatMessageRepo;
   chatPermissionRepo: ChatPermissionRepo;
+  chatRetryRepo: ChatRetryRepo;
   permissionBroker: PermissionBroker;
   profileService: ProfileService;
   scheduler: Scheduler;
@@ -87,6 +89,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
   const chatPermissionRepo = new ChatPermissionRepo(db);
+  const chatRetryRepo = new ChatRetryRepo(db);
   chatPermissionRepo.expirePending();
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
@@ -97,7 +100,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     steps: config.brain.fallback,
     apiKeyPath: path.join(config.hubHome, 'secrets', 'anthropic.key'),
   });
-  const claudeScanner = new ClaudeSessionScanner(db, { ...config.claudeSessions, hubHome: config.hubHome, worktreesDir: config.worktreesDir, failoverState });
+  const claudeScanner = new ClaudeSessionScanner(db, { ...config.claudeSessions, hubHome: config.hubHome, worktreesDir: config.worktreesDir, failoverState, autoResume: { ...config.claudeSessions.autoResume, claudeBin: config.chat.claudeBin } });
   usageRepo.deleteForEngine('codex');
 
   const profileService = new ProfileService(config, profileRepo, quotaMarkRepo);
@@ -167,7 +170,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     quotaMarkRepo,
     usageRepo,
     eventRepo,
-    { failoverState },
+    { failoverState, retryRepo: chatRetryRepo },
   );
 
   const bulletinService = new BulletinService({
@@ -237,6 +240,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     chatSessionRepo,
     chatMessageRepo,
     chatPermissionRepo,
+    chatRetryRepo,
     permissionBroker,
     profileService,
     scheduler,
