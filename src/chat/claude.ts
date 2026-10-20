@@ -297,7 +297,7 @@ export function spawnClaude(
   args: string[],
   cwd: string,
   stdinText?: string,
-  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number; claudeConfigDir?: string } = {},
+  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number; claudeConfigDir?: string; env?: Record<string, string> } = {},
 ): ChildProcess {
   const child = spawn(claudeBin, args, {
     cwd,
@@ -308,6 +308,7 @@ export function spawnClaude(
       ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
       ...(options.chatSessionId ? { AGENTHUB_CHAT_SESSION_ID: options.chatSessionId } : {}),
       ...(options.port ? { AGENTHUB_PORT: String(options.port) } : {}),
+      ...(options.env || {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

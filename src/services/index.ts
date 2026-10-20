@@ -251,6 +251,15 @@ export const UpdateConfigSchema = z.object({
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
   }).optional(),
+  brain: z.object({
+    fallback: z.array(z.discriminatedUnion('type', [
+      z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
+      z.object({ type: z.literal('model'), model: z.string().min(1) }),
+      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive() }),
+      z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
+      z.object({ type: z.literal('wait') }),
+    ])).max(10),
+  }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
   }).optional(),
@@ -1825,6 +1834,7 @@ export class AppService {
         permissionTimeoutSec: this.config.chat.permissionTimeoutSec,
         model: this.config.chat.model,
       },
+      brain: { fallback: this.config.brain.fallback },
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
@@ -1846,6 +1856,7 @@ export class AppService {
 
     // Apply in-memory
     updateConfigInMemory(this.config, parsed);
+    if (parsed.brain?.fallback) this.chatService?.configureFailoverSteps(this.config.brain.fallback);
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
@@ -1861,5 +1872,16 @@ export class AppService {
     this.scheduler.getEventBus().emit('config.updated', undefined, parsed);
 
     return this.getConfig();
+  }
+
+  getClaudeApiKeyStatus() {
+    return { configured: this.chatService?.getClaudeApiKeyStatus().configured || false };
+  }
+
+  setClaudeApiKey(value: string) {
+    if (!this.chatService) throw new HttpError(503, 'unavailable', 'Chat service chưa sẵn sàng');
+    this.chatService.setClaudeApiKey(value);
+    this.scheduler.getEventBus().emit('config.updated', undefined, { brain: { apiKey: 'configured' } });
+    return this.getClaudeApiKeyStatus();
   }
 }

@@ -177,8 +177,13 @@ export async function getClaudeQuota(): Promise<ClaudeQuota> {
 export type ClaudeFailover = {
   active: boolean;
   until: number | null;
+  resetAt: number | null;
   reason: string | null;
   activatedAt: number | null;
+  step: { type: string; model?: string; profile?: string; engine?: string; dailyCapUSD?: number } | null;
+  stepIndex: number;
+  dailyCostUSD: number;
+  apiKeyConfigured: boolean;
   evidence?: { file: string; line: number; observedAt: string } | null;
   lastActivityAt?: string | null;
 };
@@ -189,6 +194,14 @@ export async function getClaudeFailover(): Promise<ClaudeFailover> {
 
 export async function clearClaudeFailover(): Promise<ClaudeFailover> {
   return apiFetch<ClaudeFailover>('/api/claude/failover/clear', { method: 'POST' });
+}
+
+export async function getClaudeApiKeyStatus(): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key');
+}
+
+export async function setClaudeApiKey(apiKey: string): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key', { method: 'PUT', body: JSON.stringify({ apiKey }) });
 }
 
 export async function rescanClaudeSessions(): Promise<{ ok: boolean }> {

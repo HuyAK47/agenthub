@@ -336,6 +336,12 @@ export async function createServer(
   fastify.get('/api/claude/quota', async () => service.getClaudeQuota());
   fastify.get('/api/claude/failover', async () => service.getClaudeFailover());
   fastify.post('/api/claude/failover/clear', async () => service.clearClaudeFailover());
+  fastify.get('/api/claude/api-key', async () => service.getClaudeApiKeyStatus());
+  fastify.put('/api/claude/api-key', async (req: FastifyRequest) => {
+    const body = req.body as { apiKey?: unknown };
+    if (typeof body?.apiKey !== 'string') throw new HttpError(400, 'bad_request', 'apiKey là bắt buộc');
+    return service.setClaudeApiKey(body.apiKey);
+  });
   fastify.get('/api/claude/usage/today', async () => service.getClaudeToday());
 
   // --- SSE Route ---

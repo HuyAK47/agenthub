@@ -395,6 +395,9 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
+  brain?: {
+    fallback: Array<{ type: 'profile'; profile?: string } | { type: 'model'; model: string } | { type: 'apiKey'; dailyCapUSD: number } | { type: 'engine'; engine: 'codex' } | { type: 'wait' }>;
+  };
   notifications?: {
     desktop: boolean;
   };
