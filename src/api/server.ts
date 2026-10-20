@@ -166,6 +166,11 @@ export async function createServer(
     return service.refreshUsage(name);
   });
 
+  fastify.delete('/api/profiles/:name', async (req: FastifyRequest) => {
+    const { name } = req.params as { name: string };
+    return service.deleteProfile(name);
+  });
+
   fastify.post('/api/profiles', async (req: FastifyRequest, reply: FastifyReply) => {
     const profile = service.createProfile(req.body);
     return reply.status(201).send(profile);

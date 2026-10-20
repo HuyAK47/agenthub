@@ -283,13 +283,14 @@ export function spawnClaude(
   args: string[],
   cwd: string,
   stdinText?: string,
-  options: { disableToolSearch?: boolean } = {},
+  options: { disableToolSearch?: boolean; claudeConfigDir?: string } = {},
 ): ChildProcess {
   const child = spawn(claudeBin, args, {
     cwd,
     detached: true,
     env: {
       ...process.env,
+      ...(options.claudeConfigDir ? { CLAUDE_CONFIG_DIR: options.claudeConfigDir } : {}),
       ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
