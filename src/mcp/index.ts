@@ -404,6 +404,41 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
   );
 
+  server.tool(
+    'hub_knowledge',
+    'Quản lý sổ kiến thức của project (list/add/update/delete)',
+    {
+      action: z.enum(['list', 'add', 'update', 'delete']),
+      project: z.string().min(1),
+      id: z.number().int().positive().optional(),
+      content: z.string().min(1).optional(),
+      taskId: z.string().optional(),
+      pinned: z.boolean().optional(),
+    },
+    async (args) => {
+      try {
+        const base = `/api/projects/${encodeURIComponent(args.project)}/knowledge`;
+        if (args.action === 'list') {
+          const entries = await callApi<Array<{ id: number; taskId: string; content: string; pinned: number }>>('GET', base);
+          return { content: [{ type: 'text', text: entries.length ? entries.map((e) => `- [${e.pinned ? 'ghim' : 'mới'}] #${e.id} (${e.taskId}): ${e.content}`).join('\n') : 'Sổ kiến thức đang trống.' }] };
+        }
+        if (!args.id && args.action !== 'add') throw new Error('id là bắt buộc');
+        if (args.action === 'add') {
+          const entry = await callApi<{ id: number }>('POST', base, { content: args.content, taskId: args.taskId, pinned: args.pinned });
+          return { content: [{ type: 'text', text: `✓ Đã thêm mục kiến thức #${entry.id}.` }] };
+        }
+        if (args.action === 'update') {
+          await callApi('PATCH', `${base}/${args.id}`, { content: args.content, pinned: args.pinned });
+          return { content: [{ type: 'text', text: `✓ Đã cập nhật mục kiến thức #${args.id}.` }] };
+        }
+        await callApi('DELETE', `${base}/${args.id}`);
+        return { content: [{ type: 'text', text: `✓ Đã xoá mục kiến thức #${args.id}.` }] };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
   // 4. hub_profiles
   server.tool(
     'hub_profiles',

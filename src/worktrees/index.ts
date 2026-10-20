@@ -26,6 +26,13 @@ export interface DependencyContext {
   diffStat?: string;
 }
 
+export interface KnowledgeContext {
+  content: string;
+  taskId: string;
+  pinned: number;
+  createdAt: string;
+}
+
 function resolveReal(target: string): string {
   const resolved = path.resolve(target);
   try {
@@ -362,10 +369,20 @@ export class WorktreeService {
     feedback?: string,
     dependencies: DependencyContext[] = [],
     depsMaxChars = 16000,
+    knowledge: KnowledgeContext[] = [],
+    knowledgeMaxChars = 12000,
   ): void {
     const agentHubDir = path.join(worktreePath, '.agenthub');
     if (!fs.existsSync(agentHubDir)) {
       fs.mkdirSync(agentHubDir, { recursive: true });
+    }
+
+    const knowledgePath = path.join(agentHubDir, 'context', 'knowledge.md');
+    if (knowledge.length > 0) {
+      fs.mkdirSync(path.dirname(knowledgePath), { recursive: true });
+      fs.writeFileSync(knowledgePath, this.buildKnowledgeContext(knowledge, knowledgeMaxChars), 'utf-8');
+    } else if (fs.existsSync(knowledgePath)) {
+      fs.rmSync(knowledgePath, { force: true });
     }
 
     let content = body;
@@ -425,6 +442,13 @@ export class WorktreeService {
     const note = '\n\n[Đã cắt bớt context dependency vì vượt giới hạn cấu hình.]';
     const available = Math.max(0, limit - note.length);
     return full.slice(0, available) + note.slice(0, limit);
+  }
+
+  private buildKnowledgeContext(entries: KnowledgeContext[], maxChars: number): string {
+    const limit = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : 12000;
+    const full = ['# Sổ kiến thức dự án', '', ...entries.map((entry) => `- ${entry.content} _(task: ${entry.taskId})`)].join('\n');
+    if (full.length <= limit) return full;
+    return full.slice(0, limit);
   }
 
   /**

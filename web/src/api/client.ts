@@ -22,6 +22,8 @@ import {
   SavingsReport,
   DailyUsageReport,
   OrphanProcess,
+  KnowledgeEntry,
+  TaskGraphResponse,
 } from '../types/api';
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
@@ -177,8 +179,13 @@ export async function getClaudeQuota(): Promise<ClaudeQuota> {
 export type ClaudeFailover = {
   active: boolean;
   until: number | null;
+  resetAt: number | null;
   reason: string | null;
   activatedAt: number | null;
+  step: { type: string; model?: string; profile?: string; engine?: string; dailyCapUSD?: number } | null;
+  stepIndex: number;
+  dailyCostUSD: number;
+  apiKeyConfigured: boolean;
   evidence?: { file: string; line: number; observedAt: string } | null;
   lastActivityAt?: string | null;
 };
@@ -189,6 +196,14 @@ export async function getClaudeFailover(): Promise<ClaudeFailover> {
 
 export async function clearClaudeFailover(): Promise<ClaudeFailover> {
   return apiFetch<ClaudeFailover>('/api/claude/failover/clear', { method: 'POST' });
+}
+
+export async function getClaudeApiKeyStatus(): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key');
+}
+
+export async function setClaudeApiKey(apiKey: string): Promise<{ configured: boolean }> {
+  return apiFetch<{ configured: boolean }>('/api/claude/api-key', { method: 'PUT', body: JSON.stringify({ apiKey }) });
 }
 
 export async function rescanClaudeSessions(): Promise<{ ok: boolean }> {
@@ -217,6 +232,22 @@ export async function deleteProject(id: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
+}
+
+export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
+  return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
+}
+
+export async function addProjectKnowledge(projectId: string, data: { content: string; pinned?: boolean }): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateProjectKnowledge(projectId: string, id: number, data: { content?: string; pinned?: boolean }): Promise<KnowledgeEntry> {
+  return apiFetch<KnowledgeEntry>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteProjectKnowledge(projectId: string, id: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/knowledge/${id}`, { method: 'DELETE' });
 }
 
 export async function getProfiles(): Promise<Profile[]> {
@@ -288,6 +319,17 @@ export async function getTasks(params?: {
   if (params?.status) query.set('status', params.status);
   const qStr = query.toString();
   return apiFetch<Task[]>(`/api/tasks${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getTaskGraph(params?: {
+  project?: string;
+  includeDone?: string | boolean;
+}): Promise<TaskGraphResponse> {
+  const query = new URLSearchParams();
+  if (params?.project) query.set('project', params.project);
+  if (params?.includeDone !== undefined) query.set('includeDone', String(params.includeDone));
+  const qStr = query.toString();
+  return apiFetch<TaskGraphResponse>(`/api/tasks/graph${qStr ? `?${qStr}` : ''}`);
 }
 
 export async function createTask(data: CreateTaskInput): Promise<Task> {
@@ -425,6 +467,52 @@ export async function getDailyUsage(days = 7): Promise<DailyUsageReport> {
   return apiFetch<DailyUsageReport>(`/api/usage/daily${qStr ? `?${qStr}` : ''}`);
 }
 
-export async function getTelegramPairingCode(refresh = false): Promise<{ code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] }> {
+export interface TelegramChat {
+  id: number;
+  name: string;
+  username?: string;
+}
+
+export interface TelegramStatus {
+  enabled: boolean;
+  hasToken: boolean;
+  chats: TelegramChat[];
+  allowedChatIds: number[];
+  notify: { reviewReady: boolean; failed: boolean; blocked: boolean; quota: boolean; fallback: boolean };
+}
+
+export interface TelegramPairingCode {
+  code: string;
+  expiresInSec: number;
+  enabled: boolean;
+  allowedChatIds: number[];
+  chats: TelegramChat[];
+}
+
+export async function getTelegramStatus(): Promise<TelegramStatus> {
+  return apiFetch<TelegramStatus>('/api/telegram/status');
+}
+
+export async function putTelegramToken(token: string): Promise<{ hasToken: boolean }> {
+  return apiFetch<{ hasToken: boolean }>('/api/telegram/token', { method: 'PUT', body: JSON.stringify({ token }) });
+}
+
+export async function testTelegram(): Promise<{ ok: boolean; bot: { id: number; name: string; username?: string } }> {
+  return apiFetch('/api/telegram/test', { method: 'POST' });
+}
+
+export async function getTelegramPairingCode(refresh = false): Promise<TelegramPairingCode> {
   return apiFetch(`/api/telegram/pairing-code${refresh ? '?refresh=1' : ''}`);
+}
+
+export async function createTelegramPairCode(): Promise<TelegramPairingCode> {
+  return apiFetch<TelegramPairingCode>('/api/telegram/pair-code', { method: 'POST' });
+}
+
+export async function removeTelegramChat(id: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/telegram/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function updateTelegramConfig(data: { enabled?: boolean; notify?: Partial<TelegramStatus['notify']> }): Promise<SystemConfig> {
+  return apiFetch<SystemConfig>('/api/config', { method: 'PUT', body: JSON.stringify({ telegram: data }) });
 }

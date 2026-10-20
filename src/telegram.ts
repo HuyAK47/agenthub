@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { AgentHubConfig, saveConfig, updateConfigInMemory } from './config.js';
+import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
@@ -42,6 +42,7 @@ export interface TelegramUpdate {
       type: string;
       title?: string;
       username?: string;
+      first_name?: string;
     };
     date: number;
     text?: string;
@@ -203,6 +204,30 @@ export class TelegramBotService {
     this.token = token;
   }
 
+  async testConnection(): Promise<{ id: number; name: string; username?: string }> {
+    if (!this.token) throw new Error('Chưa cấu hình Telegram bot token');
+    const url = `https://api.telegram.org/bot${this.token}/getMe`;
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, { method: 'POST' });
+    } catch (error) {
+      throw new Error(`Telegram getMe request failed: ${redactTelegramToken(error, this.token)}`);
+    }
+    const data = (await response.json()) as {
+      ok: boolean;
+      description?: string;
+      result?: { id: number; first_name?: string; last_name?: string; username?: string };
+    };
+    if (!response.ok || !data.ok || !data.result) {
+      throw new Error(data.description || `Telegram getMe failed with status ${response.status}`);
+    }
+    return {
+      id: data.result.id,
+      name: [data.result.first_name, data.result.last_name].filter(Boolean).join(' ') || data.result.username || 'Telegram bot',
+      ...(data.result.username ? { username: data.result.username } : {}),
+    };
+  }
+
   hasValidToken(): boolean {
     return Boolean(this.token && this.token.length > 0);
   }
@@ -234,9 +259,18 @@ export class TelegramBotService {
   /**
    * Add a chat ID to allowedChatIds and persist to config.json.
    */
-  addAllowedChatId(chatId: number): void {
+  addAllowedChatId(chatId: number, chat?: TelegramChat): void {
     if (!this.config.telegram.allowedChatIds.includes(chatId)) {
       this.config.telegram.allowedChatIds.push(chatId);
+      if (chat) {
+        this.config.telegram.chats = (this.config.telegram.chats || []).filter((item) => item.id !== chatId);
+        this.config.telegram.chats.push(chat);
+      }
+      updateConfigInMemory(this.config, { telegram: this.config.telegram });
+      saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+    } else if (chat) {
+      this.config.telegram.chats = (this.config.telegram.chats || []).filter((item) => item.id !== chatId);
+      this.config.telegram.chats.push(chat);
       updateConfigInMemory(this.config, { telegram: this.config.telegram });
       saveConfig(this.config.hubHome, { telegram: this.config.telegram });
     }
@@ -400,7 +434,11 @@ export class TelegramBotService {
         const now = this.now();
         if (this.pairingCode && this.pairingCode === code && this.pairingExpiresAt > now) {
           // Success pairing!
-          this.addAllowedChatId(chatId);
+          this.addAllowedChatId(chatId, {
+            id: chatId,
+            name: msg.chat.title || (msg.chat.first_name ? `${msg.chat.first_name}${msg.chat.username ? ` (@${msg.chat.username})` : ''}` : `Chat ${chatId}`),
+            ...(msg.chat.username ? { username: msg.chat.username } : {}),
+          });
           this.pairingCode = null;
           this.pairingExpiresAt = 0;
           this.pairingInvalidAttempts = 0;

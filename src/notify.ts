@@ -120,9 +120,20 @@ export class NotificationService {
         break;
       }
 
+      case 'claude.fallback_changed': {
+        const step = p.step && typeof p.step === 'object' ? p.step as Record<string, unknown> : null;
+        const label = step?.type === 'model' ? `model ${String(step.model)}`
+          : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
+          : step?.type === 'apiKey' ? 'API key'
+          : step?.type === 'engine' ? `engine ${String(step.engine)}`
+          : step?.type === 'wait' ? 'chờ reset' : 'cấu hình chính';
+        this.notify(`Claude fallback: đang dùng ${label}`, 'normal');
+        break;
+      }
+
       case 'profile.auth_expired': {
         const name = typeof p.name === 'string' ? p.name : 'tài khoản';
-        this.notify(`Tài khoản ${name} cần đăng nhập lại`, 'normal');
+        this.notify(`Hồ sơ ${name} cần đăng nhập lại`, 'normal');
         break;
       }
 

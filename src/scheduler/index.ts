@@ -16,6 +16,7 @@ import {
   RunMetricsRepo,
   TaskRow,
   ProfileRow,
+  KnowledgeRepo,
 } from '../db/index.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, QuotaService } from '../quota/index.js';
@@ -132,6 +133,7 @@ export class Scheduler {
   private checkRunner?: CheckRunner;
   private db?: Database.Database;
   private runMetricsRepo?: RunMetricsRepo;
+  private knowledgeRepo?: KnowledgeRepo;
   private reviewRepo?: ReviewRepo;
   private failoverState?: ClaudeFailoverState;
   private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
@@ -155,6 +157,7 @@ export class Scheduler {
     locks?: ProfileLockService,
     db?: Database.Database,
     runMetricsRepo?: RunMetricsRepo,
+    knowledgeRepo?: KnowledgeRepo,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -163,6 +166,7 @@ export class Scheduler {
     this.locks = locks || new ProfileLockService(path.join(config.agyHomesDir, '.state'), config.slotsPerAgyProfile, config.slotsPerCodexProfile);
     this.db = db;
     this.runMetricsRepo = runMetricsRepo;
+    this.knowledgeRepo = knowledgeRepo;
     if (db) this.checkRunner = new CheckRunner(db);
 
     if (engineOverrides) {
@@ -1074,8 +1078,7 @@ export class Scheduler {
           this.runRepo.finish(rt.runId, 'crashed', undefined, 'auth');
           this.markProfileAuthExpired(rt.profileName);
 
-          const attempt = (task.attempt || 0) + 1;
-          this.taskRepo.update(taskId, { status: 'queued', attempt, resume: 1, transientRetries: 0, notBefore: null });
+          this.taskRepo.update(taskId, { status: 'queued', attempt: task.attempt, resume: 1, transientRetries: 0, notBefore: null });
           this.eventBus.emit('task.queued', taskId, { reason: 'auth_retry', profile: rt.profileName });
         } else {
           // Check for transient errors
@@ -1173,7 +1176,7 @@ export class Scheduler {
       this.eventBus.emit('claude.failover_cleared', undefined);
     }
     this.failoverWasActive = snapshot.active;
-    if (!snapshot.active) return;
+    if (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex') return;
 
     const codex = this.engines.get('codex');
     if (!codex) return;
@@ -1184,15 +1187,17 @@ export class Scheduler {
         this.escalateReview(task.id, 'missing_autocheck_results', 'Không có kết quả autocheck đã lưu; cần người xác minh trước khi tiếp tục.');
         continue;
       }
-      const profile = this.profileRepo.getEnabled().find((p) => p.engine === 'codex' &&
+      const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex' &&
         !this.quotaService.isExhausted(p.name, 'codex') &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
-      if (!profile || !task.worktreePath) continue;
+      if (codexProfiles.length === 0 || !task.worktreePath) continue;
+      codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+      const profile = codexProfiles[0];
       this.startReview(task, profile.name, codex);
     }
   }
 
-  private reviewerRunsForProfile(profileName: string): boolean {
+  reviewerRunsForProfile(profileName: string): boolean {
     return [...this.reviewerRuns.values()].some((run) => run.profileName === profileName);
   }
 
@@ -1473,6 +1478,7 @@ export class Scheduler {
       const ranked = eligibleProfiles.map((profile, originalIndex) => ({
         profile,
         originalIndex,
+        priority: profile.priority ?? 0,
         emailRuns: this.getEmailRunningCount(profile),
         quotaRemaining: this.getQuotaRemainingPct(profile, family),
       }));
@@ -1483,6 +1489,9 @@ export class Scheduler {
         }
         if (a.quotaRemaining !== b.quotaRemaining) {
           return b.quotaRemaining - a.quotaRemaining;
+        }
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority;
         }
         return a.originalIndex - b.originalIndex;
       });
@@ -1583,6 +1592,8 @@ export class Scheduler {
       feedback,
       this.getDependencyContext(task),
       this.config.context?.depsMaxChars,
+      this.knowledgeRepo?.getByProject(task.projectId) || [],
+      this.config.context?.knowledgeMaxChars,
     );
   }
 
