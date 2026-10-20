@@ -257,6 +257,7 @@ export const UpdateKnowledgeSchema = z.object({
 export const CreateProfileSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
   engine: z.enum(['agy', 'claude', 'codex']).default('agy'),
+  accountType: z.enum(['personal', 'team', 'api']).default('personal'),
 });
 
 export const RenameProfileSchema = z.object({
@@ -288,6 +289,7 @@ export const UpdateConfigSchema = z.object({
   }).optional(),
   slotsPerAgyProfile: z.number().int().positive().optional(),
   slotsPerCodexProfile: z.number().int().positive().optional(),
+  multiplePerProvider: z.boolean().optional(),
   watchdog: z.object({
     stallMinutes: z.number().positive().optional(),
     waitingMinutes: z.number().positive().optional(),
@@ -1066,6 +1068,12 @@ export class AppService {
 
   createProfile(raw: unknown): ProfileRow {
     const parsed = CreateProfileSchema.parse(raw);
+    if (!this.config.multiplePerProvider && parsed.accountType === 'personal') {
+      const existing = this.profileRepo.getAll().find((profile) => profile.engine === parsed.engine && profile.accountType === 'personal');
+      if (existing) {
+        throw new HttpError(409, 'provider_policy', `Đã có hồ sơ cá nhân cho engine ${parsed.engine}; hãy dùng hồ sơ API/Team hoặc bật multiplePerProvider`);
+      }
+    }
     if (this.profileRepo.get(parsed.name)) {
       if (!this.profileRepo.isDeleted(parsed.name)) {
         throw new HttpError(409, 'conflict', `Hồ sơ "${parsed.name}" đã tồn tại`);
@@ -1074,7 +1082,7 @@ export class AppService {
       this.profileRepo.restore(parsed.name);
     }
 
-    this.coreProfileService.createProfile(parsed.name, parsed.engine);
+    this.coreProfileService.createProfile(parsed.name, parsed.engine, parsed.accountType);
     this.scheduler.getEventBus().emit('profile.created', undefined, { name: parsed.name });
     this.scheduler.wakeWaitingQuotaTasks('profile_created');
 
@@ -2177,6 +2185,7 @@ export class AppService {
       modelChainEasy: this.config.defaultModelChains.easy,
       defaultTimeout: this.config.defaultTimeout,
       slotsPerAgyProfile: this.config.slotsPerAgyProfile,
+      multiplePerProvider: this.config.multiplePerProvider,
       slotsPerCodexProfile: this.config.slotsPerCodexProfile,
       watchdog: this.config.watchdog,
       autoFixOnFail: this.config.autoFixOnFail,

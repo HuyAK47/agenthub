@@ -23,6 +23,10 @@ Kế hoạch kiến trúc và thiết kế hệ thống: xem [Kế hoạch chi t
 - **Phân tích Hiệu quả ủy quyền (Savings Page)**: Lượng hóa số token Claude tiết kiệm được, chi phí token điều phối, tỷ lệ tiết kiệm và thống kê chi tiết theo từng model, engine và ngày thực hiện.
 - **Trải nghiệm người dùng hiện đại**: Giao diện hỗ trợ Dark/Light mode, song ngữ Tiếng Việt / Tiếng Anh, terminal tương tác trực tiếp trên web và thông báo nổi desktop khi có sự kiện quan trọng.
 
+### Accounts & provider terms
+
+AgentHub mặc định giới hạn một hồ sơ cá nhân trên mỗi engine; hồ sơ API key hoặc Team vẫn được phép. Có thể bật `multiplePerProvider` khi bạn hiểu và chấp nhận điều khoản của nhà cung cấp. Nhiều gói cá nhân cấm chia sẻ hoặc vượt giới hạn, vì vậy nên dùng API key hoặc gói Team cho nhu cầu dùng chung.
+
 👉 Xem chi tiết tại [Danh sách tính năng đầy đủ (docs/FEATURES.md)](docs/FEATURES.md).
 
 ---
