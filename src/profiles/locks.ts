@@ -21,7 +21,9 @@ export class ProfileLockService {
 
   slotsTotal(profile: ProfileRow): number { return profile.engine === 'codex' ? this.codexSlots : this.agySlots; }
   lockPath(profile: ProfileRow, slot: number): string {
-    if (profile.engine === 'codex') return path.join(this.stateDir, `codex.lock${slot === 1 ? '' : slot}`);
+    if (profile.engine === 'codex' && profile.kind !== 'isolated') {
+      return path.join(this.stateDir, `codex.lock${slot === 1 ? '' : slot}`);
+    }
     return path.join(this.stateDir, `${profile.name}.lock${slot === 1 ? '' : slot}`);
   }
 

@@ -66,6 +66,7 @@ export interface DaemonContext {
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
+  usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
 }
 
@@ -247,6 +248,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    usageRepo,
     telegramService,
   };
 }

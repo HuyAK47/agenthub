@@ -236,7 +236,14 @@ export async function createServer(
 
   fastify.delete('/api/profiles/:name', async (req: FastifyRequest) => {
     const { name } = req.params as { name: string };
-    return service.deleteProfile(name);
+    const query = req.query as { purgeHome?: string | boolean };
+    const purgeHome = query?.purgeHome === '1' || query?.purgeHome === 'true' || query?.purgeHome === true;
+    return service.deleteProfile(name, purgeHome);
+  });
+
+  fastify.post('/api/profiles/:name/rename', async (req: FastifyRequest) => {
+    const { name } = req.params as { name: string };
+    return service.renameProfile(name, req.body);
   });
 
   fastify.post('/api/profiles', async (req: FastifyRequest, reply: FastifyReply) => {
