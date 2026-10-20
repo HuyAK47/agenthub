@@ -99,6 +99,10 @@ async function main() {
         num_turns: 2,
         is_error: false,
         result: 'Nội dung PLAN đã đọc.',
+        usage: {
+          input_tokens: 150,
+          output_tokens: 30,
+        },
       }),
     );
     return;
@@ -181,6 +185,10 @@ async function main() {
       },
     }),
   );
+  const usageMatch = prompt.match(/usage:(\d+):(\d+)/);
+  const inputTokens = usageMatch ? parseInt(usageMatch[1], 10) : 100;
+  const outputTokens = usageMatch ? parseInt(usageMatch[2], 10) : 25;
+
   console.log(
     JSON.stringify({
       type: 'result',
@@ -190,6 +198,10 @@ async function main() {
       num_turns: 1,
       is_error: false,
       result: 'Xin chào, tôi là Claude!',
+      usage: {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+      },
     }),
   );
 }
