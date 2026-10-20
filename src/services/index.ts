@@ -47,6 +47,7 @@ import { mergeTaskIntoBase, MergeError } from '../merge.js';
 import { computeTaskGraph, filterTasksForGraph } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
+import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -55,7 +56,17 @@ function apiProject(project: ProjectRow): ProjectRow {
   if (project.merge) {
     try { merge = JSON.parse(project.merge); } catch { merge = null; }
   }
-  return { ...project, merge, createdAt: toApiTime(project.createdAt)! } as ProjectRow;
+  let reviewChain: unknown = null;
+  if (project.reviewChain) {
+    try { reviewChain = JSON.parse(project.reviewChain); } catch { reviewChain = null; }
+  }
+  let review: unknown = null;
+  if (project.review) {
+    try { review = JSON.parse(project.review); } catch { review = null; }
+  } else if (reviewChain) {
+    review = { chain: reviewChain, maxRounds: 2 };
+  }
+  return { ...project, merge, reviewChain, review, createdAt: toApiTime(project.createdAt)! } as ProjectRow;
 }
 
 function apiProfile(profile: ProfileRow): ProfileRow {
@@ -147,6 +158,10 @@ export const ProjectMergeSchema = z.object({
   timeoutSec: z.number().int().positive().default(600),
 });
 export type ProjectMerge = z.infer<typeof ProjectMergeSchema>;
+export const ProjectReviewSchema = z.object({
+  chain: ReviewChainSchema.default([]),
+  maxRounds: z.number().int().positive().default(2),
+});
 
 export const CreateProjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
@@ -158,6 +173,8 @@ export const CreateProjectSchema = z.object({
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
+  reviewChain: ReviewChainSchema.nullable().optional(),
+  review: ProjectReviewSchema.nullable().optional(),
 });
 
 export const UpdateProjectSchema = z.object({
@@ -168,6 +185,8 @@ export const UpdateProjectSchema = z.object({
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
+  reviewChain: ReviewChainSchema.nullable().optional(),
+  review: ProjectReviewSchema.nullable().optional(),
 });
 
 export const CreateTaskSchema = z.object({
@@ -892,6 +911,8 @@ export class AppService {
       checks: parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks ? JSON.stringify(parsed.hooks) : null,
       merge: parsed.merge ? JSON.stringify(parsed.merge) : null,
+      reviewChain: parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
+      review: parsed.review ? JSON.stringify(parsed.review) : null,
     });
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -906,6 +927,8 @@ export class AppService {
       checks: parsed.checks === undefined ? undefined : parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks === undefined ? undefined : parsed.hooks ? JSON.stringify(parsed.hooks) : null,
       merge: parsed.merge === undefined ? undefined : parsed.merge ? JSON.stringify(parsed.merge) : null,
+      reviewChain: parsed.reviewChain === undefined ? undefined : parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
+      review: parsed.review === undefined ? undefined : parsed.review ? JSON.stringify(parsed.review) : null,
     });
     this.invalidateOutOfScopeClaudeScanStates();
     return this.getProject(id);
@@ -1411,8 +1434,14 @@ export class AppService {
     const running = this.scheduler.getRunning();
     return tasks.map((task) => {
       const run = running.get(task.id);
+      const project = this.projectRepo.get(task.projectId);
+      let reviewChain = parseReviewChain(project?.reviewChain);
+      if (project?.review) {
+        try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
+      }
       return {
         ...apiTask(task),
+        reviewChain,
         checks: this.scheduler.getCheckResults(task.id),
         currentRun: run ? {
           startedAt: new Date(run.startTime).toISOString(),
@@ -1468,6 +1497,9 @@ export class AppService {
     }
 
     const project = this.projectRepo.get(task.projectId);
+    const reviewSettings = project?.review ? (() => {
+      try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
+    })() : null;
     let commits: string[] = [];
     if (project && task.branch) {
       const baseRef = task.baseRef || project.defaultBranch;
@@ -1488,6 +1520,9 @@ export class AppService {
       } : null,
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
+      reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
+      reviewStep: task.reviewStep ?? 0,
+      reviewMaxRounds: reviewSettings?.maxRounds || 2,
       doneContent,
       blockedContent,
       commits,

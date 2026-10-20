@@ -850,12 +850,19 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 
         // 1. Check if any target task is ALREADY in an actionable/terminal status
         const terminalStatuses = new Set(['review', 'blocked', 'failed', 'waiting_quota', 'done']);
+        const isWaitable = (task: Record<string, unknown>): boolean => {
+          if (String(task.status) !== 'review') return terminalStatuses.has(String(task.status));
+          const chain = Array.isArray(task.reviewChain) ? task.reviewChain as Array<{ mode?: string }> : [];
+          if (chain.length === 0) return true;
+          const step = Number(task.reviewStep ?? 0);
+          return step >= chain.length || chain[step]?.mode === 'final';
+        };
         if (targetIds && targetIds.length > 0) {
           for (const id of targetIds) {
             try {
               const data = await callApi<Record<string, unknown>>('GET', `/api/tasks/${toRouteId(id)}`);
               const t = (data.task || data) as Record<string, unknown>;
-              if (t && terminalStatuses.has(String(t.status))) {
+              if (t && isWaitable(t)) {
                 return {
                   content: [{
                     type: 'text',
