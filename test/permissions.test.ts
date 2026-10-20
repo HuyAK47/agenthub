@@ -55,4 +55,13 @@ describe('PermissionBroker', () => {
     await expect(pending).resolves.toEqual({ behavior: 'deny', message: 'Hết thời gian chờ cấp quyền' });
     expect(broker.listPending()).toHaveLength(0);
   });
+
+  it('expires pending requests left by a daemon restart', () => {
+    const broker = makeBroker();
+    new ChatPermissionRepo(db).insert({ id: 'stale', sessionId: 'session-1', toolName: 'Bash', input: JSON.stringify({ command: 'git status' }) });
+    expect(broker.listPending()).toHaveLength(1);
+    expect(new ChatPermissionRepo(db).expirePending()).toBe(1);
+    expect(broker.listPending()).toHaveLength(0);
+    broker.stop();
+  });
 });
