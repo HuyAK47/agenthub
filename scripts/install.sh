@@ -32,7 +32,12 @@ is_safe_app_dir() {
     "$_app_dir/"*) return 1 ;;
   esac
 
-  [ "$(git -C "$AGENTHUB_DIR" config --get agenthub.installed 2>/dev/null)" = "true" ] || return 1
+  if grep -q '^mode=release$' "$AGENTHUB_DIR/.agenthub-app" 2>/dev/null; then
+    [ -L "$AGENTHUB_DIR/current" ] || return 1
+    [ -f "$AGENTHUB_DIR/current/package.json" ] || return 1
+  else
+    [ "$(git -C "$AGENTHUB_DIR" config --get agenthub.installed 2>/dev/null)" = "true" ] || return 1
+  fi
   return 0
 }
 
@@ -206,6 +211,7 @@ install_from_release() {
   if [ -e "$_release_dir" ] || [ -L "$_release_dir" ]; then rm -rf "$_release_dir"; fi
   mkdir -p "$_release_dir"
   tar -xzf "$_tmp/$_archive" -C "$_release_dir"
+  printf 'mode=release\nversion=%s\ndate=%s\n' "$RELEASE_VERSION" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$_release_root/.agenthub-app"
   ln -sfn "$RELEASE_VERSION" "$_release_root/current"
   echo "==> Cài dependencies native theo máy..."
   (cd "$_release_root/current" && npm ci --omit=dev)

@@ -61,9 +61,9 @@ export async function cmdOpen(
   return url;
 }
 
-export async function cmdInstallService(extraArgs: string[]): Promise<string> {
+export async function cmdInstallService(extraArgs: string[], projectRootOverride?: string): Promise<string> {
   const isPrint = extraArgs.includes('--print');
-  const projectRoot = findProjectRoot();
+  const projectRoot = projectRootOverride || findProjectRoot();
   const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
   const nodePath = process.execPath;
   const currentPath = process.env.PATH || '';
@@ -138,6 +138,32 @@ export async function cmdDoctor(
   return report;
 }
 
+export async function cmdRollback(extraArgs: string[] = []): Promise<string> {
+  const currentRoot = findProjectRoot();
+  const appRoot = path.dirname(currentRoot);
+  const currentLink = path.join(appRoot, 'current');
+  if (!fs.existsSync(currentLink) || !fs.lstatSync(currentLink).isSymbolicLink()) {
+    throw new Error(`Không tìm thấy layout release tại ${appRoot}.`);
+  }
+  const candidates = fs.readdirSync(appRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== 'node_modules' && /^\d+\.\d+\.\d+(?:[-+.].*)?$/.test(entry.name))
+    .filter((entry) => fs.existsSync(path.join(appRoot, entry.name, 'package.json')))
+    .map((entry) => entry.name)
+    .sort((a, b) => compareSemver(b, a));
+  const requested = extraArgs[0]?.replace(/^v/, '');
+  const target = requested && candidates.includes(requested)
+    ? requested
+    : candidates.find((version) => version !== path.basename(currentRoot));
+  if (!target) throw new Error('Không có bản release cũ để rollback.');
+  if (requested && !candidates.includes(requested)) throw new Error(`Không tìm thấy release v${requested}.`);
+
+  fs.unlinkSync(currentLink);
+  fs.symlinkSync(target, currentLink);
+  await cmdInstallService([], path.join(appRoot, target));
+  console.log(`✓ Đã rollback AgentHub về v${target}`);
+  return target;
+}
+
 export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = []): Promise<void> {
   console.log('==> Thiết lập AgentHub lần đầu');
   const checks = [
@@ -178,6 +204,10 @@ async function main() {
 
     case 'setup':
       await cmdSetup(config, args.slice(1));
+      break;
+
+    case 'rollback':
+      await cmdRollback(args.slice(1));
       break;
 
     case 'update':
@@ -266,6 +296,7 @@ Cách dùng:
   agenthub mcp                        Chạy MCP server (stdio transport)
   agenthub open                       Mở giao diện web trong trình duyệt
   agenthub setup [--no-browser]       Thiết lập lần đầu, service và dashboard
+  agenthub rollback [version]         Quay lại bản release trước đó
   agenthub update                     Cập nhật AgentHub lên phiên bản mới nhất
   agenthub version [--check]          Xem phiên bản và kiểm tra cập nhật mới
   agenthub install-service [--print]  Cài đặt systemd/LaunchAgent user service

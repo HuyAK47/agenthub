@@ -75,6 +75,11 @@ agenthub setup
 
 Dùng `--from-release 0.1.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, chạy `npm ci --omit=dev` để build native module, rồi cập nhật symlink `current` và service. Hai bản cũ được giữ lại để rollback thủ công.
 
+```bash
+agenthub rollback          # chọn bản cũ gần nhất
+agenthub rollback 0.1.0    # chọn rõ phiên bản
+```
+
 ---
 
 ## 2. Các lệnh CLI chính
