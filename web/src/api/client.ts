@@ -5,6 +5,7 @@ import {
   CreateProfileInput,
   CreateProjectInput,
   CreateTaskInput,
+  CaptureTaskInput,
   HubStatus,
   LoginSessionResponse,
   Profile,
@@ -293,6 +294,10 @@ export async function createTask(data: CreateTaskInput): Promise<Task> {
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+export async function createTaskFromError(data: CaptureTaskInput): Promise<Task> {
+  return apiFetch<Task>('/api/tasks/from-error', { method: 'POST', body: JSON.stringify(data) });
 }
 
 export async function getTask(id: string): Promise<TaskDetail> {
