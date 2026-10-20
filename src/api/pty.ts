@@ -5,6 +5,7 @@ import pty from 'node-pty';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket } from 'ws';
 import { AppService, HttpError } from '../services/index.js';
+import { findClaudeBin } from '../chat/claude.js';
 
 interface PtySession {
   id: string;
@@ -39,15 +40,19 @@ export class PtyManager {
     const home = profile.home || path.join(this.service.config.agyHomesDir, profile.name);
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-    if (profile.kind === 'isolated') {
+    if (profile.engine === 'claude' && profile.kind !== 'system' && profile.home) {
+      env.CLAUDE_CONFIG_DIR = profile.home;
+    } else if (profile.kind === 'isolated') {
       env.HOME = home;
       env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
     }
 
-    // agy binary path (can be overridden by AGENTHUB_AGY_BIN for tests)
-    const agyBin = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+    const command = profile.engine === 'claude'
+      ? (findClaudeBin(this.service.config.chat.claudeBin) || process.env.AGENTHUB_CLAUDE_BIN)
+      : (process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
+    if (!command) throw new HttpError(404, 'not_found', 'Không tìm thấy lệnh claude');
 
-    const ptyProcess = pty.spawn(agyBin, [], {
+    const ptyProcess = pty.spawn(command, [], {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
@@ -85,6 +90,12 @@ export class PtyManager {
 
     this.sessions.set(sessionId, session);
     this.profileToSession.set(profileName, sessionId);
+
+    if (profile.engine === 'claude') {
+      setTimeout(() => {
+        try { ptyProcess.write('/login\r'); } catch { /* process may have exited */ }
+      }, 250);
+    }
 
     return sessionId;
   }
