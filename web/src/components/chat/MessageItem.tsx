@@ -128,7 +128,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       </div>
 
       {/* Message Content */}
-      <div className="flex-1 min-w-0 space-y-2">
+      <div
+        className="flex-1 min-w-0 space-y-2"
+        aria-live={isStreaming ? 'polite' : undefined}
+      >
         <div className="text-sm text-[var(--text-primary)] leading-relaxed space-y-2 markdown-body overflow-hidden break-words">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

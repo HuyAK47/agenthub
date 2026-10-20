@@ -292,7 +292,7 @@ export const ChatPage: React.FC = () => {
 
   // Mutations
   const createSessionMutation = useMutation({
-    mutationFn: createChatSession,
+    mutationFn: (data: any) => createChatSession(data),
     onSuccess: (newSession) => {
       queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) => [
         newSession,
@@ -321,7 +321,7 @@ export const ChatPage: React.FC = () => {
   });
 
   const deleteSessionMutation = useMutation({
-    mutationFn: deleteChatSession,
+    mutationFn: (id: string) => deleteChatSession(id),
     onSuccess: (_, deletedId) => {
       queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) =>
         prev.filter((s) => s.id !== deletedId),
@@ -374,7 +374,7 @@ export const ChatPage: React.FC = () => {
   });
 
   const cancelMutation = useMutation({
-    mutationFn: stopChatSession,
+    mutationFn: (id: string) => stopChatSession(id),
     onSuccess: () => {
       setIsLocalBusy(false);
       setStreamingMessageId(null);
