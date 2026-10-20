@@ -8,7 +8,7 @@ import { WebSocket } from 'ws';
 import { AppService, HttpError } from '../services/index.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { CodexEngine } from '../engines/index.js';
-import { isProfileLoggedIn } from '../profiles/index.js';
+import { accountKey, isProfileLoggedIn } from '../profiles/index.js';
 
 interface PtySession {
   id: string;
@@ -206,7 +206,7 @@ export class PtyManager {
 
     const profile = this.service.profileRepo.get(profileName);
     const dupes = this.service.coreProfileService.getDuplicateEmails();
-    const duplicateWarning = profile?.email ? dupes.has(profile.email) : false;
+    const duplicateWarning = profile ? dupes.has(accountKey(profile) || '') : false;
 
     this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
       name: profileName,

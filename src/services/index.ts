@@ -19,7 +19,7 @@ import {
   TaskRow,
   QuotaMarkRow,
 } from '../db/index.js';
-import { ProfileService as CoreProfileService, isProfileLoggedIn } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -644,7 +644,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        duplicateWarning: p.email ? dupes.has(p.email) : false,
+        duplicateWarning: dupes.has(accountKey(p) || ''),
       };
     });
 
@@ -830,7 +830,7 @@ export class AppService {
           return email;
         }
         const dupes = this.coreProfileService.getDuplicateEmails();
-        const duplicateWarning = dupes.has(email);
+        const duplicateWarning = dupes.has(`${profile.engine}:${email}`);
         this.scheduler.getEventBus().emit('profile.updated', undefined, {
           name: profile.name,
           email,
@@ -885,7 +885,7 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        duplicateWarning: p.email ? dupes.has(p.email) : false,
+        duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
