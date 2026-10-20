@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -178,6 +179,7 @@ export const RetryTaskSchema = z.object({
 
 export const CreateProfileSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+  engine: z.enum(['agy', 'claude']).default('agy'),
 });
 
 export const UpdateProfileSchema = z.object({
@@ -797,7 +799,16 @@ export class AppService {
     } catch {
       return null;
     }
-    if (!profile || profile.engine !== 'agy') return null;
+    if (!profile) return null;
+
+    if (profile.engine === 'claude') {
+      const account = this.coreProfileService.readClaudeAccount(profile.home || os.homedir());
+      if (account?.email && account.email !== profile.email) {
+        this.profileRepo.upsert({ ...profile, email: account.email });
+        this.scheduler.getEventBus().emit('profile.updated', undefined, { name: profile.name, email: account.email });
+      }
+      return account?.email || profile.email || null;
+    }
 
     const logDir =
       profile.name === 'chinh'
@@ -837,6 +848,13 @@ export class AppService {
     const profiles = this.profileRepo.getAll();
     const now = Date.now();
     for (const p of profiles) {
+      if (p.engine === 'claude') {
+        const account = this.coreProfileService.readClaudeAccount(p.home || os.homedir());
+        if (account?.email && account.email !== p.email) {
+          this.profileRepo.upsert({ ...p, email: account.email });
+          p.email = account.email;
+        }
+      }
       if (p.engine === 'agy' && !p.email && this.isProfileLoggedIn(p)) {
         const lastCheck = this.emailCheckCache.get(p.name) || 0;
         if (now - lastCheck > 30_000) {
@@ -854,6 +872,7 @@ export class AppService {
     const runningMap = this.scheduler.getRunning();
 
     return profiles.map((p) => {
+      const claudeAccount = p.engine === 'claude' ? this.coreProfileService.readClaudeAccount(p.home || os.homedir()) : null;
       const marks = quotaMarks.filter((m) => m.profileName === p.name);
       const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === p.name);
       const slots = this.lockService.getSlotsSync(p);
@@ -866,6 +885,7 @@ export class AppService {
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
         duplicateWarning: p.email ? dupes.has(p.email) : false,
+        ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
   }
@@ -876,11 +896,26 @@ export class AppService {
       throw new HttpError(409, 'conflict', `Hồ sơ "${parsed.name}" đã tồn tại`);
     }
 
-    this.coreProfileService.createProfile(parsed.name);
+    this.coreProfileService.createProfile(parsed.name, parsed.engine);
     this.scheduler.getEventBus().emit('profile.created', undefined, { name: parsed.name });
     this.scheduler.wakeWaitingQuotaTasks('profile_created');
 
     return apiProfile(this.profileRepo.get(parsed.name)!);
+  }
+
+  deleteProfile(name: string): { ok: boolean } {
+    const profile = this.profileRepo.get(name);
+    if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    if (profile.engine !== 'claude' || profile.kind === 'system') {
+      throw new HttpError(400, 'bad_request', 'Chỉ có thể xóa hồ sơ Claude riêng');
+    }
+    try {
+      this.coreProfileService.deleteProfile(name);
+    } catch (error) {
+      throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+    }
+    this.scheduler.getEventBus().emit('profile.deleted', undefined, { name });
+    return { ok: true };
   }
 
   startProfileCheck(name: string): { started: true } {

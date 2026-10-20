@@ -16,6 +16,7 @@ import { cmdBrain } from './brain.js';
 import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
+import { findClaudeBin } from './chat/claude.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -460,6 +461,24 @@ async function cmdProfile(
   ctx.profileService.registerAll();
 
   switch (sub) {
+    case 'add': {
+      const name = extraArgs[0];
+      const engineArg = extraArgs.find((arg) => arg.startsWith('--engine='))?.split('=')[1]
+        || (extraArgs.includes('--engine') ? extraArgs[extraArgs.indexOf('--engine') + 1] : 'agy');
+      if (!name || (engineArg !== 'agy' && engineArg !== 'claude')) {
+        console.error('Cách dùng: agenthub profile add <name> --engine claude|agy');
+        process.exitCode = 1;
+        break;
+      }
+      if (ctx.profileRepo.get(name)) {
+        console.error(`Hồ sơ "${name}" đã tồn tại`);
+        process.exitCode = 1;
+        break;
+      }
+      ctx.profileService.createProfile(name, engineArg);
+      console.log(`✓ Đã tạo hồ sơ ${engineArg}: ${name}`);
+      break;
+    }
     case 'list': {
       const profiles = ctx.profileRepo.getAll();
       const quotaMarks = ctx.quotaMarkRepo.getActive();
@@ -530,11 +549,19 @@ async function cmdProfile(
         profile = ctx.profileRepo.get(name)!;
       }
 
-      // Run agy interactively with profile's environment
-      const agyPath = path.join(os.homedir(), '.gemini', 'bin', 'agy');
+      const executable = profile.engine === 'claude'
+        ? findClaudeBin(config.chat.claudeBin)
+        : (process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
+      if (!executable) {
+        console.error(`Không tìm thấy lệnh ${profile.engine}`);
+        process.exitCode = 1;
+        break;
+      }
       const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 
-      if (profile.kind === 'isolated' && profile.home) {
+      if (profile.engine === 'claude' && profile.kind !== 'system' && profile.home) {
+        env.CLAUDE_CONFIG_DIR = profile.home;
+      } else if (profile.kind === 'isolated' && profile.home) {
         env.HOME = profile.home;
         env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
       }
@@ -543,22 +570,27 @@ async function cmdProfile(
       console.log('Chọn "Sử dụng tài khoản khác" nếu muốn dùng tài khoản Google khác.');
       console.log('Sau khi đăng nhập xong, gõ /exit hoặc Ctrl+C để thoát.\n');
 
-      spawnSync(agyPath, [], {
+      const child = spawnSync(executable, [], {
         env,
-        stdio: 'inherit',
+        stdio: profile.engine === 'claude' ? ['pipe', 'inherit', 'inherit'] : 'inherit',
+        input: profile.engine === 'claude' ? '/login\n' : undefined,
       });
+      if (profile.engine === 'claude' && child.error) {
+        console.error(`Không thể chạy claude: ${child.error.message}`);
+        process.exitCode = 1;
+      }
 
       // Re-read email
-      const logDir = path.join(
-        profile.home || os.homedir(),
-        '.gemini',
-        'antigravity-cli',
-        'log',
-      );
-      const email = ctx.profileService.readEmailFromLog(logDir);
+      const claudeAccount = profile.engine === 'claude'
+        ? ctx.profileService.readClaudeAccount(profile.home || os.homedir())
+        : null;
+      const email = profile.engine === 'claude'
+        ? claudeAccount?.email
+        : ctx.profileService.readEmailFromLog(path.join(profile.home || os.homedir(), '.gemini', 'antigravity-cli', 'log'));
       if (email) {
         ctx.profileRepo.upsert({ ...profile, email });
         console.log(`\n✓ Đã đăng nhập: ${email}`);
+        if (claudeAccount?.plan) console.log(`  Gói: ${claudeAccount.plan}`);
       } else {
         console.log('\n⚠ Không tìm thấy email trong log.');
       }

@@ -54,6 +54,7 @@ export interface QueuedTurn {
   mode: 'safe' | 'full';
   claudeSessionId: string | null;
   model: string;
+  profileName: string | null;
 }
 
 export interface RunningTurn {
@@ -77,6 +78,7 @@ interface PersistentProcess {
   idleTimer?: NodeJS.Timeout;
   lastUsedAt: number;
   model: string;
+  profileName: string | null;
   stderrOutput: string;
   lastAssistantUsage?: AssistantUsage;
 }
@@ -185,6 +187,7 @@ export class ChatService {
     title: string | null;
     mode: 'safe' | 'full';
     model: string;
+    profileName: string | null;
     busy: number;
     state: ChatSessionRow['state'];
     pinned: number;
@@ -222,6 +225,7 @@ export class ChatService {
         title: string | null;
         mode: 'safe' | 'full';
         model: string;
+        profileName: string | null;
         busy: number;
         state: ChatSessionRow['state'];
         pinned: number;
@@ -244,6 +248,7 @@ export class ChatService {
         title: s.title,
         mode: s.mode,
         model: s.model,
+        profileName: s.profileName,
         busy: s.busy,
         state: s.state || 'idle',
         pinned: s.pinned ?? 0,
@@ -272,6 +277,7 @@ export class ChatService {
     title?: string | null;
     mode?: 'safe' | 'full';
     model?: string;
+    profileName?: string | null;
   }): ChatSessionRow {
     const mode = body.mode || 'safe';
     if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
@@ -292,9 +298,14 @@ export class ChatService {
       mode,
       model,
       busy: 0,
+      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
     });
 
-    return this.chatSessionRepo.get(id)!;
+    const session = this.chatSessionRepo.get(id)!;
+    if (body.profileName && session.profileName && this.profileRepo && !this.profileRepo.get(session.profileName)) {
+      throw new HttpError(400, 'bad_request', `Hồ sơ Claude "${session.profileName}" không tồn tại`);
+    }
+    return session;
   }
 
   updateSession(
@@ -506,6 +517,7 @@ export class ChatService {
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
       model: session.model,
+      profileName: session.profileName,
     });
 
     return { userMessageId, assistantMessageId };
@@ -624,6 +636,7 @@ export class ChatService {
     const supportsPartial = checkClaudePartialSupport(claudeBin);
 
     const session = this.chatSessionRepo.get(turn.sessionId);
+    const profile = turn.profileName && this.profileRepo ? this.profileRepo.get(turn.profileName) : undefined;
     const args = buildClaudeArgs({
       text: turn.text,
       claudeSessionId: turn.claudeSessionId,
@@ -638,7 +651,7 @@ export class ChatService {
 
     let child: ChildProcess;
     try {
-      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch });
+      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
     } catch (err: unknown) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
       this.setSessionState(turn.sessionId, 'error');
@@ -920,6 +933,7 @@ export class ChatService {
     }
     let cwd = os.homedir();
     if (session.projectId) cwd = this.projectRepo.get(session.projectId)?.path || cwd;
+    const profile = session.profileName && this.profileRepo ? this.profileRepo.get(session.profileName) : undefined;
     const proc = spawnClaude(claudeBin, buildClaudeArgs({
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
@@ -928,8 +942,8 @@ export class ChatService {
       persistent: true,
       model: session.model,
       hubSnapshot: this.hubSnapshot(session, (this.snapshotAt.get(session.id) || 0) > 0 && Date.now() - (this.snapshotAt.get(session.id) || 0) > 10 * 60 * 1000),
-    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch });
-    const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, stderrOutput: '' };
+    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined });
+    const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, profileName: session.profileName, stderrOutput: '' };
     this.persistentProcesses.set(session.id, state);
     proc.stdout?.on('data', (chunk: Buffer) => this.handlePersistentOutput(state, chunk));
     proc.stderr?.on('data', (chunk: Buffer) => { state.stderrOutput += chunk.toString('utf8'); });
@@ -1041,7 +1055,7 @@ export class ChatService {
     if (!running) return;
     running.cancelled = true;
     if (proc.child.pid) killProcessGroup(proc.child.pid);
-    this.finishPersistentError(proc, { sessionId: proc.sessionId, messageId: running.messageId, text: '', projectId: null, mode: 'safe', claudeSessionId: null, model: proc.model }, 'Lượt chat bị quá thời gian (15 phút)');
+    this.finishPersistentError(proc, { sessionId: proc.sessionId, messageId: running.messageId, text: '', projectId: null, mode: 'safe', claudeSessionId: null, model: proc.model, profileName: proc.profileName }, 'Lượt chat bị quá thời gian (15 phút)');
   }
 
   private armIdleTimer(proc: PersistentProcess): void {
@@ -1172,6 +1186,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
         title?: string;
         mode?: 'safe' | 'full';
         model?: string;
+        profileName?: string | null;
       },
     );
     return reply.status(201).send(session);
