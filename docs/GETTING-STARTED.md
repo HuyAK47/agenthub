@@ -54,13 +54,15 @@ agenthub open                     # mở http://127.0.0.1:7700/#token=...
 
 ## 4. Kết nối tài khoản worker
 
-```bash
-agenthub profile list
-agenthub profile login <tên>      # mở terminal đăng nhập tài khoản agy/codex
-agenthub profile check            # kiểm tra quota từng tài khoản
-```
+Mở **Tài khoản (Profiles)**, bấm **Thêm tài khoản**, chọn nhà cung cấp và nhập tên. Dashboard mở trình hướng dẫn cạnh terminal; mỗi bước sẽ được đánh dấu theo output terminal.
 
-Trang **Profiles** trên dashboard hiển thị % quota còn lại theo cửa sổ 5 giờ và theo tuần, cùng bảng mức dùng theo ngày. Hub tự ưu tiên tài khoản đang rảnh và còn nhiều quota.
+- **Antigravity (Gemini):** Hub chọn `Google OAuth` trong menu `agy` (nếu menu còn hiện, bấm Enter). Bấm **Mở trang đăng nhập Google**, đăng nhập đúng tài khoản muốn thêm. Khi Google chuyển tới `antigravity.google`, copy mã xác thực, dán vào ô mã trên dashboard và bấm **Gửi**. Chờ thông báo đăng nhập thành công; Hub tự đọc email. Mã chỉ có hiệu lực khoảng 60 giây, nên bấm **Đăng nhập lại** nếu hết hạn. Dùng tài khoản Google khác các hồ sơ hiện có để có quota riêng.
+- **Codex (OpenAI):** Hub chạy `codex login --device-auth`. Mở link, đăng nhập ChatGPT, copy mã thiết bị hiển thị trên dashboard và dán vào ô mã; chờ xác nhận.
+- **Claude:** Hub gửi `/login`. Chọn loại gói Claude, mở link, đăng nhập, copy mã rồi dán vào ô mã trên dashboard.
+
+Trạng thái hồ sơ gồm **Đã đăng nhập**, **Chưa đăng nhập**, **Cần xác minh** và **Lỗi**. Thẻ cũng hiển thị quota 5 giờ/tuần, task đang chạy, cảnh báo trùng email và menu **Kiểm tra**, **Sửa**, **Đổi tên**, **Xoá**. Xoá có thể giữ lại hoặc xoá cả thư mục dữ liệu đăng nhập.
+
+Nếu không thấy link, kiểm tra terminal đầy đủ và dùng **Kết nối lại**. Nếu mã hết hạn, bấm **Đăng nhập lại**; nếu tài khoản cần xác minh, mở link xác minh trên thẻ rồi bấm **Kiểm tra**. Khi thấy cảnh báo trùng email, đăng nhập lại bằng tài khoản Google khác.
 
 ## 5. Đăng ký dự án
 
