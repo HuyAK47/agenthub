@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc && cp src/protocol.md dist/protocol.md",
     "build:web": "npm --prefix web run build",
+    "package": "node scripts/package.mjs",
     "check:migrate": "node scripts/check-migrations-live.mjs",
     "dev": "tsx --watch src/cli.ts",
     "dev:web": "npm --prefix web run dev",

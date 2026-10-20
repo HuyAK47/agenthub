@@ -153,6 +153,23 @@ agenthub open
 | **Machine Safety & Throttling** | Rare host resource awareness; can exhaust memory during unmonitored compilation. | Built-in Load Guard, Disk Guard, Orphan Process Reaper, and `nice`/`ionice` CPU scheduling. |
 | **Supervisory Model** | User acts as the sole prompt engineer and manual tester. | Claude Code acts as tech lead / Brain, delegating tasks and reviewing code diffs. |
 
+### Cài trên máy khác từ GitHub Release
+
+Máy mới chỉ cần Node.js 22, npm, `curl`, `tar` và trình biên dịch native:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh --from-release
+agenthub setup
+```
+
+Dùng `--from-release 0.1.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, chạy `npm ci --omit=dev` để build native module, rồi cập nhật symlink `current` và service. Hai bản cũ được giữ lại để rollback thủ công.
+
+```bash
+agenthub rollback          # chọn bản cũ gần nhất
+agenthub rollback 0.1.0    # chọn rõ phiên bản
+```
+
 ---
 
 ## Visual Tour & Screenshots
