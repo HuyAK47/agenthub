@@ -5,6 +5,7 @@ import {
   CreateProfileInput,
   CreateProjectInput,
   CreateTaskInput,
+  CaptureTaskInput,
   HubStatus,
   LoginSessionResponse,
   Profile,
@@ -296,6 +297,10 @@ export async function createTask(data: CreateTaskInput): Promise<Task> {
   });
 }
 
+export async function createTaskFromError(data: CaptureTaskInput): Promise<Task> {
+  return apiFetch<Task>('/api/tasks/from-error', { method: 'POST', body: JSON.stringify(data) });
+}
+
 export async function getTask(id: string): Promise<TaskDetail> {
   return apiFetch<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`);
 }
@@ -418,4 +423,8 @@ export async function getDailyUsage(days = 7): Promise<DailyUsageReport> {
   if (days != null) query.set('days', String(days));
   const qStr = query.toString();
   return apiFetch<DailyUsageReport>(`/api/usage/daily${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getTelegramPairingCode(refresh = false): Promise<{ code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[] }> {
+  return apiFetch(`/api/telegram/pairing-code${refresh ? '?refresh=1' : ''}`);
 }

@@ -19,6 +19,7 @@ import {
   HardDrive,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
+import { TelegramCard } from '../components/TelegramCard';
 import { ReviewQueue } from '../components/ReviewQueue';
 import { WaitingQueue } from '../components/WaitingQueue';
 import { DailyUsageTable } from '../components/DailyUsageTable';
@@ -241,6 +242,14 @@ export const DashboardPage: React.FC = () => {
 
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} />}
+
+      {/* Telegram Card */}
+      {status.telegram?.enabled && (
+        <TelegramCard
+          hasToken={status.telegram.hasToken}
+          allowedChatsCount={status.telegram.allowedChatsCount}
+        />
+      )}
       {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
         <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
