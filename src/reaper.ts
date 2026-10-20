@@ -11,10 +11,16 @@ export interface ReaperOptions {
 
 export interface ProcessInfo {
   pid: number;
+  ppid: number;
+  parentName: string;
   cwd: string;
   cpu: number;
   rss: number;
   startedAt: number;
+}
+
+export function isOrphanProcess(info: Pick<ProcessInfo, 'ppid' | 'parentName'>): boolean {
+  return info.ppid === 1 || /^(init|systemd)$/i.test(info.parentName);
 }
 
 const DELETED_SUFFIX = ' (deleted)';
@@ -84,6 +90,7 @@ function readProcessInfo(pid: number): ProcessInfo | null {
     const rssMatch = status.match(/^VmRSS:\s+(\d+)\s+kB$/m);
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
     const afterComm = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    const ppid = Number(afterComm[1] || 0);
     const ticks = Number(afterComm[11] || 0) + Number(afterComm[12] || 0);
     const startTicks = Number(afterComm[19] || 0);
     let cpu = 0;
@@ -95,7 +102,9 @@ function readProcessInfo(pid: number): ProcessInfo | null {
       // proc/uptime may be unavailable outside Linux.
     }
     const startedAt = bootTimeMs() + startTicks * 10;
-    return { pid, cwd, cpu, rss: Number(rssMatch?.[1] || 0) * 1024, startedAt };
+    let parentName = '';
+    try { parentName = fs.readFileSync(`/proc/${ppid}/comm`, 'utf8').trim(); } catch { /* exited */ }
+    return { pid, ppid, parentName, cwd, cpu, rss: Number(rssMatch?.[1] || 0) * 1024, startedAt };
   } catch {
     return null;
   }

@@ -976,6 +976,12 @@ export class RunRepo {
       .all() as RunRow[];
   }
 
+  getShutdownRuns(): RunRow[] {
+    return this.db
+      .prepare("SELECT * FROM runs WHERE outcome = 'crashed' AND reason = 'daemon_shutdown'")
+      .all() as RunRow[];
+  }
+
   get(id: string): RunRow | undefined {
     return this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as RunRow | undefined;
   }
