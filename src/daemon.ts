@@ -31,6 +31,7 @@ import { ClaudeFailoverState } from './chat/failover.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { ClaudeSessionScanner } from './claude-sessions/scanner.js';
 import { PermissionBroker } from './chat/permissions.js';
+import { findClaudeBin } from './chat/claude.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -249,6 +250,13 @@ export async function startDaemon(
 
   // Register profiles on startup
   ctx.profileService.registerAll();
+  // Claude /usage opens the real Claude Code CLI; never do that from the test suite.
+  if (!process.env.VITEST) {
+    ctx.usageService.configureClaude({
+      bin: () => findClaudeBin(ctx.config.chat.claudeBin),
+      cwd: path.join(ctx.config.hubHome, 'claude-usage-cwd'),
+    });
+  }
   ctx.usageService.start();
 
   // Start scheduler
