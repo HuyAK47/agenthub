@@ -104,6 +104,16 @@ export type DeepPartialSavingsConfig = {
   claudeOverheadPerTask?: number;
 };
 
+export interface UpdatesConfig {
+  check: boolean;
+  repo?: string;
+}
+
+export const DEFAULT_UPDATES_CONFIG: UpdatesConfig = {
+  check: true,
+  repo: 'ducanh19020217/agenthub',
+};
+
 export interface AgentHubConfig {
   hubHome: string;
   agyHomesDir: string;
@@ -155,6 +165,7 @@ export interface AgentHubConfig {
   stall: StallConfig;
   context: ContextConfig;
   telegram: TelegramConfig;
+  updates: UpdatesConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -187,6 +198,7 @@ export function saveConfig(
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
     context?: Partial<ContextConfig>;
+    updates?: Partial<UpdatesConfig>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -220,6 +232,14 @@ export function saveConfig(
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
     ...(patch.stall ? { stall: { ...((current.stall as Record<string, unknown>) || {}), ...patch.stall } } : {}),
     ...(patch.context ? { context: { ...((current.context as Record<string, unknown>) || {}), ...patch.context } } : {}),
+    ...(patch.updates && typeof patch.updates === 'object'
+      ? {
+          updates: {
+            ...((current.updates as Record<string, unknown>) || {}),
+            ...patch.updates,
+          },
+        }
+      : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
       ? {
           telegram: {
@@ -280,6 +300,7 @@ export function updateConfigInMemory(
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
     context?: Partial<ContextConfig>;
+    updates?: Partial<UpdatesConfig>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -397,6 +418,9 @@ export function updateConfigInMemory(
         ...(patch.telegram.notify || {}),
       },
     };
+  }
+  if (patch.updates) {
+    config.updates = { ...config.updates, ...patch.updates };
   }
 }
 
@@ -546,6 +570,14 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     },
   };
 
+  const rawUpdates = (userConfig.updates as Record<string, unknown>) || {};
+  const updates: UpdatesConfig = {
+    check: rawUpdates.check !== false,
+    repo: typeof rawUpdates.repo === 'string' && rawUpdates.repo.trim()
+      ? rawUpdates.repo.trim()
+      : DEFAULT_UPDATES_CONFIG.repo,
+  };
+
   return {
     hubHome,
     agyHomesDir,
@@ -614,5 +646,6 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       knowledgeFile: context.knowledgeFile,
     },
     telegram,
+    updates,
   };
 }
