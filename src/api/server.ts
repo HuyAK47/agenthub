@@ -213,6 +213,11 @@ export async function createServer(
     return reply.status(201).send(task);
   });
 
+  fastify.post('/api/tasks/from-error', async (req: FastifyRequest, reply: FastifyReply) => {
+    const task = service.captureTask(req.body);
+    return reply.status(201).send(task);
+  });
+
   fastify.get('/api/tasks/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.getTask(id);
