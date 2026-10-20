@@ -326,7 +326,6 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
   UPDATE chat_sessions SET lastMessageAt = (SELECT MAX(createdAt) FROM chat_messages WHERE sessionId = chat_sessions.id);
   `,
-  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
