@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, AgentHubConfig } from './config.js';
 import { createContext, closeContext, startDaemon } from './daemon.js';
 import { runMcpServer } from './mcp/index.js';
-import { getOrCreateToken, getTokenPath } from './auth.js';
+import { getOrCreateToken, getTokenPath, readExistingToken } from './auth.js';
 import { spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -232,6 +232,12 @@ async function main() {
     case 'claude-failover':
       await cmdClaudeFailover(config, args.slice(1));
       break;
+    case 'note':
+      await cmdNote(config, args.slice(1));
+      break;
+    case 'notes':
+      await cmdNotes(config, args.slice(1));
+      break;
 
     default:
       console.log(`AgentHub - Quản lý worker AI
@@ -256,6 +262,8 @@ Cách dùng:
   agenthub savings backfill-lines [--project x] Tính lại số dòng cho các task có nhánh còn tồn tại
   agenthub claude-sessions --summary  Tóm tắt phiên Claude và chi phí 24 giờ qua
   agenthub claude-failover [status|clear] Xem hoặc tắt failover Claude
+  agenthub note "<nội dung>"          Gửi ghi chú từ task đang chạy
+  agenthub notes [--since <id>]       Xem ghi chú của các task đang chạy cùng project
 `);
   }
 }
@@ -941,6 +949,138 @@ export async function cmdSavings(
     process.exitCode = 1;
   } finally {
     closeContext(ctx);
+  }
+}
+
+export async function cmdNote(
+  config: AgentHubConfig,
+  extraArgs: string[],
+): Promise<void> {
+  const content = extraArgs.join(' ').trim();
+  if (!content) {
+    console.error('Cách dùng: agenthub note "<nội dung>"');
+    process.exit(1);
+  }
+
+  const taskId = process.env.AGENTHUB_TASK_ID;
+  if (!taskId) {
+    console.error('Lỗi: Biến môi trường AGENTHUB_TASK_ID không được thiết lập.');
+    process.exit(1);
+  }
+
+  const port = config.port || 7700;
+  const token = readExistingToken(config.tokenPath || getTokenPath());
+  if (!token) {
+    console.error('Lỗi: Không tìm thấy token xác thực.');
+    process.exit(1);
+  }
+
+  const normalizedId = taskId.replace(/\//g, '~');
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/${encodeURIComponent(normalizedId)}/notes`, {
+      method: 'POST',
+      headers: {
+        Host: `127.0.0.1:${port}`,
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ content, kind: 'note' }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`Lỗi từ daemon API (${res.status}): ${err}`);
+      process.exit(1);
+    }
+
+    const data = (await res.json()) as { id: number; content: string; taskId: string };
+    console.log(`✓ Đã thêm ghi chú cho task ${data.taskId} (#${data.id})`);
+  } catch (err) {
+    console.error(`Không thể kết nối tới AgentHub daemon tại http://127.0.0.1:${port}:`, (err as Error).message);
+    process.exit(1);
+  }
+}
+
+export async function cmdNotes(
+  config: AgentHubConfig,
+  extraArgs: string[],
+): Promise<void> {
+  let projectId = getArg(extraArgs, '--project');
+  if (!projectId && process.env.AGENTHUB_TASK_ID) {
+    const taskId = process.env.AGENTHUB_TASK_ID;
+    projectId = taskId.includes('/') ? taskId.split('/')[0] : taskId;
+  }
+
+  if (!projectId) {
+    const ctx = createContext(config);
+    const projects = ctx.projectRepo.getAll();
+    const cwd = process.cwd();
+    const matched = projects.find(
+      (p) => cwd === p.path || cwd.startsWith(p.path + path.sep) || cwd.includes(p.id),
+    );
+    ctx.db.close();
+    if (matched) {
+      projectId = matched.id;
+    }
+  }
+
+  if (!projectId) {
+    console.error('Lỗi: Không xác định được project (AGENTHUB_TASK_ID chưa được thiết lập và không có --project).');
+    process.exit(1);
+  }
+
+  const since = getArg(extraArgs, '--since');
+  const port = config.port || 7700;
+  const token = readExistingToken(config.tokenPath || getTokenPath());
+  if (!token) {
+    console.error('Lỗi: Không tìm thấy token xác thực.');
+    process.exit(1);
+  }
+
+  const queryParams = new URLSearchParams();
+  queryParams.set('runningOnly', 'true');
+  if (since) {
+    queryParams.set('since', since);
+  }
+
+  try {
+    const res = await fetch(
+      `http://127.0.0.1:${port}/api/projects/${encodeURIComponent(projectId)}/notes?${queryParams.toString()}`,
+      {
+        headers: {
+          Host: `127.0.0.1:${port}`,
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`Lỗi từ daemon API (${res.status}): ${err}`);
+      process.exit(1);
+    }
+
+    const notes = (await res.json()) as Array<{
+      id: number;
+      taskId: string;
+      kind: 'note' | 'overlap';
+      content: string;
+      createdAt: string;
+    }>;
+
+    if (notes.length === 0) {
+      console.log('Không có ghi chú nào.');
+      return;
+    }
+
+    console.log(`=== Bảng tin project ${projectId} ===\n`);
+    for (const note of notes) {
+      const tag = note.kind === 'overlap' ? '[TRÙNG FILE] ' : '';
+      console.log(`[#${note.id}] ${note.createdAt} [${note.taskId}] ${tag}${note.content}`);
+    }
+  } catch (err) {
+    console.error(`Không thể kết nối tới AgentHub daemon tại http://127.0.0.1:${port}:`, (err as Error).message);
+    process.exit(1);
   }
 }
 

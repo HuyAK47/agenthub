@@ -79,6 +79,23 @@ describe('Claude session privacy and quota handling', () => {
     expect(isClaudeQuotaLimited(undefined)).toBe(false);
   });
 
+  it('persists rate_limit_info events from stream-json transcripts', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', 'encoded'); fs.mkdirSync(transcriptDir, { recursive: true });
+    const projectDir = path.join(root, 'project'); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
+    fs.writeFileSync(path.join(transcriptDir, 'session.jsonl'), `${JSON.stringify({
+      type: 'rate_limit_info', cwd: projectDir, timestamp: new Date().toISOString(),
+      rate_limit_info: { status: 'allowed_warning', resetsAt: 1_900_000_000, rateLimitType: 'five_hour' },
+    })}\n`);
+    await new ClaudeSessionScanner(db, { dir: path.join(root, 'projects') }).scan();
+    expect(db.prepare('SELECT status,resetsAt,rateLimitType FROM claude_quota WHERE id=1').get()).toEqual({
+      status: 'allowed_warning', resetsAt: 1_900_000_000, rateLimitType: 'five_hour',
+    });
+    db.close();
+  });
+
   it('does not persist an out-of-scope transcript or its title/content', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
     const transcriptDir = path.join(root, 'projects'); fs.mkdirSync(transcriptDir); fs.mkdirSync(path.join(transcriptDir, 'encoded'));

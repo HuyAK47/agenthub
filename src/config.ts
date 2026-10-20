@@ -45,9 +45,42 @@ export interface StallConfig {
   loopThreshold: number;
 }
 
+export interface TelegramNotifyConfig {
+  reviewReady: boolean;
+  failed: boolean;
+  blocked: boolean;
+  quota: boolean;
+  fallback: boolean;
+}
+
+export interface TelegramConfig {
+  enabled: boolean;
+  botTokenFile: string;
+  allowedChatIds: number[];
+  notify: TelegramNotifyConfig;
+}
+
+export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
+  reviewReady: true,
+  failed: true,
+  blocked: true,
+  quota: true,
+  fallback: true,
+};
+
 export const DEFAULT_STALL_CONFIG: StallConfig = {
   noCommitMin: 45,
   loopThreshold: 6,
+};
+
+export interface ContextConfig {
+  overlapCheckSec: number;
+  depsMaxChars: number;
+}
+
+export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
+  overlapCheckSec: 60,
+  depsMaxChars: 16000,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -102,6 +135,8 @@ export interface AgentHubConfig {
   savings: SavingsConfig;
   load: LoadConfig;
   stall: StallConfig;
+  context: ContextConfig;
+  telegram: TelegramConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -131,6 +166,13 @@ export function saveConfig(
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
+    context?: Partial<ContextConfig>;
+    telegram?: Partial<{
+      enabled?: boolean;
+      botTokenFile?: string;
+      allowedChatIds?: number[];
+      notify?: Partial<TelegramNotifyConfig>;
+    }>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -155,6 +197,23 @@ export function saveConfig(
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
     ...(patch.stall ? { stall: { ...((current.stall as Record<string, unknown>) || {}), ...patch.stall } } : {}),
+    ...(patch.context ? { context: { ...((current.context as Record<string, unknown>) || {}), ...patch.context } } : {}),
+    ...(patch.telegram && typeof patch.telegram === 'object'
+      ? {
+          telegram: {
+            ...((current.telegram as Record<string, unknown>) || {}),
+            ...patch.telegram,
+            ...(patch.telegram.notify && typeof patch.telegram.notify === 'object'
+              ? {
+                  notify: {
+                    ...(((current.telegram as Record<string, unknown>)?.notify as Record<string, unknown>) || {}),
+                    ...patch.telegram.notify,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(patch.savings
       ? {
           savings: {
@@ -196,6 +255,13 @@ export function updateConfigInMemory(
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
+    context?: Partial<ContextConfig>;
+    telegram?: Partial<{
+      enabled?: boolean;
+      botTokenFile?: string;
+      allowedChatIds?: number[];
+      notify?: Partial<TelegramNotifyConfig>;
+    }>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -273,6 +339,28 @@ export function updateConfigInMemory(
   }
   if (patch.load) config.load = { ...config.load, ...patch.load };
   if (patch.stall) config.stall = { ...config.stall, ...patch.stall };
+  if (patch.context) {
+    if (patch.context.overlapCheckSec !== undefined) {
+      config.context.overlapCheckSec = patch.context.overlapCheckSec;
+    }
+    if (patch.context.depsMaxChars !== undefined) {
+      config.context.depsMaxChars = patch.context.depsMaxChars;
+    }
+  }
+  if (patch.telegram) {
+    config.telegram = {
+      ...config.telegram,
+      ...patch.telegram,
+      allowedChatIds:
+        patch.telegram.allowedChatIds !== undefined
+          ? [...patch.telegram.allowedChatIds]
+          : config.telegram.allowedChatIds,
+      notify: {
+        ...config.telegram.notify,
+        ...(patch.telegram.notify || {}),
+      },
+    };
+  }
 }
 
 export function loadConfig(overrideHome?: string): AgentHubConfig {
@@ -381,6 +469,34 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     loopThreshold: typeof rawStall.loopThreshold === 'number' ? rawStall.loopThreshold : DEFAULT_STALL_CONFIG.loopThreshold,
   };
 
+  const rawContext = (userConfig.context as Record<string, unknown>) || {};
+  const context = {
+    depsMaxChars: typeof rawContext.depsMaxChars === 'number' && rawContext.depsMaxChars > 0
+      ? Math.floor(rawContext.depsMaxChars)
+      : 16000,
+  };
+
+  const defaultBotTokenFile = path.join(hubHome, 'secrets', 'telegram.token');
+  const rawTelegram = (userConfig.telegram as Record<string, unknown>) || {};
+  const rawTelegramNotify = (rawTelegram.notify as Record<string, unknown>) || {};
+  const telegram: TelegramConfig = {
+    enabled: rawTelegram.enabled === true,
+    botTokenFile:
+      typeof rawTelegram.botTokenFile === 'string' && rawTelegram.botTokenFile.trim()
+        ? rawTelegram.botTokenFile.trim()
+        : defaultBotTokenFile,
+    allowedChatIds: Array.isArray(rawTelegram.allowedChatIds)
+      ? rawTelegram.allowedChatIds.filter((id): id is number => typeof id === 'number')
+      : [],
+    notify: {
+      reviewReady: rawTelegramNotify.reviewReady !== false,
+      failed: rawTelegramNotify.failed !== false,
+      blocked: rawTelegramNotify.blocked !== false,
+      quota: rawTelegramNotify.quota !== false,
+      fallback: rawTelegramNotify.fallback !== false,
+    },
+  };
+
   return {
     hubHome,
     agyHomesDir,
@@ -437,5 +553,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
     },
     stall,
+    context: {
+      overlapCheckSec: typeof rawContext.overlapCheckSec === 'number'
+        ? rawContext.overlapCheckSec
+        : DEFAULT_CONTEXT_CONFIG.overlapCheckSec,
+      depsMaxChars: context.depsMaxChars,
+    },
+    telegram,
   };
 }

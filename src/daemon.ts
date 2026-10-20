@@ -15,6 +15,7 @@ import {
   ChatMessageRepo,
   ChatPermissionRepo,
   RunMetricsRepo,
+  TaskNoteRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
@@ -30,7 +31,10 @@ import { SavingsService } from './savings.js';
 import { ClaudeFailoverState } from './chat/failover.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { ClaudeSessionScanner } from './claude-sessions/scanner.js';
+import { BulletinService } from './bulletin.js';
+import { TelegramBotService } from './telegram.js';
 import { PermissionBroker } from './chat/permissions.js';
+import { findClaudeBin } from './chat/claude.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -43,6 +47,7 @@ export interface DaemonContext {
   runMetricsRepo: RunMetricsRepo;
   reviewRepo: ReviewRepo;
   eventRepo: EventRepo;
+  taskNoteRepo: TaskNoteRepo;
   chatSessionRepo: ChatSessionRepo;
   chatMessageRepo: ChatMessageRepo;
   chatPermissionRepo: ChatPermissionRepo;
@@ -55,10 +60,12 @@ export interface DaemonContext {
   brainRepo: BrainRepo;
   brainService: BrainService;
   notifier: NotificationService;
+  bulletinService: BulletinService;
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
   usageRepo: QuotaUsageRepo;
+  telegramService: TelegramBotService;
 }
 
 export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>): DaemonContext {
@@ -71,6 +78,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const runMetricsRepo = new RunMetricsRepo(db);
   const reviewRepo = new ReviewRepo(db);
   const eventRepo = new EventRepo(db);
+  const taskNoteRepo = new TaskNoteRepo(db);
   const usageRepo = new QuotaUsageRepo(db);
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
@@ -154,6 +162,15 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     { failoverState },
   );
 
+  const bulletinService = new BulletinService({
+    config,
+    taskRepo,
+    projectRepo,
+    taskNoteRepo,
+    eventBus: scheduler.getEventBus(),
+  });
+  scheduler.configureBulletinService(bulletinService);
+
   const service = new AppService(
     config,
     projectRepo,
@@ -172,6 +189,8 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    taskNoteRepo,
+    bulletinService,
   );
 
   const notifier = new NotificationService({
@@ -180,6 +199,16 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     taskRepo,
     quotaMarkRepo,
   });
+
+  const telegramService = new TelegramBotService({
+    config,
+    service,
+    eventBus: scheduler.getEventBus(),
+    taskRepo,
+    projectRepo,
+    quotaMarkRepo,
+  });
+  service.setTelegramBotService(telegramService);
 
   return {
     config,
@@ -192,6 +221,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     runMetricsRepo,
     reviewRepo,
     eventRepo,
+    taskNoteRepo,
     chatSessionRepo,
     chatMessageRepo,
     chatPermissionRepo,
@@ -204,16 +234,23 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     brainRepo,
     brainService,
     notifier,
+    bulletinService,
     savingsService,
     claudeSessionRepo,
     claudeScanner,
     usageRepo,
+    telegramService,
   };
 }
 
 export function closeContext(ctx: DaemonContext): void {
   try {
     ctx.notifier?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.bulletinService?.stop();
   } catch {
     // ignore
   }
@@ -229,6 +266,11 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.claudeScanner?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    void ctx.telegramService?.stop();
   } catch {
     // ignore
   }
@@ -251,6 +293,13 @@ export async function startDaemon(
 
   // Register profiles on startup
   ctx.profileService.registerAll();
+  // Claude /usage opens the real Claude Code CLI; never do that from the test suite.
+  if (!process.env.VITEST) {
+    ctx.usageService.configureClaude({
+      bin: () => findClaudeBin(ctx.config.chat.claudeBin),
+      cwd: path.join(ctx.config.hubHome, 'claude-usage-cwd'),
+    });
+  }
   ctx.usageService.start();
 
   // Start scheduler
@@ -259,6 +308,12 @@ export async function startDaemon(
   // Start notification service and claude transcript scanner
   ctx.notifier.start();
   ctx.claudeScanner.start();
+  ctx.bulletinService.start();
+
+  // Start Telegram bot if enabled
+  if (config.telegram?.enabled) {
+    ctx.telegramService.start();
+  }
 
   // Start Fastify HTTP server with security and API endpoints
   const fastify = await createServer(ctx.service, config);

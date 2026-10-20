@@ -536,6 +536,11 @@ export const ProfilesPage: React.FC = () => {
                             onRefresh={() => usageMutation.mutate(profile.name)}
                             refreshing={usageMutation.isPending && usageMutation.variables === profile.name}
                           />
+                          {profile.engine === 'claude' && profile.claudeTokens && (
+                            <div className="text-xs text-[var(--t-text-3)]" data-testid={`claude-tokens-${profile.name}`}>
+                              Token hôm nay: {Math.round(profile.claudeTokens.today).toLocaleString()} · tuần: {Math.round(profile.claudeTokens.week).toLocaleString()}
+                            </div>
+                          )}
                         </div>
                       </td>
 
@@ -600,22 +605,41 @@ export const ProfilesPage: React.FC = () => {
                           );
                         })()}
 
-                        {/* Relogin / Login button */}
+                        {/* Login (not logged in) or re-login (already logged in, secondary style) */}
                         {canLogin && (
                           <button
                             type="button"
                             onClick={() => handleManualLogin(profile.name)}
-                            className="px-2.5 py-1 text-xs font-medium rounded bg-[var(--t-accent-bg)] text-[var(--t-accent)] border border-[var(--t-accent)] hover:bg-[var(--t-accent-bg)] cursor-pointer"
+                            title={isLoggedIn && !isNotLoggedIn ? t('extra.reLoginTip') : undefined}
+                            className={isLoggedIn && !isNotLoggedIn && !needsReLogin
+                              ? 'px-2.5 py-1 text-xs font-medium rounded text-[var(--t-text-3)] border border-[var(--t-border)] hover:text-[var(--t-text)] cursor-pointer'
+                              : 'px-2.5 py-1 text-xs font-medium rounded bg-[var(--t-accent-bg)] text-[var(--t-accent)] border border-[var(--t-accent)] hover:bg-[var(--t-accent-bg)] cursor-pointer'}
                           >
-                            {t('profiles.loginBtn')}
+                            {isLoggedIn && !isNotLoggedIn && !needsReLogin ? t('extra.reLogin') : t('profiles.loginBtn')}
                           </button>
                         )}
-                        {profile.engine === 'claude' && profile.kind === 'isolated' && (
-                          <button type="button" onClick={async () => {
-                            if (!window.confirm(`Xóa hồ sơ Claude ${profile.name}?`)) return;
-                            await deleteProfile(profile.name);
-                            queryClient.invalidateQueries({ queryKey: ['profiles'] });
-                          }} className="px-2.5 py-1 text-xs font-medium rounded text-[var(--t-crit)] border border-[var(--t-crit)] cursor-pointer">Đăng xuất</button>
+                        {profile.kind !== 'system' && (
+                          <button
+                            type="button"
+                            data-testid={`delete-profile-${profile.name}`}
+                            disabled={isBusy}
+                            title={isBusy ? t('extra.deleteBusyTip') : t('extra.deleteProfileTip')}
+                            onClick={async () => {
+                              const what = profile.engine === 'claude' && profile.kind === 'isolated'
+                                ? t('extra.deleteClaudeNote')
+                                : t('extra.deleteSoftNote');
+                              if (!window.confirm(`${t('extra.deleteConfirm', { name: profile.name })}\n\n${what}`)) return;
+                              try {
+                                await deleteProfile(profile.name);
+                              } catch (err: any) {
+                                alert(err?.message || t('extra.deleteFailed'));
+                              }
+                              queryClient.invalidateQueries({ queryKey: ['profiles'] });
+                            }}
+                            className="px-2.5 py-1 text-xs font-medium rounded text-[var(--t-crit)] border border-[var(--t-crit)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {t('extra.deleteProfile')}
+                          </button>
                         )}
                       </td>
                     </tr>

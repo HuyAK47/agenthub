@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import {
   cancelTask,
+  createTaskFromError,
   deleteWorktree,
   getTask,
   getTasks,
@@ -15,6 +16,8 @@ import {
   updateTask,
   rerunChecks,
   getStatus,
+  getProjectNotes,
+  createTaskNote,
 } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { subscribeToRunOutput } from '../api/sse';
@@ -42,6 +45,7 @@ import {
   Plus,
   X,
   Edit3,
+  Bell,
 } from 'lucide-react';
 
 const VALID_MODELS = [
@@ -60,8 +64,9 @@ export const TaskDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Active Tab: 'log' | 'body' | 'runs' | 'report'
-  const [activeTab, setActiveTab] = useState<'log' | 'body' | 'runs' | 'report'>('log');
+  // Active Tab: 'log' | 'body' | 'runs' | 'report' | 'bulletin'
+  const [activeTab, setActiveTab] = useState<'log' | 'body' | 'runs' | 'report' | 'bulletin'>('log');
+  const [newNoteText, setNewNoteText] = useState('');
 
   // Modals
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -70,6 +75,9 @@ export const TaskDetailPage: React.FC = () => {
   const [showChangesModal, setShowChangesModal] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [capture, setCapture] = useState<{ excerpt: string; checkName?: string } | null>(null);
+  const [captureTitle, setCaptureTitle] = useState('');
+  const [captureSlug, setCaptureSlug] = useState('');
 
   // Edit Task Modal
   const [showEditModal, setShowEditModal] = useState(false);
@@ -96,6 +104,21 @@ export const TaskDetailPage: React.FC = () => {
     queryFn: getStatus,
     enabled: task?.status === 'waiting_quota' && task?.waitReason === 'disk',
     refetchInterval: 10_000,
+  });
+
+  const { data: projectNotes = [], refetch: refetchNotes } = useQuery({
+    queryKey: ['projectNotes', task?.projectId],
+    queryFn: () => (task?.projectId ? getProjectNotes(task.projectId) : Promise.resolve([])),
+    enabled: Boolean(task?.projectId),
+    refetchInterval: 5000,
+  });
+
+  const sendNoteMutation = useMutation({
+    mutationFn: (content: string) => createTaskNote(task!.id, { content }),
+    onSuccess: () => {
+      setNewNoteText('');
+      refetchNotes();
+    },
   });
 
   // Fetch initial log
@@ -208,6 +231,18 @@ export const TaskDetailPage: React.FC = () => {
     mutationFn: () => rerunChecks(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['task', id] }),
   });
+
+  const captureMutation = useMutation({
+    mutationFn: () => createTaskFromError({ sourceTaskId: task?.id || id, excerpt: capture?.excerpt || '', checkName: capture?.checkName, slug: captureSlug, title: captureTitle, level: 'easy' }),
+    onSuccess: (created) => { setCapture(null); queryClient.invalidateQueries({ queryKey: ['tasks'] }); navigate(`/tasks/${encodeURIComponent(created.id.replace('/', '~'))}`); },
+  });
+
+  const openCapture = (excerpt: string, checkName?: string) => {
+    const first = excerpt.split(/\r?\n/).find((line) => line.trim())?.trim() || 'fix-error';
+    setCapture({ excerpt, checkName });
+    setCaptureTitle(`${checkName || 'Lỗi'}: ${first.slice(0, 80)}`);
+    setCaptureSlug(`${task?.slug || 'task'}-fix-${Date.now().toString(36)}`.replace(/[^a-zA-Z0-9_-]/g, '-'));
+  };
 
   const { data: projectTasks = [] } = useQuery({
     queryKey: ['tasks', { project: task?.projectId }],
@@ -505,7 +540,9 @@ export const TaskDetailPage: React.FC = () => {
         </div>
       </div>
 
-      <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} />
+      <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} onCreateTask={(check) => openCapture(check.outputTail, check.name)} />
+
+      {(task.sourceRef || (task.derivedTasks && task.derivedTasks.length > 0)) && <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 text-sm space-y-2"><h2 className="font-semibold">Liên kết task</h2>{task.sourceRef && <p>Sinh từ: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(task.sourceRef!.taskId.replace('/', '~'))}`)}>{task.sourceRef.taskId}</button></p>}{task.derivedTasks?.map((derived) => <p key={derived.id}>Đã sinh task: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(derived.id.replace('/', '~'))}`)}>{derived.id}</button></p>)}</section>}
 
       {/* Tabs */}
       <div className="flex border-b border-[var(--t-border)] space-x-6 text-sm font-medium">
@@ -560,6 +597,19 @@ export const TaskDetailPage: React.FC = () => {
           <GitCommit className="w-4 h-4" />
           <span>{t('taskDetail.tabReport')}</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('bulletin')}
+          className={`pb-3 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'bulletin'
+              ? 'border-[var(--t-accent)] text-[var(--t-accent)] font-semibold'
+              : 'border-transparent text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+          }`}
+        >
+          <Bell className="w-4 h-4" />
+          <span>{t('taskDetail.tabBulletin')}</span>
+        </button>
       </div>
 
       {/* Tab Contents */}
@@ -573,6 +623,7 @@ export const TaskDetailPage: React.FC = () => {
           >
             {liveLog ? liveLog : <span className="text-[#8b93a7]">{t('taskDetail.noLog')}</span>}
           </div>
+          <button type="button" onClick={() => { const text = window.getSelection()?.toString().trim(); if (text) openCapture(text, 'log'); }} className="mt-2 px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer">{t('extra.captureFromSelection')}</button>
 
           {!autoScroll && (
             <button
@@ -680,6 +731,116 @@ export const TaskDetailPage: React.FC = () => {
               </ul>
             ) : (
               <p className="text-xs text-[var(--t-text-3)] italic">{t('taskDetail.noCommits')}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 5. Bulletin tab */}
+      {activeTab === 'bulletin' && (
+        <div data-testid="task-bulletin-tab" className="space-y-6">
+          {/* Overlaps section */}
+          <div className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-3">
+            <h3 className="text-sm font-semibold text-[var(--t-text)] flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-[var(--t-warn)]" />
+              <span>{t('taskDetail.bulletinOverlapsTitle')}</span>
+            </h3>
+            {projectNotes.filter(
+              (n) =>
+                n.kind === 'overlap' &&
+                (n.taskId === task.id ||
+                  n.content.includes(task.id) ||
+                  n.content.includes(task.slug)),
+            ).length > 0 ? (
+              <div className="space-y-2">
+                {projectNotes
+                  .filter(
+                    (n) =>
+                      n.kind === 'overlap' &&
+                      (n.taskId === task.id ||
+                        n.content.includes(task.id) ||
+                        n.content.includes(task.slug)),
+                  )
+                  .map((ov) => (
+                    <div
+                      key={ov.id}
+                      className="p-3 rounded-lg border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] text-xs flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-2 text-[var(--t-text)]">
+                        <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] border border-[var(--t-border)]">
+                          {ov.taskId}
+                        </span>
+                        <span className="font-medium">{ov.content}</span>
+                      </div>
+                      <span className="text-[var(--t-text-3)] text-[10px] shrink-0 font-mono">
+                        {ov.createdAt}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--t-text-3)] italic">
+                {t('taskDetail.bulletinNoOverlaps')}
+              </p>
+            )}
+          </div>
+
+          {/* Project notes section */}
+          <div className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-4">
+            <h3 className="text-sm font-semibold text-[var(--t-text)] flex items-center gap-2">
+              <FileText className="w-4 h-4 text-[var(--t-accent)]" />
+              <span>{t('taskDetail.bulletinNotesTitle')}</span>
+            </h3>
+
+            {/* Input to send note */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const text = newNoteText.trim();
+                if (!text || sendNoteMutation.isPending) return;
+                sendNoteMutation.mutate(text);
+              }}
+              className="flex gap-2"
+            >
+              <input
+                type="text"
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                placeholder={t('taskDetail.bulletinAddNotePlaceholder')}
+                className="flex-1 px-3 py-2 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-[var(--t-text)] focus:outline-none focus:border-[var(--t-accent)]"
+              />
+              <button
+                type="submit"
+                disabled={!newNoteText.trim() || sendNoteMutation.isPending}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-[var(--t-accent)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {sendNoteMutation.isPending ? t('taskDetail.bulletinSendingBtn') : t('taskDetail.bulletinSendBtn')}
+              </button>
+            </form>
+
+            {projectNotes.filter((n) => n.kind === 'note').length > 0 ? (
+              <div className="space-y-2">
+                {projectNotes
+                  .filter((n) => n.kind === 'note')
+                  .map((note) => (
+                    <div
+                      key={note.id}
+                      className="p-3 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between text-[11px] text-[var(--t-text-3)]">
+                        <span className="font-semibold text-[var(--t-text)]">
+                          {note.taskId}
+                        </span>
+                        <span className="font-mono text-[10px]">{note.createdAt}</span>
+                      </div>
+                      <p className="text-[var(--t-text)]">{note.content}</p>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--t-text-3)] italic">
+                {t('taskDetail.bulletinNoNotes')}
+              </p>
             )}
           </div>
         </div>
@@ -807,6 +968,19 @@ export const TaskDetailPage: React.FC = () => {
       )}
 
       {/* Edit Task Modal */}
+      {capture && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <form onSubmit={(event) => { event.preventDefault(); captureMutation.mutate(); }} className="w-full max-w-2xl bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4">
+            <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
+            <label className="block text-xs font-semibold">Tiêu đề<input value={captureTitle} onChange={(e) => setCaptureTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
+            <label className="block text-xs font-semibold">Slug<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
+            <pre className="max-h-48 overflow-auto rounded-lg bg-[#0b0d12] text-[#e6e8ee] p-3 text-xs whitespace-pre-wrap">{capture.excerpt}</pre>
+            {captureMutation.error && <p className="text-sm text-[var(--t-crit)]">{(captureMutation.error as Error).message}</p>}
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">Hủy</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white cursor-pointer disabled:opacity-50">Tạo task</button></div>
+          </form>
+        </div>
+      )}
+
       {showEditModal && (
         <div data-testid="edit-task-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl max-h-[90vh] overflow-y-auto">

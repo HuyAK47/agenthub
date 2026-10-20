@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans } from '../api/client';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -19,12 +19,26 @@ import {
   HardDrive,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
+import { TelegramCard } from '../components/TelegramCard';
 import { ReviewQueue } from '../components/ReviewQueue';
 import { WaitingQueue } from '../components/WaitingQueue';
 import { DailyUsageTable } from '../components/DailyUsageTable';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { QuotaUsage } from '../components/QuotaUsage';
+import { Profile, QuotaUsageItem } from '../types/api';
+
+function providerUsage(profiles: Profile[], engine: Profile['engine']): QuotaUsageItem[] {
+  const rows = profiles.filter((profile) => profile.engine === engine).flatMap((profile) => profile.usage || []);
+  const best = new Map<string, QuotaUsageItem>();
+  for (const row of rows) {
+    const key = `${row.grp}:${row.window}`;
+    const previous = best.get(key);
+    if (!previous || row.remainingPct > previous.remainingPct) best.set(key, row);
+  }
+  return [...best.values()].sort((a, b) => a.grp.localeCompare(b.grp) || a.window.localeCompare(b.window));
+}
 
 function RunningDuration({ startedAt }: { startedAt: string }) {
   const [elapsed, setElapsed] = useState('');
@@ -65,6 +79,11 @@ export const DashboardPage: React.FC = () => {
     queryKey: ['status'],
     queryFn: getStatus,
     refetchInterval: 5000,
+  });
+  const { data: profiles = [], refetch: refetchProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: getProfiles,
+    refetchInterval: 30_000,
   });
   const { data: claudeQuota } = useQuery({ queryKey: ['claude-quota'], queryFn: getClaudeQuota, refetchInterval: 30_000 });
   const { data: claudeFailover } = useQuery({ queryKey: ['claude-failover'], queryFn: getClaudeFailover, refetchInterval: 5000 });
@@ -241,6 +260,37 @@ export const DashboardPage: React.FC = () => {
 
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} />}
+
+      {/* Telegram Card */}
+      {status.telegram?.enabled && (
+        <TelegramCard
+          hasToken={status.telegram.hasToken}
+          allowedChatsCount={status.telegram.allowedChatsCount}
+        />
+      )}
+      <div data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
+        {([
+          ['agy', 'Antigravity'],
+          ['codex', 'Codex'],
+          ['claude', 'Claude'],
+        ] as const).map(([engine, label]) => {
+          const engineProfiles = profiles.filter((profile) => profile.engine === engine);
+          return (
+            <div key={engine} className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-xs">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-[var(--text-primary)]">Quota {label}</h2>
+                <span className="text-[11px] text-[var(--text-secondary)]">{engineProfiles.length} hồ sơ</span>
+              </div>
+              <QuotaUsage usage={providerUsage(profiles, engine)} onRefresh={() => { void refetchProfiles(); }} />
+              {engine === 'claude' && engineProfiles.some((profile) => profile.claudeTokens) && (
+                <div className="mt-2 text-xs text-[var(--text-secondary)]">
+                  Token hôm nay: {Math.round(engineProfiles.reduce((sum, profile) => sum + (profile.claudeTokens?.today || 0), 0)).toLocaleString()}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
       {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
         <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
@@ -255,6 +305,31 @@ export const DashboardPage: React.FC = () => {
           {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-white text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
         </div>
       </div>}
+
+      {status.overlaps && status.overlaps.length > 0 && (
+        <div
+          data-testid="overlap-warnings"
+          className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4 space-y-2"
+        >
+          <div className="flex items-center gap-2 text-[var(--t-warn)] font-semibold text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{t('dashboard.overlapWarningTitle')}</span>
+          </div>
+          <p className="text-xs text-[var(--text-secondary)]">
+            {t('dashboard.overlapWarningDesc', { count: status.overlaps.length })}
+          </p>
+          <ul className="space-y-1.5 text-xs">
+            {status.overlaps.map((ov) => (
+              <li key={ov.id} className="flex items-center gap-2 text-[var(--text-primary)]">
+                <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-default)]">
+                  {ov.taskId}
+                </span>
+                <span>{ov.content}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
