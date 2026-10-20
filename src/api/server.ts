@@ -214,6 +214,11 @@ export async function createServer(
     return service.listTasks(query);
   });
 
+  fastify.get('/api/tasks/graph', async (req: FastifyRequest) => {
+    const query = req.query as { project?: string; includeDone?: string };
+    return service.getTasksGraph(query);
+  });
+
   fastify.post('/api/tasks', async (req: FastifyRequest, reply: FastifyReply) => {
     const task = service.createTask(req.body);
     return reply.status(201).send(task);

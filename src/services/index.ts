@@ -42,6 +42,7 @@ import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
+import { computeTaskGraph, filterTasksForGraph } from './dag.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1142,6 +1143,12 @@ export class AppService {
         } : null,
       };
     }) as TaskRow[];
+  }
+
+  getTasksGraph(options?: { project?: string; includeDone?: string | boolean }) {
+    const tasks = this.listTasks({ project: options?.project });
+    const filtered = filterTasksForGraph(tasks, options);
+    return computeTaskGraph(filtered);
   }
 
   async getTask(idParam: string) {
