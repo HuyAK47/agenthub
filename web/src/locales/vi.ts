@@ -127,6 +127,7 @@ export const vi = {
     btnCancel: 'Hủy',
     btnRetry: 'Thử lại',
     btnReview: 'Duyệt',
+    btnMerge: 'Duyệt & merge',
     btnRequestChanges: 'Yêu cầu sửa',
     btnDeleteWorktree: 'Xóa worktree',
     noLog: 'Chưa có log từ worker...',

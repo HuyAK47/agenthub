@@ -187,8 +187,8 @@ export const TaskDetailPage: React.FC = () => {
   });
 
   const reviewMutation = useMutation({
-    mutationFn: ({ verdict, fb }: { verdict: 'approved' | 'changes_requested'; fb?: string }) =>
-      reviewTask(id, { verdict, feedback: fb }),
+    mutationFn: ({ verdict, fb, merge }: { verdict: 'approved' | 'changes_requested'; fb?: string; merge?: boolean }) =>
+      reviewTask(id, { verdict, feedback: fb, merge }),
     onSuccess: () => {
       setShowChangesModal(false);
       setFeedback('');
@@ -465,6 +465,15 @@ export const TaskDetailPage: React.FC = () => {
               >
                 <CheckCircle2 className="w-4 h-4" />
               <span>{t('taskDetail.btnReview')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => reviewMutation.mutate({ verdict: 'approved', merge: true })}
+                disabled={reviewMutation.isPending}
+                className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <GitCommit className="w-4 h-4" />
+                <span>{t('taskDetail.btnMerge')}</span>
               </button>
 
               <button

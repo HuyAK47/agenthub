@@ -50,6 +50,13 @@ export interface ProjectHooks {
   onWorktreeRemoved?: string[];
 }
 
+export interface ProjectMerge {
+  enabled: boolean;
+  worktrees: Record<string, string>;
+  checks: string[];
+  timeoutSec: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -59,6 +66,7 @@ export interface Project {
   maxParallel: number;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
+  merge?: ProjectMerge | string | null;
   createdAt?: string;
 }
 
@@ -389,6 +397,7 @@ export interface CreateProjectInput {
   maxParallel?: number;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
+  merge?: ProjectMerge | null;
 }
 
 export interface UpdateProjectInput {
@@ -398,6 +407,7 @@ export interface UpdateProjectInput {
   maxParallel?: number;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
+  merge?: ProjectMerge | null;
 }
 
 export interface CreateProfileInput {
@@ -440,6 +450,7 @@ export interface CreateTaskInput {
 export interface ReviewTaskInput {
   verdict: 'approved' | 'changes_requested';
   feedback?: string;
+  merge?: boolean;
 }
 
 export interface RetryTaskInput {
