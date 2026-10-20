@@ -21,6 +21,7 @@ import {
   SavingsReport,
   DailyUsageReport,
   OrphanProcess,
+  TaskGraphResponse,
 } from '../types/api';
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
@@ -287,6 +288,17 @@ export async function getTasks(params?: {
   if (params?.status) query.set('status', params.status);
   const qStr = query.toString();
   return apiFetch<Task[]>(`/api/tasks${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getTaskGraph(params?: {
+  project?: string;
+  includeDone?: string | boolean;
+}): Promise<TaskGraphResponse> {
+  const query = new URLSearchParams();
+  if (params?.project) query.set('project', params.project);
+  if (params?.includeDone !== undefined) query.set('includeDone', String(params.includeDone));
+  const qStr = query.toString();
+  return apiFetch<TaskGraphResponse>(`/api/tasks/graph${qStr ? `?${qStr}` : ''}`);
 }
 
 export async function createTask(data: CreateTaskInput): Promise<Task> {

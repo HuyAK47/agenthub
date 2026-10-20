@@ -545,3 +545,34 @@ export interface UpdateTaskInput {
   body?: string;
   appendBody?: string;
 }
+
+export interface TaskGraphNode {
+  id: string;
+  projectId: string;
+  slug: string;
+  title: string;
+  status: TaskStatus;
+  level: TaskLevel;
+  modelChain?: string[];
+  currentRun?: {
+    model?: string;
+    profileName?: string;
+  } | null;
+  blockedCount: number;
+  isCritical: boolean;
+  isMaxBlocker: boolean;
+}
+
+export interface TaskGraphEdge {
+  from: string;
+  to: string;
+  isCritical: boolean;
+}
+
+export interface TaskGraphResponse {
+  nodes: TaskGraphNode[];
+  edges: TaskGraphEdge[];
+  criticalPath: string[];
+  maxBlockingTaskId: string | null;
+  maxBlockedCount: number;
+}
