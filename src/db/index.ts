@@ -491,6 +491,8 @@ export class ProjectRepo {
     const sets: string[] = [];
     const values: unknown[] = [];
     for (const [key, value] of Object.entries(fields)) {
+      // A partial update must not clear columns the caller did not send.
+      if (value === undefined) continue;
       sets.push(`${key} = ?`);
       values.push(value);
     }
