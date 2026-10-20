@@ -235,13 +235,17 @@ export class ChatService {
       const selected = step.profile
         ? this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude' && profile.name === step.profile && profile.name !== turn.profileName && isProfileLoggedIn(profile))?.name
         : this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude' && profile.name !== turn.profileName && isProfileLoggedIn(profile))?.name;
-      return { model: turn.model, profileName: selected || turn.profileName };
+      if (selected) return { model: turn.model, profileName: selected };
+      const next = this.failoverState.advance('profile_unavailable');
+      this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt });
+      return this.failoverExecution(turn);
     }
     if (step.type === 'apiKey') {
       const key = this.failoverState.getApiKey();
       if (key && snapshot.dailyCostUSD < step.dailyCapUSD) return { model: turn.model, profileName: turn.profileName, env: { ANTHROPIC_API_KEY: key } };
       const next = this.failoverState.advance(key ? 'daily_cap_reached' : 'api_key_unconfigured');
       this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt, dailyCostUSD: next.dailyCostUSD });
+      return this.failoverExecution(turn);
     }
     return { model: turn.model, profileName: turn.profileName };
   }
