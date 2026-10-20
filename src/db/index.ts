@@ -342,6 +342,25 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
   UPDATE chat_sessions SET lastMessageAt = (SELECT MAX(createdAt) FROM chat_messages WHERE sessionId = chat_sessions.id);
   `,
+  // Migration 23: allow system role in chat_messages
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE chat_messages_new (
+    id TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','error','system')),
+    content TEXT NOT NULL,
+    meta TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+  );
+  INSERT INTO chat_messages_new (id, sessionId, role, content, meta, createdAt)
+    SELECT id, sessionId, role, content, meta, createdAt FROM chat_messages;
+  DROP TABLE chat_messages;
+  ALTER TABLE chat_messages_new RENAME TO chat_messages;
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
+  PRAGMA foreign_keys = ON;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -924,7 +943,7 @@ export interface ChatSessionRow {
 export interface ChatMessageRow {
   id: string;
   sessionId: string;
-  role: 'user' | 'assistant' | 'tool' | 'error';
+  role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
   content: string;
   meta: string | null;
   createdAt: string;
@@ -1216,7 +1235,7 @@ export class ChatMessageRepo {
   insert(row: {
     id: string;
     sessionId: string;
-    role: 'user' | 'assistant' | 'tool' | 'error';
+    role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
     content: string;
     meta?: string | null;
   }): void {
@@ -1231,7 +1250,7 @@ export class ChatMessageRepo {
   upsert(row: {
     id: string;
     sessionId: string;
-    role: 'user' | 'assistant' | 'tool' | 'error';
+    role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
     content: string;
     meta?: string | null;
   }): void {
