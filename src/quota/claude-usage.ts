@@ -70,7 +70,7 @@ export function parseResetTime(text: string, timeZone: string, now = new Date())
 export function parseClaudeUsage(raw: string, now = new Date()): ClaudeUsageWindow[] {
   const text = cleanTerminalOutput(raw);
   const result: ClaudeUsageWindow[] = [];
-  const re = /Current (session|week(?:\s*\(([^)]*)\))?)[^%]*?(\d{1,3})%\s*used\s*Resets\s+([^(\n]+?)\s*\(([^)]+)\)/g;
+  const re = /Current\s*(session|week(?:\s*\(([^)]*)\))?)[^%]*?(\d{1,3})%\s*used\s*Resets\s*([^(\n]+?)\s*\(([^)]+)\)/g;
   for (const m of text.matchAll(re)) {
     const isSession = m[1] === 'session';
     const scope = (m[2] || '').trim();
@@ -96,6 +96,10 @@ export interface ClaudeUsageRunOptions {
 export function runClaudeUsage(opts: ClaudeUsageRunOptions): Promise<string> {
   fs.mkdirSync(opts.cwd, { recursive: true });
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+  // Do not inherit markers from a parent Claude Code session (e.g. when the hub runs inside one).
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('CLAUDE_CODE_') || key === 'CLAUDECODE') delete env[key];
+  }
   if (opts.configDir) env.CLAUDE_CONFIG_DIR = opts.configDir;
   return new Promise((resolve) => {
     let out = '';
@@ -136,14 +140,15 @@ export function runClaudeUsage(opts: ClaudeUsageRunOptions): Promise<string> {
     proc.onData((data) => {
       out += data;
       const text = cleanTerminalOutput(out);
-      if (!sent && !trusted && /trust this folder/i.test(text)) {
+      if (!sent && !trusted && /trust\s*this\s*folder/i.test(text)) {
         // Default choice is "No, exit": move down to "Yes, I trust this folder".
+        // The dialog ignores keys sent the instant it renders, so wait before answering.
         trusted = true;
-        proc.write('\x1b[B');
-        setTimeout(() => { try { proc.write('\r'); } catch { /* exited */ } }, 400);
+        setTimeout(() => { try { proc.write('\x1b[B'); } catch { /* exited */ } }, 1500);
+        setTimeout(() => { try { proc.write('\r'); } catch { /* exited */ } }, 2700);
         return;
       }
-      if (sent && /Current (?:session|week)[\s\S]*?%\s*used[\s\S]*?Resets[^\n]*\)/i.test(text)) {
+      if (sent && /Current\s*(?:session|week)[\s\S]*?%\s*used[\s\S]*?Resets[^\n]*\)/i.test(text)) {
         setTimeout(finish, 300);
       }
     });
