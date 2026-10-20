@@ -18,6 +18,7 @@ import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
 import { findClaudeBin } from './chat/claude.js';
 import { getPlatform } from './platform/index.js';
+import { assertWorkerMayControlHub } from './worker-guard.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -136,6 +137,9 @@ export async function cmdDoctor(
 
 async function main() {
   const config = loadConfig();
+  if (command === 'install-service' || command === 'uninstall' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
+    assertWorkerMayControlHub(command === 'daemon' ? 'daemon stop' : command);
+  }
 
   switch (command) {
     case 'daemon':
