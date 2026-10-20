@@ -1,4 +1,5 @@
 import { QuotaMarkRepo, ProfileRepo } from '../db/index.js';
+import { sameAccount } from '../profiles/account.js';
 
 export class QuotaService {
   constructor(
@@ -18,7 +19,7 @@ export class QuotaService {
     if (profile?.email) {
       const allProfiles = this.profileRepo.getAll();
       for (const p of allProfiles) {
-        if (p.name !== profileName && p.email === profile.email) {
+        if (p.name !== profileName && sameAccount(p, profile)) {
           this.quotaMarkRepo.mark(p.name, family, until, reason);
         }
       }
@@ -34,7 +35,7 @@ export class QuotaService {
     const profile = this.profileRepo.get(profileName);
     if (profile?.email) {
       for (const other of this.profileRepo.getAll()) {
-        if (other.name !== profileName && other.email === profile.email) {
+        if (other.name !== profileName && sameAccount(other, profile)) {
           this.quotaMarkRepo.clear(other.name, family);
         }
       }

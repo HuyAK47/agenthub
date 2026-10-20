@@ -9,9 +9,11 @@ import {
   getChatSessions,
   sendChatMessage,
   warmChatSession,
+  decideChatPermission,
+  getChatPermissions,
 } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
-import { ChatMessage, ChatMode, ChatSession } from '../types/api';
+import { ChatMessage, ChatMode, ChatSession, ChatPermissionRequest } from '../types/api';
 import { ChatSessionList } from '../components/chat/ChatSessionList';
 import { ChatMessageItem } from '../components/chat/ChatMessageItem';
 import { ToolChipsGroup } from '../components/chat/ToolChipsGroup';
@@ -41,6 +43,7 @@ export const ChatPage: React.FC = () => {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [isLocalBusy, setIsLocalBusy] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [permission, setPermission] = useState<ChatPermissionRequest | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -98,6 +101,11 @@ export const ChatPage: React.FC = () => {
 
   useEffect(() => {
     if (activeSession?.id) warmChatSession(activeSession.id).catch(() => {});
+  }, [activeSession?.id]);
+
+  useEffect(() => {
+    if (!activeSession?.id) { setPermission(null); return; }
+    getChatPermissions(activeSession.id).then((items) => setPermission(items[0] || null)).catch(() => {});
   }, [activeSession?.id]);
 
   const [thinkingSince, setThinkingSince] = useState<number | null>(null);
@@ -245,11 +253,27 @@ export const ChatPage: React.FC = () => {
       } else if (type === 'chat.status') {
         queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) => prev.map((session) =>
           session.id === targetSessionId ? { ...session, state: payload.status, busy: payload.status !== 'idle' && payload.status !== 'error' } : session));
+      } else if (type === 'chat.permission_request') {
+        let input: Record<string, unknown> = {};
+        try { input = typeof payload.input === 'string' ? JSON.parse(payload.input) : (payload.input || {}); } catch { /* malformed input stays empty */ }
+        setPermission({
+          id: String(payload.id), sessionId: targetSessionId, messageId: payload.messageId,
+          toolName: String(payload.toolName || 'tool'), input, status: 'pending', message: null,
+          createdAt: String(payload.createdAt || new Date().toISOString()),
+        });
+      } else if (type === 'chat.permission_resolved' && permission?.id === payload.id) {
+        setPermission(null);
       }
     });
 
     return () => unsub();
-  }, [activeSession?.id, queryClient]);
+  }, [activeSession?.id, queryClient, permission?.id]);
+
+  const resolvePermission = async (decision: 'allow' | 'deny' | 'allow_always') => {
+    if (!permission) return;
+    try { await decideChatPermission(permission.id, decision); setPermission(null); }
+    catch (err: any) { setToastMessage(err.message || 'Không thể xử lý yêu cầu cấp quyền'); }
+  };
 
   // Mutations
   const createSessionMutation = useMutation({
@@ -590,6 +614,17 @@ export const ChatPage: React.FC = () => {
         {/* Input Bar */}
         {activeSession && (
           <>
+            {permission && (
+              <div className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm" role="dialog" aria-label="Yêu cầu cấp quyền công cụ">
+                <div className="font-semibold text-[var(--text-primary)]">Claude cần quyền: {permission.toolName}</div>
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)]">{JSON.stringify(permission.input, null, 2)}</pre>
+                <div className="mt-2 flex gap-2">
+                  <button type="button" onClick={() => resolvePermission('allow')} className="rounded-lg bg-[var(--t-ok)] px-3 py-1.5 text-xs font-semibold text-white">Cho phép</button>
+                  <button type="button" onClick={() => resolvePermission('allow_always')} className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white">Luôn cho phép</button>
+                  <button type="button" onClick={() => resolvePermission('deny')} className="rounded-lg border border-[var(--t-crit)] px-3 py-1.5 text-xs font-semibold text-[var(--t-crit)]">Từ chối</button>
+                </div>
+              </div>
+            )}
             {(isBusy || (activeSession.state && activeSession.state !== 'idle')) && (
               <div className="px-5 pb-2 text-xs text-[var(--text-muted)]" role="status">
                 {activeSession.state === 'waiting_permission'

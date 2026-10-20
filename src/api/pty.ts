@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -6,6 +7,8 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket } from 'ws';
 import { AppService, HttpError } from '../services/index.js';
 import { findClaudeBin } from '../chat/claude.js';
+import { CodexEngine } from '../engines/index.js';
+import { accountKey, isProfileLoggedIn } from '../profiles/index.js';
 
 interface PtySession {
   id: string;
@@ -14,6 +17,18 @@ interface PtySession {
   sockets: Set<WebSocket>;
   timer: NodeJS.Timeout;
   recentBuffer: string;
+  loginMenuAnswered?: boolean;
+}
+
+// eslint-disable-next-line no-control-regex -- strips terminal escape sequences
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>]/g;
+
+/**
+ * Newer agy versions ask for a login method before printing the OAuth link.
+ * Return true when the menu is on screen so the hub can pick "Google OAuth".
+ */
+export function isAgyLoginMenu(buffer: string): boolean {
+  return /Select login method/i.test(buffer.replace(ANSI_RE, '')) && /Google OAuth/i.test(buffer.replace(ANSI_RE, ''));
 }
 
 export class PtyManager {
@@ -47,16 +62,25 @@ export class PtyManager {
       env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
     }
 
-    const command = profile.engine === 'claude'
-      ? (findClaudeBin(this.service.config.chat.claudeBin) || process.env.AGENTHUB_CLAUDE_BIN)
-      : (process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
-    if (!command) throw new HttpError(404, 'not_found', 'Không tìm thấy lệnh claude');
+    let args: string[] = [];
+    let command: string | null | undefined;
+    if (profile.engine === 'claude') {
+      command = findClaudeBin(this.service.config.chat.claudeBin) || process.env.AGENTHUB_CLAUDE_BIN;
+    } else if (profile.engine === 'codex') {
+      // Device-code login works from the dashboard: the CLI prints a URL and a one-time code.
+      command = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
+      args = ['login', '--device-auth'];
+      if (profile.kind === 'isolated' && profile.home) env.CODEX_HOME = profile.home;
+    } else {
+      command = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+    }
+    if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
 
-    const ptyProcess = pty.spawn(command, [], {
+    const ptyProcess = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
-      cwd: home,
+      cwd: fs.existsSync(home) ? home : os.homedir(),
       env,
     });
 
@@ -77,6 +101,13 @@ export class PtyManager {
     ptyProcess.onData((data: string) => {
       // Keep last 16KB for new connections
       session.recentBuffer = (session.recentBuffer + data).slice(-16384);
+      if (profile.engine === 'agy' && !session.loginMenuAnswered && isAgyLoginMenu(session.recentBuffer)) {
+        session.loginMenuAnswered = true;
+        // Option 1 (Google OAuth) is preselected; Enter confirms it.
+        setTimeout(() => {
+          try { ptyProcess.write('\r'); } catch { /* process may have exited */ }
+        }, 300);
+      }
       for (const socket of session.sockets) {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(data);
@@ -115,6 +146,10 @@ export class PtyManager {
   }
 
   private scheduleEmailRefresh(profileName: string): void {
+    const profile = this.service.profileRepo.get(profileName);
+    if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
+      this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);
+    }
     this.service.refreshProfileEmail(profileName);
 
     const timer = setTimeout(() => {
@@ -171,7 +206,7 @@ export class PtyManager {
 
     const profile = this.service.profileRepo.get(profileName);
     const dupes = this.service.coreProfileService.getDuplicateEmails();
-    const duplicateWarning = profile?.email ? dupes.has(profile.email) : false;
+    const duplicateWarning = profile ? dupes.has(accountKey(profile) || '') : false;
 
     this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
       name: profileName,

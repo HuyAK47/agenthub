@@ -13,6 +13,7 @@ import {
   QuotaUsageRepo,
   ChatSessionRepo,
   ChatMessageRepo,
+  ChatPermissionRepo,
   RunMetricsRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
@@ -29,6 +30,7 @@ import { SavingsService } from './savings.js';
 import { ClaudeFailoverState } from './chat/failover.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { ClaudeSessionScanner } from './claude-sessions/scanner.js';
+import { PermissionBroker } from './chat/permissions.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -43,6 +45,8 @@ export interface DaemonContext {
   eventRepo: EventRepo;
   chatSessionRepo: ChatSessionRepo;
   chatMessageRepo: ChatMessageRepo;
+  chatPermissionRepo: ChatPermissionRepo;
+  permissionBroker: PermissionBroker;
   profileService: ProfileService;
   scheduler: Scheduler;
   service: AppService;
@@ -69,6 +73,12 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const usageRepo = new QuotaUsageRepo(db);
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
+  const chatPermissionRepo = new ChatPermissionRepo(db);
+  chatPermissionRepo.expirePending();
+  const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
+    eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
+    scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
+  });
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,
@@ -134,6 +144,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     config,
     chatSessionRepo,
     chatMessageRepo,
+    permissionBroker,
     projectRepo,
     scheduler.getEventBus(),
     taskRepo,
@@ -185,6 +196,8 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     eventRepo,
     chatSessionRepo,
     chatMessageRepo,
+    chatPermissionRepo,
+    permissionBroker,
     profileService,
     scheduler,
     service,
