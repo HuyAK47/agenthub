@@ -3,7 +3,7 @@ import { darwinPlatform } from './darwin.js';
 import { linuxPlatform } from './linux.js';
 
 export { darwinPlatform, linuxPlatform };
-export type { PlatformApi, PlatformProcessInfo, ServiceInstallResult } from './types.js';
+export type { PlatformApi, PlatformProcessInfo, ServiceInstallResult, ServiceRestartResult, ServiceUninstallResult } from './types.js';
 
 export function getPlatform(): PlatformApi {
   if (process.platform === 'darwin') return darwinPlatform;

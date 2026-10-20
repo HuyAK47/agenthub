@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
-import type { PlatformApi, PlatformProcessInfo, ServiceInstallResult } from './types.js';
+import type { PlatformApi, PlatformProcessInfo, ServiceInstallResult, ServiceRestartResult, ServiceUninstallResult } from './types.js';
 
 function bootTimeMs(): number {
   try { return Number(fs.readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)$/m)?.[1] || 0) * 1000; } catch { return 0; }
@@ -80,8 +80,42 @@ function installService(opts: { nodePath: string; cliPath: string; currentPath: 
   return { file, content, activate };
 }
 
+function restartService(opts?: { exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceRestartResult {
+  const runner = opts?.exec || ((command, options) => execFileSync('sh', ['-c', command], options));
+  try {
+    runner('systemctl --user restart agenthub', { stdio: 'inherit' });
+    return { restarted: true, message: 'Đã khởi động lại service systemd agenthub' };
+  } catch (err) {
+    return { restarted: false, message: `Không thể khởi động lại service systemd: ${(err as Error).message}` };
+  }
+}
+
+function uninstallService(opts?: { homeDir?: string; exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceUninstallResult {
+  const homeDir = opts?.homeDir || os.homedir();
+  const file = path.join(homeDir, '.config', 'systemd', 'user', 'agenthub.service');
+  const runner = opts?.exec || ((command, options) => execFileSync('sh', ['-c', command], options));
+  try {
+    runner('systemctl --user stop agenthub && systemctl --user disable agenthub', { stdio: 'ignore' });
+  } catch {
+    // ignore
+  }
+  if (fs.existsSync(file)) {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      // ignore
+    }
+  }
+  try {
+    runner('systemctl --user daemon-reload', { stdio: 'ignore' });
+  } catch {
+    // ignore
+  }
+  return { uninstalled: true, file, message: 'Đã gỡ systemd user service agenthub' };
+}
+
 export const linuxPlatform: PlatformApi = {
-  process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService,
+  process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService, restartService, uninstallService,
   serviceCheck: (exec, timeoutMs) => {
     const probe = exec('systemctl', ['--version'], { timeout: timeoutMs });
     if (probe.error) return { id: 'systemd', name: 'Service systemd', status: 'skip', message: 'Không có systemd (bỏ qua)', details: { reason: 'systemctl_not_found' } };

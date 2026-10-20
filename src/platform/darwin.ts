@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
-import type { PlatformApi, PlatformProcessInfo } from './types.js';
+import type { PlatformApi, PlatformProcessInfo, ServiceRestartResult, ServiceUninstallResult } from './types.js';
 
 function command(args: string[]): string { try { return execFileSync(args[0], args.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } }
 
@@ -31,4 +31,35 @@ function installService(opts: { nodePath: string; cliPath: string; currentPath: 
   return { file, content, activate };
 }
 
-export const darwinPlatform: PlatformApi = { process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService, serviceCheck: () => ({ id: 'service', name: 'Service nền tảng', status: 'skip', message: 'macOS dùng LaunchAgent; systemd không được hỗ trợ. Chạy agenthub install-service để tạo ~/Library/LaunchAgents/dev.agenthub.plist.', suggestion: 'LaunchAgent được nạp bằng launchctl bootstrap khi cài đặt.', details: { platform: 'darwin', limited: ['ionice', 'systemd'] } }) };
+function restartService(opts?: { exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceRestartResult {
+  const uid = process.getuid?.() ?? '';
+  const runner = opts?.exec || ((cmd, options) => execFileSync('sh', ['-c', cmd], options));
+  try {
+    runner(`launchctl kickstart -k gui/${uid}/dev.agenthub`, { stdio: 'inherit' });
+    return { restarted: true, message: 'Đã khởi động lại LaunchAgent dev.agenthub' };
+  } catch (err) {
+    return { restarted: false, message: `Không thể khởi động lại LaunchAgent: ${(err as Error).message}` };
+  }
+}
+
+function uninstallService(opts?: { homeDir?: string; exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceUninstallResult {
+  const homeDir = opts?.homeDir || os.homedir();
+  const file = path.join(homeDir, 'Library', 'LaunchAgents', 'dev.agenthub.plist');
+  const uid = process.getuid?.() ?? '';
+  const runner = opts?.exec || ((cmd, options) => execFileSync('sh', ['-c', cmd], options));
+  try {
+    runner(`launchctl bootout gui/${uid}/dev.agenthub`, { stdio: 'ignore' });
+  } catch {
+    // ignore
+  }
+  if (fs.existsSync(file)) {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      // ignore
+    }
+  }
+  return { uninstalled: true, file, message: 'Đã gỡ LaunchAgent dev.agenthub' };
+}
+
+export const darwinPlatform: PlatformApi = { process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService, restartService, uninstallService, serviceCheck: () => ({ id: 'service', name: 'Service nền tảng', status: 'skip', message: 'macOS dùng LaunchAgent; systemd không được hỗ trợ. Chạy agenthub install-service để tạo ~/Library/LaunchAgents/dev.agenthub.plist.', suggestion: 'LaunchAgent được nạp bằng launchctl bootstrap khi cài đặt.', details: { platform: 'darwin', limited: ['ionice', 'systemd'] } }) };
