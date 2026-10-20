@@ -22,6 +22,8 @@ import {
   QuotaMarkRow,
   KnowledgeRepo,
   KnowledgeEntryRow,
+  TaskBatchRepo,
+  TaskBatchRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
@@ -44,7 +46,7 @@ import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
-import { computeTaskGraph, filterTasksForGraph } from './dag.js';
+import { computeTaskGraph, filterTasksForGraph, detectCycle, parseDependsOn } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
 
@@ -86,6 +88,13 @@ export function apiTaskNote(note: TaskNoteRow): TaskNoteRow {
 
 export function apiKnowledgeEntry(entry: KnowledgeEntryRow): KnowledgeEntryRow {
   return { ...entry, createdAt: toApiTime(entry.createdAt) || entry.createdAt };
+}
+
+export function apiBatch(batch: TaskBatchRow): TaskBatchRow {
+  return {
+    ...batch,
+    createdAt: toApiTime(batch.createdAt) || batch.createdAt,
+  };
 }
 
 export function extractKnowledgeSection(doneContent: string): string | null {
@@ -182,6 +191,31 @@ export const CreateTaskSchema = z.object({
   modelChain: z.array(modelValidator).optional(),
   sourceRef: z.object({ taskId: z.string(), runId: z.string().nullable().optional(), checkName: z.string().nullable().optional(), excerptHash: z.string() }).optional(),
   start: z.boolean().optional(),
+  fromClaude: z.boolean().optional(),
+  batchId: z.string().optional(),
+});
+
+export const BatchTaskInputSchema = z.object({
+  slug: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+  title: z.string().min(1),
+  body: z.string().optional(),
+  level: z.enum(['easy', 'hard']).default('easy'),
+  modelChain: z.array(modelValidator).optional(),
+  dependsOn: z.array(z.string()).optional(),
+});
+
+export const CreateBatchSchema = z.object({
+  project: z.string().min(1),
+  title: z.string().min(1),
+  goal: z.string().optional(),
+  tasks: z.array(BatchTaskInputSchema).min(1),
+  createdBy: z.string().optional(),
+});
+
+export const UpdateBatchSchema = z.object({
+  title: z.string().min(1).optional(),
+  goal: z.string().nullable().optional(),
+  status: z.enum(['draft', 'dispatched', 'discarded']).optional(),
 });
 
 export const CaptureTaskSchema = z.object({
@@ -600,6 +634,7 @@ export class AppService {
     public bulletinService?: BulletinService,
     public telegramBotService?: TelegramBotService,
     public knowledgeRepo?: KnowledgeRepo,
+    public taskBatchRepo?: TaskBatchRepo,
   ) {}
 
   listClaudeSessions(activeWithinMin = 5) {
@@ -1320,7 +1355,40 @@ export class AppService {
       throw new HttpError(409, 'conflict', `Task "${taskId}" đã tồn tại`);
     }
 
-    const initialStatus = parsed.start ? 'queued' : 'draft';
+    let initialStatus = parsed.start ? 'queued' : 'draft';
+    let batchId = parsed.batchId || null;
+
+    if (parsed.fromClaude && this.config.planning?.requireApproval) {
+      initialStatus = 'draft';
+      if (!batchId && this.taskBatchRepo) {
+        const existingDraftBatches = this.taskBatchRepo.list(parsed.project, 'draft')
+          .filter((b) => b.createdBy === 'claude');
+        if (existingDraftBatches.length > 0) {
+          batchId = existingDraftBatches[0].id;
+        } else {
+          const newBatchId = `batch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+          this.taskBatchRepo.create({
+            id: newBatchId,
+            projectId: parsed.project,
+            title: `Kế hoạch đề xuất: ${parsed.title}`,
+            goal: `Tạo từ Claude qua hub_create_task`,
+            status: 'draft',
+            createdBy: 'claude',
+          });
+          batchId = newBatchId;
+          const payload = {
+            batchId: newBatchId,
+            projectId: parsed.project,
+            title: `Kế hoạch đề xuất: ${parsed.title}`,
+            taskCount: 1,
+            createdBy: 'claude',
+          };
+          this.eventRepo.insert('batch.created', undefined, payload);
+          this.scheduler.getEventBus().emit('batch.created', undefined, payload);
+        }
+      }
+    }
+
     this.taskRepo.insert({
       id: taskId,
       projectId: parsed.project,
@@ -1334,9 +1402,10 @@ export class AppService {
       dependsOn: parsed.dependsOn,
       status: initialStatus,
       sourceRef: parsed.sourceRef ? JSON.stringify(parsed.sourceRef) : null,
+      batchId,
     });
 
-    if (parsed.start) {
+    if (initialStatus === 'queued') {
       this.scheduler.getEventBus().emit('task.queued', taskId);
       this.scheduler.triggerTick();
     }
@@ -1446,8 +1515,15 @@ export class AppService {
     if (parsed.dependsOn !== undefined) {
       const normalizedDeps: string[] = [];
       for (const depId of parsed.dependsOn) {
-        const normId = toTaskId(depId);
-        const depTask = this.taskRepo.get(normId);
+        let normId = toTaskId(depId);
+        let depTask = this.taskRepo.get(normId);
+        if (!depTask && !normId.includes('/') && task.projectId) {
+          const qualified = `${task.projectId}/${normId}`;
+          if (this.taskRepo.get(qualified)) {
+            normId = qualified;
+            depTask = this.taskRepo.get(qualified);
+          }
+        }
         if (!depTask) {
           throw new HttpError(422, 'unprocessable_entity', `Task phụ thuộc "${depId}" không tồn tại`);
         }
@@ -1527,6 +1603,260 @@ export class AppService {
     }
 
     return updatedTask;
+  }
+
+  createBatch(raw: unknown): TaskBatchRow & { tasks: TaskRow[] } {
+    const parsed = CreateBatchSchema.parse(raw);
+    const project = this.projectRepo.get(parsed.project);
+    if (!project) {
+      throw new HttpError(404, 'not_found', `Project "${parsed.project}" không tồn tại`);
+    }
+    if (!this.taskBatchRepo) {
+      throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
+    }
+
+    const slugs = new Set<string>();
+    for (const t of parsed.tasks) {
+      if (slugs.has(t.slug)) {
+        throw new HttpError(400, 'bad_request', `Trùng slug "${t.slug}" trong cùng đợt`);
+      }
+      slugs.add(t.slug);
+      const taskId = `${parsed.project}/${t.slug}`;
+      if (this.taskRepo.get(taskId)) {
+        throw new HttpError(409, 'conflict', `Task "${taskId}" đã tồn tại`);
+      }
+    }
+
+    const batchId = `batch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const createdBy = parsed.createdBy || 'claude';
+    this.taskBatchRepo.create({
+      id: batchId,
+      projectId: parsed.project,
+      title: parsed.title,
+      goal: parsed.goal || null,
+      status: 'draft',
+      createdBy,
+    });
+
+    const createdTasks: TaskRow[] = [];
+    const taskDepsToPopulate: Array<{ taskId: string; deps: string[] }> = [];
+
+    for (const t of parsed.tasks) {
+      const taskId = `${parsed.project}/${t.slug}`;
+      const normalizedDeps: string[] = (t.dependsOn || []).map((dep) => {
+        if (!dep.includes('/') && !dep.includes('~')) {
+          return `${parsed.project}/${dep}`;
+        }
+        return toTaskId(dep);
+      });
+
+      this.taskRepo.insert({
+        id: taskId,
+        projectId: parsed.project,
+        slug: t.slug,
+        title: t.title,
+        body: t.body,
+        level: t.level,
+        modelChain: t.modelChain ? JSON.stringify(t.modelChain) : undefined,
+        dependsOn: normalizedDeps,
+        status: 'draft',
+        batchId,
+        skipDeps: true,
+      });
+      taskDepsToPopulate.push({ taskId, deps: normalizedDeps });
+      createdTasks.push(apiTask(this.taskRepo.get(taskId)!));
+    }
+
+    // Phase 2: populate task_deps now that all tasks exist in DB
+    for (const item of taskDepsToPopulate) {
+      this.taskRepo.populateDeps(item.taskId, item.deps);
+    }
+
+    const payload = {
+      batchId,
+      projectId: parsed.project,
+      title: parsed.title,
+      goal: parsed.goal || null,
+      taskCount: createdTasks.length,
+      createdBy,
+    };
+    this.eventRepo.insert('batch.created', undefined, payload);
+    this.scheduler.getEventBus().emit('batch.created', undefined, payload);
+
+    const batchRow = apiBatch(this.taskBatchRepo.get(batchId)!);
+    return { ...batchRow, tasks: createdTasks };
+  }
+
+  getBatch(id: string): TaskBatchRow & { tasks: TaskRow[] } {
+    if (!this.taskBatchRepo) {
+      throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
+    }
+    const batch = this.taskBatchRepo.get(id);
+    if (!batch) {
+      throw new HttpError(404, 'not_found', `Đợt "${id}" không tồn tại`);
+    }
+    const tasks = this.taskRepo.getByBatch(id).map(apiTask);
+    return { ...apiBatch(batch), tasks };
+  }
+
+  listBatches(params?: { project?: string; status?: string }): TaskBatchRow[] {
+    if (!this.taskBatchRepo) return [];
+    return this.taskBatchRepo.list(params?.project, params?.status).map(apiBatch);
+  }
+
+  dispatchBatch(id: string): { ok: boolean; batchId: string; dispatchedCount: number } {
+    if (!this.taskBatchRepo) {
+      throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
+    }
+    const batch = this.taskBatchRepo.get(id);
+    if (!batch) {
+      throw new HttpError(404, 'not_found', `Đợt "${id}" không tồn tại`);
+    }
+    if (batch.status !== 'draft') {
+      throw new HttpError(400, 'bad_request', `Chỉ có thể giao đợt ở trạng thái draft (hiện tại: ${batch.status})`);
+    }
+    const tasks = this.taskRepo.getByBatch(id);
+    const draftTasks = tasks.filter((t) => t.status === 'draft');
+    if (draftTasks.length === 0) {
+      throw new HttpError(400, 'bad_request', `Đợt "${id}" không có task nào ở trạng thái draft`);
+    }
+
+    const projectTasks = this.taskRepo.getByProject(batch.projectId);
+    const cycle = detectCycle(projectTasks);
+    if (cycle) {
+      throw new HttpError(400, 'cycle_detected', `Phát hiện vòng phụ thuộc: ${cycle.join(' -> ')}`);
+    }
+
+    for (const task of draftTasks) {
+      this.taskRepo.updateStatus(task.id, 'queued');
+      this.eventRepo.insert('task.queued', task.id, { fromBatch: id });
+      this.scheduler.getEventBus().emit('task.queued', task.id);
+    }
+
+    this.taskBatchRepo.updateStatus(id, 'dispatched');
+    const payload = { batchId: id, projectId: batch.projectId, dispatchedCount: draftTasks.length };
+    this.eventRepo.insert('batch.dispatched', undefined, payload);
+    this.scheduler.getEventBus().emit('batch.dispatched', undefined, payload);
+    this.scheduler.triggerTick();
+
+    return { ok: true, batchId: id, dispatchedCount: draftTasks.length };
+  }
+
+  discardBatch(id: string): { ok: boolean; batchId: string } {
+    if (!this.taskBatchRepo) {
+      throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
+    }
+    const batch = this.taskBatchRepo.get(id);
+    if (!batch) {
+      throw new HttpError(404, 'not_found', `Đợt "${id}" không tồn tại`);
+    }
+    if (batch.status !== 'draft') {
+      throw new HttpError(400, 'bad_request', `Chỉ có thể huỷ đợt ở trạng thái draft (hiện tại: ${batch.status})`);
+    }
+    const tasks = this.taskRepo.getByBatch(id);
+    for (const task of tasks) {
+      if (task.status === 'draft') {
+        this.taskRepo.updateStatus(task.id, 'cancelled');
+      }
+    }
+    this.taskBatchRepo.updateStatus(id, 'discarded');
+    const payload = { batchId: id, projectId: batch.projectId };
+    this.eventRepo.insert('batch.discarded', undefined, payload);
+    this.scheduler.getEventBus().emit('batch.discarded', undefined, payload);
+
+    return { ok: true, batchId: id };
+  }
+
+  addTaskToBatch(batchId: string, raw: unknown): TaskRow {
+    if (!this.taskBatchRepo) {
+      throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
+    }
+    const batch = this.taskBatchRepo.get(batchId);
+    if (!batch) {
+      throw new HttpError(404, 'not_found', `Đợt "${batchId}" không tồn tại`);
+    }
+    if (batch.status !== 'draft') {
+      throw new HttpError(400, 'bad_request', `Chỉ có thể thêm task vào đợt ở trạng thái draft`);
+    }
+
+    const parsed = BatchTaskInputSchema.parse(raw);
+    const taskId = `${batch.projectId}/${parsed.slug}`;
+    if (this.taskRepo.get(taskId)) {
+      throw new HttpError(409, 'conflict', `Task "${taskId}" đã tồn tại`);
+    }
+
+    const normalizedDeps: string[] = (parsed.dependsOn || []).map((dep) => {
+      if (!dep.includes('/') && !dep.includes('~')) {
+        return `${batch.projectId}/${dep}`;
+      }
+      return toTaskId(dep);
+    });
+
+    this.taskRepo.insert({
+      id: taskId,
+      projectId: batch.projectId,
+      slug: parsed.slug,
+      title: parsed.title,
+      body: parsed.body,
+      level: parsed.level,
+      modelChain: parsed.modelChain ? JSON.stringify(parsed.modelChain) : undefined,
+      dependsOn: normalizedDeps,
+      status: 'draft',
+      batchId,
+    });
+
+    return apiTask(this.taskRepo.get(taskId)!);
+  }
+
+  removeTaskFromBatch(batchId: string, idParam: string): { ok: boolean } {
+    if (!this.taskBatchRepo) {
+      throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
+    }
+    const batch = this.taskBatchRepo.get(batchId);
+    if (!batch) {
+      throw new HttpError(404, 'not_found', `Đợt "${batchId}" không tồn tại`);
+    }
+    if (batch.status !== 'draft') {
+      throw new HttpError(400, 'bad_request', `Chỉ có thể bỏ task khỏi đợt ở trạng thái draft`);
+    }
+
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    if (task.batchId !== batchId) {
+      throw new HttpError(400, 'bad_request', `Task "${taskId}" không thuộc đợt "${batchId}"`);
+    }
+    if (task.status !== 'draft') {
+      throw new HttpError(400, 'bad_request', `Chỉ có thể bỏ task ở trạng thái draft (hiện tại: ${task.status})`);
+    }
+
+    this.taskRepo.delete(taskId);
+
+    const batchTasks = this.taskRepo.getByBatch(batchId);
+    for (const otherTask of batchTasks) {
+      let deps = parseDependsOn(otherTask.dependsOn);
+      if (deps.includes(taskId) || deps.includes(task.slug)) {
+        deps = deps.filter((d: string) => d !== taskId && d !== task.slug);
+        this.taskRepo.update(otherTask.id, { dependsOn: JSON.stringify(deps) });
+      }
+    }
+
+    return { ok: true };
+  }
+
+  deleteTask(idParam: string): { ok: boolean } {
+    const taskId = toTaskId(idParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task) {
+      throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    }
+    if (task.status !== 'draft') {
+      throw new HttpError(400, 'bad_request', `Chỉ có thể xoá task ở trạng thái draft (hiện tại: ${task.status})`);
+    }
+    this.taskRepo.delete(taskId);
+    return { ok: true };
   }
 
   startTask(idParam: string): TaskRow {

@@ -810,6 +810,7 @@ export class TaskRepo {
     diffStat?: string | null;
     sourceRef?: string | null;
     batchId?: string | null;
+    skipDeps?: boolean;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
@@ -838,11 +839,19 @@ export class TaskRepo {
       );
 
     // Populate task_deps
-    if (row.dependsOn && row.dependsOn.length > 0) {
+    if (!row.skipDeps && row.dependsOn && row.dependsOn.length > 0) {
       const stmt = this.db.prepare('INSERT INTO task_deps (taskId, dependsOnId) VALUES (?, ?)');
       for (const dep of row.dependsOn) {
         stmt.run(row.id, dep);
       }
+    }
+  }
+
+  populateDeps(taskId: string, dependsOn: string[]): void {
+    if (!dependsOn || dependsOn.length === 0) return;
+    const stmt = this.db.prepare('INSERT INTO task_deps (taskId, dependsOnId) VALUES (?, ?)');
+    for (const dep of dependsOn) {
+      stmt.run(taskId, dep);
     }
   }
 

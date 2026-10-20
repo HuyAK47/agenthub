@@ -17,6 +17,7 @@ import {
   RunMetricsRepo,
   TaskNoteRepo,
   KnowledgeRepo,
+  TaskBatchRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
@@ -81,6 +82,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const eventRepo = new EventRepo(db);
   const taskNoteRepo = new TaskNoteRepo(db);
   const knowledgeRepo = new KnowledgeRepo(db);
+  const taskBatchRepo = new TaskBatchRepo(db);
   const usageRepo = new QuotaUsageRepo(db);
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
@@ -199,6 +201,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     bulletinService,
     undefined,
     knowledgeRepo,
+    taskBatchRepo,
   );
 
   const notifier = new NotificationService({
