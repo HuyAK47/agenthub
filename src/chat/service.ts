@@ -374,14 +374,7 @@ export class ChatService {
     model?: string;
     profileName?: string | null;
   }): ChatSessionRow {
-    const mode = body.mode || 'safe';
-    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
-      throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
-    }
-    const model = body.model ?? this.config.chat.model;
-    if (model !== '' && model !== 'sonnet' && model !== 'haiku') {
-      throw new HttpError(400, 'bad_request', 'Model chat phải là mặc định, sonnet hoặc haiku');
-    }
+    const { mode, model } = this.validateSessionOptions(body);
 
     const id = crypto.randomUUID();
     const title = body.title && body.title.trim().length > 0 ? body.title.trim() : 'Cuộc trò chuyện mới';
@@ -401,6 +394,44 @@ export class ChatService {
       throw new HttpError(400, 'bad_request', `Hồ sơ Claude "${session.profileName}" không tồn tại`);
     }
     return session;
+  }
+
+  getOrCreateSession(id: string, body: {
+    title?: string | null;
+    projectId?: string | null;
+    mode?: 'safe' | 'full';
+    model?: string;
+    profileName?: string | null;
+  }): ChatSessionRow {
+    const existing = this.chatSessionRepo.get(id);
+    if (existing) return existing;
+    const { mode, model } = this.validateSessionOptions(body);
+    this.chatSessionRepo.insert({
+      id,
+      projectId: body.projectId || null,
+      title: body.title || 'Cuộc trò chuyện Telegram',
+      mode,
+      model,
+      busy: 0,
+      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+    });
+    return this.chatSessionRepo.get(id)!;
+  }
+
+  private validateSessionOptions(body: {
+    mode?: 'safe' | 'full';
+    model?: string;
+  }): { mode: 'safe' | 'full'; model: string } {
+    const mode = body.mode || 'safe';
+    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
+      throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
+    }
+    const model = body.model ?? this.config.chat.model;
+    const allowedModels = new Set(['', 'sonnet', 'haiku', this.config.chat.model]);
+    if (!allowedModels.has(model)) {
+      throw new HttpError(400, 'bad_request', 'Model chat phải là mặc định, sonnet hoặc haiku');
+    }
+    return { mode, model };
   }
 
   updateSession(

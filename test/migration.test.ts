@@ -75,4 +75,26 @@ describe('database migrations', () => {
     );
     db.close();
   });
+
+  it('marks an existing installation with multiple personal profiles for compatibility', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-migration-policy-test-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'hub.db');
+    const oldDb = new Database(dbPath);
+    for (let version = 0; version <= 28; version += 1) {
+      oldDb.exec(MIGRATIONS[version]);
+      oldDb.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(version));
+    }
+    oldDb.prepare("INSERT INTO profiles (name, engine, kind) VALUES ('old-a', 'agy', 'isolated')").run();
+    oldDb.prepare("INSERT INTO profiles (name, engine, kind) VALUES ('old-b', 'agy', 'isolated')").run();
+    oldDb.close();
+
+    const db = openDatabase(dbPath);
+    expect(db.prepare("SELECT value FROM meta WHERE key = 'multiple_per_provider_legacy'").pluck().get()).toBe('true');
+    expect(db.prepare('SELECT accountType FROM profiles ORDER BY name').all()).toEqual([
+      { accountType: 'personal' },
+      { accountType: 'personal' },
+    ]);
+    db.close();
+  });
 });

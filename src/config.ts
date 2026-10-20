@@ -119,6 +119,8 @@ export interface AgentHubConfig {
     easy: string[];
   };
   defaultTimeout: number;
+  multiplePerProvider: boolean;
+  multiplePerProviderConfigured: boolean;
   slotsPerAgyProfile: number;
   slotsPerCodexProfile: number;
   watchdog: {
@@ -167,6 +169,7 @@ export function saveConfig(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
@@ -260,6 +263,7 @@ export function updateConfigInMemory(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
@@ -294,6 +298,10 @@ export function updateConfigInMemory(
   }
   if (patch.defaultTimeout !== undefined) {
     config.defaultTimeout = patch.defaultTimeout;
+  }
+  if (patch.multiplePerProvider !== undefined) {
+    config.multiplePerProvider = patch.multiplePerProvider;
+    config.multiplePerProviderConfigured = true;
   }
   if (patch.slotsPerAgyProfile !== undefined) {
     config.slotsPerAgyProfile = patch.slotsPerAgyProfile;
@@ -555,6 +563,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
+    multiplePerProvider: userConfig.multiplePerProvider === true,
+    multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,
     slotsPerCodexProfile: (userConfig.slotsPerCodexProfile as number) || 2,
     watchdog: {
