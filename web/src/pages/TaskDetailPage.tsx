@@ -19,6 +19,8 @@ import {
   getProjectNotes,
   createTaskNote,
   getModelOptions,
+  pauseTask,
+  resumeTask,
 } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { subscribeToRunOutput } from '../api/sse';
@@ -32,6 +34,7 @@ import { CollapsibleList } from '../components/CollapsibleList';
 import {
   ArrowLeft,
   Play,
+  Pause,
   RotateCcw,
   CheckCircle2,
   XCircle,
@@ -190,6 +193,24 @@ export const TaskDetailPage: React.FC = () => {
       setShowCancelModal(false);
       queryClient.invalidateQueries({ queryKey: ['task', id] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+
+  const pauseMutation = useMutation({
+    mutationFn: () => pauseTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task', id] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: () => resumeTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task', id] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
     },
   });
 
@@ -431,7 +452,23 @@ export const TaskDetailPage: React.FC = () => {
                 diskMinFreeGB={hubStatus?.disk?.minFreeGB}
                 size="sm"
               />
-              {task.status === 'running' && <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />}
+              {task.status === 'running' && (task.paused || task.currentRun?.paused) && (
+                <span
+                  data-testid="task-paused-badge"
+                  className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold border ${
+                    (task.pauseReason === 'load' || task.currentRun?.pauseReason === 'load')
+                      ? 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]'
+                      : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] border-[var(--t-border)]'
+                  }`}
+                >
+                  {(task.pauseReason === 'load' || task.currentRun?.pauseReason === 'load')
+                    ? t('status.pausedOverload')
+                    : t('status.paused')}
+                </span>
+              )}
+              {task.status === 'running' && !task.paused && !task.currentRun?.paused && (
+                <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />
+              )}
               {task.status === 'running' && task.currentRun?.noCommitMinutes != null && task.currentRun.noCommitMinutes > 0 && (
                 <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]">
                   {t('extra.noCommit', { minutes: task.currentRun.noCommitMinutes })}
@@ -440,6 +477,11 @@ export const TaskDetailPage: React.FC = () => {
               {task.status === 'running' && task.currentRun?.isLooping && (
                 <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]">
                   {t('extra.looping')}
+                </span>
+              )}
+              {task.status === 'running' && (task.currentRun?.rss || task.currentRun?.cpu !== undefined) && (
+                <span className="text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] font-mono text-[var(--t-text-3)]">
+                  {task.currentRun?.rss ? `${(task.currentRun.rss / (1024 * 1024)).toFixed(0)} MB` : '0 MB'} · {(task.currentRun?.cpu ?? 0).toFixed(1)}% CPU
                 </span>
               )}
               <span className="text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] font-mono text-[var(--t-text-3)]">
@@ -477,6 +519,31 @@ export const TaskDetailPage: React.FC = () => {
             </button>
           )}
 
+          {/* Pause / Resume (if running) */}
+          {task.status === 'running' && (
+            (task.paused || task.currentRun?.paused) ? (
+              <button
+                type="button"
+                onClick={() => resumeMutation.mutate()}
+                disabled={resumeMutation.isPending}
+                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_25%,transparent)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Play className="w-4 h-4" />
+                <span>{t('taskDetail.btnResume')}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => pauseMutation.mutate()}
+                disabled={pauseMutation.isPending}
+                className="px-3.5 py-1.5 rounded-lg border border-[var(--t-border)] hover:bg-[var(--t-surface-2)] text-[var(--t-text)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Pause className="w-4 h-4" />
+                <span>{t('taskDetail.btnPause')}</span>
+              </button>
+            )
+          )}
+
           {/* Cancel (if running or queued) */}
           {(task.status === 'running' || task.status === 'checking' || task.status === 'queued') && (
             <button
@@ -492,21 +559,11 @@ export const TaskDetailPage: React.FC = () => {
           {/* Retry (if failed or blocked) */}
           {(task.status === 'failed' || task.status === 'blocked') && (
             <>
-              <button
-                type="button"
-                onClick={() => setShowRetryModal(true)}
-                className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-              >
-                <RotateCcw className="w-4 h-4" />
-                <span>{t('taskDetail.btnRetry')}</span>
+              <button type="button" onClick={() => setShowRetryModal(true)} className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer">
+                <RotateCcw className="w-4 h-4" /><span>{t('taskDetail.btnRetry')}</span>
               </button>
-              <button
-                type="button"
-                onClick={() => { setRetryWithDifferentModel(true); openEditModal(); }}
-                className="px-3.5 py-1.5 rounded-lg border border-[var(--t-accent)] text-[var(--t-accent)] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <RotateCcw className="w-4 h-4" />
-                <span>{t('taskDetail.retryWithModel')}</span>
+              <button type="button" onClick={() => { setRetryWithDifferentModel(true); openEditModal(); }} className="px-3.5 py-1.5 rounded-lg border border-[var(--t-accent)] text-[var(--t-accent)] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer">
+                <RotateCcw className="w-4 h-4" /><span>{t('taskDetail.retryWithModel')}</span>
               </button>
             </>
           )}
@@ -1053,14 +1110,18 @@ export const TaskDetailPage: React.FC = () => {
                   {t('taskDetail.modelChainLabel')}
                 </label>
                 <div className="flex gap-2">
-                  <input
+                  <select
                     data-testid="add-model-select"
                     value={selectedModelToAdd}
                     onChange={(e) => setSelectedModelToAdd(e.target.value)}
-                    list="task-model-suggestions"
                     className="flex-1 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2.5 py-1.5 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
-                  />
-                  <datalist id="task-model-suggestions">{modelSuggestions.map((m) => <option key={m} value={m} />)}</datalist>
+                  >
+                    {modelSuggestions.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     type="button"
                     data-testid="add-model-btn"

@@ -110,6 +110,18 @@ async function run() {
       );
       break;
 
+    case 'sleep-loop': {
+      console.log('Fake agent: sleep loop...');
+      let running = true;
+      while (running) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        if (process.env.STOP_SLEEP === '1') {
+          running = false;
+        }
+      }
+      break;
+    }
+
     case 'transient':
       console.log('Fake agent: transient error...');
       console.log('error: failed to send message: UNAVAILABLE (code 503): The service is currently unavailable.');

@@ -991,6 +991,38 @@ export const handlers = [
     return HttpResponse.json(task);
   }),
 
+  // POST /api/tasks/:id/pause
+  http.post('/api/tasks/:id/pause', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const task = mockTasks.find((t) => t.id === id);
+    if (!task) {
+      return HttpResponse.json({ error: 'not_found', message: `Task "${id}" không tồn tại` }, { status: 404 });
+    }
+    task.paused = true;
+    task.pauseReason = 'manual';
+    task.updatedAt = new Date().toISOString();
+    return HttpResponse.json({ ok: true, paused: true });
+  }),
+
+  // POST /api/tasks/:id/resume
+  http.post('/api/tasks/:id/resume', ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { id } = params;
+    const task = mockTasks.find((t) => t.id === id);
+    if (!task) {
+      return HttpResponse.json({ error: 'not_found', message: `Task "${id}" không tồn tại` }, { status: 404 });
+    }
+    task.paused = false;
+    task.pauseReason = null;
+    task.updatedAt = new Date().toISOString();
+    return HttpResponse.json({ ok: true, paused: false });
+  }),
+
   // POST /api/tasks/:id/review
   http.post('/api/tasks/:id/review', async ({ params, request }) => {
     if (!checkAuth(request)) {

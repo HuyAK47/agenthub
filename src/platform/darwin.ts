@@ -1,0 +1,81 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile, execFileSync } from 'node:child_process';
+import type { PlatformApi, PlatformProcessInfo } from './types.js';
+
+function command(args: string[]): string { try { return execFileSync(args[0], args.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } }
+
+const TRACKED_NAMES = /^(?:node|agy|codex|claude|vitest|npm|pnpm)$/i;
+
+type ProcessRow = PlatformProcessInfo & { name: string };
+
+function parseProcessRows(output: string): ProcessRow[] {
+  return output.split('\n').flatMap((row) => {
+    const fields = row.trim().split(/\s+/);
+    if (fields.length < 10) return [];
+    const pid = Number(fields[0]);
+    const ppid = Number(fields[1]);
+    const rssKb = Number(fields[2]);
+    const cpu = Number(fields[3]);
+    if (![pid, ppid, rssKb, cpu].every(Number.isFinite)) return [];
+    const name = fields.slice(9).join(' ');
+    const parsedStart = Date.parse(fields.slice(4, 9).join(' '));
+    return [{ pid, ppid, parentName: '', rss: rssKb * 1024, cpu, cwd: '', startedAt: Number.isNaN(parsedStart) ? 0 : parsedStart, name }];
+  });
+}
+
+function parseCwds(output: string): Map<number, string> {
+  const result = new Map<number, string>();
+  let pid: number | null = null;
+  for (const line of output.split('\n')) {
+    if (line.startsWith('p')) {
+      const parsed = Number(line.slice(1));
+      pid = Number.isFinite(parsed) ? parsed : null;
+    } else if (line.startsWith('n') && pid !== null) {
+      result.set(pid, line.slice(1));
+    }
+  }
+  return result;
+}
+
+function listProcesses(): PlatformProcessInfo[] {
+  const processes = parseProcessRows(command(['ps', '-axo', 'pid=,ppid=,rss=,%cpu=,lstart=,comm=']));
+  const byPid = new Map(processes.map((processInfo) => [processInfo.pid, processInfo]));
+  const relevant = new Set<number>(processes.filter((processInfo) => TRACKED_NAMES.test(processInfo.name)).map((processInfo) => processInfo.pid));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const processInfo of processes) {
+      if (!relevant.has(processInfo.pid) && relevant.has(processInfo.ppid)) {
+        relevant.add(processInfo.pid);
+        changed = true;
+      }
+    }
+  }
+
+  const relevantPids = [...relevant].sort((left, right) => left - right);
+  const cwdOutput = relevantPids.length > 0
+    ? command(['lsof', '-a', '-d', 'cwd', '-Fpn', '-p', relevantPids.join(',')])
+    : '';
+  const cwds = parseCwds(cwdOutput);
+  return processes.map(({ name: _name, ...processInfo }) => ({
+    ...processInfo,
+    parentName: byPid.get(processInfo.ppid)?.name || '',
+    cwd: cwds.get(processInfo.pid) || '',
+  } satisfies PlatformProcessInfo));
+}
+
+function parentPid(pid: number): number | null { const row = command(['ps', '-o', 'ppid=', '-p', String(pid)]).trim(); return row ? Number(row) || null : null; }
+function freeMemoryBytes(): number { return os.freemem(); }
+function lowPriority(executable: string, args: string[]): [string, string[]] { return process.env.AGENTHUB_NO_NICE === '1' ? [executable, args] : ['/usr/bin/nice', ['-n', '10', executable, ...args]]; }
+function openBrowser(url: string, openFn?: (file: string, args: string[], callback?: (err: Error | null) => void) => void): void { if (openFn) return openFn('open', [url]); execFile('open', [url], () => {}); }
+function installService(opts: { nodePath: string; cliPath: string; currentPath: string; homeDir: string; print: boolean; exec?: (command: string, options: { stdio: 'inherit' }) => void }) {
+  const file = path.join(opts.homeDir, 'Library', 'LaunchAgents', 'dev.agenthub.plist');
+  const content = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>dev.agenthub</string><key>ProgramArguments</key><array><string>${opts.nodePath}</string><string>${opts.cliPath}</string><string>daemon</string></array><key>EnvironmentVariables</key><dict><key>PATH</key><string>${opts.currentPath}</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>\n`;
+  const activate = `launchctl bootstrap gui/${process.getuid?.() ?? ''} ${file}`;
+  if (!opts.print) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content, 'utf8'); (opts.exec || ((cmd, options) => execFileSync('sh', ['-c', cmd], options)))(activate, { stdio: 'inherit' }); }
+  return { file, content, activate };
+}
+
+export const darwinPlatform: PlatformApi = { process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService, serviceCheck: () => ({ id: 'service', name: 'Service nền tảng', status: 'skip', message: 'macOS dùng LaunchAgent; systemd không được hỗ trợ. Chạy agenthub install-service để tạo ~/Library/LaunchAgents/dev.agenthub.plist.', suggestion: 'LaunchAgent được nạp bằng launchctl bootstrap khi cài đặt.', details: { platform: 'darwin', limited: ['ionice', 'systemd'] } }) };
