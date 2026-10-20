@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { readCodexRateLimits } from './codex-usage.js';
 import { promisify } from 'node:util';
 import { ProfileRepo, ProfileRow, QuotaMarkRepo, QuotaUsageRepo, QuotaUsageRow } from '../db/index.js';
 import { isProfileLoggedIn } from '../profiles/index.js';
@@ -108,6 +109,7 @@ export class QuotaUsageService {
   }
 
   start(): void {
+    // Drop stale codex rows (older versions stored agy groups); collectAll re-reads Codex logs.
     this.usage.deleteForEngine('codex');
     this.collectAll();
     this.timer = setInterval(() => this.collectAll(), 5 * 60 * 1000);
@@ -118,6 +120,28 @@ export class QuotaUsageService {
     for (const profile of this.profiles.getEnabled().filter((p) => p.engine === 'agy' && this.isLoggedIn(p))) {
       this.collect(profile);
     }
+    for (const profile of this.profiles.getEnabled().filter((p) => p.engine === 'codex')) {
+      this.collectCodex(profile);
+    }
+  }
+
+  /** Codex writes its rate limits into session logs; read them instead of spending quota. */
+  collectCodex(profile: ProfileRow, now = Math.floor(Date.now() / 1000)): QuotaUsageRow[] {
+    if (profile.engine !== 'codex') return [];
+    const codexDir = path.join(profile.home || os.homedir(), '.codex');
+    const limits = readCodexRateLimits(codexDir);
+    if (!limits) return [];
+    const rows: QuotaUsageRow[] = limits.windows.map((w) => ({
+      profileName: profile.name,
+      grp: 'Codex',
+      window: w.window,
+      // A window whose reset time has passed starts again from zero usage.
+      remainingPct: w.resetAt > 0 && w.resetAt <= now ? 100 : Math.max(0, Math.min(100, Math.round(100 - w.usedPercent))),
+      resetAt: w.resetAt,
+      fetchedAt: limits.observedAt,
+    }));
+    for (const row of rows) this.usage.upsert(row);
+    return rows;
   }
 
   async collect(profile: ProfileRow): Promise<QuotaUsageRow[]> {

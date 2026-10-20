@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -6,6 +7,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket } from 'ws';
 import { AppService, HttpError } from '../services/index.js';
 import { findClaudeBin } from '../chat/claude.js';
+import { CodexEngine } from '../engines/index.js';
 import { isProfileLoggedIn } from '../profiles/index.js';
 
 interface PtySession {
@@ -60,16 +62,25 @@ export class PtyManager {
       env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
     }
 
-    const command = profile.engine === 'claude'
-      ? (findClaudeBin(this.service.config.chat.claudeBin) || process.env.AGENTHUB_CLAUDE_BIN)
-      : (process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
-    if (!command) throw new HttpError(404, 'not_found', 'Không tìm thấy lệnh claude');
+    let args: string[] = [];
+    let command: string | null | undefined;
+    if (profile.engine === 'claude') {
+      command = findClaudeBin(this.service.config.chat.claudeBin) || process.env.AGENTHUB_CLAUDE_BIN;
+    } else if (profile.engine === 'codex') {
+      // Device-code login works from the dashboard: the CLI prints a URL and a one-time code.
+      command = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
+      args = ['login', '--device-auth'];
+      if (profile.kind === 'isolated' && profile.home) env.CODEX_HOME = profile.home;
+    } else {
+      command = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+    }
+    if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
 
-    const ptyProcess = pty.spawn(command, [], {
+    const ptyProcess = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
-      cwd: home,
+      cwd: fs.existsSync(home) ? home : os.homedir(),
       env,
     });
 

@@ -359,7 +359,7 @@ export const ProfilesPage: React.FC = () => {
                   const isNotLoggedIn = profile.authState === 'not_logged_in' || (!isNeedsVerification && !isLoggedIn);
                   const needsReLogin = profile.authState === 'not_logged_in' &&
                     Boolean(profile.authMessage && /401|hết hạn|expired/i.test(profile.authMessage));
-                  const canLogin = (profile.engine === 'agy' && profile.kind === 'isolated') || profile.engine === 'claude';
+                  const canLogin = (profile.engine === 'agy' && profile.kind === 'isolated') || profile.engine === 'claude' || profile.engine === 'codex';
 
                   return (
                     <tr
