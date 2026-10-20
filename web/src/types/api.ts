@@ -406,6 +406,17 @@ export interface ChatMessageMeta {
   retryText?: string;
 }
 
+export interface ChatPermissionRequest {
+  id: string;
+  sessionId: string;
+  messageId?: string | null;
+  toolName: string;
+  input: Record<string, unknown>;
+  status: 'pending' | 'allow' | 'deny' | 'allow_always';
+  message?: string | null;
+  createdAt: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatMessageRole;
