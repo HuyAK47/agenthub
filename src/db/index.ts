@@ -346,6 +346,26 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE profiles ADD COLUMN deletedAt TEXT;
   `,
+  // Migration 24: task notes and overlaps
+  `
+  CREATE TABLE IF NOT EXISTS task_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projectId TEXT NOT NULL,
+    taskId TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('note', 'overlap')),
+    content TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (projectId) REFERENCES projects(id),
+    FOREIGN KEY (taskId) REFERENCES tasks(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_notes_project ON task_notes(projectId, id);
+  CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(taskId, id);
+  `,
+  // Migration 25: persist dependency context before worktrees are cleaned up
+  `
+  ALTER TABLE tasks ADD COLUMN doneReport TEXT;
+  ALTER TABLE tasks ADD COLUMN diffStat TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -450,6 +470,8 @@ export interface TaskRow {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  doneReport?: string | null;
+  diffStat?: string | null;
   slot: number | null;
   createdAt: string;
   updatedAt: string;
@@ -730,12 +752,14 @@ export class TaskRepo {
     status?: string;
     waitReason?: WaitReason;
     worktreePath?: string | null;
+    doneReport?: string | null;
+    diffStat?: string | null;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -751,6 +775,8 @@ export class TaskRepo {
         row.status || 'draft',
         row.waitReason || null,
         row.worktreePath || null,
+        row.doneReport || null,
+        row.diffStat || null,
       );
 
     // Populate task_deps
@@ -776,7 +802,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
@@ -1358,4 +1384,78 @@ export class RunMetricsRepo {
       .run(taskId, keepRunId);
   }
 }
+
+export type TaskNoteKind = 'note' | 'overlap';
+
+export interface TaskNoteRow {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: TaskNoteKind;
+  content: string;
+  createdAt: string;
+}
+
+export class TaskNoteRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: {
+    projectId: string;
+    taskId: string;
+    kind: TaskNoteKind;
+    content: string;
+  }): TaskNoteRow {
+    const info = this.db
+      .prepare(
+        'INSERT INTO task_notes (projectId, taskId, kind, content) VALUES (?, ?, ?, ?)',
+      )
+      .run(row.projectId, row.taskId, row.kind, row.content);
+    return this.get(info.lastInsertRowid as number)!;
+  }
+
+  get(id: number): TaskNoteRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE id = ?')
+      .get(id) as TaskNoteRow | undefined;
+  }
+
+  getByProject(projectId: string, sinceId?: number): TaskNoteRow[] {
+    if (sinceId !== undefined && !Number.isNaN(sinceId)) {
+      return this.db
+        .prepare('SELECT * FROM task_notes WHERE projectId = ? AND id > ? ORDER BY id ASC')
+        .all(projectId, sinceId) as TaskNoteRow[];
+    }
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE projectId = ? ORDER BY id ASC')
+      .all(projectId) as TaskNoteRow[];
+  }
+
+  getByTask(taskId: string): TaskNoteRow[] {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE taskId = ? ORDER BY id ASC')
+      .all(taskId) as TaskNoteRow[];
+  }
+
+  hasOverlap(taskId: string, otherTaskId: string, file: string): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT id FROM task_notes WHERE taskId = ? AND kind = 'overlap' AND content LIKE ? LIMIT 1",
+      )
+      .get(taskId, `%${file}%${otherTaskId}%`);
+    return Boolean(row);
+  }
+
+  getActiveOverlaps(runningTaskIds: string[]): TaskNoteRow[] {
+    if (runningTaskIds.length === 0) return [];
+    const placeholders = runningTaskIds.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT * FROM task_notes
+         WHERE kind = 'overlap' AND taskId IN (${placeholders})
+         ORDER BY id DESC LIMIT 50`,
+      )
+      .all(...runningTaskIds) as TaskNoteRow[];
+  }
+}
+
 

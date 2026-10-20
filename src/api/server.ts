@@ -156,6 +156,12 @@ export async function createServer(
     return service.deleteProject(id);
   });
 
+  fastify.get('/api/projects/:id/notes', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { since?: string; runningOnly?: string; taskId?: string };
+    return service.getProjectNotes(id, query);
+  });
+
   // --- Profiles API ---
   fastify.get('/api/profiles', async () => {
     return service.listProfiles();
@@ -263,6 +269,17 @@ export async function createServer(
   fastify.post('/api/tasks/:id/checks/rerun', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.rerunChecks(id);
+  });
+
+  fastify.post('/api/tasks/:id/notes', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const note = service.createTaskNote(id, req.body);
+    return reply.status(201).send(note);
+  });
+
+  fastify.get('/api/tasks/:id/notes', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getTaskNotes(id);
   });
 
   // --- Config API ---

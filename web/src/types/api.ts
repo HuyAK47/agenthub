@@ -206,10 +206,20 @@ export interface ClaudeQuota {
   limited?: boolean;
 }
 
+export interface TaskNote {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: 'note' | 'overlap';
+  content: string;
+  createdAt: string;
+}
+
 export interface HubStatus {
   tasks: Record<string, number>;
   profiles?: Profile[];
   running: RunningWorker[];
+  overlaps?: TaskNote[];
   brain?: BrainStatus;
   disk?: {
     freeGB: number;

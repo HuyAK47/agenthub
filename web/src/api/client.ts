@@ -14,6 +14,7 @@ import {
   SystemConfig,
   Task,
   TaskDetail,
+  TaskNote,
   UpdateProjectInput,
   UpdateTaskInput,
   VersionResponse,
@@ -376,6 +377,34 @@ export async function getTaskLog(
   if (params?.tail) query.set('tail', String(params.tail));
   const qStr = query.toString();
   return apiFetch<string>(`/api/tasks/${encodeURIComponent(id)}/log${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getProjectNotes(
+  projectId: string,
+  params?: { since?: number; runningOnly?: boolean; taskId?: string },
+): Promise<TaskNote[]> {
+  const query = new URLSearchParams();
+  if (params?.since !== undefined) query.set('since', String(params.since));
+  if (params?.runningOnly) query.set('runningOnly', 'true');
+  if (params?.taskId) query.set('taskId', params.taskId);
+  const qStr = query.toString();
+  return apiFetch<TaskNote[]>(`/api/projects/${encodeURIComponent(projectId)}/notes${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getTaskNotes(id: string): Promise<TaskNote[]> {
+  const normalizedId = id.replace(/\//g, '~');
+  return apiFetch<TaskNote[]>(`/api/tasks/${encodeURIComponent(normalizedId)}/notes`);
+}
+
+export async function createTaskNote(
+  taskId: string,
+  data: { content: string; kind?: 'note' | 'overlap' },
+): Promise<TaskNote> {
+  const normalizedId = taskId.replace(/\//g, '~');
+  return apiFetch<TaskNote>(`/api/tasks/${encodeURIComponent(normalizedId)}/notes`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
 }
 
 export async function getConfig(): Promise<SystemConfig> {

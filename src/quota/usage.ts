@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { readCodexRateLimits } from './codex-usage.js';
+import { parseClaudeUsage, runClaudeUsage } from './claude-usage.js';
 import { promisify } from 'node:util';
 import { ProfileRepo, ProfileRow, QuotaMarkRepo, QuotaUsageRepo, QuotaUsageRow } from '../db/index.js';
 import { isProfileLoggedIn } from '../profiles/index.js';
@@ -95,6 +96,13 @@ export class QuotaUsageService {
     this.isLoggedIn = isLoggedIn || isProfileLoggedIn;
   }
 
+  private claude: { bin: () => string | null; cwd: string } | null = null;
+  private claudeInFlight = new Set<string>();
+  private static CLAUDE_MIN_INTERVAL_SEC = 15 * 60;
+
+  /** Enable Claude `/usage` collection (bin resolver avoids importing chat code here). */
+  configureClaude(opts: { bin: () => string | null; cwd: string }): void { this.claude = opts; }
+
   getForProfile(name: string): QuotaUsageRow[] { return this.usage.getForProfile(name); }
   getAll(): QuotaUsageRow[] { return this.usage.getAll(); }
 
@@ -123,6 +131,45 @@ export class QuotaUsageService {
     }
     for (const profile of this.profiles.getEnabled().filter((p) => p.engine === 'codex')) {
       this.collectCodex(profile);
+    }
+    for (const profile of this.profiles.getEnabled().filter((p) => p.engine === 'claude')) {
+      void this.collectClaude(profile);
+    }
+  }
+
+  /**
+   * Read the 5-hour and weekly limits from Claude Code's `/usage` screen in a PTY.
+   * Periodic calls run at most every 15 minutes per profile; `force` is for the refresh button.
+   */
+  async collectClaude(profile: ProfileRow, force = false): Promise<QuotaUsageRow[]> {
+    if (profile.engine !== 'claude' || !this.claude || this.claudeInFlight.has(profile.name)) return [];
+    const now = Math.floor(Date.now() / 1000);
+    const last = Math.max(0, ...this.usage.getForProfile(profile.name).map((u) => u.fetchedAt));
+    if (!force && now - last < QuotaUsageService.CLAUDE_MIN_INTERVAL_SEC) return [];
+    const bin = this.claude.bin();
+    if (!bin) return [];
+    this.claudeInFlight.add(profile.name);
+    try {
+      const raw = await runClaudeUsage({
+        claudeBin: bin,
+        configDir: profile.kind === 'isolated' && profile.home ? profile.home : undefined,
+        cwd: this.claude.cwd,
+      });
+      const fetchedAt = Math.floor(Date.now() / 1000);
+      const rows: QuotaUsageRow[] = parseClaudeUsage(raw).map((w) => ({
+        profileName: profile.name,
+        grp: w.group,
+        window: w.window,
+        remainingPct: Math.max(0, 100 - w.usedPercent),
+        resetAt: w.resetAt,
+        fetchedAt,
+      }));
+      for (const row of rows) this.usage.upsert(row);
+      return rows;
+    } catch {
+      return [];
+    } finally {
+      this.claudeInFlight.delete(profile.name);
     }
   }
 
