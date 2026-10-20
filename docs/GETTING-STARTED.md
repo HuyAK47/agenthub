@@ -64,6 +64,10 @@ Trạng thái hồ sơ gồm **Đã đăng nhập**, **Chưa đăng nhập**, **
 
 Nếu không thấy link, kiểm tra terminal đầy đủ và dùng **Kết nối lại**. Nếu mã hết hạn, bấm **Đăng nhập lại**; nếu tài khoản cần xác minh, mở link xác minh trên thẻ rồi bấm **Kiểm tra**. Khi thấy cảnh báo trùng email, đăng nhập lại bằng tài khoản Google khác.
 
+### Accounts & provider terms
+
+Mặc định AgentHub chỉ cho một hồ sơ **personal** trên mỗi engine để tránh khuyến khích xoay vòng nhiều tài khoản cá nhân nhằm vượt giới hạn. Hồ sơ **API key** và **Team** vẫn được phép thêm. Nếu bật `multiplePerProvider`, dashboard sẽ cảnh báo và bạn chịu trách nhiệm tuân thủ điều khoản của nhà cung cấp; nhiều gói cá nhân cấm chia sẻ hoặc vượt giới hạn. Khi dùng chung, nên ưu tiên API key hoặc gói Team thay vì nhiều gói cá nhân.
+
 ## 5. Đăng ký dự án
 
 ```bash
@@ -130,7 +134,8 @@ Trang **Settings** (hoặc `PUT /api/config`):
     "minFreeGB": 3,
     "extraPaths": [{ "path": "/var/lib/docker", "minFreeGB": 1.5, "label": "Docker" }]
   },
-  "defaultTimeout": 5400
+  "defaultTimeout": 5400,
+  "multiplePerProvider": false
 }
 ```
 
