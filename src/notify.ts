@@ -148,6 +148,15 @@ export class NotificationService {
         break;
       }
 
+      case 'claude.auto_resumed': {
+        if (p.started === true) {
+          this.notify('Claude đã tự tiếp tục phiên sau khi hết giới hạn', 'normal');
+        } else if (p.ok === false) {
+          this.notify('Claude tự tiếp tục nhưng phiên đã lỗi', 'critical');
+        }
+        break;
+      }
+
       case 'profile.auth_expired': {
         const name = typeof p.name === 'string' ? p.name : 'tài khoản';
         this.notify(`Hồ sơ ${name} cần đăng nhập lại`, 'normal');

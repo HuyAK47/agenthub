@@ -19,7 +19,7 @@ import {
   KnowledgeRepo,
 } from '../db/index.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
-import { getModelFamily, getModelEngine, QuotaService } from '../quota/index.js';
+import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
@@ -153,6 +153,7 @@ export class Scheduler {
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
+  private notifiedSkippedModels = new Set<string>();
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -1369,6 +1370,15 @@ export class Scheduler {
       // Check dependencies
       if (!this.areDependenciesMet(task)) continue;
 
+      if (this.getModelChain(task).length === 0) {
+        this.taskRepo.updateStatus(task.id, 'failed');
+        this.eventBus.emit('task.failed', task.id, {
+          reason: 'no_usable_model',
+          message: 'Model chain không có model hợp lệ thuộc engine đã biết',
+        });
+        continue;
+      }
+
       // Check project parallel limit
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
@@ -1533,6 +1543,7 @@ export class Scheduler {
         readOnly: true,
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
+        hubHome: this.config.hubHome,
       });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
@@ -1847,12 +1858,23 @@ export class Scheduler {
   }
 
   private getModelChain(task: TaskRow): string[] {
-    if (task.modelChain) {
-      return JSON.parse(task.modelChain) as string[];
-    }
-    return task.level === 'hard'
+    const chain = task.modelChain
+      ? JSON.parse(task.modelChain) as string[]
+      : task.level === 'hard'
       ? this.config.defaultModelChains.hard
       : this.config.defaultModelChains.easy;
+    return chain.filter((model) => {
+      if (isKnownModel(model)) return true;
+      const key = `${task.id}:${model}`;
+      if (!this.notifiedSkippedModels.has(key)) {
+        this.notifiedSkippedModels.add(key);
+        this.eventBus.emit('task.model_skipped', task.id, {
+          model,
+          message: `Bỏ qua model không thuộc engine đã cấu hình: ${model}`,
+        });
+      }
+      return false;
+    });
   }
 
   private getDependencyContext(task: TaskRow): DependencyContext[] {
@@ -2059,6 +2081,7 @@ export class Scheduler {
         logPath,
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
+        hubHome: this.config.hubHome,
       });
 
       const pid = child.pid!;

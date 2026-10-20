@@ -143,6 +143,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     delete process.env.FAKE_CLAUDE_LOG;
     delete process.env.FAKE_CLAUDE_STREAM_JSON;
     clearPartialSupportCache();
+    delete process.env.FAKE_QUOTA_ONCE_FILE;
   });
 
   it('unit test: parse.ts handles all stream-json line types and ignores invalid lines', () => {
@@ -833,6 +834,22 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     await server.inject({ method: 'POST', url: `/api/chat/sessions/${quotaSession.id}/messages`, headers: authHeaders(), payload: { text: 'quota' } });
     await vi.waitFor(() => expect(quotaError).not.toBeNull(), { timeout: 15000 });
     expect(quotaError?.message).toContain('Usage limit');
+  }, 60000);
+
+  it('persists a Claude limit retry and can send it immediately after the limit clears', async () => {
+    const marker = path.join(tmpDir, 'quota-once');
+    process.env.FAKE_QUOTA_ONCE_FILE = marker;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body) as { id: string };
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'quota-once' } });
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_limit'), { timeout: 15000 });
+    const pending = ctx.chatRetryRepo.getPending().find((retry) => retry.sessionId === session.id);
+    expect(pending).toMatchObject({ sessionId: session.id, status: 'pending' });
+    expect((await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/limit-retry/now`, headers: authHeaders() })).statusCode).toBe(200);
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('idle'), { timeout: 15000 });
+    expect(ctx.chatRetryRepo.getPending()).toHaveLength(0);
+    expect(ctx.chatRetryRepo.get(pending!.messageId)?.status).toBe('sent');
+    expect(ctx.chatMessageRepo.getBySession(session.id).some((message) => message.role === 'assistant')).toBe(true);
   }, 60000);
 
   it('validates text bounds: rejects empty or > 20000 characters (400)', async () => {

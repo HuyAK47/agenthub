@@ -151,6 +151,8 @@ export const en: typeof vi = {
     createBtn: 'Create Task',
     creatingBtn: 'Creating...',
     createError: 'Failed to create task',
+    modelChainLabel: 'Model chain (comma-separated)',
+    modelChainHint: 'Leave blank to use the default chain.',
   },
   taskDetail: {
     notFound: 'Task not found or an error occurred while loading data.',
@@ -225,6 +227,9 @@ export const en: typeof vi = {
     saving: 'Saving...',
     updateSuccess: 'Task updated successfully.',
     updateError: 'Failed to update task.',
+    retryWithModel: 'Retry with another model',
+    modelWarningTitle: 'Model chain warning',
+    modelWarningItem: 'Model "{model}" is not available in a configured engine and will be skipped.',
   },
   profiles: {
     antigravitySubtitle: 'Google account and Gemini quota', codexSubtitle: 'ChatGPT account and device auth', claudeSubtitle: 'Claude Code account',

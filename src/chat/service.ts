@@ -16,12 +16,14 @@ import {
   QuotaUsageRepo,
   EventRepo,
   ChatSessionRow,
+  ChatRetryRepo,
+  ChatRetryRow,
 } from '../db/index.js';
 import { PermissionBroker } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn } from '../profiles/index.js';
-import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage } from './parse.js';
+import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage, ClaudeQuotaSignal } from './parse.js';
 import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
 import {
   findClaudeBin,
@@ -90,6 +92,7 @@ interface PersistentProcess {
   profileName: string | null;
   stderrOutput: string;
   lastAssistantUsage?: AssistantUsage;
+  limitResetSeconds?: number;
 }
 
 export class ChatService {
@@ -99,6 +102,7 @@ export class ChatService {
   private persistentProcesses = new Map<string, PersistentProcess>();
   private snapshotAt = new Map<string, number>();
   private snapshotEventAt = new Map<string, number>();
+  private retryTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     public config: AgentHubConfig,
@@ -113,7 +117,7 @@ export class ChatService {
     public quotaMarkRepo?: QuotaMarkRepo,
     public quotaUsageRepo?: QuotaUsageRepo,
     public eventRepo?: EventRepo,
-    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState },
+    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo },
   ) {
     if (options?.claudeBin) {
       this.claudeBinOverride = options.claudeBin;
@@ -121,9 +125,12 @@ export class ChatService {
     this.failoverState = options?.failoverState || new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'));
     // Daemon khởi động lại thì reset busy=0 cho mọi phiên
     this.chatSessionRepo.resetAllBusy();
+    this.retryRepo = options?.retryRepo;
+    for (const retry of this.retryRepo?.getPending() || []) this.armRetry(retry);
   }
 
   private failoverState: ClaudeFailoverState;
+  private retryRepo?: ChatRetryRepo;
 
   private hubSnapshot(session: ChatSessionRow, refresh = false): string {
     const project = session.projectId ? this.projectRepo.get(session.projectId) : undefined;
@@ -216,9 +223,9 @@ export class ChatService {
     return result;
   }
 
-  private recordClaudeQuota(streamText: string, stderr: string, exitCode?: number | null): void {
+  private recordClaudeQuota(streamText: string, stderr: string, exitCode?: number | null): ClaudeQuotaSignal {
     const result = detectClaudeQuota({ streamText, stderr, exitCode });
-    if (!result.exhausted) return;
+    if (!result.exhausted) return result;
     const snapshot = this.failoverState.snapshot().active
       ? this.failoverState.advance('claude_usage_limit')
       : this.failoverState.activate(result.resetSeconds || this.config.reviewer.failoverSec, 'claude_usage_limit');
@@ -228,6 +235,72 @@ export class ChatService {
     });
     this.eventBus.emit('claude.fallback_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });
     this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until, step: snapshot.step });
+    return result;
+  }
+
+  private shouldRetryLimit(): boolean {
+    const snapshot = this.failoverState.snapshot();
+    return !snapshot.active || snapshot.step?.type === 'wait';
+  }
+
+  private scheduleLimitRetry(turn: QueuedTurn, resetSeconds?: number, message?: string): boolean {
+    if (!this.retryRepo || !this.shouldRetryLimit()) return false;
+    const existing = this.retryRepo.get(turn.messageId);
+    const attempts = existing?.attempts || 0;
+    if (attempts >= 6) {
+      this.retryRepo.markFailed(turn.messageId);
+      return false;
+    }
+    const resetAt = Math.floor(Date.now() / 1000) + (resetSeconds || 5 * 3600);
+    if (existing) this.retryRepo.defer(turn.messageId, resetAt);
+    else this.retryRepo.insert({ sessionId: turn.sessionId, messageId: turn.messageId, text: turn.text, resetAt });
+    this.chatSessionRepo.setWaitingLimit(turn.sessionId, resetAt);
+    this.emitEvent('chat.error', { sessionId: turn.sessionId, messageId: turn.messageId, message: message || 'Claude đã chạm giới hạn sử dụng', pendingRetry: true, resetAt });
+    this.emitEvent('chat.limit_waiting', { sessionId: turn.sessionId, messageId: turn.messageId, resetAt, attempts });
+    this.armRetry(this.retryRepo.get(turn.messageId)!);
+    return true;
+  }
+
+  private armRetry(retry: ChatRetryRow): void {
+    const old = this.retryTimers.get(retry.messageId);
+    if (old) clearTimeout(old);
+    const delay = Math.max(0, retry.resetAt * 1000 + 60_000 - Date.now());
+    const timer = setTimeout(() => this.runRetry(retry.messageId), delay);
+    timer.unref?.();
+    this.retryTimers.set(retry.messageId, timer);
+  }
+
+  private runRetry(messageId: string): void {
+    const retry = this.retryRepo?.get(messageId);
+    if (!retry || retry.status !== 'pending') return;
+    if (retry.attempts >= 6) { this.retryRepo?.markFailed(messageId); return; }
+    this.retryRepo?.markSent(messageId);
+    this.chatSessionRepo.clearWaitingLimit(retry.sessionId);
+    const session = this.chatSessionRepo.get(retry.sessionId);
+    if (!session) return;
+    this.queue.push({ sessionId: retry.sessionId, messageId: retry.messageId, text: retry.text, projectId: session.projectId, mode: session.mode, claudeSessionId: session.claudeSessionId, model: session.model, profileName: session.profileName });
+    this.chatSessionRepo.setBusy(retry.sessionId, 1);
+    this.setSessionState(retry.sessionId, 'running');
+    this.processQueue();
+  }
+
+  cancelLimitRetry(sessionId: string): { ok: boolean } {
+    const retry = this.retryRepo?.getPending().find((item) => item.sessionId === sessionId);
+    if (!retry) return { ok: false };
+    const timer = this.retryTimers.get(retry.messageId); if (timer) clearTimeout(timer);
+    this.retryTimers.delete(retry.messageId);
+    this.retryRepo?.markCancelled(retry.messageId);
+    this.chatSessionRepo.clearWaitingLimit(sessionId);
+    this.emitEvent('chat.limit_cancelled', { sessionId, messageId: retry.messageId });
+    return { ok: true };
+  }
+
+  retryLimitNow(sessionId: string): { ok: boolean } {
+    const retry = this.retryRepo?.getPending().find((item) => item.sessionId === sessionId);
+    if (!retry) return { ok: false };
+    this.retryRepo?.defer(retry.messageId, Math.floor(Date.now() / 1000) - 1);
+    this.runRetry(retry.messageId);
+    return { ok: true };
   }
 
   private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string>; pausedUntil?: number } {
@@ -427,7 +500,7 @@ export class ChatService {
       throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
     }
     const model = body.model ?? this.config.chat.model;
-    const allowedModels = new Set(['', 'sonnet', 'haiku', this.config.chat.model]);
+    const allowedModels = new Set(['', ...(this.config.chat.models || ['opus', 'sonnet', 'haiku']), this.config.chat.model]);
     if (!allowedModels.has(model)) {
       throw new HttpError(400, 'bad_request', 'Model chat phải là mặc định, sonnet hoặc haiku');
     }
@@ -440,11 +513,22 @@ export class ChatService {
       title?: string;
       pinned?: boolean | number;
       archived?: boolean | number;
+      model?: string;
     },
   ): ChatSessionRow {
     const session = this.chatSessionRepo.get(id);
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${id}" không tồn tại`);
+    }
+
+    if (body.model !== undefined) {
+      const { model } = this.validateSessionOptions({ model: body.model });
+      if (session.busy === 1 || this.runningTurns.has(id)) {
+        throw new HttpError(409, 'conflict', 'Hãy đợi lượt chat hiện tại kết thúc trước khi đổi model');
+      }
+      const proc = this.persistentProcesses.get(id);
+      if (proc) this.closePersistentProcess(proc);
+      this.chatSessionRepo.updateModel(id, model);
     }
 
     if (body.title !== undefined) {
@@ -1199,6 +1283,7 @@ export class ChatService {
     let hasStreamedPartials = false;
     let resultHandled = false;
     let lastAssistantUsage: AssistantUsage | undefined;
+    let limitResetSeconds: number | undefined;
     const startTime = Date.now();
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -1247,6 +1332,8 @@ export class ChatService {
           runningTurn.pendingToolUse = false;
           runningTurn.waitingPermission = false;
           this.resetTurnWatchdog(runningTurn);
+        } else if (ev.type === 'rate_limit_info' && /rejected|limited|exhausted/i.test(ev.status)) {
+          limitResetSeconds = ev.resetsAt ? Math.max(1, ev.resetsAt - Math.floor(Date.now() / 1000) + 60) : 5 * 3600;
         } else if (ev.type === 'result') {
           resultHandled = true;
           if (ev.result) accumulatedText += ev.result;
@@ -1266,6 +1353,8 @@ export class ChatService {
 
           if (ev.isError) {
             const errMsg = ev.result || 'Claude error';
+            const quota = detectClaudeQuota({ streamText: errMsg });
+            if (quota.exhausted && this.scheduleLimitRetry(turn, quota.resetSeconds, errMsg)) continue;
             if (turn.claudeSessionId && /session|resume|conversation/i.test(errMsg) && /not found|invalid|unknown|exist/i.test(errMsg)) {
               this.chatSessionRepo.clearClaudeSessionId(turn.sessionId);
               this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: turn.sessionId, role: 'error', content: 'Đã mở phiên mới, ngữ cảnh cũ không còn' });
@@ -1361,9 +1450,12 @@ export class ChatService {
 
       const running = this.runningTurns.get(turn.sessionId);
       if (running && !running.cancelled) {
-        this.recordClaudeQuota(accumulatedText, stderrOutput, code);
+        const quota = this.recordClaudeQuota(accumulatedText, stderrOutput, code);
+        if (!quota.exhausted && limitResetSeconds) { quota.exhausted = true; quota.resetSeconds = limitResetSeconds; }
         if (!resultHandled) {
-          if (code !== 0) {
+          if (quota.exhausted && this.scheduleLimitRetry(turn, quota.resetSeconds, stderrOutput.trim())) {
+            // The original user message remains pending until the retry succeeds.
+          } else if (code !== 0) {
             const errMsg = stderrOutput.trim() || `Claude process exited with code ${code}`;
             try {
               this.chatMessageRepo.insert({
@@ -1463,6 +1555,7 @@ export class ChatService {
         this.chatSessionRepo.updateClaudeSessionId(proc.sessionId, ev.sessionId);
       }
       if (ev.type === 'result' && proc.active) this.finishPersistentTurn(proc, ev);
+      else if (ev.type === 'rate_limit_info' && /rejected|limited|exhausted/i.test(ev.status)) proc.limitResetSeconds = ev.resetsAt ? Math.max(1, ev.resetsAt - Math.floor(Date.now() / 1000) + 60) : 5 * 3600;
       else if (ev.type === 'tool_use' && proc.active) {
         if (ev.usage) proc.lastAssistantUsage = ev.usage;
         proc.active.pendingToolUse = true;
@@ -1503,7 +1596,8 @@ export class ChatService {
     if (running.cancelTimer) clearTimeout(running.cancelTimer);
     proc.active = undefined;
     this.runningTurns.delete(proc.sessionId);
-    this.recordClaudeQuota(ev.result || '', proc.stderrOutput, 0);
+    const quota = this.recordClaudeQuota(ev.result || '', proc.stderrOutput, 0);
+    if (!quota.exhausted && proc.limitResetSeconds) { quota.exhausted = true; quota.resetSeconds = proc.limitResetSeconds; }
     if (ev.costUsd !== undefined) this.failoverState.recordCost(ev.costUsd);
     this.chatSessionRepo.setBusy(proc.sessionId, 0);
     let contextTokens = 0;
@@ -1520,9 +1614,17 @@ export class ChatService {
     const isForkSummary = running.isForkSummary;
     const onFinish = running.onFinish;
 
+    proc.limitResetSeconds = undefined;
     if (ev.isError) {
-      this.setSessionState(proc.sessionId, 'error');
       const session = this.chatSessionRepo.get(proc.sessionId);
+      const retryTurn: QueuedTurn = { sessionId: proc.sessionId, messageId: running.messageId, text: this.chatMessageRepo.getBySession(proc.sessionId, 100000).find((message) => message.role === 'user' && message.id !== running.messageId)?.content || '', projectId: session?.projectId || null, mode: session?.mode || 'safe', claudeSessionId: session?.claudeSessionId || null, model: proc.model, profileName: proc.profileName };
+      if (quota.exhausted && retryTurn.text && this.scheduleLimitRetry(retryTurn, quota.resetSeconds, ev.result)) {
+        this.armIdleTimer(proc);
+        setBrainActivity('idle').catch(() => {});
+        this.processQueue();
+        return;
+      }
+      this.setSessionState(proc.sessionId, 'error');
       if (session?.claudeSessionId && /session|resume|conversation/i.test(ev.result || '') && /not found|invalid|unknown|exist/i.test(ev.result || '')) {
         this.chatSessionRepo.clearClaudeSessionId(proc.sessionId);
         this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'error', content: 'Đã mở phiên mới, ngữ cảnh cũ không còn' });
@@ -1621,10 +1723,15 @@ export class ChatService {
       const active = proc.active;
       clearTimeout(active.timeoutTimer);
       this.runningTurns.delete(proc.sessionId);
-      this.recordClaudeQuota('', proc.stderrOutput, null);
+      const quota = this.recordClaudeQuota('', proc.stderrOutput, null);
+      if (!quota.exhausted && proc.limitResetSeconds) { quota.exhausted = true; quota.resetSeconds = proc.limitResetSeconds; }
       this.chatSessionRepo.setBusy(proc.sessionId, 0);
       this.setSessionState(proc.sessionId, 'error');
-      if (!active.cancelled) {
+      const session = this.chatSessionRepo.get(proc.sessionId);
+      const retryTurn: QueuedTurn = { sessionId: proc.sessionId, messageId: active.messageId, text: this.chatMessageRepo.getBySession(proc.sessionId, 100000).find((message) => message.role === 'user')?.content || '', projectId: session?.projectId || null, mode: session?.mode || 'safe', claudeSessionId: session?.claudeSessionId || null, model: proc.model, profileName: proc.profileName };
+      if (!active.cancelled && quota.exhausted && retryTurn.text && this.scheduleLimitRetry(retryTurn, quota.resetSeconds, proc.stderrOutput.trim())) {
+        this.closePersistentProcess(proc);
+      } else if (!active.cancelled) {
         this.chatMessageRepo.insert({ id: active.messageId, sessionId: proc.sessionId, role: 'error', content: 'Claude process đã dừng' });
         this.emitChatError(proc.sessionId, active.messageId, 'Claude process đã dừng');
       }
@@ -1835,6 +1942,14 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   fastify.post('/api/chat/sessions/:id/cancel', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return chatService.cancelSession(id);
+  });
+
+  fastify.post('/api/chat/sessions/:id/limit-retry/cancel', async (req: FastifyRequest) => {
+    return chatService.cancelLimitRetry((req.params as { id: string }).id);
+  });
+
+  fastify.post('/api/chat/sessions/:id/limit-retry/now', async (req: FastifyRequest) => {
+    return chatService.retryLimitNow((req.params as { id: string }).id);
   });
 
   fastify.post('/api/chat/sessions/:id/stop', async (req: FastifyRequest) => {

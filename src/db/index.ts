@@ -426,6 +426,43 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
   PRAGMA foreign_keys = ON;
   `,
+  // Migration 33: durable Claude chat retries and session auto-resume metadata
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE chat_sessions_new (
+    id TEXT PRIMARY KEY, projectId TEXT, claudeSessionId TEXT, title TEXT,
+    mode TEXT NOT NULL DEFAULT 'safe' CHECK(mode IN ('safe','full')),
+    busy INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    model TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'idle' CHECK(state IN ('idle','running','waiting_permission','waiting_limit','error')),
+    profileName TEXT, pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+    lastMessageAt TEXT, inputTokens INTEGER NOT NULL DEFAULT 0, outputTokens INTEGER NOT NULL DEFAULT 0,
+    contextTokens INTEGER NOT NULL DEFAULT 0, waitingLimitResetAt INTEGER,
+    FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  INSERT INTO chat_sessions_new (id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens)
+    SELECT id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens FROM chat_sessions;
+  DROP TABLE chat_sessions;
+  ALTER TABLE chat_sessions_new RENAME TO chat_sessions;
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE IF NOT EXISTS chat_retries (
+    sessionId TEXT NOT NULL,
+    messageId TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    resetAt INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN ('pending','sent','cancelled','failed')),
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_retries_pending ON chat_retries(status, resetAt);
+  ALTER TABLE claude_sessions ADD COLUMN limitResetAt INTEGER;
+  ALTER TABLE claude_sessions ADD COLUMN limitHitAt TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN autoResumeEnabled INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -1094,13 +1131,25 @@ export interface ChatSessionRow {
   model: string;
   profileName: string | null;
   busy: number;
-  state: 'idle' | 'running' | 'waiting_permission' | 'error';
+  state: 'idle' | 'running' | 'waiting_permission' | 'waiting_limit' | 'error';
+  waitingLimitResetAt?: number | null;
   pinned: number;
   archived: number;
   lastMessageAt: string | null;
   inputTokens: number;
   outputTokens: number;
   contextTokens: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatRetryRow {
+  sessionId: string;
+  messageId: string;
+  text: string;
+  resetAt: number;
+  attempts: number;
+  status: 'pending' | 'sent' | 'cancelled' | 'failed';
   createdAt: string;
   updatedAt: string;
 }
@@ -1282,13 +1331,42 @@ export class ChatSessionRepo {
   }
 
   resetAllBusy(): void {
-    this.db.prepare("UPDATE chat_sessions SET busy = 0, state = 'idle' WHERE busy != 0 OR state != 'idle'").run();
+    this.db.prepare("UPDATE chat_sessions SET busy = 0, state = 'idle' WHERE (busy != 0 OR state != 'idle') AND state != 'waiting_limit'").run();
+  }
+
+  setWaitingLimit(id: string, resetAt: number | null): void {
+    this.db.prepare("UPDATE chat_sessions SET waitingLimitResetAt = ?, busy = 0, state = 'waiting_limit', updatedAt = datetime('now') WHERE id = ?").run(resetAt, id);
+  }
+
+  clearWaitingLimit(id: string): void {
+    this.db.prepare("UPDATE chat_sessions SET waitingLimitResetAt = NULL, state = 'idle', updatedAt = datetime('now') WHERE id = ?").run(id);
   }
 
   delete(id: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE sessionId = ?').run(id);
     this.db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
   }
+}
+
+export class ChatRetryRepo {
+  constructor(private db: Database.Database) {}
+
+  getPending(): ChatRetryRow[] {
+    return this.db.prepare("SELECT * FROM chat_retries WHERE status = 'pending' ORDER BY resetAt, createdAt").all() as ChatRetryRow[];
+  }
+
+  get(messageId: string): ChatRetryRow | undefined {
+    return this.db.prepare('SELECT * FROM chat_retries WHERE messageId = ?').get(messageId) as ChatRetryRow | undefined;
+  }
+
+  insert(row: Pick<ChatRetryRow, 'sessionId' | 'messageId' | 'text' | 'resetAt'>): void {
+    this.db.prepare(`INSERT INTO chat_retries (sessionId,messageId,text,resetAt,attempts,status) VALUES (?,?,?,?,0,'pending') ON CONFLICT(messageId) DO UPDATE SET text=excluded.text,resetAt=excluded.resetAt,status='pending',updatedAt=datetime('now')`).run(row.sessionId, row.messageId, row.text, row.resetAt);
+  }
+
+  markSent(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='sent', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
+  markCancelled(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='cancelled', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
+  markFailed(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='failed', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
+  defer(messageId: string, resetAt: number): void { this.db.prepare("UPDATE chat_retries SET attempts=attempts+1, resetAt=?, status='pending', updatedAt=datetime('now') WHERE messageId=?").run(resetAt, messageId); }
 }
 
 export interface ChatPermissionRow {
