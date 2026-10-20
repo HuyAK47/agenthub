@@ -919,7 +919,27 @@ export class Scheduler {
       markers = this.worktreeService.checkMarkers(task.worktreePath) as typeof markers;
     }
 
-    // Measure diff stats if moving to review
+    // Persist dependency context while the marker and branch are still available.
+    if (markers.done) {
+      let diffStat: string | null = null;
+      const project = this.projectRepo.get(task.projectId);
+      const baseRef = task.baseRef || project?.defaultBranch || 'main';
+      const branch = task.branch || `agenthub/${task.slug}`;
+      if (project?.path) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: project.path,
+            timeout: 30_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // The branch may not be available yet; the context can still include DONE.
+        }
+      }
+      this.taskRepo.update(taskId, { doneReport: markers.doneContent, diffStat });
+    }
+
+    // Measure diff stats for run metrics.
     let diffStats = { linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
     if (markers.done) {
       const project = this.projectRepo.get(task.projectId);
@@ -1491,30 +1511,16 @@ export class Scheduler {
       const donePath = dependency.worktreePath
         ? path.join(dependency.worktreePath, '.agenthub', 'DONE')
         : null;
-      const doneContent = donePath && fs.existsSync(donePath)
+      const doneContent = dependency.doneReport ?? (donePath && fs.existsSync(donePath)
         ? fs.readFileSync(donePath, 'utf-8')
-        : undefined;
+        : undefined);
       const reviews = this.reviewRepo?.getByTask(dependency.id) || [];
       const lastReview = reviews[reviews.length - 1];
       const review = lastReview?.verdict === 'approved'
         ? `approved${lastReview.feedback ? ` — ${lastReview.feedback}` : ''}`
         : undefined;
 
-      let diffStat: string | undefined;
-      const dependencyProject = this.projectRepo.get(dependency.projectId);
-      const baseRef = dependency.baseRef || dependencyProject?.defaultBranch;
-      if (dependencyProject && baseRef && dependency.branch) {
-        try {
-          diffStat = execFileSync('git', ['-C', dependencyProject.path, 'diff', '--stat', `${baseRef}...${dependency.branch}`], {
-            encoding: 'utf-8',
-            timeout: 30000,
-          }).trim();
-        } catch {
-          // The dependency may have been cleaned up or its branch may be unavailable.
-        }
-      }
-
-      return [{ id: dependency.id, title: dependency.title, doneContent, review, diffStat }];
+      return [{ id: dependency.id, title: dependency.title, doneContent, review, diffStat: dependency.diffStat ?? undefined }];
     });
   }
 
