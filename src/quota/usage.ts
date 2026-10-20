@@ -4,7 +4,7 @@ import path from 'node:path';
 import { readCodexRateLimits } from './codex-usage.js';
 import { promisify } from 'node:util';
 import { ProfileRepo, ProfileRow, QuotaMarkRepo, QuotaUsageRepo, QuotaUsageRow } from '../db/index.js';
-import { isProfileLoggedIn } from '../profiles/index.js';
+import { isProfileLoggedIn, sameAccount } from '../profiles/index.js';
 import { parseAuthState } from '../profiles/auth.js';
 
 const execFileAsync = promisify(execFile);
@@ -178,14 +178,14 @@ export class QuotaUsageService {
   }
 
   private markForEmail(profile: ProfileRow, family: string, until: number): void {
-    for (const p of this.profiles.getAll().filter((p) => p.name === profile.name || (!!profile.email && p.email === profile.email))) {
+    for (const p of this.profiles.getAll().filter((p) => p.name === profile.name || sameAccount(p, profile))) {
       this.marks.mark(p.name, family, until, 'usage');
     }
   }
 
   bestRemaining(profile: ProfileRow, family: string): number | null {
     if (profile.engine !== 'agy') return null;
-    const names = profile.email ? this.profiles.getAll().filter((p) => p.email === profile.email).map((p) => p.name) : [profile.name];
+    const names = profile.email ? this.profiles.getAll().filter((p) => sameAccount(p, profile)).map((p) => p.name) : [profile.name];
     const group = family === 'gemini' ? 'Gemini Models' : family === 'claude' || family === 'gpt' ? 'Claude and GPT models' : null;
     if (!group) return null;
     const values = names.flatMap((name) => this.usage.getForProfile(name).filter((u) => u.window === '5h' && u.grp === group).map((u) => u.remainingPct));

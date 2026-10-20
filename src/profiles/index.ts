@@ -308,14 +308,20 @@ export class ProfileService {
   /**
    * Detect duplicate emails across profiles
    */
+  /**
+   * Profiles that share one provider account (same engine and email) share quota.
+   * Keys are `engine:email`; the same email on different engines (e.g. Claude and
+   * Antigravity) is not a duplicate.
+   */
   getDuplicateEmails(): Map<string, string[]> {
     const profiles = this.profileRepo.getAll();
     const emailMap = new Map<string, string[]>();
     for (const p of profiles) {
-      if (!p.email) continue;
-      const existing = emailMap.get(p.email) || [];
+      const key = accountKey(p);
+      if (!key) continue;
+      const existing = emailMap.get(key) || [];
       existing.push(p.name);
-      emailMap.set(p.email, existing);
+      emailMap.set(key, existing);
     }
     // Only return those with duplicates
     const result = new Map<string, string[]>();
@@ -337,6 +343,16 @@ export class ProfileService {
   getAll(): ProfileRow[] {
     return this.profileRepo.getAll();
   }
+}
+
+/** Identity of the provider account behind a profile, or null when the email is unknown. */
+export function accountKey(profile: Pick<ProfileRow, 'engine' | 'email'>): string | null {
+  return profile.email ? `${profile.engine}:${profile.email}` : null;
+}
+
+/** True when two profiles log in to the same provider account (same engine and email). */
+export function sameAccount(a: Pick<ProfileRow, 'engine' | 'email'>, b: Pick<ProfileRow, 'engine' | 'email'>): boolean {
+  return !!a.email && a.email === b.email && a.engine === b.engine;
 }
 
 export function isProfileLoggedIn(profile: ProfileRow): boolean {

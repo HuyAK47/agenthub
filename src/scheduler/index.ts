@@ -23,6 +23,7 @@ import { WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
+import { sameAccount } from '../profiles/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
 import { CheckRunner, getCheckResults } from '../checks.js';
 import { parseDbTime } from '../db/time.js';
@@ -1298,7 +1299,7 @@ export class Scheduler {
 
     if (targetEmail) {
       for (const p of this.profileRepo.getAll()) {
-        if (p.email === targetEmail) {
+        if (sameAccount(p, profile)) {
           sameEmailProfileNames.add(p.name);
         }
       }
@@ -1351,7 +1352,7 @@ export class Scheduler {
         const group = family === 'gemini' ? 'Gemini Models' : (family === 'claude' || family === 'gpt' ? 'Claude and GPT models' : null);
         if (group) {
           const names = profile.email
-            ? this.profileRepo.getAll().filter((p) => p.email === profile.email).map((p) => p.name)
+            ? this.profileRepo.getAll().filter((p) => sameAccount(p, profile)).map((p) => p.name)
             : [profile.name];
           if (names.length > 0) {
             const placeholders = names.map(() => '?').join(',');
@@ -1459,7 +1460,7 @@ export class Scheduler {
     const profile = this.profileRepo.get(profileName);
     if (!profile) return;
     const related = profile.email
-      ? this.profileRepo.getAll().filter((candidate) => candidate.email === profile.email)
+      ? this.profileRepo.getAll().filter((candidate) => sameAccount(candidate, profile))
       : [profile];
     for (const candidate of related) {
       this.profileRepo.updateAuthState(candidate.name, 'not_logged_in', 'Phiên đăng nhập hết hạn (401) – cần đăng nhập lại', null);

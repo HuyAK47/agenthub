@@ -36,3 +36,30 @@ describe('new agy profile auth state', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('trùng email theo nhà cung cấp', () => {
+  it('chỉ cảnh báo khi cùng engine và cùng email', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const { ProfileService } = await import('../src/profiles/index.js');
+    const { QuotaMarkRepo } = await import('../src/db/index.js');
+    const { QuotaService } = await import('../src/quota/index.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-dupe-'));
+    const db = openDatabase(path.join(dir, 'hub.db'));
+    const repo = new ProfileRepo(db);
+    const marks = new QuotaMarkRepo(db);
+    const base = { home: dir, enabled: 1, authState: null, authMessage: null, verifyUrl: null };
+    repo.upsert({ ...base, name: 'g1', engine: 'agy', kind: 'isolated', email: 'a@x.com' });
+    repo.upsert({ ...base, name: 'claude-may', engine: 'claude', kind: 'system', email: 'a@x.com' });
+    const service = new ProfileService(loadConfig(dir), repo, marks);
+    expect(service.getDuplicateEmails().size).toBe(0);
+
+    repo.upsert({ ...base, name: 'g2', engine: 'agy', kind: 'isolated', email: 'a@x.com' });
+    expect([...service.getDuplicateEmails().entries()]).toEqual([['agy:a@x.com', ['g1', 'g2']]]);
+
+    new QuotaService(marks, repo).mark('g1', 'gemini', 2_000_000_000, 'test');
+    const marked = marks.getActive().map((m) => m.profileName).sort();
+    expect(marked).toEqual(['g1', 'g2']);
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
