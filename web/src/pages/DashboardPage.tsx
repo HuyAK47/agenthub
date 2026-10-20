@@ -21,6 +21,7 @@ import {
 import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
 import { WaitingQueue } from '../components/WaitingQueue';
+import { DailyUsageTable } from '../components/DailyUsageTable';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
@@ -449,6 +450,9 @@ export const DashboardPage: React.FC = () => {
         diskMinFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.minFreeGB ?? status.disk?.minFreeGB}
         diskLabel={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.label}
       />
+
+      {/* Daily Usage Table */}
+      <DailyUsageTable />
 
       {/* Recent events */}
       <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">

@@ -11,6 +11,7 @@ import {
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { QuotaUsage } from '../components/QuotaUsage';
+import { DailyUsageTable } from '../components/DailyUsageTable';
 import { CountdownTimer } from '../components/CountdownTimer';
 import { LoginTerminal } from '../components/LoginTerminal';
 import {
@@ -615,6 +616,9 @@ export const ProfilesPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Daily Usage Table */}
+      <DailyUsageTable />
 
       {/* Add Profile Modal */}
       {showAddModal && (

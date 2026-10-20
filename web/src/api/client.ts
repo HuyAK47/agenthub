@@ -18,6 +18,7 @@ import {
   UpdateTaskInput,
   VersionResponse,
   SavingsReport,
+  DailyUsageReport,
   OrphanProcess,
 } from '../types/api';
 
@@ -377,4 +378,11 @@ export async function getSavings(params?: { project?: string; since?: string }):
   if (params?.since) query.set('since', params.since);
   const qStr = query.toString();
   return apiFetch<SavingsReport>(`/api/savings${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getDailyUsage(days = 7): Promise<DailyUsageReport> {
+  const query = new URLSearchParams();
+  if (days != null) query.set('days', String(days));
+  const qStr = query.toString();
+  return apiFetch<DailyUsageReport>(`/api/usage/daily${qStr ? `?${qStr}` : ''}`);
 }

@@ -609,6 +609,109 @@ export const handlers = [
     return HttpResponse.json(mockProfiles);
   }),
 
+  // GET /api/usage/daily
+  http.get('/api/usage/daily', ({ request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const dates = [
+      '2026-10-20',
+      '2026-10-19',
+      '2026-10-18',
+      '2026-10-17',
+      '2026-10-16',
+      '2026-10-15',
+      '2026-10-14',
+      '2026-10-13',
+    ];
+    return HttpResponse.json({
+      days: 7,
+      timezone: 'Asia/Ho_Chi_Minh',
+      dates,
+      profiles: [
+        {
+          name: 'chinh',
+          engine: 'agy',
+          enabled: true,
+          isIdle: false,
+          quota: { gemini5h: 80, geminiWeek: 85, claude5h: 40, claudeWeek: 50 },
+          quotaUsage: [],
+          today: { runs: 3, durationMs: 180000, tokens: 65000 },
+          totals: { runs: 12, durationMs: 720000, tokens: 280000 },
+          daily: {
+            '2026-10-20': { runs: 3, durationMs: 180000, tokens: 65000 },
+            '2026-10-19': { runs: 2, durationMs: 120000, tokens: 45000 },
+          },
+        },
+        {
+          name: 'g1',
+          engine: 'agy',
+          enabled: true,
+          isIdle: true,
+          idleReason: 'Gemini 95%, Claude 80% · 0 run hôm nay',
+          quota: { gemini5h: 95, geminiWeek: 95, claude5h: 80, claudeWeek: 85 },
+          quotaUsage: [],
+          today: { runs: 0, durationMs: 0, tokens: 0 },
+          totals: { runs: 8, durationMs: 480000, tokens: 190000 },
+          daily: {
+            '2026-10-20': { runs: 0, durationMs: 0, tokens: 0 },
+            '2026-10-19': { runs: 4, durationMs: 240000, tokens: 90000 },
+          },
+        },
+        {
+          name: 'g2',
+          engine: 'agy',
+          enabled: true,
+          isIdle: true,
+          idleReason: 'Gemini 90%, Claude 90% · 0 run hôm nay',
+          quota: { gemini5h: 90, geminiWeek: 90, claude5h: 90, claudeWeek: 90 },
+          quotaUsage: [],
+          today: { runs: 0, durationMs: 0, tokens: 0 },
+          totals: { runs: 5, durationMs: 300000, tokens: 120000 },
+          daily: {
+            '2026-10-20': { runs: 0, durationMs: 0, tokens: 0 },
+          },
+        },
+        {
+          name: 'g3',
+          engine: 'agy',
+          enabled: true,
+          isIdle: false,
+          idleReason: 'Đang bị khóa quota',
+          quota: { gemini5h: 10, geminiWeek: 20, claude5h: 5, claudeWeek: 15 },
+          quotaUsage: [],
+          today: { runs: 1, durationMs: 60000, tokens: 25000 },
+          totals: { runs: 6, durationMs: 360000, tokens: 150000 },
+          daily: {
+            '2026-10-20': { runs: 1, durationMs: 60000, tokens: 25000 },
+          },
+        },
+        {
+          name: 'codex',
+          engine: 'codex',
+          enabled: true,
+          isIdle: true,
+          idleReason: 'Codex sẵn sàng, ít việc hôm nay',
+          quota: { gemini5h: null, geminiWeek: null, claude5h: null, claudeWeek: null },
+          quotaUsage: [],
+          today: { runs: 0, durationMs: 0, tokens: 0 },
+          totals: { runs: 4, durationMs: 160000, tokens: 150000 },
+          daily: {
+            '2026-10-20': { runs: 0, durationMs: 0, tokens: 0 },
+          },
+        },
+      ],
+      byDay: dates.map((d, i) => ({
+        date: d,
+        isToday: i === 0,
+        totalRuns: i === 0 ? 4 : 8,
+        totalDurationMs: i === 0 ? 240000 : 480000,
+        totalTokens: i === 0 ? 90000 : 180000,
+        profiles: [],
+      })),
+    });
+  }),
+
   // POST /api/profiles
   http.post('/api/profiles', async ({ request }) => {
     if (!checkAuth(request)) {
