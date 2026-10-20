@@ -9,6 +9,7 @@ AGENTHUB_DIR="${AGENTHUB_DIR:-$HOME/.agenthub-app}"
 AGENTHUB_DATA_DIR="${AGENTHUB_HOME:-$HOME/.agenthub}"
 AGENTHUB_REPO="${AGENTHUB_REPO:-https://github.com/ducanh19020217/agenthub.git}"
 AGENTHUB_RELEASE_REPO="${AGENTHUB_RELEASE_REPO:-ducanh19020217/agenthub}"
+AGENTHUB_RELEASE_BASE="${AGENTHUB_RELEASE_BASE:-}"
 AGENTHUB_LINK_DIR="${AGENTHUB_LINK_DIR:-$HOME/.local/bin}"
 SYSTEMCTL="${AGENTHUB_SYSTEMCTL:-systemctl}"
 LAUNCHCTL="${AGENTHUB_LAUNCHCTL:-launchctl}"
@@ -111,6 +112,7 @@ PURGE=0
 DRY_RUN=0
 FROM_RELEASE=0
 RELEASE_VERSION=""
+RELEASE_VERSION_SET=0
 
 while [ "$#" -gt 0 ]; do
   arg="$1"
@@ -128,6 +130,7 @@ while [ "$#" -gt 0 ]; do
       FROM_RELEASE=1
       if [ "$#" -gt 1 ] && [ "${2#--}" = "$2" ]; then
         RELEASE_VERSION="$2"
+        RELEASE_VERSION_SET=1
         shift
       fi
       ;;
@@ -146,6 +149,7 @@ while [ "$#" -gt 0 ]; do
       echo "  AGENTHUB_HOME      Thư mục lưu trữ dữ liệu (mặc định: ~/.agenthub)"
       echo "  AGENTHUB_REPO      URL git repository (mặc định: GitHub chính thức)"
       echo "  AGENTHUB_RELEASE_REPO  owner/repo hoặc URL GitHub Release"
+      echo "  AGENTHUB_RELEASE_BASE  URL hoặc thư mục release để test (ghi đè repo)"
       exit 0
       ;;
   esac
@@ -153,6 +157,13 @@ while [ "$#" -gt 0 ]; do
 done
 
 release_repo_path() {
+  if [ -n "$AGENTHUB_RELEASE_BASE" ]; then
+    case "$AGENTHUB_RELEASE_BASE" in
+      http://*|https://*|file://*) printf '%s' "${AGENTHUB_RELEASE_BASE%/}" ;;
+      *) printf 'file://%s' "${AGENTHUB_RELEASE_BASE%/}" ;;
+    esac
+    return
+  fi
   case "$AGENTHUB_RELEASE_REPO" in
     http://*|https://*) printf '%s' "$AGENTHUB_RELEASE_REPO" | sed 's#/$##' ;;
     *) printf 'https://github.com/%s' "$AGENTHUB_RELEASE_REPO" ;;
@@ -178,6 +189,14 @@ install_from_release() {
   fi
 
   _base="$(release_repo_path)"
+  if [ "$RELEASE_VERSION_SET" = "1" ]; then
+    case "$RELEASE_VERSION" in
+      v*) RELEASE_VERSION="${RELEASE_VERSION#v}" ;;
+    esac
+    case "$RELEASE_VERSION" in
+      ''|*[!0-9A-Za-z._-]*) echo "Lỗi: phiên bản release không hợp lệ." >&2; return 1 ;;
+    esac
+  fi
   if [ -z "$RELEASE_VERSION" ]; then
     _release_json="$(curl -fsSL "$_base/releases/latest" 2>/dev/null || true)"
     RELEASE_VERSION="$(printf '%s' "$_release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9A-Za-z.-]*\)".*/\1/p' | head -n 1)"
