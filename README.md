@@ -38,6 +38,16 @@ AgentHub mặc định giới hạn một hồ sơ cá nhân trên mỗi engine;
 
 Yêu cầu môi trường: **Node.js >= 22** (khuyến nghị thông qua NVM) và **npm**.
 
+Cài đặt nhanh (nên đọc và kiểm tra script trước khi chạy):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
+less /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh
+```
+
+Script có thể cập nhật/gỡ cài đặt an toàn; dùng `--dry-run` để xem lệnh trước. Dữ liệu `~/.agenthub/` chỉ bị xoá khi chạy `--uninstall --purge` và xác nhận.
+
 ```bash
 # Kích hoạt môi trường Node 22
 source ~/.nvm/nvm.sh && nvm use 22

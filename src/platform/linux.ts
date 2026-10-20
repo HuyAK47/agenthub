@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
-import type { PlatformApi, PlatformProcessInfo, ServiceInstallResult } from './types.js';
+import type { PlatformApi, PlatformProcessInfo, ServiceInstallResult, ServiceRestartResult, ServiceUninstallResult } from './types.js';
 
 function bootTimeMs(): number {
   try { return Number(fs.readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)$/m)?.[1] || 0) * 1000; } catch { return 0; }
@@ -68,10 +68,22 @@ function openBrowser(url: string, openFn?: (file: string, args: string[], callba
   execFile('xdg-open', [url], () => {});
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : shellQuote(value);
+}
+
+function systemctlCommand(...args: string[]): string {
+  return [shellWord(process.env.AGENTHUB_SYSTEMCTL || 'systemctl'), ...args.map(shellWord)].join(' ');
+}
+
 function installService(opts: { nodePath: string; cliPath: string; currentPath: string; homeDir: string; print: boolean; exec?: (command: string, options: { stdio: 'inherit' }) => void }): ServiceInstallResult {
   const content = `[Unit]\nDescription=AgentHub Daemon\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=${opts.nodePath} ${opts.cliPath} daemon\nRestart=on-failure\nEnvironment=PATH=${opts.currentPath}\n\n[Install]\nWantedBy=default.target\n`;
   const file = path.join(opts.homeDir, '.config', 'systemd', 'user', 'agenthub.service');
-  const activate = 'systemctl --user daemon-reload && systemctl --user enable --now agenthub';
+  const activate = `${systemctlCommand('--user', 'daemon-reload')} && ${systemctlCommand('--user', 'enable', '--now', 'agenthub')}`;
   if (!opts.print) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content, 'utf8');
@@ -80,8 +92,42 @@ function installService(opts: { nodePath: string; cliPath: string; currentPath: 
   return { file, content, activate };
 }
 
+function restartService(opts?: { exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceRestartResult {
+  const runner = opts?.exec || ((command, options) => execFileSync('sh', ['-c', command], options));
+  try {
+    runner(systemctlCommand('--user', 'restart', 'agenthub'), { stdio: 'inherit' });
+    return { restarted: true, message: 'Đã khởi động lại service systemd agenthub' };
+  } catch (err) {
+    return { restarted: false, message: `Không thể khởi động lại service systemd: ${(err as Error).message}` };
+  }
+}
+
+function uninstallService(opts?: { homeDir?: string; exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceUninstallResult {
+  const homeDir = opts?.homeDir || os.homedir();
+  const file = path.join(homeDir, '.config', 'systemd', 'user', 'agenthub.service');
+  const runner = opts?.exec || ((command, options) => execFileSync('sh', ['-c', command], options));
+  try {
+    runner(`${systemctlCommand('--user', 'stop', 'agenthub')} && ${systemctlCommand('--user', 'disable', 'agenthub')}`, { stdio: 'ignore' });
+  } catch {
+    // ignore
+  }
+  if (fs.existsSync(file)) {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      // ignore
+    }
+  }
+  try {
+    runner(systemctlCommand('--user', 'daemon-reload'), { stdio: 'ignore' });
+  } catch {
+    // ignore
+  }
+  return { uninstalled: true, file, message: 'Đã gỡ systemd user service agenthub' };
+}
+
 export const linuxPlatform: PlatformApi = {
-  process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService,
+  process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService, restartService, uninstallService,
   serviceCheck: (exec, timeoutMs) => {
     const probe = exec('systemctl', ['--version'], { timeout: timeoutMs });
     if (probe.error) return { id: 'systemd', name: 'Service systemd', status: 'skip', message: 'Không có systemd (bỏ qua)', details: { reason: 'systemctl_not_found' } };

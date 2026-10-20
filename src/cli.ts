@@ -18,6 +18,9 @@ import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
 import { findClaudeBin } from './chat/claude.js';
 import { getPlatform } from './platform/index.js';
+import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
+
+export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
 import { assertWorkerMayControlHub } from './worker-guard.js';
 
 const args = process.argv.slice(2);
@@ -154,8 +157,22 @@ async function main() {
       await cmdOpen(config, args.slice(1));
       break;
 
+    case 'update':
+      await cmdUpdate(config, args.slice(1));
+      break;
+
+    case 'version':
+    case '-v':
+    case '--version':
+      await cmdVersion(config, args.slice(1));
+      break;
+
     case 'install-service':
       await cmdInstallService(args.slice(1));
+      break;
+
+    case 'uninstall-service':
+      await cmdUninstallService(args.slice(1));
       break;
 
     case 'mcp-install':
@@ -225,7 +242,10 @@ Cách dùng:
   agenthub daemon                     Chạy daemon AgentHub
   agenthub mcp                        Chạy MCP server (stdio transport)
   agenthub open                       Mở giao diện web trong trình duyệt
-  agenthub install-service [--print]  Cài đặt systemd user service
+  agenthub update                     Cập nhật AgentHub lên phiên bản mới nhất
+  agenthub version [--check]          Xem phiên bản và kiểm tra cập nhật mới
+  agenthub install-service [--print]  Cài đặt systemd/LaunchAgent user service
+  agenthub uninstall-service          Gỡ bỏ service chạy nền của AgentHub
   agenthub mcp-install [--print]      Đăng ký MCP server với Claude Code
   agenthub link                       Tạo symlink vào ~/.local/bin/agenthub
   agenthub doctor [--json]            Kiểm tra môi trường và cấu hình hệ thống
