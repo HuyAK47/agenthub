@@ -288,6 +288,17 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE projects ADD COLUMN merge TEXT;
   `,
+  // Migration 19: chat session metadata, token tracking, and message indexing
+  `
+  ALTER TABLE chat_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN lastMessageAt TEXT;
+  ALTER TABLE chat_sessions ADD COLUMN inputTokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN outputTokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN contextTokens INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(sessionId, id);
+  UPDATE chat_sessions SET lastMessageAt = (SELECT MAX(createdAt) FROM chat_messages WHERE sessionId = chat_sessions.id);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -848,6 +859,12 @@ export interface ChatSessionRow {
   mode: 'safe' | 'full';
   model: string;
   busy: number;
+  pinned: number;
+  archived: number;
+  lastMessageAt: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  contextTokens: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -866,8 +883,24 @@ export class ChatSessionRepo {
 
   getAll(): ChatSessionRow[] {
     return this.db
-      .prepare('SELECT * FROM chat_sessions ORDER BY updatedAt DESC, createdAt DESC')
+      .prepare('SELECT * FROM chat_sessions ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
       .all() as ChatSessionRow[];
+  }
+
+  search(query: string): ChatSessionRow[] {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      return this.getAll();
+    }
+    const pattern = `%${trimmed}%`;
+    return this.db
+      .prepare(
+        `SELECT DISTINCT s.* FROM chat_sessions s
+         LEFT JOIN chat_messages m ON m.sessionId = s.id
+         WHERE s.title LIKE ? OR m.content LIKE ?
+         ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
+      )
+      .all(pattern, pattern) as ChatSessionRow[];
   }
 
   get(id: string): ChatSessionRow | undefined {
@@ -884,11 +917,17 @@ export class ChatSessionRepo {
     mode?: 'safe' | 'full';
     model?: string;
     busy?: number;
+    pinned?: number;
+    archived?: number;
+    lastMessageAt?: string | null;
+    inputTokens?: number;
+    outputTokens?: number;
+    contextTokens?: number;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, pinned, archived, lastMessageAt, inputTokens, outputTokens, contextTokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         row.id,
@@ -898,6 +937,12 @@ export class ChatSessionRepo {
         row.mode || 'safe',
         row.busy ?? 0,
         row.model || '',
+        row.pinned ?? 0,
+        row.archived ?? 0,
+        row.lastMessageAt || null,
+        row.inputTokens ?? 0,
+        row.outputTokens ?? 0,
+        row.contextTokens ?? 0,
       );
   }
 
@@ -909,6 +954,40 @@ export class ChatSessionRepo {
     this.db
       .prepare("UPDATE chat_sessions SET title = ?, updatedAt = datetime('now') WHERE id = ?")
       .run(title, id);
+  }
+
+  updatePinned(id: string, pinned: number): void {
+    this.db
+      .prepare("UPDATE chat_sessions SET pinned = ?, updatedAt = datetime('now') WHERE id = ?")
+      .run(pinned ? 1 : 0, id);
+  }
+
+  updateArchived(id: string, archived: number): void {
+    this.db
+      .prepare("UPDATE chat_sessions SET archived = ?, updatedAt = datetime('now') WHERE id = ?")
+      .run(archived ? 1 : 0, id);
+  }
+
+  touchLastMessage(id: string, timestamp?: string): void {
+    this.db
+      .prepare(
+        "UPDATE chat_sessions SET lastMessageAt = COALESCE(?, datetime('now')), updatedAt = datetime('now') WHERE id = ?"
+      )
+      .run(timestamp || null, id);
+  }
+
+  addUsage(id: string, usage: { inputTokens: number; outputTokens: number }): void {
+    this.db
+      .prepare(
+        `UPDATE chat_sessions
+         SET inputTokens = inputTokens + ?,
+             outputTokens = outputTokens + ?,
+             contextTokens = ?,
+             lastMessageAt = datetime('now'),
+             updatedAt = datetime('now')
+         WHERE id = ?`
+      )
+      .run(usage.inputTokens, usage.outputTokens, usage.inputTokens, id);
   }
 
   updateClaudeSessionId(id: string, claudeSessionId: string): void {
@@ -946,6 +1025,49 @@ export class ChatMessageRepo {
     return this.db
       .prepare('SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY createdAt ASC, rowid ASC LIMIT ?')
       .all(sessionId, limit) as ChatMessageRow[];
+  }
+
+  getPaginated(
+    sessionId: string,
+    before?: string,
+    limit = 50,
+  ): { messages: ChatMessageRow[]; hasMore: boolean } {
+    const safeLimit = Math.max(1, limit);
+    let rows: ChatMessageRow[];
+
+    if (before) {
+      const target = this.db
+        .prepare('SELECT rowid, createdAt FROM chat_messages WHERE id = ? AND sessionId = ?')
+        .get(before, sessionId) as { rowid: number; createdAt: string } | undefined;
+
+      if (!target) {
+        return { messages: [], hasMore: false };
+      }
+
+      rows = this.db
+        .prepare(
+          `SELECT * FROM chat_messages
+           WHERE sessionId = ? AND (createdAt < ? OR (createdAt = ? AND rowid < ?))
+           ORDER BY createdAt DESC, rowid DESC
+           LIMIT ?`
+        )
+        .all(sessionId, target.createdAt, target.createdAt, target.rowid, safeLimit + 1) as ChatMessageRow[];
+    } else {
+      rows = this.db
+        .prepare(
+          `SELECT * FROM chat_messages
+           WHERE sessionId = ?
+           ORDER BY createdAt DESC, rowid DESC
+           LIMIT ?`
+        )
+        .all(sessionId, safeLimit + 1) as ChatMessageRow[];
+    }
+
+    const hasMore = rows.length > safeLimit;
+    const paginated = hasMore ? rows.slice(0, safeLimit) : rows;
+    paginated.reverse();
+
+    return { messages: paginated, hasMore };
   }
 
   getLastBySession(sessionId: string): ChatMessageRow | undefined {
