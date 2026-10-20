@@ -6,17 +6,64 @@ import type { PlatformApi, PlatformProcessInfo } from './types.js';
 
 function command(args: string[]): string { try { return execFileSync(args[0], args.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } }
 
-function listProcesses(): PlatformProcessInfo[] {
-  const rows = command(['ps', '-axo', 'pid,ppid,rss,%cpu,command']).split('\n').slice(1);
-  return rows.flatMap((row) => {
-    const match = row.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.*)$/);
-    if (!match) return [];
-    const pid = Number(match[1]);
-    const cwd = command(['lsof', '-a', '-d', 'cwd', '-p', String(pid)]).split('\n').find((line) => /cwd/i.test(line))?.trim().split(/\s+/).at(-1) || '';
-    const ppid = Number(match[2]);
-    const parentName = command(['ps', '-o', 'comm=', '-p', String(ppid)]).trim();
-    return [{ pid, ppid, parentName, rss: Number(match[3]) * 1024, cpu: Number(match[4]), cwd, startedAt: 0 } satisfies PlatformProcessInfo];
+const TRACKED_NAMES = /^(?:node|agy|codex|claude|vitest|npm|pnpm)$/i;
+
+type ProcessRow = PlatformProcessInfo & { name: string };
+
+function parseProcessRows(output: string): ProcessRow[] {
+  return output.split('\n').flatMap((row) => {
+    const fields = row.trim().split(/\s+/);
+    if (fields.length < 10) return [];
+    const pid = Number(fields[0]);
+    const ppid = Number(fields[1]);
+    const rssKb = Number(fields[2]);
+    const cpu = Number(fields[3]);
+    if (![pid, ppid, rssKb, cpu].every(Number.isFinite)) return [];
+    const name = fields.slice(9).join(' ');
+    const parsedStart = Date.parse(fields.slice(4, 9).join(' '));
+    return [{ pid, ppid, parentName: '', rss: rssKb * 1024, cpu, cwd: '', startedAt: Number.isNaN(parsedStart) ? 0 : parsedStart, name }];
   });
+}
+
+function parseCwds(output: string): Map<number, string> {
+  const result = new Map<number, string>();
+  let pid: number | null = null;
+  for (const line of output.split('\n')) {
+    if (line.startsWith('p')) {
+      const parsed = Number(line.slice(1));
+      pid = Number.isFinite(parsed) ? parsed : null;
+    } else if (line.startsWith('n') && pid !== null) {
+      result.set(pid, line.slice(1));
+    }
+  }
+  return result;
+}
+
+function listProcesses(): PlatformProcessInfo[] {
+  const processes = parseProcessRows(command(['ps', '-axo', 'pid=,ppid=,rss=,%cpu=,lstart=,comm=']));
+  const byPid = new Map(processes.map((processInfo) => [processInfo.pid, processInfo]));
+  const relevant = new Set<number>(processes.filter((processInfo) => TRACKED_NAMES.test(processInfo.name)).map((processInfo) => processInfo.pid));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const processInfo of processes) {
+      if (!relevant.has(processInfo.pid) && relevant.has(processInfo.ppid)) {
+        relevant.add(processInfo.pid);
+        changed = true;
+      }
+    }
+  }
+
+  const relevantPids = [...relevant].sort((left, right) => left - right);
+  const cwdOutput = relevantPids.length > 0
+    ? command(['lsof', '-a', '-d', 'cwd', '-Fpn', '-p', relevantPids.join(',')])
+    : '';
+  const cwds = parseCwds(cwdOutput);
+  return processes.map(({ name: _name, ...processInfo }) => ({
+    ...processInfo,
+    parentName: byPid.get(processInfo.ppid)?.name || '',
+    cwd: cwds.get(processInfo.pid) || '',
+  } satisfies PlatformProcessInfo));
 }
 
 function parentPid(pid: number): number | null { const row = command(['ps', '-o', 'ppid=', '-p', String(pid)]).trim(); return row ? Number(row) || null : null; }

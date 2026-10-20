@@ -318,6 +318,16 @@ export async function createServer(
     return service.cancelTask(id);
   });
 
+  fastify.post('/api/tasks/:id/pause', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.pauseTask(id);
+  });
+
+  fastify.post('/api/tasks/:id/resume', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.resumeTask(id);
+  });
+
   fastify.post('/api/tasks/:id/review', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.reviewTask(id, req.body);
