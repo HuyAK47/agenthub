@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { projectSettings } from './projects/settings.js';
+import { execFileSync } from 'node:child_process';
 
 export const WORKER_SERVICE_MESSAGE = 'AgentHub: worker không được điều khiển service của hub';
 
@@ -40,6 +41,21 @@ exec ${shellQuote(realBinary)} "$@"
 export interface WorkerEnvOptions {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null } | null;
+  cwd?: string;
+}
+
+const HUB_GIT_NAME = 'AgentHub';
+const HUB_GIT_EMAIL = 'agenthub@localhost';
+
+function hasGitIdentity(cwd: string | undefined, env: NodeJS.ProcessEnv): boolean {
+  if (env.GIT_AUTHOR_NAME && env.GIT_AUTHOR_EMAIL && env.GIT_COMMITTER_NAME && env.GIT_COMMITTER_EMAIL) return true;
+  try {
+    const name = execFileSync('git', ['config', '--get', 'user.name'], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+    const email = execFileSync('git', ['config', '--get', 'user.email'], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+    return Boolean(name && email);
+  } catch {
+    return false;
+  }
 }
 
 export function workerEnvironment(
@@ -48,6 +64,15 @@ export function workerEnvironment(
   options?: WorkerEnvOptions | { settings?: string | null } | null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
+  const workerOptions = options && 'project' in options && options.project
+    ? options
+    : options;
+  if (!hasGitIdentity(workerOptions && 'cwd' in workerOptions ? workerOptions.cwd : undefined, env)) {
+    env.GIT_AUTHOR_NAME ??= HUB_GIT_NAME;
+    env.GIT_AUTHOR_EMAIL ??= HUB_GIT_EMAIL;
+    env.GIT_COMMITTER_NAME ??= HUB_GIT_NAME;
+    env.GIT_COMMITTER_EMAIL ??= HUB_GIT_EMAIL;
+  }
   const shimDir = path.join(hubHome, 'shims');
   fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
   for (const name of ['systemctl', 'launchctl']) {
