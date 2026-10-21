@@ -456,7 +456,11 @@ export async function createServer(
     if (body.brain?.permissions === 'full' && body.confirm !== true) {
       throw new HttpError(409, 'confirmation_required', 'Cấp Toàn quyền mặc định cần confirm: true');
     }
-    return service.updateConfig(req.body);
+    const result = service.updateConfig(req.body);
+    if (body.brain?.permissions) {
+      service.scheduler.getEventBus().emit('brain.trust_changed', undefined, { projectId: null, permissions: body.brain.permissions });
+    }
+    return result;
   });
   fastify.get('/api/models', async () => service.getModelOptions());
 
