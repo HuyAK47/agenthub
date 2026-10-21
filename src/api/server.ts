@@ -183,7 +183,7 @@ export async function createServer(
 
   // --- Brain API ---
   if (service.brainService) {
-    registerBrainRoutes(fastify, service.brainService);
+    registerBrainRoutes(fastify, service.brainService, service);
   }
 
   // --- Projects API ---

@@ -61,6 +61,10 @@ export class DecisionTracker {
     return Array.from(this.decisions.values()).filter((d) => !d.answered);
   }
 
+  getPendingDecisions(): PendingDecision[] {
+    return this.getPending();
+  }
+
   getAll(): PendingDecision[] {
     return Array.from(this.decisions.values());
   }

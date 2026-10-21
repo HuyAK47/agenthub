@@ -7,6 +7,8 @@ import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
 import { readExistingToken, getTokenPath } from './auth.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
+import { generateDigest } from './brain/digest.js';
+import { AppService, HttpError } from './services/index.js';
 
 export const BRAIN_ACTIVITIES = [
   'planning',
@@ -246,6 +248,7 @@ function isWithin(child: string, root: string): boolean {
 export function registerBrainRoutes(
   fastify: FastifyInstance,
   brainService: BrainService,
+  appService?: AppService,
 ): void {
   fastify.get('/api/brain', async () => {
     return brainService.getStatus();
@@ -256,6 +259,71 @@ export function registerBrainRoutes(
     return reply.status(200).send(result);
   });
   fastify.post('/api/brain/notify', async (req: FastifyRequest) => brainService.notify(req.body));
+
+  fastify.get('/api/brain/digest', async () => {
+    if (!appService) {
+      throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
+    }
+    const digest = appService.telegramBotService?.buildCurrentDigest() ?? generateDigest({
+      taskRepo: appService.taskRepo,
+      projectRepo: appService.projectRepo,
+      profileRepo: appService.profileRepo,
+      quotaMarkRepo: appService.quotaMarkRepo,
+      eventRepo: appService.eventRepo,
+      decisionTracker: appService.telegramBotService?.getDecisionTracker(),
+      port: appService.config.port,
+    });
+    return digest;
+  });
+
+  fastify.post('/api/brain/digest', async () => {
+    if (!appService) {
+      throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
+    }
+    const digest = appService.telegramBotService?.buildCurrentDigest() ?? generateDigest({
+      taskRepo: appService.taskRepo,
+      projectRepo: appService.projectRepo,
+      profileRepo: appService.profileRepo,
+      quotaMarkRepo: appService.quotaMarkRepo,
+      eventRepo: appService.eventRepo,
+      decisionTracker: appService.telegramBotService?.getDecisionTracker(),
+      port: appService.config.port,
+    });
+    appService.scheduler.getEventBus().emit('brain.digest', undefined, digest);
+    if (appService.telegramBotService) {
+      appService.telegramBotService.broadcastMessage(digest.text, {
+        inline_keyboard: [[{ text: '🌐 Xem dashboard', url: appService.telegramBotService.getDashboardUrl() }]],
+      });
+    }
+    return digest;
+  });
+
+  fastify.get('/api/brain/decisions', async () => {
+    const tracker = appService?.telegramBotService?.getDecisionTracker();
+    const decisions = tracker ? tracker.getPendingDecisions() : [];
+    return { decisions };
+  });
+
+  fastify.post('/api/brain/decisions/:id/answer', async (req: FastifyRequest) => {
+    const tracker = appService?.telegramBotService?.getDecisionTracker();
+    const { id } = req.params as { id: string };
+    const body = req.body as { answer?: 'agree' | 'reject' } | undefined;
+    const answer = body?.answer;
+    if (!answer || (answer !== 'agree' && answer !== 'reject')) {
+      throw new HttpError(400, 'bad_request', 'answer must be agree or reject');
+    }
+    const updated = tracker?.answerDecision(id, answer);
+    if (!updated) {
+      throw new HttpError(404, 'not_found', `Decision ${id} not found`);
+    }
+    appService?.scheduler.getEventBus().emit('decision.answered', undefined, {
+      decisionId: id,
+      action: answer,
+      answer,
+      text: updated.text,
+    });
+    return { ok: true, decision: updated };
+  });
 }
 
 export async function cmdBrain(
