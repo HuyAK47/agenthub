@@ -59,7 +59,11 @@ export class ClaudeSessionScanner {
   async scan() {
     const repo = new ClaudeSessionRepo(this.db);
     const tasks = this.db.prepare('SELECT id,slug FROM tasks').all() as Array<{ id: string; slug: string }>;
-    const files = findTranscriptFiles(this.options.dir, this.options.maxAgeDays ?? 14);
+    // Only open transcripts of projects the hub manages (or hub chats). Other Claude Code projects on
+    // this machine (e.g. company work) must not be read or recorded at all.
+    const encodedRoots = this.allowedRoots().map(encodeProjectDir);
+    const dirAllowed = (name: string) => encodedRoots.some((root) => name === root || name.startsWith(`${root}-`));
+    const files = findTranscriptFiles(this.options.dir, this.options.maxAgeDays ?? 14, dirAllowed, (sessionId) => this.isHubChat(sessionId));
     for (const file of files) await this.scanFile(file, repo, tasks);
   }
   private async scanFile(file: string, repo: ClaudeSessionRepo, tasks: Array<{ id: string; slug: string }>) {
@@ -267,13 +271,15 @@ export class ClaudeSessionScanner {
   private isAllowed(event: ClaudeTranscriptEvent, sessionId: string): boolean {
     if (this.isHubChat(sessionId)) return true;
     if (typeof event.cwd !== 'string' || event.cwd.length === 0) return false;
-    const roots = [
+    return this.allowedRoots().some((root) => isWithin(event.cwd!, root));
+  }
+  private allowedRoots(): string[] {
+    return [
       ...(this.options.include || []),
       this.options.hubHome,
       this.options.worktreesDir,
       ...(this.db.prepare('SELECT path FROM projects').all() as Array<{ path: string }>).map((project) => project.path),
     ].filter((root): root is string => typeof root === 'string' && root.length > 0);
-    return roots.some((root) => isWithin(event.cwd!, root));
   }
 }
 
@@ -319,13 +325,23 @@ function isWithin(child: string, root: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(child));
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
-function findTranscriptFiles(dir: string, maxAgeDays: number): string[] {
+/** Claude Code stores a project's transcripts under ~/.claude/projects/<cwd with non-alphanumerics as '-'>. */
+export function encodeProjectDir(cwd: string): string {
+  return path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-');
+}
+function findTranscriptFiles(dir: string, maxAgeDays: number, dirAllowed: (name: string) => boolean, isHubChat: (sessionId: string) => boolean): string[] {
   const cutoff = Date.now() - maxAgeDays * 86_400_000; const files: string[] = [];
   let projects: string[]; try { projects = fs.readdirSync(dir); } catch { return files; }
   for (const project of projects) {
+    const allowed = dirAllowed(project);
     const projectDir = path.join(dir, project); let entries: fs.Dirent[];
     try { entries = fs.readdirSync(projectDir, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) if (entry.isFile() && entry.name.endsWith('.jsonl')) { const file = path.join(projectDir, entry.name); try { if (fs.statSync(file).mtimeMs >= cutoff) files.push(file); } catch { /* raced */ } }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      if (!allowed && !isHubChat(path.basename(entry.name, '.jsonl'))) continue;
+      const file = path.join(projectDir, entry.name);
+      try { if (fs.statSync(file).mtimeMs >= cutoff) files.push(file); } catch { /* raced */ }
+    }
   }
   return files;
 }
