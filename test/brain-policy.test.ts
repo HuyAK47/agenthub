@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BrainPolicy } from '../src/brain/policy.js';
+import { BrainPolicy, projectBrainPolicy } from '../src/brain/policy.js';
 
 describe('BrainPolicy', () => {
   const dirs: string[] = [];
@@ -127,5 +127,20 @@ describe('BrainPolicy', () => {
       expect(suggest.decide({ toolName, input: {} })).toBeNull();
     }
     expect(policy.decide({ toolName: 'mcp__agenthub__hub_review', input: {} })?.action).toBe('allow');
+  });
+
+  it('gives a project brain the project\'s own mode, not the global one', () => {
+    const { root } = make();
+    const project = (mode: string) => ({ id: 'p1', path: root, settings: JSON.stringify({ brain: { mode } }) });
+    const review = { toolName: 'mcp__agenthub__hub_review', input: {} };
+    const suggestGlobal = { worktreesDir: path.join(root, 'wt'), brain: { mode: 'suggest' as const, policy: [] } };
+    const autoGlobal = { worktreesDir: path.join(root, 'wt'), brain: { mode: 'auto' as const, policy: [] } };
+    // Project set to auto while the global brain is suggest: merge-affecting tools are allowed.
+    expect(projectBrainPolicy(project('auto'), suggestGlobal).decide(review)?.action).toBe('allow');
+    // Project set to suggest while the global brain is auto: they need the user's approval.
+    expect(projectBrainPolicy(project('suggest'), autoGlobal).decide(review)).toBeNull();
+    // inherit follows the global mode.
+    expect(projectBrainPolicy(project('inherit'), suggestGlobal).decide(review)).toBeNull();
+    expect(projectBrainPolicy(project('inherit'), autoGlobal).decide(review)?.action).toBe('allow');
   });
 });

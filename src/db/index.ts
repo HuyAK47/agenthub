@@ -530,6 +530,15 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE brain_turns ADD COLUMN projectId TEXT;
   CREATE INDEX IF NOT EXISTS idx_brain_turns_project ON brain_turns(projectId, startedAt);
   `,
+  // Migration 42: allow 'project_unavailable' waitReason for unmounted drives
+  `
+  ALTER TABLE tasks ADD COLUMN waitReason_old TEXT;
+  UPDATE tasks SET waitReason_old = waitReason;
+  ALTER TABLE tasks DROP COLUMN waitReason;
+  ALTER TABLE tasks ADD COLUMN waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk', 'quota', 'parallel', 'profile_busy', 'project_unavailable'));
+  UPDATE tasks SET waitReason = waitReason_old;
+  ALTER TABLE tasks DROP COLUMN waitReason_old;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -579,6 +588,15 @@ export interface ProjectRow {
   review?: string | null;
   /** JSON ProjectSettings; read through projectSettings() in src/projects/settings.ts. */
   settings?: string | null;
+  integrationStatus?: {
+    path: string;
+    branch: string;
+    exists: boolean;
+    currentBranch: string | null;
+    dirty: boolean;
+    ahead: number;
+    behind: number;
+  } | null;
   createdAt: string;
 }
 
@@ -618,7 +636,7 @@ export interface QuotaUsageRow {
   fetchedAt: number;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
 
 export interface TaskRow {
   id: string;
@@ -1081,7 +1099,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];

@@ -31,4 +31,50 @@ describe('worker service guard', () => {
     if (previousWorker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = previousWorker;
     if (previousHome === undefined) delete process.env.AGENTHUB_HOME; else process.env.AGENTHUB_HOME = previousHome;
   });
+
+  it('disables git hooks when gitHooks=skip and leaves them active when run', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-git-hooks-test-'));
+    const hub = path.join(root, 'hub');
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+
+    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'hello');
+
+    // Add a failing pre-commit hook
+    const hooksDir = path.join(repo, '.git', 'hooks');
+    fs.mkdirSync(hooksDir, { recursive: true });
+    const preCommit = path.join(hooksDir, 'pre-commit');
+    fs.writeFileSync(preCommit, '#!/bin/sh\necho "hook failed" >&2\nexit 1\n', { mode: 0o755 });
+
+    const gitAuthorEnv = {
+      GIT_AUTHOR_NAME: 'test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    };
+
+    execFileSync('git', ['add', '.'], { cwd: repo });
+
+    // 1. With project with default / gitHooks='run': commit should fail because hook exits 1
+    const runEnv = workerEnvironment(hub, { ...process.env, ...gitAuthorEnv }, {
+      project: { settings: JSON.stringify({ worktree: { gitHooks: 'run' } }) },
+    });
+    expect(() => execFileSync('git', ['commit', '-m', 'test-run'], { cwd: repo, env: runEnv, encoding: 'utf8', stdio: 'pipe' })).toThrow();
+
+    // 2. With project with gitHooks='skip': commit succeeds because hooks are disabled
+    const skipEnv = workerEnvironment(hub, { ...process.env, ...gitAuthorEnv }, {
+      project: { settings: JSON.stringify({ worktree: { gitHooks: 'skip' } }) },
+    });
+    expect(skipEnv.HUSKY).toBe('0');
+    expect(skipEnv.GIT_CONFIG_COUNT).toBe('1');
+    expect(skipEnv.GIT_CONFIG_KEY_0).toBe('core.hooksPath');
+    expect(skipEnv.GIT_CONFIG_VALUE_0).toBe(path.join(hub, 'empty-hooks'));
+    expect(fs.existsSync(path.join(hub, 'empty-hooks'))).toBe(true);
+
+    expect(() => execFileSync('git', ['commit', '-m', 'test-skip'], { cwd: repo, env: skipEnv, encoding: 'utf8' })).not.toThrow();
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

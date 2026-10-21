@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
+import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -56,7 +58,7 @@ import { SetupManager } from '../tools/setup.js';
 
 const execFileAsync = promisify(execFile);
 
-function apiProject(project: ProjectRow): ProjectRow {
+function apiProject(project: ProjectRow, hubHome?: string): ProjectRow {
   let merge: unknown = null;
   if (project.merge) {
     try { merge = JSON.parse(project.merge); } catch { merge = null; }
@@ -71,7 +73,18 @@ function apiProject(project: ProjectRow): ProjectRow {
   } else if (reviewChain) {
     review = { chain: reviewChain, maxRounds: 2 };
   }
-  return { ...project, merge, reviewChain, review, settings: projectSettings(project), createdAt: toApiTime(project.createdAt)! } as unknown as ProjectRow;
+  const settings = projectSettings(project);
+  const resolvedHubHome = hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub');
+  const integrationStatus = settings.integration.enabled ? getIntegrationStatus(project, resolvedHubHome) : null;
+  return {
+    ...project,
+    merge,
+    reviewChain,
+    review,
+    settings,
+    integrationStatus,
+    createdAt: toApiTime(project.createdAt)!,
+  } as unknown as ProjectRow;
 }
 
 function apiProfile(profile: ProfileRow): ProfileRow {
@@ -466,12 +479,7 @@ export async function getGitCommits(
   }
 }
 
-export class HttpError extends Error {
-  constructor(public statusCode: number, public error: string, message: string) {
-    super(message);
-    this.name = 'HttpError';
-  }
-}
+export { HttpError };
 
 export function formatEventSummary(
   type: string,
@@ -978,8 +986,9 @@ export class AppService {
       };
     });
 
-    const disk = getDiskSpaceSync(this.config.worktreesDir);
-    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    const diskReader = this.scheduler ? this.scheduler.getDiskReader() : getDiskSpaceSync;
+    const disk = diskReader(this.config.worktreesDir);
+    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
     const runningTaskIds = runningTasks.map((r) => r.taskId);
     const overlaps = this.taskNoteRepo
       ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)
@@ -1043,7 +1052,7 @@ export class AppService {
 
   // --- Projects ---
   listProjects(): ProjectRow[] {
-    return this.projectRepo.getAll().map(apiProject);
+    return this.projectRepo.getAll().map((p) => apiProject(p, this.config.hubHome));
   }
 
   getProject(id: string): ProjectRow {
@@ -1051,7 +1060,7 @@ export class AppService {
     if (!proj) {
       throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
     }
-    return apiProject(proj);
+    return apiProject(proj, this.config.hubHome);
   }
 
   createProject(raw: unknown): ProjectRow {
@@ -1061,9 +1070,61 @@ export class AppService {
       throw new HttpError(409, 'conflict', `Project ID "${id}" đã tồn tại`);
     }
 
+    if (!path.isAbsolute(parsed.path)) {
+      throw new HttpError(400, 'bad_request', `Đường dẫn repo phải là đường dẫn tuyệt đối: ${parsed.path}`);
+    }
+
     const resolvedPath = path.resolve(parsed.path);
     if (!fs.existsSync(resolvedPath)) {
       throw new HttpError(400, 'bad_request', `Thư mục repo không tồn tại: ${resolvedPath}`);
+    }
+
+    const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
+    if (effectiveSettings.integration.enabled || effectiveSettings.integration.branch) {
+      validateIntegrationBranch(effectiveSettings.integration.branch || 'agenthub/integration', parsed.defaultBranch);
+    }
+
+    let isGitRepo = false;
+    if (fs.existsSync(path.join(resolvedPath, '.git'))) {
+      isGitRepo = true;
+    } else {
+      try {
+        const topLevel = execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--show-toplevel'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (topLevel) {
+          isGitRepo = true;
+        }
+      } catch {
+        isGitRepo = false;
+      }
+    }
+    if (!isGitRepo) {
+      throw new HttpError(400, 'bad_request', `Thư mục không phải là git repository: ${resolvedPath}`);
+    }
+
+    let branchExists = false;
+    try {
+      execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--verify', parsed.defaultBranch], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      branchExists = true;
+    } catch {
+      try {
+        const headBranch = execFileSync('git', ['-C', resolvedPath, 'symbolic-ref', '--short', 'HEAD'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (headBranch === parsed.defaultBranch) {
+          branchExists = true;
+        }
+      } catch {
+        branchExists = false;
+      }
+    }
+    if (!branchExists) {
+      throw new HttpError(400, 'bad_request', `Nhánh mặc định "${parsed.defaultBranch}" không tồn tại trong repository`);
     }
 
     this.projectRepo.insert({
@@ -1078,8 +1139,15 @@ export class AppService {
       merge: parsed.merge ? JSON.stringify(parsed.merge) : null,
       reviewChain: parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
       review: parsed.review ? JSON.stringify(parsed.review) : null,
-      settings: parsed.settings ? JSON.stringify(mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings)) : null,
+      settings: parsed.settings ? JSON.stringify(effectiveSettings) : null,
     });
+
+    if (effectiveSettings.integration.enabled) {
+      ensureIntegrationWorktree(
+        { id, path: resolvedPath, defaultBranch: parsed.defaultBranch, settings: JSON.stringify(effectiveSettings) },
+        this.config.hubHome,
+      );
+    }
 
     this.invalidateOutOfScopeClaudeScanStates();
     return this.getProject(id);
@@ -1088,23 +1156,41 @@ export class AppService {
   updateProject(id: string, raw: unknown): ProjectRow {
     this.getProject(id);
     const parsed = UpdateProjectSchema.parse(raw);
-    const current = this.projectRepo.get(id);
+    const current = this.projectRepo.get(id)!;
+    const effectiveDefaultBranch = parsed.defaultBranch ?? current.defaultBranch;
+    const mergedSettings = parsed.settings === undefined
+      ? projectSettings(current)
+      : mergeProjectSettings(projectSettings(current), parsed.settings);
+
+    if (mergedSettings.integration.enabled || mergedSettings.integration.branch) {
+      validateIntegrationBranch(mergedSettings.integration.branch || 'agenthub/integration', effectiveDefaultBranch);
+    }
+
     this.projectRepo.update(id, {
       ...parsed,
       // Partial settings merge over what is stored, so callers can change one switch at a time.
-      settings: parsed.settings === undefined ? undefined : JSON.stringify(mergeProjectSettings(projectSettings(current), parsed.settings)),
+      settings: parsed.settings === undefined ? undefined : JSON.stringify(mergedSettings),
       checks: parsed.checks === undefined ? undefined : parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks === undefined ? undefined : parsed.hooks ? JSON.stringify(parsed.hooks) : null,
       merge: parsed.merge === undefined ? undefined : parsed.merge ? JSON.stringify(parsed.merge) : null,
       reviewChain: parsed.reviewChain === undefined ? undefined : parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
       review: parsed.review === undefined ? undefined : parsed.review ? JSON.stringify(parsed.review) : null,
     });
+
+    if (mergedSettings.integration.enabled) {
+      const updatedProject = this.projectRepo.get(id)!;
+      ensureIntegrationWorktree(updatedProject, this.config.hubHome);
+    }
+
     this.invalidateOutOfScopeClaudeScanStates();
     return this.getProject(id);
   }
 
-  deleteProject(id: string): { ok: boolean } {
-    this.getProject(id);
+  deleteProject(id: string): { ok: boolean; warnings?: string[] } {
+    const proj = this.projectRepo.get(id);
+    if (!proj) {
+      throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+    }
 
     // Check if any task in this project is currently running
     const runningMap = this.scheduler.getRunning();
@@ -1113,9 +1199,11 @@ export class AppService {
       throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy`);
     }
 
+    const warning = removeIntegrationWorktree(proj, this.config.hubHome);
+
     this.projectRepo.delete(id);
     this.invalidateOutOfScopeClaudeScanStates();
-    return { ok: true };
+    return warning ? { ok: true, warnings: [warning] } : { ok: true };
   }
 
   private invalidateOutOfScopeClaudeScanStates() {
@@ -2347,7 +2435,7 @@ export class AppService {
       const project = this.projectRepo.get(task.projectId);
       if (!project) throw new HttpError(404, 'not_found', `Project "${task.projectId}" không tồn tại`);
       try {
-        mergeResult = await mergeTaskIntoBase(task, project);
+        mergeResult = await mergeTaskIntoBase(task, project, { hubHome: this.config.hubHome });
       } catch (error) {
         if (error instanceof MergeError) {
           this.createMergeFailureDraft(task, error.message);

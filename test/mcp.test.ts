@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
+import { execFileSync } from 'node:child_process';
 import { FastifyInstance } from 'fastify';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -165,11 +166,28 @@ describe('AgentHub MCP Server Tools', () => {
     expect(listRes.content[0].text).toContain('Chưa có project nào được đăng ký.');
 
     // Register project
+    const repoPath = path.join(tmpDir, 'test-repo');
+    fs.mkdirSync(repoPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: repoPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
+    fs.writeFileSync(path.join(repoPath, 'README.md'), '# Initial Repo\n');
+    execFileSync('git', ['add', '.'], { cwd: repoPath });
+    execFileSync('git', ['commit', '-m', 'chore: initial commit', '--allow-empty'], {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    });
+
     const regRes = (await client.callTool({
       name: 'hub_register_project',
       arguments: {
         name: 'proj1',
-        path: tmpDir,
+        path: repoPath,
         defaultBranch: 'main',
         maxParallel: 2,
       },

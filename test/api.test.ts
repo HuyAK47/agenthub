@@ -329,6 +329,83 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect(delRes.statusCode).toBe(200);
   });
 
+  it('POST /api/projects validates absolute path, directory existence, git repo and default branch', async () => {
+    const validRepoPath = path.join(tmpDir, 'valid-repo');
+    initGitRepo(validRepoPath);
+
+    // 1. Relative path -> 400
+    const relRes = await server.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: authHeaders(),
+      payload: {
+        name: 'Rel Proj',
+        path: 'relative/path/to/repo',
+        defaultBranch: 'main',
+      },
+    });
+    expect(relRes.statusCode).toBe(400);
+    expect(JSON.parse(relRes.body).message).toMatch(/tuyệt đối/i);
+
+    // 2. Non-existent path -> 400
+    const nonExistRes = await server.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: authHeaders(),
+      payload: {
+        name: 'Non Exist Proj',
+        path: path.join(tmpDir, 'does-not-exist'),
+        defaultBranch: 'main',
+      },
+    });
+    expect(nonExistRes.statusCode).toBe(400);
+    expect(JSON.parse(nonExistRes.body).message).toMatch(/không tồn tại/i);
+
+    // 3. Not a git repository -> 400
+    const notGitPath = path.join(tmpDir, 'not-git-dir');
+    fs.mkdirSync(notGitPath, { recursive: true });
+    const notGitRes = await server.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: authHeaders(),
+      payload: {
+        name: 'Not Git Proj',
+        path: notGitPath,
+        defaultBranch: 'main',
+      },
+    });
+    expect(notGitRes.statusCode).toBe(400);
+    expect(JSON.parse(notGitRes.body).message).toMatch(/git repository/i);
+
+    // 4. Default branch does not exist -> 400
+    const invalidBranchRes = await server.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: authHeaders(),
+      payload: {
+        name: 'Invalid Branch Proj',
+        path: validRepoPath,
+        defaultBranch: 'nonexistent-branch',
+      },
+    });
+    expect(invalidBranchRes.statusCode).toBe(400);
+    expect(JSON.parse(invalidBranchRes.body).message).toMatch(/không tồn tại trong repository/i);
+
+    // 5. Valid git repo and branch -> 201
+    const validRes = await server.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: authHeaders(),
+      payload: {
+        name: 'Valid Proj',
+        path: validRepoPath,
+        defaultBranch: 'main',
+      },
+    });
+    expect(validRes.statusCode).toBe(201);
+    expect(JSON.parse(validRes.body).name).toBe('Valid Proj');
+  });
+
   // --- Profiles and Quota API ---
   it('GET /api/profiles does not create any directories when listing profiles', async () => {
     const agyHomesBefore = fs.readdirSync(config.agyHomesDir);
@@ -530,6 +607,9 @@ describe('AgentHub HTTP API Endpoints', () => {
     // 5. Test detail endpoint with git commits and worktree DONE/BLOCKED
     const worktreeDir = path.join(tmpDir, 'worktrees', 'myproj', 'task-abc');
     fs.mkdirSync(path.join(worktreeDir, '.agenthub'), { recursive: true });
+    execFileSync('git', ['init'], { cwd: worktreeDir });
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: worktreeDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
     fs.writeFileSync(path.join(worktreeDir, '.agenthub', 'DONE'), 'All completed successfully');
 
     ctx.taskRepo.update('myproj/task-abc', {

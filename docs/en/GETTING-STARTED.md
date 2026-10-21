@@ -148,20 +148,55 @@ The system periodically validates session token health. Profile cards on the **P
 
 ---
 
-## 6. Registering Projects
+## 6. Registering Projects (Adding a Project)
 
-```bash
-agenthub project add <project_name> /path/to/git/repository
-```
+In AgentHub, a **project** represents a local git repository on your machine. When an AI worker (Gemini or Codex) receives a task, the hub automatically spins up an isolated git worktree (under branch `agenthub/<slug>`), allowing workers to implement changes safely without touching your active working directory or branch.
 
-After adding a project, configure its settings on the **Projects** page:
+### 3 Steps to Add a Project:
 
-- **`maxParallel`**: Maximum number of tasks executed concurrently for this repository.
-- **`envTemplate`**: Generates a dedicated `.env` file per worktree to prevent port and database collisions across parallel tasks. Supports template variables: `{slot}`, `{slug}`, `{slug_underscored}` (e.g., `PORT=4{slot}50`, `DB_NAME=app_t_{slug_underscored}`).
-- **`onWorktreeRemoved` Hooks**: Cleanup commands executed when a task worktree is removed (e.g., dropping ephemeral databases).
+1. **Prepare the repository**: Clone the repo onto your machine (if not already present). Ensure it is initialized as a git repository with a default branch (such as `main`).
+2. **Register the project in AgentHub**:
+   - **Via Web Dashboard**: Open the **Setup** page and click **"Add project"**, or visit the **Projects** page and click **"Register Project"** (or go directly to `/projects?new=1`). Enter a project name and the absolute path to the repository directory.
+   - **Or via CLI**:
+     ```bash
+     agenthub project add <project_name> /absolute/path/to/git/repository
+     ```
+3. **Dispatch tasks**: After registration, you can dispatch tasks to workers via `/newtask` on Telegram, through chat with Claude on the Web Dashboard, or directly from the **Tasks** page.
+
+### Configuration Fields in Registration Form:
+
+- **Project Name**: Display name for the project (the system auto-derives the project ID from this name).
+- **Git Repo Path**: Absolute path to the repository root directory on this machine. This directory must exist and must be a valid git repository.
+- **Default Branch**: Base branch (default is `main`) that workers branch off from and merge back into after approval. The branch must exist in the repository.
+- **Max Parallel Workers (`maxParallel`)**: Maximum number of concurrent tasks allowed for this project (default: 3).
+
+### Advanced Settings (collapsed by default):
+
+- **Environment Template (`envTemplate` - JSON format)**: Optional template used to generate isolated `.env` files per worktree, preventing port collisions or database conflicts when multiple workers run in parallel. Supported template placeholders:
+  - `{slot}`: Worker slot number (1 through 9).
+  - `{slug}`: Task slug identifier (e.g., `add-login`).
+  - `{slug_underscored}`: Task slug with hyphens replaced by underscores (e.g., `add_login`).
+
+  *Example `envTemplate`:*
+  ```json
+  {
+    "PORT": "300{slot}",
+    "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/myapp_t_{slug_underscored}"
+  }
+  ```
+
+- **Automated Checks (`checks` - JSON array)**: Automated verification commands executed after a worker completes its task (e.g., `lint`, `test`):
+  ```json
+  [
+    { "name": "lint", "cmd": ["npm", "run", "lint"] },
+    { "name": "test", "cmd": ["npm", "test"] }
+  ]
+  ```
+
+- **`onWorktreeRemoved` Hooks**: Cleanup commands executed after a worktree is removed (e.g., `docker exec my_postgres psql -U user -d postgres -c "DROP DATABASE IF EXISTS myapp_t_{slug_underscored}"`).
 - **Automated Merge**: Configure an integration worktree per target branch and post-merge verification commands (e.g., `npm run lint`, `npm run typecheck`). When a task is approved with merge enabled, the hub automatically merges the task branch, runs verification checks, and reverts if conflicts or test failures arise.
 
-Repositories should maintain an `AGENTS.md` file defining project conventions, testing standards, and forbidden actions. Workers inspect this file before starting work.
+> **Project Conventions**: Repositories should maintain an `AGENTS.md` file defining project conventions, testing instructions, and forbidden actions. Workers inspect this file before starting work.
 
 ---
 

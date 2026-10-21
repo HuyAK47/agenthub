@@ -1,5 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { BrainConfig } from '../config.js';
+import { projectSettings } from '../projects/settings.js';
+import { effectiveBrainModeFromSettings } from './mode.js';
 
 export type BrainPolicyAction = 'allow' | 'deny';
 export interface BrainPolicyDecision {
@@ -248,4 +251,24 @@ export class BrainPolicy {
     }
     return null;
   }
+}
+
+/**
+ * Policy for a project's brain session: it may work in the project repo and that project's
+ * worktrees, only read the project's references, and acts in the project's own effective mode
+ * (a project set to `auto` gets auto permissions even when the global brain is `suggest`).
+ */
+export function projectBrainPolicy(
+  project: { id: string; path: string; settings?: string | null },
+  config: { worktreesDir: string; brain: Pick<BrainConfig, 'mode' | 'policy'> },
+): BrainPolicy {
+  const settings = projectSettings(project);
+  return new BrainPolicy({
+    roots: [project.path, path.join(config.worktreesDir, project.id)],
+    readOnlyRoots: settings.references.map((reference) => reference.path),
+    extraPatterns: config.brain.policy.flatMap((pattern) => {
+      try { return [new RegExp(pattern)]; } catch { return []; }
+    }),
+    mode: effectiveBrainModeFromSettings(settings, config.brain) === 'auto' ? 'auto' : 'suggest',
+  });
 }

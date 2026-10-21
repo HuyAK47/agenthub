@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import {
   completeSetup,
+  getProjects,
   getSetupStatus,
   installSetupMcp,
   installSetupTool,
@@ -42,7 +43,7 @@ export const SetupCheckRow: React.FC<SetupCheckRowProps> = ({
   log,
 }) => {
   const { t } = useLocale();
-  const showLog = item.key !== 'node' && item.key !== 'git' && log !== undefined;
+  const showLog = item.key !== 'node' && item.key !== 'git' && item.key !== 'firstProject' && log !== undefined;
 
   return (
     <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -225,6 +226,10 @@ export const SetupPage: React.FC = () => {
     queryFn: getSetupStatus,
     refetchInterval: 3000,
   });
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: getProjects,
+  });
 
   const [logs, setLogs] = useState<Record<string, string>>({});
   const [installingTool, setInstallingTool] = useState<string | null>(null);
@@ -371,8 +376,21 @@ export const SetupPage: React.FC = () => {
           </Button>
         ) : undefined,
       },
+      {
+        key: 'firstProject',
+        label: t('setup.firstProject'),
+        ok: projects.length >= 1,
+        action: projects.length < 1 ? (
+          <Link
+            to="/projects?new=1"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold cursor-pointer"
+          >
+            <span>{t('setup.addProject')}</span>
+          </Link>
+        ) : undefined,
+      },
     ];
-  }, [data, installingTool, mcp, t]);
+  }, [data, projects, installingTool, mcp, t]);
 
   const readyCount = useMemo(() => {
     return checks.filter((c) => c.ok).length;
