@@ -3,6 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BrainPolicy, projectBrainPolicy } from '../src/brain/policy.js';
+import { BrainRunner } from '../src/brain/runner.js';
+import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, ProjectRepo, openDatabase } from '../src/db/index.js';
+import { EventBus } from '../src/scheduler/index.js';
+import { createContext } from '../src/daemon.js';
+import { createServer } from '../src/api/server.js';
+import { loadConfig } from '../src/config.js';
+import { getOrCreateToken } from '../src/auth.js';
+import { FakeEngine } from '../src/engines/index.js';
+import { TelegramBotService } from '../src/telegram.js';
 
 describe('BrainPolicy', () => {
   const dirs: string[] = [];
@@ -201,5 +210,145 @@ describe('BrainPolicy', () => {
 
     // git push origin feature
     expect(trusted.decide({ toolName: 'Bash', input: { command: 'git push origin feature', cwd: root } })?.action).toBe('allow');
+  });
+
+  it('API: PATCH project permissions=full and PUT /api/config require confirm and emit brain.trust_changed', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-api-'));
+    dirs.push(tmp);
+    const agyHomesDir = path.join(tmp, 'agy-homes');
+    fs.mkdirSync(agyHomesDir, { recursive: true });
+    const cfg = loadConfig(tmp);
+    cfg.agyHomesDir = agyHomesDir;
+    cfg.port = 0;
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const ctx = createContext(cfg, new Map([['agy', fakeEngine]]));
+    const srv = await createServer(ctx.service, cfg);
+    const tok = getOrCreateToken(cfg.tokenPath);
+    const headers = { host: '127.0.0.1', authorization: `Bearer ${tok}`, 'content-type': 'application/json' };
+
+    ctx.projectRepo.insert({ id: 'p1', name: 'P1', path: tmp, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    const events: Array<{ type: string; payload?: unknown }> = [];
+    ctx.scheduler.getEventBus().on('brain.trust_changed', (_taskId, payload) => events.push({ type: 'brain.trust_changed', payload }));
+
+    // PATCH /api/projects/p1 without confirm -> 409
+    const patchNoConfirm = await srv.inject({ method: 'PATCH', url: '/api/projects/p1', headers, payload: { settings: { brain: { permissions: 'full' } } } });
+    expect(patchNoConfirm.statusCode).toBe(409);
+    expect(events).toHaveLength(0);
+
+    // PATCH /api/projects/p1 with confirm -> 200 + event
+    const patchConfirm = await srv.inject({ method: 'PATCH', url: '/api/projects/p1', headers, payload: { settings: { brain: { permissions: 'full' } }, confirm: true } });
+    expect(patchConfirm.statusCode).toBe(200);
+    expect(events).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ projectId: 'p1', permissions: 'full' }) }));
+
+    // PUT /api/config without confirm -> 409
+    const putNoConfirm = await srv.inject({ method: 'PUT', url: '/api/config', headers, payload: { brain: { permissions: 'full' } } });
+    expect(putNoConfirm.statusCode).toBe(409);
+
+    // PUT /api/config with confirm -> 200 + event
+    const putConfirm = await srv.inject({ method: 'PUT', url: '/api/config', headers, payload: { brain: { permissions: 'full' }, confirm: true } });
+    expect(putConfirm.statusCode).toBe(200);
+    expect(events).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ projectId: null, permissions: 'full' }) }));
+
+    await srv.close();
+    ctx.scheduler.stop();
+    ctx.db.close();
+  });
+
+  it('BrainRunner.ensureSession: switches project to full mode when session is idle and keeps safe when busy', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-runner-'));
+    dirs.push(root);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    const sessions = new ChatSessionRepo(db);
+    const turns = new BrainTurnRepo(db);
+    const profiles = new ProfileRepo(db);
+    const projects = new ProjectRepo(db);
+    projects.insert({ id: 'p1', name: 'P1', path: root, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: JSON.stringify({ brain: { permissions: 'full' } }) });
+    projects.insert({ id: 'p2', name: 'P2', path: root, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: JSON.stringify({ brain: { permissions: 'full' } }) });
+    const events = new EventBus({ insert: () => 0 } as never);
+    const runner = new BrainRunner({
+      config: { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode: 'auto', maxConcurrent: 2, maxTurnsPerHour: 20, dailyTokenBudget: 0 } as const,
+      eventBus: events,
+      chatService: { getOrCreateSession: () => ({ id: 'x' }) } as never,
+      chatSessionRepo: sessions,
+      profileRepo: profiles,
+      turnRepo: turns,
+      debounceMs: 60_000,
+      projectRepo: projects,
+    });
+
+    // Idle session switches to full
+    sessions.insert({ id: 'brain:p1', projectId: 'p1', title: 'P1', kind: 'brain', mode: 'safe', busy: 0 });
+    const s1 = runner.ensureSession('p1');
+    expect(s1.mode).toBe('full');
+
+    // Busy session stays safe
+    sessions.insert({ id: 'brain:p2', projectId: 'p2', title: 'P2', kind: 'brain', mode: 'safe', busy: 1 });
+    const s2 = runner.ensureSession('p2');
+    expect(s2.mode).toBe('safe');
+    db.close();
+  });
+
+  it('Telegram: /brain trust p full without confirm does not change; with confirm changes and emits event', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-tg-'));
+    dirs.push(tmp);
+    const agyHomesDir = path.join(tmp, 'agy-homes');
+    fs.mkdirSync(agyHomesDir, { recursive: true });
+    const secretsDir = path.join(tmp, 'secrets');
+    fs.mkdirSync(secretsDir, { recursive: true });
+    fs.writeFileSync(path.join(secretsDir, 'telegram.token'), 'test-bot-token\n', { mode: 0o600 });
+    const cfg = loadConfig(tmp);
+    cfg.agyHomesDir = agyHomesDir;
+    cfg.telegram = { enabled: true, allowedChatIds: [12345], tokenPath: path.join(secretsDir, 'telegram.token') } as never;
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const ctx = createContext(cfg, new Map([['agy', fakeEngine]]));
+    ctx.scheduler.stop();
+    ctx.projectRepo.insert({ id: 'p1', name: 'P1', path: tmp, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+
+    const sentMessages: string[] = [];
+    const bot = new TelegramBotService({
+      config: cfg,
+      service: ctx.service,
+      projectRepo: ctx.projectRepo,
+      taskRepo: ctx.taskRepo,
+      eventRepo: ctx.eventRepo,
+      eventBus: ctx.scheduler.getEventBus(),
+      tokenOverride: 'test-bot-token',
+      fetch: (async (_url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        if (body.text) sentMessages.push(body.text);
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 101 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }) as typeof fetch,
+    });
+
+    const events: unknown[] = [];
+    ctx.scheduler.getEventBus().on('brain.trust_changed', (_taskId, payload) => events.push(payload));
+
+    // /brain trust p1 full without confirm -> no change
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: 12345, type: 'private' }, date: Math.floor(Date.now() / 1000), text: '/brain trust p1 full' },
+    });
+    await bot.flushQueue(12345);
+    expect(sentMessages.some((m) => m.includes('Toàn quyền'))).toBe(true);
+    expect(events).toHaveLength(0);
+    const projBefore = ctx.projectRepo.get('p1');
+    expect(JSON.parse(projBefore?.settings || '{}').brain?.permissions).toBeUndefined();
+
+    // /brain trust p1 full confirm -> changes and emits event
+    await bot.handleUpdate({
+      update_id: 2,
+      message: { message_id: 2, chat: { id: 12345, type: 'private' }, date: Math.floor(Date.now() / 1000), text: '/brain trust p1 full confirm' },
+    });
+    await bot.flushQueue(12345);
+    expect(sentMessages.some((m) => m.includes('Đã đổi quyền bộ não dự án'))).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({ projectId: 'p1', permissions: 'full' }));
+    const projAfter = ctx.projectRepo.get('p1');
+    expect(JSON.parse(projAfter?.settings || '{}').brain?.permissions).toBe('full');
+
+    ctx.scheduler.stop();
+    ctx.db.close();
   });
 });
