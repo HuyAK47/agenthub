@@ -190,7 +190,9 @@ export const ProfilesPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
     }
   };
-  const runCheck = async (name: string) => {
+  /** Bật trạng thái đang kiểm tra; sự kiện profile.check (SSE) sẽ tắt nó và hiện kết quả. */
+  const watchCheck = (name: string) => {
+    clearTimeout(checkTimers.current[name]);
     setChecking((old) => ({ ...old, [name]: true }));
     checkTimers.current[name] = setTimeout(
       () => {
@@ -199,6 +201,9 @@ export const ProfilesPage: React.FC = () => {
       },
       75_000,
     );
+  };
+  const runCheck = async (name: string) => {
+    watchCheck(name);
     try {
       await checkProfile(name);
     } catch (err: any) {
@@ -321,6 +326,8 @@ export const ProfilesPage: React.FC = () => {
               t('profiles.importDone', { success: result.successCount, total: result.total }),
               result.successCount === 0,
             );
+            // Backend tự chạy Check bằng agy cho các tài khoản vừa nhập.
+            result.results.filter((item) => item.status === 'ok').forEach((item) => watchCheck(item.name));
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
         />
@@ -365,6 +372,7 @@ export const ProfilesPage: React.FC = () => {
           onDone={(email) => {
             setTokenLogin(null);
             toast(t('profiles.tokenLoginSuccess', { name: tokenLogin.name, email }));
+            watchCheck(tokenLogin.name);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
         />

@@ -1394,7 +1394,11 @@ export class AppService {
     return apiProfile(this.profileRepo.get(parsed.name)!);
   }
 
-  async importAgyTokens(raw: unknown): Promise<{
+  /**
+   * verify: chạy Check bằng agy cho từng hồ sơ nhập thành công (kết quả về qua sự kiện profile.check).
+   * CLI tắt vì nó đóng DB ngay sau khi nhập.
+   */
+  async importAgyTokens(raw: unknown, options: { verify?: boolean } = {}): Promise<{
     success: boolean;
     total: number;
     successCount: number;
@@ -1549,6 +1553,7 @@ export class AppService {
       const nextAvatar = avatarUrl ?? (sameEmail(current) ? current.avatarUrl ?? null : null);
       this.profileRepo.upsert({ ...current, email });
       this.profileRepo.updateAvatarUrl(targetName, nextAvatar);
+      // Google đã nhận refresh token; agy có dùng được file token hay không thì Check bên dưới xác nhận.
       this.profileRepo.updateAuthState(targetName, 'ok', 'Đã xác thực qua refresh token', null);
 
       if (action === 'created') {
@@ -1562,8 +1567,19 @@ export class AppService {
         email,
         action,
         status: 'ok',
-        message: action === 'updated' ? 'Cập nhật token thành công' : 'Thêm tài khoản thành công',
+        message: `${action === 'updated' ? 'Cập nhật token thành công' : 'Thêm tài khoản thành công'}${options.verify === false ? '' : ' · đang kiểm tra với agy'}`,
       });
+    }
+
+    if (options.verify !== false) {
+      for (const item of results) {
+        if (item.status !== 'ok') continue;
+        try {
+          this.startProfileCheck(item.name);
+        } catch {
+          // Đang có lượt kiểm tra khác cho hồ sơ này; kết quả của nó cũng phản ánh token mới.
+        }
+      }
     }
 
     return {

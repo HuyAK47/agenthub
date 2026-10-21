@@ -745,7 +745,7 @@ export async function cmdProfile(
         const result = await ctx.service.importAgyTokens({
           tokens: payloadRaw,
           accountType: accountTypeArg,
-        });
+        }, { verify: false });
 
         console.log(`\nKết quả xử lý (${result.total} mục):`);
         for (const item of result.results) {
@@ -756,6 +756,9 @@ export async function cmdProfile(
           }
         }
         console.log(`\nTổng kết: ${result.successCount} thành công, ${result.failedCount} thất bại.`);
+        if (result.successCount > 0) {
+          console.log('Kiểm tra lại với agy: agenthub profile check <tên>');
+        }
         if (result.failedCount > 0 && result.successCount === 0) {
           process.exitCode = 1;
         }

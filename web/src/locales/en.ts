@@ -402,7 +402,7 @@ export const en: typeof vi = {
     tokenLoginRequired: 'Please enter the email and refresh token.',
     tokenLoginBtn: 'Sign in',
     tokenLoginVerifying: 'Verifying token…',
-    tokenLoginSuccess: 'Signed in {name} as {email}',
+    tokenLoginSuccess: 'Saved the token for {name} ({email}), checking with agy…',
     refreshDone: 'Refreshed {name}',
     refreshFailed: 'Refresh failed',
     toggledOn: 'Enabled profile {name}',

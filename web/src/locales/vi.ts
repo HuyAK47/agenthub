@@ -401,7 +401,7 @@ export const vi = {
     tokenLoginRequired: 'Vui lòng nhập email và refresh token.',
     tokenLoginBtn: 'Đăng nhập',
     tokenLoginVerifying: 'Đang kiểm tra token…',
-    tokenLoginSuccess: 'Đã đăng nhập {name} với {email}',
+    tokenLoginSuccess: 'Đã lưu token cho {name} ({email}), đang kiểm tra với agy…',
     refreshDone: 'Đã làm mới {name}',
     refreshFailed: 'Làm mới thất bại',
     toggledOn: 'Đã bật hồ sơ {name}',

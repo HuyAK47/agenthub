@@ -12,8 +12,19 @@ describe('Antigravity Token Import from Cockpit', () => {
   let config: ReturnType<typeof loadConfig>;
   let ctx: ReturnType<typeof createContext>;
   let originalFetch: typeof globalThis.fetch;
+  let previousAgyBin: string | undefined;
+
+  /** Chờ các lượt Check tự chạy sau khi nhập token kết thúc (agy giả, không bao giờ agy thật). */
+  async function waitForChecks(timeoutMs = 10_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (ctx.service['profileChecks'].size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
 
   beforeEach(() => {
+    previousAgyBin = process.env.AGENTHUB_AGY_BIN;
+    process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-usage.mjs');
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-agy-import-test-'));
     agyHomesDir = path.join(tmpDir, 'agy-homes');
     fs.mkdirSync(agyHomesDir, { recursive: true });
@@ -29,8 +40,11 @@ describe('Antigravity Token Import from Cockpit', () => {
     originalFetch = globalThis.fetch;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForChecks();
     globalThis.fetch = originalFetch;
+    if (previousAgyBin === undefined) delete process.env.AGENTHUB_AGY_BIN;
+    else process.env.AGENTHUB_AGY_BIN = previousAgyBin;
     try {
       ctx.db.close();
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -430,6 +444,53 @@ describe('Antigravity Token Import from Cockpit', () => {
     });
     expect(Number.isFinite(Date.parse(saved.token.expiry))).toBe(true);
     expect(readAgyAccessToken(path.join(agyHomesDir, 'shape'))).toBe('at_1');
+  });
+
+  describe('automatic check with agy after import', () => {
+    it('confirms the imported account with agy and stores its quota', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: 'auto_at', expires_in: 3600, token_type: 'Bearer' }),
+      } as unknown as Response);
+      const events: unknown[] = [];
+      ctx.scheduler.getEventBus().on('profile.check', (_taskId: unknown, payload: unknown) => events.push(payload));
+
+      const result = await ctx.service.importAgyTokens({ email: 'auto@example.com', refresh_token: 'rt' });
+      expect(result.results[0].message).toMatch(/đang kiểm tra với agy/);
+      await waitForChecks();
+
+      expect(ctx.profileRepo.get('auto')?.authState).toBe('ok');
+      expect(ctx.service.usageService.getForProfile('auto').length).toBeGreaterThan(0);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ name: 'auto', ok: true });
+    });
+
+    it('reports not logged in when agy cannot use the token file', async () => {
+      ctx.service.createProfile({ name: 'flat', engine: 'agy', accountType: 'team' });
+      const dir = path.join(agyHomesDir, 'flat', '.gemini', 'antigravity-cli');
+      fs.mkdirSync(dir, { recursive: true });
+      // Định dạng phẳng cũ mà agy thật đã từ chối.
+      fs.writeFileSync(path.join(dir, 'antigravity-oauth-token'), JSON.stringify({ access_token: 'a', refresh_token: 'r' }));
+
+      ctx.service.startProfileCheck('flat');
+      await waitForChecks();
+
+      expect(ctx.profileRepo.get('flat')?.authState).toBe('not_logged_in');
+    });
+
+    it('skips the agy check when verify is off (CLI)', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: 'cli_at', expires_in: 3600, token_type: 'Bearer' }),
+      } as unknown as Response);
+
+      const result = await ctx.service.importAgyTokens({ email: 'cli@example.com', refresh_token: 'rt' }, { verify: false });
+
+      expect(result.results[0].message).not.toMatch(/kiểm tra/);
+      expect(ctx.service['profileChecks'].size).toBe(0);
+    });
   });
 });
 

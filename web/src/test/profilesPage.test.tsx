@@ -351,6 +351,30 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/Đã làm mới g1 · Đã cập nhật ảnh đại diện/);
   });
 
+  it('9c. Dùng token: nhập xong thì thẻ tự chuyển sang đang kiểm tra, không cần bấm Check', async () => {
+    const importSpy = vi.spyOn(client, 'importAgyTokens').mockResolvedValue({
+      success: true, total: 1, successCount: 1, failedCount: 0,
+      results: [{ name: 'g1', email: 'g1@example.com', action: 'updated', status: 'ok', message: 'ok' }],
+    });
+    const checkSpy = vi.spyOn(client, 'checkProfile').mockResolvedValue({ started: true });
+    renderPage();
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+
+    const card = screen.getByTestId('profile-card-g1');
+    fireEvent.click(Array.from(card.querySelectorAll('button')).find((b) => /Dùng token/.test(b.textContent || ''))!);
+    fireEvent.change(screen.getByPlaceholderText('1//...'), { target: { value: '1//rt' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Đăng nhập' }));
+    });
+
+    expect(importSpy).toHaveBeenCalledWith({
+      tokens: [{ name: 'g1', email: 'g1@example.com', refresh_token: '1//rt' }],
+      accountType: undefined,
+    });
+    expect(await screen.findByText(/Đang kiểm tra/)).toBeInTheDocument();
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
     const profilesWithExpired: Profile[] = [
       {
