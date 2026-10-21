@@ -55,13 +55,18 @@ const BROWSER_OPENERS = [
  * để CLI vẫn coi là mở thành công và tiếp tục chờ mã xác thực.
  * Đặt AGENTHUB_LOGIN_OPEN_BROWSER=1 để bật lại hành vi cũ.
  */
-export function applyNoBrowserEnv(env: Record<string, string>, hubHome: string): void {
+export function applyNoBrowserEnv(env: Record<string, string>, hubHome: string | undefined): void {
   if (process.env.AGENTHUB_LOGIN_OPEN_BROWSER === '1') return;
-  const shimDir = path.join(hubHome, 'no-browser-bin');
-  fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
-  for (const name of BROWSER_OPENERS) {
-    const file = path.join(shimDir, name);
-    if (!fs.existsSync(file)) fs.writeFileSync(file, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const shimDir = path.join(hubHome || os.tmpdir(), 'no-browser-bin');
+  try {
+    fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+    for (const name of BROWSER_OPENERS) {
+      const file = path.join(shimDir, name);
+      if (!fs.existsSync(file)) fs.writeFileSync(file, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+  } catch {
+    // Không tạo được shim thì CLI có thể tự mở tab; không được chặn việc đăng nhập.
+    return;
   }
   env.BROWSER = path.join(shimDir, 'xdg-open');
   env.PATH = env.PATH ? `${shimDir}${path.delimiter}${env.PATH}` : shimDir;
@@ -115,13 +120,19 @@ export class PtyManager {
     }
     if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
 
-    const ptyProcess = pty.spawn(command, args, {
-      name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
-      cwd: fs.existsSync(home) ? home : os.homedir(),
-      env,
-    });
+    let ptyProcess: pty.IPty;
+    try {
+      ptyProcess = pty.spawn(command, args, {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 24,
+        cwd: fs.existsSync(home) ? home : os.homedir(),
+        env,
+      });
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new HttpError(503, 'pty_unavailable', `Không thể khởi tạo PTY trên ${process.platform}: ${detail}. Kiểm tra binary node-pty/spawn-helper và quyền thực thi.`);
+    }
 
     // Auto-close session after 15 minutes (PLAN 4)
     const timer = setTimeout(() => {

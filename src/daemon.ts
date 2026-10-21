@@ -45,6 +45,7 @@ import { SetupManager } from './tools/setup.js';
 import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
+import { DeployService } from './deploy.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -79,6 +80,7 @@ export interface DaemonContext {
   usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
   brainRunner: BrainRunner;
+  deployService: DeployService;
 }
 
 export interface CreateContextOptions {
@@ -179,7 +181,7 @@ export function createContext(
     engines.set('agy', new AgyEngine());
     const codexPath = CodexEngine.findCodexPath();
     if (codexPath) {
-      engines.set('codex', new CodexEngine(codexPath));
+      engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
   }
 
@@ -199,6 +201,7 @@ export function createContext(
     knowledgeRepo,
     diskFn ? { diskSpace: diskFn } : undefined,
   );
+  usageService.setEventBus(scheduler.getEventBus());
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
     profileService.registerAll();
     scheduler.refreshEngines();
@@ -224,6 +227,12 @@ export function createContext(
     eventRepo,
     { failoverState, retryRepo: chatRetryRepo },
   );
+  scheduler.getEventBus().on('claude.quota_available', (_taskId, payload) => {
+    const data = payload && typeof payload === 'object' ? payload as { profileName?: unknown; observedAt?: unknown } : {};
+    if (typeof data.profileName !== 'string') return;
+    if (typeof data.observedAt === 'string') claudeSessionRepo.markAllowedAfter(data.profileName, data.observedAt);
+    chatService.retryWaitingForProfile(data.profileName);
+  });
   const brainRunner = new BrainRunner({
     config: config.brain,
     eventBus: scheduler.getEventBus(),
@@ -233,6 +242,9 @@ export function createContext(
     turnRepo: brainTurnRepo,
     projectRepo,
   });
+
+  const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());
+  deployService.start();
 
   const bulletinService = new BulletinService({
     config,
@@ -269,6 +281,7 @@ export function createContext(
     setupManager,
     brainRunner,
   );
+  service.deployService = deployService;
 
   const notifier = new NotificationService({
     eventBus: scheduler.getEventBus(),
@@ -325,6 +338,7 @@ export function createContext(
     usageRepo,
     telegramService,
     brainRunner,
+    deployService,
   };
 }
 

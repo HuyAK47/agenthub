@@ -468,7 +468,7 @@ export const en: typeof vi = {
     envHint: 'Optional, e.g. dedicated port/DB for each worktree with {slot}',
     checksHint: 'Automated checks before review (JSON array)',
     hooksHint: 'Commands executed after worktree removal (optional)',
-    settings: 'Settings', saveSettings: 'Save settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
+    settings: 'Settings', saveSettings: 'Save settings', saveSettingsError: 'Failed to save project settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
   },
   settings: {
     title: 'System Settings',
@@ -606,6 +606,7 @@ export const en: typeof vi = {
     saveName: 'Save name',
     newNameAria: 'New session title',
     retryLastTurn: 'Retry last turn',
+    retryLimit: 'Retry now',
     permissionTitle: 'Claude requires permission: {tool}',
     permissionAria: 'Tool permission request',
     allow: 'Allow',

@@ -421,3 +421,22 @@ Worker và lệnh kiểm tra chạy với ưu tiên thấp (`nice`/`ionice` trê
 | Telegram bot không phản hồi | Kiểm tra token trong `secrets/telegram.token` và xác thực ghép đôi trên Dashboard |
 
 Xem thêm: [USAGE.md](USAGE.md) (quy trình chi tiết), [FEATURES.md](FEATURES.md) (danh sách tính năng), [PLAN.md](PLAN.md) (kiến trúc).
+
+## 14. Tự triển khai sau merge
+
+Các bước deploy chỉ được khai báo trong `~/.agenthub/config.json`, không qua API/MCP. Ví dụ cho chính repo AgentHub:
+
+```json
+{
+  "deploy": {
+    "agenthub": {
+      "steps": [["npm", "run", "build"], ["npm", "run", "build:web"], ["node", "scripts/install-web.mjs"]],
+      "timeoutSec": 900,
+      "restartHub": true,
+      "push": { "remote": "origin", "from": "integration", "to": "main", "ffOnly": true }
+    }
+  }
+}
+```
+
+Mỗi bước chạy bằng argv trong worktree tích hợp, có log tại `~/.agenthub/logs/deploy/<project>/<time>.log`. `push` mặc định tắt; khi bật chỉ fast-forward. Có thể chạy lại bằng nút Deploy trên trang Projects hoặc `/deploy <project>` trong Telegram; `/deploy` không có tham số hiển thị trạng thái gần nhất.

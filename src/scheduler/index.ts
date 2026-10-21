@@ -41,6 +41,7 @@ import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
 import { measureProcessTree } from '../process-tree.js';
+import { ReferenceSnapshot, takeReferenceSnapshots, detectReferenceModifications, ReferenceModification } from '../references.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -120,6 +121,7 @@ interface RunningTask {
   paused?: boolean;
   pauseReason?: 'manual' | 'load' | null;
   pausedAt?: number | null;
+  referenceSnapshots?: ReferenceSnapshot[];
 }
 
 interface StartingTask {
@@ -238,7 +240,7 @@ export class Scheduler {
       this.engines.set('agy', new AgyEngine());
       const codexPath = CodexEngine.findCodexPath();
       if (codexPath) {
-        this.engines.set('codex', new CodexEngine(codexPath));
+        this.engines.set('codex', new CodexEngine(codexPath, this.config.workers?.codexSandbox || 'off'));
       }
     }
 
@@ -273,7 +275,7 @@ export class Scheduler {
   refreshEngines(): void {
     if (this.engines.has('codex')) return;
     const codexPath = CodexEngine.findCodexPath();
-    if (codexPath) this.engines.set('codex', new CodexEngine(codexPath));
+    if (codexPath) this.engines.set('codex', new CodexEngine(codexPath, this.config.workers?.codexSandbox || 'off'));
   }
 
   getRunning(): Map<string, RunningTask> {
@@ -1410,6 +1412,16 @@ export class Scheduler {
       });
     }
 
+    // Check if any read-only references were modified
+    if (rt.referenceSnapshots && rt.referenceSnapshots.length > 0) {
+      const modifications = detectReferenceModifications(rt.referenceSnapshots);
+      if (modifications.length > 0) {
+        await this.handleReferenceModifications(taskId, task, rt, modifications);
+        if (!this.stopped) this.triggerTick();
+        return;
+      }
+    }
+
     // A worker may have exited while the daemon was still alive. Preserve completed work exactly
     // as startup recovery does — but only after the run's metrics (tokens, lines, duration) are
     // recorded: returning earlier dropped token usage for every finished run.
@@ -1483,6 +1495,74 @@ export class Scheduler {
         console.error(`[scheduler] handleRunCompletion failed for ${taskId}:`, error);
       }
     }
+  }
+
+  private async handleReferenceModifications(
+    taskId: string,
+    task: TaskRow,
+    rt: RunningTask,
+    modifications: ReferenceModification[],
+  ): Promise<void> {
+    const lines = [
+      '# BỊ CHẶN: Phát hiện sửa đổi tài liệu tham chiếu chỉ đọc (References)',
+      '',
+      'Worker đã sửa đổi các file trong tài liệu tham chiếu (vốn là CHỈ ĐỌC):',
+    ];
+    const allFiles: string[] = [];
+    for (const mod of modifications) {
+      lines.push(`\n## Tham chiếu: ${mod.name} (${mod.path})`);
+      for (const f of mod.modifiedFiles) {
+        lines.push(`- ${f}`);
+        allFiles.push(`${mod.name}:${f}`);
+      }
+      this.eventBus.emit('reference.modified', taskId, {
+        reference: mod.name,
+        path: mod.path,
+        files: mod.modifiedFiles,
+        modifiedFiles: mod.modifiedFiles,
+      });
+    }
+
+    const blockedMessage = lines.join('\n');
+
+    // Remove DONE marker if present and write BLOCKED marker
+    if (task.worktreePath) {
+      const donePath = path.join(task.worktreePath, '.agenthub', 'DONE');
+      const blockedPath = path.join(task.worktreePath, '.agenthub', 'BLOCKED');
+      if (fs.existsSync(donePath)) {
+        try { fs.unlinkSync(donePath); } catch { /* ignore */ }
+      }
+      try {
+        fs.writeFileSync(blockedPath, blockedMessage, 'utf-8');
+      } catch { /* ignore */ }
+    }
+
+    // Insert task note if note repo is configured
+    if (this.taskNoteRepo) {
+      try {
+        this.taskNoteRepo.insert({
+          projectId: task.projectId,
+          taskId,
+          kind: 'note',
+          content: `Tài liệu tham chiếu bị sửa đổi: ${allFiles.join(', ')}`,
+        });
+      } catch { /* ignore */ }
+    }
+
+    // Finish run as blocked
+    this.runRepo.finish(rt.runId, 'blocked');
+
+    // Update task status to blocked
+    this.taskRepo.update(taskId, {
+      status: 'blocked',
+      transientRetries: 0,
+      notBefore: null,
+    });
+
+    this.eventBus.emit('task.blocked', taskId, {
+      reason: 'reference_modified',
+      modifications,
+    });
   }
 
   private scheduleNewTasks(): void {
@@ -2077,6 +2157,8 @@ export class Scheduler {
 
   private writeTaskFiles(task: TaskRow, body: string, resume: boolean, feedback?: string): void {
     if (!task.worktreePath) return;
+    const project = this.projectRepo.get(task.projectId);
+    const settings = project ? projectSettings(project) : undefined;
     this.worktreeService.writeTaskFile(
       task.worktreePath,
       body,
@@ -2086,6 +2168,8 @@ export class Scheduler {
       this.config.context?.depsMaxChars,
       this.knowledgeRepo?.getByProject(task.projectId) || [],
       this.config.context?.knowledgeMaxChars,
+      settings?.references || [],
+      project?.path,
     );
   }
 
@@ -2285,6 +2369,7 @@ export class Scheduler {
     });
 
     // Spawn the engine
+    const referenceSnapshots = takeReferenceSnapshots(projectSettings(project).references);
     try {
       const child = engine.spawn({
         profile,
@@ -2297,6 +2382,7 @@ export class Scheduler {
         hubHome: this.config.hubHome,
         project,
         gitHooks: projectSettings(project).worktree.gitHooks,
+        codexSandbox: this.config.workers?.codexSandbox || 'off',
       });
 
       const pid = child.pid!;
@@ -2328,6 +2414,7 @@ export class Scheduler {
         timeoutAt: Date.now() + this.config.defaultTimeout * 1000,
         retryCount,
         projectId: task.projectId,
+        referenceSnapshots,
         lastOutputAt: Date.now(),
         lastActivityAt: Date.now(),
         activitySource: 'log',

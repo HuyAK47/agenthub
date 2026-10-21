@@ -30,9 +30,10 @@ export function formatMinutesAgo(updatedAt?: string, now = Date.now(), translate
 export interface BrainCardProps {
   brain?: BrainStatus | null;
   quota?: ClaudeQuota | null;
+  onRetryLimit?: () => void;
 }
 
-export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
+export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit }) => {
   const { t } = useLocale();
   const [, setTick] = useState(0);
 
@@ -142,6 +143,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
           {quota.status || t('extra.unknown')} {resetSeconds > 0 && `· ${Math.floor(resetSeconds / 3600)}h ${Math.floor((resetSeconds % 3600) / 60)}m`}
         </span>
       </div>}
+      {brain.state === 'waiting' && onRetryLimit && <button type="button" onClick={onRetryLimit} className="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-warn)]/15 text-[var(--t-warn)] border border-[var(--t-warn)]/30">{t('extra.retryLimit')}</button>}
       {brain.sessions && brain.sessions.length > 0 && <div className="mt-4 pt-3 border-t border-[var(--t-border)] space-y-2" data-testid="brain-sessions">
         {brain.sessions.map((session) => <div key={session.sessionId} className="text-xs text-[var(--text-secondary)]">
           <a href={session.link} className="font-medium text-[var(--t-accent)] hover:underline">{session.title}</a>
