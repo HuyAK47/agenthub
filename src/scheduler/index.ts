@@ -911,17 +911,16 @@ export class Scheduler {
   private async checkRunningTasks(): Promise<void> {
     if (this.running.size === 0) return;
     const now = Date.now();
+    const completions: Promise<void>[] = [];
     for (const [taskId, rt] of this.running) {
       // Check if process is still alive
       if (!this.isProcessAlive(rt.pid, rt.pidStart)) {
         // Process has ended, check results
-        try {
-          await this.handleRunCompletion(taskId, rt);
-        } catch (error) {
+        completions.push(this.handleRunCompletion(taskId, rt).catch((error) => {
           if (!this.stopped) {
             console.error(`[scheduler] handleRunCompletion failed for ${taskId}:`, error);
           }
-        }
+        }));
         continue;
       }
 
@@ -950,6 +949,7 @@ export class Scheduler {
       // Check looping detection
       this.checkTaskLooping(taskId, rt, now);
     }
+    await Promise.allSettled(completions);
   }
 
   async checkTaskCommits(taskId: string, runningTask?: RunningTask, now = Date.now(), force = false): Promise<void> {
