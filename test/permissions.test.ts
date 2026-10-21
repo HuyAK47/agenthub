@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { openDatabase, ChatPermissionRepo, ChatSessionRepo } from '../src/db/index.js';
 import { PermissionBroker } from '../src/chat/permissions.js';
+import { BrainPolicy } from '../src/brain/policy.js';
 
 describe('PermissionBroker', () => {
   let dir: string;
@@ -63,5 +64,23 @@ describe('PermissionBroker', () => {
     expect(new ChatPermissionRepo(db).expirePending()).toBe(1);
     expect(broker.listPending()).toHaveLength(0);
     broker.stop();
+  });
+
+  it('derives brain policy from stored session kind, not request input', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-permission-'));
+    db = openDatabase(path.join(dir, 'hub.db'));
+    const sessions = new ChatSessionRepo(db);
+    sessions.insert({ id: 'brain-session', title: 'Brain', kind: 'brain' });
+    sessions.insert({ id: 'chat-session', title: 'Chat', kind: 'chat' });
+    const root = fs.mkdtempSync(path.join(dir, 'root-'));
+    const policy = new BrainPolicy({ roots: [root] });
+    const broker = new PermissionBroker(new ChatPermissionRepo(db), 1, undefined, policy, sessions);
+
+    await expect(broker.request({ sessionId: 'brain-session', kind: 'user', toolName: 'Bash', input: { command: 'git status', cwd: root } }))
+      .resolves.toMatchObject({ behavior: 'allow' });
+    const ordinary = broker.request({ sessionId: 'chat-session', kind: 'brain', toolName: 'Bash', input: { command: 'git status', cwd: root } });
+    expect(broker.listPending('chat-session')).toHaveLength(1);
+    broker.resolve(broker.listPending('chat-session')[0].id, 'deny');
+    await expect(ordinary).resolves.toMatchObject({ behavior: 'deny' });
   });
 });

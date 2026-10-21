@@ -117,6 +117,7 @@ export interface TelegramServiceOptions {
   execFile?: GitDiffFn;
   tokenOverride?: string;
   chatService?: ChatService;
+  brainSession?: boolean;
 }
 
 export type PendingChatState =
@@ -198,6 +199,7 @@ export class TelegramBotService {
   private sleepFn: (ms: number) => Promise<void>;
   private execFileFn: GitDiffFn;
   private chatService?: ChatService;
+  private brainSession: boolean;
 
   private token: string | null = null;
   private running = false;
@@ -239,6 +241,7 @@ export class TelegramBotService {
     this.sleepFn = opts.sleep || opts.sleepFn || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
     this.chatService = opts.chatService;
+    this.brainSession = opts.brainSession === true;
 
     if (opts.tokenOverride) {
       this.token = opts.tokenOverride;
@@ -659,7 +662,7 @@ export class TelegramBotService {
         break;
 
       case '/brain':
-        await this.handleBrainCommand(chatId);
+        await this.handleBrainCommand(chatId, argStr);
         break;
 
       case '/tasks':
@@ -718,7 +721,41 @@ export class TelegramBotService {
     }
   }
 
+  private async handleBrainCommand(chatId: number, argStr: string): Promise<void> {
+    const current = this.config.brain;
+    const parts = argStr.split(/\s+/).filter(Boolean);
+    if (parts[0] !== 'mode') {
+      const brain = this.service.getStatus().brain;
+      const detailed = brain as (typeof brain & {
+        source?: string;
+        sessions?: Array<{ link: string; title: string; state?: string; stale?: boolean; lastUserRequest?: string; lastTool?: { name: string; summary?: string } }>;
+      });
+      if (detailed?.sessions) {
+        let text = `🧠 <b>Claude · Điều phối</b>\n• Trạng thái: <b>${this.brainLabel(detailed)}</b>\n• Nguồn: ${this.escapeHtml(detailed.source || 'hub')}\n`;
+        for (const session of detailed.sessions) {
+          text += `\n• <a href="${this.escapeHtml(session.link)}">${this.escapeHtml(session.title)}</a> · ${this.brainLabel(session)}\n`;
+          if (session.lastUserRequest) text += `  Yêu cầu: ${this.escapeHtml(session.lastUserRequest)}\n`;
+          if (session.lastTool) text += `  Tool: ${this.escapeHtml(session.lastTool.name)}${session.lastTool.summary ? ` — ${this.escapeHtml(session.lastTool.summary)}` : ''}\n`;
+        }
+        await this.sendMessage(chatId, text);
+        return;
+      }
+      const activity = brain ? ` · trạng thái <b>${this.brainLabel(brain)}</b>` : '';
+      await this.sendMessage(chatId, `🧠 Bộ não: <b>${current.mode}</b> · model <b>${current.model}</b> · tối đa ${current.maxTurnsPerHour} lượt/giờ${activity}`);
+      return;
+    }
+    const mode = parts[1];
+    if (mode !== 'off' && mode !== 'suggest' && mode !== 'auto') {
+      await this.sendMessage(chatId, 'Cú pháp: /brain mode off|suggest|auto');
+      return;
+    }
+    this.config.brain.mode = mode;
+    saveConfig(this.config.hubHome, { brain: { mode } });
+    await this.sendMessage(chatId, `🧠 Đã chuyển bộ não sang chế độ <b>${mode}</b>.`);
+  }
+
   private sessionIdForChat(chatId: number): string {
+    if (this.brainSession && this.config.brain?.mode && this.config.brain.mode !== 'off') return 'brain';
     const existing = this.chatSessions.get(chatId);
     if (existing) return existing;
     const sessionId = `telegram:${chatId}`;
@@ -735,7 +772,10 @@ export class TelegramBotService {
     const sessionId = this.sessionIdForChat(chatId);
     let initial: unknown;
     try {
-      this.chatService.getOrCreateSession(sessionId, { title: 'Cuộc trò chuyện Telegram' });
+      this.chatService.getOrCreateSession(sessionId, {
+        title: sessionId === 'brain' ? 'Bộ não' : 'Cuộc trò chuyện Telegram',
+        kind: sessionId === 'brain' ? 'brain' : 'chat',
+      });
       initial = await this.sendMessage(chatId, '⏳ Đang xử lý…');
       const messageId = this.telegramMessageId(initial);
       if (messageId === null) throw new Error('Telegram không trả về message_id');
@@ -1278,18 +1318,6 @@ export class TelegramBotService {
     await this.sendMessage(chatId, text);
   }
 
-  private async handleBrainCommand(chatId: number): Promise<void> {
-    const brain = this.service.getStatus().brain;
-    if (!brain) { await this.sendMessage(chatId, 'Claude chưa có trạng thái.'); return; }
-    let text = `🧠 <b>Claude · Điều phối</b>\n• Trạng thái: <b>${this.brainLabel(brain)}</b>\n• Nguồn: ${brain.source}\n`;
-    for (const session of brain.sessions || []) {
-      text += `\n• <a href="${this.escapeHtml(session.link)}">${this.escapeHtml(session.title)}</a> · ${this.brainLabel(session)}\n`;
-      if (session.lastUserRequest) text += `  Yêu cầu: ${this.escapeHtml(session.lastUserRequest)}\n`;
-      if (session.lastTool) text += `  Tool: ${this.escapeHtml(session.lastTool.name)}${session.lastTool.summary ? ` — ${this.escapeHtml(session.lastTool.summary)}` : ''}\n`;
-    }
-    await this.sendMessage(chatId, text);
-  }
-
   private brainLabel(value: { state?: string; stale?: boolean }): string {
     if (value.state === 'waiting') return 'chờ bạn trả lời';
     if (value.state === 'working') return 'đang làm';
@@ -1746,6 +1774,12 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     switch (type) {
+      case 'brain.notify': {
+        const level = p.level === 'incident' ? '🚨' : p.level === 'decision' ? '📌' : 'ℹ️';
+        const text = typeof p.text === 'string' ? p.text : '';
+        if (text) this.broadcastMessage(`${level} <b>Bộ não</b>\n${this.escapeHtml(text)}`);
+        break;
+      }
       case 'batch.created': {
         const batchId = typeof p.batchId === 'string' ? p.batchId : undefined;
         let batchInfo: (TaskBatchRow & { tasks: TaskRow[] }) | null = null;

@@ -19,6 +19,7 @@ import {
   TaskNoteRepo,
   KnowledgeRepo,
   TaskBatchRepo,
+  BrainTurnRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
@@ -42,6 +43,7 @@ import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
 import { BrainPolicy } from './brain/policy.js';
+import { BrainRunner } from './brain/runner.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -75,6 +77,7 @@ export interface DaemonContext {
   claudeScanner: ClaudeSessionScanner;
   usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
+  brainRunner: BrainRunner;
 }
 
 export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>): DaemonContext {
@@ -95,17 +98,19 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const chatMessageRepo = new ChatMessageRepo(db);
   const chatPermissionRepo = new ChatPermissionRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
+  const brainTurnRepo = new BrainTurnRepo(db);
   chatPermissionRepo.expirePending();
   const brainPolicy = new BrainPolicy({
     roots: [process.cwd(), config.hubHome, config.worktreesDir],
     extraPatterns: config.brain.policy.flatMap((pattern) => {
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
+    mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
   });
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
-  }, brainPolicy);
+  }, brainPolicy, chatSessionRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,
@@ -185,6 +190,13 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     eventRepo,
     { failoverState, retryRepo: chatRetryRepo },
   );
+  const brainRunner = new BrainRunner({
+    config: config.brain,
+    eventBus: scheduler.getEventBus(),
+    chatService,
+    chatSessionRepo,
+    turnRepo: brainTurnRepo,
+  });
 
   const bulletinService = new BulletinService({
     config,
@@ -236,6 +248,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     projectRepo,
     quotaMarkRepo,
     chatService,
+    brainSession: true,
   });
   service.setTelegramBotService(telegramService);
 
@@ -271,10 +284,16 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     claudeScanner,
     usageRepo,
     telegramService,
+    brainRunner,
   };
 }
 
 export function closeContext(ctx: DaemonContext): void {
+  try {
+    ctx.brainRunner?.stop();
+  } catch {
+    // ignore
+  }
   try {
     ctx.notifier?.stop();
   } catch {
@@ -345,6 +364,7 @@ export async function startDaemon(
   ctx.notifier.start();
   ctx.claudeScanner.start();
   ctx.bulletinService.start();
+  ctx.brainRunner.start();
 
   // Start Telegram bot if enabled
   if (config.telegram?.enabled) {

@@ -16,6 +16,7 @@ export interface BrainPolicyRequest {
 export interface BrainPolicyOptions {
   roots: string[];
   extraPatterns?: RegExp[];
+  mode?: 'suggest' | 'auto';
 }
 
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
@@ -193,9 +194,11 @@ function allowedCommand(command: string, roots: string[], cwd: string): boolean 
 
 export class BrainPolicy {
   private roots: string[];
+  private mode: 'suggest' | 'auto';
   constructor(options: BrainPolicyOptions) {
     this.roots = options.roots.filter((root) => Boolean(realPath(root)));
     this.extraPatterns = options.extraPatterns || [];
+    this.mode = options.mode || 'auto';
   }
   private extraPatterns: RegExp[];
 
@@ -208,6 +211,11 @@ export class BrainPolicy {
     }
     if (toolName === 'Bash' && /\r|\n|\$\(|<\(|>\(|`|\$\{/u.test(command)) return null;
     if (toolName.startsWith('mcp__agenthub__')) {
+      if (this.mode === 'suggest' && new Set([
+        'mcp__agenthub__hub_review',
+        'mcp__agenthub__hub_cancel',
+        'mcp__agenthub__hub_dispatch_batch',
+      ]).has(toolName)) return null;
       return { action: 'allow', reason: 'policy:auto_allow', message: 'MCP AgentHub được policy tự cho phép' };
     }
     if (toolName === 'Bash' && DENY_COMMAND.test(command)) {

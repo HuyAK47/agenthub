@@ -498,6 +498,27 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE claude_sessions ADD COLUMN lastEventKind TEXT;
   ALTER TABLE claude_sessions ADD COLUMN fiveHourTokens REAL;
   `,
+  // Migration 38: distinguish the resident brain chat from ordinary chats
+  `
+  ALTER TABLE chat_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'
+    CHECK(kind IN ('chat','brain'));
+  `,
+  // Migration 39: durable resident brain turn accounting
+  `
+  CREATE TABLE IF NOT EXISTS brain_turns (
+    id TEXT PRIMARY KEY,
+    trigger TEXT NOT NULL,
+    input TEXT NOT NULL,
+    summary TEXT,
+    status TEXT NOT NULL CHECK(status IN ('running','done','quota','failed','limited')),
+    inputTokens INTEGER NOT NULL DEFAULT 0,
+    outputTokens INTEGER NOT NULL DEFAULT 0,
+    startedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    finishedAt TEXT,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_brain_turns_started ON brain_turns(startedAt);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -1293,6 +1314,7 @@ export interface ChatSessionRow {
   contextTokens: number;
   createdAt: string;
   updatedAt: string;
+  kind: 'chat' | 'brain';
 }
 
 export interface ChatRetryRow {
@@ -1380,11 +1402,12 @@ export class ChatSessionRepo {
     inputTokens?: number;
     outputTokens?: number;
     contextTokens?: number;
+    kind?: 'chat' | 'brain';
   }): void {
     this.db
       .prepare(
-        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, profileName, state, pinned, archived, lastMessageAt, inputTokens, outputTokens, contextTokens)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, profileName, state, pinned, archived, lastMessageAt, inputTokens, outputTokens, contextTokens, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         row.id,
@@ -1402,7 +1425,16 @@ export class ChatSessionRepo {
         row.inputTokens ?? 0,
         row.outputTokens ?? 0,
         row.contextTokens ?? 0,
+        row.kind || 'chat',
       );
+  }
+
+  getByKind(kind: 'chat' | 'brain'): ChatSessionRow | undefined {
+    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+  }
+
+  updateKind(id: string, kind: 'chat' | 'brain'): void {
+    this.db.prepare("UPDATE chat_sessions SET kind = ?, updatedAt = datetime('now') WHERE id = ?").run(kind, id);
   }
 
   updateProfileName(id: string, profileName: string | null): void {
@@ -1497,6 +1529,47 @@ export class ChatSessionRepo {
   delete(id: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE sessionId = ?').run(id);
     this.db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
+  }
+}
+
+export interface BrainTurnRow {
+  id: string;
+  trigger: string;
+  input: string;
+  summary: string | null;
+  status: 'running' | 'done' | 'quota' | 'failed' | 'limited';
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+}
+
+export class BrainTurnRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: { id: string; trigger: string; input: string; status?: BrainTurnRow['status'] }): BrainTurnRow {
+    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, status) VALUES (?, ?, ?, ?)')
+      .run(row.id, row.trigger, row.input, row.status || 'running');
+    return this.get(row.id)!;
+  }
+
+  get(id: string): BrainTurnRow | undefined {
+    return this.db.prepare('SELECT * FROM brain_turns WHERE id = ?').get(id) as BrainTurnRow | undefined;
+  }
+
+  finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {
+    this.db.prepare(`UPDATE brain_turns SET status = ?, summary = ?, inputTokens = ?, outputTokens = ?, error = ?, finishedAt = datetime('now') WHERE id = ?`)
+      .run(fields.status, fields.summary || null, fields.inputTokens || 0, fields.outputTokens || 0, fields.error || null, id);
+  }
+
+  countSince(epochMs: number): number {
+    return (this.db.prepare("SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch')").get(Math.floor(epochMs / 1000)) as { count: number }).count;
+  }
+
+  tokensSince(isoDate: string): number {
+    const row = this.db.prepare('SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ?').get(isoDate) as { total: number };
+    return row.total;
   }
 }
 

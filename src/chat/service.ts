@@ -446,6 +446,7 @@ export class ChatService {
     mode?: 'safe' | 'full';
     model?: string;
     profileName?: string | null;
+    kind?: 'chat' | 'brain';
   }): ChatSessionRow {
     const { mode, model } = this.validateSessionOptions(body);
 
@@ -460,6 +461,7 @@ export class ChatService {
       model,
       busy: 0,
       profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+      kind: body.kind,
     });
 
     const session = this.chatSessionRepo.get(id)!;
@@ -475,6 +477,7 @@ export class ChatService {
     mode?: 'safe' | 'full';
     model?: string;
     profileName?: string | null;
+    kind?: 'chat' | 'brain';
   }): ChatSessionRow {
     const existing = this.chatSessionRepo.get(id);
     if (existing) return existing;
@@ -487,6 +490,7 @@ export class ChatService {
       model,
       busy: 0,
       profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+      kind: body.kind,
     });
     return this.chatSessionRepo.get(id)!;
   }
@@ -713,6 +717,12 @@ export class ChatService {
     this.chatMessageRepo.insert({
       id: userMessageId,
       sessionId,
+      role: 'user',
+      content: text,
+    });
+    this.emitEvent('chat.message', {
+      sessionId,
+      messageId: userMessageId,
       role: 'user',
       content: text,
     });

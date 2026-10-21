@@ -105,4 +105,13 @@ describe('BrainPolicy', () => {
     const policy = new BrainPolicy({ roots: [root], extraPatterns: [/^custom-tool$/] });
     expect(policy.decide({ toolName: 'Bash', input: { command: 'custom-tool', cwd: root } })?.action).toBe('allow');
   });
+
+  it('requires approval for merge-affecting MCP tools in suggest mode', () => {
+    const { root, policy } = make();
+    const suggest = new BrainPolicy({ roots: [root], mode: 'suggest' });
+    for (const toolName of ['mcp__agenthub__hub_review', 'mcp__agenthub__hub_cancel', 'mcp__agenthub__hub_dispatch_batch']) {
+      expect(suggest.decide({ toolName, input: {} })).toBeNull();
+    }
+    expect(policy.decide({ toolName: 'mcp__agenthub__hub_review', input: {} })?.action).toBe('allow');
+  });
 });

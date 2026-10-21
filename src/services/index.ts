@@ -369,6 +369,11 @@ export const UpdateConfigSchema = z.object({
       z.object({ type: z.literal('wait') }),
     ])).max(10),
     policy: z.array(z.string().min(1)).max(100).optional(),
+    claudeProfile: z.string().min(1).optional(),
+    model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
+    mode: z.enum(['off', 'suggest', 'auto']).optional(),
+    maxTurnsPerHour: z.number().int().positive().optional(),
+    dailyTokenBudget: z.number().int().nonnegative().optional(),
   }).optional(),
   notifications: z.object({
     desktop: z.boolean(),

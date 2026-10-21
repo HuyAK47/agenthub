@@ -20,6 +20,7 @@ const required = [
   'README.md',
   'LICENSE',
   'docs/GETTING-STARTED.md',
+  'docs/BRAIN-PLAYBOOK.md',
   'scripts/install.sh',
 ];
 
