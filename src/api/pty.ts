@@ -78,13 +78,19 @@ export class PtyManager {
     }
     if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
 
-    const ptyProcess = pty.spawn(command, args, {
-      name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
-      cwd: fs.existsSync(home) ? home : os.homedir(),
-      env,
-    });
+    let ptyProcess: pty.IPty;
+    try {
+      ptyProcess = pty.spawn(command, args, {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 24,
+        cwd: fs.existsSync(home) ? home : os.homedir(),
+        env,
+      });
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new HttpError(503, 'pty_unavailable', `Không thể khởi tạo PTY trên ${process.platform}: ${detail}. Kiểm tra binary node-pty/spawn-helper và quyền thực thi.`);
+    }
 
     // Auto-close session after 15 minutes (PLAN 4)
     const timer = setTimeout(() => {

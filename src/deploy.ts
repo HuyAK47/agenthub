@@ -192,7 +192,7 @@ export class DeployService {
   }
 
   private restartHub(status: DeployStatus): void {
-    const command = process.platform === 'darwin' ? 'launchctl' : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+    const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
     const args = process.platform === 'darwin' ? ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] : ['--user', 'restart', 'agenthub', '--no-block'];
     const statePath = path.join(this.config.hubHome, 'deploy-restart.json');
     fs.writeFileSync(statePath, JSON.stringify({ projectId: status.projectId, commit: status.commit, logPath: status.logPath }));
