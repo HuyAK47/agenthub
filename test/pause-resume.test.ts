@@ -111,6 +111,7 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     ctx.scheduler.stop();
+    ctx.scheduler.cancelAll();
     ctx.db.close();
     delete process.env.FAKE_MODE;
     delete process.env.AGENTHUB_HOME;
@@ -274,8 +275,10 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     }
 
     ctx.scheduler.tick();
+    await vi.waitFor(() => {
+      expect(ctx.scheduler.getRunning().size).toBe(3);
+    }, { timeout: 5000 });
     const running = Array.from(ctx.scheduler.getRunning().values());
-    expect(running.length).toBe(3);
 
     // Gán thời gian bắt đầu và RSS giả lập
     const t1 = ctx.scheduler.getRunning().get('p-test/t1')!;

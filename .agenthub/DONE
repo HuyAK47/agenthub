@@ -1,0 +1,27 @@
+# t-flaky-tests hoàn tất
+
+## Tóm tắt
+
+- Ổn định test load guard bằng cách chờ scheduler khởi chạy đủ worker và dọn toàn bộ worker sau mỗi test.
+- Thay sleep cố định trong test auto-resume bằng `vi.waitFor` tới khi phiên chat chuyển sang `idle`.
+- Test chat usage-limit/resume-fail chờ cả event lỗi và `busy=0` để bảo đảm process đã hoàn tất cleanup.
+- PTY shutdown đóng WebSocket bằng mã 1001 và lý do `Going Away`.
+
+## Kiểm chứng
+
+- `npm run lint`: đạt.
+- `npm run typecheck`: đạt.
+- `npm run build`: đạt.
+- `npm run build:web`: đạt.
+- `npm test -- --run`: đạt.
+- Stress 5/5: mỗi vòng `65` test files, `635` tests passed, exit 0; chạy với 4 CPU burner đồng thời. Thời gian: 86.79s, 71.15s, 87.82s, 94.26s, 89.73s.
+
+## Việc còn thiếu
+
+Không còn việc nào trong phạm vi task.
+
+## Commit
+
+- `631e11c test: stabilize flaky async test waits`
+- `e877c45 fix: close pty clients with shutdown code`
+- `2f9cdc1 Merge branch 'integration' into agenthub/t-flaky-tests`

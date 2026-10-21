@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrainRepo, BrainService } from '../src/brain.js';
 import { EventRepo, openDatabase } from '../src/db/index.js';
 import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
@@ -64,7 +64,9 @@ describe('Claude session privacy and quota handling', () => {
     await scanner.scan();
     db.prepare('UPDATE claude_sessions SET autoResumeEnabled=1 WHERE sessionId=?').run('session');
     await scanner.scan();
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await vi.waitFor(() => {
+      expect(db.prepare("SELECT COUNT(*) count FROM chat_sessions WHERE title LIKE 'Tự tiếp tục:%' AND state = 'idle'").get()).toEqual({ count: 1 });
+    }, { timeout: 5000 });
     const chat = db.prepare("SELECT id,projectId,claudeSessionId,title,state FROM chat_sessions WHERE title LIKE 'Tự tiếp tục:%'").get() as { id: string; projectId: string; claudeSessionId: string; title: string; state: string };
     expect(chat).toMatchObject({ projectId: 'p', claudeSessionId: 'session', state: 'idle' });
     expect(chat.title).toContain('session');

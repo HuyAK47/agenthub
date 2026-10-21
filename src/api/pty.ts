@@ -137,7 +137,7 @@ export class PtyManager {
     }
     this.emailRefreshTimers.clear();
     for (const sessionId of [...this.sessions.keys()]) {
-      this.closeSession(sessionId);
+      this.closeSession(sessionId, 1001, 'Going Away');
     }
   }
 
@@ -160,7 +160,7 @@ export class PtyManager {
     this.emailRefreshTimers.add(timer);
   }
 
-  closeSession(sessionId: string): void {
+  closeSession(sessionId: string, closeCode = 1000, closeReason = 'Session closed'): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -173,7 +173,7 @@ export class PtyManager {
 
     for (const socket of session.sockets) {
       try {
-        socket.close(1000, 'Session closed');
+        socket.close(closeCode, closeReason);
       } catch {
         // ignore
       }
