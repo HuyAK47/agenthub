@@ -376,6 +376,16 @@ export class FakeEngine implements Engine {
       FAKE_OUTPUT_PATH: opts.outputPath || '',
       ...(opts.env || {}),
     };
+    if (opts.hubHome || opts.project) {
+      Object.assign(
+        env,
+        workerEnvironment(
+          opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+          env,
+          { gitHooks: opts.gitHooks, project: opts.project },
+        ),
+      );
+    }
 
     const command = process.env.FAKE_MODE === 'reviewer-error' ? '/definitely-missing-agenthub-fixture' : process.execPath;
     const args = command === process.execPath ? [this.scriptPath] : [];
