@@ -149,6 +149,21 @@ describe('Profile import from ~/.agy-homes', () => {
     }
   });
 
+  it('uses claude-default for a newly discovered system Claude profile', () => {
+    const claudeBin = path.join(tmpDir, 'claude');
+    fs.writeFileSync(claudeBin, '#!/bin/sh\n', { mode: 0o755 });
+    const previous = process.env.AGENTHUB_CLAUDE_BIN;
+    process.env.AGENTHUB_CLAUDE_BIN = claudeBin;
+    try {
+      profileService.registerAll();
+      expect(profileRepo.get('claude-default')).toEqual(expect.objectContaining({ engine: 'claude', kind: 'system' }));
+      expect(profileRepo.get('claude-may')).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.AGENTHUB_CLAUDE_BIN;
+      else process.env.AGENTHUB_CLAUDE_BIN = previous;
+    }
+  });
+
   it('imports quota marks from .state/*.exhausted', () => {
     // Create profile directory
     const profileDir = path.join(agyHomesDir, 'g1');

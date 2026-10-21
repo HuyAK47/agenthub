@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BrainRunner } from '../src/brain/runner.js';
-import { BrainTurnRepo, ChatSessionRepo, openDatabase } from '../src/db/index.js';
+import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, openDatabase } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 
 const dirs: string[] = [];
@@ -15,6 +15,7 @@ function setup(mode: 'suggest' | 'auto' = 'suggest') {
   const db = openDatabase(path.join(dir, 'hub.db'));
   const sessions = new ChatSessionRepo(db);
   const turns = new BrainTurnRepo(db);
+  const profiles = new ProfileRepo(db);
   const events = new EventBus({ insert: () => 0 } as never);
   const sent: string[] = [];
   const chat = {
@@ -29,10 +30,11 @@ function setup(mode: 'suggest' | 'auto' = 'suggest') {
     eventBus: events,
     chatService: chat,
     chatSessionRepo: sessions,
+    profileRepo: profiles,
     turnRepo: turns,
     debounceMs: 60_000,
   });
-  return { db, sessions, turns, events, sent, runner };
+  return { db, sessions, turns, profiles, events, sent, runner };
 }
 
 describe('BrainRunner', () => {
@@ -60,5 +62,12 @@ describe('BrainRunner', () => {
     expect(ctx.sent).toHaveLength(1);
     ctx.events.emit('chat.error', undefined, { sessionId: 'brain', message: 'RESOURCE_EXHAUSTED quota' });
     expect(ctx.runner.getQueuedEvents()).toHaveLength(1);
+  });
+
+  it('keeps the legacy Claude system profile for a brain session without explicit config', () => {
+    const ctx = setup();
+    ctx.profiles.upsert({ name: 'claude-may', engine: 'claude', kind: 'system', home: os.homedir(), email: null, enabled: 1 });
+    ctx.runner.start();
+    expect(ctx.sessions.get('brain')?.profileName).toBe('claude-may');
   });
 });

@@ -169,7 +169,11 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     runMetricsRepo,
     knowledgeRepo,
   );
-  const setupManager = new SetupManager(config, scheduler.getEventBus());
+  const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
+    profileService.registerAll();
+    scheduler.refreshEngines();
+    scheduler.getEventBus().emit('profile.updated', undefined, { source: 'setup', tool });
+  });
   scheduler.configureReviewer(reviewRepo, failoverState);
   claudeScanner.setEventBus(scheduler.getEventBus());
 
@@ -195,6 +199,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     eventBus: scheduler.getEventBus(),
     chatService,
     chatSessionRepo,
+    profileRepo,
     turnRepo: brainTurnRepo,
   });
 

@@ -49,6 +49,17 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(args).toContain(snapshot);
   });
 
+  it('does not include disabled profiles in the brain snapshot', () => {
+    const snapshot = buildHubSnapshot({
+      projects: [], tasks: [], profiles: [
+        { name: 'active', engine: 'agy', email: null, enabled: 1 },
+        { name: 'disabled', engine: 'agy', email: null, enabled: 0 },
+      ], quotaUsage: [], quotaMarks: [], capturedAt: '2026-10-16T00:00:00.000Z',
+    });
+    expect(snapshot).toContain('active');
+    expect(snapshot).not.toContain('disabled');
+  });
+
   it('builds a private MCP config scoped to the chat session', () => {
     const hubHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-'));
     try {
@@ -400,6 +411,29 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     });
     expect(delRes.statusCode).toBe(200);
     expect(JSON.parse(delRes.body).ok).toBe(true);
+  });
+
+  it('uses an existing legacy Claude system profile when no profile is configured', async () => {
+    ctx.profileRepo.upsert({
+      name: 'claude-may',
+      engine: 'claude',
+      kind: 'system',
+      home: os.homedir(),
+      email: null,
+      enabled: 1,
+    });
+    config.chat.claudeProfileExplicit = false;
+    config.brain.claudeProfileExplicit = false;
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Legacy Claude' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(JSON.parse(response.body).profileName).toBe('claude-may');
   });
 
   it('full streaming flow: POST message -> chat.delta -> chat.done, saves claudeSessionId and uses --resume', async () => {

@@ -10,6 +10,17 @@ import { findAgyPath } from '../doctor.js';
 
 export { accountKey, sameAccount } from './account.js';
 
+/** Resolve the system Claude profile while keeping existing installations compatible. */
+export function resolveClaudeProfile(
+  profileRepo: Pick<ProfileRepo, 'getAll'>,
+  configuredProfile: string | undefined,
+  configuredExplicitly = false,
+): string {
+  if (configuredExplicitly && configuredProfile) return configuredProfile;
+  const existing = profileRepo.getAll().find((profile) => profile.engine === 'claude' && profile.kind === 'system');
+  return existing?.name || configuredProfile || 'claude-default';
+}
+
 // Symlinks to create in isolated HOME per PLAN 2.1
 const SYMLINK_TARGETS = [
   '.nvm',
@@ -74,10 +85,12 @@ export class ProfileService {
     }
 
     // The system Claude profile uses the existing ~/.claude account and is
-    // only exposed when Claude Code is installed on this machine.
+    // only exposed when Claude Code is installed on this machine. Preserve
+    // the legacy name when it exists; new installations use the default name.
     if (findClaudeBin(this.config.chat.claudeBin)) {
+      const existing = this.profileRepo.getAll().find((p) => p.engine === 'claude' && p.kind === 'system');
       this.profileRepo.upsert({
-        name: 'claude-may',
+        name: existing?.name || 'claude-default',
         engine: 'claude',
         kind: 'system',
         home: os.homedir(),

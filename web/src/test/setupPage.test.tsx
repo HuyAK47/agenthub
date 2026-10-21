@@ -131,7 +131,7 @@ describe('SetupPage', () => {
     expect(screen.getByText('Tài khoản default')).toBeInTheDocument();
     expect(screen.getByText('Tài khoản g1')).toBeInTheDocument();
     const loginLink = screen.getByText('Đăng nhập trong Profiles').closest('a');
-    expect(loginLink).toHaveAttribute('href', '/profiles');
+    expect(loginLink).toHaveAttribute('href', '/profiles#profile-g1');
   });
 
   it('3. Bấm "Cài đặt" gọi installSetupTool, hiển thị log stream và kết quả trong chính hàng', async () => {

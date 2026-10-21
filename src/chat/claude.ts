@@ -45,7 +45,7 @@ export interface HubSnapshotInput {
   projects: Array<{ id: string; name: string; path: string; defaultBranch: string }>;
   tasks: Array<{ id: string; projectId: string; title: string; status: string }>;
   runs?: Array<{ taskId: string; model: string; outcome: string | null }>;
-  profiles: Array<{ name: string; engine: string; email: string | null; authState?: string | null }>;
+  profiles: Array<{ name: string; engine: string; email: string | null; authState?: string | null; enabled?: boolean | number }>;
   quotaUsage: Array<{ profileName: string; grp: string; window: string; remainingPct: number }>;
   quotaMarks: Array<{ profileName: string; family: string; until: number }>;
   currentProject?: { id: string; path: string } | null;
@@ -76,7 +76,7 @@ export function buildHubSnapshot(input: HubSnapshotInput): string {
     });
     return `- ${p.name} · ${p.path} · nhánh ${p.defaultBranch} · task ${counts || '0'}${notable.length ? ` · ${notable.join('; ')}` : ''}`;
   });
-  const profileLines = input.profiles.map((profile) => {
+  const profileLines = input.profiles.filter((profile) => profile.enabled !== false && profile.enabled !== 0).map((profile) => {
     const usage = input.quotaUsage.filter((row) => row.profileName === profile.name && row.window === '5h')
       .map((row) => `${row.grp}:${row.remainingPct}%`).join(', ');
     const marks = input.quotaMarks.filter((mark) => mark.profileName === profile.name && mark.until > snapshotEpoch)

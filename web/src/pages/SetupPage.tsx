@@ -135,7 +135,7 @@ export const SetupAccountsCard: React.FC<{ profiles: Profile[] }> = ({ profiles 
                 <StatusBadge status="done" />
               ) : (
                 <Link
-                  to="/profiles"
+                  to={`/profiles#profile-${encodeURIComponent(profile.name)}`}
                   className="text-xs font-medium text-[var(--t-accent)] hover:underline inline-flex items-center gap-1"
                 >
                   <span>{t('setup.login')}</span>

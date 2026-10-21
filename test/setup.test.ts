@@ -50,6 +50,36 @@ describe('first-run setup', () => {
     }
   });
 
+  it('runs the profile refresh callback only after a successful install', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-setup-refresh-'));
+    const fakeBin = path.join(home, 'bin');
+    fs.mkdirSync(fakeBin);
+    fs.writeFileSync(path.join(fakeBin, 'installer'), '#!/bin/sh\nexit "$FAKE_INSTALL_EXIT"\n', { mode: 0o755 });
+    const previous = { exit: process.env.FAKE_INSTALL_EXIT, worker: process.env.AGENTHUB_WORKER };
+    const refreshed: string[] = [];
+    try {
+      const config = loadConfig(home);
+      config.tools.installers.codex = { command: [path.join(fakeBin, 'installer')], versionArgs: ['--version'] };
+      const manager = new SetupManager(config, undefined, (tool) => refreshed.push(tool));
+      delete process.env.AGENTHUB_WORKER;
+      process.env.FAKE_INSTALL_EXIT = '0';
+      await manager.install('codex');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(refreshed).toEqual(['codex']);
+
+      process.env.FAKE_INSTALL_EXIT = '1';
+      await manager.install('codex');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(refreshed).toEqual(['codex']);
+    } finally {
+      if (previous.exit === undefined) delete process.env.FAKE_INSTALL_EXIT;
+      else process.env.FAKE_INSTALL_EXIT = previous.exit;
+      if (previous.worker === undefined) delete process.env.AGENTHUB_WORKER;
+      else process.env.AGENTHUB_WORKER = previous.worker;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('rejects unknown tools and worker-mode installs', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-setup-guard-'));
     const config = loadConfig(home);
