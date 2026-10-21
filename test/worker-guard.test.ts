@@ -254,6 +254,30 @@ describe('worker service guard', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('keeps unrelated tool shims in PATH while removing only hub shims', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-path-shims-'));
+    const hub = path.join(root, 'hub');
+    const asdfShims = path.join(root, '.asdf', 'shims');
+    const fakebin = path.join(asdfShims, 'fakebin');
+    const legacyShims = path.join(hub, 'shims');
+    fs.mkdirSync(asdfShims, { recursive: true });
+    fs.mkdirSync(legacyShims, { recursive: true });
+    fs.writeFileSync(fakebin, '#!/bin/sh\nprintf "fakebin-ran\\n"\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(legacyShims, 'old-tool'), '#!/bin/sh\n', { mode: 0o700 });
+
+    for (const guards of [true, false]) {
+      const env = workerEnvironment(hub, {
+        PATH: [legacyShims, asdfShims].join(path.delimiter),
+      }, { guards });
+      const entries = env.PATH?.split(path.delimiter) ?? [];
+      expect(entries).toContain(asdfShims);
+      expect(entries).not.toContain(legacyShims);
+      expect(execFileSync('fakebin', [], { env, encoding: 'utf8' })).toBe('fakebin-ran\n');
+    }
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('exposes AGENTHUB_REF_<NAME> environment variables for project references', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-ref-env-'));
     const hub = path.join(root, 'hub');

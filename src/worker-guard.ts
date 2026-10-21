@@ -7,10 +7,33 @@ export const WORKER_SERVICE_MESSAGE = 'AgentHub: worker không được điều 
 export const WORKER_BLOCKED_COMMANDS = ['ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman'] as const;
 const OLD_SHIM_NAMES = ['git', 'systemctl', 'launchctl', ...WORKER_BLOCKED_COMMANDS] as const;
 
-function findExecutable(name: string, env: NodeJS.ProcessEnv): string | null {
+function isWithin(parent: string, candidate: string): boolean {
+  return candidate === parent || candidate.startsWith(parent + path.sep);
+}
+
+function isHubShimPath(hubHome: string, candidate: string): boolean {
+  const shimRoot = path.resolve(hubHome, 'shims');
+  const roots = [shimRoot];
+  try {
+    roots.push(fs.realpathSync(shimRoot));
+  } catch {
+    // The lexical path still protects PATH entries before the directory exists.
+  }
+
+  const resolved = path.resolve(candidate);
+  if (roots.some(root => isWithin(root, resolved))) return true;
+
+  try {
+    const real = fs.realpathSync(candidate);
+    return roots.some(root => isWithin(root, real));
+  } catch {
+    return false;
+  }
+}
+
+function findExecutable(name: string, env: NodeJS.ProcessEnv, hubHome: string): string | null {
   for (const dir of (env.PATH || '').split(path.delimiter).filter(Boolean)) {
-    const parts = path.resolve(dir).split(path.sep);
-    if (parts.includes('shims')) continue;
+    if (isHubShimPath(hubHome, dir)) continue;
     const candidate = path.resolve(dir, name);
     try {
       const stat = fs.statSync(candidate);
@@ -161,7 +184,7 @@ export function workerEnvironment(
 
   // 1. systemctl & launchctl shims (service guards)
   for (const name of ['systemctl', 'launchctl']) {
-    const realBinary = findExecutable(name, env);
+    const realBinary = findExecutable(name, env, hubHome);
     if (!realBinary) continue;
     const file = path.join(serviceDir, name);
     const content = shimScript(realBinary);
@@ -179,7 +202,7 @@ export function workerEnvironment(
     }
 
     // 3. git wrapper shim
-    const realGit = findExecutable('git', env) || findExecutable('git', process.env) || '/usr/bin/git';
+    const realGit = findExecutable('git', env, hubHome) || findExecutable('git', process.env, hubHome) || '/usr/bin/git';
     const gitFile = path.join(workerDir, 'git');
     const gitContent = gitShimScript(realGit);
     writeShimFile(gitFile, gitContent);
@@ -189,8 +212,7 @@ export function workerEnvironment(
     .split(path.delimiter)
     .filter(dir => {
       if (!dir) return false;
-      const parts = path.resolve(dir).split(path.sep);
-      return !parts.includes('shims');
+      return !isHubShimPath(hubHome, dir);
     })
     .join(path.delimiter);
 
