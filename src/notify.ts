@@ -311,7 +311,7 @@ export class NotificationService {
         const failedJobNames = jobs.map((j) => j.name).filter(Boolean);
         const jobDetails = failedJobNames.length > 0 ? ` (${failedJobNames.join(', ')})` : '';
         const msg = `CI thất bại [${projId}]: ${workflow}${sha ? ` @ ${sha}` : ''}${jobDetails}`;
-        this.notify(msg, 'normal');
+        this.notify(msg, 'warning');
         break;
       }
 
@@ -371,7 +371,7 @@ export class NotificationService {
     return '';
   }
 
-  private notify(message: string, urgency: 'normal' | 'critical' = 'normal'): void {
+  private notify(message: string, urgency: 'normal' | 'warning' | 'critical' = 'normal'): void {
     const key = `${urgency}:${message}`;
     const now = this.now();
     const last = this.lastSent.get(key);
@@ -380,6 +380,8 @@ export class NotificationService {
     }
     this.lastSent.set(key, now);
 
+    // notify-send has no portable "warning" value; retain the warning level
+    // in the service and map it to the supported normal desktop urgency.
     const args = urgency === 'critical'
       ? ['-u', 'critical', '-t', '10000', '-a', 'AgentHub', message]
       : ['-t', '10000', '-a', 'AgentHub', message];

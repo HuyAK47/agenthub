@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { AgentHubConfig } from './config.js';
 import type { CiRepo, CiRunRow, ProjectRepo, ProjectRow } from './db/index.js';
 import { projectSettings } from './projects/settings.js';
@@ -265,12 +267,25 @@ export class CiWatchService {
     let latestSaved: CiRunRow | null = null;
     for (const run of runs) {
       if (run.status !== 'completed') {
+        // Persist active runs so their status survives a daemon restart. The
+        // same row is replaced with the completed result on a later poll.
+        this.ciRepo.insert({
+          projectId,
+          runId: run.id,
+          workflow: run.name || 'CI',
+          sha: run.head_sha,
+          status: run.status,
+          conclusion: run.conclusion,
+          jobs: '[]',
+          completedAt: null,
+          url: run.html_url,
+        });
         continue;
       }
 
       // Check if already processed
       const existing = this.ciRepo.get(projectId, run.id);
-      if (existing) {
+      if (existing?.status === 'completed') {
         continue;
       }
 
@@ -433,10 +448,23 @@ export class CiWatchService {
   }
 
   private getToken(): string | null {
-    const token =
-      process.env.GITHUB_TOKEN ||
-      process.env.GH_TOKEN ||
-      (this.config as unknown as { githubToken?: string }).githubToken;
-    return token ? token.trim() : null;
+    const environmentToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+    if (environmentToken?.trim()) return environmentToken.trim();
+
+    // Keep the token out of config.json/SQLite and never include it in logs or
+    // API payloads. This follows the same secret-file convention as Telegram.
+    const secretDir = path.join(this.config.hubHome, 'secrets');
+    for (const name of ['github.token', 'gh.token']) {
+      const tokenPath = path.join(secretDir, name);
+      try {
+        if (!fs.existsSync(tokenPath)) continue;
+        fs.chmodSync(tokenPath, 0o600);
+        const token = fs.readFileSync(tokenPath, 'utf8').trim();
+        if (token) return token;
+      } catch {
+        // An unreadable optional secret must not prevent public-repo polling.
+      }
+    }
+    return null;
   }
 }

@@ -247,6 +247,82 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
       expect(passedPayload.runId).toBe(101);
     });
 
+    it('persists active runs and replaces them with the completed result', async () => {
+      projectRepo.insert({
+        id: 'p-active',
+        name: 'Active project',
+        path: '/tmp/p-active',
+        defaultBranch: 'main',
+        envTemplate: null,
+        maxParallel: 2,
+      });
+
+      let run: GitHubRunItem = {
+        id: 150,
+        name: 'CI Workflow',
+        head_sha: 'active-sha',
+        status: 'in_progress',
+        conclusion: null,
+        html_url: 'https://github.com/org/repo/actions/runs/150',
+        updated_at: '2026-10-21T10:00:00Z',
+        created_at: '2026-10-21T09:50:00Z',
+      };
+      const mockFetch: typeof fetch = async () => new Response(
+        JSON.stringify({ workflow_runs: [run] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+      const service = new CiWatchService({
+        config,
+        projectRepo,
+        ciRepo,
+        eventBus,
+        fetchFn: mockFetch,
+        getGitRemoteUrl: async () => 'https://github.com/org/repo.git',
+      });
+
+      await service.pollProject('p-active');
+      expect(ciRepo.get('p-active', 150)?.status).toBe('in_progress');
+      expect(ciRepo.getLatest('p-active')?.completedAt).toBeNull();
+
+      run = { ...run, status: 'completed', conclusion: 'success', updated_at: '2026-10-21T10:05:00Z' };
+      await service.pollProject('p-active');
+      expect(ciRepo.get('p-active', 150)?.status).toBe('completed');
+      expect(ciRepo.get('p-active', 150)?.conclusion).toBe('success');
+      expect(ciRepo.get('p-active', 150)?.completedAt).toBe('2026-10-21T10:05:00Z');
+    });
+
+    it('reads a GitHub token from the hub secrets directory without exposing it', async () => {
+      projectRepo.insert({
+        id: 'p-secret',
+        name: 'Secret project',
+        path: '/tmp/p-secret',
+        defaultBranch: 'main',
+        envTemplate: null,
+        maxParallel: 2,
+      });
+      const secretsDir = path.join(tmpDir, 'secrets');
+      fs.mkdirSync(secretsDir, { recursive: true });
+      const tokenPath = path.join(secretsDir, 'github.token');
+      fs.writeFileSync(tokenPath, ' ghp_test_secret\n', { mode: 0o644 });
+      let authorization: string | null = null;
+      const mockFetch: typeof fetch = async (_url, init) => {
+        authorization = new Headers(init?.headers).get('authorization');
+        return new Response(JSON.stringify({ workflow_runs: [] }), { status: 200 });
+      };
+      const service = new CiWatchService({
+        config,
+        projectRepo,
+        ciRepo,
+        eventBus,
+        fetchFn: mockFetch,
+        getGitRemoteUrl: async () => 'https://github.com/org/repo.git',
+      });
+
+      await service.pollProject('p-secret');
+      expect(authorization).toBe('Bearer ghp_test_secret');
+      expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    });
+
     it('emits ci.passed with recoveredFromFailure=true on red-to-green transition', async () => {
       projectRepo.insert({
         id: 'p1',
