@@ -26,7 +26,7 @@ import {
   TaskBatchRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
-import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -1246,6 +1246,209 @@ export class AppService {
     this.scheduler.wakeWaitingQuotaTasks('profile_created');
 
     return apiProfile(this.profileRepo.get(parsed.name)!);
+  }
+
+  async importAgyTokens(raw: unknown): Promise<{
+    success: boolean;
+    total: number;
+    successCount: number;
+    failedCount: number;
+    results: Array<{
+      name: string;
+      email: string;
+      action: 'created' | 'updated' | 'skipped';
+      status: 'ok' | 'error';
+      message?: string;
+    }>;
+  }> {
+    let payload: unknown = raw;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        throw new HttpError(400, 'bad_request', 'Dữ liệu không phải là chuỗi JSON hợp lệ');
+      }
+    }
+
+    const payloadObj = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const accountType: 'personal' | 'team' | 'api' =
+      typeof payloadObj.accountType === 'string' && ['personal', 'team', 'api'].includes(payloadObj.accountType)
+        ? (payloadObj.accountType as 'personal' | 'team' | 'api')
+        : 'personal';
+
+    let rawList: unknown[] = [];
+    if (Array.isArray(payload)) {
+      rawList = payload;
+    } else if (Array.isArray(payloadObj.tokens)) {
+      rawList = payloadObj.tokens;
+    } else if (typeof payloadObj.tokens === 'string') {
+      try {
+        const parsed = JSON.parse(payloadObj.tokens);
+        rawList = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        throw new HttpError(400, 'bad_request', 'Trường "tokens" không phải là JSON hợp lệ');
+      }
+    } else if (payloadObj.refresh_token || payloadObj.refreshToken || payloadObj.token) {
+      rawList = [payloadObj];
+    } else {
+      throw new HttpError(
+        400,
+        'bad_request',
+        'Dữ liệu token không hợp lệ (cần mảng JSON hoặc object chứa email và refresh_token)',
+      );
+    }
+
+    if (rawList.length === 0) {
+      throw new HttpError(400, 'bad_request', 'Danh sách token trống');
+    }
+
+    // Tự động bật multiplePerProvider nếu đang tắt để cho phép lưu nhiều tài khoản Google
+    if (!this.config.multiplePerProvider) {
+      this.config.multiplePerProvider = true;
+      this.config.multiplePerProviderConfigured = true;
+      saveConfig(this.config.hubHome, { multiplePerProvider: true });
+    }
+
+    const results: Array<{
+      name: string;
+      email: string;
+      action: 'created' | 'updated' | 'skipped';
+      status: 'ok' | 'error';
+      message?: string;
+    }> = [];
+
+    for (const rawItem of rawList) {
+      if (!rawItem || typeof rawItem !== 'object') {
+        results.push({
+          name: 'unknown',
+          email: '',
+          action: 'skipped',
+          status: 'error',
+          message: 'Mục dữ liệu không phải là object hợp lệ',
+        });
+        continue;
+      }
+      const item = rawItem as Record<string, unknown>;
+
+      const emailRaw = item.email || item.Email || item.mail;
+      if (!emailRaw || typeof emailRaw !== 'string' || !emailRaw.includes('@')) {
+        results.push({
+          name: 'unknown',
+          email: typeof emailRaw === 'string' ? emailRaw : '',
+          action: 'skipped',
+          status: 'error',
+          message: 'Địa chỉ email không hợp lệ hoặc thiếu',
+        });
+        continue;
+      }
+      const email = emailRaw.trim().toLowerCase();
+
+      const refreshTokenRaw = item.refresh_token || item.refreshToken || item.token;
+      if (!refreshTokenRaw || typeof refreshTokenRaw !== 'string' || !refreshTokenRaw.trim()) {
+        results.push({
+          name: 'unknown',
+          email,
+          action: 'skipped',
+          status: 'error',
+          message: 'Thiếu refresh_token',
+        });
+        continue;
+      }
+      const refreshToken = refreshTokenRaw.trim();
+
+      // Xác định tên profile mục tiêu
+      let targetName = '';
+      let action: 'created' | 'updated' = 'created';
+      const customName = String(item.name || item.profile_name || item.profileName || '').trim();
+
+      if (customName && /^[a-zA-Z0-9_-]+$/.test(customName)) {
+        targetName = customName;
+        const existing = this.profileRepo.get(targetName);
+        if (existing) {
+          action = 'updated';
+        }
+      } else {
+        const base = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'agy_account';
+        const existing = this.profileRepo.get(base);
+        if (!existing) {
+          targetName = base;
+        } else if (existing.engine === 'agy' && existing.email === email) {
+          targetName = base;
+          action = 'updated';
+        } else {
+          let idx = 2;
+          let cand = `${base}_${idx}`;
+          while (this.profileRepo.get(cand)) {
+            const candProf = this.profileRepo.get(cand);
+            if (candProf && candProf.engine === 'agy' && candProf.email === email) {
+              cand = candProf.name;
+              break;
+            }
+            idx++;
+            cand = `${base}_${idx}`;
+          }
+          targetName = cand;
+          action = this.profileRepo.get(targetName) ? 'updated' : 'created';
+        }
+      }
+
+      // Xác thực và đổi access_token qua Google OAuth
+      let exchanged: { accessToken: string; tokenType: string; refreshToken: string; expiry: string };
+      try {
+        exchanged = await exchangeAgyRefreshToken(refreshToken);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        results.push({
+          name: targetName,
+          email,
+          action: 'skipped',
+          status: 'error',
+          message: errMsg,
+        });
+        continue;
+      }
+
+      // Khởi tạo thư mục profile isolated nếu chưa có
+      const homeDir = path.join(this.config.agyHomesDir, targetName);
+      if (!this.profileRepo.get(targetName)) {
+        this.coreProfileService.createProfile(targetName, 'agy', accountType);
+      } else if (this.profileRepo.isDeleted(targetName)) {
+        this.profileRepo.restore(targetName);
+      }
+
+      // Ghi token và log giả lập
+      writeAgyIsolatedToken(homeDir, exchanged, email);
+
+      // Cập nhật email và authState vào DB
+      const current = this.profileRepo.get(targetName);
+      if (current) {
+        this.profileRepo.upsert({
+          ...current,
+          email,
+          enabled: 1,
+        });
+        this.profileRepo.updateAuthState(targetName, 'ok', 'Đã xác thực qua Cockpit refresh token', null);
+      }
+
+      this.scheduler.getEventBus().emit('profile.created', undefined, { name: targetName });
+      this.scheduler.wakeWaitingQuotaTasks('profile_created');
+
+      results.push({
+        name: targetName,
+        email,
+        action,
+        status: 'ok',
+        message: action === 'updated' ? 'Cập nhật token thành công' : 'Thêm tài khoản thành công',
+      });
+    }
+
+    return {
+      success: results.some((r) => r.status === 'ok'),
+      total: rawList.length,
+      successCount: results.filter((r) => r.status === 'ok').length,
+      failedCount: results.filter((r) => r.status === 'error').length,
+      results,
+    };
   }
 
   deleteProfile(name: string, purgeHome = false): { ok: boolean } {

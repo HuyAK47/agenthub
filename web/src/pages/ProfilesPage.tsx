@@ -22,6 +22,8 @@ import {
   getProfiles,
   getConfig,
   getStatus,
+  importAgyTokens,
+  ImportTokensResult,
   loginProfile,
   refreshProfileUsage,
   renameProfile,
@@ -99,10 +101,6 @@ export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newEngine, setNewEngine] = useState<Provider>('agy');
-  const [newAccountType, setNewAccountType] = useState<'personal' | 'team' | 'api'>('personal');
-  const [addError, setAddError] = useState('');
   const [activeLogin, setActiveLogin] = useState<{ name: string; engine: Provider; sessionId: string } | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [editing, setEditing] = useState<Profile | null>(null);
@@ -168,25 +166,6 @@ export const ProfilesPage: React.FC = () => {
       clearTimeout(checkTimers.current[name]);
       setChecking((old) => ({ ...old, [name]: false }));
       toast(err?.status === 409 ? t('profiles.checkAlreadyRunning') : err?.message || 'Kiểm tra thất bại', true);
-    }
-  };
-  const createAndLogin = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!newName.trim()) {
-      setAddError('Vui lòng nhập tên tài khoản');
-      return;
-    }
-    try {
-      const name = newName.trim();
-      await createProfile({ name, engine: newEngine, accountType: newAccountType });
-      setShowAdd(false);
-      setNewName('');
-      setNewAccountType('personal');
-      setAddError('');
-      await runLogin(name, newEngine);
-      queryClient.invalidateQueries({ queryKey: ['profiles'] });
-    } catch (err: any) {
-      setAddError(err?.message || 'Không thể tạo tài khoản');
     }
   };
 
@@ -292,56 +271,17 @@ export const ProfilesPage: React.FC = () => {
       )}
       <DailyUsageTable />
       {showAdd && (
-        <Modal title={t('profiles.addBtn')} onClose={() => setShowAdd(false)}>
-          <form onSubmit={createAndLogin} className="space-y-4">
-            <p className="text-sm text-[var(--t-text-3)]">
-              {t('profiles.addDescription')}
-            </p>
-            {addError && (
-              <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
-                {addError}
-              </p>
-            )}
-            <label className="block text-sm">
-              {t('profiles.accountName')}
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder={t('profiles.accountNamePlaceholder')}
-                className="field mt-1"
-              />
-            </label>
-            <label className="block text-sm">
-              {t('profiles.provider')}
-              <select
-                value={newEngine}
-                onChange={(e) => setNewEngine(e.target.value as Provider)}
-                className="field mt-1"
-              >
-                <option value="agy">Antigravity (Gemini)</option>
-                <option value="codex">Codex (OpenAI)</option>
-                <option value="claude">Claude</option>
-              </select>
-            </label>
-            <label className="block text-sm">
-              {t('profiles.accountType')}
-              <select value={newAccountType} onChange={(e) => setNewAccountType(e.target.value as typeof newAccountType)} className="field mt-1">
-                <option value="personal">{t('profiles.personal')}</option>
-                <option value="team">{t('profiles.team')}</option>
-                <option value="api">{t('profiles.api')}</option>
-              </select>
-            </label>
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setShowAdd(false)} className="button-secondary">
-                {t('common.cancel')}
-              </button>
-              <button type="submit" className="button-primary">
-                {t('profiles.createAndGuide')}
-              </button>
-            </div>
-          </form>
-        </Modal>
+        <AddProfileModal
+          onClose={() => {
+            setShowAdd(false);
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+          }}
+          onCreated={async (name, engine) => {
+            setShowAdd(false);
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+            await runLogin(name, engine);
+          }}
+        />
       )}
       {editing && (
         <EditProfileModal
@@ -692,14 +632,16 @@ function Modal({
   title,
   onClose,
   children,
+  maxWidth = 'max-w-md',
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  maxWidth?: string;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl">
+      <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button type="button" onClick={onClose} aria-label="Đóng">
@@ -709,6 +651,262 @@ function Modal({
         {children}
       </div>
     </div>
+  );
+}
+
+function AddProfileModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (name: string, engine: Provider) => void;
+}) {
+  const { t } = useLocale();
+  const [tab, setTab] = useState<'terminal' | 'cockpit'>('terminal');
+
+  // Terminal state
+  const [name, setName] = useState('');
+  const [engine, setEngine] = useState<Provider>('agy');
+  const [accountType, setAccountType] = useState<'personal' | 'team' | 'api'>('personal');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Cockpit token state
+  const [cockpitJson, setCockpitJson] = useState('');
+  const [cockpitAccountType, setCockpitAccountType] = useState<'personal' | 'team' | 'api'>('personal');
+  const [cockpitError, setCockpitError] = useState('');
+  const [cockpitLoading, setCockpitLoading] = useState(false);
+  const [cockpitResult, setCockpitResult] = useState<ImportTokensResult | null>(null);
+
+  const handleCreateTerminal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setError('Vui lòng nhập tên tài khoản');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      await createProfile({ name: name.trim(), engine, accountType });
+      onCreated(name.trim(), engine);
+    } catch (err: any) {
+      setError(err?.message || 'Không thể tạo tài khoản');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleImportCockpit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cockpitJson.trim()) {
+      setCockpitError('Vui lòng dán dữ liệu JSON từ Cockpit tools');
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cockpitJson);
+    } catch {
+      setCockpitError(t('profiles.invalidJson'));
+      return;
+    }
+    setCockpitLoading(true);
+    setCockpitError('');
+    try {
+      const result = await importAgyTokens({
+        tokens: parsed,
+        accountType: cockpitAccountType,
+      });
+      setCockpitResult(result);
+    } catch (err: any) {
+      setCockpitError(err?.message || 'Lỗi khi nhập tài khoản');
+    } finally {
+      setCockpitLoading(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={t('profiles.addBtn')}
+      onClose={onClose}
+      maxWidth={tab === 'cockpit' ? 'max-w-xl' : 'max-w-md'}
+    >
+      <div className="mb-4 flex border-b border-[var(--t-border)]">
+        <button
+          type="button"
+          onClick={() => { setTab('terminal'); setError(''); }}
+          className={`flex-1 pb-2.5 text-center text-sm font-medium transition-colors border-b-2 ${
+            tab === 'terminal'
+              ? 'border-[var(--t-accent)] text-[var(--t-accent)] font-semibold'
+              : 'border-transparent text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
+          }`}
+        >
+          {t('profiles.tabTerminalLogin')}
+        </button>
+        <button
+          type="button"
+          onClick={() => { setTab('cockpit'); setCockpitError(''); }}
+          className={`flex-1 pb-2.5 text-center text-sm font-medium transition-colors border-b-2 ${
+            tab === 'cockpit'
+              ? 'border-[var(--t-accent)] text-[var(--t-accent)] font-semibold'
+              : 'border-transparent text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
+          }`}
+        >
+          {t('profiles.tabImportCockpit')}
+        </button>
+      </div>
+
+      {tab === 'terminal' ? (
+        <form onSubmit={handleCreateTerminal} className="space-y-4">
+          <p className="text-sm text-[var(--t-text-3)]">
+            {t('profiles.addDescription')}
+          </p>
+          {error && (
+            <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
+              {error}
+            </p>
+          )}
+          <label className="block text-sm">
+            {t('profiles.accountName')}
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t('profiles.accountNamePlaceholder')}
+              className="field mt-1"
+            />
+          </label>
+          <label className="block text-sm">
+            {t('profiles.provider')}
+            <select
+              value={engine}
+              onChange={(e) => setEngine(e.target.value as Provider)}
+              className="field mt-1"
+            >
+              <option value="agy">Antigravity (Gemini)</option>
+              <option value="codex">Codex (OpenAI)</option>
+              <option value="claude">Claude</option>
+            </select>
+          </label>
+          <label className="block text-sm">
+            {t('profiles.accountType')}
+            <select
+              value={accountType}
+              onChange={(e) => setAccountType(e.target.value as typeof accountType)}
+              className="field mt-1"
+            >
+              <option value="personal">{t('profiles.personal')}</option>
+              <option value="team">{t('profiles.team')}</option>
+              <option value="api">{t('profiles.api')}</option>
+            </select>
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="button-secondary">
+              {t('common.cancel')}
+            </button>
+            <button type="submit" disabled={loading} className="button-primary">
+              {loading ? 'Đang tạo…' : t('profiles.createAndGuide')}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="space-y-4">
+          {cockpitResult ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-[var(--t-border)] p-3 bg-[var(--t-surface-2)]">
+                <p className="text-sm font-medium">
+                  {t('profiles.importResultTitle', {
+                    success: cockpitResult.successCount,
+                    total: cockpitResult.total,
+                  })}
+                </p>
+              </div>
+              <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                {cockpitResult.results.map((res, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs ${
+                      res.status === 'ok'
+                        ? 'border-[var(--t-ok)]/30 bg-[var(--t-ok)]/10 text-[var(--t-text-1)]'
+                        : 'border-[var(--t-crit)]/30 bg-[var(--t-crit)]/10 text-[var(--t-crit)]'
+                    }`}
+                  >
+                    <span className="mt-0.5 font-bold">
+                      {res.status === 'ok' ? '✓' : '✗'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold">{res.name}</span>
+                        {res.email && (
+                          <span className="text-[var(--t-text-3)] truncate">({res.email})</span>
+                        )}
+                      </div>
+                      {res.message && (
+                        <p className="mt-0.5 opacity-90">{res.message}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="button-primary"
+                >
+                  {t('profiles.doneAndClose')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleImportCockpit} className="space-y-4">
+              <p className="text-sm text-[var(--t-text-3)]">
+                {t('profiles.cockpitImportDesc')}
+              </p>
+              {cockpitError && (
+                <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
+                  {cockpitError}
+                </p>
+              )}
+              <label className="block text-sm">
+                JSON Token
+                <textarea
+                  autoFocus
+                  value={cockpitJson}
+                  onChange={(e) => setCockpitJson(e.target.value)}
+                  placeholder={t('profiles.cockpitJsonPlaceholder')}
+                  rows={6}
+                  className="field mt-1 font-mono text-xs leading-relaxed"
+                />
+              </label>
+              <label className="block text-sm">
+                {t('profiles.accountType')}
+                <select
+                  value={cockpitAccountType}
+                  onChange={(e) => setCockpitAccountType(e.target.value as typeof cockpitAccountType)}
+                  className="field mt-1"
+                >
+                  <option value="personal">{t('profiles.personal')}</option>
+                  <option value="team">{t('profiles.team')}</option>
+                  <option value="api">{t('profiles.api')}</option>
+                </select>
+              </label>
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={onClose} className="button-secondary">
+                  {t('common.cancel')}
+                </button>
+                <button
+                  type="submit"
+                  disabled={cockpitLoading}
+                  className="button-primary"
+                >
+                  {cockpitLoading ? t('profiles.importingTokens') : t('profiles.importTokensBtn')}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 function EditProfileModal({
