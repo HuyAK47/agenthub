@@ -19,6 +19,7 @@ import {
   forwardDecisionToBrain,
   getMinutesSinceTime,
 } from './brain/digest.js';
+import { effectiveBrainMode } from './brain/mode.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1275,7 +1276,7 @@ export class TelegramBotService {
         await this.answerCallbackQuery(query.id, `Bạn đã chọn: ${label}`);
 
         if (this.chatService) {
-          forwardDecisionToBrain(this.chatService, decisionId, updated?.text || d.text, answer);
+          forwardDecisionToBrain(this.chatService, decisionId, updated?.text || d.text, answer, updated?.taskId);
         }
 
         if (query.message) {
@@ -2269,7 +2270,9 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     // 1. Brain auto mode: suppress raw task notifications
-    if (this.config.brain?.mode === 'auto') {
+    const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
+    const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
+    if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
         (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
@@ -2298,7 +2301,7 @@ export class TelegramBotService {
             typeof p.decisionId === 'string' && p.decisionId
               ? p.decisionId
               : `dec-${now}-${Math.random().toString(36).slice(2, 8)}`;
-          this.decisionTracker.recordDecision(decisionId, text, allowedChats, now);
+          this.decisionTracker.recordDecision(decisionId, text, allowedChats, now, taskId);
         }
 
         const desc = this.describeEventForQuietHours(type, taskId, p);
@@ -2323,7 +2326,7 @@ export class TelegramBotService {
               ? p.decisionId
               : `dec-${now}-${Math.random().toString(36).slice(2, 8)}`;
 
-          this.decisionTracker.recordDecision(decisionId, text, allowedChats, now);
+          this.decisionTracker.recordDecision(decisionId, text, allowedChats, now, taskId);
 
           const dashboardUrl = this.getDashboardUrl();
           const keyboard: InlineKeyboardButton[][] = [
@@ -2466,7 +2469,7 @@ export class TelegramBotService {
 
       case 'quota.exhausted': {
         const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now);
-        if (this.config.brain?.mode === 'auto') {
+        if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
           }

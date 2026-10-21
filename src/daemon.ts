@@ -258,6 +258,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     taskRepo,
     profileRepo,
     quotaMarkRepo,
+    projectRepo,
   });
 
   const telegramService = new TelegramBotService({
