@@ -140,20 +140,55 @@ Hệ thống tự động kiểm tra định kỳ tính hợp lệ của token �
 - **Chưa đăng nhập**: Phiên đăng nhập hết hạn hoặc chưa hoàn tất, kèm nút **Đăng nhập** nhanh.
 - **Thao tác quản lý**: Hỗ trợ **Kiểm tra** kết nối, **Đổi tên** hồ sơ, hoặc **Xoá** hồ sơ (có tùy chọn giữ lại hoặc xóa sạch thư mục dữ liệu).
 
-## 6. Đăng ký dự án
+## 6. Đăng ký dự án (Thêm dự án)
 
-```bash
-agenthub project add <tên> /đường/dẫn/tới/repo
-```
+Trong AgentHub, một **project** là một git repository trên máy của bạn. Khi AI worker (Gemini hoặc Codex) nhận task, hub sẽ tự động tạo một git worktree riêng (nhánh `agenthub/<slug>`), giúp worker làm việc độc lập mà hoàn toàn không đụng vào thư mục hoặc nhánh bạn đang code dở.
 
-Sau đó vào trang **Projects** để chỉnh:
+### 3 bước thêm dự án:
 
-- **`maxParallel`**: số task chạy cùng lúc cho dự án.
-- **`envTemplate`**: tạo file `.env` riêng cho mỗi worktree, để các task không giẫm lên nhau. Hỗ trợ biến `{slot}`, `{slug}`, `{slug_underscored}`. Ví dụ: cổng `4{slot}50`, DB `myapp_t_{slug_underscored}`.
-- **Hooks `onWorktreeRemoved`**: lệnh dọn dẹp khi xoá worktree, ví dụ xoá DB riêng của task.
-- **Merge tự động**: khai báo worktree tích hợp cho từng nhánh đích và các lệnh kiểm tra sau merge (vd. `pnpm lint`, `pnpm typecheck`). Khi duyệt kèm merge, hub merge nhánh task, chạy kiểm tra và tự hoàn tác nếu xung đột hoặc kiểm tra thất bại.
+1. **Chuẩn bị repo**: Clone repo về máy (nếu chưa có). Đảm bảo repo đã được khởi tạo git và có nhánh mặc định (như `main`).
+2. **Đăng ký project vào hub**:
+   - **Trên Web Dashboard**: Truy cập trang **Thiết lập** (Setup) và bấm nút **"Thêm dự án"**, hoặc vào trang **Projects** bấm **"Đăng ký Project"** (hoặc mở trực tiếp đường dẫn `/projects?new=1`). Điền tên gợi nhớ và đường dẫn tuyệt đối tới thư mục repo git.
+   - **Hoặc qua CLI**:
+     ```bash
+     agenthub project add <tên> /đường/dẫn/tuyệt/đối/tới/repo
+     ```
+3. **Giao việc**: Sau khi đăng ký, bạn có thể giao task cho worker qua lệnh `/newtask` trên Telegram, qua khung chat với Claude trên Web Dashboard, hoặc tạo trực tiếp trên trang **Tasks**.
 
-Trong repo dự án nên có file `AGENTS.md` mô tả quy ước (cách chạy, cách test, những gì không được làm). Worker đọc file này trước khi làm việc.
+### Các trường cấu hình trong form đăng ký:
+
+- **Tên Project (Name)**: Tên hiển thị của dự án (hệ thống tự động sinh ID dự án từ tên này).
+- **Đường dẫn Git repo (Path)**: Đường dẫn tuyệt đối tới thư mục gốc repo git trên máy của bạn. Thư mục này bắt buộc phải tồn tại và là một git repository hợp lệ.
+- **Nhánh mặc định (Default Branch)**: Nhánh cơ sở (mặc định là `main`) để worker tách nhánh công việc ra và merge kết quả về sau khi được duyệt. Nhánh này phải tồn tại trong repo.
+- **Giới hạn worker song song (maxParallel)**: Số lượng task tối đa được phép chạy cùng lúc cho dự án này (mặc định: 3).
+
+### Mục Nâng cao (Advanced - thu gọn mặc định):
+
+- **Mẫu biến môi trường (`envTemplate` - định dạng JSON)**: Cấu hình tạo file `.env` riêng biệt cho từng worktree, giúp các worker chạy song song mà không bị xung đột cổng mạng hoặc trùng cơ sở dữ liệu. Hỗ trợ các biến thay thế:
+  - `{slot}`: Số thứ tự slot worker (1 đến 9).
+  - `{slug}`: Mã định danh của task (vd: `add-login`).
+  - `{slug_underscored}`: Mã task thay gạch ngang bằng gạch dưới (vd: `add_login`).
+
+  *Ví dụ `envTemplate`:*
+  ```json
+  {
+    "PORT": "300{slot}",
+    "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/myapp_t_{slug_underscored}"
+  }
+  ```
+
+- **Kiểm tra tự động (`checks` - JSON array)**: Danh sách lệnh kiểm tra tự động chạy sau khi worker hoàn thành (ví dụ `lint`, `test`):
+  ```json
+  [
+    { "name": "lint", "cmd": ["npm", "run", "lint"] },
+    { "name": "test", "cmd": ["npm", "test"] }
+  ]
+  ```
+
+- **Hooks `onWorktreeRemoved`**: Các lệnh dọn dẹp chạy sau khi xoá worktree (ví dụ: `docker exec my_postgres psql -U user -d postgres -c "DROP DATABASE IF EXISTS myapp_t_{slug_underscored}"`).
+- **Merge tự động**: Khai báo worktree tích hợp cho từng nhánh đích và các lệnh kiểm tra sau merge (vd. `pnpm lint`, `pnpm typecheck`). Khi duyệt kèm merge, hub merge nhánh task, chạy kiểm tra và tự hoàn tác nếu xung đột hoặc kiểm tra thất bại.
+
+> **Quy ước dự án**: Trong repo dự án nên có file `AGENTS.md` mô tả quy ước (cách chạy, cách test, những gì không được làm). Worker đọc file này trước khi làm việc.
 
 ## 7. Điều khiển hub: Web Dashboard, Telegram và Claude Code trong VS Code
 
