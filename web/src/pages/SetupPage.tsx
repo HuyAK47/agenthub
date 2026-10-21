@@ -230,13 +230,13 @@ export const SetupPage: React.FC = () => {
   const [installingTool, setInstallingTool] = useState<string | null>(null);
   const [installResult, setInstallResult] = useState<Record<string, boolean>>({});
 
-  const install = useMutation({ mutationFn: installSetupTool });
+  const install = useMutation({ mutationFn: (tool: string) => installSetupTool(tool) });
   const finish = useMutation({
-    mutationFn: completeSetup,
+    mutationFn: (skip: boolean) => completeSetup(skip),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['setup-status'] }),
   });
   const mcp = useMutation({
-    mutationFn: installSetupMcp,
+    mutationFn: () => installSetupMcp(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['setup-status'] }),
   });
 
