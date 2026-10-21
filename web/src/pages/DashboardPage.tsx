@@ -21,7 +21,6 @@ import {
   Pause,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
-import { TelegramCard } from '../components/TelegramCard';
 import { ReviewQueue } from '../components/ReviewQueue';
 import { WaitingQueue } from '../components/WaitingQueue';
 import { DailyUsageTable } from '../components/DailyUsageTable';
@@ -277,77 +276,6 @@ export const DashboardPage: React.FC = () => {
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} />}
 
-      {/* Telegram Card */}
-      {status.telegram?.enabled && (
-        <TelegramCard
-          hasToken={status.telegram.hasToken}
-          allowedChatsCount={status.telegram.allowedChatsCount}
-        />
-      )}
-      <div data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
-        {([
-          ['agy', 'Antigravity'],
-          ['codex', 'Codex'],
-          ['claude', 'Claude'],
-        ] as const).map(([engine, label]) => {
-          const engineProfiles = profiles.filter((profile) => profile.engine === engine);
-          return (
-            <div key={engine} className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-xs">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-[var(--text-primary)]">Quota {label}</h2>
-                <span className="text-[11px] text-[var(--text-secondary)]">{engineProfiles.length} hồ sơ</span>
-              </div>
-              <QuotaUsage usage={providerUsage(profiles, engine)} onRefresh={() => { void refetchProfiles(); }} />
-              {engine === 'claude' && engineProfiles.some((profile) => profile.claudeTokens) && (
-                <div className="mt-2 text-xs text-[var(--text-secondary)]">
-                  Token hôm nay: {Math.round(engineProfiles.reduce((sum, profile) => sum + (profile.claudeTokens?.today || 0), 0)).toLocaleString()}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
-        <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
-        <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
-      </div>}
-      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
-            {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">Đang dùng: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? `tài khoản ${claudeFailover.step.profile || 'khác'}` : claudeFailover.step.type === 'apiKey' ? `API key (đã dùng $${claudeFailover.dailyCostUSD.toFixed(2)}/$${claudeFailover.step.dailyCapUSD ?? 0})` : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : 'chờ reset'}</div>}
-            {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
-            {claudeFailover.evidence && <div className="text-xs text-[var(--text-secondary)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
-          </div>
-          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-white text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
-        </div>
-      </div>}
-
-      {status.overlaps && status.overlaps.length > 0 && (
-        <div
-          data-testid="overlap-warnings"
-          className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4 space-y-2"
-        >
-          <div className="flex items-center gap-2 text-[var(--t-warn)] font-semibold text-sm">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span>{t('dashboard.overlapWarningTitle')}</span>
-          </div>
-          <p className="text-xs text-[var(--text-secondary)]">
-            {t('dashboard.overlapWarningDesc', { count: status.overlaps.length })}
-          </p>
-          <ul className="space-y-1.5 text-xs">
-            {status.overlaps.map((ov) => (
-              <li key={ov.id} className="flex items-center gap-2 text-[var(--text-primary)]">
-                <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-default)]">
-                  {ov.taskId}
-                </span>
-                <span>{ov.content}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {metrics.map((m) => {
@@ -374,68 +302,6 @@ export const DashboardPage: React.FC = () => {
             </div>
           );
         })}
-      </div>
-
-      <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
-        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">Tiến trình mồ côi</h2>
-            <p className="text-xs text-[var(--text-secondary)]">Các tiến trình còn giữ cwd trong worktree đã dừng.</p>
-          </div>
-          <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
-            {isReaping ? 'Đang dọn…' : 'Dọn'} ({orphans.length})
-          </button>
-        </div>
-        {orphans.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)]">
-                <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">Task</th></tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border-subtle)]">
-                {orphans.map((orphan) => <tr key={orphan.pid}>
-                  <td className="px-6 py-3 font-mono">{orphan.pid}</td>
-                  <td className="px-6 py-3 font-mono max-w-sm truncate" title={orphan.cwd}>{orphan.cwd}</td>
-                  <td className="px-6 py-3">{orphan.cpu.toFixed(1)}%</td>
-                  <td className="px-6 py-3">{(orphan.rss / 1024 / 1024).toFixed(1)} MB</td>
-                  <td className="px-6 py-3">{orphan.task?.title || orphan.task?.id || 'Không xác định'}</td>
-                </tr>)}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Compact quick chat */}
-      <div className="p-4 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-xs transition-colors">
-        <form onSubmit={handleQuickChat} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-[var(--text-primary)] shrink-0">
-            <div className="w-6 h-6 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shadow-xs">
-              C
-            </div>
-            <span>{t('extra.quickChat')}</span>
-          </div>
-
-          <div className="flex-1 relative">
-            <input
-              type="text"
-              value={quickChatText}
-              onChange={(e) => setQuickChatText(e.target.value)}
-              placeholder={t('extra.quickChatPlaceholder')}
-              disabled={isSubmittingQuickChat}
-              className="w-full text-xs rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] disabled:opacity-50"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={!quickChatText.trim() || isSubmittingQuickChat}
-            className="px-4 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0 transition-colors"
-          >
-            <Send className="w-3.5 h-3.5" />
-            <span>{isSubmittingQuickChat ? t('extra.sending') : t('extra.send')}</span>
-          </button>
-        </form>
       </div>
 
       {/* Running workers */}
@@ -590,6 +456,132 @@ export const DashboardPage: React.FC = () => {
         diskMinFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.minFreeGB ?? status.disk?.minFreeGB}
         diskLabel={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.label}
       />
+
+      {status.overlaps && status.overlaps.length > 0 && (
+        <div
+          data-testid="overlap-warnings"
+          className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4 space-y-2"
+        >
+          <div className="flex items-center gap-2 text-[var(--t-warn)] font-semibold text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{t('dashboard.overlapWarningTitle')}</span>
+          </div>
+          <p className="text-xs text-[var(--text-secondary)]">
+            {t('dashboard.overlapWarningDesc', { count: status.overlaps.length })}
+          </p>
+          <ul className="space-y-1.5 text-xs">
+            {status.overlaps.map((ov) => (
+              <li key={ov.id} className="flex items-center gap-2 text-[var(--text-primary)]">
+                <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-default)]">
+                  {ov.taskId}
+                </span>
+                <span>{ov.content}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
+        {([
+          ['agy', 'Antigravity'],
+          ['codex', 'Codex'],
+          ['claude', 'Claude'],
+        ] as const).map(([engine, label]) => {
+          const engineProfiles = profiles.filter((profile) => profile.engine === engine);
+          return (
+            <div key={engine} className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-xs">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-[var(--text-primary)]">Quota {label}</h2>
+                <span className="text-[11px] text-[var(--text-secondary)]">{engineProfiles.length} hồ sơ</span>
+              </div>
+              <QuotaUsage usage={providerUsage(profiles, engine)} onRefresh={() => { void refetchProfiles(); }} />
+              {engine === 'claude' && engineProfiles.some((profile) => profile.claudeTokens) && (
+                <div className="mt-2 text-xs text-[var(--text-secondary)]">
+                  Token hôm nay: {Math.round(engineProfiles.reduce((sum, profile) => sum + (profile.claudeTokens?.today || 0), 0)).toLocaleString()}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
+        <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
+        <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
+      </div>}
+      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
+            {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">Đang dùng: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? `tài khoản ${claudeFailover.step.profile || 'khác'}` : claudeFailover.step.type === 'apiKey' ? `API key (đã dùng $${claudeFailover.dailyCostUSD.toFixed(2)}/$${claudeFailover.step.dailyCapUSD ?? 0})` : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : 'chờ reset'}</div>}
+            {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
+            {claudeFailover.evidence && <div className="text-xs text-[var(--text-secondary)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
+          </div>
+          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-white text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
+        </div>
+      </div>}
+
+      {/* Compact quick chat */}
+      <div className="p-4 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-xs transition-colors">
+        <form onSubmit={handleQuickChat} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <div className="flex items-center gap-2 text-xs font-semibold text-[var(--text-primary)] shrink-0">
+            <div className="w-6 h-6 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shadow-xs">
+              C
+            </div>
+            <span>{t('extra.quickChat')}</span>
+          </div>
+
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={quickChatText}
+              onChange={(e) => setQuickChatText(e.target.value)}
+              placeholder={t('extra.quickChatPlaceholder')}
+              disabled={isSubmittingQuickChat}
+              className="w-full text-xs rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] disabled:opacity-50"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={!quickChatText.trim() || isSubmittingQuickChat}
+            className="px-4 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0 transition-colors"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>{isSubmittingQuickChat ? t('extra.sending') : t('extra.send')}</span>
+          </button>
+        </form>
+      </div>
+
+      <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
+        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">Tiến trình mồ côi</h2>
+            <p className="text-xs text-[var(--text-secondary)]">Các tiến trình còn giữ cwd trong worktree đã dừng.</p>
+          </div>
+          <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
+            {isReaping ? 'Đang dọn…' : 'Dọn'} ({orphans.length})
+          </button>
+        </div>
+        {orphans.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)]">
+                <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">Task</th></tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-subtle)]">
+                {orphans.map((orphan) => <tr key={orphan.pid}>
+                  <td className="px-6 py-3 font-mono">{orphan.pid}</td>
+                  <td className="px-6 py-3 font-mono max-w-sm truncate" title={orphan.cwd}>{orphan.cwd}</td>
+                  <td className="px-6 py-3">{orphan.cpu.toFixed(1)}%</td>
+                  <td className="px-6 py-3">{(orphan.rss / 1024 / 1024).toFixed(1)} MB</td>
+                  <td className="px-6 py-3">{orphan.task?.title || orphan.task?.id || 'Không xác định'}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Daily Usage Table */}
       <DailyUsageTable />
