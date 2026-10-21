@@ -196,6 +196,16 @@ export async function createServer(
     return service.getProject(id);
   });
 
+  fastify.get('/api/projects/:id/deploy', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getDeployStatus(id);
+  });
+
+  fastify.post('/api/projects/:id/deploy', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    return reply.status(202).send(await service.rerunDeploy(id));
+  });
+
   fastify.post('/api/projects', async (req: FastifyRequest, reply: FastifyReply) => {
     const project = service.createProject(req.body);
     return reply.status(201).send(project);

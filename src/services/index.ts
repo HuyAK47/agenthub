@@ -55,6 +55,7 @@ import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
+import type { DeployService } from '../deploy.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -685,6 +686,7 @@ export function formatEventSummary(
 }
 
 export class AppService {
+  public deployService?: DeployService;
   private profileChecks = new Set<string>();
   private reviewingTasks = new Set<string>();
   constructor(
@@ -1052,7 +1054,7 @@ export class AppService {
 
   // --- Projects ---
   listProjects(): ProjectRow[] {
-    return this.projectRepo.getAll().map((p) => apiProject(p, this.config.hubHome));
+    return this.projectRepo.getAll().map((p) => ({ ...apiProject(p, this.config.hubHome), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
   }
 
   getProject(id: string): ProjectRow {
@@ -1060,7 +1062,22 @@ export class AppService {
     if (!proj) {
       throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
     }
-    return apiProject(proj, this.config.hubHome);
+    return { ...apiProject(proj, this.config.hubHome), afterMerge: this.config.deploy?.[proj.id] || null } as ProjectRow;
+  }
+
+  getDeployStatus(id: string) {
+    this.getProject(id);
+    return this.deployService?.getStatus(id) || null;
+  }
+
+  getDeployStatuses() {
+    return this.deployService?.getAllStatus() || [];
+  }
+
+  async rerunDeploy(id: string) {
+    this.getProject(id);
+    if (!this.deployService) throw new HttpError(503, 'unavailable', 'Deploy service chưa sẵn sàng');
+    return this.deployService.rerun(id);
   }
 
   createProject(raw: unknown): ProjectRow {
