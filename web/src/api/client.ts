@@ -33,6 +33,22 @@ export async function getModelOptions(): Promise<ModelOptions> {
   return apiFetch<ModelOptions>('/api/models');
 }
 
+export interface SetupStatus {
+  node: { version: string; ok: boolean };
+  git: { version: string | null; installed: boolean };
+  tools: Array<{ id: 'claude' | 'codex' | 'agy'; installed: boolean; version: string | null; path: string | null; manual: boolean; docsUrl?: string; installing: boolean }>;
+  profiles: Profile[];
+  mcpRegistered: boolean;
+  serviceRunning: boolean;
+  setupCompletedAt?: string;
+  setupSkippedAt?: string;
+}
+
+export const getSetupStatus = () => apiFetch<SetupStatus>('/api/setup/status');
+export const installSetupTool = (tool: string) => apiFetch<{ jobId: string }>(`/api/setup/install/${encodeURIComponent(tool)}`, { method: 'POST' });
+export const completeSetup = (skip = false) => apiFetch(`/api/setup/${skip ? 'skip' : 'complete'}`, { method: 'POST' });
+export const installSetupMcp = () => apiFetch('/api/setup/mcp', { method: 'POST' });
+
 const TOKEN_STORAGE_KEY = 'agenthub_token';
 
 let unauthorizedListeners: Array<() => void> = [];

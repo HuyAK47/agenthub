@@ -40,6 +40,7 @@ import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
+import { SetupManager } from './tools/setup.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -156,6 +157,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     runMetricsRepo,
     knowledgeRepo,
   );
+  const setupManager = new SetupManager(config, scheduler.getEventBus());
   scheduler.configureReviewer(reviewRepo, failoverState);
   claudeScanner.setEventBus(scheduler.getEventBus());
 
@@ -209,6 +211,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     undefined,
     knowledgeRepo,
     taskBatchRepo,
+    setupManager,
   );
 
   const notifier = new NotificationService({

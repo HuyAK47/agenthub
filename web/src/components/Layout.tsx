@@ -10,6 +10,7 @@ import {
   Users,
   FolderGit2,
   Settings,
+    Wrench,
   Sun,
   Moon,
   Monitor,
@@ -60,6 +61,7 @@ export const Layout: React.FC = () => {
     { to: '/profiles', label: t('common.profiles'), icon: Users },
     { to: '/projects', label: t('common.projects'), icon: FolderGit2 },
     { to: '/settings', label: t('common.settings'), icon: Settings },
+    { to: '/setup', label: 'Thiết lập', icon: Wrench },
   ];
 
   const getPageTitle = (pathname: string): string => {

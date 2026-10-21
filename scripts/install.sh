@@ -236,6 +236,7 @@ install_from_release() {
   (cd "$_release_root/current" && npm ci --omit=dev)
   "$_release_root/current/bin/agenthub" link
   "$_release_root/current/bin/agenthub" install-service
+  "$_release_root/current/bin/agenthub" setup --no-browser
   "$_release_root/current/bin/agenthub" open --no-browser
 
   _kept=0
@@ -255,6 +256,7 @@ if [ "$FROM_RELEASE" = "1" ]; then
     echo "[dry-run] tải release v${RELEASE_VERSION:-latest} từ $(release_repo_path)"
     echo "[dry-run] kiểm tra SHA256, giải nén vào $AGENTHUB_DIR/<version>, cập nhật symlink current"
     echo "[dry-run] npm ci --omit=dev && agenthub link && agenthub install-service"
+    echo "[dry-run] agenthub setup --no-browser"
     exit 0
   fi
   install_from_release
@@ -369,6 +371,7 @@ if [ "$DRY_RUN" = "1" ]; then
   echo "[dry-run] npm ci && npm run build && npm run build:web (tại $AGENTHUB_DIR)"
   echo "[dry-run] agenthub link"
   echo "[dry-run] agenthub install-service"
+  echo "[dry-run] agenthub setup --no-browser"
   echo "[dry-run] agenthub open --no-browser"
   exit 0
 fi
@@ -495,7 +498,11 @@ esac
 echo "==> Cài đặt service chạy nền..."
 "$AGENTHUB_DIR/bin/agenthub" install-service
 
-# 6. in URL dashboard
+# 6. Chuẩn bị bộ công cụ cho lần chạy đầu tiên
+echo "==> Kiểm tra bộ công cụ AgentHub..."
+"$AGENTHUB_DIR/bin/agenthub" setup --no-browser
+
+# 7. in URL dashboard
 echo ""
 echo "==> Web Dashboard URL:"
 "$AGENTHUB_DIR/bin/agenthub" open --no-browser

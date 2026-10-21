@@ -123,6 +123,31 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.get('/api/setup/status', async () => service.getSetupStatus());
+  fastify.post('/api/setup/install/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    return reply.status(202).send(await service.installSetupTool(tool));
+  });
+  fastify.get('/api/setup/log/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    const logPath = service.getSetupLogPath(tool);
+    if (!logPath) throw new HttpError(404, 'not_found', 'Setup log không tồn tại');
+    return reply.type('text/plain; charset=utf-8').send(fs.createReadStream(logPath));
+  });
+  fastify.post('/api/setup/complete', async () => service.completeSetup(false));
+  fastify.post('/api/setup/skip', async () => service.completeSetup(true));
+  fastify.post('/api/setup/mcp', async () => {
+    const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const cliPath = path.join(projectRoot, 'dist', 'cli.js');
+    const { execFile } = await import('node:child_process');
+    return new Promise((resolve, reject) => {
+      execFile('claude', ['mcp', 'add', '--scope', 'user', 'agenthub', '--', process.execPath, cliPath, 'mcp'], { timeout: 60_000 }, (error, stdout, stderr) => {
+        if (error) return reject(new HttpError(500, 'mcp_install_failed', stderr || error.message));
+        resolve({ ok: true, output: `${stdout}${stderr}` });
+      });
+    });
+  });
+
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
   fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
 

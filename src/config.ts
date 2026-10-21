@@ -120,6 +120,23 @@ export interface UpdatesConfig {
   repo?: string;
 }
 
+export interface ToolInstaller {
+  package?: string;
+  command?: string[];
+  versionArgs?: string[];
+  docsUrl?: string;
+}
+
+export interface ToolsConfig {
+  installers: {
+    claude: ToolInstaller;
+    codex: ToolInstaller;
+    agy: ToolInstaller;
+  };
+}
+
+export type ToolInstallerPatch = Pick<ToolInstaller, 'package' | 'versionArgs' | 'docsUrl'>;
+
 export const DEFAULT_UPDATES_CONFIG: UpdatesConfig = {
   check: true,
   repo: 'ducanh19020217/agenthub',
@@ -178,6 +195,7 @@ export interface AgentHubConfig {
   planning: PlanningConfig;
   telegram: TelegramConfig;
   updates: UpdatesConfig;
+  tools: ToolsConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -212,6 +230,7 @@ export function saveConfig(
     context?: Partial<ContextConfig>;
     planning?: Partial<PlanningConfig>;
     updates?: Partial<UpdatesConfig>;
+    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstallerPatch>> }>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -222,6 +241,12 @@ export function saveConfig(
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
+  const managedToolsDir = path.join(hubHome, 'tools');
+  process.env.AGENTHUB_TOOLS_DIR ||= managedToolsDir;
+  const managedBinDir = path.join(managedToolsDir, 'node_modules', '.bin');
+  if (!(process.env.PATH || '').split(path.delimiter).includes(managedBinDir)) {
+    process.env.PATH = `${managedBinDir}${path.delimiter}${process.env.PATH || ''}`;
+  }
   let current: Record<string, unknown> = {};
   if (fs.existsSync(configFilePath)) {
     try {
@@ -256,6 +281,7 @@ export function saveConfig(
           },
         }
       : {}),
+    ...(patch.tools ? { tools: { ...((current.tools as Record<string, unknown>) || {}), ...patch.tools, ...(patch.tools.installers ? { installers: { ...(((current.tools as Record<string, unknown>)?.installers as Record<string, unknown>) || {}), ...patch.tools.installers } } : {}) } } : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
       ? {
           telegram: {
@@ -318,6 +344,7 @@ export function updateConfigInMemory(
     context?: Partial<ContextConfig>;
     planning?: Partial<PlanningConfig>;
     updates?: Partial<UpdatesConfig>;
+    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstallerPatch>> }>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -446,6 +473,17 @@ export function updateConfigInMemory(
   if (patch.updates) {
     config.updates = { ...config.updates, ...patch.updates };
   }
+  if (patch.tools?.installers) {
+    for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
+      if (!value) continue;
+      config.tools.installers[name] = {
+        ...config.tools.installers[name],
+        ...(value.package !== undefined ? { package: value.package } : {}),
+        ...(value.versionArgs !== undefined ? { versionArgs: [...value.versionArgs] } : {}),
+        ...(value.docsUrl !== undefined ? { docsUrl: value.docsUrl } : {}),
+      };
+    }
+  }
 }
 
 export function loadConfig(overrideHome?: string): AgentHubConfig {
@@ -457,6 +495,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   }
 
   const configFilePath = path.join(hubHome, 'config.json');
+  const managedToolsDir = path.join(hubHome, 'tools');
+  process.env.AGENTHUB_TOOLS_DIR ||= managedToolsDir;
+  const managedBinDir = path.join(managedToolsDir, 'node_modules', '.bin');
+  if (!(process.env.PATH || '').split(path.delimiter).includes(managedBinDir)) {
+    process.env.PATH = `${managedBinDir}${path.delimiter}${process.env.PATH || ''}`;
+  }
   let userConfig: Record<string, unknown> = {};
   if (fs.existsSync(configFilePath)) {
     try {
@@ -609,6 +653,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ? rawUpdates.repo.trim()
       : DEFAULT_UPDATES_CONFIG.repo,
   };
+  const rawTools = (userConfig.tools as Record<string, unknown>) || {};
+  const rawInstallers = (rawTools.installers as Record<string, unknown>) || {};
+  const installer = (name: string, fallback: ToolInstaller): ToolInstaller => {
+    const value = rawInstallers[name];
+    return value && typeof value === 'object' ? { ...fallback, ...(value as ToolInstaller) } : fallback;
+  };
 
   return {
     hubHome,
@@ -690,5 +740,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     planning,
     telegram,
     updates,
+    tools: {
+      installers: {
+        claude: installer('claude', { package: '@anthropic-ai/claude-code', versionArgs: ['--version'] }),
+        codex: installer('codex', { package: '@openai/codex', versionArgs: ['--version'] }),
+        agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
+      },
+    },
   };
 }

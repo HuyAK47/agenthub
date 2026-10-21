@@ -79,6 +79,7 @@ export function findRealUserHome(): string {
 
 export function findAgyPath(customHome?: string, existsFn: (filePath: string) => boolean = (p) => fs.existsSync(p)): string | null {
   const candidates: string[] = [];
+  if (process.env.AGENTHUB_TOOLS_DIR) candidates.push(path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'agy'));
   if (process.env.AGENTHUB_AGY_BIN) {
     candidates.push(process.env.AGENTHUB_AGY_BIN);
   }
@@ -100,6 +101,10 @@ export function findCodexPath(customHome?: string, existsFn: (filePath: string) 
     return fromEngine;
   }
   const homes = [customHome, os.homedir(), findRealUserHome()].filter(Boolean) as string[];
+  if (process.env.AGENTHUB_TOOLS_DIR) {
+    const managed = path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'codex');
+    if (existsFn(managed)) return managed;
+  }
   for (const h of homes) {
     const base = path.join(h, '.vscode', 'extensions');
     if (existsFn(base)) {

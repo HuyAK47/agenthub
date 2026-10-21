@@ -109,6 +109,9 @@ export function findClaudeBin(configuredBin?: string): string | null {
     }
   }
 
+  const managedBin = path.join(process.env.AGENTHUB_TOOLS_DIR || '', 'node_modules', '.bin', 'claude');
+  if (process.env.AGENTHUB_TOOLS_DIR && fs.existsSync(managedBin)) return managedBin;
+
   // 2. Latest VS Code Claude Code native binary.
   const extensionsDir = path.join(os.homedir(), '.vscode', 'extensions');
   try {

@@ -349,6 +349,10 @@ export const vi = {
     wsError: 'Lỗi kết nối WebSocket terminal.',
     doneAndClose: 'Hoàn tất & Đóng',
   },
+  setup: {
+    loading: 'Đang kiểm tra môi trường…', title: 'Bắt đầu với AgentHub', subtitle: 'Chuẩn bị các công cụ cần thiết để bạn có thể dùng ngay.',
+    node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Service nền', mcp: 'Đăng ký MCP với Claude Code', accounts: 'Đăng nhập tài khoản', account: 'Tài khoản {name}', login: 'Đăng nhập trong Profiles', needsCheck: 'Cần kiểm tra', manualGuide: 'Hướng dẫn', install: 'Cài đặt', installAll: 'Cài tất cả công cụ còn thiếu', installing: 'Đang cài đặt…', log: 'Xem log', complete: 'Hoàn tất', skip: 'Bỏ qua, làm sau', done: 'Đã hoàn tất', notDone: 'Cần làm', running: 'Đang chạy', installFailed: 'Cài đặt thất bại',
+  },
   projects: {
     title: 'Quản lý Project',
     subtitle: 'Đăng ký và cấu hình các dự án phần mềm để AI workers tạo worktree và chạy tác vụ.',
