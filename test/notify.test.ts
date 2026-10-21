@@ -471,4 +471,41 @@ describe('NotificationService (Desktop Notifications)', () => {
 
     notifier.stop();
   });
+
+  it('checkQuietHoursEnd khong gui thong bao khi ngoai cua so 2h sau quietHours.end hoac khi hang doi rong', () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    let mockTime = new Date();
+    mockTime.setHours(23, 0, 0, 0);
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      exec: fakeExec,
+      now: () => mockTime.getTime(),
+    });
+    notifier.start();
+
+    // 1. In night: queue 1 notification
+    eventBus.emit('brain.notify', undefined, { text: 'N-night', level: 'info' });
+    expect(notifier.getQuietHoursQueue()).toHaveLength(1);
+
+    // Advance time to 15:00 (outside 2h window after 07:00)
+    mockTime = new Date();
+    mockTime.setHours(15, 0, 0, 0);
+
+    const flushedAt15 = notifier.checkQuietHoursEnd(mockTime.getTime());
+    expect(flushedAt15).toBe(false);
+    expect(execCalls).toHaveLength(0);
+
+    // 2. Clear queue and check at 07:30 (inside window but empty queue)
+    notifier.flushQuietHoursQueue();
+    mockTime = new Date();
+    mockTime.setHours(7, 30, 0, 0);
+
+    const flushedEmpty = notifier.checkQuietHoursEnd(mockTime.getTime());
+    expect(flushedEmpty).toBe(false);
+    expect(execCalls).toHaveLength(0);
+
+    notifier.stop();
+  });
 });

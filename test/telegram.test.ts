@@ -1947,6 +1947,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(markup.inline_keyboard[0][1].callback_data).toBe('decision:reject:dec-123');
     expect(markup.inline_keyboard[1][0].text).toContain('Xem dashboard');
 
+    const getOrCreateSpy = vi.spyOn(ctx.chatService, 'getOrCreateSession');
     const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({
       userMessageId: 'u-1',
       assistantMessageId: 'a-1',
@@ -1966,6 +1967,9 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     const edits = recordedCalls.filter((c) => c.url.includes('/editMessageText'));
     expect(edits.length).toBeGreaterThan(0);
     expect(edits[0].body?.text).toContain('Đã phản hồi: Đồng ý');
+
+    // getOrCreateSession called with kind: 'brain'
+    expect(getOrCreateSpy).toHaveBeenCalledWith('brain', { title: 'Bộ não', kind: 'brain' });
 
     // Message sent to brain session
     expect(sendSpy).toHaveBeenCalledWith(
@@ -2209,6 +2213,101 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(queue.length).toBe(200);
     expect(queue[0].text).toContain('Thông báo thứ 51');
     expect(queue[199].text).toContain('Thông báo thứ 250');
+  });
+
+  it('11. restart gia lap (tao service moi voi now = 15:00) khong gui tom tat sang hoac digest', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    config.brain.digest = { enabled: true, time: '18:00' };
+
+    const restartDate = new Date();
+    restartDate.setHours(15, 0, 0, 0);
+    currentTime = restartDate.getTime();
+
+    // Create a new bot instance at 15:00 (simulating hub restart)
+    const bot = createBot('suggest');
+
+    // Add a pending decision created just now
+    bot.getDecisionTracker().recordDecision('dec-1', 'Cần quyết định việc X', [CHAT_ID], currentTime);
+
+    const morningTriggered = await bot.checkMorningSummary();
+    expect(morningTriggered).toBe(false);
+
+    const digestTriggered = await bot.checkScheduledDigest();
+    expect(digestTriggered).toBe(false);
+
+    await bot.periodicCheck();
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('12. restart gia lap (tao service moi voi now = 19:30) khong gui tom tat sang hoac digest', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    config.brain.digest = { enabled: true, time: '18:00' };
+
+    const restartDate = new Date();
+    restartDate.setHours(19, 30, 0, 0);
+    currentTime = restartDate.getTime();
+
+    // Create a new bot instance at 19:30 (simulating hub restart after 18:00 window)
+    const bot = createBot('suggest');
+
+    const morningTriggered = await bot.checkMorningSummary();
+    expect(morningTriggered).toBe(false);
+
+    const digestTriggered = await bot.checkScheduledDigest();
+    expect(digestTriggered).toBe(false);
+
+    await bot.periodicCheck();
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('13. tom tat sang khong gui khi hang doi rong va khong co decision', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+
+    // Set time to 07:15 (inside the 2h window after quietHours.end)
+    const morningDate = new Date();
+    morningDate.setHours(7, 15, 0, 0);
+    currentTime = morningDate.getTime();
+
+    const bot = createBot('suggest');
+    // Ensure queue and decisionTracker are empty
+    expect(bot.getQuietHoursQueue()).toHaveLength(0);
+    expect(bot.getDecisionTracker().getPending()).toHaveLength(0);
+
+    const triggered = await bot.checkMorningSummary();
+    expect(triggered).toBe(false);
+
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('14. nut khi co nhieu quyet dinh trong tom tat sang hien short text cho ca nut Khong (❌ <short>)', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const morningDate = new Date();
+    morningDate.setHours(7, 0, 0, 0);
+    currentTime = morningDate.getTime();
+
+    const bot = createBot('suggest');
+    const tracker = bot.getDecisionTracker();
+    tracker.recordDecision('dec-1', 'Đồng ý cập nhật cấu hình hệ thống?', [CHAT_ID], currentTime);
+    tracker.recordDecision('dec-2', 'Chạy lệnh di chuyển database lớn?', [CHAT_ID], currentTime);
+
+    const summary = bot.buildMorningSummary();
+    expect(summary.keyboard).toHaveLength(3); // 2 rows of decisions + 1 row for dashboard
+    // Row 1
+    expect(summary.keyboard[0][0].text).toBe('✅ Đồng ý cập nhật c...');
+    expect(summary.keyboard[0][1].text).toBe('❌ Đồng ý cập nhật c...');
+    expect(summary.keyboard[0][1].callback_data).toBe('decision:reject:dec-1');
+    // Row 2
+    expect(summary.keyboard[1][0].text).toBe('✅ Chạy lệnh di chuy...');
+    expect(summary.keyboard[1][1].text).toBe('❌ Chạy lệnh di chuy...');
+    expect(summary.keyboard[1][1].callback_data).toBe('decision:reject:dec-2');
   });
 });
 
