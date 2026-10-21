@@ -51,6 +51,7 @@ export const en: typeof vi = {
     quota: 'Waiting for model quota',
     parallel: 'Waiting for parallel slot',
     profile_busy: 'Waiting for free account',
+    project_unavailable: 'Project unavailable (drive not mounted?)',
   },
   timer: {
     expired: 'Expired',

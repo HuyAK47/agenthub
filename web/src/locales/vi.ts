@@ -49,6 +49,7 @@ export const vi = {
     quota: 'Chờ quota model',
     parallel: 'Chờ slot song song',
     profile_busy: 'Chờ tài khoản rảnh',
+    project_unavailable: 'Dự án không truy cập được (ổ chưa mount?)',
   },
   timer: {
     expired: 'Hết hạn',

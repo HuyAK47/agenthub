@@ -530,6 +530,15 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE brain_turns ADD COLUMN projectId TEXT;
   CREATE INDEX IF NOT EXISTS idx_brain_turns_project ON brain_turns(projectId, startedAt);
   `,
+  // Migration 42: allow 'project_unavailable' waitReason for unmounted drives
+  `
+  ALTER TABLE tasks ADD COLUMN waitReason_old TEXT;
+  UPDATE tasks SET waitReason_old = waitReason;
+  ALTER TABLE tasks DROP COLUMN waitReason;
+  ALTER TABLE tasks ADD COLUMN waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk', 'quota', 'parallel', 'profile_busy', 'project_unavailable'));
+  UPDATE tasks SET waitReason = waitReason_old;
+  ALTER TABLE tasks DROP COLUMN waitReason_old;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -618,7 +627,7 @@ export interface QuotaUsageRow {
   fetchedAt: number;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
 
 export interface TaskRow {
   id: string;
