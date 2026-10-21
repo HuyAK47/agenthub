@@ -1114,7 +1114,7 @@ export class AppService {
 
   private emailCheckCache = new Map<string, number>();
 
-  /** Lấy ảnh Google cho hồ sơ agy đăng nhập qua terminal (ngoại lệ DEC-006). */
+  /** Lấy ảnh Google cho hồ sơ agy đăng nhập qua terminal (ngoại lệ DEC-006); chỉ gọi từ thao tác của người dùng. */
   async syncAgyAvatarFromToken(name: string): Promise<string | null> {
     const profile = this.profileRepo.get(name);
     if (!profile || profile.engine !== 'agy' || profile.kind !== 'isolated' || !profile.home) return null;
@@ -1739,6 +1739,7 @@ export class AppService {
     else if (profile.engine === 'claude') await this.usageService.collectClaude(profile, true);
     else await this.usageService.collect(profile);
     this.refreshProfileEmail(profile.name);
+    if (profile.engine === 'agy') await this.syncAgyAvatarFromToken(profile.name).catch(() => null);
     return this.listProfiles().find((p) => p.name === name);
   }
 

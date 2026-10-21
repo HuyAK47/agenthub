@@ -354,6 +354,16 @@ describe('Antigravity Token Import from Cockpit', () => {
       expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toContain('/oauth2/v3/userinfo');
     });
 
+    it('refreshUsage (nút Làm mới) also picks up the avatar', async () => {
+      setupProfile(new Date(Date.now() + 3_600_000).toISOString());
+      mockUserInfo('term@example.com');
+      vi.spyOn(ctx.service.usageService, 'collect').mockResolvedValue([]);
+
+      const profile = await ctx.service.refreshUsage('term');
+
+      expect(profile?.avatarUrl).toBe(picture);
+    });
+
     it('does not refresh an expired token', async () => {
       setupProfile(new Date(Date.now() - 1000).toISOString());
       mockUserInfo('term@example.com');
