@@ -7,6 +7,16 @@ const fallbackSafeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-fallbac
 const fallbackAgyHomes = path.join(fallbackSafeHome, 'agy-homes');
 fs.mkdirSync(fallbackAgyHomes, { recursive: true });
 
+// Tests must never control the host's services, including when a platform
+// branch is mocked to macOS. Put fail-fast shims first in PATH for every worker
+// and every child process it starts.
+const serviceShimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-service-shims-'));
+for (const command of ['systemctl', 'launchctl']) {
+  const shim = path.join(serviceShimDir, command);
+  fs.writeFileSync(shim, '#!/bin/sh\necho "blocked test service command: ' + command + ' $*" >&2\nexit 1\n', { mode: 0o755 });
+}
+process.env.PATH = `${serviceShimDir}${path.delimiter}${process.env.PATH || ''}`;
+
 if (!process.env.AGENTHUB_HOME) {
   process.env.AGENTHUB_HOME = fallbackSafeHome;
 }

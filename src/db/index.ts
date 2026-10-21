@@ -539,7 +539,18 @@ export const MIGRATIONS: string[] = [
   UPDATE tasks SET waitReason = waitReason_old;
   ALTER TABLE tasks DROP COLUMN waitReason_old;
   `,
-  // Migration 43: assistant sessions and durable user directives for the brain.
+  // Migration 43: Claude quota observations per profile (keep claude_quota for legacy clients).
+  `
+  CREATE TABLE IF NOT EXISTS claude_quota_profiles (
+    profileName TEXT PRIMARY KEY,
+    status TEXT,
+    resetsAt INTEGER,
+    rateLimitType TEXT,
+    isUsingOverage INTEGER NOT NULL DEFAULT 0,
+    observedAt TEXT NOT NULL
+  );
+  `,
+  // Migration 44: assistant sessions and durable user directives for the brain.
   // chat_sessions had a CHECK on kind, so rebuild it while preserving every column.
   `
   PRAGMA foreign_keys = OFF;
@@ -601,7 +612,8 @@ export function openDatabase(dbPath: string): Database.Database {
     }
   })();
 
-  const currentVersion = versionRow ? parseInt(versionRow.value, 10) : -1;
+  let currentVersion = versionRow ? parseInt(versionRow.value, 10) : -1;
+  currentVersion = repairForkAvatarMigration(db, currentVersion);
 
   for (let i = currentVersion + 1; i < MIGRATIONS.length; i++) {
     db.exec(MIGRATIONS[i]);
@@ -609,8 +621,32 @@ export function openDatabase(dbPath: string): Database.Database {
       String(i),
     );
   }
+  ensureProfileAvatarColumn(db);
 
   return db;
+}
+
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  return (db.prepare('SELECT name FROM pragma_table_info(?)').all(table) as Array<{ name: string }>)
+    .some((row) => row.name === column);
+}
+
+/**
+ * Bản fork từng dùng migration 41 cho profiles.avatarUrl, trùng số với migration 41 của upstream
+ * (projects.settings). DB đã chạy bản fork có schema_version = 41 nhưng thiếu cột của upstream:
+ * lùi về 40 để migration 41 thật được chạy. Cột avatarUrl do ensureProfileAvatarColumn lo.
+ */
+function repairForkAvatarMigration(db: Database.Database, currentVersion: number): number {
+  if (currentVersion !== 41 || hasColumn(db, 'projects', 'settings') || !hasColumn(db, 'profiles', 'avatarUrl')) {
+    return currentVersion;
+  }
+  db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run('40');
+  return 40;
+}
+
+/** Cột avatarUrl nằm ngoài danh sách MIGRATIONS để không giành số migration với upstream. */
+function ensureProfileAvatarColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'profiles', 'avatarUrl')) db.exec('ALTER TABLE profiles ADD COLUMN avatarUrl TEXT');
 }
 
 // Repository helpers
@@ -661,6 +697,7 @@ export interface ProfileRow {
   notes?: string | null;
   priority?: number;
   accountType?: 'personal' | 'team' | 'api';
+  avatarUrl?: string | null;
   deletedAt?: string | null;
 }
 
@@ -834,8 +871,8 @@ export class ProfileRepo {
   upsert(row: Omit<ProfileRow, 'createdAt'>): void {
     this.db
       .prepare(
-        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt, accountType)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt, accountType, avatarUrl)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            engine=excluded.engine,
            kind=excluded.kind,
@@ -848,6 +885,7 @@ export class ProfileRepo {
            notes=COALESCE(excluded.notes, profiles.notes),
            priority=COALESCE(excluded.priority, profiles.priority),
            accountType=COALESCE(excluded.accountType, profiles.accountType),
+           avatarUrl=COALESCE(excluded.avatarUrl, profiles.avatarUrl),
            deletedAt=COALESCE(excluded.deletedAt, profiles.deletedAt)`,
       )
       .run(
@@ -865,7 +903,12 @@ export class ProfileRepo {
         row.priority ?? 0,
         row.deletedAt ?? null,
         row.accountType ?? 'personal',
+        row.avatarUrl ?? null,
       );
+  }
+
+  updateAvatarUrl(name: string, avatarUrl: string | null): void {
+    this.db.prepare('UPDATE profiles SET avatarUrl = ? WHERE name = ?').run(avatarUrl, name);
   }
 
   update(

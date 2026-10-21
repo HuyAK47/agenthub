@@ -210,6 +210,14 @@ export const DEFAULT_UPDATES_CONFIG: UpdatesConfig = {
   repo: 'ducanh19020217/agenthub',
 };
 
+export interface WorkersConfig {
+  codexSandbox: 'off' | 'workspace-write';
+}
+
+export const DEFAULT_WORKERS_CONFIG: WorkersConfig = {
+  codexSandbox: 'off',
+};
+
 export interface AgentHubConfig {
   hubHome: string;
   agyHomesDir: string;
@@ -263,6 +271,7 @@ export interface AgentHubConfig {
   telegram: TelegramConfig;
   updates: UpdatesConfig;
   tools: ToolsConfig;
+  workers: WorkersConfig;
   deploy: Record<string, DeployProjectConfig>;
 }
 
@@ -308,6 +317,7 @@ export function saveConfig(
       chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
+    workers?: Partial<WorkersConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -385,6 +395,14 @@ export function saveConfig(
           },
         }
       : {}),
+    ...(patch.workers && typeof patch.workers === 'object'
+      ? {
+          workers: {
+            ...((current.workers as Record<string, unknown>) || {}),
+            ...patch.workers,
+          },
+        }
+      : {}),
     ...(patch.tools ? { tools: { ...((current.tools as Record<string, unknown>) || {}), ...patch.tools, ...(patch.tools.installers ? { installers: { ...(((current.tools as Record<string, unknown>)?.installers as Record<string, unknown>) || {}), ...patch.tools.installers } } : {}) } } : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
       ? {
@@ -458,6 +476,7 @@ export function updateConfigInMemory(
       chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
+    workers?: Partial<WorkersConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -606,6 +625,12 @@ export function updateConfigInMemory(
   }
   if (patch.updates) {
     config.updates = { ...config.updates, ...patch.updates };
+  }
+  if (patch.workers) {
+    config.workers = {
+      ...(config.workers || DEFAULT_WORKERS_CONFIG),
+      ...patch.workers,
+    };
   }
   if (patch.tools?.installers) {
     for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
@@ -793,6 +818,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ? rawUpdates.repo.trim()
       : DEFAULT_UPDATES_CONFIG.repo,
   };
+  const rawWorkers = (userConfig.workers as Record<string, unknown>) || {};
+  const workers: WorkersConfig = {
+    codexSandbox: rawWorkers.codexSandbox === 'workspace-write' ? 'workspace-write' : DEFAULT_WORKERS_CONFIG.codexSandbox,
+  };
   const rawTools = (userConfig.tools as Record<string, unknown>) || {};
   const rawDeploy = (userConfig.deploy as Record<string, unknown>) || {};
   const rawProjectsConfig = (userConfig.projects as Record<string, unknown>) || {};
@@ -979,6 +1008,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
       },
     },
+    workers,
     deploy,
   };
 }

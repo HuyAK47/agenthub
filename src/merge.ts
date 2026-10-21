@@ -127,7 +127,7 @@ export async function mergeTaskIntoBase(
 
   const before = await git(repo, ['rev-parse', 'HEAD']);
   const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
-  const env = workerEnvironment(hubHome, process.env, { project, cwd: repo });
+  const env = workerEnvironment(hubHome, process.env, { project, cwd: repo, guards: false });
   const identity = await gitIdentityArgs(repo, env);
   try {
     await execFileAsync('git', [...identity, 'merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${targetBranch}`], { cwd: repo, env });

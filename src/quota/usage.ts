@@ -29,6 +29,12 @@ export interface UsageCheckResult {
   error?: string;
 }
 
+/** A Claude profile is available only when every reported Claude window has quota left. */
+export function hasClaudeQuotaAvailable(rows: Array<Pick<QuotaUsageRow, 'grp' | 'remainingPct'>>): boolean {
+  const claudeRows = rows.filter((row) => row.grp.startsWith('Claude'));
+  return claudeRows.length > 0 && claudeRows.every((row) => row.remainingPct > 0);
+}
+
 export function parseUsage(text: string): UsageEntry[] {
   const result: UsageEntry[] = [];
   for (const line of text.split(/\r?\n/)) {
@@ -53,7 +59,7 @@ export async function fetchUsage(profile: ProfileRow, agyPath = process.env.AGEN
 }
 
 async function runUsage(profile: ProfileRow, agyPath: string): Promise<UsageCheckResult> {
-  const env = { ...process.env } as Record<string, string>;
+  const env = { ...process.env, BROWSER: '/bin/false' } as Record<string, string>;
   if (profile.kind === 'isolated' && profile.home) {
     env.HOME = profile.home;
     env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
@@ -102,6 +108,7 @@ export class QuotaUsageService {
 
   /** Enable Claude `/usage` collection (bin resolver avoids importing chat code here). */
   configureClaude(opts: { bin: () => string | null; cwd: string }): void { this.claude = opts; }
+  setEventBus(eventBus: UsageEventSink): void { this.eventBus = eventBus; }
 
   getForProfile(name: string): QuotaUsageRow[] { return this.usage.getForProfile(name); }
   getAll(): QuotaUsageRow[] { return this.usage.getAll(); }
@@ -178,6 +185,8 @@ export class QuotaUsageService {
         fetchedAt,
       }));
       for (const row of rows) this.usage.upsert(row);
+      const claudeRows = rows.filter((row) => row.grp.startsWith('Claude'));
+      if (hasClaudeQuotaAvailable(claudeRows)) this.eventBus?.emit('claude.quota_available', undefined, { profileName: profile.name, observedAt: new Date(fetchedAt * 1000).toISOString(), remainingPct: Math.min(...claudeRows.map((row) => row.remainingPct)) });
       return rows;
     } catch {
       return [];

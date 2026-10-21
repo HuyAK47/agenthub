@@ -43,4 +43,12 @@ export interface PlatformApi {
   restartService(opts?: { exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceRestartResult;
   uninstallService(opts?: { homeDir?: string; exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceUninstallResult;
   serviceCheck(exec: SyncExecFn, timeoutMs: number): { id: string; name: string; status: 'ok' | 'error' | 'skip' | 'warn'; message: string; suggestion?: string; details?: Record<string, unknown> };
+  measureProcessTree?(rootPid: number, worktreePath?: string | null, prev?: { ticks: number; time: number }): {
+    rss: number;
+    cpu: number;
+    totalTicks: number;
+    measuredAt: number;
+    pids: number[];
+    states: Record<number, string>;
+  };
 }

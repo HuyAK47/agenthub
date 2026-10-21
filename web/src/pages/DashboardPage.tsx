@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain } from '../api/client';
-import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
+import { getChatSessions, createChatSession, sendChatMessage, retryChatLimitNow } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
 import { parseApiTime, formatTimeAgo } from '../lib/time';
@@ -275,7 +275,7 @@ export const DashboardPage: React.FC = () => {
       )}
 
       {/* Brain Card */}
-      {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} />}
+      {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} />}
       {brainOverview?.brains && <div data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
         <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
         {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
@@ -519,7 +519,7 @@ export const DashboardPage: React.FC = () => {
       </div>
       {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
-        <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
+        <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p) => `${p.profileName}: ${p.status || t('extra.unknown')} (${p.source}, ${new Date(p.observedAt).toLocaleTimeString()})`).join(' · ') : `${claudeQuota.status || t('extra.unknown')}${claudeQuota.resetsAt ? ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}` : ''}`}</span>
       </div>}
       {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
         <div className="flex items-center justify-between gap-4">

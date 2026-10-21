@@ -109,6 +109,7 @@ export class ChatService {
   private snapshotEventAt = new Map<string, number>();
   private retryTimers = new Map<string, NodeJS.Timeout>();
   private telegramChatBySession = new Map<string, number>();
+  private earlyRetryAt = new Map<string, number>();
 
   constructor(
     public config: AgentHubConfig,
@@ -310,6 +311,20 @@ export class ChatService {
     this.retryRepo?.defer(retry.messageId, Math.floor(Date.now() / 1000) - 1);
     this.runRetry(retry.messageId);
     return { ok: true };
+  }
+
+  retryWaitingForProfile(profileName: string): number {
+    const now = Date.now();
+    let retried = 0;
+    for (const retry of this.retryRepo?.getPending() || []) {
+      const session = this.chatSessionRepo.get(retry.sessionId);
+      if (!session || session.profileName !== profileName) continue;
+      const last = this.earlyRetryAt.get(retry.sessionId) || 0;
+      if (now - last < 15 * 60_000) continue;
+      this.earlyRetryAt.set(retry.sessionId, now);
+      if (this.retryLimitNow(retry.sessionId).ok) retried++;
+    }
+    return retried;
   }
 
   private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string>; pausedUntil?: number } {
