@@ -568,7 +568,22 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_ci_runs_project ON ci_runs(projectId, completedAt);
   `,
-  // Migration 45: assistant sessions and durable user directives for the brain.
+  // Migration 45: durable chat permission rules
+  `
+  CREATE TABLE IF NOT EXISTS permission_rules (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL CHECK(scope IN ('session','project','global')),
+    sessionId TEXT,
+    projectId TEXT,
+    toolName TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    createdBy TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_permission_rules_lookup
+    ON permission_rules(scope, sessionId, projectId, toolName, pattern);
+  `,
+  // Migration 46: assistant sessions and durable user directives for the brain.
   // chat_sessions had a CHECK on kind, so rebuild it while preserving every column.
   `
   PRAGMA foreign_keys = OFF;
@@ -1027,7 +1042,12 @@ export class QuotaMarkRepo {
       .all(now) as QuotaMarkRow[];
   }
 
-  mark(profileName: string, family: string, until: number, reason?: string): void {
+  mark(profileName: string, family: string, until: number, reason?: string): boolean {
+    const now = Math.floor(Date.now() / 1000);
+    const previous = this.db
+      .prepare('SELECT until FROM quota_marks WHERE profileName = ? AND family = ?')
+      .get(profileName, family) as { until: number } | undefined;
+    const shouldEmit = !previous || previous.until <= now || until - previous.until > 10 * 60;
     this.db
       .prepare(
         `INSERT INTO quota_marks (profileName, family, until, reason)
@@ -1035,6 +1055,7 @@ export class QuotaMarkRepo {
          ON CONFLICT(profileName, family) DO UPDATE SET until=excluded.until, reason=excluded.reason`,
       )
       .run(profileName, family, until, reason || null);
+    return shouldEmit;
   }
 
   clear(profileName: string, family: string): void {
@@ -1824,6 +1845,10 @@ export class ChatPermissionRepo {
       : this.db.prepare("SELECT * FROM chat_permissions WHERE status = 'pending' ORDER BY createdAt").all()) as ChatPermissionRow[];
   }
 
+  listAlways(sessionId: string, toolName: string): ChatPermissionRow[] {
+    return this.db.prepare("SELECT * FROM chat_permissions WHERE sessionId = ? AND toolName = ? AND status = 'allow_always'").all(sessionId, toolName) as ChatPermissionRow[];
+  }
+
   expirePending(message = 'AgentHub khởi động lại'): number {
     const result = this.db.prepare("UPDATE chat_permissions SET status = 'deny', message = ?, resolvedAt = datetime('now') WHERE status = 'pending'").run(message);
     return result.changes;
@@ -1838,6 +1863,46 @@ export class ChatPermissionRepo {
     this.db.prepare("UPDATE chat_permissions SET status = ?, message = ?, reason = ?, resolvedAt = datetime('now') WHERE id = ? AND status = 'pending'")
       .run(status, message, reason || null, id);
     return this.get(id);
+  }
+}
+
+export interface PermissionRuleRow {
+  id: string;
+  scope: 'session' | 'project' | 'global';
+  sessionId: string | null;
+  projectId: string | null;
+  toolName: string;
+  pattern: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+export class PermissionRuleRepo {
+  constructor(private db: Database.Database) {}
+
+  list(options?: { sessionId?: string; projectId?: string; toolName?: string }): PermissionRuleRow[] {
+    const scopes: string[] = [];
+    const values: unknown[] = [];
+    if (options?.sessionId) { scopes.push('(scope = \'session\' AND sessionId = ?)'); values.push(options.sessionId); }
+    if (options?.projectId) { scopes.push('(scope = \'project\' AND projectId = ?)'); values.push(options.projectId); }
+    if (options?.sessionId || options?.projectId) scopes.push("scope = 'global'");
+    if (options?.toolName) values.push(options.toolName);
+    const where = scopes.length ? ` WHERE (${scopes.join(' OR ')})${options?.toolName ? ' AND toolName = ?' : ''}` : options?.toolName ? ' WHERE toolName = ?' : '';
+    return this.db.prepare(`SELECT * FROM permission_rules${where} ORDER BY createdAt, id`).all(...values) as PermissionRuleRow[];
+  }
+
+  listAll(): PermissionRuleRow[] {
+    return this.db.prepare('SELECT * FROM permission_rules ORDER BY createdAt, id').all() as PermissionRuleRow[];
+  }
+
+  insert(row: Omit<PermissionRuleRow, 'createdAt'>): PermissionRuleRow {
+    this.db.prepare('INSERT INTO permission_rules (id, scope, sessionId, projectId, toolName, pattern, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.scope, row.sessionId, row.projectId, row.toolName, row.pattern, row.createdBy);
+    return this.db.prepare('SELECT * FROM permission_rules WHERE id = ?').get(row.id) as PermissionRuleRow;
+  }
+
+  delete(id: string): boolean {
+    return this.db.prepare('DELETE FROM permission_rules WHERE id = ?').run(id).changes > 0;
   }
 }
 

@@ -14,6 +14,7 @@ import {
   ChatSessionRepo,
   ChatMessageRepo,
   ChatPermissionRepo,
+  PermissionRuleRepo,
   ChatRetryRepo,
   RunMetricsRepo,
   TaskNoteRepo,
@@ -45,7 +46,7 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
-import { BrainPolicy, projectBrainPolicy, assistantPolicy } from './brain/policy.js';
+import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
@@ -128,6 +129,7 @@ export function createContext(
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
   const chatPermissionRepo = new ChatPermissionRepo(db);
+  const permissionRuleRepo = new PermissionRuleRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
   const directiveRepo = new BrainDirectiveRepo(db);
@@ -139,6 +141,7 @@ export function createContext(
     }),
     mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
   });
+  const systemAssistantPolicy = globalAssistantPolicy(config);
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
@@ -146,13 +149,14 @@ export function createContext(
     const session = chatSessionRepo.get(sessionId);
     if (session?.kind === 'assistant' && session.projectId) {
       const project = projectRepo.get(session.projectId);
-      return project ? assistantPolicy(project, config) : systemBrainPolicy;
+      return project ? assistantPolicy(project, config) : systemAssistantPolicy;
     }
+    if (session?.kind === 'assistant') return systemAssistantPolicy;
     if (!session?.projectId) return systemBrainPolicy;
     const project = projectRepo.get(session.projectId);
     if (!project) return systemBrainPolicy;
     return projectBrainPolicy(project, config);
-  }, chatSessionRepo);
+  }, chatSessionRepo, permissionRuleRepo, projectRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,
@@ -250,6 +254,7 @@ export function createContext(
     chatService,
     chatSessionRepo,
     profileRepo,
+    taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
     directiveRepo,

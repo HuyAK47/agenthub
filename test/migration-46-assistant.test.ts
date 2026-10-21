@@ -10,18 +10,18 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('Migration 45 (assistant sessions + brain_directives)', () => {
+describe('Migration 46 (assistant sessions + brain_directives)', () => {
   it('preserves existing sessions and messages after table rebuild', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mig45-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mig46-'));
     dirs.push(dir);
     const dbPath = path.join(dir, 'hub.db');
 
-    // Build DB up to migration 44 (schema_version = 44), after CI migration.
+    // Build DB up to migration 45 (schema_version = 45), after CI migration.
     const legacy = new Database(dbPath);
     legacy.pragma('journal_mode = WAL');
     legacy.pragma('foreign_keys = ON');
-    for (let i = 0; i <= 44; i++) legacy.exec(MIGRATIONS[i]);
-    legacy.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '44')").run();
+    for (let i = 0; i <= 45; i++) legacy.exec(MIGRATIONS[i]);
+    legacy.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '45')").run();
 
     // Insert a project, a session, and a message that depends on the session via CASCADE.
     legacy.prepare("INSERT INTO projects (id, name, path) VALUES ('p1', 'proj', '/tmp/proj')").run();
@@ -34,7 +34,7 @@ describe('Migration 45 (assistant sessions + brain_directives)', () => {
     ).run();
     legacy.close();
 
-    // Open with openDatabase which runs remaining migration (45).
+    // Open with openDatabase which runs remaining migration (46).
     const db = openDatabase(dbPath);
     const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string };
     expect(Number(version.value)).toBe(MIGRATIONS.length - 1);
