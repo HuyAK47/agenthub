@@ -34,6 +34,14 @@ function changedSettings(current: NonNullable<Project['settings']>, original: No
   return result;
 }
 
+function parsePositiveInt(val: string): number | undefined {
+  const trimmed = val.trim();
+  if (!trimmed) return undefined;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const num = parseInt(trimmed, 10);
+  return num > 0 && Number.isSafeInteger(num) ? num : undefined;
+}
+
 function ProjectSettingsForm({
   value, onChange, compact = false,
 }: { value: NonNullable<Project['settings']>; onChange: (value: NonNullable<Project['settings']>) => void; compact?: boolean }) {
@@ -43,8 +51,8 @@ function ProjectSettingsForm({
   return <div className="space-y-4" data-testid="project-settings-form">
     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
       <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.brainMode')}</span><select value={value.brain.mode} onChange={(e) => update('brain', { mode: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="inherit">{t('projects.brainInherit')}</option><option value="off">{t('projects.brainOff')}</option><option value="suggest">{t('projects.brainSuggest')}</option><option value="auto">{t('projects.brainAuto')}</option><option value="external">{t('projects.brainExternal')}</option></select><span className="text-[var(--t-text-3)]">{t(`projects.brainDesc${value.brain.mode}`)}</span></label>
-      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.dailyTokenBudget')}</span><input type="text" inputMode="numeric" value={value.brain.dailyTokenBudget ?? ''} onChange={(e) => update('brain', { dailyTokenBudget: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
-      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.maxTurnsPerHour')}</span><input type="text" inputMode="numeric" value={value.brain.maxTurnsPerHour ?? ''} onChange={(e) => update('brain', { maxTurnsPerHour: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
+      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.dailyTokenBudget')}</span><input type="text" inputMode="numeric" aria-label={t('projects.dailyTokenBudget')} value={value.brain.dailyTokenBudget ?? ''} onChange={(e) => update('brain', { dailyTokenBudget: parsePositiveInt(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
+      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.maxTurnsPerHour')}</span><input type="text" inputMode="numeric" aria-label={t('projects.maxTurnsPerHour')} value={value.brain.maxTurnsPerHour ?? ''} onChange={(e) => update('brain', { maxTurnsPerHour: parsePositiveInt(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
     </div>
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
       <label className="space-y-1"><span className="font-semibold block">{t('projects.worktreeInstall')}</span><select value={value.worktree.install} onChange={(e) => update('worktree', { install: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="auto">{t('projects.worktreeAuto')}</option><option value="skip">{t('projects.worktreeSkip')}</option></select></label>
