@@ -547,8 +547,10 @@ export class Scheduler {
   }
 
   async recoverCheckingTasks(): Promise<void> {
+    if (this.stopped) return;
     const checkingTasks = this.taskRepo.getByStatus('checking');
     for (const task of checkingTasks) {
+      if (this.stopped) return;
       const runs = this.runRepo.getByTask(task.id);
       const runId = runs[runs.length - 1]?.id || 'recovered';
       await this.runChecksForTask(task.id, runId);
@@ -556,6 +558,7 @@ export class Scheduler {
   }
 
   async runChecksForTask(taskId: string, runId: string): Promise<void> {
+    if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
     if (!task) return;
     this.taskRepo.update(taskId, { status: 'checking' });
@@ -566,6 +569,7 @@ export class Scheduler {
       ? await this.checkRunner.run(task, project, runId)
       : { passed: true, failed: [], results: [] };
 
+    if (this.stopped) return;
     // Check if task status was changed (e.g. cancelled) during checks
     const currentTask = this.taskRepo.get(taskId);
     if (!currentTask || currentTask.status !== 'checking') return;
