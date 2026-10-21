@@ -21,6 +21,11 @@ export interface ChatConfig {
 export interface BrainConfig {
   fallback: ClaudeFallbackStep[];
   policy: string[];
+  claudeProfile: string;
+  model: string;
+  mode: 'off' | 'suggest' | 'auto';
+  maxTurnsPerHour: number;
+  dailyTokenBudget: number;
 }
 
 export interface ClaudeSessionsConfig {
@@ -702,6 +707,19 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       policy: Array.isArray(brainRaw.policy)
         ? brainRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
         : [],
+      claudeProfile: typeof brainRaw.claudeProfile === 'string' && brainRaw.claudeProfile.trim()
+        ? brainRaw.claudeProfile.trim()
+        : chat.claudeProfile || 'claude-may',
+      model: typeof brainRaw.model === 'string' && brainRaw.model
+        ? brainRaw.model
+        : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
+      mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
+      maxTurnsPerHour: typeof brainRaw.maxTurnsPerHour === 'number' && brainRaw.maxTurnsPerHour > 0
+        ? Math.floor(brainRaw.maxTurnsPerHour)
+        : 20,
+      dailyTokenBudget: typeof brainRaw.dailyTokenBudget === 'number' && brainRaw.dailyTokenBudget >= 0
+        ? Math.floor(brainRaw.dailyTokenBudget)
+        : 0,
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),

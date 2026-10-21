@@ -4,8 +4,23 @@ import os from 'node:os';
 import { execFileSync, execSync, spawn, ChildProcess } from 'node:child_process';
 import { findProjectRoot } from '../cli.js';
 
+function loadBrainPlaybook(): string {
+  const candidates = [
+    path.resolve(path.dirname(new URL('.', import.meta.url).pathname), '../../docs/BRAIN-PLAYBOOK.md'),
+    path.resolve(process.env.AGENTHUB_INSTALL_DIR || '', 'docs/BRAIN-PLAYBOOK.md'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf8');
+    } catch {
+      // Continue to the embedded fallback below.
+    }
+  }
+  return 'BRAIN-PLAYBOOK không có sẵn; chỉ điều phối qua MCP, review trước merge và hỏi người dùng khi có rủi ro.';
+}
+
 export const BRAIN_PROMPT =
-  'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_create_batch, mcp__agenthub__hub_batch, mcp__agenthub__hub_dispatch_batch, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. {{PLANNING_RULE}}Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task hoặc hub_create_batch, sau đó review.';
+  'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_create_batch, mcp__agenthub__hub_batch, mcp__agenthub__hub_dispatch_batch, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. {{PLANNING_RULE}}Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task hoặc hub_create_batch, sau đó review.' + `\n\nSỔ TAY BRAIN-PLAYBOOK:\n${loadBrainPlaybook()}`;
 
 /** Planning rule follows the user's approval setting (Settings → Kế hoạch). */
 export function planningRule(planning?: { requireApproval?: boolean; approvalMinTasks?: number }): string {
