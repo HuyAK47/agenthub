@@ -43,8 +43,8 @@ describe('SetupPage', () => {
       },
     ],
     profiles: [
-      { name: 'default', engine: 'agy', kind: 'default', loggedIn: true },
-      { name: 'g1', engine: 'agy', kind: 'isolated', loggedIn: false },
+      { name: 'default', engine: 'agy', kind: 'keyring', loggedIn: true, enabled: 1 },
+      { name: 'g1', engine: 'agy', kind: 'isolated', loggedIn: false, enabled: 1 },
     ],
     mcpRegistered: false,
     serviceRunning: true,
