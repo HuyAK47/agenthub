@@ -116,6 +116,7 @@ exec ${shellQuote(realBinary)} "$@"
 export interface WorkerEnvOptions {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null } | null;
+  guards?: boolean;
 }
 
 export function workerEnvironment(
@@ -126,6 +127,7 @@ export function workerEnvironment(
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
   const shimDir = path.join(hubHome, 'shims');
   fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+  const guards = !options || !('guards' in options) || options.guards !== false;
 
   // 1. systemctl & launchctl shims
   for (const name of ['systemctl', 'launchctl']) {
@@ -136,18 +138,20 @@ export function workerEnvironment(
     writeShimFile(file, content);
   }
 
-  // 2. Blocked command shims (ssh, scp, sftp, docker, docker-compose, podman)
-  for (const name of WORKER_BLOCKED_COMMANDS) {
-    const file = path.join(shimDir, name);
-    const content = blockedCommandScript(name);
-    writeShimFile(file, content);
-  }
+  if (guards) {
+    // 2. Blocked command shims (ssh, scp, sftp, docker, docker-compose, podman)
+    for (const name of WORKER_BLOCKED_COMMANDS) {
+      const file = path.join(shimDir, name);
+      const content = blockedCommandScript(name);
+      writeShimFile(file, content);
+    }
 
-  // 3. git wrapper shim
-  const realGit = findExecutable('git', env) || findExecutable('git', process.env) || '/usr/bin/git';
-  const gitFile = path.join(shimDir, 'git');
-  const gitContent = gitShimScript(realGit);
-  writeShimFile(gitFile, gitContent);
+    // 3. git wrapper shim
+    const realGit = findExecutable('git', env) || findExecutable('git', process.env) || '/usr/bin/git';
+    const gitFile = path.join(shimDir, 'git');
+    const gitContent = gitShimScript(realGit);
+    writeShimFile(gitFile, gitContent);
+  }
 
   env.PATH = [shimDir, env.PATH || ''].filter(Boolean).join(path.delimiter);
 

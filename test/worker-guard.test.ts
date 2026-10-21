@@ -158,6 +158,22 @@ describe('worker service guard', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('can disable worker command guards for hub git operations while keeping service shims', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-hub-env-'));
+    const hub = path.join(root, 'hub');
+    const bin = path.join(root, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\nprintf "real:%s\\n" "$*"\n', { mode: 0o700 });
+    const env = workerEnvironment(hub, { PATH: bin }, { guards: false });
+
+    expect(env.PATH?.split(path.delimiter)[0]).toBe(path.join(hub, 'shims'));
+    expect(fs.existsSync(path.join(hub, 'shims', 'git'))).toBe(false);
+    expect(fs.existsSync(path.join(hub, 'shims', 'ssh'))).toBe(false);
+    expect(execFileSync('systemctl', ['status', 'agenthub'], { env, encoding: 'utf8' })).toContain('real:status agenthub');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('exposes AGENTHUB_REF_<NAME> environment variables for project references', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-ref-env-'));
     const hub = path.join(root, 'hub');
