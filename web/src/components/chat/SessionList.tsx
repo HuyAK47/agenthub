@@ -273,7 +273,10 @@ export const SessionList: React.FC<SessionListProps> = ({
             const isPinned = Boolean(session.pinned);
             const isArchived = Boolean(session.archived);
 
+            const brainGroup = session.id === 'brain' ? 'system' : session.id.startsWith('brain:') ? 'project' : null;
             return (
+              <React.Fragment key={session.id}>
+                {brainGroup && (filteredSessions.findIndex((item) => (item.id === 'brain' ? 'system' : item.id.startsWith('brain:') ? 'project' : null) === brainGroup) === filteredSessions.indexOf(session)) && <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{brainGroup === 'system' ? t('extra.systemBrain') : t('extra.projectBrains')}</div>}
               <div
                 key={session.id}
                 role="button"
@@ -472,6 +475,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                   )}
                 </div>
               </div>
+              </React.Fragment>
             );
           })
         )}
