@@ -13,6 +13,10 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(command, args, { env: { ...process.env, ...env }, encoding: 'utf8' });
 }
 
+// Same naming as scripts/package.mjs and install.sh, so the fixture matches the runner (CI also
+// runs on linux-arm64 and macos).
+const PLATFORM_ARCH = `${process.platform === 'darwin' ? 'macos' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
+
 function makeRelease(base: string, version: string, checksum = true) {
   const releaseDir = path.join(base, 'releases', 'download', `v${version}`);
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-fixture-'));
@@ -22,8 +26,10 @@ function makeRelease(base: string, version: string, checksum = true) {
     name: 'agenthub', version, lockfileVersion: 3, requires: true, packages: { '': { name: 'agenthub', version } },
   }));
   fs.writeFileSync(path.join(staging, 'bin/agenthub'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  // Real release archives ship prebuilt production node_modules, so install needs no compiler.
+  fs.mkdirSync(path.join(staging, 'node_modules'), { recursive: true });
   fs.mkdirSync(releaseDir, { recursive: true });
-  const archiveName = `agenthub-${version}-linux-x64.tar.gz`;
+  const archiveName = `agenthub-${version}-${PLATFORM_ARCH}.tar.gz`;
   expect(run('tar', ['-czf', path.join(releaseDir, archiveName), '-C', staging, '.']).status).toBe(0);
   const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(releaseDir, archiveName))).digest('hex');
   fs.writeFileSync(path.join(releaseDir, 'SHA256SUMS'), `${checksum ? digest : '0'.repeat(64)}  ${archiveName}\n`);

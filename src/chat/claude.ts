@@ -140,6 +140,10 @@ export function findClaudeBin(configuredBin?: string): string | null {
     }
   }
 
+  // Explicit override (also lets tests point at a fake CLI independent of what this machine has).
+  const envBin = process.env.AGENTHUB_CLAUDE_BIN;
+  if (envBin && fs.existsSync(envBin)) return envBin;
+
   const managedBin = path.join(process.env.AGENTHUB_TOOLS_DIR || '', 'node_modules', '.bin', 'claude');
   if (process.env.AGENTHUB_TOOLS_DIR && fs.existsSync(managedBin)) return managedBin;
 

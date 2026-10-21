@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -224,7 +225,8 @@ describe('safe installer and updater commands', () => {
       env: {
         ...process.env,
         HOME: home,
-        PATH: `${fakeBin}:/usr/bin:/bin`,
+        // Keep node reachable: on CI it lives outside /usr/bin (setup-node tool cache).
+        PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
         AGENTHUB_DIR: path.join(home, 'app'),
         AGENTHUB_HOME: path.join(home, 'data'),
         AGENTHUB_RELEASE_BASE: path.join(home, 'releases'),
@@ -251,10 +253,11 @@ describe('safe installer and updater commands', () => {
     fs.writeFileSync(path.join(payload, 'package.json'), '{}');
     fs.writeFileSync(path.join(payload, 'bin', 'agenthub'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     fs.mkdirSync(releaseBase, { recursive: true });
-    expect(spawnSync('tar', ['-czf', path.join(releaseBase, 'agenthub-1.2.3-linux-x64.tar.gz'), '-C', payload, '.']).status).toBe(0);
-    expect(spawnSync('sha256sum', ['agenthub-1.2.3-linux-x64.tar.gz'], { cwd: releaseBase, encoding: 'utf8' }).status).toBe(0);
-    const checksum = spawnSync('sha256sum', ['agenthub-1.2.3-linux-x64.tar.gz'], { cwd: releaseBase, encoding: 'utf8' }).stdout;
-    fs.writeFileSync(path.join(releaseBase, 'SHA256SUMS'), checksum);
+    // Match the runner's platform/arch (CI also runs on linux-arm64 and macos, which has no sha256sum).
+    const archiveName = `agenthub-1.2.3-${process.platform === 'darwin' ? 'macos' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`;
+    expect(spawnSync('tar', ['-czf', path.join(releaseBase, archiveName), '-C', payload, '.']).status).toBe(0);
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(releaseBase, archiveName))).digest('hex');
+    fs.writeFileSync(path.join(releaseBase, 'SHA256SUMS'), `${digest}  ${archiveName}\n`);
     fs.mkdirSync(fakeBin);
     const fakeCurl = path.join(fakeBin, 'curl');
     fs.writeFileSync(fakeCurl, '#!/bin/sh\nurl=""; out=""\nwhile [ "$#" -gt 0 ]; do case "$1" in file://*) url="$1" ;; -o) shift; out="$1" ;; esac; shift; done\ncp "${url#file://}" "$out"\n');
@@ -264,7 +267,8 @@ describe('safe installer and updater commands', () => {
       env: {
         ...process.env,
         HOME: home,
-        PATH: `${fakeBin}:/usr/bin:/bin`,
+        // Keep node reachable: on CI it lives outside /usr/bin (setup-node tool cache).
+        PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
         AGENTHUB_DIR: app,
         AGENTHUB_HOME: path.join(home, 'data'),
         AGENTHUB_RELEASE_BASE: path.join(home, 'releases'),
