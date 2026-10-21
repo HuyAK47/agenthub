@@ -1104,9 +1104,12 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       })).toBe(true), { timeout: 5_000 });
 
       await bot.handleUpdate({ update_id: 1021, callback_query: {
-        id: 'callback-1', from: { id: 321 }, message: { message_id: 1, chat: { id: 321 } }, data: `permission:allow:${permissionId}`,
+        id: 'callback-1', from: { id: 321 }, message: { message_id: 1, chat: { id: 321 }, text: 'echo x > file & <tag>' }, data: `permission:allow:${permissionId}`,
       } });
       expect(ctx.chatService.permissionBroker.get(permissionId)?.status).toBe('allow');
+      const edited = recordedCalls.find((call) => call.url.includes('/editMessageText'));
+      expect(edited?.body?.parse_mode).toBe('HTML');
+      expect(edited?.body?.text).toContain('echo x &gt; file &amp; &lt;tag&gt;');
       ctx.chatService.stop();
       await pendingPermission;
     });

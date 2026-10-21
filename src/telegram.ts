@@ -1567,11 +1567,15 @@ export class TelegramBotService {
         await this.answerCallbackQuery(query.id, decision === 'deny' ? 'Đã từ chối.' : 'Đã cho phép.');
         if (query.message) {
           const result = decision === 'deny' ? '🚫 Đã từ chối.' : decision === 'allow_always' ? '✅ Đã luôn cho phép.' : '✅ Đã cho phép.';
-          await this.editMessage(chatId, query.message.message_id, `${query.message.text || ''}\n\n<b>${result}</b>`, { inline_keyboard: [] });
+          const previousText = this.escapeHtml(query.message.text || '');
+          await this.editMessage(chatId, query.message.message_id, `${previousText}\n\n<b>${result}</b>`, { inline_keyboard: [] });
         }
       } catch {
         await this.answerCallbackQuery(query.id, 'Yêu cầu đã hết hạn.');
-        if (query.message) await this.editMessage(chatId, query.message.message_id, `${query.message.text || ''}\n\n⚠️ Yêu cầu đã hết hạn.`, { inline_keyboard: [] });
+        if (query.message) {
+          const previousText = this.escapeHtml(query.message.text || '');
+          await this.editMessage(chatId, query.message.message_id, `${previousText}\n\n⚠️ Yêu cầu đã hết hạn.`, { inline_keyboard: [] });
+        }
       }
       return;
     }
