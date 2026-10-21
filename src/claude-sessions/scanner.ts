@@ -175,7 +175,7 @@ export class ClaudeSessionScanner {
       repo.upsert({ sessionId, cwd: String(latestCwd || ''), title: titleToSet });
     }
     if (eligible && metadataChanged && !records.length) {
-      repo.upsert({ sessionId, cwd: '', lastAt: latestActivity, lastUserRequest, lastToolName, lastToolSummary, lastEventKind, fiveHourTokens, isHubChat: this.isHubChat(sessionId) ? 1 : 0 });
+      repo.updateActivity(sessionId, { lastAt: latestActivity, lastUserRequest, lastToolName, lastToolSummary, lastEventKind, fiveHourTokens });
     }
     if (eligible && latestLimit) {
       const stillLimited = !latestActivity || Date.parse(latestActivity) <= Date.parse(latestLimit.observedAt);

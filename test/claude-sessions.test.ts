@@ -410,3 +410,20 @@ describe('Claude session privacy and quota handling', () => {
     db.close();
   });
 });
+
+describe('ClaudeSessionRepo giữ dữ liệu khi cập nhật thiếu trường', () => {
+  it('lastAt rỗng không xoá lastAt cũ; cập nhật hoạt động không đặt lại bộ đếm', async () => {
+    const { openDatabase } = await import('../src/db/index.js');
+    const { ClaudeSessionRepo } = await import('../src/claude-sessions/repo.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-session-repo-'));
+    const db = openDatabase(path.join(dir, 'hub.db'));
+    const repo = new ClaudeSessionRepo(db);
+    repo.upsert({ sessionId: 's1', cwd: '/w', lastAt: '2026-10-21T01:00:00.000Z', messages: 12, effectiveTokens: 500 });
+    repo.upsert({ sessionId: 's1', cwd: '', lastAt: null, messages: 12, effectiveTokens: 500 });
+    expect(repo.get('s1')).toMatchObject({ cwd: '/w', lastAt: '2026-10-21T01:00:00.000Z' });
+    repo.updateActivity('s1', { lastAt: '2026-10-21T02:00:00.000Z', lastUserRequest: 'hỏi', lastToolName: 'Bash', lastToolSummary: 'Bash: git status', lastEventKind: 'tool_use', fiveHourTokens: null });
+    expect(repo.get('s1')).toMatchObject({ lastAt: '2026-10-21T02:00:00.000Z', messages: 12, effectiveTokens: 500, lastEventKind: 'tool_use' });
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
