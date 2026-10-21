@@ -31,6 +31,30 @@ export function isAgyLoginMenu(buffer: string): boolean {
   return /Select login method/i.test(buffer.replace(ANSI_RE, '')) && /Google OAuth/i.test(buffer.replace(ANSI_RE, ''));
 }
 
+// Lệnh mà agy/claude/codex có thể gọi để tự mở trình duyệt.
+const BROWSER_OPENERS = [
+  'xdg-open', 'x-www-browser', 'www-browser', 'sensible-browser', 'gio', 'gnome-open', 'kde-open', 'kde-open5',
+  'exo-open', 'gvfs-open', 'firefox', 'google-chrome', 'chromium', 'chromium-browser',
+];
+
+/**
+ * Không cho CLI tự mở tab đăng nhập: wizard trên web đã hiện link để người dùng tự mở.
+ * Các lệnh mở trình duyệt được thay bằng script không làm gì (exit 0) đặt đầu PATH,
+ * để CLI vẫn coi là mở thành công và tiếp tục chờ mã xác thực.
+ * Đặt AGENTHUB_LOGIN_OPEN_BROWSER=1 để bật lại hành vi cũ.
+ */
+export function applyNoBrowserEnv(env: Record<string, string>, hubHome: string): void {
+  if (process.env.AGENTHUB_LOGIN_OPEN_BROWSER === '1') return;
+  const shimDir = path.join(hubHome, 'no-browser-bin');
+  fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+  for (const name of BROWSER_OPENERS) {
+    const file = path.join(shimDir, name);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  }
+  env.BROWSER = path.join(shimDir, 'xdg-open');
+  env.PATH = env.PATH ? `${shimDir}${path.delimiter}${env.PATH}` : shimDir;
+}
+
 export class PtyManager {
   private sessions = new Map<string, PtySession>(); // sessionId -> PtySession
   private profileToSession = new Map<string, string>(); // profileName -> sessionId
@@ -61,6 +85,7 @@ export class PtyManager {
       env.HOME = home;
       env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
     }
+    applyNoBrowserEnv(env, this.service.config.hubHome);
 
     let args: string[] = [];
     let command: string | null | undefined;

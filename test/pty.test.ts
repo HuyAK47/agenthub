@@ -8,6 +8,7 @@ import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
+import { applyNoBrowserEnv } from '../src/api/pty.js';
 
 let tmpDir: string;
 let config: ReturnType<typeof loadConfig>;
@@ -159,5 +160,18 @@ describe('AgentHub PTY Login and WebSocket', () => {
     }, { timeout: 5000 });
 
     delete process.env.FAKE_AGY_LOG_DELAY_MS;
+  });
+
+  it('login sessions cannot open a browser tab on their own', async () => {
+    const env: Record<string, string> = { PATH: '/usr/bin' };
+    applyNoBrowserEnv(env, tmpDir);
+
+    const shimDir = path.join(tmpDir, 'no-browser-bin');
+    expect(env.PATH.split(path.delimiter)[0]).toBe(shimDir);
+    expect(env.BROWSER).toBe(path.join(shimDir, 'xdg-open'));
+    const { execFileSync } = await import('node:child_process');
+    // Shim chạy được và không làm gì
+    expect(execFileSync('xdg-open', ['https://example.com'], { env, encoding: 'utf8' })).toBe('');
+    expect(fs.statSync(path.join(shimDir, 'xdg-open')).mode & 0o111).not.toBe(0);
   });
 });
