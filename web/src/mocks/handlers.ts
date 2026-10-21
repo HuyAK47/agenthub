@@ -810,6 +810,7 @@ export const handlers = [
         totalRuns: i === 0 ? 4 : 8,
         totalDurationMs: i === 0 ? 240000 : 480000,
         totalTokens: i === 0 ? 90000 : 180000,
+        claudeTokens: i === 0 ? 35000 : 70000,
         profiles: [],
       })),
     });

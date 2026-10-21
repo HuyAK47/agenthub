@@ -419,6 +419,7 @@ export const en: typeof vi = {
     runs: 'Runs',
     duration: 'Run Duration',
     tokens: 'Tokens / Usage',
+    claudeTokens: 'Claude Tokens',
     suggestedIdle: 'Idle (Available)',
     suggestedIdleDesc: 'High remaining quota and few runs today, ready for more tasks!',
     active: 'Active',

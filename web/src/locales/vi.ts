@@ -418,6 +418,7 @@ export const vi = {
     runs: 'Lượt chạy',
     duration: 'Thời gian chạy',
     tokens: 'Tokens / Usage',
+    claudeTokens: 'Token Claude',
     suggestedIdle: 'Đang rảnh',
     suggestedIdleDesc: 'Còn nhiều quota mà ít việc hôm nay, sẵn sàng nhận thêm task!',
     active: 'Đang hoạt động',

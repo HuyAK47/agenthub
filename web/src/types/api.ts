@@ -429,11 +429,12 @@ export interface DayMetric {
   runs: number;
   durationMs: number;
   tokens: number;
+  claudeTokens?: number;
 }
 
 export interface DailyProfileSummary {
   name: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   enabled: boolean;
   isIdle: boolean;
   idleReason?: string;
@@ -446,7 +447,7 @@ export interface DailyProfileSummary {
 
 export interface DailyUsageDayProfile extends DayMetric {
   profileName: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   isIdle: boolean;
   quota: ProfileQuotaInfo;
 }
@@ -457,6 +458,7 @@ export interface DailyUsageDay {
   totalRuns: number;
   totalDurationMs: number;
   totalTokens: number;
+  claudeTokens?: number;
   profiles: DailyUsageDayProfile[];
 }
 

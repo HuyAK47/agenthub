@@ -364,6 +364,12 @@ describe('GET /api/usage/daily integration & report generation', () => {
        VALUES ('run-3', 'task-1', 'codex', 'gpt-5.6-luna', 'codex', 75000, 45000)`
     ).run();
 
+    // Insert claude_usage on 2026-10-16 03:00:00 UTC (10:00 Asia/Ho_Chi_Minh)
+    db.prepare(
+      `INSERT INTO claude_usage (sessionId, messageId, ts, turnId, input, output, cacheCreation, cacheRead, effective)
+       VALUES ('sess-1', 'msg-1', '2026-10-16 03:00:00', 'turn-1', 1000, 500, 200, 100, 42000)`
+    ).run();
+
     // Test calling getDailyUsageReport directly with fixed reference time
     const report = getDailyUsageReport({
       days: 7,
@@ -429,6 +435,7 @@ describe('GET /api/usage/daily integration & report generation', () => {
     expect(dayToday.totalRuns).toBe(2); // g1 (1) + codex (1)
     expect(dayToday.totalDurationMs).toBe(165000); // 120000 + 45000
     expect(dayToday.totalTokens).toBe(125000); // 50000 + 75000
+    expect(dayToday.claudeTokens).toBe(42000);
 
     // Test API response via Fastify GET /api/usage/daily
     const res = await server.inject({
@@ -445,6 +452,8 @@ describe('GET /api/usage/daily integration & report generation', () => {
     expect(body.profiles).toBeDefined();
     expect(body.profiles.length).toBe(5);
     expect(body.byDay).toBeDefined();
+    const apiDayToday = body.byDay.find((d: { date: string; claudeTokens?: number }) => d.date === '2026-10-16');
+    expect(apiDayToday.claudeTokens).toBe(42000);
   });
 
   it('supports days query parameter', async () => {
