@@ -748,6 +748,51 @@ export class AppService {
     return { today: row.today, week: row.week };
   }
 
+  getClaudeProfileLimitedSessions(profile: ProfileRow) {
+    if (!this.claudeSessionRepo) return [];
+    const db = this.scheduler.getDatabase();
+    if (!db) return [];
+
+    const limitedRows = db.prepare(`
+      SELECT sessionId, cwd, title, limitResetAt, autoResumeEnabled
+      FROM claude_sessions
+      WHERE limitResetAt IS NOT NULL
+      ORDER BY limitResetAt ASC
+    `).all() as Array<{ sessionId: string; cwd: string; title: string | null; limitResetAt: number; autoResumeEnabled: number }>;
+
+    if (limitedRows.length === 0) return [];
+
+    const scanRows = db.prepare('SELECT path FROM claude_scan_state').all() as Array<{ path: string }>;
+    const sessionConfigDirs = new Map<string, string>();
+    for (const row of scanRows) {
+      const sid = path.basename(row.path, '.jsonl');
+      const configDir = path.dirname(path.dirname(path.dirname(row.path)));
+      sessionConfigDirs.set(sid, path.resolve(configDir));
+    }
+
+    const defaultClaudeConfigDir = path.resolve(os.homedir(), '.claude');
+    const isSystemProfile = profile.kind === 'system' || !profile.home || path.resolve(profile.home) === path.resolve(os.homedir()) || path.resolve(profile.home) === defaultClaudeConfigDir;
+    const profileHome = profile.home ? path.resolve(profile.home) : null;
+    const profileClaudeDir = profileHome ? path.join(profileHome, '.claude') : null;
+
+    const matched = limitedRows.filter((row) => {
+      const configDir = sessionConfigDirs.get(row.sessionId);
+      if (isSystemProfile) {
+        return !configDir || configDir === defaultClaudeConfigDir;
+      }
+      if (!configDir || !profileHome) return false;
+      return configDir === profileHome || configDir === profileClaudeDir;
+    });
+
+    return matched.map((row) => ({
+      sessionId: row.sessionId,
+      title: row.title || (row.sessionId.length > 8 ? row.sessionId.slice(0, 8) : row.sessionId),
+      cwd: row.cwd,
+      limitResetAt: row.limitResetAt,
+      autoResumeEnabled: row.autoResumeEnabled === 1,
+    }));
+  }
+
   // --- Savings ---
   getSavings(query?: { project?: string; since?: string }) {
     if (!this.savingsService) {
@@ -868,7 +913,10 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
+        ...(p.engine === 'claude' ? {
+          claudeTokens: this.getClaudeTokenTotals(),
+          limitedSessions: this.getClaudeProfileLimitedSessions(p),
+        } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
       };
     });
@@ -1135,7 +1183,10 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
+        ...(p.engine === 'claude' ? {
+          claudeTokens: this.getClaudeTokenTotals(),
+          limitedSessions: this.getClaudeProfileLimitedSessions(p),
+        } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };

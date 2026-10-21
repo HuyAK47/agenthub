@@ -883,6 +883,15 @@ export const handlers = [
     return HttpResponse.json({ ok: true });
   }),
 
+  // PATCH /api/claude/sessions/:id/auto-resume
+  http.patch('/api/claude/sessions/:id/auto-resume', async ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const body = (await request.json()) as any;
+    return HttpResponse.json({ sessionId: params.id, autoResumeEnabled: body?.enabled ? 1 : 0 });
+  }),
+
   // GET /api/tasks
   http.get('/api/tasks', ({ request }) => {
     if (!checkAuth(request)) {

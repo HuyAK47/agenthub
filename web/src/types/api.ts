@@ -31,6 +31,14 @@ export interface QuotaUsageItem {
   fetchedAt: number;
 }
 
+export interface ClaudeLimitedSession {
+  sessionId: string;
+  title: string | null;
+  cwd: string;
+  limitResetAt: number;
+  autoResumeEnabled: boolean;
+}
+
 export interface Profile {
   name: string;
   engine: EngineType;
@@ -48,6 +56,7 @@ export interface Profile {
   duplicateEmailWith?: string[];
   usage?: QuotaUsageItem[];
   claudeTokens?: { today: number; week: number };
+  limitedSessions?: ClaudeLimitedSession[];
   slotsUsed?: number;
   slotsTotal?: number;
   authState?: 'ok' | 'not_logged_in' | 'needs_verification' | 'error' | null;
