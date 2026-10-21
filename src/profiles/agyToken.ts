@@ -23,6 +23,8 @@ export interface ExchangedTokenData {
   tokenType: string;
   refreshToken: string;
   expiry: string;
+  expiresIn: number;
+  idToken?: string;
 }
 
 /**
@@ -85,6 +87,9 @@ export async function exchangeAgyRefreshToken(
     tokenType: typeof data?.token_type === 'string' ? data.token_type : 'Bearer',
     refreshToken: refreshToken.trim(),
     expiry,
+    expiresIn: expiresInSec,
+    // Có khi scope gồm openid (agy xin openid); agy lưu kèm trong file token.
+    idToken: typeof data?.id_token === 'string' ? data.id_token : undefined,
   };
 }
 
@@ -99,6 +104,8 @@ export function writeAgyIsolatedToken(
     refreshToken: string;
     tokenType?: string;
     expiry?: string;
+    expiresIn?: number;
+    idToken?: string;
   },
   email?: string | null,
 ): void {
@@ -113,11 +120,17 @@ export function writeAgyIsolatedToken(
     }
   }
 
+  // Cùng cấu trúc file agy tự ghi khi đăng nhập Google (người dùng cung cấp, chỉ tên trường).
   const tokenPayload = {
-    access_token: tokenData.accessToken || '',
-    token_type: tokenData.tokenType || 'Bearer',
-    refresh_token: tokenData.refreshToken,
-    expiry: tokenData.expiry || new Date(Date.now() + 3600 * 1000).toISOString(),
+    token: {
+      access_token: tokenData.accessToken || '',
+      token_type: tokenData.tokenType || 'Bearer',
+      refresh_token: tokenData.refreshToken,
+      expiry: tokenData.expiry || new Date(Date.now() + 3600 * 1000).toISOString(),
+      expires_in: tokenData.expiresIn ?? 3600,
+    },
+    auth_method: 'consumer',
+    ...(tokenData.idToken ? { id_token: tokenData.idToken } : {}),
   };
 
   const tokenFilePath = path.join(cliDir, 'antigravity-oauth-token');

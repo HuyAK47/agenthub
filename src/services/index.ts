@@ -1520,7 +1520,7 @@ export class AppService {
       }
 
       // Xác thực và đổi access_token qua Google OAuth
-      let exchanged: { accessToken: string; tokenType: string; refreshToken: string; expiry: string };
+      let exchanged: Awaited<ReturnType<typeof exchangeAgyRefreshToken>>;
       try {
         exchanged = await exchangeAgyRefreshToken(refreshToken);
       } catch (err: unknown) {

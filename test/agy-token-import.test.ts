@@ -409,5 +409,27 @@ describe('Antigravity Token Import from Cockpit', () => {
     expect(result).toEqual({ skip: 'no_access_token', fieldNames: ['secretBlob', 'meta.kind'] });
     expect(JSON.stringify(result)).not.toContain('abc123');
   });
+
+  it('writes the token file in the same structure agy itself uses', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes('/token')
+        ? { access_token: 'at_1', expires_in: 3599, token_type: 'Bearer', id_token: 'idt_1' }
+        : {},
+    }) as unknown as Response);
+
+    await ctx.service.importAgyTokens({ email: 'shape@example.com', refresh_token: 'rt_1' });
+
+    const file = path.join(agyHomesDir, 'shape', '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(saved).toEqual({
+      token: { access_token: 'at_1', token_type: 'Bearer', refresh_token: 'rt_1', expiry: expect.any(String), expires_in: 3599 },
+      auth_method: 'consumer',
+      id_token: 'idt_1',
+    });
+    expect(Number.isFinite(Date.parse(saved.token.expiry))).toBe(true);
+    expect(readAgyAccessToken(path.join(agyHomesDir, 'shape'))).toBe('at_1');
+  });
 });
 
