@@ -503,6 +503,18 @@ export class ChatService {
     return this.chatSessionRepo.get(id)!;
   }
 
+  /** Apply a changed brain permission on the next turn. Running processes are closed safely. */
+  setSessionMode(id: string, mode: 'safe' | 'full'): ChatSessionRow {
+    const session = this.chatSessionRepo.get(id);
+    if (!session) throw new HttpError(404, 'not_found', `Phiên trò chuyện "${id}" không tồn tại`);
+    if (session.mode === mode) return session;
+    if (session.busy === 1 || this.runningTurns.has(id)) throw new HttpError(409, 'conflict', 'Không thể đổi quyền khi brain đang chạy');
+    const proc = this.persistentProcesses.get(id);
+    if (proc) this.closePersistentProcess(proc);
+    this.chatSessionRepo.updateMode(id, mode);
+    return this.chatSessionRepo.get(id)!;
+  }
+
   private validateSessionOptions(body: {
     mode?: 'safe' | 'full';
     model?: string;

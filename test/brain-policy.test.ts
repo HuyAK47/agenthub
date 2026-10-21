@@ -143,4 +143,14 @@ describe('BrainPolicy', () => {
     expect(projectBrainPolicy(project('inherit'), suggestGlobal).decide(review)).toBeNull();
     expect(projectBrainPolicy(project('inherit'), autoGlobal).decide(review)?.action).toBe('allow');
   });
+
+  it('trusted permission allows project edits and commits while standard asks', () => {
+    const { root } = make();
+    const trusted = new BrainPolicy({ roots: [root], permissions: 'trusted' });
+    const standard = new BrainPolicy({ roots: [root], permissions: 'standard' });
+    expect(trusted.decide({ toolName: 'Write', input: { file_path: path.join(root, 'new.ts'), cwd: root } })?.action).toBe('allow');
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'git commit -am update', cwd: root } })?.action).toBe('allow');
+    expect(standard.decide({ toolName: 'Write', input: { file_path: path.join(root, 'new.ts'), cwd: root } })).toBeNull();
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'sudo ls', cwd: root } })?.action).toBe('deny');
+  });
 });

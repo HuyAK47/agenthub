@@ -129,6 +129,7 @@ export function createContext(
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
     mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
+    permissions: config.brain.permissions,
   });
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);

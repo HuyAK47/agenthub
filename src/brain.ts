@@ -5,7 +5,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { AgentHubConfig } from './config.js';
 import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
-import { effectiveBrainMode } from './brain/mode.js';
+import { effectiveBrainMode, effectiveBrainPermission } from './brain/mode.js';
 import { readExistingToken, getTokenPath } from './auth.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { generateDigest, forwardDecisionToBrain, DigestData } from './brain/digest.js';
@@ -282,6 +282,7 @@ export function registerBrainRoutes(
         projectId,
         projectName: project?.name || 'Hệ thống',
         mode: effectiveBrainMode(projectId, project, appService.config.brain),
+        permissions: effectiveBrainPermission(project, appService.config.brain),
         sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
         state: session?.state || 'idle',
         queued: usage?.queued || false,

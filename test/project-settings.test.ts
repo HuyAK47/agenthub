@@ -16,7 +16,7 @@ import {
 describe('project settings parsing', () => {
   it('defaults reproduce the behaviour from before settings existed', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
-      brain: { mode: 'inherit' },
+      brain: { mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
       integration: { enabled: false },
       references: [],
@@ -45,7 +45,7 @@ describe('project settings parsing', () => {
       brain: { dailyTokenBudget: 5000 },
       references: [{ name: 'glossary', path: '/data/glossary.md', inject: true }],
     });
-    expect(next.brain).toEqual({ mode: 'auto', dailyTokenBudget: 5000 });
+    expect(next.brain).toEqual({ mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
     expect(next.references).toEqual([{ name: 'glossary', path: '/data/glossary.md', inject: true }]);
     expect(next.worktree).toEqual(DEFAULT_PROJECT_SETTINGS.worktree);
   });

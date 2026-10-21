@@ -27,6 +27,7 @@ export const ProjectSettingsSchema = z.object({
      *   ignores this project's events and only notifies.
      */
     mode: z.enum(['inherit', 'off', 'suggest', 'auto', 'external']).default('inherit'),
+    permissions: z.enum(['inherit', 'standard', 'trusted', 'full']).default('inherit'),
     /** Overrides the global limits for this project's brain; unset = global value. */
     dailyTokenBudget: z.number().int().min(0).optional(),
     maxTurnsPerHour: z.number().int().positive().optional(),

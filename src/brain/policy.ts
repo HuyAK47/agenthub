@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { BrainConfig } from '../config.js';
 import { projectSettings } from '../projects/settings.js';
-import { effectiveBrainModeFromSettings } from './mode.js';
+import { effectiveBrainModeFromSettings, effectiveBrainPermission, type BrainPermission } from './mode.js';
 
 export type BrainPolicyAction = 'allow' | 'deny';
 export interface BrainPolicyDecision {
@@ -21,11 +21,12 @@ export interface BrainPolicyOptions {
   readOnlyRoots?: string[];
   extraPatterns?: RegExp[];
   mode?: 'suggest' | 'auto';
+  permissions?: BrainPermission;
 }
 
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
 const GIT_COMMANDS = new Set(['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'merge-base', 'merge-tree']);
-const DENY_COMMAND = /(?:^|[\s/])(?:systemctl|launchctl|docker|sudo)(?:$|\s)|rm\s+-rf|prisma\s+migrate\s+reset|db\s+push\s+--accept-data-loss|git\s+push\s+--force/i;
+const DENY_COMMAND = /(?:^|[\s/])(?:systemctl|launchctl|docker|podman|sudo|su|ssh|scp)(?:$|\s)|rm\s+-rf|prisma\s+migrate\s+reset|db\s+push\s+--accept-data-loss|git\s+push\s+--force/i;
 const SECRET_PATH = /(?:^|\/)(?:auth\.json|\.credentials\.json|.*oauth.*token.*|\.agenthub\/token|secrets)(?:\/|$)/i;
 
 function realPath(value: string): string | undefined {
@@ -173,7 +174,7 @@ function allowedGit(args: string[]): boolean {
   return !options.includes('--hard');
 }
 
-function allowedCommand(command: string, roots: string[], cwd: string): boolean {
+function allowedCommand(command: string, roots: string[], cwd: string, permissions: BrainPermission): boolean {
   const parts = splitShell(command);
   if (!parts || parts.some((part) => !part.trim())) return false;
   return parts.every((part) => {
@@ -182,12 +183,18 @@ function allowedCommand(command: string, roots: string[], cwd: string): boolean 
     if (!parsed || parsed.words.length === 0 || parsed.redirects.some((target) => !safePath(target, roots, cwd))) return false;
     const executable = path.basename(parsed.words[0]);
     const args = parsed.words.slice(1);
-    if (executable === 'git') return allowedGit(args);
+    if (executable === 'git') {
+      if (permissions === 'standard') return allowedGit(args);
+      if (args[0] === 'push' && args.some((arg) => /force/.test(arg))) return false;
+      return ['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'merge-base', 'merge-tree', 'add', 'commit', 'checkout', 'switch', 'pull', 'fetch', 'push'].includes(args[0] || '') && !args.includes('--hard');
+    }
     if (executable === 'npm' || executable === 'pnpm') {
       const script = args[0] === 'run' ? args[1] : args[0];
-      return ['test', 'lint', 'typecheck', 'build', 'build:web'].includes(script || '');
+      return permissions !== 'standard' && ['test', 'lint', 'typecheck', 'build', 'build:web', 'install', 'exec'].includes(script || '')
+        || permissions === 'standard' && ['test', 'lint', 'typecheck', 'build', 'build:web'].includes(script || '');
     }
     if (executable === 'npx') return (args[0] === 'vitest' && args[1] === 'run') || (args[0] === 'tsc' && args[1] === '--noEmit');
+    if (executable === 'node') return permissions !== 'standard' && args.every((arg) => safePath(arg, roots, cwd));
     if (executable === 'cat' || executable === 'head' || executable === 'tail' || executable === 'wc' || executable === 'ls') {
       if (executable === 'tail' && args.some((arg) => arg === '-f' || arg === '--follow' || arg.startsWith('--follow='))) return false;
       return args.filter((arg) => !arg.startsWith('-') && !/^\d+$/.test(arg)).every((arg) => safePath(arg, roots, cwd));
@@ -205,8 +212,10 @@ export class BrainPolicy {
     this.readOnlyRoots = (options.readOnlyRoots || []).filter((root) => Boolean(realPath(root)));
     this.extraPatterns = options.extraPatterns || [];
     this.mode = options.mode || 'auto';
+    this.permissions = options.permissions || 'standard';
   }
   private extraPatterns: RegExp[];
+  private permissions: BrainPermission;
 
   decide(request: BrainPolicyRequest): BrainPolicyDecision | null {
     const { toolName, input } = request;
@@ -240,13 +249,15 @@ export class BrainPolicy {
         ? { action: 'allow', reason: 'policy:auto_allow', message: 'Đọc trong phạm vi project/worktree' }
         : null;
     }
-    if (toolName === 'Write' || toolName === 'Edit') {
+    if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
       if (!paths.every((value) => safePath(value, this.roots, cwd))) {
         return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối ghi ngoài phạm vi project/worktree' };
       }
+      if (this.permissions === 'standard') return null;
+      return { action: 'allow', reason: 'policy:auto_allow', message: 'Ghi trong phạm vi project/worktree được policy trusted cho phép' };
     }
     if (!this.roots.some((root) => within(cwd, root))) return null;
-    if (toolName === 'Bash' && allowedCommand(command, this.roots, cwd)) {
+    if (toolName === 'Bash' && allowedCommand(command, this.roots, cwd, this.permissions)) {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'Lệnh Bash an toàn trong phạm vi project/worktree' };
     }
     return null;
@@ -260,7 +271,7 @@ export class BrainPolicy {
  */
 export function projectBrainPolicy(
   project: { id: string; path: string; settings?: string | null },
-  config: { worktreesDir: string; brain: Pick<BrainConfig, 'mode' | 'policy'> },
+  config: { worktreesDir: string; brain: Pick<BrainConfig, 'mode' | 'policy' | 'permissions'> },
 ): BrainPolicy {
   const settings = projectSettings(project);
   return new BrainPolicy({
@@ -270,5 +281,6 @@ export function projectBrainPolicy(
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
     mode: effectiveBrainModeFromSettings(settings, config.brain) === 'auto' ? 'auto' : 'suggest',
+    permissions: effectiveBrainPermission(project, config.brain),
   });
 }

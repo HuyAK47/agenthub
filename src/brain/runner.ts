@@ -4,7 +4,7 @@ import { BrainTurnRepo, ChatSessionRepo, ProfileRepo } from '../db/index.js';
 import { resolveClaudeProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
-import { effectiveBrainMode, type EffectiveBrainMode } from './mode.js';
+import { effectiveBrainMode, effectiveBrainPermission, type EffectiveBrainMode } from './mode.js';
 import { projectSettings } from '../projects/settings.js';
 
 const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
@@ -151,10 +151,17 @@ export class BrainRunner {
 
   private ensureSession(projectId: string | null) {
     const id = this.sessionIdFor(projectId);
-    const existing = this.opts.chatSessionRepo.get(id) || this.opts.chatSessionRepo.getByKind('brain', projectId);
-    if (existing) return existing;
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
-    this.opts.chatService.getOrCreateSession(id, { title: project ? `Bộ não · ${project.name}` : 'Bộ não', mode: 'safe', model: this.opts.config.model, profileName: this.profileName(), kind: 'brain', projectId } as never);
+    const permission = effectiveBrainPermission(project, this.opts.config);
+    const mode = permission === 'full' ? 'full' : 'safe';
+    const existing = this.opts.chatSessionRepo.get(id) || this.opts.chatSessionRepo.getByKind('brain', projectId);
+    if (existing) {
+      if (existing.mode !== mode && existing.busy !== 1) {
+        (this.opts.chatService as ChatService & { setSessionMode?: (id: string, mode: 'safe' | 'full') => unknown }).setSessionMode?.(id, mode);
+      }
+      return this.opts.chatSessionRepo.get(id) || existing;
+    }
+    this.opts.chatService.getOrCreateSession(id, { title: project ? `Bộ não · ${project.name}` : 'Bộ não', mode, model: this.opts.config.model, profileName: this.profileName(), kind: 'brain', projectId } as never);
     this.opts.chatSessionRepo.updatePinned(id, 1);
     return this.opts.chatSessionRepo.get(id)!;
   }

@@ -203,7 +203,15 @@ export async function createServer(
 
   fastify.patch('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return service.updateProject(id, req.body);
+    const body = (req.body || {}) as { settings?: { brain?: { permissions?: string } }; confirm?: boolean };
+    if (body.settings?.brain?.permissions === 'full' && body.confirm !== true) {
+      throw new HttpError(409, 'confirmation_required', 'Cấp Toàn quyền cần confirm: true vì cho phép Claude chạy mọi lệnh');
+    }
+    const result = service.updateProject(id, req.body);
+    if (body.settings?.brain?.permissions) {
+      service.scheduler.getEventBus().emit('brain.trust_changed', undefined, { projectId: id, permissions: body.settings.brain.permissions });
+    }
+    return result;
   });
 
   fastify.delete('/api/projects/:id', async (req: FastifyRequest) => {
@@ -444,6 +452,10 @@ export async function createServer(
   });
 
   fastify.put('/api/config', async (req: FastifyRequest) => {
+    const body = (req.body || {}) as { brain?: { permissions?: string }; confirm?: boolean };
+    if (body.brain?.permissions === 'full' && body.confirm !== true) {
+      throw new HttpError(409, 'confirmation_required', 'Cấp Toàn quyền mặc định cần confirm: true');
+    }
     return service.updateConfig(req.body);
   });
   fastify.get('/api/models', async () => service.getModelOptions());

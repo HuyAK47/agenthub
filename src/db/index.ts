@@ -1481,6 +1481,10 @@ export class ChatSessionRepo {
     this.db.prepare("UPDATE chat_sessions SET model = ?, updatedAt = datetime('now') WHERE id = ?").run(model, id);
   }
 
+  updateMode(id: string, mode: 'safe' | 'full'): void {
+    this.db.prepare("UPDATE chat_sessions SET mode = ?, updatedAt = datetime('now') WHERE id = ?").run(mode, id);
+  }
+
   updateTitle(id: string, title: string): void {
     this.db
       .prepare("UPDATE chat_sessions SET title = ?, updatedAt = datetime('now') WHERE id = ?")
