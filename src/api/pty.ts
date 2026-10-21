@@ -214,6 +214,8 @@ export class PtyManager {
     const timer = setTimeout(() => {
       this.emailRefreshTimers.delete(timer);
       this.service.refreshProfileEmail(profileName);
+      // Đăng nhập agy qua terminal xong thì lấy luôn ảnh Google (DEC-006), không đợi bấm Làm mới.
+      if (profile?.engine === 'agy') void this.service.syncAgyAvatarFromToken(profileName).catch(() => null);
     }, 2000);
     timer.unref?.();
     this.emailRefreshTimers.add(timer);

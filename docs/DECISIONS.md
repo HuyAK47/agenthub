@@ -69,7 +69,7 @@
 - **Quyết định**: Cho phép `readAgyAccessToken()` (`src/profiles/agyToken.ts`) đọc file token, với giới hạn:
   - Chỉ hồ sơ `engine=agy`, `kind=isolated`; không bao giờ chạm keyring hay HOME thật.
   - Chỉ lấy trường `access_token`, và chỉ khi `expiry` còn hạn. **Không** dùng `refresh_token`, **không** tự đổi token, **không** ghi lại file token.
-  - Chỉ chạy khi người dùng bấm "Kiểm tra" hồ sơ (`runProfileCheck`) hoặc nút "Làm mới" quota (`refreshUsage`), không chạy nền theo chu kỳ.
+  - Chỉ chạy khi người dùng bấm "Kiểm tra" hồ sơ (`runProfileCheck`) hoặc nút "Làm mới" quota (`refreshUsage`), hoặc ngay khi phiên đăng nhập terminal của hồ sơ đó kết thúc; không chạy nền theo chu kỳ.
   - Access token chỉ được gửi tới `https://www.googleapis.com/oauth2/v3/userinfo`, không log, không lưu DB, không trả qua API.
   - Nếu email Google trả về khác email của hồ sơ thì bỏ qua ảnh.
 - **Hệ quả**: Hồ sơ terminal có ảnh sau lần "Kiểm tra" hoặc "Làm mới" đầu tiên khi token còn hạn (agy làm mới token mỗi lần chạy). Token hết hạn thì giữ ảnh cũ hoặc ảnh chữ cái. Mọi quy tắc khác của PLAN 2.1 giữ nguyên.

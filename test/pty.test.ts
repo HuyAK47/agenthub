@@ -204,4 +204,16 @@ describe('AgentHub PTY Login and WebSocket', () => {
       expect(await runRelogin(true)).toEqual(['/login', '/logout', '/login']);
     }, 20_000);
   });
+
+  it('fetches the Google avatar right after an agy login session ends', async () => {
+    process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-logged-in.mjs');
+    const syncSpy = vi.spyOn(ctx.service, 'syncAgyAvatarFromToken').mockResolvedValue({ avatarUrl: null, message: '' });
+    const manager = new PtyManager(ctx.service);
+    const sessionId = manager.createSession('avatar_after_login');
+    manager.closeSession(sessionId);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_300));
+    expect(syncSpy).toHaveBeenCalledWith('avatar_after_login');
+    manager.stop();
+  });
 });
