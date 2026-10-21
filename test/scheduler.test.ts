@@ -1793,3 +1793,35 @@ describe('Profile selection: email load spreading and remaining quota priority',
   });
 });
 
+
+describe('Run metrics after a normal worker exit', () => {
+  beforeEach(setupTestEnv);
+  afterEach(teardownTestEnv);
+
+  it('records Codex token usage before handing the DONE marker to recovery', async () => {
+    const { RunMetricsRepo } = await import('../src/db/index.js');
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    profileRepo.upsert({ name: 'codex', engine: 'codex', kind: 'codex', home: tmpDir, email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/tok', projectId: 'test-project', slug: 'tok', title: 'Tokens', status: 'queued', modelChain: JSON.stringify(['codex:gpt-test']) });
+
+    class CodexFake extends FakeEngine { id = 'codex' as unknown as 'agy'; }
+    const fake = new CodexFake(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const metrics = new RunMetricsRepo(db);
+    const prevMode = process.env.FAKE_MODE;
+    process.env.FAKE_MODE = 'done-tokens';
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['codex', fake as unknown as Engine]]), undefined, undefined, undefined, metrics);
+    try {
+      scheduler.tick();
+      await vi.waitFor(() => {
+        const run = runRepo.getByTask('test-project/tok')[0];
+        expect(run).toBeDefined();
+        expect(metrics.get(run.id)?.tokensUsed).toBe(1234);
+      }, { timeout: 20000 });
+    } finally {
+      scheduler.stop();
+      if (prevMode === undefined) delete process.env.FAKE_MODE; else process.env.FAKE_MODE = prevMode;
+    }
+  }, 30000);
+});

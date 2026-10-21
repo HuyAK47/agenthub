@@ -18,10 +18,6 @@ import {
   isSystemIncident,
 } from './brain/digest.js';
 
-function statusBrainWaiting(brain: { sessions?: Array<{ state: string; lastActivityAt: string }> } | undefined, now: number): boolean {
-  return Boolean(brain?.sessions?.some((session) => session.state === 'waiting' && now - Date.parse(session.lastActivityAt) > 5 * 60_000));
-}
-
 const execFileAsync = promisify(execFile);
 
 export type GitDiffFn = (
@@ -196,6 +192,30 @@ export function readTelegramToken(tokenPath: string): string | null {
     return null;
   }
 }
+
+
+/** Shown by Telegram when the user types "/" (registered with setMyCommands on start). */
+export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string }> = [
+  { command: 'brain', description: 'Bộ não đang làm gì · /brain mode off|suggest|auto' },
+  { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
+  { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
+  { command: 'task', description: 'Chi tiết một task: /task <id>' },
+  { command: 'newtask', description: 'Tạo task mới (hỏi từng bước)' },
+  { command: 'plan', description: 'Lên kế hoạch: /plan <project> <mục tiêu>' },
+  { command: 'drafts', description: 'Task/đợt nháp chờ giao' },
+  { command: 'approve', description: 'Duyệt & merge: /approve <id>' },
+  { command: 'reject', description: 'Trả về: /reject <id> <nhận xét>' },
+  { command: 'retry', description: 'Chạy lại task: /retry <id>' },
+  { command: 'log', description: 'Xem log cuối của task: /log <id>' },
+  { command: 'cancel', description: 'Huỷ task: /cancel <id>' },
+  { command: 'pause', description: 'Tạm dừng giao task mới' },
+  { command: 'resume', description: 'Tiếp tục giao task' },
+  { command: 'new', description: 'Mở phiên chat mới với Claude' },
+  { command: 'stop', description: 'Dừng câu trả lời đang chạy' },
+  { command: 'compact', description: 'Nén ngữ cảnh phiên chat' },
+  { command: 'help', description: 'Hướng dẫn sử dụng' },
+];
 
 export class TelegramBotService {
   private config: AgentHubConfig;
@@ -378,6 +398,26 @@ export class TelegramBotService {
       this.timerInterval = setInterval(() => {
         void this.periodicCheck();
       }, 60_000);
+    }
+    void this.registerCommands();
+  }
+
+  /** Register the "/" command menu with Telegram; best effort, never blocks or throws. */
+  private async registerCommands(): Promise<void> {
+    // Network to Telegram can be flaky right after boot: retry a few times.
+    for (let attempt = 1; attempt <= 5 && this.running && this.token; attempt += 1) {
+      try {
+        const res = await this.fetchFn(`https://api.telegram.org/bot${this.token}/setMyCommands`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
+        });
+        if (res.ok) return;
+        console.error(`[telegram] setMyCommands failed with status ${res.status}`);
+      } catch (error) {
+        console.error(`[telegram] setMyCommands failed: ${redactTelegramToken(error, this.token)}`);
+      }
+      await this.sleepFn(30_000 * attempt);
     }
   }
 
@@ -2152,11 +2192,16 @@ export class TelegramBotService {
 
       case 'brain.updated': {
         const currentBrain = this.service.getStatus().brain;
-        const waitingIds = new Set((currentBrain?.sessions || []).filter((session) => session.state === 'waiting' && this.now() - Date.parse(session.lastActivityAt) > 5 * 60_000).map((session) => session.sessionId));
+        // Only Claude Code sessions outside the hub (e.g. an editor) can be silently waiting:
+        // hub chat / brain replies already reached the user, so they never trigger this.
+        const waiting = (currentBrain?.sessions || []).filter((session) => !session.isHubChat && session.state === 'waiting' && this.now() - Date.parse(session.lastActivityAt) > 5 * 60_000);
+        const waitingIds = new Set(waiting.map((session) => session.sessionId));
         for (const id of [...this.brainWaitingNotified]) if (!waitingIds.has(id)) this.brainWaitingNotified.delete(id);
-        if (notify.brainWaiting === false || !statusBrainWaiting(currentBrain, this.now()) || [...waitingIds].every((id) => this.brainWaitingNotified.has(id))) return;
-        for (const id of waitingIds) this.brainWaitingNotified.add(id);
-        this.broadcastMessage('🧠 <b>Claude đang chờ bạn trả lời</b>\nDùng /brain để xem phiên và yêu cầu gần nhất.');
+        const fresh = waiting.filter((session) => !this.brainWaitingNotified.has(session.sessionId));
+        if (notify.brainWaiting === false || fresh.length === 0) return;
+        for (const session of fresh) this.brainWaitingNotified.add(session.sessionId);
+        const lines = fresh.map((session) => `• <b>${this.escapeHtml(session.title)}</b>${session.lastUserRequest ? `\n  Yêu cầu cuối: ${this.escapeHtml(session.lastUserRequest)}` : ''}`).join('\n');
+        this.broadcastMessage(`🧠 <b>Phiên Claude Code đang chờ bạn trả lời</b> (ngoài hub, quá 5 phút)\n${lines}`);
         break;
       }
 

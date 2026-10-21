@@ -1160,11 +1160,6 @@ export class Scheduler {
       const task = this.taskRepo.get(taskId);
       if (!task) return;
 
-      // A worker may have exited while the daemon was still alive. Preserve
-      // completed work exactly as startup recovery does.
-      const persistedRun = this.runRepo.get(rt.runId);
-      if (persistedRun && this.recoverFinishedWork(persistedRun)) return;
-
       if (task.worktreePath) {
         await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
       }
@@ -1287,6 +1282,12 @@ export class Scheduler {
         durationMs,
       });
     }
+
+    // A worker may have exited while the daemon was still alive. Preserve completed work exactly
+    // as startup recovery does — but only after the run's metrics (tokens, lines, duration) are
+    // recorded: returning earlier dropped token usage for every finished run.
+    const persistedRun = this.runRepo.get(rt.runId);
+    if (persistedRun && this.recoverFinishedWork(persistedRun)) return;
 
     if (markers.done) {
       this.runRepo.finish(rt.runId, 'done');

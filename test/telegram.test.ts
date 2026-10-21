@@ -602,7 +602,19 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
 
       const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls).toHaveLength(1);
-      expect(calls[0].body?.text).toContain('Claude đang chờ bạn trả lời');
+      expect(calls[0].body?.text).toContain('đang chờ bạn trả lời');
+      expect(calls[0].body?.text).toContain('Chờ phản hồi');
+    });
+
+    it('does not notify for hub chat / brain sessions that already answered in Telegram', () => {
+      currentTime = Date.now();
+      ctx.claudeSessionRepo.upsert({
+        sessionId: 'hub-chat-waiting', cwd: tmpDir, title: 'Bộ não', isHubChat: 1,
+        lastAt: new Date(currentTime - 6 * 60_000).toISOString(), lastEventKind: 'assistant_text',
+      });
+      const handleChatEvent = (bot as unknown as { handleEvent(type: string, taskId?: string, payload?: unknown): void }).handleEvent.bind(bot);
+      handleChatEvent('brain.updated');
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
     });
 
     it('/tasks lists tasks and filters by status', async () => {
@@ -1896,5 +1908,19 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     // Running again in the same day doesn't double-trigger
     const secondTrigger = await bot.checkScheduledDigest();
     expect(secondTrigger).toBe(false);
+  });
+});
+
+describe('Menu lệnh Telegram', () => {
+  it('mọi lệnh trong menu đều có xử lý thật và mô tả hợp lệ', async () => {
+    const { TELEGRAM_BOT_COMMANDS } = await import('../src/telegram.js');
+    const fsMod = await import('node:fs');
+    const src = fsMod.readFileSync(new URL('../src/telegram.ts', import.meta.url), 'utf8');
+    for (const { command, description } of TELEGRAM_BOT_COMMANDS) {
+      expect(command).toMatch(/^[a-z0-9_]{1,32}$/);
+      expect(description.length).toBeGreaterThan(2);
+      expect(description.length).toBeLessThanOrEqual(256);
+      expect(src).toContain(`case '/${command}'`);
+    }
   });
 });
