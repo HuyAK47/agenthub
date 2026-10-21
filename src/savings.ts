@@ -188,7 +188,8 @@ export async function recalculateTaskLines(
       }
       runMetricsRepo.clearOtherRunsLines(taskId, targetRun.id);
     }
-  } catch {
+  } catch (error) {
+    console.warn('[savings] recalculateTaskLines failed:', error);
     return null;
   }
 
