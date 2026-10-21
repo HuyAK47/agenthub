@@ -235,6 +235,8 @@ export class TelegramBotService {
   private projectRepo: ProjectRepo;
   private profileRepo?: ProfileRepo;
   private quotaMarkRepo?: QuotaMarkRepo;
+  private ciRepo?: CiRepo;
+  private lastSentCi = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
   private sleepFn: (ms: number) => Promise<void>;
@@ -288,6 +290,7 @@ export class TelegramBotService {
     this.projectRepo = opts.projectRepo;
     this.profileRepo = opts.profileRepo || (opts.service as unknown as { profileRepo?: ProfileRepo })?.profileRepo;
     this.quotaMarkRepo = opts.quotaMarkRepo;
+    this.ciRepo = opts.ciRepo;
     this.fetchFn = opts.fetch || globalThis.fetch;
     this.now = opts.now || (() => Date.now());
     this.sleepFn = opts.sleep || opts.sleepFn || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -517,6 +520,7 @@ export class TelegramBotService {
       quotaMarkRepo: this.quotaMarkRepo,
       eventRepo: (this.service as unknown as { eventRepo?: EventRepo })?.eventRepo,
       decisionTracker: this.decisionTracker,
+      ciRepo: this.ciRepo,
       now: () => this.now(),
       accumulatedQuietHoursMessages: this.quietHoursQueue.map((q) => q.text),
       port: this.config.port,
@@ -2659,6 +2663,8 @@ export class TelegramBotService {
         type === 'claude.quota_exhausted' ||
         type === 'hub.restart_failed' ||
         type === 'system.error' ||
+        type === 'ci.failed' ||
+        type === 'ci.passed' ||
         allExhausted;
 
       if (!isAllowedInAuto) {
@@ -2969,6 +2975,72 @@ export class TelegramBotService {
         this.broadcastMessage(`🔑 <b>Tài khoản ${this.escapeHtml(name)}</b> cần đăng nhập lại.`);
         break;
       }
+
+      case 'ci.failed': {
+        const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || null;
+        const workflow = (typeof p.workflow === 'string' ? p.workflow : '') || 'CI';
+        const sha = typeof p.sha === 'string' ? p.sha.slice(0, 7) : '';
+        const throttleKey = `ci:${projId}:${workflow}`;
+        const last = this.lastSentCi.get(throttleKey) || 0;
+        if (now - last < 3600_000) {
+          break;
+        }
+        this.lastSentCi.set(throttleKey, now);
+
+        const prefix = this.projectPrefix(projId);
+        const jobs = Array.isArray(p.jobs)
+          ? (p.jobs as Array<{ name?: string; annotations?: Array<{ message?: string; path?: string; start_line?: number }> }>)
+          : [];
+        const annotations = Array.isArray(p.annotations)
+          ? (p.annotations as Array<{ message?: string; path?: string; start_line?: number }>)
+          : [];
+
+        let text = `${prefix}⚠️ <b>CI thất bại: ${this.escapeHtml(workflow)}</b>`;
+        if (sha) text += ` (<code>${this.escapeHtml(sha)}</code>)`;
+        if (jobs.length > 0) {
+          text += '\n\n<b>Job lỗi:</b>\n';
+          for (const j of jobs) {
+            text += `• <b>${this.escapeHtml(j.name || 'Job')}</b>\n`;
+          }
+        }
+        if (annotations.length > 0) {
+          text += '\n<b>Chi tiết lỗi:</b>\n';
+          for (const a of annotations.slice(0, 5)) {
+            const loc = a.path ? ` (${this.escapeHtml(a.path)}${a.start_line ? `:${a.start_line}` : ''})` : '';
+            text += `• ${this.escapeHtml(a.message || 'Lỗi')}${loc}\n`;
+          }
+          if (annotations.length > 5) {
+            text += `<i>... và ${annotations.length - 5} chú thích lỗi khác.</i>\n`;
+          }
+        }
+
+        const keyboard: InlineKeyboardButton[][] = [];
+        if (typeof p.url === 'string' && p.url) {
+          keyboard.push([{ text: '🔗 Xem trên GitHub', url: p.url }]);
+        }
+        this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
+        break;
+      }
+
+      case 'ci.passed': {
+        if (p.recoveredFromFailure !== true && p.previousConclusion !== 'failure') {
+          break;
+        }
+        const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || null;
+        const workflow = (typeof p.workflow === 'string' ? p.workflow : '') || 'CI';
+        const sha = typeof p.sha === 'string' ? p.sha.slice(0, 7) : '';
+        const prefix = this.projectPrefix(projId);
+
+        let text = `${prefix}🟢 <b>CI đã xanh: ${this.escapeHtml(workflow)}</b>`;
+        if (sha) text += ` (<code>${this.escapeHtml(sha)}</code>)`;
+
+        const keyboard: InlineKeyboardButton[][] = [];
+        if (typeof p.url === 'string' && p.url) {
+          keyboard.push([{ text: '🔗 Xem trên GitHub', url: p.url }]);
+        }
+        this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
+        break;
+      }
     }
   }
 
@@ -3229,6 +3301,10 @@ export class TelegramBotService {
         return minimal ? `${prefix}Task bị chặn` : `${prefix}Task ${this.resolveTaskTitle(taskId, p)} bị chặn`;
       case 'batch.created':
         return minimal ? `${prefix}Đợt task mới` : `${prefix}Đợt task mới: ${p?.title || 'Kế hoạch đề xuất'}`;
+      case 'ci.failed':
+        return minimal ? `${prefix}CI thất bại` : `${prefix}CI thất bại: ${p?.workflow || 'CI'}`;
+      case 'ci.passed':
+        return minimal ? `${prefix}CI đã xanh` : `${prefix}CI đã xanh: ${p?.workflow || 'CI'}`;
       case 'quota.exhausted':
         return `Hồ sơ ${p?.profile || p?.profileName || 'tài khoản'} hết quota ${p?.family || ''}`;
       default:

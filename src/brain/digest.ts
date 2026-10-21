@@ -1,4 +1,4 @@
-import { TaskRepo, ProjectRepo, ProfileRepo, QuotaMarkRepo, EventRepo } from '../db/index.js';
+import { TaskRepo, ProjectRepo, ProfileRepo, QuotaMarkRepo, EventRepo, CiRepo } from '../db/index.js';
 import type { QuietHoursConfig } from '../config.js';
 import type { ChatService } from '../chat/service.js';
 import { projectSettings } from '../projects/settings.js';
@@ -217,6 +217,7 @@ export interface GenerateDigestOptions {
   quotaMarkRepo?: QuotaMarkRepo;
   eventRepo?: EventRepo;
   decisionTracker?: DecisionTracker;
+  ciRepo?: CiRepo;
   now?: () => number;
   accumulatedQuietHoursMessages?: string[];
   port?: number;
@@ -532,11 +533,45 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
     }
   }
 
+  // 5. CI status per project
+  const ciLines: string[] = [];
+  const ciMarkdownLines: string[] = [];
+  if (projects.length > 0) {
+    for (const proj of projects) {
+      const label = proj.name || proj.id;
+      const latestRun = opts.ciRepo?.getLatest(proj.id);
+      let statusText = 'Chưa có run';
+      let icon = '⚪️';
+      if (latestRun) {
+        const wf = latestRun.workflow || 'CI';
+        const sha = latestRun.sha ? ` (${latestRun.sha.slice(0, 7)})` : '';
+        if (latestRun.status !== 'completed') {
+          icon = '🟡';
+          statusText = `Đang chạy · ${wf}${sha}`;
+        } else if (latestRun.conclusion === 'success') {
+          icon = '🟢';
+          statusText = `Đạt · ${wf}${sha}`;
+        } else if (latestRun.conclusion === 'failure') {
+          icon = '🔴';
+          statusText = `Thất bại · ${wf}${sha}`;
+        } else {
+          icon = '⚪️';
+          statusText = `${latestRun.conclusion || latestRun.status} · ${wf}${sha}`;
+        }
+      }
+      ciLines.push(`• <b>[${escapeHtml(label)}]</b>: ${icon} ${escapeHtml(statusText)}`);
+      ciMarkdownLines.push(`- **[${label}]**: ${icon} ${statusText}`);
+    }
+  }
+  const ciSection = ciLines.length > 0 ? ciLines.join('\n') : '• <i>Chưa có dự án nào</i>';
+  const markdownCiSection = ciMarkdownLines.length > 0 ? ciMarkdownLines.join('\n') : '_Chưa có dự án nào_';
+
   const text =
     `📋 <b>TÓM TẮT HỆ THỐNG AGENTHUB</b>\n` +
     `<i>${dateStr}</i>\n\n` +
     `📊 <b>Tiến độ công việc:</b>\n${taskLines.join('\n')}\n\n` +
     `🔀 <b>Đã merge (24h):</b>\n${mergedSection}\n\n` +
+    `🚦 <b>Trạng thái CI:</b>\n${ciSection}\n\n` +
     `⏳ <b>Quota tài khoản:</b>\n${quotaSection}\n\n` +
     `📌 <b>Việc cần quyết định (${decisions.length}):</b>\n${decisionsSection}${quietSection}`;
 
@@ -547,6 +582,8 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
     `${markdownTaskLines}\n\n` +
     `### Đã merge (24h)\n` +
     `${markdownMergedSection}\n\n` +
+    `### Trạng thái CI\n` +
+    `${markdownCiSection}\n\n` +
     `### Quota tài khoản\n` +
     `- ${quotaSummary}\n` +
     (exhaustedList.length > 0
