@@ -250,6 +250,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     knowledgeRepo,
     taskBatchRepo,
     setupManager,
+    brainRunner,
   );
 
   const notifier = new NotificationService({

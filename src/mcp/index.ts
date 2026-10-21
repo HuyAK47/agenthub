@@ -384,7 +384,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         if (visibleProjects.length === 0) {
           return { content: [{ type: 'text', text: 'Chưa có project nào được đăng ký.' }] };
         }
-        const lines = [`Projects (${projects.length}):`];
+        const lines = [`Projects (${visibleProjects.length}):`];
         for (const p of visibleProjects) {
           lines.push(
             `- ${p.id} (${p.name}): ${p.path} (defaultBranch: ${p.defaultBranch || 'main'}, maxParallel: ${p.maxParallel})`,
@@ -698,6 +698,9 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        const scope = scopedProject();
+        const batch = await callApi<{ projectId: string }>('GET', `/api/batches/${encodeURIComponent(args.id)}`);
+        if (scope && batch.projectId !== scope) throw new Error(`Giao batch chỉ được phép trong project "${scope}"`);
         const res = await callApi<{
           ok: boolean;
           batchId: string;

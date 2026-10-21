@@ -1577,6 +1577,13 @@ export class BrainTurnRepo {
     return this.db.prepare('SELECT * FROM brain_turns WHERE id = ?').get(id) as BrainTurnRow | undefined;
   }
 
+  latest(projectId?: string | null): BrainTurnRow | undefined {
+    const query = projectId === undefined
+      ? 'SELECT * FROM brain_turns ORDER BY startedAt DESC LIMIT 1'
+      : 'SELECT * FROM brain_turns WHERE projectId IS ? ORDER BY startedAt DESC LIMIT 1';
+    return (projectId === undefined ? this.db.prepare(query).get() : this.db.prepare(query).get(projectId)) as BrainTurnRow | undefined;
+  }
+
   finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {
     this.db.prepare(`UPDATE brain_turns SET status = ?, summary = ?, inputTokens = ?, outputTokens = ?, error = ?, finishedAt = datetime('now') WHERE id = ?`)
       .run(fields.status, fields.summary || null, fields.inputTokens || 0, fields.outputTokens || 0, fields.error || null, id);

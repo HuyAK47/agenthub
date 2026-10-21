@@ -5,9 +5,11 @@ import { resolveClaudeProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
 import { effectiveBrainMode, type EffectiveBrainMode } from './mode.js';
+import { projectSettings } from '../projects/settings.js';
 
 const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
 const SYSTEM_EVENTS = new Set(['quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
+const MAX_RETRIES = 3;
 
 export interface BrainRunnerOptions {
   config: BrainConfig;
@@ -22,7 +24,7 @@ export interface BrainRunnerOptions {
 }
 
 export interface BrainQueuedEvent { id?: string; type: string; taskId?: string; projectId?: string | null; payload?: unknown; }
-interface ActiveTurn { id: string; events: BrainQueuedEvent[]; timer?: NodeJS.Timeout; }
+interface ActiveTurn { id: string; events: BrainQueuedEvent[]; retries: number; timer?: NodeJS.Timeout; }
 
 /** Routes resident-brain turns by project while retaining the system brain for incidents. */
 export class BrainRunner {
@@ -33,48 +35,132 @@ export class BrainRunner {
   private timer?: NodeJS.Timeout;
   private active = new Map<string, ActiveTurn>();
   private userBusy = new Set<string>();
+  private retryCounts = new Map<string, number>();
+  private roundRobinCursor = 0;
   private started = false;
   private bound = (type: string, taskId?: string, payload?: unknown) => this.onEvent(type, taskId, payload);
 
-  constructor(private readonly opts: BrainRunnerOptions) { this.debounceMs = opts.debounceMs ?? 30_000; this.now = opts.now ?? (() => Date.now()); }
-  start(): void { if (this.started) return; this.started = true; this.ensureSession(null); this.opts.eventBus.on('*', this.bound); }
-  stop(): void { if (!this.started) return; this.started = false; this.opts.eventBus.off('*', this.bound); if (this.timer) clearTimeout(this.timer); for (const turn of this.active.values()) if (turn.timer) clearTimeout(turn.timer); this.timer = undefined; }
+  constructor(private readonly opts: BrainRunnerOptions) {
+    this.debounceMs = opts.debounceMs ?? 30_000;
+    this.now = opts.now ?? (() => Date.now());
+  }
+
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    this.ensureSession(null);
+    this.opts.eventBus.on('*', this.bound);
+  }
+
+  stop(): void {
+    if (!this.started) return;
+    this.started = false;
+    this.opts.eventBus.off('*', this.bound);
+    if (this.timer) clearTimeout(this.timer);
+    for (const turn of this.active.values()) if (turn.timer) clearTimeout(turn.timer);
+    this.timer = undefined;
+  }
+
   getQueuedEvents(): BrainQueuedEvent[] { return [...this.pending]; }
+  isQueued(projectId: string | null): boolean { return this.pending.some((event) => (event.projectId ?? null) === projectId); }
+  getUsage(projectId: string | null): { queued: boolean; lastTurnAt: string | null; tokensToday: number } {
+    const day = new Date(this.now());
+    day.setHours(0, 0, 0, 0);
+    const latest = this.opts.turnRepo.latest(projectId);
+    return { queued: this.isQueued(projectId), lastTurnAt: latest?.finishedAt || latest?.startedAt || null, tokensToday: this.opts.turnRepo.tokensSince(day.toISOString(), projectId) };
+  }
 
   flush(): void {
     if (!this.started || this.pending.length === 0) return;
-    while (this.active.size < Math.max(1, this.opts.config.maxConcurrent || 2) && this.pending.length) {
-      const projectId = this.pending[0].projectId ?? null;
-      const sessionId = this.sessionIdFor(projectId);
-      const session = this.ensureSession(projectId);
-      const mode = this.mode(projectId);
-      if (mode === 'off' || mode === 'external') { this.pending = this.pending.filter((event) => (event.projectId ?? null) !== projectId); continue; }
-      if (session.busy === 1 || session.state === 'running' || session.state === 'waiting_limit' || this.active.has(sessionId) || this.userBusy.has(sessionId)) break;
-      const now = this.now(); const day = new Date(now); day.setHours(0, 0, 0, 0);
-      const settings = this.projectSettings(projectId);
-      const maxTurns = typeof settings.maxTurnsPerHour === 'number' ? settings.maxTurnsPerHour : this.opts.config.maxTurnsPerHour;
-      const budget = typeof settings.dailyTokenBudget === 'number' ? settings.dailyTokenBudget : this.opts.config.dailyTokenBudget;
-      if (this.opts.turnRepo.countSince(now - 3600000, projectId) >= maxTurns || (budget > 0 && this.opts.turnRepo.tokensSince(day.toISOString(), projectId) >= budget) || (this.opts.config.dailyTokenBudget > 0 && this.opts.turnRepo.tokensSince(day.toISOString()) >= this.opts.config.dailyTokenBudget)) { this.opts.eventBus.emit('brain.limited', projectId || undefined, { reason: 'budget' }); break; }
-      const events = this.pending.filter((event) => (event.projectId ?? null) === projectId);
-      this.pending = this.pending.filter((event) => (event.projectId ?? null) !== projectId);
-      const input = this.formatEvents(events, mode, projectId);
-      const turn = this.opts.turnRepo.insert({ id: crypto.randomUUID(), trigger: 'event', input, projectId });
-      this.active.set(sessionId, { id: turn.id, events });
-      try { this.opts.chatService.sendMessage(sessionId, input); const active = this.active.get(sessionId)!; active.timer = setTimeout(() => this.failActive(sessionId, 'brain turn timeout'), (this.opts.config.turnTimeoutSec ?? 1200) * 1000); active.timer.unref?.(); }
-      catch (error) { this.failActive(sessionId, error instanceof Error ? error.message : String(error)); }
+    const maxConcurrent = Math.max(1, this.opts.config.maxConcurrent || 2);
+    while (this.active.size < maxConcurrent && this.pending.length > 0) {
+      const projects = this.pendingProjects();
+      if (projects.length === 0) return;
+      let selected: { projectId: string | null; index: number } | undefined;
+      let globalLimited = false;
+      for (let offset = 0; offset < projects.length; offset += 1) {
+        const index = (this.roundRobinCursor + offset) % projects.length;
+        const projectId = projects[index];
+        const result = this.canStart(projectId);
+        if (result === 'global_limited') { globalLimited = true; break; }
+        if (result === 'ready') { selected = { projectId, index }; break; }
+      }
+      if (globalLimited || !selected) return;
+      this.roundRobinCursor = (selected.index + 1) % projects.length;
+      this.startProjectTurn(selected.projectId);
     }
   }
 
-  private projectSettings(projectId: string | null): Record<string, unknown> { const raw = projectId ? this.opts.projectRepo?.get(projectId)?.settings : null; try { return raw ? (JSON.parse(raw).brain || {}) : {}; } catch { return {}; } }
+  private pendingProjects(): Array<string | null> {
+    const seen = new Set<string>();
+    const result: Array<string | null> = [];
+    for (const event of this.pending) {
+      const projectId = event.projectId ?? null;
+      const key = projectId ?? '__system__';
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(projectId);
+    }
+    return result;
+  }
+
+  private canStart(projectId: string | null): 'ready' | 'busy' | 'limited' | 'global_limited' {
+    const sessionId = this.sessionIdFor(projectId);
+    const session = this.ensureSession(projectId);
+    const mode = this.mode(projectId);
+    if (mode === 'off' || mode === 'external') { this.dropProjectEvents(projectId); return 'busy'; }
+    if (session.busy === 1 || session.state === 'running' || session.state === 'waiting_limit' || this.active.has(sessionId) || this.userBusy.has(sessionId)) return 'busy';
+    const now = this.now();
+    const day = new Date(now);
+    day.setHours(0, 0, 0, 0);
+    const settings = this.projectSettings(projectId);
+    const maxTurns = settings.brain.maxTurnsPerHour ?? this.opts.config.maxTurnsPerHour;
+    const budget = settings.brain.dailyTokenBudget ?? this.opts.config.dailyTokenBudget;
+    if (this.opts.turnRepo.countSince(now - 3600000, projectId) >= maxTurns || (budget > 0 && this.opts.turnRepo.tokensSince(day.toISOString(), projectId) >= budget)) {
+      this.opts.eventBus.emit('brain.limited', projectId || undefined, { reason: 'budget' });
+      return 'limited';
+    }
+    if (this.opts.config.dailyTokenBudget > 0 && this.opts.turnRepo.tokensSince(day.toISOString()) >= this.opts.config.dailyTokenBudget) {
+      this.opts.eventBus.emit('brain.limited', projectId || undefined, { reason: 'budget', scope: 'global' });
+      return 'global_limited';
+    }
+    return 'ready';
+  }
+
+  private startProjectTurn(projectId: string | null): void {
+    const sessionId = this.sessionIdFor(projectId);
+    const events = this.pending.filter((event) => (event.projectId ?? null) === projectId);
+    this.dropProjectEvents(projectId);
+    const input = this.formatEvents(events, this.mode(projectId), projectId);
+    const turn = this.opts.turnRepo.insert({ id: crypto.randomUUID(), trigger: 'event', input, projectId });
+    const active: ActiveTurn = { id: turn.id, events, retries: Math.max(0, ...events.map((event) => this.retryCounts.get(event.id || '') || 0)) };
+    this.active.set(sessionId, active);
+    try {
+      this.opts.chatService.sendMessage(sessionId, input);
+      active.timer = setTimeout(() => this.failActive(sessionId, 'brain turn timeout'), (this.opts.config.turnTimeoutSec ?? 1200) * 1000);
+      active.timer.unref?.();
+    } catch (error) {
+      this.failActive(sessionId, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private dropProjectEvents(projectId: string | null): void { this.pending = this.pending.filter((event) => (event.projectId ?? null) !== projectId); }
+  private projectSettings(projectId: string | null) { return projectSettings(projectId ? this.opts.projectRepo?.get(projectId) : null); }
   private mode(projectId: string | null): EffectiveBrainMode { return effectiveBrainMode(projectId, projectId ? this.opts.projectRepo?.get(projectId) : null, this.opts.config); }
   private sessionIdFor(projectId: string | null): string { return projectId ? `brain:${projectId}` : 'brain'; }
+
   private ensureSession(projectId: string | null) {
-    const id = this.sessionIdFor(projectId); const existing = this.opts.chatSessionRepo.get(id) || this.opts.chatSessionRepo.getByKind('brain', projectId); if (existing) return existing;
+    const id = this.sessionIdFor(projectId);
+    const existing = this.opts.chatSessionRepo.get(id) || this.opts.chatSessionRepo.getByKind('brain', projectId);
+    if (existing) return existing;
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
     this.opts.chatService.getOrCreateSession(id, { title: project ? `Bộ não · ${project.name}` : 'Bộ não', mode: 'safe', model: this.opts.config.model, profileName: this.profileName(), kind: 'brain', projectId } as never);
-    this.opts.chatSessionRepo.updatePinned(id, 1); return this.opts.chatSessionRepo.get(id)!;
+    this.opts.chatSessionRepo.updatePinned(id, 1);
+    return this.opts.chatSessionRepo.get(id)!;
   }
+
   private profileName(): string { return resolveClaudeProfile(this.opts.profileRepo || { getAll: () => [] }, this.opts.config.claudeProfile, this.opts.config.claudeProfileExplicit); }
+
   private onEvent(type: string, taskId?: string, payload?: unknown): void {
     const data = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
     if (type === 'chat.message') {
@@ -82,37 +168,62 @@ export class BrainRunner {
       if (data.role === 'user') this.userBusy.add(sessionId);
       return;
     }
-    if (type === 'chat.done' || type === 'chat.error') {
-      const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
-      this.userBusy.delete(sessionId);
-      const active = this.active.get(sessionId);
-      if (!active) return;
-      if (active.timer) clearTimeout(active.timer);
-      const usage = data.usage && typeof data.usage === 'object' ? data.usage as Record<string, unknown> : {};
-      const quota = type === 'chat.error' && /quota|rate.?limit|429|usage limit|limit reached/i.test(String(data.message || ''));
-      this.opts.turnRepo.finish(active.id, {
-        status: type === 'chat.done' ? 'done' : quota ? 'quota' : 'failed',
-        summary: typeof data.message === 'string' ? data.message : undefined,
-        inputTokens: typeof usage.inputTokens === 'number' ? usage.inputTokens : 0,
-        outputTokens: typeof usage.outputTokens === 'number' ? usage.outputTokens : 0,
-        error: type === 'chat.error' ? String(data.message || 'brain turn failed') : undefined,
-      });
-      this.active.delete(sessionId);
-      if (quota) this.pending.unshift(...active.events);
-      else this.flush();
-      return;
-    }
+    if (type === 'chat.done' || type === 'chat.error') { this.finishChatEvent(type, data); return; }
     if (!this.started || !EVENT_TYPES.has(type)) return;
     const candidate = typeof data.projectId === 'string' ? data.projectId : taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : null;
     const projectId = SYSTEM_EVENTS.has(type) ? null : (candidate && this.opts.projectRepo?.get(candidate) ? candidate : null);
     if (this.mode(projectId) === 'off' || this.mode(projectId) === 'external') return;
-    this.pending.push({ id: crypto.randomUUID(), type, taskId, projectId, payload }); this.schedule();
+    this.pending.push({ id: crypto.randomUUID(), type, taskId, projectId, payload });
+    this.schedule();
   }
-  private schedule(): void { if (this.timer) return; this.timer = setTimeout(() => { this.timer = undefined; this.flush(); }, this.debounceMs); this.timer.unref?.(); }
+
+  private finishChatEvent(type: string, data: Record<string, unknown>): void {
+    const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+    this.userBusy.delete(sessionId);
+    const active = this.active.get(sessionId);
+    if (!active) return;
+    if (active.timer) clearTimeout(active.timer);
+    const usage = data.usage && typeof data.usage === 'object' ? data.usage as Record<string, unknown> : {};
+    const quota = type === 'chat.error' && /quota|rate.?limit|429|usage limit|limit reached/i.test(String(data.message || ''));
+    this.opts.turnRepo.finish(active.id, { status: type === 'chat.done' ? 'done' : quota ? 'quota' : 'failed', summary: typeof data.message === 'string' ? data.message : undefined, inputTokens: typeof usage.inputTokens === 'number' ? usage.inputTokens : 0, outputTokens: typeof usage.outputTokens === 'number' ? usage.outputTokens : 0, error: type === 'chat.error' ? String(data.message || 'brain turn failed') : undefined });
+    this.active.delete(sessionId);
+    if (type === 'chat.done') for (const event of active.events) this.retryCounts.delete(event.id || '');
+    if (quota) {
+      this.pending.unshift(...active.events);
+      this.opts.eventBus.emit('brain.waiting', sessionId === 'brain' ? undefined : sessionId.slice('brain:'.length), { reason: 'quota' });
+      this.schedule();
+      return;
+    }
+    this.flush();
+  }
+
+  private schedule(): void {
+    if (this.timer) return;
+    this.timer = setTimeout(() => { this.timer = undefined; this.flush(); }, this.debounceMs);
+    this.timer.unref?.();
+  }
+
   private formatEvents(events: BrainQueuedEvent[], mode: EffectiveBrainMode, projectId: string | null): string {
-    const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined; const context = project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
+    const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
+    const context = project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
     const lines = events.slice(0, 30).map((event) => `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${event.payload ? ` ${JSON.stringify(event.payload).slice(0, 500)}` : ''}`);
     return `${context}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
   }
-  private failActive(sessionId: string, error: string): void { const active = this.active.get(sessionId); if (!active) return; if (active.timer) clearTimeout(active.timer); this.opts.turnRepo.finish(active.id, { status: 'failed', error }); this.active.delete(sessionId); this.pending.unshift(...active.events); this.schedule(); }
+
+  private failActive(sessionId: string, error: string): void {
+    const active = this.active.get(sessionId);
+    if (!active) return;
+    if (active.timer) clearTimeout(active.timer);
+    this.opts.turnRepo.finish(active.id, { status: 'failed', error });
+    this.active.delete(sessionId);
+    active.retries += 1;
+    for (const event of active.events) this.retryCounts.set(event.id || '', active.retries);
+    if (active.retries >= MAX_RETRIES) {
+      this.opts.eventBus.emit('brain.notify', undefined, { level: 'incident', text: `Bộ não không xử lý được sự kiện sau ${MAX_RETRIES} lần: ${error}` });
+      this.flush();
+      return;
+    }
+    this.pending.unshift(...active.events);
+    this.schedule();
+  }
 }

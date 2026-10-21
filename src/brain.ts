@@ -277,15 +277,16 @@ export function registerBrainRoutes(
     const brains = [null, ...projects.map((project) => project.id)].map((projectId) => {
       const project = projectId ? appService.projectRepo.get(projectId) : undefined;
       const session = sessions?.get(projectId ? `brain:${projectId}` : 'brain');
+      const usage = appService.brainRunner?.getUsage(projectId);
       return {
         projectId,
         projectName: project?.name || 'Hệ thống',
         mode: effectiveBrainMode(projectId, project, appService.config.brain),
         sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
         state: session?.state || 'idle',
-        queued: false,
-        lastTurnAt: session?.lastMessageAt || null,
-        tokensToday: (session?.inputTokens || 0) + (session?.outputTokens || 0),
+        queued: usage?.queued || false,
+        lastTurnAt: usage?.lastTurnAt || session?.lastMessageAt || null,
+        tokensToday: usage?.tokensToday || 0,
       };
     });
     return { ...status, brains };

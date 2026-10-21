@@ -36,6 +36,7 @@ import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
+import type { BrainRunner } from '../brain/runner.js';
 import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
 import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
@@ -702,6 +703,7 @@ export class AppService {
     public knowledgeRepo?: KnowledgeRepo,
     public taskBatchRepo?: TaskBatchRepo,
     public setupManager?: SetupManager,
+    public brainRunner?: BrainRunner,
   ) {}
 
   async getSetupStatus() {
