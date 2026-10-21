@@ -60,6 +60,12 @@ export interface BrainConfig {
   digest: BrainDigestConfig;
 }
 
+export interface AssistantConfig {
+  enabled: boolean;
+  model: string;
+  policy: string[];
+}
+
 export interface ClaudeSessionsConfig {
   dir: string;
   maxAgeDays: number;
@@ -230,6 +236,7 @@ export interface AgentHubConfig {
   autoFixOnFail: boolean;
   chat: ChatConfig;
   brain: BrainConfig;
+  assistant: AssistantConfig;
   claudeSessions: ClaudeSessionsConfig;
   reviewer: {
     enabled: boolean;
@@ -278,6 +285,7 @@ export function saveConfig(
     autoFixOnFail?: boolean;
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
+    assistant?: Partial<AssistantConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
@@ -338,6 +346,9 @@ export function saveConfig(
               : {}),
           },
         }
+      : {}),
+    ...(patch.assistant && typeof patch.assistant === 'object'
+      ? { assistant: { ...((current.assistant as Record<string, unknown>) || {}), ...patch.assistant } }
       : {}),
     ...(patch.notifications && typeof patch.notifications === 'object'
       ? {
@@ -424,6 +435,7 @@ export function updateConfigInMemory(
     autoFixOnFail: boolean;
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
+    assistant?: Partial<AssistantConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
@@ -507,6 +519,9 @@ export function updateConfigInMemory(
         ...patch.brain.digest,
       };
     }
+  }
+  if (patch.assistant) {
+    config.assistant = { ...config.assistant, ...patch.assistant };
   }
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
   if (patch.notifications) {
@@ -674,6 +689,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
   const brainRaw = (userConfig.brain as Record<string, unknown>) || {};
+  const assistantRaw = (userConfig.assistant as Record<string, unknown>) || {};
 
   const userDisk = (userConfig.disk as { minFreeGB?: number; extraPaths?: unknown } | undefined);
   const userCleanup = (userConfig.cleanup as { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number } | undefined);
@@ -872,6 +888,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
               : DEFAULT_BRAIN_DIGEST_CONFIG.time,
           }
         : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
+    },
+    assistant: {
+      enabled: assistantRaw.enabled !== false,
+      model: typeof assistantRaw.model === 'string' && assistantRaw.model.trim() ? assistantRaw.model.trim() : 'sonnet',
+      policy: Array.isArray(assistantRaw.policy)
+        ? assistantRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
+        : [],
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),

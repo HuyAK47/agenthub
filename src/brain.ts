@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
@@ -289,7 +290,17 @@ export function registerBrainRoutes(
         tokensToday: usage?.tokensToday || 0,
       };
     });
-    return { ...status, brains };
+    const assistants = [null, ...projects.map((project) => project.id)].map((projectId) => {
+      const session = sessions?.get(projectId ? `assistant:${projectId}` : 'assistant');
+      return {
+        projectId,
+        projectName: projectId ? projects.find((project) => project.id === projectId)?.name || projectId : 'Hệ thống',
+        sessionId: session?.id || (projectId ? `assistant:${projectId}` : 'assistant'),
+        state: session?.state || 'idle',
+        busy: Boolean(session?.busy),
+      };
+    });
+    return { ...status, brains, assistants };
   });
 
   fastify.put('/api/brain', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -297,6 +308,36 @@ export function registerBrainRoutes(
     return reply.status(200).send(result);
   });
   fastify.post('/api/brain/notify', async (req: FastifyRequest) => brainService.notify(req.body));
+
+  fastify.get('/api/brain/directives', async (req: FastifyRequest) => {
+    if (!appService?.directiveRepo) return [];
+    const projectId = (req.query as { projectId?: string }).projectId;
+    return appService.directiveRepo.list(projectId || null);
+  });
+
+  fastify.post('/api/brain/directives', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!appService?.directiveRepo) throw new HttpError(503, 'unavailable', 'Directive service chưa sẵn sàng');
+    const body = (req.body || {}) as { projectId?: string | null; text?: string; createdBy?: string };
+    if (!body.text?.trim()) throw new HttpError(400, 'bad_request', 'text là bắt buộc');
+    const directive = appService.directiveRepo.add({ id: crypto.randomUUID(), projectId: body.projectId || null, text: body.text.trim(), createdBy: body.createdBy || 'user' });
+    appService.scheduler.getEventBus().emit('brain.directive_added', directive.projectId || undefined, directive);
+    return reply.status(201).send(directive);
+  });
+
+  fastify.delete('/api/brain/directives/:id', async (req: FastifyRequest) => {
+    if (!appService?.directiveRepo) throw new HttpError(503, 'unavailable', 'Directive service chưa sẵn sàng');
+    if (!appService.directiveRepo.remove((req.params as { id: string }).id)) throw new HttpError(404, 'not_found', 'Chỉ thị không tồn tại');
+    return { ok: true };
+  });
+
+  fastify.post('/api/brain/ask', async (req: FastifyRequest) => {
+    if (!appService?.chatService) throw new HttpError(503, 'unavailable', 'Chat service chưa sẵn sàng');
+    const body = (req.body || {}) as { question?: string; projectId?: string | null };
+    if (!body.question?.trim()) throw new HttpError(400, 'bad_request', 'question là bắt buộc');
+    const sessionId = body.projectId ? `brain:${body.projectId}` : 'brain';
+    appService.chatService.getOrCreateSession(sessionId, { title: body.projectId ? `Bộ não · ${body.projectId}` : 'Bộ não', kind: 'brain', projectId: body.projectId || null, mode: 'safe', model: appService.config.brain.model });
+    return appService.chatService.sendMessage(sessionId, `CÂU HỎI TỪ TRỢ LÝ (cần quyết định): ${body.question.trim()}`, { queueIfBusy: true });
+  });
 
   fastify.get('/api/brain/digest', async () => {
     if (!appService) {

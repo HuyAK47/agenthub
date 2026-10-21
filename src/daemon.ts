@@ -20,6 +20,7 @@ import {
   KnowledgeRepo,
   TaskBatchRepo,
   BrainTurnRepo,
+  BrainDirectiveRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
@@ -42,7 +43,7 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
-import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
+import { BrainPolicy, projectBrainPolicy, assistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
@@ -80,6 +81,7 @@ export interface DaemonContext {
   usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
   brainRunner: BrainRunner;
+  directiveRepo: BrainDirectiveRepo;
   deployService: DeployService;
 }
 
@@ -124,6 +126,7 @@ export function createContext(
   const chatPermissionRepo = new ChatPermissionRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
+  const directiveRepo = new BrainDirectiveRepo(db);
   chatPermissionRepo.expirePending();
   const systemBrainPolicy = new BrainPolicy({
     roots: [process.cwd(), config.hubHome, config.worktreesDir],
@@ -137,6 +140,10 @@ export function createContext(
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
   }, (sessionId) => {
     const session = chatSessionRepo.get(sessionId);
+    if (session?.kind === 'assistant' && session.projectId) {
+      const project = projectRepo.get(session.projectId);
+      return project ? assistantPolicy(project, config) : systemBrainPolicy;
+    }
     if (!session?.projectId) return systemBrainPolicy;
     const project = projectRepo.get(session.projectId);
     if (!project) return systemBrainPolicy;
@@ -234,6 +241,7 @@ export function createContext(
     profileRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
+    directiveRepo,
   });
 
   const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());
@@ -273,6 +281,7 @@ export function createContext(
     taskBatchRepo,
     setupManager,
     brainRunner,
+    directiveRepo,
   );
   service.deployService = deployService;
 
@@ -295,6 +304,7 @@ export function createContext(
     quotaMarkRepo,
     chatService,
     brainSession: true,
+    directiveRepo,
   });
   service.setTelegramBotService(telegramService);
 
@@ -331,6 +341,7 @@ export function createContext(
     usageRepo,
     telegramService,
     brainRunner,
+    directiveRepo,
     deployService,
   };
 }

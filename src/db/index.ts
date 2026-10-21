@@ -539,6 +539,50 @@ export const MIGRATIONS: string[] = [
   UPDATE tasks SET waitReason = waitReason_old;
   ALTER TABLE tasks DROP COLUMN waitReason_old;
   `,
+  // Migration 43: assistant sessions and durable user directives for the brain.
+  // chat_sessions had a CHECK on kind, so rebuild it while preserving every column.
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE chat_sessions_new (
+    id TEXT PRIMARY KEY,
+    projectId TEXT,
+    claudeSessionId TEXT,
+    title TEXT,
+    mode TEXT NOT NULL DEFAULT 'safe' CHECK(mode IN ('safe','full')),
+    busy INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    model TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'idle' CHECK(state IN ('idle','running','waiting_permission','waiting_limit','error')),
+    profileName TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    lastMessageAt TEXT,
+    inputTokens INTEGER NOT NULL DEFAULT 0,
+    outputTokens INTEGER NOT NULL DEFAULT 0,
+    contextTokens INTEGER NOT NULL DEFAULT 0,
+    waitingLimitResetAt INTEGER,
+    kind TEXT NOT NULL DEFAULT 'chat' CHECK(kind IN ('chat','brain','assistant')),
+    FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  INSERT INTO chat_sessions_new
+    (id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens,waitingLimitResetAt,kind)
+    SELECT id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens,waitingLimitResetAt,kind
+    FROM chat_sessions;
+  DROP TABLE chat_sessions;
+  ALTER TABLE chat_sessions_new RENAME TO chat_sessions;
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE IF NOT EXISTS brain_directives (
+    id TEXT PRIMARY KEY,
+    projectId TEXT,
+    text TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    createdBy TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_brain_directives_project_active ON brain_directives(projectId, active, createdAt);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -1347,7 +1391,7 @@ export interface ChatSessionRow {
   contextTokens: number;
   createdAt: string;
   updatedAt: string;
-  kind: 'chat' | 'brain';
+  kind: 'chat' | 'brain' | 'assistant';
 }
 
 export interface ChatRetryRow {
@@ -1435,7 +1479,7 @@ export class ChatSessionRepo {
     inputTokens?: number;
     outputTokens?: number;
     contextTokens?: number;
-    kind?: 'chat' | 'brain';
+    kind?: 'chat' | 'brain' | 'assistant';
   }): void {
     this.db
       .prepare(
@@ -1462,14 +1506,14 @@ export class ChatSessionRepo {
       );
   }
 
-  getByKind(kind: 'chat' | 'brain', projectId?: string | null): ChatSessionRow | undefined {
+  getByKind(kind: 'chat' | 'brain' | 'assistant', projectId?: string | null): ChatSessionRow | undefined {
     if (projectId === undefined) {
       return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
     }
     return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
   }
 
-  updateKind(id: string, kind: 'chat' | 'brain'): void {
+  updateKind(id: string, kind: 'chat' | 'brain' | 'assistant'): void {
     this.db.prepare("UPDATE chat_sessions SET kind = ?, updatedAt = datetime('now') WHERE id = ?").run(kind, id);
   }
 
@@ -1565,6 +1609,44 @@ export class ChatSessionRepo {
   delete(id: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE sessionId = ?').run(id);
     this.db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
+  }
+}
+
+export interface BrainDirectiveRow {
+  id: string;
+  projectId: string | null;
+  text: string;
+  createdAt: string;
+  createdBy: string;
+  active: number;
+}
+
+export class BrainDirectiveRepo {
+  constructor(private db: Database.Database) {}
+
+  add(row: { id: string; projectId?: string | null; text: string; createdBy: string }): BrainDirectiveRow {
+    this.db.prepare('INSERT INTO brain_directives (id, projectId, text, createdBy, active) VALUES (?, ?, ?, ?, 1)')
+      .run(row.id, row.projectId || null, row.text, row.createdBy);
+    return this.get(row.id)!;
+  }
+
+  list(projectId?: string | null, includeGlobal = true): BrainDirectiveRow[] {
+    if (projectId == null) {
+      return this.db.prepare('SELECT * FROM brain_directives WHERE active = 1 AND projectId IS NULL ORDER BY createdAt, id').all() as BrainDirectiveRow[];
+    }
+    return this.db.prepare(
+      `SELECT * FROM brain_directives
+       WHERE active = 1 AND (projectId = ? OR (projectId IS NULL AND ? = 1))
+       ORDER BY createdAt, id`,
+    ).all(projectId, includeGlobal ? 1 : 0) as BrainDirectiveRow[];
+  }
+
+  get(id: string): BrainDirectiveRow | undefined {
+    return this.db.prepare('SELECT * FROM brain_directives WHERE id = ?').get(id) as BrainDirectiveRow | undefined;
+  }
+
+  remove(id: string): boolean {
+    return this.db.prepare('UPDATE brain_directives SET active = 0 WHERE id = ? AND active = 1').run(id).changes > 0;
   }
 }
 

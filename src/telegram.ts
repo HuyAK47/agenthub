@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo } from './db/index.js';
+import { BrainDirectiveRepo, TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 import { planningRule } from './chat/claude.js';
@@ -128,6 +128,7 @@ export interface TelegramServiceOptions {
   tokenOverride?: string;
   chatService?: ChatService;
   brainSession?: boolean;
+  directiveRepo?: BrainDirectiveRepo;
 }
 
 export type PendingChatState =
@@ -240,6 +241,7 @@ export class TelegramBotService {
   private execFileFn: GitDiffFn;
   private chatService?: ChatService;
   private brainSession: boolean;
+  private directiveRepo?: BrainDirectiveRepo;
   private decisionTracker = new DecisionTracker();
   private quietHoursQueue: Array<{ text: string; timestamp: number }> = [];
   private lastDigestDate = '';
@@ -293,6 +295,7 @@ export class TelegramBotService {
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
     this.chatService = opts.chatService;
     this.brainSession = opts.brainSession === true;
+    this.directiveRepo = opts.directiveRepo;
 
     if (opts.tokenOverride) {
       this.token = opts.tokenOverride;
@@ -937,7 +940,9 @@ export class TelegramBotService {
           break;
         }
         {
-          const sessionId = `telegram:${chatId}:${crypto.randomUUID()}`;
+          const sessionId = this.brainSession && this.config.assistant.enabled
+            ? `assistant:${this.selectedProject.get(chatId) || 'global'}`
+            : `telegram:${chatId}:${crypto.randomUUID()}`;
           this.chatSessions.set(chatId, sessionId);
           this.chatService.getOrCreateSession(sessionId, { title: 'Cuộc trò chuyện Telegram' });
         }
@@ -970,6 +975,10 @@ export class TelegramBotService {
 
       case '/brain':
         await this.handleBrainCommand(chatId, argStr);
+        break;
+
+      case '/directives':
+        await this.handleDirectivesCommand(chatId, argStr);
         break;
 
       case '/tasks':
@@ -1140,6 +1149,28 @@ export class TelegramBotService {
     await this.sendMessage(chatId, 'Cú pháp: /brain mode off|suggest|auto\nTheo dự án: /brain mode <dự án> off|suggest|auto|external|inherit');
   }
 
+  private async handleDirectivesCommand(chatId: number, argStr: string): Promise<void> {
+    if (!this.directiveRepo) { await this.sendMessage(chatId, 'Chỉ thị chưa khả dụng.'); return; }
+    const projectId = this.selectedProject.get(chatId) || null;
+    const parts = argStr.trim().split(/\s+/).filter(Boolean);
+    if (parts[0] === 'del' || parts[0] === 'remove') {
+      const id = parts[1];
+      if (!id || !this.directiveRepo.remove(id)) { await this.sendMessage(chatId, 'Không tìm thấy chỉ thị.'); return; }
+      await this.sendMessage(chatId, '✓ Đã xoá chỉ thị.');
+      return;
+    }
+    if (parts[0] === 'add') {
+      const text = argStr.slice(3).trim();
+      if (!text) { await this.sendMessage(chatId, 'Cú pháp: /directives add <nội dung>'); return; }
+      this.directiveRepo.add({ id: crypto.randomUUID(), projectId, text, createdBy: 'telegram' });
+      this.eventBus.emit('brain.directive_added', projectId || undefined, { projectId, text });
+      await this.sendMessage(chatId, '✓ Đã thêm chỉ thị cho bộ não.');
+      return;
+    }
+    const rows = this.directiveRepo.list(projectId);
+    await this.sendMessage(chatId, rows.length ? rows.map((row) => `• <code>${this.escapeHtml(row.id)}</code>: ${this.escapeHtml(row.text)}`).join('\n') : 'Chưa có chỉ thị. Dùng /directives add <nội dung>.');
+  }
+
   private async handleUseCommand(chatId: number, argStr: string): Promise<void> {
     const trimmed = argStr.trim();
     if (!trimmed) {
@@ -1243,8 +1274,17 @@ export class TelegramBotService {
   }
 
   private sessionIdForChat(chatId: number): string {
-    // If a project is selected via /use, route to that project's brain or chat session
+    // Assistant sessions are independent from resident brain turns, so user messages never queue behind events.
     const selectedProjectId = this.selectedProject.get(chatId);
+    if (this.brainSession && this.config.assistant.enabled) {
+      if (selectedProjectId) {
+        const project = this.projectRepo.get(selectedProjectId);
+        const mode = effectiveBrainMode(selectedProjectId, project, this.config.brain);
+        if (mode === 'external' || mode === 'off') return `telegram:${chatId}:${selectedProjectId}`;
+        return `assistant:${selectedProjectId}`;
+      }
+      return 'assistant';
+    }
     if (selectedProjectId) {
       const project = this.projectRepo.get(selectedProjectId);
       const mode = effectiveBrainMode(selectedProjectId, project, this.config.brain);
@@ -1281,13 +1321,23 @@ export class TelegramBotService {
     if (!this.chatService) throw new Error('Chat Claude chưa được bật.');
     const sessionId = this.sessionIdForChat(chatId);
     const isBrain = sessionId === 'brain' || sessionId.startsWith('brain:');
+    const isAssistant = sessionId === 'assistant' || sessionId.startsWith('assistant:');
     const selectedProjId = this.selectedProject.get(chatId);
-    const projectId = sessionId.startsWith('brain:')
-      ? sessionId.slice('brain:'.length)
+    const projectId = sessionId.startsWith('brain:') || sessionId.startsWith('assistant:')
+      ? sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length) === 'global'
+        ? null
+        : sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length)
       : (selectedProjId || null);
+    if (isAssistant) {
+      const brainId = projectId ? `brain:${projectId}` : 'brain';
+      this.chatService.getOrCreateSession(brainId, {
+        title: 'Bộ não', kind: 'brain', projectId, model: this.config.brain.model,
+      });
+    }
     this.chatService.getOrCreateSession(sessionId, {
-      title: isBrain ? 'Bộ não' : 'Cuộc trò chuyện Telegram',
-      kind: isBrain ? 'brain' : 'chat',
+      title: isBrain ? 'Bộ não' : isAssistant ? 'Trợ lý' : 'Cuộc trò chuyện Telegram',
+      kind: isBrain ? 'brain' : isAssistant ? 'assistant' : 'chat',
+      model: isAssistant ? this.config.assistant.model : undefined,
       projectId,
     });
     let initial: unknown;

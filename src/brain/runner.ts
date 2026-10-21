@@ -1,13 +1,13 @@
 import crypto from 'node:crypto';
 import type { BrainConfig } from '../config.js';
-import { BrainTurnRepo, ChatSessionRepo, ProfileRepo } from '../db/index.js';
+import { BrainDirectiveRepo, BrainTurnRepo, ChatSessionRepo, ProfileRepo } from '../db/index.js';
 import { resolveClaudeProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
 import { effectiveBrainMode, type EffectiveBrainMode } from './mode.js';
 import { projectSettings } from '../projects/settings.js';
 
-const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
+const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high', 'brain.directive_added']);
 const SYSTEM_EVENTS = new Set(['quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
 const MAX_RETRIES = 3;
 
@@ -19,6 +19,7 @@ export interface BrainRunnerOptions {
   profileRepo?: Pick<ProfileRepo, 'getAll'>;
   turnRepo: BrainTurnRepo;
   projectRepo?: { get(id: string): { id: string; name: string; path: string; settings?: string | null } | undefined };
+  directiveRepo?: BrainDirectiveRepo;
   debounceMs?: number;
   now?: () => number;
 }
@@ -211,7 +212,8 @@ export class BrainRunner {
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
     const context = project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
     const lines = events.slice(0, 30).map((event) => `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${event.payload ? ` ${JSON.stringify(event.payload).slice(0, 500)}` : ''}`);
-    return `${context}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
+    const directives = this.opts.directiveRepo?.list(projectId).map((directive) => `- ${directive.text}`).join('\n') || '- Không có';
+    return `${context}\nCHỈ THỊ CỦA NGƯỜI DÙNG (bắt buộc tuân theo):\n${directives}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
   }
 
   private failActive(sessionId: string, error: string): void {

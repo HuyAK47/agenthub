@@ -151,6 +151,12 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
   };
 
   const scopedProject = (): string | undefined => options?.projectId || process.env.AGENTHUB_MCP_PROJECT || undefined;
+  const assistantSession = (): boolean => (process.env.AGENTHUB_CHAT_KIND || '') === 'assistant';
+  const assertAssistantAllowed = (toolName: string): void => {
+    if (assistantSession() && ['hub_review', 'hub_create_batch', 'hub_dispatch_batch'].includes(toolName)) {
+      throw new Error(`Trợ lý không được gọi ${toolName}; việc này thuộc về bộ não`);
+    }
+  };
   const assertProject = (projectId: string | undefined, action: string): void => {
     const scope = scopedProject();
     if (scope && projectId !== scope) throw new Error(`${action} chỉ được phép trong project "${scope}"`);
@@ -577,6 +583,10 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        if (assistantSession()) {
+          const current = await callApi<{ status: string }>('GET', `/api/tasks/${toRouteId(args.id)}`);
+          if (current.status !== 'draft' && current.status !== 'queued') throw new Error('Trợ lý chỉ được cập nhật task ở trạng thái draft hoặc queued');
+        }
         assertTaskId(args.id, 'Cập nhật task');
         const { id, ...payload } = args;
         const routeId = toRouteId(id);
@@ -614,6 +624,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertAssistantAllowed('hub_create_batch');
         assertProject(args.project, 'Tạo batch');
         const res = await callApi<{
           id: string;
@@ -698,6 +709,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertAssistantAllowed('hub_dispatch_batch');
         const scope = scopedProject();
         const batch = await callApi<{ projectId: string }>('GET', `/api/batches/${encodeURIComponent(args.id)}`);
         if (scope && batch.projectId !== scope) throw new Error(`Giao batch chỉ được phép trong project "${scope}"`);
@@ -906,6 +918,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertAssistantAllowed('hub_review');
         assertTaskId(args.id, 'Duyệt task');
         const routeId = toRouteId(args.id);
         await callApi('POST', `/api/tasks/${routeId}/review`, {
@@ -1344,6 +1357,66 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       } catch (err: unknown) {
         return handleError(err);
       }
+    },
+  );
+
+  server.tool(
+    'hub_brain_directive',
+    'Thêm, liệt kê hoặc xoá chỉ thị bắt buộc cho bộ não',
+    {
+      action: z.enum(['add', 'list', 'remove']),
+      id: z.string().optional(),
+      projectId: z.string().nullable().optional(),
+      text: z.string().optional(),
+    },
+    async (args) => {
+      try {
+        if (args.action === 'list') {
+          const query = args.projectId ? `?projectId=${encodeURIComponent(args.projectId)}` : '';
+          const rows = await callApi<Array<{ id: string; projectId: string | null; text: string }>>('GET', `/api/brain/directives${query}`);
+          return { content: [{ type: 'text', text: rows.length ? rows.map((row) => `- ${row.id}: ${row.text}`).join('\n') : '(không có chỉ thị)' }] };
+        }
+        if (args.action === 'remove') {
+          if (!args.id) throw new Error('id là bắt buộc khi xoá chỉ thị');
+          await callApi('DELETE', `/api/brain/directives/${encodeURIComponent(args.id)}`);
+          return { content: [{ type: 'text', text: `✓ Đã xoá chỉ thị ${args.id}` }] };
+        }
+        if (!args.text?.trim()) throw new Error('text là bắt buộc khi thêm chỉ thị');
+        const row = await callApi<{ id: string }>('POST', '/api/brain/directives', { projectId: args.projectId || null, text: args.text, createdBy: 'assistant' });
+        return { content: [{ type: 'text', text: `✓ Đã thêm chỉ thị ${row.id}` }] };
+      } catch (err: unknown) { return handleError(err); }
+    },
+  );
+
+  server.tool(
+    'hub_ask_brain',
+    'Gửi một câu hỏi cần quyết định cho bộ não',
+    { question: z.string().min(1), projectId: z.string().nullable().optional() },
+    async (args) => {
+      try {
+        const result = await callApi<{ queued?: boolean }>('POST', '/api/brain/ask', args);
+        return { content: [{ type: 'text', text: result.queued ? '✓ Đã xếp câu hỏi cho bộ não; câu trả lời sẽ được gửi lại.' : '✓ Đã gửi câu hỏi cho bộ não.' }] };
+      } catch (err: unknown) { return handleError(err); }
+    },
+  );
+
+  server.tool(
+    'hub_pause',
+    'Tạm dừng một task',
+    { id: z.string() },
+    async ({ id }) => {
+      try { assertTaskId(id, 'Tạm dừng task'); await callApi('POST', `/api/tasks/${toRouteId(id)}/pause`); return { content: [{ type: 'text', text: `✓ Đã tạm dừng ${id}` }] }; }
+      catch (err: unknown) { return handleError(err); }
+    },
+  );
+
+  server.tool(
+    'hub_resume',
+    'Tiếp tục một task đã tạm dừng',
+    { id: z.string() },
+    async ({ id }) => {
+      try { assertTaskId(id, 'Tiếp tục task'); await callApi('POST', `/api/tasks/${toRouteId(id)}/resume`); return { content: [{ type: 'text', text: `✓ Đã tiếp tục ${id}` }] }; }
+      catch (err: unknown) { return handleError(err); }
     },
   );
 
