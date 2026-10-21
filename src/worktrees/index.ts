@@ -384,6 +384,8 @@ export class WorktreeService {
     depsMaxChars = 16000,
     knowledge: KnowledgeContext[] = [],
     knowledgeMaxChars = 12000,
+    references: Array<{ name: string; path: string; inject?: boolean }> = [],
+    projectPath?: string,
   ): void {
     const agentHubDir = path.join(worktreePath, '.agenthub');
     if (!fs.existsSync(agentHubDir)) {
@@ -396,6 +398,40 @@ export class WorktreeService {
       fs.writeFileSync(knowledgePath, this.buildKnowledgeContext(knowledge, knowledgeMaxChars), 'utf-8');
     } else if (fs.existsSync(knowledgePath)) {
       fs.rmSync(knowledgePath, { force: true });
+    }
+
+    const referencesPath = path.join(agentHubDir, 'context', 'references.md');
+    if (references.length > 0) {
+      fs.mkdirSync(path.dirname(referencesPath), { recursive: true });
+      fs.writeFileSync(referencesPath, this.buildReferencesContext(references), 'utf-8');
+    } else if (fs.existsSync(referencesPath)) {
+      fs.rmSync(referencesPath, { force: true });
+    }
+
+    // Copy AGENTS.md if present in worktree or project root (<= 32KB)
+    const contextAgentsPath = path.join(agentHubDir, 'context', 'AGENTS.md');
+    const possibleAgents = [
+      path.join(worktreePath, 'AGENTS.md'),
+      ...(projectPath ? [path.join(projectPath, 'AGENTS.md')] : []),
+    ];
+    let agentsCopied = false;
+    for (const p of possibleAgents) {
+      if (fs.existsSync(p)) {
+        try {
+          const stat = fs.statSync(p);
+          if (stat.isFile() && stat.size <= 32 * 1024) {
+            fs.mkdirSync(path.dirname(contextAgentsPath), { recursive: true });
+            fs.writeFileSync(contextAgentsPath, fs.readFileSync(p, 'utf-8'), 'utf-8');
+            agentsCopied = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    if (!agentsCopied && fs.existsSync(contextAgentsPath)) {
+      fs.rmSync(contextAgentsPath, { force: true });
     }
 
     let content = body;
@@ -462,6 +498,67 @@ export class WorktreeService {
     const full = ['# Sổ kiến thức dự án', '', ...entries.map((entry) => `- ${entry.content} _(task: ${entry.taskId})`)].join('\n');
     if (full.length <= limit) return full;
     return full.slice(0, limit);
+  }
+
+  private buildReferencesContext(references: Array<{ name: string; path: string; inject?: boolean }>): string {
+    const lines: string[] = [
+      '# Tài liệu tham chiếu (References)',
+      '',
+      'QUY TẮC BẮT BUỘC: CHỈ ĐỌC, không sửa, không commit các tài liệu tham chiếu này.',
+      'Mọi hành vi sửa đổi tài liệu tham chiếu sẽ khiến task bị chặn (BLOCKED).',
+      '',
+    ];
+
+    for (const ref of references) {
+      const envName = `AGENTHUB_REF_${ref.name.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
+      lines.push(`## ${ref.name}`);
+      lines.push(`- Đường dẫn: \`${ref.path}\``);
+      lines.push(`- Biến môi trường: \`${envName}\``);
+
+      if (!fs.existsSync(ref.path)) {
+        lines.push(`> ⚠️ CẢNH BÁO: Đường dẫn tham chiếu không tồn tại: ${ref.path}`);
+        console.warn(`[references] Reference '${ref.name}' path does not exist: ${ref.path}`);
+        lines.push('');
+        continue;
+      }
+
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(ref.path);
+      } catch (err) {
+        lines.push(`> ⚠️ CẢNH BÁO: Không thể đọc thông tin đường dẫn: ${String(err)}`);
+        lines.push('');
+        continue;
+      }
+
+      if (ref.inject) {
+        if (stat.isFile()) {
+          const MAX_INJECT_SIZE = 64 * 1024; // 64KB
+          if (stat.size <= MAX_INJECT_SIZE) {
+            try {
+              const fileContent = fs.readFileSync(ref.path, 'utf-8');
+              lines.push('');
+              lines.push('### Nội dung:');
+              lines.push('```');
+              lines.push(fileContent);
+              lines.push('```');
+            } catch (err) {
+              lines.push(`> ⚠️ CẢNH BÁO: Không thể đọc nội dung file: ${String(err)}`);
+            }
+          } else {
+            lines.push(`> ⚠️ CẢNH BÁO: File tham chiếu vượt quá giới hạn 64KB (${stat.size} bytes), không tự động inject nội dung.`);
+            console.warn(`[references] Reference '${ref.name}' exceeds 64KB (${stat.size} bytes), skipping content injection: ${ref.path}`);
+          }
+        } else {
+          lines.push('> ⚠️ CẢNH BÁO: Tham chiếu là thư mục, không tự động inject nội dung.');
+          console.warn(`[references] Reference '${ref.name}' is a directory, skipping content injection: ${ref.path}`);
+        }
+      }
+
+      lines.push('');
+    }
+
+    return lines.join('\n');
   }
 
   /**

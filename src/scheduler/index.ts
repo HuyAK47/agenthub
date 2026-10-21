@@ -2001,6 +2001,8 @@ export class Scheduler {
 
   private writeTaskFiles(task: TaskRow, body: string, resume: boolean, feedback?: string): void {
     if (!task.worktreePath) return;
+    const project = this.projectRepo.get(task.projectId);
+    const settings = project ? projectSettings(project) : undefined;
     this.worktreeService.writeTaskFile(
       task.worktreePath,
       body,
@@ -2010,6 +2012,8 @@ export class Scheduler {
       this.config.context?.depsMaxChars,
       this.knowledgeRepo?.getByProject(task.projectId) || [],
       this.config.context?.knowledgeMaxChars,
+      settings?.references || [],
+      project?.path,
     );
   }
 
