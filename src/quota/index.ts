@@ -10,9 +10,9 @@ export class QuotaService {
   /**
    * Mark a profile (and same-email profiles) as quota exhausted
    */
-  mark(profileName: string, family: string, resetSeconds: number, reason?: string): void {
+  mark(profileName: string, family: string, resetSeconds: number, reason?: string): boolean {
     const until = Math.floor(Date.now() / 1000) + resetSeconds;
-    this.quotaMarkRepo.mark(profileName, family, until, reason);
+    const shouldEmit = this.quotaMarkRepo.mark(profileName, family, until, reason);
 
     // Propagate to profiles with same email
     const profile = this.profileRepo.get(profileName);
@@ -24,6 +24,7 @@ export class QuotaService {
         }
       }
     }
+    return shouldEmit;
   }
 
   /**

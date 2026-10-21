@@ -245,6 +245,7 @@ export function createContext(
     chatService,
     chatSessionRepo,
     profileRepo,
+    taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
   });

@@ -2010,11 +2010,12 @@ export class AppService {
     }
     const parsed = MarkQuotaSchema.parse(raw);
     const seconds = parsed.seconds || 5 * 3600;
-    this.coreProfileService.markQuota(name, parsed.family, seconds, parsed.reason);
-    this.scheduler.getEventBus().emit('quota.exhausted', undefined, {
-      profile: name,
-      family: parsed.family,
-    });
+    if (this.coreProfileService.markQuota(name, parsed.family, seconds, parsed.reason)) {
+      this.scheduler.getEventBus().emit('quota.exhausted', undefined, {
+        profile: name,
+        family: parsed.family,
+      });
+    }
     return { ok: true };
   }
 

@@ -56,6 +56,17 @@ describe('BrainRunner', () => {
     expect(ctx.sent[0]).toContain('Chế độ suggest');
   });
 
+  it('deduplicates quota keys in one brain turn', () => {
+    const ctx = setup();
+    ctx.runner.start();
+    for (let i = 0; i < 30; i += 1) {
+      ctx.events.emit('quota.exhausted', `p/task-${i}`, { profile: 'g1', family: 'gemini' });
+    }
+    ctx.runner.flush();
+    const prompt = ctx.sent[0];
+    expect(prompt.match(/quota\.exhausted/g)).toHaveLength(1);
+  });
+
   it('does not overlap a user turn and preserves events after quota', () => {
     const ctx = setup('auto');
     ctx.runner.start();
