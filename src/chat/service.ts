@@ -189,6 +189,15 @@ export class ChatService {
     }));
   }
 
+  listPermissionRules() { return this.permissionBroker.listRules(); }
+
+  getPermission(id: string) { return this.permissionBroker.get(id); }
+
+  deletePermissionRule(id: string): { ok: boolean } {
+    if (!this.permissionBroker.deleteRule(id)) throw new HttpError(404, 'not_found', 'Quy tắc không tồn tại');
+    return { ok: true };
+  }
+
   decidePermission(id: string, decision: 'allow' | 'deny' | 'allow_always', message?: string): { ok: boolean } {
     if (!this.permissionBroker.resolve(id, decision, message)) {
       throw new HttpError(404, 'not_found', 'Yêu cầu cấp quyền không tồn tại hoặc đã được xử lý');
@@ -1917,6 +1926,12 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   fastify.get('/api/chat/permissions', async (req: FastifyRequest) => {
     const sessionId = (req.query as { sessionId?: string }).sessionId;
     return chatService.listPermissions(sessionId);
+  });
+
+  fastify.get('/api/chat/permission-rules', async () => chatService.listPermissionRules());
+  fastify.delete('/api/chat/permission-rules/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return chatService.deletePermissionRule(id);
   });
 
   fastify.post('/api/chat/permissions/:id', async (req: FastifyRequest) => {
