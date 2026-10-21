@@ -120,18 +120,22 @@ async function runOne(check: CheckDefinition, repo: string, hubHome: string): Pr
   return { name: check.name, ok, exitCode: r.code, durationMs: Date.now() - started, outputTail: tail(`${r.output}${r.timedOut ? `\nTimeout sau ${check.timeoutSec || 600}s` : ''}`) };
 }
 import { ensureWorktreeNodeModules } from './cache.js';
+import { projectSettings } from './projects/settings.js';
 
 export class CheckRunner {
   constructor(private db: Database.Database) {}
   async run(task: TaskRow, project: ProjectRow, runId: string): Promise<{ passed: boolean; failed: string[]; results: CheckResult[] }> {
-    const repo = task.worktreePath || project.path; await this.prepare(repo, project.path);
+    const repo = task.worktreePath || project.path; await this.prepare(repo, project.path, project);
     const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
     const configured = project.checks ? JSON.parse(project.checks) as CheckDefinition[] : detectChecks(repo);
     const results: CheckResult[] = [];
     for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await runOne(check, repo, hubHome); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
     return { passed: results.every((r) => r.ok), failed: results.filter((r) => !r.ok).map((r) => r.name), results };
   }
-  private async prepare(repo: string, projectPath?: string): Promise<void> {
+  private async prepare(repo: string, projectPath?: string, project?: ProjectRow): Promise<void> {
+    if (project && projectSettings(project).worktree.install === 'skip') {
+      return;
+    }
     try {
       await ensureWorktreeNodeModules(repo, projectPath);
     } catch {

@@ -17,7 +17,9 @@ import {
   TaskRow,
   ProfileRow,
   KnowledgeRepo,
+  TaskNoteRepo,
 } from '../db/index.js';
+import { projectSettings } from '../projects/settings.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
@@ -144,6 +146,7 @@ export class Scheduler {
   private locks: ProfileLockService;
   private checkRunner?: CheckRunner;
   private db?: Database.Database;
+  private taskNoteRepo?: TaskNoteRepo;
   private runMetricsRepo?: RunMetricsRepo;
   private knowledgeRepo?: KnowledgeRepo;
   private reviewRepo?: ReviewRepo;
@@ -181,7 +184,10 @@ export class Scheduler {
     this.db = db;
     this.runMetricsRepo = runMetricsRepo;
     this.knowledgeRepo = knowledgeRepo;
-    if (db) this.checkRunner = new CheckRunner(db);
+    if (db) {
+      this.checkRunner = new CheckRunner(db);
+      this.taskNoteRepo = new TaskNoteRepo(db);
+    }
 
     if (engineOverrides) {
       this.engines = engineOverrides;
@@ -2009,18 +2015,30 @@ export class Scheduler {
       // Dependency installation can take minutes. Keep the task out of the
       // queue while it runs, but never let a cache/native-module failure stop
       // the worker from starting with its own install.
-      const hasDependencyLock = (dir: string): boolean =>
-        fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
-      if (hasDependencyLock(worktreePath) || hasDependencyLock(path.join(worktreePath, 'web'))) {
-        try {
-          await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
-        } catch (error) {
-          this.locks.release(profile.name, lockFile);
-          this.taskRepo.update(task.id, { status: 'failed' });
-          this.eventBus.emit('task.failed', task.id, {
-            error: `Failed to prepare node_modules before worker start: ${String(error)}`,
-          });
-          return;
+      const settings = projectSettings(project);
+      if (settings.worktree.install !== 'skip') {
+        const hasDependencyLock = (dir: string): boolean =>
+          fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
+        if (hasDependencyLock(worktreePath) || hasDependencyLock(path.join(worktreePath, 'web'))) {
+          try {
+            await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
+          } catch (error) {
+            this.eventBus.emit('worktree.install_failed', task.id, {
+              error: `Failed to prepare node_modules before worker start: ${String(error)}`,
+            });
+            if (this.taskNoteRepo) {
+              try {
+                this.taskNoteRepo.insert({
+                  projectId: project.id,
+                  taskId: task.id,
+                  kind: 'note',
+                  content: `Lỗi cài phụ thuộc: ${String(error)}`,
+                });
+              } catch {
+                // ignore
+              }
+            }
+          }
         }
       }
 

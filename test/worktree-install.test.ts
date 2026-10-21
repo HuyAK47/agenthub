@@ -1,0 +1,231 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { loadConfig } from '../src/config.js';
+import { openDatabase, ProjectRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, TaskNoteRepo } from '../src/db/index.js';
+import { Scheduler } from '../src/scheduler/index.js';
+import { FakeEngine } from '../src/engines/index.js';
+import * as cacheModule from '../src/cache.js';
+import { CheckRunner } from '../src/checks.js';
+
+describe('settings.worktree.install option', () => {
+  let tmpDir: string;
+  let config: ReturnType<typeof loadConfig>;
+  let db: ReturnType<typeof openDatabase>;
+  let projectRepo: ProjectRepo;
+  let profileRepo: ProfileRepo;
+  let quotaMarkRepo: QuotaMarkRepo;
+  let taskRepo: TaskRepo;
+  let runRepo: RunRepo;
+  let eventRepo: EventRepo;
+  let taskNoteRepo: TaskNoteRepo;
+  let projectPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-wt-install-test-'));
+    const agyHomesDir = path.join(tmpDir, 'agy-homes');
+    fs.mkdirSync(agyHomesDir, { recursive: true });
+
+    process.env.AGENTHUB_HOME = tmpDir;
+    process.env.AGENTHUB_AGY_HOMES = agyHomesDir;
+
+    config = loadConfig(tmpDir);
+    config.agyHomesDir = agyHomesDir;
+
+    db = openDatabase(config.dbPath);
+    projectRepo = new ProjectRepo(db);
+    profileRepo = new ProfileRepo(db);
+    quotaMarkRepo = new QuotaMarkRepo(db);
+    taskRepo = new TaskRepo(db);
+    runRepo = new RunRepo(db);
+    eventRepo = new EventRepo(db);
+    taskNoteRepo = new TaskNoteRepo(db);
+
+    projectPath = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: projectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
+    fs.writeFileSync(path.join(projectPath, 'README.md'), '# Project');
+    fs.writeFileSync(path.join(projectPath, 'package.json'), JSON.stringify({ name: 'test' }));
+    fs.writeFileSync(path.join(projectPath, 'package-lock.json'), JSON.stringify({ name: 'test', lockfileVersion: 3 }));
+    execFileSync('git', ['add', '.'], { cwd: projectPath });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: projectPath,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@test.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@test.com',
+      },
+    });
+
+    profileRepo.upsert({
+      name: 'p1',
+      engine: 'agy',
+      kind: 'isolated',
+      home: path.join(agyHomesDir, 'p1'),
+      email: 'test@example.com',
+      enabled: 1,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    db.close();
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch { /* ignore */ }
+    delete process.env.AGENTHUB_HOME;
+    delete process.env.AGENTHUB_AGY_HOMES;
+  });
+
+  it('install=skip không gọi ensureWorktreeNodeModules ở cả tạo worktree và checks; install=auto thì có gọi', async () => {
+    const spy = vi.spyOn(cacheModule, 'ensureWorktreeNodeModules').mockImplementation(async () => {});
+
+    // 1. Project with install = 'skip'
+    projectRepo.insert({
+      id: 'proj-skip',
+      name: 'Project Skip',
+      path: projectPath,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 3,
+      settings: JSON.stringify({ worktree: { install: 'skip' } }),
+    });
+
+    taskRepo.insert({
+      id: 'proj-skip/task-1',
+      projectId: 'proj-skip',
+      slug: 'task-1',
+      title: 'Task 1',
+      status: 'queued',
+    });
+
+    const fakeEngine = new FakeEngine();
+    const engines = new Map<string, any>([['agy', fakeEngine]]);
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines, undefined, undefined, db);
+
+    const task = taskRepo.get('proj-skip/task-1')!;
+    await scheduler.startTask(task, 'gemini-3.8-flash-high', 'p1');
+
+    // Scheduler startTask should NOT call ensureWorktreeNodeModules for install=skip
+    expect(spy).not.toHaveBeenCalled();
+
+    // CheckRunner.run should NOT call ensureWorktreeNodeModules for install=skip
+    const checkRunner = new CheckRunner(db);
+    const projSkip = projectRepo.get('proj-skip')!;
+    const runningTask = taskRepo.get('proj-skip/task-1')!;
+    const runs = runRepo.getByTask('proj-skip/task-1');
+    expect(runs.length).toBeGreaterThan(0);
+    await checkRunner.run(runningTask, projSkip, runs[0].id);
+    expect(spy).not.toHaveBeenCalled();
+
+    scheduler.stop();
+
+    // 2. Project with install = 'auto' (default)
+    projectRepo.insert({
+      id: 'proj-auto',
+      name: 'Project Auto',
+      path: projectPath,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 3,
+      settings: JSON.stringify({ worktree: { install: 'auto' } }),
+    });
+
+    taskRepo.insert({
+      id: 'proj-auto/task-2',
+      projectId: 'proj-auto',
+      slug: 'task-2',
+      title: 'Task 2',
+      status: 'queued',
+    });
+
+    const schedulerAuto = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines, undefined, undefined, db);
+    const taskAuto = taskRepo.get('proj-auto/task-2')!;
+    await schedulerAuto.startTask(taskAuto, 'gemini-3.8-flash-high', 'p1');
+
+    // Scheduler startTask SHOULD call ensureWorktreeNodeModules
+    expect(spy).toHaveBeenCalled();
+    const callsAfterStart = spy.mock.calls.length;
+    expect(callsAfterStart).toBeGreaterThan(0);
+
+    const projAuto = projectRepo.get('proj-auto')!;
+    const runningTaskAuto = taskRepo.get('proj-auto/task-2')!;
+    const runsAuto = runRepo.getByTask('proj-auto/task-2');
+    expect(runsAuto.length).toBeGreaterThan(0);
+    await checkRunner.run(runningTaskAuto, projAuto, runsAuto[0].id);
+
+    // CheckRunner SHOULD call ensureWorktreeNodeModules
+    expect(spy.mock.calls.length).toBeGreaterThan(callsAfterStart);
+
+    schedulerAuto.stop();
+  });
+
+  it('lỗi cài phụ thuộc không đánh failed task: ghi event worktree.install_failed + ghi chú vào task, worker vẫn chạy', async () => {
+    vi.spyOn(cacheModule, 'ensureWorktreeNodeModules').mockImplementation(async () => {
+      throw new Error('EACCES: permission denied or network failure');
+    });
+
+    projectRepo.insert({
+      id: 'proj-fail',
+      name: 'Project Fail',
+      path: projectPath,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 3,
+      settings: JSON.stringify({ worktree: { install: 'auto' } }),
+    });
+
+    taskRepo.insert({
+      id: 'proj-fail/task-fail',
+      projectId: 'proj-fail',
+      slug: 'task-fail',
+      title: 'Task Fail',
+      status: 'queued',
+    });
+
+    const emittedEvents: Array<{ type: string; taskId?: string; payload?: any }> = [];
+    const fakeEngine = new FakeEngine();
+    const spawnSpy = vi.spyOn(fakeEngine, 'spawn');
+    const engines = new Map<string, any>([['agy', fakeEngine]]);
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines, undefined, undefined, db);
+    scheduler.getEventBus().on('worktree.install_failed', (taskId, payload) => {
+      emittedEvents.push({ type: 'worktree.install_failed', taskId, payload });
+    });
+    scheduler.getEventBus().on('task.failed', (taskId, payload) => {
+      emittedEvents.push({ type: 'task.failed', taskId, payload });
+    });
+
+    const task = taskRepo.get('proj-fail/task-fail')!;
+    await scheduler.startTask(task, 'gemini-3.8-flash-high', 'p1');
+
+    // 1. Task must NOT be failed; it must be running
+    const updatedTask = taskRepo.get('proj-fail/task-fail')!;
+    expect(updatedTask.status).toBe('running');
+
+    // 2. Event worktree.install_failed was emitted
+    const installFailedEvents = emittedEvents.filter((e) => e.type === 'worktree.install_failed');
+    expect(installFailedEvents.length).toBe(1);
+    expect(installFailedEvents[0].taskId).toBe('proj-fail/task-fail');
+    expect(installFailedEvents[0].payload.error).toContain('EACCES');
+
+    // 3. No task.failed event
+    const taskFailedEvents = emittedEvents.filter((e) => e.type === 'task.failed');
+    expect(taskFailedEvents.length).toBe(0);
+
+    // 4. Note added to task
+    const notes = taskNoteRepo.getByTask('proj-fail/task-fail');
+    expect(notes.length).toBe(1);
+    expect(notes[0].content).toContain('Lỗi cài phụ thuộc');
+    expect(notes[0].content).toContain('EACCES');
+
+    // 5. Worker engine was still spawned
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
+
+    scheduler.stop();
+  });
+});
