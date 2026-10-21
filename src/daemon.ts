@@ -43,6 +43,7 @@ import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
 import { BrainPolicy } from './brain/policy.js';
+import { projectSettings } from './projects/settings.js';
 import { BrainRunner } from './brain/runner.js';
 
 export interface DaemonContext {
@@ -100,7 +101,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
   chatPermissionRepo.expirePending();
-  const brainPolicy = new BrainPolicy({
+  const systemBrainPolicy = new BrainPolicy({
     roots: [process.cwd(), config.hubHome, config.worktreesDir],
     extraPatterns: config.brain.policy.flatMap((pattern) => {
       try { return [new RegExp(pattern)]; } catch { return []; }
@@ -110,7 +111,19 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
-  }, brainPolicy, chatSessionRepo);
+  }, (sessionId) => {
+    const session = chatSessionRepo.get(sessionId);
+    if (!session?.projectId) return systemBrainPolicy;
+    const project = projectRepo.get(session.projectId);
+    if (!project) return systemBrainPolicy;
+    const settings = projectSettings(project);
+    return new BrainPolicy({
+      roots: [project.path, path.join(config.worktreesDir, project.id)],
+      readOnlyRoots: settings.references.map((reference) => reference.path),
+      extraPatterns: config.brain.policy.flatMap((pattern) => { try { return [new RegExp(pattern)]; } catch { return []; } }),
+      mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
+    });
+  }, chatSessionRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,
@@ -201,6 +214,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     chatSessionRepo,
     profileRepo,
     turnRepo: brainTurnRepo,
+    projectRepo,
   });
 
   const bulletinService = new BulletinService({

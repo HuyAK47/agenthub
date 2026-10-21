@@ -15,6 +15,7 @@ export interface BrainPolicyRequest {
 
 export interface BrainPolicyOptions {
   roots: string[];
+  readOnlyRoots?: string[];
   extraPatterns?: RegExp[];
   mode?: 'suggest' | 'auto';
 }
@@ -194,9 +195,11 @@ function allowedCommand(command: string, roots: string[], cwd: string): boolean 
 
 export class BrainPolicy {
   private roots: string[];
+  private readOnlyRoots: string[];
   private mode: 'suggest' | 'auto';
   constructor(options: BrainPolicyOptions) {
     this.roots = options.roots.filter((root) => Boolean(realPath(root)));
+    this.readOnlyRoots = (options.readOnlyRoots || []).filter((root) => Boolean(realPath(root)));
     this.extraPatterns = options.extraPatterns || [];
     this.mode = options.mode || 'auto';
   }
@@ -220,6 +223,10 @@ export class BrainPolicy {
     }
     if (toolName === 'Bash' && DENY_COMMAND.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Lệnh thuộc danh sách luôn từ chối' };
+    }
+    const touchesReadOnly = paths.some((value) => this.readOnlyRoots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(process.cwd(), value), root)));
+    if (touchesReadOnly && !READ_TOOLS.has(toolName)) {
+      return { action: 'deny', reason: 'policy:deny', message: 'Policy chỉ cho phép đọc trong references của project' };
     }
     if (this.extraPatterns.some((pattern) => pattern.test(command || JSON.stringify(input)))) {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'Khớp brain.policy' };
