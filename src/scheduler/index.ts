@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getMonitoredDisks, type MonitoredDisk } from '../disk.js';
+import { getMonitoredDisks, getDiskSpaceSync, type MonitoredDisk, type DiskSpace } from '../disk.js';
 import {
   TaskRepo,
   RunRepo,
@@ -142,6 +142,10 @@ interface ReviewerRun {
 
 const STALL_NOTE = 'Lượt trước bị kẹt khi chờ tác vụ nền. Chạy lệnh trực tiếp với timeout.';
 
+export interface SchedulerOptions {
+  diskSpace?: (path: string) => DiskSpace;
+}
+
 export class Scheduler {
   private running: Map<string, RunningTask> = new Map(); // taskId -> RunningTask
   /** Bumped by stop(); a start that began before it must not spawn afterwards. */
@@ -178,6 +182,8 @@ export class Scheduler {
   private lastLoadOverloaded = false;
   private notifiedSkippedModels = new Set<string>();
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
+  private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
+  private usageService?: QuotaUsageService;
 
   constructor(
     private config: AgentHubConfig,
@@ -187,12 +193,13 @@ export class Scheduler {
     private projectRepo: ProjectRepo,
     private profileRepo: ProfileRepo,
     private quotaMarkRepo: QuotaMarkRepo,
-    engineOverrides?: Map<string, Engine>,
-    private usageService?: QuotaUsageService,
+    engineOverrides?: Map<string, Engine> | SchedulerOptions,
+    usageServiceOrOptions?: QuotaUsageService | SchedulerOptions,
     locks?: ProfileLockService,
     db?: Database.Database,
     runMetricsRepo?: RunMetricsRepo,
     knowledgeRepo?: KnowledgeRepo,
+    diskReader?: ((p: string) => DiskSpace) | SchedulerOptions,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -207,9 +214,26 @@ export class Scheduler {
       this.taskNoteRepo = new TaskNoteRepo(db);
     }
 
-    if (engineOverrides) {
+    if (engineOverrides && !(engineOverrides instanceof Map) && 'diskSpace' in engineOverrides) {
+      if (engineOverrides.diskSpace) this.diskReader = engineOverrides.diskSpace;
+    } else if (engineOverrides instanceof Map) {
       this.engines = engineOverrides;
-    } else {
+    }
+
+    if (usageServiceOrOptions && 'diskSpace' in usageServiceOrOptions && typeof usageServiceOrOptions.diskSpace === 'function') {
+      this.diskReader = usageServiceOrOptions.diskSpace;
+    } else if (usageServiceOrOptions && 'getForProfile' in usageServiceOrOptions) {
+      this.usageService = usageServiceOrOptions as QuotaUsageService;
+    }
+
+    if (typeof diskReader === 'function') {
+      this.diskReader = diskReader;
+    } else if (diskReader && typeof diskReader === 'object' && diskReader.diskSpace) {
+      this.diskReader = diskReader.diskSpace;
+    }
+
+
+    if (!engineOverrides || !(engineOverrides instanceof Map)) {
       this.engines.set('agy', new AgyEngine());
       const codexPath = CodexEngine.findCodexPath();
       if (codexPath) {
@@ -2487,8 +2511,12 @@ export class Scheduler {
     }
   }
 
+  getDiskReader(): (p: string) => DiskSpace {
+    return this.diskReader;
+  }
+
   private getMonitoredDisks(): MonitoredDisk[] {
-    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
   }
 
   private getBlockingDisk(): MonitoredDisk | undefined {
