@@ -399,4 +399,76 @@ describe('NotificationService (Desktop Notifications)', () => {
 
     notifier.stop();
   });
+
+  it('caps quietHoursQueue at 200 items, dropping oldest', () => {
+    config.notifications.quietHours = {
+      enabled: true,
+      start: '22:00',
+      end: '07:00',
+    };
+    const mockNightTime = new Date();
+    mockNightTime.setHours(23, 0, 0, 0);
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      exec: fakeExec,
+      now: () => mockNightTime.getTime(),
+    });
+    notifier.start();
+
+    for (let i = 1; i <= 250; i++) {
+      eventBus.emit('brain.notify', undefined, { text: `Notice ${i}`, level: 'info' });
+    }
+
+    const queue = notifier.getQuietHoursQueue();
+    expect(queue).toHaveLength(200);
+    expect((queue[0].payload as { text: string }).text).toBe('Notice 51');
+    expect((queue[199].payload as { text: string }).text).toBe('Notice 250');
+
+    notifier.stop();
+  });
+
+  it('when quiet hours end, sends grouped summary "N thông báo trong đêm" and flushes queue', () => {
+    config.notifications.quietHours = {
+      enabled: true,
+      start: '22:00',
+      end: '07:00',
+    };
+    let mockTime = new Date();
+    mockTime.setHours(23, 0, 0, 0);
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      exec: fakeExec,
+      now: () => mockTime.getTime(),
+    });
+    notifier.start();
+
+    // Accumulate 3 notifications in the night
+    eventBus.emit('brain.notify', undefined, { text: 'N1', level: 'info' });
+    eventBus.emit('brain.notify', undefined, { text: 'N2', level: 'info' });
+    eventBus.emit('brain.notify', undefined, { text: 'N3', level: 'info' });
+    expect(execCalls).toHaveLength(0);
+    expect(notifier.getQuietHoursQueue()).toHaveLength(3);
+
+    // Advance time to 07:00 (quiet hours end)
+    mockTime = new Date();
+    mockTime.setHours(7, 0, 0, 0);
+
+    // Calling checkQuietHoursEnd triggers the flush
+    const flushed = notifier.checkQuietHoursEnd(mockTime.getTime());
+    expect(flushed).toBe(true);
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toBe('AgentHub: 3 thông báo trong đêm');
+    expect(notifier.getQuietHoursQueue()).toHaveLength(0);
+
+    // Subsequent call does not duplicate
+    const flushedAgain = notifier.checkQuietHoursEnd(mockTime.getTime());
+    expect(flushedAgain).toBe(false);
+    expect(execCalls).toHaveLength(1);
+
+    notifier.stop();
+  });
 });

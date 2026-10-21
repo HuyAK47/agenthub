@@ -234,6 +234,7 @@ export class TelegramBotService {
   private decisionTracker = new DecisionTracker();
   private quietHoursQueue: Array<{ text: string; timestamp: number }> = [];
   private lastDigestDate = '';
+  private lastMorningSummaryDate = '';
   private timerInterval?: NodeJS.Timeout;
 
   private token: string | null = null;
@@ -490,6 +491,9 @@ export class TelegramBotService {
   }
 
   async checkDecisionReminders(): Promise<void> {
+    if (isQuietHours(this.config.notifications?.quietHours, new Date(this.now()))) {
+      return;
+    }
     const due = this.decisionTracker.getRemindersDue(this.now(), 2 * 60 * 60 * 1000, 2);
     for (const { decision, reminderIndex } of due) {
       const keyboard: InlineKeyboardButton[][] = [
@@ -505,15 +509,104 @@ export class TelegramBotService {
     }
   }
 
+  buildMorningSummary(): { text: string; keyboard: InlineKeyboardButton[][] } {
+    const nowMs = this.now();
+    const d = new Date(nowMs);
+    const timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const dateStr = `${timeStr} ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+
+    const queueItems = [...this.quietHoursQueue];
+    const pendingDecisions = this.decisionTracker.getPending();
+
+    let text = `🌅 <b>TÓM TẮT BUỔI SÁNG AGENTHUB</b>\n<i>${dateStr} (Hết giờ yên tĩnh)</i>\n\n`;
+
+    if (queueItems.length === 0) {
+      text += `🔕 <i>Không có thông báo mới trong đêm.</i>\n\n`;
+    } else {
+      text += `📬 <b>Thông báo trong đêm (${queueItems.length}):</b>\n`;
+      const shown = queueItems.slice(0, 10);
+      text += shown.map((q) => `• ${this.escapeHtml(q.text)}`).join('\n');
+      if (queueItems.length > 10) {
+        text += `\n• <i>... và ${queueItems.length - 10} thông báo khác</i>`;
+      }
+      text += `\n\n`;
+    }
+
+    const keyboard: InlineKeyboardButton[][] = [];
+
+    if (pendingDecisions.length > 0) {
+      text += `📌 <b>Việc cần quyết định (${pendingDecisions.length}):</b>\n`;
+      text += pendingDecisions.map((dec) => `• ${this.escapeHtml(dec.text)}`).join('\n');
+
+      if (pendingDecisions.length === 1) {
+        const dec = pendingDecisions[0];
+        keyboard.push([
+          { text: '✅ Đồng ý', callback_data: `decision:agree:${dec.id}` },
+          { text: '❌ Không', callback_data: `decision:reject:${dec.id}` },
+        ]);
+      } else {
+        for (const dec of pendingDecisions.slice(0, 5)) {
+          const short = dec.text.length > 20 ? dec.text.slice(0, 17) + '...' : dec.text;
+          keyboard.push([
+            { text: `✅ ${short}`, callback_data: `decision:agree:${dec.id}` },
+            { text: `❌ ${dec.id}`, callback_data: `decision:reject:${dec.id}` },
+          ]);
+        }
+      }
+    }
+
+    keyboard.push([{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }]);
+
+    return { text, keyboard };
+  }
+
+  async checkMorningSummary(): Promise<boolean> {
+    const qh = this.config.notifications?.quietHours;
+    if (!qh || !qh.enabled) return false;
+
+    const nowMs = this.now();
+    const d = new Date(nowMs);
+    const inQuiet = isQuietHours(qh, d);
+    if (inQuiet) return false;
+
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (this.lastMorningSummaryDate === dateKey) return false;
+
+    const endParts = (qh.end || '07:00').split(':').map(Number);
+    const endMins = (endParts[0] || 0) * 60 + (endParts[1] || 0);
+    const curMins = d.getHours() * 60 + d.getMinutes();
+    const startParts = (qh.start || '22:00').split(':').map(Number);
+    const startMins = (startParts[0] || 0) * 60 + (startParts[1] || 0);
+
+    if (startMins < endMins && curMins < endMins) {
+      return false;
+    }
+
+    this.lastMorningSummaryDate = dateKey;
+
+    const summary = this.buildMorningSummary();
+    this.broadcastMessage(summary.text, { inline_keyboard: summary.keyboard });
+    this.eventBus.emit('brain.morning_summary', undefined, summary);
+
+    // Reset quiet hours queue after morning summary
+    this.quietHoursQueue = [];
+    return true;
+  }
+
   async checkScheduledDigest(): Promise<boolean> {
     if (this.config.brain?.digest?.enabled === false) return false;
     const digestTime = this.config.brain?.digest?.time || '18:00';
     const nowMs = this.now();
     const d = new Date(nowMs);
-    const curHHMM = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-    if (curHHMM === digestTime && this.lastDigestDate !== dateKey) {
+    if (this.lastDigestDate === dateKey) return false;
+
+    const parts = digestTime.split(':').map(Number);
+    const targetMins = (parts[0] || 0) * 60 + (parts[1] || 0);
+    const curMins = d.getHours() * 60 + d.getMinutes();
+
+    if (curMins >= targetMins) {
       this.lastDigestDate = dateKey;
       const digest = this.buildCurrentDigest();
       const keyboard: InlineKeyboardButton[][] = [
@@ -532,6 +625,7 @@ export class TelegramBotService {
   async periodicCheck(): Promise<void> {
     try {
       await this.checkDecisionReminders();
+      await this.checkMorningSummary();
       await this.checkScheduledDigest();
     } catch {
       // ignore
@@ -2014,8 +2108,20 @@ export class TelegramBotService {
     if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
       const isIncident = isSystemIncident(type, payload, this.profileRepo, this.quotaMarkRepo, now);
       if (!isIncident) {
+        if (type === 'brain.notify' && p.level === 'decision') {
+          const text = typeof p.text === 'string' ? p.text : '';
+          const decisionId =
+            typeof p.decisionId === 'string' && p.decisionId
+              ? p.decisionId
+              : `dec-${now}-${Math.random().toString(36).slice(2, 8)}`;
+          this.decisionTracker.recordDecision(decisionId, text, allowedChats, now);
+        }
+
         const desc = this.describeEventForQuietHours(type, taskId, p);
         if (desc) {
+          if (this.quietHoursQueue.length >= 200) {
+            this.quietHoursQueue.shift();
+          }
           this.quietHoursQueue.push({ text: desc, timestamp: now });
         }
         return;

@@ -32,6 +32,7 @@ export class NotificationService {
   private lastSent = new Map<string, number>();
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
+  private checkTimer?: NodeJS.Timeout;
 
   constructor(opts: NotificationServiceOptions) {
     this.eventBus = opts.eventBus;
@@ -53,18 +54,53 @@ export class NotificationService {
     return queue;
   }
 
+  checkQuietHoursEnd(nowMs = this.now()): boolean {
+    const qh = this.config.notifications?.quietHours;
+    if (!qh || !qh.enabled) return false;
+
+    const d = new Date(nowMs);
+    const inQuiet = isQuietHours(qh, d);
+    if (inQuiet) return false;
+
+    const endParts = (qh.end || '07:00').split(':').map(Number);
+    const endMins = (endParts[0] || 0) * 60 + (endParts[1] || 0);
+    const curMins = d.getHours() * 60 + d.getMinutes();
+    const startParts = (qh.start || '22:00').split(':').map(Number);
+    const startMins = (startParts[0] || 0) * 60 + (startParts[1] || 0);
+
+    if (startMins < endMins && curMins < endMins) {
+      return false;
+    }
+
+    if (this.quietHoursQueue.length > 0) {
+      const count = this.quietHoursQueue.length;
+      this.quietHoursQueue = [];
+      this.notify(`AgentHub: ${count} thông báo trong đêm`, 'normal');
+      return true;
+    }
+    return false;
+  }
+
   start(): void {
     if (this.boundHandler) return;
     this.boundHandler = (type: string, taskId?: string, payload?: unknown) => {
       this.handleEvent(type, taskId, payload);
     };
     this.eventBus.on('*', this.boundHandler);
+    this.checkTimer = setInterval(() => {
+      this.checkQuietHoursEnd();
+    }, 60_000);
+    this.checkTimer.unref?.();
   }
 
   stop(): void {
     if (this.boundHandler) {
       this.eventBus.off('*', this.boundHandler);
       this.boundHandler = null;
+    }
+    if (this.checkTimer) {
+      clearInterval(this.checkTimer);
+      this.checkTimer = undefined;
     }
   }
 
@@ -97,9 +133,14 @@ export class NotificationService {
 
     // 2. Quiet hours: only send level 'incident'
     const now = this.now();
+    this.checkQuietHoursEnd(now);
+
     if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
       const isIncident = isSystemIncident(type, payload, this.profileRepo, this.quotaMarkRepo, now);
       if (!isIncident) {
+        if (this.quietHoursQueue.length >= 200) {
+          this.quietHoursQueue.shift();
+        }
         this.quietHoursQueue.push({ type, taskId, payload, timestamp: now });
         return;
       }

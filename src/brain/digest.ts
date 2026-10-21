@@ -203,6 +203,7 @@ export interface DigestData {
   generatedAt: string;
   tasks: {
     done: number;
+    doneTotal?: number;
     running: number;
     failed: number;
     blocked: number;
@@ -261,8 +262,16 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
     queuedTasks.length +
     waitingQuotaTasks.length;
 
+  const dayAgoMs = nowMs - 24 * 60 * 60 * 1000;
+  const done24hTasks = doneTasks.filter((t) => {
+    if (!t.updatedAt) return true;
+    const ut = new Date(t.updatedAt.includes('T') ? t.updatedAt : t.updatedAt.replace(' ', 'T') + 'Z').getTime();
+    return isNaN(ut) || ut >= dayAgoMs;
+  });
+
   const tasksSummary = {
-    done: doneTasks.length,
+    done: done24hTasks.length,
+    doneTotal: doneTasks.length,
     running: runningTasks.length,
     failed: failedTasks.length,
     blocked: blockedTasks.length,
@@ -360,7 +369,7 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
 
   // Format Telegram HTML text
   const taskLines = [
-    `• Hoàn thành: <b>${tasksSummary.done}</b>`,
+    `• Hoàn thành: <b>${tasksSummary.done}</b> (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done})`,
     `• Đang chạy: <b>${tasksSummary.running}</b>`,
     `• Lỗi: <b>${tasksSummary.failed}</b>${tasksSummary.blocked ? ` (Bị chặn: <b>${tasksSummary.blocked}</b>)` : ''}${tasksSummary.review ? ` (Chờ review: <b>${tasksSummary.review}</b>)` : ''}`,
   ];
@@ -413,7 +422,7 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
   const markdown =
     `# Tóm tắt hệ thống AgentHub (${dateStr})\n\n` +
     `### Tiến độ công việc\n` +
-    `- Hoàn thành: **${tasksSummary.done}**\n` +
+    `- Hoàn thành: **${tasksSummary.done}** (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done})\n` +
     `- Đang chạy: **${tasksSummary.running}**\n` +
     `- Lỗi: **${tasksSummary.failed}**\n` +
     `- Chờ review: **${tasksSummary.review}**\n` +

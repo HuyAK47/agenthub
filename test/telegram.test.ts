@@ -1948,6 +1948,118 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     const secondTrigger = await bot.checkScheduledDigest();
     expect(secondTrigger).toBe(false);
   });
+
+  it('7. checkScheduledDigest van gui khi bo lo dung phut (vi du chay luc 18:05)', async () => {
+    config.brain.digest = { enabled: true, time: '18:00' };
+    const digestDate = new Date();
+    digestDate.setHours(18, 5, 0, 0); // 18:05 instead of exact 18:00
+    currentTime = digestDate.getTime();
+
+    const bot = createBot('suggest');
+    const triggered = await bot.checkScheduledDigest();
+    expect(triggered).toBe(true);
+
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends.length).toBeGreaterThan(0);
+    expect(sends[0].body?.text).toContain('TÓM TẮT HỆ THỐNG AGENTHUB');
+
+    // Running again in the same day doesn't double-trigger
+    const secondTrigger = await bot.checkScheduledDigest();
+    expect(secondTrigger).toBe(false);
+  });
+
+  it('8. khong gui nhac nho decision trong gio yen tinh', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const nightDate = new Date();
+    nightDate.setHours(23, 0, 0, 0);
+    currentTime = nightDate.getTime();
+
+    const bot = createBot('suggest');
+    // Pre-record a decision that was created 3 hours ago
+    const tracker = bot.getDecisionTracker();
+    tracker.recordDecision('dec-night', 'Quyết định đêm', [CHAT_ID], currentTime - 3 * 3600 * 1000);
+
+    // Should be due for reminder, but since it's quiet hours, checkDecisionReminders should suppress
+    await bot.checkDecisionReminders();
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('9. decision trong gio yen tinh duoc ghi nhan vao tracker va gui kem nut trong tom tat sang', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const nightDate = new Date();
+    nightDate.setHours(23, 30, 0, 0);
+    currentTime = nightDate.getTime();
+
+    const bot = createBot('suggest');
+    bot.handleEvent('brain.notify', undefined, {
+      decisionId: 'dec-in-night',
+      text: 'Xác nhận migrate database?',
+      level: 'decision',
+    });
+    await bot.flushQueue(CHAT_ID);
+
+    // In quiet hours: no message sent immediately
+    expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+    // Decision IS recorded in tracker
+    const dec = bot.getDecisionTracker().getDecision('dec-in-night');
+    expect(dec).toBeDefined();
+    expect(dec?.text).toBe('Xác nhận migrate database?');
+    expect(dec?.answered).toBe(false);
+
+    // Advance time to 07:00 (quiet hours ended)
+    const morningDate = new Date();
+    morningDate.setHours(7, 0, 0, 0);
+    currentTime = morningDate.getTime();
+
+    const triggered = await bot.checkMorningSummary();
+    expect(triggered).toBe(true);
+
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends.length).toBeGreaterThan(0);
+    const morningMsg = sends[0].body;
+    expect(morningMsg?.text).toContain('TÓM TẮT BUỔI SÁNG AGENTHUB');
+    expect(morningMsg?.text).toContain('Xác nhận migrate database?');
+
+    const markup = morningMsg?.reply_markup as { inline_keyboard: InlineKeyboardButton[][] };
+    expect(markup).toBeDefined();
+    expect(markup.inline_keyboard[0][0].text).toContain('Đồng ý');
+    expect(markup.inline_keyboard[0][0].callback_data).toBe('decision:agree:dec-in-night');
+    expect(markup.inline_keyboard[0][1].text).toContain('Không');
+    expect(markup.inline_keyboard[0][1].callback_data).toBe('decision:reject:dec-in-night');
+
+    // Queue is cleared after morning summary
+    expect(bot.getQuietHoursQueue()).toHaveLength(0);
+
+    // Running again today does not re-send
+    const again = await bot.checkMorningSummary();
+    expect(again).toBe(false);
+  });
+
+  it('10. hang doi quietHoursQueue bi gioi han toi da 200 muc', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const nightDate = new Date();
+    nightDate.setHours(23, 0, 0, 0);
+    currentTime = nightDate.getTime();
+
+    const bot = createBot('suggest');
+    for (let i = 1; i <= 250; i++) {
+      bot.handleEvent('brain.notify', undefined, {
+        text: `Thông báo thứ ${i}`,
+        level: 'info',
+      });
+    }
+
+    const queue = bot.getQuietHoursQueue();
+    expect(queue.length).toBe(200);
+    expect(queue[0].text).toContain('Thông báo thứ 51');
+    expect(queue[199].text).toContain('Thông báo thứ 250');
+  });
 });
 
 describe('Menu lệnh Telegram', () => {
