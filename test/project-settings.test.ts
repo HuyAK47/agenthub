@@ -68,7 +68,8 @@ describe('project settings through the service', () => {
     // createProject requires a real git repo whose default branch exists.
     const repo = path.join(tmpDir, 'repo');
     fs.mkdirSync(repo);
-    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: repo });
     execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo });
   });
 
