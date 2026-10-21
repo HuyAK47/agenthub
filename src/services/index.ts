@@ -1578,9 +1578,11 @@ export class AppService {
   deleteProfile(name: string, purgeHome = false): { ok: boolean } {
     const profile = this.profileRepo.get(name);
     if (!profile || profile.deletedAt) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.kind === 'system' || profile.kind === 'keyring') {
-      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống hoặc keyring');
+    if (profile.kind === 'system') {
+      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống');
     }
+    // Hồ sơ keyring dùng HOME thật: chỉ ẩn khỏi hub, không bao giờ xoá thư mục (DEC-008).
+    if (profile.kind === 'keyring') purgeHome = false;
 
     const runningMap = this.scheduler.getRunning();
     const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);

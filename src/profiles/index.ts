@@ -356,10 +356,11 @@ export class ProfileService {
   deleteProfile(name: string, purgeHome = true): void {
     const profile = this.profileRepo.get(name);
     if (!profile || profile.deletedAt) throw new Error(`Hồ sơ "${name}" không tồn tại`);
-    if (profile.kind === 'system' || profile.kind === 'keyring') {
-      throw new Error('Từ chối xóa: không thể xóa hồ sơ hệ thống hoặc keyring');
+    if (profile.kind === 'system') {
+      throw new Error('Từ chối xóa: không thể xóa hồ sơ hệ thống');
     }
-    if (purgeHome && profile.home && fs.existsSync(profile.home)) {
+    // Keyring dùng HOME thật và keyring hệ thống (PLAN 2.1): chỉ xoá mềm, không đụng tới thư mục.
+    if (purgeHome && profile.kind !== 'keyring' && profile.home && fs.existsSync(profile.home)) {
       this.purgeHomeDirectory(profile);
     }
     this.profileRepo.softDelete(name);

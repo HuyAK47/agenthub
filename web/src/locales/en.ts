@@ -412,6 +412,7 @@ export const en: typeof vi = {
     savedProfile: 'Saved profile {name}',
     renamedProfile: 'Renamed {from} → {to}',
     deletedProfile: 'Deleted profile {name}',
+    deleteKeyringNote: 'This profile uses the system keyring and your real home folder: the hub only hides it and will not recreate it; no folder or keyring session is removed.',
     importDone: 'Imported {success}/{total} accounts',
     accountNameRequired: 'Please enter an account name.',
     creating: 'Creating…',

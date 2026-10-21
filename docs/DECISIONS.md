@@ -79,3 +79,12 @@
   - Access token chỉ được gửi tới `https://www.googleapis.com/oauth2/v3/userinfo`, không log, không lưu DB, không trả qua API.
   - Nếu email Google trả về khác email của hồ sơ thì bỏ qua ảnh.
 - **Hệ quả**: Hồ sơ terminal có ảnh sau lần "Kiểm tra" hoặc "Làm mới" đầu tiên khi token còn hạn (agy làm mới token mỗi lần chạy). Token hết hạn thì giữ ảnh cũ hoặc ảnh chữ cái. Mọi quy tắc khác của PLAN 2.1 giữ nguyên.
+
+## DEC-008: Cho phép xoá mềm hồ sơ keyring của agy
+
+- **Bối cảnh**: Hồ sơ keyring mặc định (`chinh` / `agy-default`) trước đây không xoá được. Người dùng không dùng tài khoản này và muốn bỏ nó khỏi hub (2026-10-21).
+- **Quyết định**: `DELETE /api/profiles/:name` chấp nhận hồ sơ `kind=keyring` nhưng chỉ **xoá mềm** (`deletedAt`):
+  - Bỏ qua `purgeHome` cho keyring vì `home` là HOME thật; không đụng keyring hệ thống (PLAN 2.1).
+  - `registerAll()` vẫn đếm cả hồ sơ đã xoá khi kiểm tra keyring, nên không tự tạo lại `agy-default`.
+  - Hồ sơ `kind=system` (Claude) vẫn bị chặn như cũ.
+- **Hệ quả**: Popup xoá ẩn ô "Xoá cả thư mục dữ liệu đăng nhập" với hồ sơ keyring và giải thích chỉ ẩn hồ sơ.

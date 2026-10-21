@@ -1288,6 +1288,7 @@ function DeleteModal({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useLocale();
   const [typed, setTyped] = useState('');
   const [purge, setPurge] = useState(false);
   const [error, setError] = useState('');
@@ -1302,7 +1303,7 @@ function DeleteModal({
             return;
           }
           try {
-            await deleteProfile(profile.name, purge);
+            await deleteProfile(profile.name, purge && profile.kind !== 'keyring');
             onDeleted();
           } catch (err: any) {
             setError(err?.message || 'Không thể xoá hồ sơ');
@@ -1320,10 +1321,14 @@ function DeleteModal({
           autoFocus
           placeholder={profile.name}
         />
-        <label className="flex items-start gap-2 text-sm">
-          <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-          Xoá cả thư mục dữ liệu đăng nhập
-        </label>
+        {profile.kind === 'keyring' ? (
+          <p className="rounded bg-[var(--t-warn)]/10 p-2 text-xs text-[var(--t-warn)]">{t('profiles.deleteKeyringNote')}</p>
+        ) : (
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
+            Xoá cả thư mục dữ liệu đăng nhập
+          </label>
+        )}
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>

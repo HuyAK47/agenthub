@@ -127,6 +127,18 @@ describe('Profile import from ~/.agy-homes', () => {
     expect(g2.email).toBe('g2@example.com');
   });
 
+  it('keeps a deleted keyring profile deleted on the next start and never touches its home', () => {
+    profileRepo.upsert({ name: 'chinh', engine: 'agy', kind: 'keyring', home: tmpDir, email: null, enabled: 1 });
+    fs.writeFileSync(path.join(tmpDir, 'keep.txt'), 'x');
+
+    profileService.deleteProfile('chinh', true);
+    profileService.registerAll();
+
+    expect(profileRepo.get('chinh')?.deletedAt).toBeTruthy();
+    expect(profileRepo.getAll().filter((p) => p.kind === 'keyring')).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, 'keep.txt'))).toBe(true);
+  });
+
   it('does not create the default keyring profile when agy is unavailable', () => {
     const previous = {
       agyBin: process.env.AGENTHUB_AGY_BIN,

@@ -361,7 +361,7 @@ describe('c-accounts-manage: Quản lý tài khoản', () => {
       expect(ctx.profileRepo.getEnabled().find((p) => p.name === 'to-delete')).toBeUndefined();
     });
 
-    it('từ chối xoá hồ sơ kind system hoặc keyring (400)', async () => {
+    it('từ chối xoá hồ sơ system (400); keyring chỉ xoá mềm, giữ HOME thật', async () => {
       ctx.profileRepo.upsert({ name: 'acc-sys', engine: 'claude', kind: 'system', home: os.homedir(), email: null, enabled: 1 });
       ctx.profileRepo.upsert({ name: 'acc-key', engine: 'agy', kind: 'keyring', home: os.homedir(), email: null, enabled: 1 });
 
@@ -372,12 +372,15 @@ describe('c-accounts-manage: Quản lý tài khoản', () => {
       });
       expect(resSys.statusCode).toBe(400);
 
+      // Keyring được xoá mềm (DEC-008) nhưng không bao giờ đụng tới HOME thật, kể cả khi yêu cầu purge.
       const resKey = await server.inject({
         method: 'DELETE',
-        url: '/api/profiles/acc-key',
+        url: '/api/profiles/acc-key?purgeHome=1',
         headers: authHeaders(),
       });
-      expect(resKey.statusCode).toBe(400);
+      expect(resKey.statusCode).toBe(200);
+      expect(ctx.profileRepo.get('acc-key')?.deletedAt).toBeTruthy();
+      expect(fs.existsSync(os.homedir())).toBe(true);
     });
 
     it('từ chối xoá hồ sơ đang chạy task (409)', async () => {

@@ -411,6 +411,7 @@ export const vi = {
     savedProfile: 'Đã lưu hồ sơ {name}',
     renamedProfile: 'Đã đổi tên {from} → {to}',
     deletedProfile: 'Đã xoá hồ sơ {name}',
+    deleteKeyringNote: 'Hồ sơ này dùng keyring và thư mục home thật của máy: hub chỉ ẩn hồ sơ và không tạo lại, không xoá thư mục hay phiên đăng nhập trong keyring.',
     importDone: 'Đã nhập {success}/{total} tài khoản',
     accountNameRequired: 'Vui lòng nhập tên tài khoản.',
     creating: 'Đang tạo…',
