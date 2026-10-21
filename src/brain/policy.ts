@@ -52,6 +52,27 @@ function safePath(value: unknown, roots: string[], base = roots[0]): boolean {
   return roots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(base, value), root));
 }
 
+function isSecretPath(value: string, cwd: string): boolean {
+  if (SECRET_PATH.test(value)) return true;
+  const abs = path.isAbsolute(value) ? value : path.resolve(cwd, value);
+  if (SECRET_PATH.test(abs)) return true;
+  const resolved = realPath(abs);
+  if (resolved && SECRET_PATH.test(resolved)) return true;
+  return false;
+}
+
+function isInGitDir(value: string, cwd: string): boolean {
+  const abs = path.isAbsolute(value) ? value : path.resolve(cwd, value);
+  const normalizedParts = path.normalize(abs).split(path.sep);
+  if (normalizedParts.includes('.git')) return true;
+  const resolved = realPath(abs);
+  if (resolved) {
+    const resolvedParts = resolved.split(path.sep);
+    if (resolvedParts.includes('.git')) return true;
+  }
+  return false;
+}
+
 function splitShell(command: string): string[] | undefined {
   if (/\r|\n|\$\(|<\(|>\(|`|\$\{/u.test(command)) return undefined;
   const parts: string[] = [];
@@ -180,21 +201,77 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
   return parts.every((part) => {
     if (/^(?:eval|exec|source|\.)\b/u.test(part.trim())) return false;
     const parsed = shellWords(part.trim());
-    if (!parsed || parsed.words.length === 0 || parsed.redirects.some((target) => !safePath(target, roots, cwd))) return false;
+    if (!parsed || parsed.words.length === 0) return false;
+    if (parsed.redirects.some((target) => !safePath(target, roots, cwd) || isInGitDir(target, cwd) || isSecretPath(target, cwd))) {
+      return false;
+    }
     const executable = path.basename(parsed.words[0]);
     const args = parsed.words.slice(1);
     if (executable === 'git') {
       if (permissions === 'standard') return allowedGit(args);
-      if (args[0] === 'push' && args.some((arg) => /force/.test(arg))) return false;
-      return ['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'merge-base', 'merge-tree', 'add', 'commit', 'checkout', 'switch', 'pull', 'fetch', 'push'].includes(args[0] || '') && !args.includes('--hard');
+      const subcommand = args[0] || '';
+      if (subcommand === 'push') {
+        const pushArgs = args.slice(1);
+        if (pushArgs.length === 0) return false;
+        const hasForbidden = pushArgs.some((arg) => {
+          if (arg === '-f' || arg.startsWith('-f=') || /force/i.test(arg)) return true;
+          if (arg === '--mirror') return true;
+          if (arg === '-d' || arg === '--delete') return true;
+          if (arg.startsWith('+')) return true;
+          if (arg.startsWith(':')) return true;
+          if (arg.includes(':')) {
+            const [src] = arg.split(':');
+            if (!src || src.startsWith('+')) return true;
+          }
+          return false;
+        });
+        if (hasForbidden) return false;
+
+        const protectedBranches = new Set(['main', 'master', 'integration']);
+        const targetsProtected = pushArgs.some((arg) => {
+          if (protectedBranches.has(arg)) return true;
+          if (arg.includes(':')) {
+            const parts = arg.split(':');
+            const target = parts[parts.length - 1];
+            if (protectedBranches.has(target)) return true;
+          }
+          return false;
+        });
+        if (targetsProtected) return false;
+
+        return true;
+      }
+      if (subcommand === 'branch') {
+        if (args.some((arg) => /^(?:-D|-d|--delete)/u.test(arg))) return false;
+      }
+      const allowedGitSubcommands = [
+        'status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'merge-base', 'merge-tree',
+        'add', 'commit', 'checkout', 'switch', 'pull', 'fetch', 'push'
+      ];
+      return allowedGitSubcommands.includes(subcommand) && !args.includes('--hard');
     }
     if (executable === 'npm' || executable === 'pnpm') {
+      if (args[0] === 'exec') return false;
+      if (args[0] === 'ci') return permissions !== 'standard';
+      if (args[0] === 'install') {
+        if (permissions === 'standard') return false;
+        return args.slice(1).every((arg) => arg.startsWith('-'));
+      }
       const script = args[0] === 'run' ? args[1] : args[0];
-      return permissions !== 'standard' && ['test', 'lint', 'typecheck', 'build', 'build:web', 'install', 'exec'].includes(script || '')
-        || permissions === 'standard' && ['test', 'lint', 'typecheck', 'build', 'build:web'].includes(script || '');
+      return ['test', 'lint', 'typecheck', 'build', 'build:web'].includes(script || '');
     }
-    if (executable === 'npx') return (args[0] === 'vitest' && args[1] === 'run') || (args[0] === 'tsc' && args[1] === '--noEmit');
-    if (executable === 'node') return permissions !== 'standard' && args.every((arg) => safePath(arg, roots, cwd));
+    if (executable === 'npx') {
+      return (args[0] === 'vitest' && args[1] === 'run') || (args[0] === 'tsc' && args[1] === '--noEmit');
+    }
+    if (executable === 'node') {
+      if (permissions === 'standard') return false;
+      if (args.length === 0) return false;
+      const script = args[0];
+      if (script.startsWith('-')) return false;
+      if (!/\.(?:[cm]?js|[cm]?ts)$/i.test(script)) return false;
+      if (!safePath(script, roots, cwd) || isInGitDir(script, cwd) || isSecretPath(script, cwd)) return false;
+      return args.slice(1).every((arg) => !arg.startsWith('-') && safePath(arg, roots, cwd) && !isInGitDir(arg, cwd) && !isSecretPath(arg, cwd));
+    }
     if (executable === 'cat' || executable === 'head' || executable === 'tail' || executable === 'wc' || executable === 'ls') {
       if (executable === 'tail' && args.some((arg) => arg === '-f' || arg === '--follow' || arg.startsWith('--follow='))) return false;
       return args.filter((arg) => !arg.startsWith('-') && !/^\d+$/.test(arg)).every((arg) => safePath(arg, roots, cwd));
@@ -220,8 +297,17 @@ export class BrainPolicy {
   decide(request: BrainPolicyRequest): BrainPolicyDecision | null {
     const { toolName, input } = request;
     const command = typeof input.command === 'string' ? input.command : '';
-    const paths = [input.file_path, input.path].filter((value): value is string => typeof value === 'string');
-    if (SECRET_PATH.test(paths.join(' ')) || SECRET_PATH.test(command)) {
+    const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
+    const paths = [
+      input.file_path,
+      input.path,
+      input.filePath,
+      ...(Array.isArray(input.paths) ? input.paths : []),
+      ...(Array.isArray(input.files) ? input.files.map((f) => (typeof f === 'string' ? f : (f as Record<string, unknown>)?.path || (f as Record<string, unknown>)?.file_path)) : []),
+      ...(Array.isArray(input.changes) ? input.changes.map((c) => (c as Record<string, unknown>)?.file_path || (c as Record<string, unknown>)?.path) : []),
+    ].filter((value): value is string => typeof value === 'string');
+
+    if (paths.some((p) => isSecretPath(p, cwd)) || SECRET_PATH.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối truy cập token/credential' };
     }
     if (toolName === 'Bash' && /\r|\n|\$\(|<\(|>\(|`|\$\{/u.test(command)) return null;
@@ -236,20 +322,25 @@ export class BrainPolicy {
     if (toolName === 'Bash' && DENY_COMMAND.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Lệnh thuộc danh sách luôn từ chối' };
     }
-    const touchesReadOnly = paths.some((value) => this.readOnlyRoots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(process.cwd(), value), root)));
+    const touchesReadOnly = paths.some((value) => this.readOnlyRoots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(cwd, value), root)));
     if (touchesReadOnly && !READ_TOOLS.has(toolName)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Policy chỉ cho phép đọc trong references của project' };
     }
     if (this.extraPatterns.some((pattern) => pattern.test(command || JSON.stringify(input)))) {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'Khớp brain.policy' };
     }
-    const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
     if (READ_TOOLS.has(toolName)) {
       return paths.length === 0 || paths.every((value) => safePath(value, [...this.roots, ...this.readOnlyRoots], cwd))
         ? { action: 'allow', reason: 'policy:auto_allow', message: 'Đọc trong phạm vi project/worktree' }
         : null;
     }
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
+      if (paths.some((p) => isSecretPath(p, cwd))) {
+        return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối truy cập token/credential' };
+      }
+      if (paths.some((p) => isInGitDir(p, cwd))) {
+        return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối can thiệp vào .git' };
+      }
       if (!paths.every((value) => safePath(value, this.roots, cwd))) {
         return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối ghi ngoài phạm vi project/worktree' };
       }

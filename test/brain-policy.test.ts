@@ -153,4 +153,53 @@ describe('BrainPolicy', () => {
     expect(standard.decide({ toolName: 'Write', input: { file_path: path.join(root, 'new.ts'), cwd: root } })).toBeNull();
     expect(trusted.decide({ toolName: 'Bash', input: { command: 'sudo ls', cwd: root } })?.action).toBe('deny');
   });
+
+  it('trusted permission: denies or does not allow forbidden commands', () => {
+    const { root } = make();
+    const trusted = new BrainPolicy({ roots: [root], permissions: 'trusted' });
+
+    // node -e ...
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'node -e "require(\'child_process\').execSync(\'id\')"', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // node --require x
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'node --require evil.js scripts/x.js', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // npm exec foo
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'npm exec foo', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // npx foo
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'npx foo', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // git push -f
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'git push -f origin feature', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // git push origin +main
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'git push origin +main', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // git push --mirror
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'git push --mirror origin', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // git push origin :main
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'git push origin :main', cwd: root } })?.action ?? null).not.toBe('allow');
+
+    // Write vào <root>/.git/hooks/pre-commit
+    expect(trusted.decide({ toolName: 'Write', input: { file_path: path.join(root, '.git/hooks/pre-commit'), cwd: root } })?.action).toBe('deny');
+
+    // Write auth.json
+    expect(trusted.decide({ toolName: 'Write', input: { file_path: 'auth.json', cwd: root } })?.action).toBe('deny');
+  });
+
+  it('trusted permission: allows safe node script, npm ci, and git push branch', () => {
+    const { root } = make();
+    const trusted = new BrainPolicy({ roots: [root], permissions: 'trusted' });
+
+    // node scripts/x.js
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'node scripts/x.js', cwd: root } })?.action).toBe('allow');
+
+    // npm ci
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'npm ci', cwd: root } })?.action).toBe('allow');
+
+    // git push origin feature
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'git push origin feature', cwd: root } })?.action).toBe('allow');
+  });
 });
