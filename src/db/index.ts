@@ -486,6 +486,10 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_run_metrics_task ON run_metrics(taskId);
   CREATE INDEX IF NOT EXISTS idx_claude_task_usage_task ON claude_task_usage(taskId);
   `,
+  // Migration 36: auditable permission decision reasons
+  `
+  ALTER TABLE chat_permissions ADD COLUMN reason TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -1517,6 +1521,7 @@ export interface ChatPermissionRow {
   input: string;
   status: 'pending' | 'allow' | 'deny' | 'allow_always';
   message: string | null;
+  reason: string | null;
   createdAt: string;
   resolvedAt: string | null;
 }
@@ -1550,9 +1555,9 @@ export class ChatPermissionRepo {
       .get(sessionId, messageId || null, toolName) as ChatPermissionRow | undefined;
   }
 
-  resolve(id: string, status: Exclude<ChatPermissionRow['status'], 'pending'>, message: string | null): ChatPermissionRow | undefined {
-    this.db.prepare("UPDATE chat_permissions SET status = ?, message = ?, resolvedAt = datetime('now') WHERE id = ? AND status = 'pending'")
-      .run(status, message, id);
+  resolve(id: string, status: Exclude<ChatPermissionRow['status'], 'pending'>, message: string | null, reason?: string): ChatPermissionRow | undefined {
+    this.db.prepare("UPDATE chat_permissions SET status = ?, message = ?, reason = ?, resolvedAt = datetime('now') WHERE id = ? AND status = 'pending'")
+      .run(status, message, reason || null, id);
     return this.get(id);
   }
 }

@@ -20,6 +20,7 @@ export interface ChatConfig {
 
 export interface BrainConfig {
   fallback: ClaudeFallbackStep[];
+  policy: string[];
 }
 
 export interface ClaudeSessionsConfig {
@@ -696,7 +697,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     defaultLogDir,
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
-    brain: { fallback: normalizeFallbackSteps(brainRaw.fallback) },
+    brain: {
+      fallback: normalizeFallbackSteps(brainRaw.fallback),
+      policy: Array.isArray(brainRaw.policy)
+        ? brainRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
+        : [],
+    },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
       maxAgeDays: typeof rawClaudeSessions.maxAgeDays === 'number' ? rawClaudeSessions.maxAgeDays : 14,
