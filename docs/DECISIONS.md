@@ -68,3 +68,23 @@
 - **Lý do**: Từ chối rõ ràng an toàn hơn việc trả về `null` để chờ người dùng phê duyệt một thay đổi ngoài phạm vi phiên; phiên bộ não không được tự ý mở rộng phạm vi tác động.
 
 
+
+## DEC-007: Ngoại lệ hẹp cho PLAN 2.1 — đọc `access_token` của agy để lấy ảnh đại diện
+
+- **Bối cảnh**: PLAN 2.1 cấm đọc nội dung file `antigravity-oauth-token`. Hồ sơ đăng nhập bằng refresh token lấy được ảnh Google lúc nhập, còn hồ sơ đăng nhập qua terminal thì không có cách nào khác để lấy ảnh. Người dùng đã đồng ý mở ngoại lệ (2026-10-21).
+- **Quyết định**: Cho phép `readAgyAccessToken()` (`src/profiles/agyToken.ts`) đọc file token, với giới hạn:
+  - Chỉ hồ sơ `engine=agy`, `kind=isolated`; không bao giờ chạm keyring hay HOME thật.
+  - Chỉ lấy trường `access_token`, và chỉ khi `expiry` còn hạn. **Không** dùng `refresh_token`, **không** tự đổi token, **không** ghi lại file token.
+  - Chỉ chạy khi người dùng bấm "Kiểm tra" hồ sơ (`runProfileCheck`) hoặc nút "Làm mới" quota (`refreshUsage`), hoặc ngay khi phiên đăng nhập terminal của hồ sơ đó kết thúc; không chạy nền theo chu kỳ.
+  - Access token chỉ được gửi tới `https://www.googleapis.com/oauth2/v3/userinfo`, không log, không lưu DB, không trả qua API.
+  - Nếu email Google trả về khác email của hồ sơ thì bỏ qua ảnh.
+- **Hệ quả**: Hồ sơ terminal có ảnh sau lần "Kiểm tra" hoặc "Làm mới" đầu tiên khi token còn hạn (agy làm mới token mỗi lần chạy). Token hết hạn thì giữ ảnh cũ hoặc ảnh chữ cái. Mọi quy tắc khác của PLAN 2.1 giữ nguyên.
+
+## DEC-008: Cho phép xoá mềm hồ sơ keyring của agy
+
+- **Bối cảnh**: Hồ sơ keyring mặc định (`chinh` / `agy-default`) trước đây không xoá được. Người dùng không dùng tài khoản này và muốn bỏ nó khỏi hub (2026-10-21).
+- **Quyết định**: `DELETE /api/profiles/:name` chấp nhận hồ sơ `kind=keyring` nhưng chỉ **xoá mềm** (`deletedAt`):
+  - Bỏ qua `purgeHome` cho keyring vì `home` là HOME thật; không đụng keyring hệ thống (PLAN 2.1).
+  - `registerAll()` vẫn đếm cả hồ sơ đã xoá khi kiểm tra keyring, nên không tự tạo lại `agy-default`.
+  - Hồ sơ `kind=system` (Claude) vẫn bị chặn như cũ.
+- **Hệ quả**: Popup xoá ẩn ô "Xoá cả thư mục dữ liệu đăng nhập" với hồ sơ keyring và giải thích chỉ ẩn hồ sơ.
