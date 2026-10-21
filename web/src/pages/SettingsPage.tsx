@@ -26,6 +26,7 @@ export const SettingsPage: React.FC = () => {
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
+  const [brainPermissions, setBrainPermissions] = useState<'standard' | 'trusted' | 'full'>('standard');
   const [brainMaxConcurrent, setBrainMaxConcurrent] = useState<number>(2);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState<boolean>(false);
   const [quietHoursStart, setQuietHoursStart] = useState<string>('22:00');
@@ -85,6 +86,7 @@ export const SettingsPage: React.FC = () => {
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
       setBrainMode(config.brain?.mode ?? 'suggest');
+      setBrainPermissions(config.brain?.permissions ?? 'standard');
       setBrainMaxConcurrent(config.brain?.maxConcurrent ?? 2);
       setQuietHoursEnabled(Boolean(config.notifications?.quietHours?.enabled));
       setQuietHoursStart(config.notifications?.quietHours?.start || '22:00');
@@ -169,6 +171,7 @@ export const SettingsPage: React.FC = () => {
       },
       brain: {
         mode: brainMode,
+        permissions: brainPermissions,
         maxConcurrent: Number(brainMaxConcurrent) || 2,
         digest: {
           enabled: digestEnabled,
@@ -176,6 +179,7 @@ export const SettingsPage: React.FC = () => {
         },
         fallback,
       },
+      ...(brainPermissions === 'full' ? { confirm: true } : {}),
       notifications: {
         desktop: desktopNotify,
         quietHours: {
@@ -255,6 +259,11 @@ export const SettingsPage: React.FC = () => {
             ))}
           </div>
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold">Quyền mặc định của bộ não</label>
+              <select value={brainPermissions} onChange={(e) => { const value = e.target.value as typeof brainPermissions; if (value === 'full' && !window.confirm(t('extra.fullModeConfirm'))) return; setBrainPermissions(value); }} className="block rounded border p-2 bg-[var(--t-surface-2)]"><option value="standard">Tiêu chuẩn</option><option value="trusted">Tin cậy</option><option value="full">Toàn quyền</option></select>
+              {brainPermissions === 'full' && <p className="text-xs text-[var(--t-crit)]">Claude có thể chạy mọi lệnh trên máy.</p>}
+            </div>
             {/* Info notice */}
             <div className="p-4 rounded-lg bg-[var(--t-accent-bg)] border border-[var(--t-accent)] text-[var(--t-accent)] text-xs flex items-start gap-2.5">
               <Info className="w-4 h-4 shrink-0 mt-0.5" />

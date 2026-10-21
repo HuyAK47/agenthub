@@ -111,7 +111,7 @@ export interface Project {
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
-  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
   worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
@@ -321,6 +321,7 @@ export interface ProjectBrain {
   projectId: string | null;
   projectName: string;
   mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  permissions?: 'standard' | 'trusted' | 'full';
   sessionId: string;
   state: 'idle' | 'running' | 'waiting' | 'error';
   queued: boolean;
@@ -540,6 +541,7 @@ export interface SystemConfig {
   reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
+    permissions?: 'standard' | 'trusted' | 'full';
     maxConcurrent?: number;
     digest?: {
       enabled: boolean;

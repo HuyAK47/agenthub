@@ -28,7 +28,12 @@ function changedSettings(current: NonNullable<Project['settings']>, original: No
   const result: Partial<NonNullable<Project['settings']>> = {};
   (['brain', 'worktree', 'integration', 'references', 'notifications'] as const).forEach((section) => {
     if (JSON.stringify(current[section]) !== JSON.stringify(original[section])) {
-      (result as Record<string, unknown>)[section] = current[section];
+      if (section === 'brain' && current.brain.permissions === 'inherit' && !original.brain.permissions) {
+        const { permissions: _permissions, ...brain } = current.brain;
+        (result as Record<string, unknown>)[section] = brain;
+      } else {
+        (result as Record<string, unknown>)[section] = current[section];
+      }
     }
   });
   return result;
@@ -41,8 +46,9 @@ function ProjectSettingsForm({
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) => onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () => onChange({ ...value, references: [...value.references, { name: '', path: '', inject: false }] });
   return <div className="space-y-4" data-testid="project-settings-form">
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
       <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.brainMode')}</span><select value={value.brain.mode} onChange={(e) => update('brain', { mode: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="inherit">{t('projects.brainInherit')}</option><option value="off">{t('projects.brainOff')}</option><option value="suggest">{t('projects.brainSuggest')}</option><option value="auto">{t('projects.brainAuto')}</option><option value="external">{t('projects.brainExternal')}</option></select><span className="text-[var(--t-text-3)]">{t(`projects.brainDesc${value.brain.mode}`)}</span></label>
+      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.brainPermissions')}</span><select value={value.brain.permissions ?? 'inherit'} onChange={(e) => { const permissions = e.target.value; if (permissions === 'full' && !window.confirm(t('extra.fullModeConfirm'))) return; update('brain', { permissions }); }} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="inherit">{t('projects.brainPermissionInherit')}</option><option value="standard">{t('projects.brainPermissionStandard')}</option><option value="trusted">{t('projects.brainPermissionTrusted')}</option><option value="full">{t('projects.brainPermissionFull')}</option></select><span className={value.brain.permissions === 'full' ? 'text-[var(--t-crit)]' : 'text-[var(--t-text-3)]'}>{t(`projects.brainPermissionDesc${value.brain.permissions ?? 'inherit'}`)}</span></label>
       <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.dailyTokenBudget')}</span><input type="text" inputMode="numeric" value={value.brain.dailyTokenBudget ?? ''} onChange={(e) => update('brain', { dailyTokenBudget: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
       <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.maxTurnsPerHour')}</span><input type="text" inputMode="numeric" value={value.brain.maxTurnsPerHour ?? ''} onChange={(e) => update('brain', { maxTurnsPerHour: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
     </div>
@@ -223,7 +229,7 @@ export const ProjectsPage: React.FC = () => {
   };
 
   const settingsMutation = useMutation({
-    mutationFn: ({ id, settings }: { id: string; settings: Partial<NonNullable<Project['settings']>> }) => updateProject(id, { settings }),
+    mutationFn: ({ id, settings }: { id: string; settings: Partial<NonNullable<Project['settings']>> }) => updateProject(id, { settings, ...(settings.brain?.permissions === 'full' ? { confirm: true } : {}) } as never),
     onSuccess: (_project, variables) => {
       setProjectSettings((current) => ({ ...current, [variables.id]: { ...(current[variables.id] ?? defaultSettings()), ...variables.settings } as NonNullable<Project['settings']> }));
       queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -508,7 +514,7 @@ export const ProjectsPage: React.FC = () => {
 
               <div className="pt-2 border-t border-[var(--t-border)]">
                 <button type="button" onClick={() => setOpenSettings(openSettings === proj.id ? null : proj.id)} className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)]"><Settings2 className="w-3.5 h-3.5" />{t('projects.settings')}</button>
-                {openSettings === proj.id && <div className="mt-3 space-y-3"><ProjectSettingsForm value={projectSettings[proj.id] ?? proj.settings ?? defaultSettings()} onChange={(settings) => setProjectSettings((current) => ({ ...current, [proj.id]: settings }))} /><button type="button" onClick={() => { const current = projectSettings[proj.id] ?? proj.settings ?? defaultSettings(); settingsMutation.mutate({ id: proj.id, settings: changedSettings(current, proj.settings ?? defaultSettings()) }); }} disabled={settingsMutation.isPending} className="px-3 py-1.5 rounded bg-[var(--t-accent)] text-white text-xs">{settingsMutation.isPending ? t('projects.savingBtn') : t('projects.saveSettings')}</button></div>}
+                {openSettings === proj.id && <div className="mt-3 space-y-3"><ProjectSettingsForm value={projectSettings[proj.id] ?? proj.settings ?? defaultSettings()} onChange={(settings) => setProjectSettings((current) => ({ ...current, [proj.id]: settings }))} /><button type="button" onClick={() => { const current = projectSettings[proj.id] ?? proj.settings ?? defaultSettings(); const original = proj.settings ?? { ...defaultSettings(), brain: { mode: 'inherit' } } as NonNullable<Project['settings']>; settingsMutation.mutate({ id: proj.id, settings: changedSettings(current, original) }); }} disabled={settingsMutation.isPending} className="px-3 py-1.5 rounded bg-[var(--t-accent)] text-white text-xs">{settingsMutation.isPending ? t('projects.savingBtn') : t('projects.saveSettings')}</button></div>}
               </div>
 
               {knowledgeProject === proj.id && (
