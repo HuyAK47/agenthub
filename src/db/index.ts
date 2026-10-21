@@ -486,6 +486,14 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_run_metrics_task ON run_metrics(taskId);
   CREATE INDEX IF NOT EXISTS idx_claude_task_usage_task ON claude_task_usage(taskId);
   `,
+  // Migration 36: safe Claude transcript activity metadata for brain status
+  `
+  ALTER TABLE claude_sessions ADD COLUMN lastUserRequest TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolName TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolSummary TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastEventKind TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN fiveHourTokens REAL;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {

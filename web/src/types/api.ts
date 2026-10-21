@@ -280,6 +280,21 @@ export interface BrainStatus {
   taskId?: string | null;
   updatedAt: string;
   stale: boolean;
+  source?: 'manual' | 'transcript';
+  sessions?: BrainSession[];
+  state?: 'working' | 'waiting' | 'inactive';
+}
+
+export interface BrainSession {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  lastActivityAt: string;
+  lastUserRequest: string | null;
+  lastTool: { name: string; summary: string } | null;
+  state: 'working' | 'waiting' | 'inactive';
+  tokens5h: number | null;
+  link: string;
 }
 
 export interface ClaudeQuota {

@@ -59,6 +59,7 @@ export interface TelegramNotifyConfig {
   blocked: boolean;
   quota: boolean;
   fallback: boolean;
+  brainWaiting?: boolean;
 }
 
 export interface TelegramChat {
@@ -81,6 +82,7 @@ export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
   blocked: true,
   quota: true,
   fallback: true,
+  brainWaiting: true,
 };
 
 export const DEFAULT_STALL_CONFIG: StallConfig = {
@@ -599,6 +601,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       blocked: rawTelegramNotify.blocked !== false,
       quota: rawTelegramNotify.quota !== false,
       fallback: rawTelegramNotify.fallback !== false,
+      brainWaiting: rawTelegramNotify.brainWaiting !== false,
     },
   };
 

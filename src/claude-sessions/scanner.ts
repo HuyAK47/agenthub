@@ -23,8 +23,23 @@ export interface ClaudeScanOptions {
   eventBus?: EventBus;
 }
 
+export function redactTranscriptText(value: unknown, maxLength: number): string {
+  if (typeof value !== 'string') return '';
+  let text = value.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]');
+  text = text.replace(/(?:sk|pk|api|token|secret|key)[-_A-Za-z0-9]*\s*[:=]\s*["']?[-A-Za-z0-9_./+=]{12,}["']?/gi, '[secret]');
+  text = text.replace(/\b(?:bearer\s+)?[A-Za-z0-9_-]{24,}\b/gi, '[secret]');
+  return text.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function messageText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.filter((item) => isRecord(item) && item.type === 'text').map((item) => String(item.text || '')).join(' ');
+  return '';
+}
+
 export class ClaudeSessionScanner {
   private timer?: NodeJS.Timeout;
+  private lastBrainEventAt = 0;
   private readonly weights: { cacheCreation: number; cacheRead: number };
   constructor(private db: Database.Database, private options: ClaudeScanOptions) {
     this.weights = { cacheCreation: options.weights?.cacheCreation ?? 1.25, cacheRead: options.weights?.cacheRead ?? 0.1 };
@@ -60,6 +75,13 @@ export class ClaudeSessionScanner {
     let turnTasks = new Set<string>(reset ? [] : parseTaskState(existing.turnTasks));
     let latestLimit: { resetAt: number; observedAt: string } | null = null;
     let latestActivity: string | null = null;
+    const previous = repo.get(sessionId);
+    let lastUserRequest = previous?.lastUserRequest || null;
+    let lastToolName = previous?.lastToolName || null;
+    let lastToolSummary = previous?.lastToolSummary || null;
+    let lastEventKind = previous?.lastEventKind || null;
+    let fiveHourTokens = previous?.fiveHourTokens ?? null;
+    let metadataChanged = false;
     const records: Array<{ event: ClaudeTranscriptEvent; sessionId: string; turnId: string; tasks: string[]; line: number }> = [];
     const turns = new Map<string, Set<string>>();
     const stream = fs.createReadStream(file, { start, encoding: 'utf8' });
@@ -82,6 +104,12 @@ export class ClaudeSessionScanner {
           if (isClaudeQuotaLimited(quota.status) && quota.resetsAt) latestLimit = { resetAt: quota.resetsAt, observedAt: typeof event.timestamp === 'string' ? event.timestamp : new Date().toISOString() };
         }
         if (event.type === 'assistant' || event.type === 'user') latestActivity = typeof event.timestamp === 'string' ? event.timestamp : latestActivity;
+        if (eligible && event.type === 'user' && !hasToolResult(event)) {
+          const request = redactTranscriptText(messageText(event.message?.content ?? event.content), 200);
+          if (request) lastUserRequest = request;
+          lastEventKind = 'user';
+          metadataChanged = true;
+        }
         if (!eligible) continue;
         if (event.type === 'user' && !hasToolResult(event)) { turnId = `${sessionId}:${event.uuid || offset}`; turnTasks = new Set(); }
         if (event.type === 'ai-title' && typeof event.aiTitle === 'string') repo.upsert({ sessionId, cwd: String(event.cwd || ''), title: event.aiTitle.slice(0, 120) });
@@ -89,6 +117,16 @@ export class ClaudeSessionScanner {
         const toolBlocks = Array.isArray(event.message.content)
           ? event.message.content.filter((block): block is { type: string; input?: unknown } => isRecord(block) && block.type === 'tool_use')
           : [];
+        if (toolBlocks.length) {
+          const block = toolBlocks.at(-1)!;
+          lastToolName = typeof (block as { name?: unknown }).name === 'string' ? redactTranscriptText((block as unknown as { name: string }).name, 80) : 'tool';
+          lastToolSummary = redactTranscriptText(toolSummary(block.input), 120);
+          lastEventKind = 'tool_use';
+          metadataChanged = true;
+        } else {
+          lastEventKind = 'assistant_text';
+          metadataChanged = true;
+        }
         for (const block of toolBlocks) for (const id of taskRefsFromToolInput(block.input, tasks)) turnTasks.add(id);
         records.push({ event, sessionId, turnId, tasks: [...turnTasks], line: lineNumber });
         turns.set(turnId, new Set(turnTasks));
@@ -113,12 +151,16 @@ export class ClaudeSessionScanner {
           const total = repo.turnTotal(sessionId, id).effective;
           repo.setTasks(sessionId, id, attributeTurn(total, [...refs]));
         }
-        const totals = this.db.prepare('SELECT COUNT(*) messages, COALESCE(SUM(input),0) input, COALESCE(SUM(output),0) output, COALESCE(SUM(cacheCreation),0) creation, COALESCE(SUM(cacheRead),0) read, COALESCE(SUM(effective),0) effective, MIN(ts) firstAt, MAX(ts) lastAt FROM claude_usage WHERE sessionId=?').get(sessionId) as { messages:number; input:number; output:number; creation:number; read:number; effective:number; firstAt:string|null; lastAt:string|null };
+        const totals = this.db.prepare("SELECT COUNT(*) messages, COALESCE(SUM(input),0) input, COALESCE(SUM(output),0) output, COALESCE(SUM(cacheCreation),0) creation, COALESCE(SUM(cacheRead),0) read, COALESCE(SUM(effective),0) effective, MIN(ts) firstAt, MAX(ts) lastAt, COALESCE(SUM(CASE WHEN ts >= datetime('now', '-5 hours') THEN input + output ELSE 0 END),0) fiveHourTokens FROM claude_usage WHERE sessionId=?").get(sessionId) as { messages:number; input:number; output:number; creation:number; read:number; effective:number; firstAt:string|null; lastAt:string|null; fiveHourTokens:number };
+        fiveHourTokens = totals.fiveHourTokens;
         const last = records.at(-1)?.event;
-        repo.upsert({ sessionId, cwd: String(last?.cwd || ''), firstAt: totals.firstAt, lastAt: totals.lastAt, model: typeof last?.message?.model === 'string' ? last.message.model : null, messages: totals.messages, inputTokens: totals.input, outputTokens: totals.output, cacheCreationTokens: totals.creation, cacheReadTokens: totals.read, effectiveTokens: totals.effective, isHubChat: this.isHubChat(sessionId) ? 1 : 0 });
+        repo.upsert({ sessionId, cwd: String(last?.cwd || ''), firstAt: totals.firstAt, lastAt: latestActivity || totals.lastAt, model: typeof last?.message?.model === 'string' ? last.message.model : null, messages: totals.messages, inputTokens: totals.input, outputTokens: totals.output, cacheCreationTokens: totals.creation, cacheReadTokens: totals.read, effectiveTokens: totals.effective, isHubChat: this.isHubChat(sessionId) ? 1 : 0, lastUserRequest, lastToolName, lastToolSummary, lastEventKind, fiveHourTokens });
       });
       tx();
       this.updateFailover(file, records);
+    }
+    if (eligible && metadataChanged && !records.length) {
+      repo.upsert({ sessionId, cwd: '', lastAt: latestActivity, lastUserRequest, lastToolName, lastToolSummary, lastEventKind, fiveHourTokens, isHubChat: this.isHubChat(sessionId) ? 1 : 0 });
     }
     if (eligible && latestLimit) {
       const stillLimited = !latestActivity || Date.parse(latestActivity) <= Date.parse(latestLimit.observedAt);
@@ -127,6 +169,14 @@ export class ClaudeSessionScanner {
     }
     await this.maybeAutoResume(file, sessionId, repo, existing, stat);
     this.db.prepare('INSERT OR REPLACE INTO claude_scan_state (path,inode,size,offset,mtime,turnId,turnTasks,eligible) VALUES (?,?,?,?,?,?,?,?)').run(file, stat.ino, stat.size, offset, stat.mtimeMs, turnId, JSON.stringify([...turnTasks]), eligible ? 1 : 0);
+    const currentSession = repo.get(sessionId);
+    const waitingTooLong = currentSession?.lastEventKind === 'assistant_text' && currentSession.lastAt
+      ? Date.now() - Date.parse(currentSession.lastAt) > 5 * 60_000
+      : false;
+    if (eligible && (metadataChanged || waitingTooLong) && Date.now() - this.lastBrainEventAt >= 10_000) {
+      this.lastBrainEventAt = Date.now();
+      this.options.eventBus?.emit('brain.updated', undefined, { sessionId });
+    }
   }
   private async maybeAutoResume(file: string, sessionId: string, repo: ClaudeSessionRepo, existing: { size: number; eligible: number } | undefined, stat: fs.Stats) {
     const auto = this.options.autoResume;
@@ -237,6 +287,13 @@ function quotaInfo(event: ClaudeTranscriptEvent): { status: string; resetsAt: nu
   return { status, resetsAt: numberOrNull(info.resetsAt), rateLimitType, isUsingOverage: false };
 }
 function hasToolResult(event: ClaudeTranscriptEvent) { return JSON.stringify(event.message?.content || event.content || '').includes('tool_result'); }
+function toolSummary(input: unknown): string {
+  if (!isRecord(input)) return '';
+  if (typeof input.command === 'string') return `Bash: ${input.command}`;
+  if (typeof input.file_path === 'string') return `file: ${input.file_path}`;
+  if (typeof input.path === 'string') return `path: ${input.path}`;
+  return Object.keys(input).slice(0, 4).join(', ');
+}
 function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object'; }
 export function isClaudeQuotaLimited(status?: string): boolean {
   const normalized = status?.trim() || '';
