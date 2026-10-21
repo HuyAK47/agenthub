@@ -556,6 +556,49 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(text).toContain('Tasks:');
     });
 
+    it('/brain renders transcript session status, request, and last tool', async () => {
+      ctx.claudeSessionRepo.upsert({
+        sessionId: 'telegram-brain-session', cwd: tmpDir, title: 'Sửa lỗi Telegram',
+        lastAt: new Date(Date.now() - 6 * 60_000).toISOString(),
+        lastUserRequest: 'Kiểm tra trạng thái bot', lastToolName: 'Bash',
+        lastToolSummary: 'Bash: git status --short', lastEventKind: 'assistant_text', fiveHourTokens: 321,
+      });
+
+      await bot.handleUpdate({
+        update_id: 111,
+        message: {
+          message_id: 111,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/brain',
+        },
+      });
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      const text = String(calls[0].body?.text);
+      expect(text).toContain('Claude · Điều phối');
+      expect(text).toContain('chờ bạn trả lời');
+      expect(text).toContain('Kiểm tra trạng thái bot');
+      expect(text).toContain('Bash: git status --short');
+    });
+
+    it('notifies brain waiting only once until the session becomes active again', () => {
+      currentTime = Date.now();
+      ctx.claudeSessionRepo.upsert({
+        sessionId: 'telegram-waiting-once', cwd: tmpDir, title: 'Chờ phản hồi',
+        lastAt: new Date(currentTime - 6 * 60_000).toISOString(), lastEventKind: 'assistant_text',
+      });
+      const handleChatEvent = (bot as unknown as { handleEvent(type: string, taskId?: string, payload?: unknown): void }).handleEvent.bind(bot);
+
+      handleChatEvent('brain.updated');
+      handleChatEvent('brain.updated');
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Claude đang chờ bạn trả lời');
+    });
+
     it('/tasks lists tasks and filters by status', async () => {
       // List all tasks
       await bot.handleUpdate({

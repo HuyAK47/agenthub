@@ -9,6 +9,10 @@ import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo } from './db/
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 
+function statusBrainWaiting(brain: { sessions?: Array<{ state: string; lastActivityAt: string }> } | undefined, now: number): boolean {
+  return Boolean(brain?.sessions?.some((session) => session.state === 'waiting' && now - Date.parse(session.lastActivityAt) > 5 * 60_000));
+}
+
 const execFileAsync = promisify(execFile);
 
 export type GitDiffFn = (
@@ -167,6 +171,7 @@ export class TelegramBotService {
 
   // Deduplication for event notifications
   private lastNotificationTime = new Map<string, number>();
+  private brainWaitingNotified = new Set<string>();
 
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
@@ -550,6 +555,10 @@ export class TelegramBotService {
         await this.handleStatusCommand(chatId);
         break;
 
+      case '/brain':
+        await this.handleBrainCommand(chatId);
+        break;
+
       case '/tasks':
         await this.handleTasksCommand(chatId, argStr);
         break;
@@ -906,9 +915,11 @@ export class TelegramBotService {
     const tasks = status.tasks;
     const running = status.running || [];
     const isPaused = this.service.isSchedulerPaused();
+    const brain = status.brain;
 
     let text = '📊 <b>Tổng quan trạng thái AgentHub</b>\n\n';
     text = text + `• Điều phối: <b>${isPaused ? '⏸ Tạm dừng giao việc' : '▶️ Đang hoạt động'}</b>\n`;
+    if (brain) text = text + `• Brain: <b>${this.brainLabel(brain)}</b>\n`;
     text = text + `• Tasks: <b>${tasks.running}</b> đang chạy, <b>${tasks.review}</b> chờ review, <b>${tasks.queued}</b> hàng đợi, <b>${tasks.waiting_quota}</b> chờ quota, <b>${tasks.failed}</b> lỗi, <b>${tasks.blocked}</b> bị chặn, <b>${tasks.done}</b> hoàn thành\n`;
 
     if (running.length > 0) {
@@ -936,6 +947,25 @@ export class TelegramBotService {
     }
 
     await this.sendMessage(chatId, text);
+  }
+
+  private async handleBrainCommand(chatId: number): Promise<void> {
+    const brain = this.service.getStatus().brain;
+    if (!brain) { await this.sendMessage(chatId, 'Claude chưa có trạng thái.'); return; }
+    let text = `🧠 <b>Claude · Điều phối</b>\n• Trạng thái: <b>${this.brainLabel(brain)}</b>\n• Nguồn: ${brain.source}\n`;
+    for (const session of brain.sessions || []) {
+      text += `\n• <a href="${this.escapeHtml(session.link)}">${this.escapeHtml(session.title)}</a> · ${this.brainLabel(session)}\n`;
+      if (session.lastUserRequest) text += `  Yêu cầu: ${this.escapeHtml(session.lastUserRequest)}\n`;
+      if (session.lastTool) text += `  Tool: ${this.escapeHtml(session.lastTool.name)}${session.lastTool.summary ? ` — ${this.escapeHtml(session.lastTool.summary)}` : ''}\n`;
+    }
+    await this.sendMessage(chatId, text);
+  }
+
+  private brainLabel(value: { state?: string; stale?: boolean }): string {
+    if (value.state === 'waiting') return 'chờ bạn trả lời';
+    if (value.state === 'working') return 'đang làm';
+    if (value.state === 'inactive' || value.stale) return 'không hoạt động';
+    return 'đang làm';
   }
 
   private async handleTasksCommand(chatId: number, statusFilter?: string): Promise<void> {
@@ -1318,6 +1348,16 @@ export class TelegramBotService {
         break;
       }
 
+      case 'brain.updated': {
+        const currentBrain = this.service.getStatus().brain;
+        const waitingIds = new Set((currentBrain?.sessions || []).filter((session) => session.state === 'waiting' && this.now() - Date.parse(session.lastActivityAt) > 5 * 60_000).map((session) => session.sessionId));
+        for (const id of [...this.brainWaitingNotified]) if (!waitingIds.has(id)) this.brainWaitingNotified.delete(id);
+        if (notify.brainWaiting === false || !statusBrainWaiting(currentBrain, this.now()) || [...waitingIds].every((id) => this.brainWaitingNotified.has(id))) return;
+        for (const id of waitingIds) this.brainWaitingNotified.add(id);
+        this.broadcastMessage('🧠 <b>Claude đang chờ bạn trả lời</b>\nDùng /brain để xem phiên và yêu cầu gần nhất.');
+        break;
+      }
+
       case 'chat.limit_waiting': {
         if (!notify.quota || !this.chatService || typeof p.sessionId !== 'string') return;
         const resetAt = typeof p.resetAt === 'number' ? new Date(p.resetAt * 1000 + 60_000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sau khi reset';
@@ -1576,6 +1616,7 @@ export class TelegramBotService {
     return `🤖 <b>Danh sách lệnh AgentHub Telegram Bot:</b>
 
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/brain - Xem Claude đang làm gì hoặc chờ bạn trả lời
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard
 /log &lt;id&gt; - Xem 30 dòng cuối log của task

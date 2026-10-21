@@ -490,6 +490,14 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE chat_permissions ADD COLUMN reason TEXT;
   `,
+  // Migration 37: safe Claude transcript activity metadata for brain status
+  `
+  ALTER TABLE claude_sessions ADD COLUMN lastUserRequest TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolName TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolSummary TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastEventKind TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN fiveHourTokens REAL;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {

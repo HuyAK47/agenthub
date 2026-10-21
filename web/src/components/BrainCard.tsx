@@ -52,6 +52,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
   const routeId = brain.taskId ? brain.taskId.replace('/', '~') : null;
   const resetSeconds = quota?.resetsAt ? Math.max(0, quota.resetsAt - Math.floor(Date.now() / 1000)) : 0;
   const quotaLimited = quota?.limited ?? (!!quota?.status && !/^allowed(?:$|[_-])/i.test(quota.status));
+  const stateLabel = (state: string) => state === 'waiting' ? 'chờ bạn trả lời' : state === 'working' ? 'đang làm' : 'không hoạt động';
 
   return (
     <div
@@ -97,7 +98,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
                 data-testid="brain-activity"
                 className="text-base font-bold text-[var(--text-primary)]"
               >
-                {activityLabel}
+                {brain.state ? stateLabel(brain.state) : activityLabel}
               </h2>
 
               {timeAgoText && (
@@ -140,6 +141,15 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
         <span className={quotaLimited ? 'text-[var(--t-crit)]' : 'text-[var(--t-ok)]'}>
           {quota.status || t('extra.unknown')} {resetSeconds > 0 && `· ${Math.floor(resetSeconds / 3600)}h ${Math.floor((resetSeconds % 3600) / 60)}m`}
         </span>
+      </div>}
+      {brain.sessions && brain.sessions.length > 0 && <div className="mt-4 pt-3 border-t border-[var(--t-border)] space-y-2" data-testid="brain-sessions">
+        {brain.sessions.map((session) => <div key={session.sessionId} className="text-xs text-[var(--text-secondary)]">
+          <a href={session.link} className="font-medium text-[var(--t-accent)] hover:underline">{session.title}</a>
+          <span className="ml-2">· {stateLabel(session.state)}</span>
+          {session.lastUserRequest && <div className="truncate" title={session.lastUserRequest}>Yêu cầu: {session.lastUserRequest}</div>}
+          {session.lastTool && <div className="truncate">Tool: {session.lastTool.name}{session.lastTool.summary ? ` — ${session.lastTool.summary}` : ''}</div>}
+          {session.tokens5h != null && <div>Token 5h: {Math.round(session.tokens5h).toLocaleString()}</div>}
+        </div>)}
       </div>}
     </div>
   );
