@@ -15,7 +15,6 @@ import {
   Monitor,
   Bot,
   MessageSquare,
-  TerminalSquare,
   TrendingUp,
   Layers,
   Wifi,
@@ -53,7 +52,6 @@ export const Layout: React.FC = () => {
   const navItems = [
     { to: '/', label: t('common.dashboard'), icon: Activity },
     { to: '/chat', label: 'Chat', icon: MessageSquare },
-    { to: '/claude-sessions', label: t('extra.claudeSessions'), icon: TerminalSquare },
     { to: '/plans', label: t('common.plans'), icon: Layers },
     { to: '/tasks', label: 'Task', icon: CheckSquare },
     { to: '/savings', label: t('extra.pageSavings'), icon: TrendingUp },
