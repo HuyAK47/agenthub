@@ -103,11 +103,15 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
 };
 
 export interface PlanningConfig {
+  /** Every task Claude creates starts as a draft that the user must dispatch. */
   requireApproval: boolean;
+  /** Plans with at least this many tasks become a draft batch for the user to approve; 0 = never. */
+  approvalMinTasks: number;
 }
 
 export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   requireApproval: false,
+  approvalMinTasks: 0,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -455,6 +459,9 @@ export function updateConfigInMemory(
     if (patch.planning.requireApproval !== undefined) {
       config.planning.requireApproval = patch.planning.requireApproval;
     }
+    if (patch.planning.approvalMinTasks !== undefined) {
+      config.planning.approvalMinTasks = Math.max(0, Math.floor(patch.planning.approvalMinTasks));
+    }
   }
   if (patch.telegram) {
     config.telegram = {
@@ -621,6 +628,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   const rawPlanning = (userConfig.planning as Record<string, unknown>) || {};
   const planning: PlanningConfig = {
     requireApproval: rawPlanning.requireApproval === true,
+    approvalMinTasks: typeof rawPlanning.approvalMinTasks === 'number' && rawPlanning.approvalMinTasks >= 0
+      ? Math.floor(rawPlanning.approvalMinTasks)
+      : DEFAULT_PLANNING_CONFIG.approvalMinTasks,
   };
   const rawTelegram = (userConfig.telegram as Record<string, unknown>) || {};
   const rawTelegramNotify = (rawTelegram.notify as Record<string, unknown>) || {};

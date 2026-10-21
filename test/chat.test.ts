@@ -7,7 +7,7 @@ import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
-import { BRAIN_PROMPT, buildClaudeArgs, buildHubSnapshot, clearPartialSupportCache, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
+import { buildBrainPrompt, buildClaudeArgs, buildHubSnapshot, clearPartialSupportCache, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
 import { parseStreamJsonLine, formatToolSummary, StreamChunkParser } from '../src/chat/parse.js';
 
 let tmpDir: string;
@@ -45,7 +45,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(snapshot).toContain('p/t Running task (running, gemini-3.8-flash-high)');
     expect(snapshot.length).toBeLessThanOrEqual(9000);
     const args = buildClaudeArgs({ mcpConfigPath: '/tmp/mcp.json', hubSnapshot: snapshot });
-    expect(args).toContain(BRAIN_PROMPT);
+    expect(args).toContain(buildBrainPrompt());
     expect(args).toContain(snapshot);
   });
 
@@ -533,7 +533,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(safeArgs).toContain('default');
     expect(safeArgs).toContain('--allowedTools');
     expect(safeArgs).toContain('--append-system-prompt');
-    expect(safeArgs).toContain(BRAIN_PROMPT);
+    expect(safeArgs).toContain(buildBrainPrompt());
     expect(safeArgs).toContain('--mcp-config');
     expect(JSON.parse(logLines[0]).env.ENABLE_TOOL_SEARCH).toBe('false');
   });

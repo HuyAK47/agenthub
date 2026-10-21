@@ -326,6 +326,10 @@ export const UpdateConfigSchema = z.object({
   slotsPerAgyProfile: z.number().int().positive().optional(),
   slotsPerCodexProfile: z.number().int().positive().optional(),
   multiplePerProvider: z.boolean().optional(),
+  planning: z.object({
+    requireApproval: z.boolean().optional(),
+    approvalMinTasks: z.number().int().min(0).max(100).optional(),
+  }).optional(),
   watchdog: z.object({
     stallMinutes: z.number().positive().optional(),
     waitingMinutes: z.number().positive().optional(),
@@ -2702,6 +2706,7 @@ export class AppService {
       defaultTimeout: this.config.defaultTimeout,
       slotsPerAgyProfile: this.config.slotsPerAgyProfile,
       multiplePerProvider: this.config.multiplePerProvider,
+      planning: this.config.planning,
       slotsPerCodexProfile: this.config.slotsPerCodexProfile,
       watchdog: this.config.watchdog,
       autoFixOnFail: this.config.autoFixOnFail,
