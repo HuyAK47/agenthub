@@ -34,16 +34,16 @@ EOF
   (cd "/tmp/release/releases/download/v$VERSION" && sha256sum "$ARCHIVE_NAME") > "/tmp/release/releases/download/v$VERSION/SHA256SUMS"
   HOME=/tmp/agenthub-home AGENTHUB_DIR=/tmp/agenthub-app AGENTHUB_HOME=/tmp/agenthub-home/data AGENTHUB_LINK_DIR=/tmp/bin AGENTHUB_RELEASE_BASE=/tmp/release AGENTHUB_SYSTEMCTL=/tmp/missing-systemctl sh /tmp/agenthub-install.sh --from-release "$VERSION"
   export PATH="/tmp/bin:$PATH"
-  AGENTHUB_HOME=/tmp/agenthub-home/data agenthub doctor --json || true
   AGENTHUB_HOME=/tmp/agenthub-home/data agenthub daemon >/tmp/agenthub-daemon.log 2>&1 &
   daemon_pid=$!
   trap "kill $daemon_pid 2>/dev/null || true" EXIT
   ready=0
   i=0
   while [ "$i" -lt 30 ]; do
-    if AGENTHUB_HEALTH_URL=http://127.0.0.1:7700/health node -e "fetch(process.env.AGY_HEALTH_URL || process.env.AGENTHUB_HEALTH_URL).then(async r => { if (!r.ok) process.exit(1); process.stdout.write(await r.text()); }).catch(() => process.exit(1))" >/tmp/agenthub-health.json; then ready=1; break; fi
+    if AGENTHUB_HEALTH_URL=http://127.0.0.1:7700/health node -e "fetch(process.env.AGENTHUB_HEALTH_URL).then(async r => { if (!r.ok) process.exit(1); process.stdout.write(await r.text()); }).catch(() => process.exit(1))" >/tmp/agenthub-health.json; then ready=1; break; fi
     i=$((i + 1)); sleep 1
   done
   [ "$ready" = 1 ]
-  grep -q ok /tmp/agenthub-health.json
+  AGENTHUB_HOME=/tmp/agenthub-home/data agenthub doctor --json || true
+  grep -q '"ok":true' /tmp/agenthub-health.json
 '

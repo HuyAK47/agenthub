@@ -210,6 +210,7 @@ export interface CheckEnginesDeps {
   codexPath?: string | null;
   homeDir?: string;
   checkFileExists?: (filePath: string) => boolean;
+  port?: number;
 }
 
 export async function checkEngines(deps?: CheckEnginesDeps): Promise<DoctorCheckItem> {
@@ -239,7 +240,8 @@ export async function checkEngines(deps?: CheckEnginesDeps): Promise<DoctorCheck
     suggestions.push(`Cài đặt Antigravity CLI tại ~/.gemini/bin/agy`);
   }
   if (!foundCodex) {
-    suggestions.push(`Mở http://127.0.0.1:7700/setup để cài Codex CLI/Claude Code một chạm; xem tài liệu agy tại https://github.com/ducanh19020217/agenthub`);
+    const port = deps?.port ?? loadConfig().port ?? 7700;
+    suggestions.push(`Mở http://127.0.0.1:${port}/setup để cài Codex CLI/Claude Code một chạm; xem mục cài agy trong docs/GETTING-STARTED.md`);
   }
 
   let message = '';

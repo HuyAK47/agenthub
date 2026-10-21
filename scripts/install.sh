@@ -211,14 +211,22 @@ install_from_release() {
 
   _os="$(uname -s)"
   case "$_os" in Linux*) _platform=linux ;; Darwin*) _platform=macos ;; *) echo "Lỗi: hệ điều hành $_os chưa được hỗ trợ." >&2; return 1 ;; esac
-  _archive="agenthub-${RELEASE_VERSION}-${_platform}-$(uname -m)"
-  case "$(uname -m)" in x86_64|amd64) _archive="agenthub-${RELEASE_VERSION}-${_platform}-x64" ;; aarch64|arm64) _archive="agenthub-${RELEASE_VERSION}-${_platform}-arm64" ;; esac
+  _machine="$(uname -m)"
+  case "$_machine" in
+    x86_64|amd64) _arch=x64 ;;
+    aarch64|arm64) _arch=arm64 ;;
+    *) echo "Lỗi: không có archive AgentHub cho kiến trúc $_machine ($_platform)." >&2; return 1 ;;
+  esac
+  _archive="agenthub-${RELEASE_VERSION}-${_platform}-${_arch}"
   _archive="${_archive}.tar.gz"
   _tmp="${TMPDIR:-/tmp}/agenthub-release.$$"
   mkdir -p "$_tmp"
   trap 'rm -rf "$_tmp"' EXIT HUP INT TERM
   echo "==> Tải AgentHub v$RELEASE_VERSION..."
-  curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/$_archive" -o "$_tmp/$_archive"
+  if ! curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/$_archive" -o "$_tmp/$_archive"; then
+    echo "Lỗi: không tìm thấy archive $_archive cho OS/arch hiện tại ($_os/$_machine)." >&2
+    return 1
+  fi
   curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/SHA256SUMS" -o "$_tmp/SHA256SUMS"
   _expected="$(awk -v file="$_archive" '$2 == file { print $1; exit }' "$_tmp/SHA256SUMS")"
   _actual="$(release_checksum "$_tmp/$_archive" | awk '{print $1}')"
@@ -264,8 +272,9 @@ install_from_release() {
   "$_release_root/current/bin/agenthub" open --no-browser
   printf 'mode=release\nversion=%s\ndate=%s\n' "$RELEASE_VERSION" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$_release_root/.agenthub-app"
 
+  find "$_release_root" -mindepth 1 -maxdepth 1 -type d -name '.*.tmp.*' -exec rm -rf {} +
   _kept=0
-  for _old in $(find "$_release_root" -mindepth 1 -maxdepth 1 -type d -print | sort -V -r); do
+  for _old in $(find "$_release_root" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -print | sort -V -r); do
     _name="${_old##*/}"
     [ "$_name" = "$RELEASE_VERSION" ] && continue
     _kept=$((_kept + 1))
