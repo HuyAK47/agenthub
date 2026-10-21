@@ -1118,4 +1118,228 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(thirdSlug).toBe('sua-loi-dang-nhap-3');
     });
   });
+
+  describe('9. /newtask command (wizard and quick format)', () => {
+    const CHAT_ID = 555;
+    let bot: TelegramBotService;
+
+    beforeEach(() => {
+      ctx.projectRepo.insert({
+        id: 'proj-shop',
+        name: 'E-Commerce Shop',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 2,
+      });
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID] });
+    });
+
+    it('completes full step-by-step wizard to create a queued task', async () => {
+      // 1. Send /newtask
+      await bot.handleUpdate({
+        update_id: 1,
+        message: {
+          message_id: 1,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask',
+        },
+      });
+
+      let calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Chọn project cho task mới');
+      const projKeyboard = calls[calls.length - 1].body?.reply_markup as { inline_keyboard: InlineKeyboardButton[][] };
+      expect(projKeyboard.inline_keyboard[0][0].callback_data).toBe('newtask:proj:proj-shop');
+
+      // 2. Select project
+      await bot.handleUpdate({
+        update_id: 2,
+        callback_query: {
+          id: 'cb-proj',
+          from: { id: CHAT_ID },
+          message: { message_id: 1, chat: { id: CHAT_ID } },
+          data: 'newtask:proj:proj-shop',
+        },
+      });
+
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Vui lòng nhập <b>tiêu đề</b>');
+
+      // 3. Send title
+      await bot.handleUpdate({
+        update_id: 3,
+        message: {
+          message_id: 2,
+          date: 123457,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: 'Tích hợp cổng VNPay',
+        },
+      });
+
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Nhập <b>đề bài</b> cho task');
+
+      // 4. Send body message 1
+      await bot.handleUpdate({
+        update_id: 4,
+        message: {
+          message_id: 3,
+          date: 123458,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: 'Bước 1: Tạo URL thanh toán',
+        },
+      });
+
+      // 5. Send body message 2
+      await bot.handleUpdate({
+        update_id: 5,
+        message: {
+          message_id: 4,
+          date: 123459,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: 'Bước 2: Xử lý IPN callback checksum',
+        },
+      });
+
+      // 6. Send /done
+      await bot.handleUpdate({
+        update_id: 6,
+        message: {
+          message_id: 5,
+          date: 123460,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/done',
+        },
+      });
+
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Chọn <b>độ khó</b> cho task');
+
+      // 7. Select level: hard
+      await bot.handleUpdate({
+        update_id: 7,
+        callback_query: {
+          id: 'cb-level',
+          from: { id: CHAT_ID },
+          message: { message_id: 5, chat: { id: CHAT_ID } },
+          data: 'newtask:level:hard',
+        },
+      });
+
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Chọn <b>model</b> cho task');
+
+      // 8. Select default model
+      await bot.handleUpdate({
+        update_id: 8,
+        callback_query: {
+          id: 'cb-model',
+          from: { id: CHAT_ID },
+          message: { message_id: 5, chat: { id: CHAT_ID } },
+          data: 'newtask:model:default',
+        },
+      });
+
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      const confirmText = calls[calls.length - 1].body?.text as string;
+      expect(confirmText).toContain('Xác nhận tạo task');
+      expect(confirmText).toContain('tich-hop-cong-vnpay');
+      expect(confirmText).toContain('hard');
+
+      // 9. Confirm: Giao ngay
+      await bot.handleUpdate({
+        update_id: 9,
+        callback_query: {
+          id: 'cb-confirm',
+          from: { id: CHAT_ID },
+          message: { message_id: 5, chat: { id: CHAT_ID } },
+          data: 'newtask:confirm:queued',
+        },
+      });
+
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Đã giao task');
+
+      // Verify task in DB
+      const createdTask = ctx.taskRepo.get('proj-shop/tich-hop-cong-vnpay');
+      expect(createdTask).toBeDefined();
+      expect(['queued', 'waiting_quota']).toContain(createdTask?.status);
+      expect(createdTask?.level).toBe('hard');
+      expect(createdTask?.title).toBe('Tích hợp cổng VNPay');
+      expect(createdTask?.body).toContain('Bước 1: Tạo URL thanh toán');
+      expect(createdTask?.body).toContain('Bước 2: Xử lý IPN callback checksum');
+    });
+
+    it('creates a draft task via quick one-line format and supports Giao ngay button', async () => {
+      await bot.handleUpdate({
+        update_id: 20,
+        message: {
+          message_id: 20,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask proj-shop Đăng xuất tài khoản | Xoá session cookie khi user bấm logout',
+        },
+      });
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Đã tạo nháp task');
+      expect(calls[calls.length - 1].body?.text).toContain('proj-shop/dang-xuat-tai-khoan');
+
+      // Task is initially draft in DB
+      let task = ctx.taskRepo.get('proj-shop/dang-xuat-tai-khoan');
+      expect(task).toBeDefined();
+      expect(task?.status).toBe('draft');
+      expect(task?.body).toBe('Xoá session cookie khi user bấm logout');
+
+      // User clicks Giao ngay
+      await bot.handleUpdate({
+        update_id: 21,
+        callback_query: {
+          id: 'cb-start-draft',
+          from: { id: CHAT_ID },
+          message: { message_id: 20, chat: { id: CHAT_ID } },
+          data: `draft:start:${task!.id}`,
+        },
+      });
+
+      task = ctx.taskRepo.get('proj-shop/dang-xuat-tai-khoan');
+      expect(['queued', 'waiting_quota']).toContain(task?.status);
+    });
+
+    it('allows cancelling wizard via /cancel', async () => {
+      await bot.handleUpdate({
+        update_id: 30,
+        message: {
+          message_id: 30,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask',
+        },
+      });
+
+      await bot.handleUpdate({
+        update_id: 31,
+        callback_query: {
+          id: 'cb-proj',
+          from: { id: CHAT_ID },
+          message: { message_id: 30, chat: { id: CHAT_ID } },
+          data: 'newtask:proj:proj-shop',
+        },
+      });
+
+      // User types /cancel instead of title
+      await bot.handleUpdate({
+        update_id: 32,
+        message: {
+          message_id: 31,
+          date: 123457,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/cancel',
+        },
+      });
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Đã hủy thao tác.');
+    });
+  });
 });
