@@ -1132,7 +1132,8 @@ export class AppService {
         no_access_token: 'File token của agy không có access_token',
         expired: 'Access token đã hết hạn; chạy một task hoặc bấm Check để agy làm mới rồi thử lại',
       };
-      return { avatarUrl: profile.avatarUrl ?? null, message: reasons[token.skip] };
+      const fields = token.fieldNames?.length ? ` (các trường: ${token.fieldNames.slice(0, 12).join(', ')})` : '';
+      return { avatarUrl: profile.avatarUrl ?? null, message: reasons[token.skip] + fields };
     }
     const { info, status } = await fetchAgyGoogleUserInfoDetailed(token.accessToken);
     if (!info) {

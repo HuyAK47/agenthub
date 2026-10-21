@@ -205,21 +205,63 @@ export type AgyAccessTokenSkip = 'no_token_file' | 'unreadable' | 'no_access_tok
  * Ngoại lệ DEC-006: chỉ lấy access_token còn hạn để gọi Google userinfo.
  * Không đọc refresh_token, không ghi lại file, không log token.
  */
-export function inspectAgyAccessToken(profileHome: string): { accessToken: string } | { skip: AgyAccessTokenSkip } {
+export function inspectAgyAccessToken(
+  profileHome: string,
+): { accessToken: string } | { skip: AgyAccessTokenSkip; fieldNames?: string[] } {
   const tokenFile = path.join(profileHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
   if (!fs.existsSync(tokenFile)) return { skip: 'no_token_file' };
-  let raw: Record<string, unknown>;
+  let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8')) as Record<string, unknown>;
+    raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
   } catch {
     return { skip: 'unreadable' };
   }
-  const accessToken = typeof raw.access_token === 'string' ? raw.access_token : '';
-  if (!accessToken) return { skip: 'no_access_token' };
+  // agy tự ghi file theo định dạng riêng (có thể lồng nhau, camelCase); file do hub ghi thì phẳng.
+  const found = findAccessTokenFields(raw);
+  if (!found) return { skip: 'no_access_token', fieldNames: listFieldNames(raw) };
   // Không có expiry thì cứ thử; Google sẽ trả 401 nếu token đã hết hạn.
-  const expiry = typeof raw.expiry === 'string' ? Date.parse(raw.expiry) : NaN;
-  if (Number.isFinite(expiry) && expiry <= Date.now() + 60_000) return { skip: 'expired' };
-  return { accessToken };
+  if (found.expiresAt !== null && found.expiresAt <= Date.now() + 60_000) return { skip: 'expired' };
+  return { accessToken: found.accessToken };
+}
+
+const ACCESS_TOKEN_KEY = /^access_?token$/i;
+const EXPIRY_KEY = /^(expiry|expires_?at|expiry_?date|expiration)$/i;
+
+/** Tìm access token và thời điểm hết hạn (ms) của cùng một object, duyệt tối đa 4 cấp. */
+function findAccessTokenFields(value: unknown, depth = 0): { accessToken: string; expiresAt: number | null } | null {
+  if (!value || typeof value !== 'object' || depth > 4) return null;
+  const entries = Object.entries(value as Record<string, unknown>);
+  const token = entries.find(([key, v]) => ACCESS_TOKEN_KEY.test(key) && typeof v === 'string' && v.length > 0);
+  if (token) {
+    const expiry = entries.find(([key]) => EXPIRY_KEY.test(key))?.[1];
+    return { accessToken: token[1] as string, expiresAt: parseExpiry(expiry) };
+  }
+  for (const [, v] of entries) {
+    const nested = findAccessTokenFields(v, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+/** Chỉ tên trường (vd. `token.foo`), không bao giờ có giá trị; dùng để chẩn đoán định dạng file. */
+function listFieldNames(value: unknown, prefix = '', depth = 0): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 2) return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, v]) => {
+    const name = prefix ? `${prefix}.${key}` : key;
+    const nested = listFieldNames(v, name, depth + 1);
+    return nested.length > 0 ? nested : [name];
+  });
+}
+
+function parseExpiry(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value > 1e12 ? value : value * 1000; // ms hoặc giây
+  }
+  if (typeof value === 'string') {
+    const parsed = /^\d+$/.test(value) ? parseExpiry(Number(value)) : Date.parse(value);
+    return parsed !== null && Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 export function readAgyAccessToken(profileHome: string): string | null {

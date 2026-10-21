@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { loadConfig } from '../src/config.js';
-import { exchangeAgyRefreshToken, writeAgyIsolatedToken, readAgyAccessToken } from '../src/profiles/agyToken.js';
+import { exchangeAgyRefreshToken, writeAgyIsolatedToken, readAgyAccessToken, inspectAgyAccessToken } from '../src/profiles/agyToken.js';
 import { createContext } from '../src/daemon.js';
 
 describe('Antigravity Token Import from Cockpit', () => {
@@ -390,6 +390,24 @@ describe('Antigravity Token Import from Cockpit', () => {
       expect((await ctx.service.syncAgyAvatarFromToken('term')).message).toMatch(/tài khoản khác/);
       expect(ctx.profileRepo.get('term')?.avatarUrl ?? null).toBeNull();
     });
+  });
+
+  it('readAgyAccessToken understands nested camelCase token files written by agy itself', () => {
+    const home = path.join(agyHomesDir, 'agy_format');
+    const dir = path.join(home, '.gemini', 'antigravity-cli');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'antigravity-oauth-token');
+
+    fs.writeFileSync(file, JSON.stringify({ email: 'x@example.com', token: { accessToken: 'nested_at', expiresAt: Date.now() + 3_600_000 } }));
+    expect(readAgyAccessToken(home)).toBe('nested_at');
+
+    fs.writeFileSync(file, JSON.stringify({ credentials: { access_token: 'old_at', expiry_date: Math.floor(Date.now() / 1000) - 10 } }));
+    expect(readAgyAccessToken(home)).toBeNull();
+
+    fs.writeFileSync(file, JSON.stringify({ secretBlob: 'abc123', meta: { kind: 'x' } }));
+    const result = inspectAgyAccessToken(home);
+    expect(result).toEqual({ skip: 'no_access_token', fieldNames: ['secretBlob', 'meta.kind'] });
+    expect(JSON.stringify(result)).not.toContain('abc123');
   });
 });
 
