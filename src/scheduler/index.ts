@@ -126,6 +126,8 @@ const STALL_NOTE = 'Lượt trước bị kẹt khi chờ tác vụ nền. Chạ
 
 export class Scheduler {
   private running: Map<string, RunningTask> = new Map(); // taskId -> RunningTask
+  /** Bumped by stop(); a start that began before it must not spawn afterwards. */
+  private stopGeneration = 0;
   // Reservations made synchronously before startTask reaches its first await.
   // This closes the dispatch race where several queued tasks are started in one tick.
   private starting: Map<string, StartingTask> = new Map();
@@ -371,6 +373,7 @@ export class Scheduler {
     }
 
     this.stopped = true;
+    this.stopGeneration += 1;
     this.starting.clear();
 
     for (const run of this.reviewerRuns.values()) {
@@ -1929,6 +1932,7 @@ export class Scheduler {
   }
 
   async startTask(task: TaskRow, model: string, profileName: string, retryCount = 0): Promise<void> {
+    const stopGeneration = this.stopGeneration;
     const disk = this.getBlockingDisk();
     if (disk) {
       this.tasksWaitingForDisk.add(task.id);
@@ -2061,6 +2065,14 @@ export class Scheduler {
         const u5h = usages.find((u) => u.window === '5h' && u.grp === grp);
         if (u5h) usageBefore = u5h.remainingPct;
       }
+    }
+
+    // stop() may have run while this start was awaiting (e.g. node_modules setup). Spawning now would
+    // leave a detached worker nobody tracks or kills.
+    if (this.stopGeneration !== stopGeneration) {
+      this.starting.delete(task.id);
+      this.locks.release(profile.name, lockFile);
+      return;
     }
 
     this.runRepo.insert({

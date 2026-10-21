@@ -7,10 +7,12 @@
  * - quota: prints quota error to stdout
  * - crash: exits with code 1
  * - slow: waits 60 seconds then creates DONE
+ * - sleep-loop: runs until killed (or until orphan-guard exits it)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import './orphan-guard.mjs';
 
 const mode = process.env.FAKE_MODE || 'done';
 const cwd = process.env.FAKE_CWD || process.cwd();

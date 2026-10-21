@@ -14,14 +14,14 @@ describe('CreateTaskPage', () => {
     {
       id: 'proj-1',
       name: 'AgentHub',
-      path: '/home/ducanh/agenthub',
+      path: '/home/user/agenthub',
       defaultBranch: 'main',
       maxParallel: 3,
     },
     {
       id: 'proj-2',
       name: 'XFarm',
-      path: '/home/ducanh/xfarm',
+      path: '/home/user/xfarm',
       defaultBranch: 'main',
       maxParallel: 2,
     },
