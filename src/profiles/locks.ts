@@ -6,6 +6,50 @@ import { ProfileRow } from '../db/index.js';
 
 const execFileAsync = promisify(execFile);
 
+export class LockToolError extends Error {
+  constructor(public readonly tool: string, cause?: unknown) {
+    super(`Không tìm thấy công cụ khóa file "${tool}" trong PATH`);
+    this.name = 'LockToolError';
+    if (cause) this.cause = cause;
+  }
+}
+
+export function lockTool(): string {
+  return process.platform === 'darwin' ? '/usr/bin/lockf' : 'flock';
+}
+
+export function lockCommand(file: string, argv: string[]): [string, string[]] {
+  return process.platform === 'darwin'
+    ? [lockTool(), ['-k', '-s', '-t', '0', file, ...argv]]
+    : [lockTool(), ['-n', file, ...argv]];
+}
+
+function isMissingToolError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'ENOENT');
+}
+
+export async function isLockFree(file: string): Promise<boolean> {
+  try {
+    const [command, args] = lockCommand(file, ['true']);
+    await execFileAsync(command, args);
+    return true;
+  } catch (error) {
+    if (isMissingToolError(error)) throw new LockToolError(lockTool(), error);
+    return false;
+  }
+}
+
+export function isLockFreeSync(file: string): boolean {
+  try {
+    const [command, args] = lockCommand(file, ['true']);
+    execFileSync(command, args, { stdio: 'ignore' });
+    return true;
+  } catch (error) {
+    if (isMissingToolError(error)) throw new LockToolError(lockTool(), error);
+    return false;
+  }
+}
+
 export interface ProfileSlots { slotsUsed: number; slotsTotal: number; busy: boolean; }
 
 export interface SlotReservation {
@@ -65,10 +109,10 @@ export class ProfileLockService {
   }
 
   async isLocked(file: string): Promise<boolean> {
-    try { await execFileAsync('flock', ['-n', file, 'true']); return false; } catch { return true; }
+    return !(await isLockFree(file));
   }
   isLockedSync(file: string): boolean {
-    try { execFileSync('flock', ['-n', file, 'true'], { stdio: 'ignore' }); return false; } catch { return true; }
+    return !isLockFreeSync(file);
   }
 
   async isSlotBusy(profile: ProfileRow, slot: number): Promise<boolean> {
