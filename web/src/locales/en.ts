@@ -382,7 +382,7 @@ export const en: typeof vi = {
     doneAndClose: 'Done & Close',
   },
   setup: {
-    loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
+    navLabel: 'Setup', loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
     progress: 'Readiness progress', progressSummary: '{ready}/{total} items ready',
     node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Background service', mcp: 'Claude Code MCP registration', accounts: 'Sign in to accounts', account: 'Account {name}', login: 'Sign in in Profiles', needsCheck: 'Needs checking', manualGuide: 'Guide', install: 'Install', installAll: 'Install all missing tools', installing: 'Installing…', log: 'View log', complete: 'Complete', skip: 'Skip for now', done: 'Complete', notDone: 'Needs action', running: 'Running', installFailed: 'Installation failed',
   },

@@ -66,9 +66,9 @@ export const App: React.FC = () => {
               }
             >
               <Routes>
-                <Route path="/setup" element={<SetupPage />} />
                 <Route path="/" element={<Layout />}>
                   <Route index element={<DashboardPage />} />
+                  <Route path="setup" element={<SetupPage />} />
                   <Route path="chat" element={<ChatPage />} />
                   <Route path="chat/:sessionId" element={<ChatPage />} />
                   <Route path="claude-sessions" element={<ClaudeSessionsPage />} />
