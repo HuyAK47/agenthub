@@ -35,6 +35,16 @@ import {
   RotateCcw,
 } from 'lucide-react';
 
+function permissionLabel(permission: ChatPermissionRequest): string {
+  const command = typeof permission.input.command === 'string' ? permission.input.command : '';
+  if (!command) return permission.toolName;
+  const tokens = command.trim().split(/\s+/);
+  if (tokens[0] === 'git') return `git ${tokens.find((token) => !token.startsWith('-') && token !== 'git') || ''}`.trim();
+  if (['npm', 'pnpm', 'yarn'].includes(tokens[0])) return tokens.slice(0, tokens[2] === 'run' ? 4 : 3).join(' ');
+  if (tokens[0] === 'python3' && tokens[1] === '-m') return tokens.slice(0, 3).join(' ');
+  return tokens[0];
+}
+
 const EMPTY_SESSIONS: ChatSession[] = [];
 
 export const ChatPage: React.FC = () => {
@@ -719,8 +729,10 @@ export const ChatPage: React.FC = () => {
                   {t('extra.permissionTitle', { tool: permission.toolName })}
                 </div>
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)] font-mono">
-                  {JSON.stringify(permission.input, null, 2)}
+                  {typeof permission.input.command === 'string' ? permission.input.command.slice(0, 500) : JSON.stringify(permission.input, null, 2)}
                 </pre>
+                {typeof permission.input.cwd === 'string' && <div className="text-xs text-[var(--text-muted)]">cwd: <code>{permission.input.cwd}</code></div>}
+                {typeof permission.input.file_path === 'string' && <div className="text-xs text-[var(--text-muted)]">file: <code>{permission.input.file_path}</code></div>}
                 <div className="mt-2 flex gap-2">
                   <button
                     type="button"
@@ -734,7 +746,7 @@ export const ChatPage: React.FC = () => {
                     onClick={() => resolvePermission('allow_always')}
                     className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
                   >
-                    {t('extra.allowAlways')}
+                    {`${t('extra.allowAlways')} ${permissionLabel(permission)}`}
                   </button>
                   <button
                     type="button"

@@ -595,6 +595,7 @@ export interface ChatSession {
   outputTokens?: number;
   contextTokens?: number;
   createdAt?: string;
+  kind?: 'chat' | 'brain';
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
