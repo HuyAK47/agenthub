@@ -107,6 +107,7 @@ export interface Project {
   settings?: ProjectSettings;
   integrationStatus?: IntegrationStatus | null;
   createdAt?: string;
+  afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
 }
 
 /** Mirrors src/projects/settings.ts. */

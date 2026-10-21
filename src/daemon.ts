@@ -45,6 +45,7 @@ import { SetupManager } from './tools/setup.js';
 import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
+import { DeployService } from './deploy.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -79,6 +80,7 @@ export interface DaemonContext {
   usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
   brainRunner: BrainRunner;
+  deployService: DeployService;
 }
 
 export interface CreateContextOptions {
@@ -234,6 +236,9 @@ export function createContext(
     projectRepo,
   });
 
+  const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());
+  deployService.start();
+
   const bulletinService = new BulletinService({
     config,
     taskRepo,
@@ -269,6 +274,7 @@ export function createContext(
     setupManager,
     brainRunner,
   );
+  service.deployService = deployService;
 
   const notifier = new NotificationService({
     eventBus: scheduler.getEventBus(),
@@ -325,6 +331,7 @@ export function createContext(
     usageRepo,
     telegramService,
     brainRunner,
+    deployService,
   };
 }
 
