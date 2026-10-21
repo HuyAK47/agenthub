@@ -2661,6 +2661,22 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     await bot.flushQueue(CHAT_ID);
     lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
     expect(lastMsg?.body?.text).toContain('[Prefix App] 📌');
+
+    currentTime += 15_000;
+
+    // 6. Project name with HTML special chars: A<B & C> -> [A&lt;B &amp; C&gt;]
+    createProject('p-html-esc', 'A<B & C>', 'suggest', 'full');
+    ctx.taskRepo.insert({
+      id: 'p-html-esc/task-esc',
+      projectId: 'p-html-esc',
+      slug: 'task-esc',
+      title: 'Kiểm tra escape HTML',
+      status: 'review',
+    });
+    bot.handleEvent('task.review_ready', 'p-html-esc/task-esc');
+    await bot.flushQueue(CHAT_ID);
+    lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastMsg?.body?.text).toContain('[A&lt;B &amp; C&gt;]');
   });
 
   it('4. telegramContent = minimal khong lo tieu de trong moi duong gui', async () => {
@@ -2818,5 +2834,41 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     const helpMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
     expect(helpMsg).toContain('/use');
     expect(helpMsg).toContain('/brain');
+  });
+
+  it('6. addAllowedChatId (pairing lai) giu lai projectId va kind cua entry cu', async () => {
+    createProject('p-keep', 'Project Keep', 'suggest', 'full');
+    const bot = createProjectBot('suggest');
+
+    // User selects project via /use
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use p-keep' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-keep');
+
+    const chatBefore = (config.telegram.chats || []).find((c) => c.id === CHAT_ID);
+    expect(chatBefore?.projectId).toBe('p-keep');
+    expect(chatBefore?.kind).toBe('chat');
+
+    // Re-pairing: addAllowedChatId with new name/username but no projectId/kind
+    bot.addAllowedChatId(CHAT_ID, {
+      id: CHAT_ID,
+      name: 'Re-paired Tester (@tester)',
+      username: 'tester',
+    });
+
+    const chatAfter = (config.telegram.chats || []).find((c) => c.id === CHAT_ID);
+    expect(chatAfter?.id).toBe(CHAT_ID);
+    expect(chatAfter?.name).toBe('Re-paired Tester (@tester)');
+    expect(chatAfter?.username).toBe('tester');
+    expect(chatAfter?.projectId).toBe('p-keep');
+    expect(chatAfter?.kind).toBe('chat');
+
+    // Selected project is preserved in memory and restored on restart
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-keep');
+    const newBot = createProjectBot('suggest');
+    expect(newBot.getSelectedProject(CHAT_ID)).toBe('p-keep');
   });
 });
