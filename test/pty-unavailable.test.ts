@@ -20,4 +20,18 @@ describe('PtyManager unavailable PTY', () => {
     expect(manager.getSession('missing')).toBeUndefined();
     expect(spawn).toHaveBeenCalledOnce();
   });
+
+  it('ensureSpawnHelperExecutable applies executable permission to spawn-helper binaries', async () => {
+    const { ensureSpawnHelperExecutable } = await import('../src/api/pty.js');
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { createRequire } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const ptyDir = path.dirname(require.resolve('node-pty/package.json'));
+    const darwinHelper = path.join(ptyDir, 'prebuilds', 'darwin-arm64', 'spawn-helper');
+    if (fs.existsSync(darwinHelper)) {
+      ensureSpawnHelperExecutable();
+      expect(fs.statSync(darwinHelper).mode & 0o111).not.toBe(0);
+    }
+  });
 });
