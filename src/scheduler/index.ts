@@ -681,7 +681,7 @@ export class Scheduler {
             });
           }
         }
-      } else if (!load.overloaded) {
+      } else if (!this.loadGuard.isOverloaded()) {
         const autoPaused = Array.from(this.running.values())
           .filter((rt) => rt.paused && rt.pauseReason === 'load')
           .sort((a, b) => (a.pausedAt || 0) - (b.pausedAt || 0));
