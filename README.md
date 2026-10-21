@@ -110,15 +110,28 @@ flowchart TD
 
 ## Quick Start (5 Commands)
 
-### Quick One-Line Install (inspect before running):
+### Quick One-Line Install from Release (inspect before running):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
 less /tmp/agenthub-install.sh
-sh /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh --from-release
 ```
 
 Supports safe updates and uninstallation; use `--dry-run` to preview commands. Data in `~/.agenthub/` is only wiped when explicitly requested via `--uninstall --purge` with confirmation.
+
+Gỡ cài đặt:
+
+```bash
+sh /tmp/agenthub-install.sh --uninstall
+sh /tmp/agenthub-install.sh --uninstall --purge
+```
+
+Thử bộ cài trên máy sạch:
+
+```bash
+scripts/smoke-install.sh release/agenthub-*.tar.gz
+```
 
 ### Manual Setup (5 Commands):
 
@@ -155,7 +168,7 @@ agenthub open
 
 ### Cài trên máy khác từ GitHub Release
 
-Máy mới chỉ cần Node.js 22, npm, `curl`, `tar` và trình biên dịch native:
+Máy mới chỉ cần Node.js 22, npm, `curl` và `tar`; archive release đã kèm `node_modules` production đã build theo OS/arch. Nếu archive thiếu dependencies, installer sẽ hướng dẫn cài compiler native.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
@@ -163,7 +176,7 @@ sh /tmp/agenthub-install.sh --from-release
 agenthub setup
 ```
 
-Dùng `--from-release 0.1.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, chạy `npm ci --omit=dev` để build native module, rồi cập nhật symlink `current` và service. Hai bản cũ được giữ lại để rollback thủ công.
+Dùng `--from-release 0.1.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, bỏ qua `npm ci` khi archive đã có dependencies production, rồi chỉ cập nhật symlink sau khi cài thành công. Hai bản cũ được giữ lại để rollback thủ công.
 
 ```bash
 agenthub rollback          # chọn bản cũ gần nhất
