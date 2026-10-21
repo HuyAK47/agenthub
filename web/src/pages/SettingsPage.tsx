@@ -4,10 +4,13 @@ import { getConfig, updateConfig, getClaudeApiKeyStatus, setClaudeApiKey } from 
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
+import { deletePermissionRule, getPermissionRules } from '../api/chat';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
+  const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
+  const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
 
   const [hardChain, setHardChain] = useState<string>('');
   const [easyChain, setEasyChain] = useState<string>('');
@@ -669,6 +672,17 @@ export const SettingsPage: React.FC = () => {
           </section>
 
           <TelegramCard />
+
+          <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
+            <h2 className="text-sm font-semibold">Quyền đã cấp</h2>
+            <p className="text-xs text-[var(--t-text-3)]">Các quy tắc được dùng để tự động cho phép công cụ.</p>
+            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">Chưa có quy tắc.</p> : permissionRules.data.map((rule) => (
+              <div key={rule.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs">
+                <code className="break-all">{rule.toolName} {rule.pattern}</code>
+                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">Xoá</button>
+              </div>
+            ))}
+          </section>
 
           <div className="flex justify-end">
             <button

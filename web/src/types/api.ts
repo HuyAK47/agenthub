@@ -630,6 +630,7 @@ export interface ChatSession {
   outputTokens?: number;
   contextTokens?: number;
   createdAt?: string;
+  kind?: 'chat' | 'brain';
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
@@ -653,6 +654,9 @@ export interface ChatPermissionRequest {
   status: 'pending' | 'allow' | 'deny' | 'allow_always';
   message?: string | null;
   createdAt: string;
+  sessionTitle?: string | null;
+  projectName?: string | null;
+  permissionLabel?: string;
 }
 
 export interface ChatMessage {

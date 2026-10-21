@@ -14,6 +14,7 @@ import {
   ChatSessionRepo,
   ChatMessageRepo,
   ChatPermissionRepo,
+  PermissionRuleRepo,
   ChatRetryRepo,
   RunMetricsRepo,
   TaskNoteRepo,
@@ -126,6 +127,7 @@ export function createContext(
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
   const chatPermissionRepo = new ChatPermissionRepo(db);
+  const permissionRuleRepo = new PermissionRuleRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
   chatPermissionRepo.expirePending();
@@ -145,7 +147,7 @@ export function createContext(
     const project = projectRepo.get(session.projectId);
     if (!project) return systemBrainPolicy;
     return projectBrainPolicy(project, config);
-  }, chatSessionRepo);
+  }, chatSessionRepo, permissionRuleRepo, projectRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,

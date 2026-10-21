@@ -19,7 +19,7 @@ import {
   ChatRetryRepo,
   ChatRetryRow,
 } from '../db/index.js';
-import { PermissionBroker } from './permissions.js';
+import { PermissionBroker, commandPermissionLabel } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
@@ -184,10 +184,27 @@ export class ChatService {
   }
 
   listPermissions(sessionId?: string) {
-    return this.permissionBroker.listPending(sessionId).map((row) => ({
-      ...row,
-      input: JSON.parse(row.input) as Record<string, unknown>,
-    }));
+    return this.permissionBroker.listPending(sessionId).map((row) => {
+      const session = this.chatSessionRepo.get(row.sessionId);
+      const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
+      const input = JSON.parse(row.input) as Record<string, unknown>;
+      return {
+        ...row,
+        input,
+        sessionTitle: session?.title || null,
+        projectName: project?.name || null,
+        permissionLabel: typeof input.command === 'string' ? commandPermissionLabel(input.command) : row.toolName,
+      };
+    });
+  }
+
+  listPermissionRules() { return this.permissionBroker.listRules(); }
+
+  getPermission(id: string) { return this.permissionBroker.get(id); }
+
+  deletePermissionRule(id: string): { ok: boolean } {
+    if (!this.permissionBroker.deleteRule(id)) throw new HttpError(404, 'not_found', 'Quy tắc không tồn tại');
+    return { ok: true };
   }
 
   decidePermission(id: string, decision: 'allow' | 'deny' | 'allow_always', message?: string): { ok: boolean } {
@@ -1932,6 +1949,12 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   fastify.get('/api/chat/permissions', async (req: FastifyRequest) => {
     const sessionId = (req.query as { sessionId?: string }).sessionId;
     return chatService.listPermissions(sessionId);
+  });
+
+  fastify.get('/api/chat/permission-rules', async () => chatService.listPermissionRules());
+  fastify.delete('/api/chat/permission-rules/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return chatService.deletePermissionRule(id);
   });
 
   fastify.post('/api/chat/permissions/:id', async (req: FastifyRequest) => {

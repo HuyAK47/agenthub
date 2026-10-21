@@ -21,6 +21,7 @@ import {
 } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
+import { commandPermissionLabel } from './chat/permissions.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -225,6 +226,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'stop', description: 'Dừng câu trả lời đang chạy' },
   { command: 'compact', description: 'Nén ngữ cảnh phiên chat' },
   { command: 'help', description: 'Hướng dẫn sử dụng' },
+  { command: 'rules', description: 'Quy tắc quyền đã cấp: /rules · /rules del <số>' },
 ];
 
 export class TelegramBotService {
@@ -703,7 +705,7 @@ export class TelegramBotService {
             await this.handleUpdate(update);
           }
         }
-      } catch (err: unknown) {
+      } catch (err) {
         if (!this.running || (err instanceof Error && err.name === 'AbortError')) {
           break;
         }
@@ -959,6 +961,10 @@ export class TelegramBotService {
 
       case '/help':
         await this.sendMessage(chatId, this.renderHelp());
+        break;
+
+      case '/rules':
+        await this.handlePermissionRules(chatId, args);
         break;
 
       case '/use':
@@ -1454,13 +1460,42 @@ export class TelegramBotService {
     const id = typeof data.id === 'string' ? data.id : undefined;
     if (!id) return;
     const tool = typeof data.toolName === 'string' ? data.toolName : 'công cụ';
-    await this.sendMessage(chatId, `🔐 Claude cần quyền dùng <b>${this.escapeHtml(tool)}</b>.`, {
+    let input: Record<string, unknown> = {};
+    try { input = typeof data.input === 'string' ? JSON.parse(data.input) as Record<string, unknown> : (data.input as Record<string, unknown> || {}); } catch { /* malformed input is still shown as a generic request */ }
+    const command = typeof input.command === 'string' ? input.command : undefined;
+    const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+    const session = this.chatService?.listSessions().find((item) => item.id === sessionId);
+    const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
+    const label = command ? commandPermissionLabel(command) : tool;
+    const text = [
+      `🔐 <b>Dự án: ${this.escapeHtml(project ? `${project.name} (${project.id})` : 'Không gắn dự án')}</b>`,
+      `Phiên: <b>${this.escapeHtml(session ? `${session.title || 'Phiên chat'} (${session.id})` : sessionId || 'Phiên chat')}</b> — Claude cần quyền`,
+      `Công cụ: <b>${this.escapeHtml(tool)}</b>`,
+      command ? `<pre>${this.escapeHtml(command.slice(0, 500))}</pre>` : '',
+      typeof input.cwd === 'string' ? `Thư mục: <code>${this.escapeHtml(input.cwd)}</code>` : '',
+      typeof input.file_path === 'string' ? `Tệp: <code>${this.escapeHtml(input.file_path)}</code>` : '',
+    ].filter(Boolean).join('\n');
+    await this.sendMessage(chatId, text, {
       inline_keyboard: [[
         { text: 'Cho phép', callback_data: `permission:allow:${id}` },
-        { text: 'Luôn cho phép', callback_data: `permission:always:${id}` },
+        { text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` },
         { text: 'Từ chối', callback_data: `permission:deny:${id}` },
       ]],
     });
+  }
+
+  private async handlePermissionRules(chatId: number, args: string[]): Promise<void> {
+    if (!this.chatService) return;
+    const rules = this.chatService.listPermissionRules();
+    if (args[0]?.toLowerCase() === 'del') {
+      const index = Number(args[1]);
+      const rule = Number.isInteger(index) && index > 0 ? rules[index - 1] : undefined;
+      if (!rule || !this.chatService.deletePermissionRule(rule.id)) { await this.sendMessage(chatId, 'Không tìm thấy quy tắc. Dùng /rules để xem danh sách.'); return; }
+      await this.sendMessage(chatId, `🗑️ Đã xoá quy tắc #${index}.`); return;
+    }
+    if (!rules.length) { await this.sendMessage(chatId, 'Chưa có quyền luôn cho phép nào.'); return; }
+    const lines = rules.map((rule, i) => `${i + 1}. <code>${this.escapeHtml(rule.toolName)} ${this.escapeHtml(rule.pattern)}</code> (${rule.scope})`);
+    await this.sendMessage(chatId, `🔐 <b>Quyền đã cấp</b>\n${lines.join('\n')}\n\nDùng <code>/rules del &lt;số&gt;</code> để xoá.`);
   }
 
   private telegramMessageId(value: unknown): number | null {
@@ -1539,10 +1574,17 @@ export class TelegramBotService {
       try {
         this.chatService.decidePermission(taskIdOrParam, decision);
         await this.answerCallbackQuery(query.id, decision === 'deny' ? 'Đã từ chối.' : 'Đã cho phép.');
-        await this.sendMessage(chatId, decision === 'deny' ? '🚫 Đã từ chối quyền công cụ.' : '✅ Đã cấp quyền công cụ.');
-      } catch (err: unknown) {
+        if (query.message) {
+          const result = decision === 'deny' ? '🚫 Đã từ chối.' : decision === 'allow_always' ? '✅ Đã luôn cho phép.' : '✅ Đã cho phép.';
+          const previousText = this.escapeHtml(query.message.text || '');
+          await this.editMessage(chatId, query.message.message_id, `${previousText}\n\n<b>${result}</b>`, { inline_keyboard: [] });
+        }
+      } catch {
         await this.answerCallbackQuery(query.id, 'Yêu cầu đã hết hạn.');
-        await this.sendMessage(chatId, `⚠️ ${this.escapeHtml(err instanceof Error ? err.message : String(err))}`);
+        if (query.message) {
+          const previousText = this.escapeHtml(query.message.text || '');
+          await this.editMessage(chatId, query.message.message_id, `${previousText}\n\n⚠️ Yêu cầu đã hết hạn.`, { inline_keyboard: [] });
+        }
       }
       return;
     }
