@@ -77,4 +77,107 @@ describe('worker service guard', () => {
 
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it('blocks network and container commands with informative message and exit 1', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-blocked-cmds-'));
+    const hub = path.join(root, 'hub');
+    const env = workerEnvironment(hub, { PATH: process.env.PATH });
+
+    for (const cmd of ['ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman']) {
+      const shimPath = path.join(hub, 'shims', cmd);
+      expect(fs.existsSync(shimPath)).toBe(true);
+
+      // Calling through shim directly
+      expect(() => execFileSync(shimPath, ['some-arg'], { env, encoding: 'utf8', stdio: 'pipe' }))
+        .toThrow(`AgentHub: worker không được chạy lệnh '${cmd}'`);
+
+      // Calling by command name with PATH set to worker env
+      expect(() => execFileSync(cmd, ['test'], { env, encoding: 'utf8', stdio: 'pipe' }))
+        .toThrow(`AgentHub: worker không được chạy lệnh '${cmd}'`);
+    }
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('git wrapper blocks git push and git remote set-url while allowing safe commands', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-git-wrapper-'));
+    const hub = path.join(root, 'hub');
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+
+    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'content');
+
+    const env = workerEnvironment(hub, {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    });
+
+    const gitShim = path.join(hub, 'shims', 'git');
+    expect(fs.existsSync(gitShim)).toBe(true);
+
+    // 1. git push is blocked
+    expect(() => execFileSync(gitShim, ['push', 'origin', 'main'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow("AgentHub: worker không được chạy lệnh 'git push'");
+
+    expect(() => execFileSync('git', ['-C', repo, 'push'], { env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow("AgentHub: worker không được chạy lệnh 'git push'");
+
+    expect(() => execFileSync('git', ['--no-pager', 'push'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow("AgentHub: worker không được chạy lệnh 'git push'");
+
+    // 2. git remote set-url is blocked
+    expect(() => execFileSync('git', ['remote', 'set-url', 'origin', 'https://example.com/repo.git'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow("AgentHub: worker không được chạy lệnh 'git remote set-url'");
+
+    expect(() => execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'https://example.com/repo.git'], { env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow("AgentHub: worker không được chạy lệnh 'git remote set-url'");
+
+    // 3. safe git commands run normally
+    // git status
+    const statusOut = execFileSync('git', ['status', '--porcelain'], { cwd: repo, env, encoding: 'utf8' });
+    expect(statusOut).toContain('?? a.txt');
+
+    // git add
+    execFileSync('git', ['add', '.'], { cwd: repo, env });
+
+    // git commit with message containing "push" (should NOT be blocked)
+    execFileSync('git', ['commit', '-m', 'feat: push notification support'], { cwd: repo, env });
+
+    // git log
+    const logOut = execFileSync('git', ['log', '-1', '--oneline'], { cwd: repo, env, encoding: 'utf8' });
+    expect(logOut).toContain('push notification support');
+
+    // git remote add (should NOT be blocked)
+    execFileSync('git', ['remote', 'add', 'origin', 'https://example.com/test.git'], { cwd: repo, env });
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('exposes AGENTHUB_REF_<NAME> environment variables for project references', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-ref-env-'));
+    const hub = path.join(root, 'hub');
+
+    const env = workerEnvironment(hub, {}, {
+      project: {
+        settings: JSON.stringify({
+          references: [
+            { name: 'glossary', path: '/docs/glossary.md', inject: true },
+            { name: 'shared_lib', path: '/libs/shared', inject: false },
+            { name: 'api-spec', path: '/specs/api.json', inject: false },
+          ],
+        }),
+      },
+    });
+
+    expect(env.AGENTHUB_REF_GLOSSARY).toBe('/docs/glossary.md');
+    expect(env.AGENTHUB_REF_SHARED_LIB).toBe('/libs/shared');
+    expect(env.AGENTHUB_REF_API_SPEC).toBe('/specs/api.json');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

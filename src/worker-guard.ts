@@ -4,6 +4,7 @@ import path from 'node:path';
 import { projectSettings } from './projects/settings.js';
 
 export const WORKER_SERVICE_MESSAGE = 'AgentHub: worker không được điều khiển service của hub';
+export const WORKER_BLOCKED_COMMANDS = ['ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman'] as const;
 
 function findExecutable(name: string, env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH || '').split(path.delimiter).filter(Boolean)) {
@@ -18,6 +19,15 @@ function findExecutable(name: string, env: NodeJS.ProcessEnv): string | null {
 }
 
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
+
+function writeShimFile(file: string, content: string): void {
+  try {
+    if (fs.readFileSync(file, 'utf8') !== content) fs.writeFileSync(file, content, { mode: 0o700 });
+    fs.chmodSync(file, 0o700);
+  } catch {
+    fs.writeFileSync(file, content, { mode: 0o700 });
+  }
+}
 
 function shimScript(realBinary: string): string {
   return `#!/bin/sh
@@ -37,6 +47,72 @@ exec ${shellQuote(realBinary)} "$@"
 `;
 }
 
+export function blockedCommandScript(name: string): string {
+  return `#!/bin/sh
+# Shim chặn lệnh ${name}: hàng rào chống nhầm, không phải sandbox (chỉ chặn khi gọi theo tên).
+echo ${shellQuote(`AgentHub: worker không được chạy lệnh '${name}'`)} >&2
+exit 1
+`;
+}
+
+export function gitShimScript(realBinary: string): string {
+  return `#!/bin/sh
+# Shim git: chặn push và remote set-url, chuyển tiếp nguyên vẹn mọi lệnh khác.
+# Lưu ý: shim chỉ chặn lệnh gọi theo tên 'git', không chặn đường dẫn tuyệt đối (hàng rào chống nhầm, không phải sandbox).
+
+skip_next=0
+subcmd=""
+for arg in "$@"; do
+  if [ "$skip_next" -eq 1 ]; then
+    skip_next=0
+    continue
+  fi
+  case "$arg" in
+    -C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path)
+      skip_next=1
+      continue
+      ;;
+    --git-dir=*|--work-tree=*|--namespace=*|--super-prefix=*|--exec-path=*|-c*)
+      continue
+      ;;
+    -*)
+      continue
+      ;;
+    *)
+      subcmd="$arg"
+      break
+      ;;
+  esac
+done
+
+if [ "$subcmd" = "push" ]; then
+  echo "AgentHub: worker không được chạy lệnh 'git push'" >&2
+  exit 1
+fi
+
+if [ "$subcmd" = "remote" ]; then
+  found_remote=0
+  for arg in "$@"; do
+    if [ "$found_remote" -eq 1 ]; then
+      case "$arg" in
+        -*) continue ;;
+        set-url)
+          echo "AgentHub: worker không được chạy lệnh 'git remote set-url'" >&2
+          exit 1
+          ;;
+        *) break ;;
+      esac
+    fi
+    if [ "$arg" = "remote" ]; then
+      found_remote=1
+    fi
+  done
+fi
+
+exec ${shellQuote(realBinary)} "$@"
+`;
+}
+
 export interface WorkerEnvOptions {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null } | null;
@@ -50,26 +126,56 @@ export function workerEnvironment(
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
   const shimDir = path.join(hubHome, 'shims');
   fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+
+  // 1. systemctl & launchctl shims
   for (const name of ['systemctl', 'launchctl']) {
     const realBinary = findExecutable(name, env);
     if (!realBinary) continue;
     const file = path.join(shimDir, name);
     const content = shimScript(realBinary);
-    try {
-      if (fs.readFileSync(file, 'utf8') !== content) fs.writeFileSync(file, content, { mode: 0o700 });
-      fs.chmodSync(file, 0o700);
-    } catch { fs.writeFileSync(file, content, { mode: 0o700 }); }
+    writeShimFile(file, content);
   }
+
+  // 2. Blocked command shims (ssh, scp, sftp, docker, docker-compose, podman)
+  for (const name of WORKER_BLOCKED_COMMANDS) {
+    const file = path.join(shimDir, name);
+    const content = blockedCommandScript(name);
+    writeShimFile(file, content);
+  }
+
+  // 3. git wrapper shim
+  const realGit = findExecutable('git', env) || findExecutable('git', process.env) || '/usr/bin/git';
+  const gitFile = path.join(shimDir, 'git');
+  const gitContent = gitShimScript(realGit);
+  writeShimFile(gitFile, gitContent);
+
   env.PATH = [shimDir, env.PATH || ''].filter(Boolean).join(path.delimiter);
 
-  // Check gitHooks option
+  // Check project settings for gitHooks and references
   let gitHooks: 'run' | 'skip' | undefined;
+  let settings: ReturnType<typeof projectSettings> | undefined;
+
   if (options) {
     if ('gitHooks' in options && options.gitHooks) {
       gitHooks = options.gitHooks;
-    } else if ('settings' in options || ('project' in options && options.project)) {
+    }
+    if ('settings' in options || ('project' in options && options.project)) {
       const proj = 'project' in options ? options.project : options;
-      gitHooks = projectSettings(proj as { settings?: string | null }).worktree.gitHooks;
+      settings = projectSettings(proj as { settings?: string | null });
+      if (!gitHooks) {
+        gitHooks = settings.worktree.gitHooks;
+      }
+    }
+  }
+
+  // Set reference env vars: AGENTHUB_REF_<NAME>
+  if (settings?.references) {
+    for (const ref of settings.references) {
+      const varName = `AGENTHUB_REF_${ref.name.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
+      env[varName] = ref.path;
+      if (ref.name !== ref.name.toUpperCase()) {
+        env[`AGENTHUB_REF_${ref.name}`] = ref.path;
+      }
     }
   }
 
