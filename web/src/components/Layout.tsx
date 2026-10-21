@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { QueryClientContext, useQuery } from '@tanstack/react-query';
 import { useTheme } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
 import { VersionBanner } from './VersionBanner';
 import { subscribeConnectionState } from '../api/sse';
+import { getBatches } from '../api/client';
 import {
   Activity,
   CheckSquare,
@@ -21,6 +23,32 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
+
+const PlansBadgeInner: React.FC = () => {
+  const { data: batches = [] } = useQuery({
+    queryKey: ['batches', 'draft-count'],
+    queryFn: () => getBatches({ status: 'draft' }),
+    staleTime: 5000,
+  });
+
+  const draftCount = batches.length;
+  if (draftCount <= 0) return null;
+
+  return (
+    <span
+      data-testid="plans-sidebar-badge"
+      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/30 leading-none"
+    >
+      {draftCount}
+    </span>
+  );
+};
+
+const PlansBadge: React.FC = () => {
+  const client = React.useContext(QueryClientContext);
+  if (!client) return null;
+  return <PlansBadgeInner />;
+};
 
 export const Layout: React.FC = () => {
   const { mode, setMode } = useTheme();
@@ -132,6 +160,7 @@ export const Layout: React.FC = () => {
               >
                 <Icon size={18} className="shrink-0" />
                 <span className="truncate max-[1100px]:hidden">{item.label}</span>
+                {item.to === '/plans' && <PlansBadge />}
               </NavLink>
             );
           })}
