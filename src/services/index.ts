@@ -29,7 +29,7 @@ import {
   TaskBatchRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
-import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, inspectAgyAccessToken } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -94,6 +94,7 @@ function apiProfile(profile: ProfileRow): ProfileRow {
     authState: profile.authState ?? null,
     authMessage: profile.authMessage ?? null,
     verifyUrl: profile.verifyUrl ?? null,
+    avatarUrl: profile.avatarUrl ?? null,
   };
 }
 
@@ -1212,6 +1213,50 @@ export class AppService {
 
   private emailCheckCache = new Map<string, number>();
 
+  /**
+   * Lấy ảnh Google cho hồ sơ agy đăng nhập qua terminal (ngoại lệ DEC-007); chỉ gọi từ thao tác của người dùng.
+   * `message` giải thích kết quả để hiện thông báo, không bao giờ chứa token.
+   */
+  async syncAgyAvatarFromToken(name: string): Promise<{ avatarUrl: string | null; message: string }> {
+    const profile = this.profileRepo.get(name);
+    if (!profile || profile.engine !== 'agy') return { avatarUrl: null, message: 'Không phải hồ sơ Antigravity' };
+    if (profile.kind !== 'isolated' || !profile.home) {
+      return { avatarUrl: profile.avatarUrl ?? null, message: 'Hồ sơ dùng keyring nên không lấy được ảnh đại diện' };
+    }
+    const token = inspectAgyAccessToken(profile.home);
+    if ('skip' in token) {
+      const reasons: Record<typeof token.skip, string> = {
+        no_token_file: 'Chưa có file token của agy, hãy đăng nhập trước',
+        unreadable: 'File token của agy không đúng định dạng JSON',
+        no_access_token: 'File token của agy không có access_token',
+        expired: 'Access token đã hết hạn; chạy một task hoặc bấm Check để agy làm mới rồi thử lại',
+      };
+      const fields = token.fieldNames?.length ? ` (các trường: ${token.fieldNames.slice(0, 12).join(', ')})` : '';
+      return { avatarUrl: profile.avatarUrl ?? null, message: reasons[token.skip] + fields };
+    }
+    const { info, status } = await fetchAgyGoogleUserInfoDetailed(token.accessToken);
+    if (!info) {
+      const message = status === 0
+        ? 'Không kết nối được tới Google'
+        : status === 401
+          ? 'Google báo access token không hợp lệ hoặc đã hết hạn (HTTP 401)'
+          : status === 403
+            ? 'Token của agy không có quyền đọc ảnh hồ sơ Google (HTTP 403)'
+            : `Google trả lỗi HTTP ${status}`;
+      return { avatarUrl: profile.avatarUrl ?? null, message };
+    }
+    if (!info.picture) return { avatarUrl: profile.avatarUrl ?? null, message: 'Google không trả về ảnh đại diện (token thiếu quyền profile hoặc tài khoản chưa đặt ảnh)' };
+    if (info.email && profile.email && info.email.toLowerCase() !== profile.email.toLowerCase()) {
+      return { avatarUrl: profile.avatarUrl ?? null, message: `Token thuộc tài khoản khác (${info.email}), bỏ qua ảnh` };
+    }
+    if (info.picture !== profile.avatarUrl) {
+      this.profileRepo.updateAvatarUrl(name, info.picture);
+      this.scheduler.getEventBus().emit('profile.updated', undefined, { name, avatarUrl: info.picture });
+      return { avatarUrl: info.picture, message: 'Đã cập nhật ảnh đại diện' };
+    }
+    return { avatarUrl: info.picture, message: 'Ảnh đại diện đã là mới nhất' };
+  }
+
   refreshProfileEmail(name: string): string | null {
     let profile: ProfileRow | undefined;
     try {
@@ -1245,6 +1290,8 @@ export class AppService {
       if (email !== profile.email) {
         try {
           this.profileRepo.upsert({ ...profile, email });
+          // Ảnh đại diện thuộc tài khoản cũ; chỉ lấy lại được khi đăng nhập bằng refresh token.
+          if (profile.avatarUrl) this.profileRepo.updateAvatarUrl(profile.name, null);
         } catch {
           return email;
         }
@@ -1347,12 +1394,211 @@ export class AppService {
     return apiProfile(this.profileRepo.get(parsed.name)!);
   }
 
+  /**
+   * verify: chạy Check bằng agy cho từng hồ sơ nhập thành công (kết quả về qua sự kiện profile.check).
+   * CLI tắt vì nó đóng DB ngay sau khi nhập.
+   */
+  async importAgyTokens(raw: unknown, options: { verify?: boolean } = {}): Promise<{
+    success: boolean;
+    total: number;
+    successCount: number;
+    failedCount: number;
+    results: Array<{
+      name: string;
+      email: string;
+      action: 'created' | 'updated' | 'skipped';
+      status: 'ok' | 'error';
+      message?: string;
+    }>;
+  }> {
+    let payload: unknown = raw;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        throw new HttpError(400, 'bad_request', 'Dữ liệu không phải là chuỗi JSON hợp lệ');
+      }
+    }
+
+    const payloadObj = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const accountType: 'personal' | 'team' | 'api' =
+      typeof payloadObj.accountType === 'string' && ['personal', 'team', 'api'].includes(payloadObj.accountType)
+        ? (payloadObj.accountType as 'personal' | 'team' | 'api')
+        : 'personal';
+
+    let rawList: unknown[] = [];
+    if (Array.isArray(payload)) {
+      rawList = payload;
+    } else if (Array.isArray(payloadObj.tokens)) {
+      rawList = payloadObj.tokens;
+    } else if (typeof payloadObj.tokens === 'string') {
+      try {
+        const parsed = JSON.parse(payloadObj.tokens);
+        rawList = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        throw new HttpError(400, 'bad_request', 'Trường "tokens" không phải là JSON hợp lệ');
+      }
+    } else if (payloadObj.refresh_token || payloadObj.refreshToken || payloadObj.token) {
+      rawList = [payloadObj];
+    } else {
+      throw new HttpError(
+        400,
+        'bad_request',
+        'Dữ liệu token không hợp lệ (cần mảng JSON hoặc object chứa email và refresh_token)',
+      );
+    }
+
+    if (rawList.length === 0) {
+      throw new HttpError(400, 'bad_request', 'Danh sách token trống');
+    }
+
+    const results: Array<{
+      name: string;
+      email: string;
+      action: 'created' | 'updated' | 'skipped';
+      status: 'ok' | 'error';
+      message?: string;
+    }> = [];
+    const fail = (name: string, email: string, message: string) =>
+      results.push({ name, email, action: 'skipped', status: 'error', message });
+
+    for (const rawItem of rawList) {
+      if (!rawItem || typeof rawItem !== 'object') {
+        fail('', '', 'Mục dữ liệu không phải là object hợp lệ');
+        continue;
+      }
+      const item = rawItem as Record<string, unknown>;
+
+      const emailRaw = item.email || item.Email || item.mail;
+      if (!emailRaw || typeof emailRaw !== 'string' || !emailRaw.includes('@')) {
+        fail('', typeof emailRaw === 'string' ? emailRaw : '', 'Địa chỉ email không hợp lệ hoặc thiếu');
+        continue;
+      }
+      const email = emailRaw.trim().toLowerCase();
+
+      const refreshTokenRaw = item.refresh_token || item.refreshToken || item.token;
+      if (!refreshTokenRaw || typeof refreshTokenRaw !== 'string' || !refreshTokenRaw.trim()) {
+        fail('', email, 'Thiếu refresh_token');
+        continue;
+      }
+      const refreshToken = refreshTokenRaw.trim();
+
+      // Chỉ cập nhật hồ sơ agy isolated; không bao giờ ghi token vào hồ sơ keyring hay engine khác.
+      const isAgyIsolated = (p: ProfileRow) => p.engine === 'agy' && p.kind === 'isolated';
+      const sameEmail = (p: ProfileRow) => (p.email || '').toLowerCase() === email;
+      const customName = String(item.name || item.profile_name || item.profileName || '').trim();
+      let targetName = '';
+      if (customName) {
+        if (!/^[a-zA-Z0-9_-]+$/.test(customName)) {
+          fail(customName, email, 'Tên hồ sơ chỉ được chứa chữ, số, "_" và "-"');
+          continue;
+        }
+        const existing = this.profileRepo.get(customName);
+        if (existing && !isAgyIsolated(existing)) {
+          fail(customName, email, `Hồ sơ "${customName}" đã tồn tại và không phải hồ sơ Antigravity riêng`);
+          continue;
+        }
+        targetName = customName;
+      } else {
+        const all = this.profileRepo.getAll(true).filter((p) => isAgyIsolated(p) && sameEmail(p));
+        const match = all.find((p) => !p.deletedAt) || all[0];
+        if (match) {
+          targetName = match.name;
+        } else {
+          const base = email.split('@')[0].replace(/[^a-z0-9_-]/g, '_') || 'agy_account';
+          targetName = base;
+          for (let idx = 2; this.profileRepo.get(targetName); idx++) targetName = `${base}_${idx}`;
+        }
+      }
+
+      const existing = this.profileRepo.get(targetName);
+      const action: 'created' | 'updated' = existing && !existing.deletedAt ? 'updated' : 'created';
+
+      // Cùng chính sách với createProfile: không tạo thêm hồ sơ cá nhân khi multiplePerProvider tắt.
+      if (action === 'created' && !this.config.multiplePerProvider && accountType === 'personal') {
+        const personal = this.profileRepo.getAll().find((p) => p.engine === 'agy' && p.accountType === 'personal');
+        if (personal) {
+          fail(targetName, email, `Đã có hồ sơ cá nhân cho engine agy (${personal.name}); hãy chọn loại Team/API hoặc bật multiplePerProvider`);
+          continue;
+        }
+      }
+
+      // Xác thực và đổi access_token qua Google OAuth
+      let exchanged: Awaited<ReturnType<typeof exchangeAgyRefreshToken>>;
+      try {
+        exchanged = await exchangeAgyRefreshToken(refreshToken);
+      } catch (err: unknown) {
+        fail(targetName, email, err instanceof Error ? err.message : String(err));
+        continue;
+      }
+
+      // Lấy Google user info (bao gồm avatar / picture)
+      let avatarUrl: string | null = null;
+      try {
+        const userInfo = await fetchAgyGoogleUserInfo(exchanged.accessToken);
+        if (userInfo?.picture) {
+          avatarUrl = userInfo.picture;
+        }
+      } catch {
+        // bỏ qua nếu không lấy được ảnh
+      }
+
+      if (action === 'created') {
+        if (existing) this.profileRepo.restore(targetName);
+        this.coreProfileService.createProfile(targetName, 'agy', accountType);
+      }
+      const current = this.profileRepo.get(targetName)!;
+      writeAgyIsolatedToken(current.home || path.join(this.config.agyHomesDir, targetName), exchanged, email);
+      // Giữ ảnh cũ chỉ khi vẫn là cùng tài khoản; đổi tài khoản mà không lấy được ảnh thì xoá ảnh cũ.
+      const nextAvatar = avatarUrl ?? (sameEmail(current) ? current.avatarUrl ?? null : null);
+      this.profileRepo.upsert({ ...current, email });
+      this.profileRepo.updateAvatarUrl(targetName, nextAvatar);
+      // Google đã nhận refresh token; agy có dùng được file token hay không thì Check bên dưới xác nhận.
+      this.profileRepo.updateAuthState(targetName, 'ok', 'Đã xác thực qua refresh token', null);
+
+      if (action === 'created') {
+        this.scheduler.getEventBus().emit('profile.created', undefined, { name: targetName });
+      } else {
+        this.scheduler.getEventBus().emit('profile.updated', undefined, { name: targetName, email, avatarUrl: nextAvatar });
+      }
+
+      results.push({
+        name: targetName,
+        email,
+        action,
+        status: 'ok',
+        message: `${action === 'updated' ? 'Cập nhật token thành công' : 'Thêm tài khoản thành công'}${options.verify === false ? '' : ' · đang kiểm tra với agy'}`,
+      });
+    }
+
+    if (options.verify !== false) {
+      for (const item of results) {
+        if (item.status !== 'ok') continue;
+        try {
+          this.startProfileCheck(item.name);
+        } catch {
+          // Đang có lượt kiểm tra khác cho hồ sơ này; kết quả của nó cũng phản ánh token mới.
+        }
+      }
+    }
+
+    return {
+      success: results.some((r) => r.status === 'ok'),
+      total: rawList.length,
+      successCount: results.filter((r) => r.status === 'ok').length,
+      failedCount: results.filter((r) => r.status === 'error').length,
+      results,
+    };
+  }
+
   deleteProfile(name: string, purgeHome = false): { ok: boolean } {
     const profile = this.profileRepo.get(name);
     if (!profile || profile.deletedAt) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.kind === 'system' || profile.kind === 'keyring') {
-      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống hoặc keyring');
+    if (profile.kind === 'system') {
+      throw new HttpError(400, 'bad_request', 'Không thể xóa hồ sơ hệ thống');
     }
+    // Hồ sơ keyring dùng HOME thật: chỉ ẩn khỏi hub, không bao giờ xoá thư mục (DEC-008).
+    if (profile.kind === 'keyring') purgeHome = false;
 
     const runningMap = this.scheduler.getRunning();
     const isBusy = Array.from(runningMap.values()).some((r) => r.profileName === name);
@@ -1637,7 +1883,11 @@ export class AppService {
     else if (profile.engine === 'claude') await this.usageService.collectClaude(profile, true);
     else await this.usageService.collect(profile);
     this.refreshProfileEmail(profile.name);
-    return this.listProfiles().find((p) => p.name === name);
+    const avatar = profile.engine === 'agy'
+      ? await this.syncAgyAvatarFromToken(profile.name).catch(() => ({ avatarUrl: null, message: 'Không lấy được ảnh đại diện' }))
+      : null;
+    const refreshed = this.listProfiles().find((p) => p.name === name);
+    return refreshed && avatar ? { ...refreshed, avatarMessage: avatar.message } : refreshed;
   }
 
   updateProfile(name: string, raw: unknown): ProfileRow {

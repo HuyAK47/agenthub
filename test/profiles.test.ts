@@ -127,6 +127,18 @@ describe('Profile import from ~/.agy-homes', () => {
     expect(g2.email).toBe('g2@example.com');
   });
 
+  it('keeps a deleted keyring profile deleted on the next start and never touches its home', () => {
+    profileRepo.upsert({ name: 'chinh', engine: 'agy', kind: 'keyring', home: tmpDir, email: null, enabled: 1 });
+    fs.writeFileSync(path.join(tmpDir, 'keep.txt'), 'x');
+
+    profileService.deleteProfile('chinh', true);
+    profileService.registerAll();
+
+    expect(profileRepo.get('chinh')?.deletedAt).toBeTruthy();
+    expect(profileRepo.getAll().filter((p) => p.kind === 'keyring')).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, 'keep.txt'))).toBe(true);
+  });
+
   it('does not create the default keyring profile when agy is unavailable', () => {
     const previous = {
       agyBin: process.env.AGENTHUB_AGY_BIN,
@@ -260,6 +272,20 @@ https://accounts.google.com/signin/continue?sarp=1&
       const result = parseAuthState(output, true);
       expect(result.authState).toBe('ok');
       expect(result.verifyUrl).toBeNull();
+    });
+
+    it('không coi hồ sơ keyring là logged in nếu chưa có email và authState là not_logged_in hoặc null', () => {
+      const p1 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: 'not_logged_in' as const };
+      expect(isProfileLoggedIn(p1)).toBe(false);
+
+      const p2 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: null };
+      expect(isProfileLoggedIn(p2)).toBe(false);
+
+      const p3 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: 'chinh@example.com', enabled: 1, authState: null };
+      expect(isProfileLoggedIn(p3)).toBe(true);
+
+      const p4 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: 'ok' as const };
+      expect(isProfileLoggedIn(p4)).toBe(true);
     });
   });
 });
