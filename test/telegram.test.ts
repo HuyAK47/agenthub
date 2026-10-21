@@ -1613,3 +1613,17 @@ describe('Telegram gửi lỗi mạng không làm sập daemon', () => {
     expect(unhandled).toHaveLength(0);
   });
 });
+
+describe('Menu lệnh Telegram', () => {
+  it('mọi lệnh trong menu đều có xử lý thật và mô tả hợp lệ', async () => {
+    const { TELEGRAM_BOT_COMMANDS } = await import('../src/telegram.js');
+    const fsMod = await import('node:fs');
+    const src = fsMod.readFileSync(new URL('../src/telegram.ts', import.meta.url), 'utf8');
+    for (const { command, description } of TELEGRAM_BOT_COMMANDS) {
+      expect(command).toMatch(/^[a-z0-9_]{1,32}$/);
+      expect(description.length).toBeGreaterThan(2);
+      expect(description.length).toBeLessThanOrEqual(256);
+      expect(src).toContain(`case '/${command}'`);
+    }
+  });
+});

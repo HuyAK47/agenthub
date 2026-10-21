@@ -187,6 +187,29 @@ export function readTelegramToken(tokenPath: string): string | null {
   }
 }
 
+
+/** Shown by Telegram when the user types "/" (registered with setMyCommands on start). */
+export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string }> = [
+  { command: 'brain', description: 'Bộ não đang làm gì · /brain mode off|suggest|auto' },
+  { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
+  { command: 'task', description: 'Chi tiết một task: /task <id>' },
+  { command: 'newtask', description: 'Tạo task mới (hỏi từng bước)' },
+  { command: 'plan', description: 'Lên kế hoạch: /plan <project> <mục tiêu>' },
+  { command: 'drafts', description: 'Task/đợt nháp chờ giao' },
+  { command: 'approve', description: 'Duyệt & merge: /approve <id>' },
+  { command: 'reject', description: 'Trả về: /reject <id> <nhận xét>' },
+  { command: 'retry', description: 'Chạy lại task: /retry <id>' },
+  { command: 'log', description: 'Xem log cuối của task: /log <id>' },
+  { command: 'cancel', description: 'Huỷ task: /cancel <id>' },
+  { command: 'pause', description: 'Tạm dừng giao task mới' },
+  { command: 'resume', description: 'Tiếp tục giao task' },
+  { command: 'new', description: 'Mở phiên chat mới với Claude' },
+  { command: 'stop', description: 'Dừng câu trả lời đang chạy' },
+  { command: 'compact', description: 'Nén ngữ cảnh phiên chat' },
+  { command: 'help', description: 'Hướng dẫn sử dụng' },
+];
+
 export class TelegramBotService {
   private config: AgentHubConfig;
   private service: AppService;
@@ -356,6 +379,21 @@ export class TelegramBotService {
 
     // Begin long polling loop in the background
     this.pollPromise = this.startPollingLoop();
+    void this.registerCommands();
+  }
+
+  /** Register the "/" command menu with Telegram; best effort, never blocks or throws. */
+  private async registerCommands(): Promise<void> {
+    if (!this.token) return;
+    try {
+      await this.fetchFn(`https://api.telegram.org/bot${this.token}/setMyCommands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
+      });
+    } catch (error) {
+      console.error(`[telegram] setMyCommands failed: ${redactTelegramToken(error, this.token)}`);
+    }
   }
 
   /**
