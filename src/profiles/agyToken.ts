@@ -186,27 +186,3 @@ export async function fetchAgyGoogleUserInfo(
     return null;
   }
 }
-
-/**
- * Đọc file token Antigravity từ thư mục profile home nếu có.
- */
-export function readAgyToken(profileHome: string): {
-  accessToken?: string;
-  refreshToken?: string;
-  tokenType?: string;
-  expiry?: string;
-} | null {
-  const tokenFile = path.join(profileHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
-  if (!fs.existsSync(tokenFile)) return null;
-  try {
-    const raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8')) as Record<string, unknown>;
-    return {
-      accessToken: typeof raw.access_token === 'string' ? raw.access_token : undefined,
-      refreshToken: typeof raw.refresh_token === 'string' ? raw.refresh_token : undefined,
-      tokenType: typeof raw.token_type === 'string' ? raw.token_type : undefined,
-      expiry: typeof raw.expiry === 'string' ? raw.expiry : undefined,
-    };
-  } catch {
-    return null;
-  }
-}

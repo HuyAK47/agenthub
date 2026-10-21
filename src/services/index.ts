@@ -26,7 +26,7 @@ import {
   TaskBatchRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
-import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, readAgyToken } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -1113,58 +1113,6 @@ export class AppService {
   }
 
   private emailCheckCache = new Map<string, number>();
-  private avatarSyncCache = new Map<string, number>();
-
-  async syncAgyAvatar(name: string): Promise<string | null> {
-    let profile: ProfileRow | undefined;
-    try {
-      profile = this.profileRepo.get(name);
-    } catch {
-      return null;
-    }
-    if (!profile || profile.engine !== 'agy') return null;
-
-    const profileHome =
-      profile.name === 'chinh'
-        ? (profile.home || os.homedir())
-        : (profile.home || path.join(this.config.agyHomesDir, profile.name));
-
-    const tokenData = readAgyToken(profileHome);
-    if (!tokenData) return null;
-
-    let accessToken = tokenData.accessToken;
-    const isExpired = tokenData.expiry ? new Date(tokenData.expiry).getTime() <= Date.now() + 60_000 : false;
-    if ((!accessToken || isExpired) && tokenData.refreshToken) {
-      try {
-        const exchanged = await exchangeAgyRefreshToken(tokenData.refreshToken);
-        accessToken = exchanged.accessToken;
-        if (profile.kind === 'isolated') {
-          writeAgyIsolatedToken(profileHome, exchanged, profile.email);
-        }
-      } catch {
-        // bỏ qua nếu refresh không thành công
-      }
-    }
-
-    if (!accessToken) return null;
-
-    try {
-      const userInfo = await fetchAgyGoogleUserInfo(accessToken);
-      if (userInfo?.picture) {
-        if (userInfo.picture !== profile.avatarUrl) {
-          this.profileRepo.updateAvatarUrl(name, userInfo.picture);
-          this.scheduler.getEventBus().emit('profile.updated', undefined, {
-            name: profile.name,
-            avatarUrl: userInfo.picture,
-          });
-        }
-        return userInfo.picture;
-      }
-    } catch {
-      // bỏ qua lỗi fetch userinfo
-    }
-    return null;
-  }
 
   refreshProfileEmail(name: string): string | null {
     let profile: ProfileRow | undefined;
@@ -1199,6 +1147,8 @@ export class AppService {
       if (email !== profile.email) {
         try {
           this.profileRepo.upsert({ ...profile, email });
+          // Ảnh đại diện thuộc tài khoản cũ; chỉ lấy lại được khi đăng nhập bằng refresh token.
+          if (profile.avatarUrl) this.profileRepo.updateAvatarUrl(profile.name, null);
         } catch {
           return email;
         }
@@ -1237,13 +1187,6 @@ export class AppService {
           if (email) {
             p.email = email;
           }
-        }
-      }
-      if (p.engine === 'agy' && !p.avatarUrl && this.isProfileLoggedIn(p)) {
-        const lastSync = this.avatarSyncCache.get(p.name) || 0;
-        if (now - lastSync > 60_000) {
-          this.avatarSyncCache.set(p.name, now);
-          this.syncAgyAvatar(p.name).catch(() => {});
         }
       }
       if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
@@ -1459,13 +1402,16 @@ export class AppService {
       }
       const current = this.profileRepo.get(targetName)!;
       writeAgyIsolatedToken(current.home || path.join(this.config.agyHomesDir, targetName), exchanged, email);
-      this.profileRepo.upsert({ ...current, email, avatarUrl: avatarUrl || current.avatarUrl });
+      // Giữ ảnh cũ chỉ khi vẫn là cùng tài khoản; đổi tài khoản mà không lấy được ảnh thì xoá ảnh cũ.
+      const nextAvatar = avatarUrl ?? (sameEmail(current) ? current.avatarUrl ?? null : null);
+      this.profileRepo.upsert({ ...current, email });
+      this.profileRepo.updateAvatarUrl(targetName, nextAvatar);
       this.profileRepo.updateAuthState(targetName, 'ok', 'Đã xác thực qua refresh token', null);
 
       if (action === 'created') {
         this.scheduler.getEventBus().emit('profile.created', undefined, { name: targetName });
       } else {
-        this.scheduler.getEventBus().emit('profile.updated', undefined, { name: targetName, email, avatarUrl: avatarUrl || current.avatarUrl });
+        this.scheduler.getEventBus().emit('profile.updated', undefined, { name: targetName, email, avatarUrl: nextAvatar });
       }
 
       results.push({
@@ -1660,7 +1606,6 @@ export class AppService {
         }
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
-        void this.syncAgyAvatar(profile.name);
       } else if (profile.engine === 'claude') {
         // Claude profiles: login state comes from the Claude config dir, not from the Codex CLI.
         const account = this.coreProfileService.readClaudeAccount(profile.home || os.homedir());

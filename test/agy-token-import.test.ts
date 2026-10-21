@@ -313,10 +313,18 @@ describe('Antigravity Token Import from Cockpit', () => {
     const profile = ctx.profileRepo.get('avatar_user');
     expect(profile).toBeDefined();
     expect(profile?.avatarUrl).toBe('https://lh3.googleusercontent.com/a/mock_avatar_img_123');
+  });
 
-    // Test syncAgyAvatar updates avatarUrl
-    const synced = await ctx.service.syncAgyAvatar('avatar_user');
-    expect(synced).toBe('https://lh3.googleusercontent.com/a/mock_avatar_img_123');
+  it('importAgyTokens drops the previous avatar when a profile switches to another account', async () => {
+    mockOkFetch();
+    ctx.service.createProfile({ name: 'g6', engine: 'agy', accountType: 'personal' });
+    ctx.profileRepo.upsert({ ...ctx.profileRepo.get('g6')!, email: 'old@example.com' });
+    ctx.profileRepo.updateAvatarUrl('g6', 'https://lh3.googleusercontent.com/a/old');
+
+    // mockOkFetch trả về userinfo không có picture
+    await ctx.service.importAgyTokens({ tokens: [{ name: 'g6', email: 'new@example.com', refresh_token: 'tok' }] });
+
+    expect(ctx.profileRepo.get('g6')).toMatchObject({ email: 'new@example.com', avatarUrl: null });
   });
 });
 

@@ -8,7 +8,7 @@ import { findClaudeBin } from '../chat/claude.js';
 import { accountKey } from './account.js';
 
 export { accountKey, sameAccount } from './account.js';
-export { exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, readAgyToken, getAgyGoogleClientId, getAgyGoogleClientSecret, GOOGLE_TOKEN_ENDPOINT } from './agyToken.js';
+export { exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, getAgyGoogleClientId, getAgyGoogleClientSecret, GOOGLE_TOKEN_ENDPOINT } from './agyToken.js';
 
 // Symlinks to create in isolated HOME per PLAN 2.1
 const SYMLINK_TARGETS = [
