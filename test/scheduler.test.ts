@@ -1193,6 +1193,36 @@ describe('Checking after worker completion', () => {
     scheduler.stop();
   });
 
+  it('starts completion handling for every finished task before awaiting any completion', async () => {
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const schedulerInternal = scheduler as unknown as {
+      isProcessAlive: (pid: number | null, pidStart?: number | null) => boolean;
+      running: Map<string, unknown>;
+      checkRunningTasks: () => Promise<void>;
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+    };
+    const firstCompletion = new Promise<void>(() => {});
+    const completionSpy = vi.spyOn(schedulerInternal, 'handleRunCompletion')
+      .mockImplementation((taskId) => taskId === 'test-project/t1' ? firstCompletion : Promise.resolve());
+    vi.spyOn(schedulerInternal, 'isProcessAlive').mockReturnValue(false);
+
+    const runningTask = { pid: 999999, pidStart: null };
+    schedulerInternal.running.set('test-project/t1', runningTask);
+    schedulerInternal.running.set('test-project/t2', runningTask);
+
+    const checkPromise = schedulerInternal.checkRunningTasks();
+    await vi.waitFor(() => {
+      expect(completionSpy).toHaveBeenCalledWith('test-project/t2', runningTask);
+    });
+
+    expect(completionSpy).toHaveBeenCalledTimes(2);
+    scheduler.stop();
+    void checkPromise;
+  });
+
   it('logs error on completion failure only when not stopped', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const projectPath = path.join(tmpDir, 'repo');

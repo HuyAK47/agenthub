@@ -285,6 +285,12 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     const t2 = ctx.scheduler.getRunning().get('p-test/t2')!;
     const t3 = ctx.scheduler.getRunning().get('p-test/t3')!;
 
+    // Keep this policy test independent from worker startup/exit timing. The workers are
+    // cleaned up by afterEach; this test only exercises the scheduler's load decisions.
+    vi.spyOn(ctx.scheduler as unknown as { isProcessAlive: (pid: number | null, pidStart?: number | null) => boolean }, 'isProcessAlive')
+      .mockReturnValue(true);
+    for (const task of [t1, t2, t3]) task.lastCommitCheckAt = Date.now();
+
     t1.startTime = 1000;
     t2.startTime = 2000;
     t3.startTime = 3000; // Most recent
