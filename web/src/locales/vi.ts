@@ -367,7 +367,7 @@ export const vi = {
     nameLabel: 'Tên Project (Name) *',
     namePlaceholder: 'vd: XFarm, AgentHub',
     pathLabel: 'Đường dẫn Git repo (Path) *',
-    pathPlaceholder: 'vd: /home/ducanh/projects/xfarm',
+    pathPlaceholder: 'vd: /home/user/projects/xfarm',
     branchLabel: 'Nhánh mặc định (Default Branch)',
     maxParallelLabel: 'Giới hạn worker song song (maxParallel)',
     envLabel: 'Mẫu biến môi trường (envTemplate - định dạng JSON)',

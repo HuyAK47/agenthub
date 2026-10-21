@@ -17,7 +17,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
       name: 'g1',
       engine: 'agy',
       kind: 'isolated',
-      email: 'g1@gmail.com',
+      email: 'g1@example.com',
       loggedIn: true,
       enabled: 1,
       quotaMarks: [
@@ -42,7 +42,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
       name: 'g2',
       engine: 'agy',
       kind: 'isolated',
-      email: 'g2@gmail.com',
+      email: 'g2@example.com',
       loggedIn: true,
       enabled: 0,
       quotaMarks: [],
@@ -311,7 +311,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
         name: 'g_expired',
         engine: 'agy',
         kind: 'isolated',
-        email: 'expired@gmail.com',
+        email: 'expired@example.com',
         loggedIn: true,
         enabled: 1,
         quotaMarks: [

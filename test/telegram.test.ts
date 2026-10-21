@@ -1201,7 +1201,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
           message_id: 1,
           date: 123456,
           chat: { id: CHAT_ID, type: 'private' },
-          text: '/newtask',
+          text: '/newtask_detail',
         },
       });
 
@@ -1399,6 +1399,156 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
 
       const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[calls.length - 1].body?.text).toContain('Đã hủy thao tác.');
+    });
+
+    it('sends a concise description mentioning the project to Claude', async () => {
+      const sendMessage = vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({
+        userMessageId: 'user-message',
+        assistantMessageId: 'assistant-message',
+      }));
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 50, message: {
+        message_id: 50, date: 1, chat: { id: CHAT_ID, type: 'private' },
+        text: '/newtask Sửa checkout trong proj-shop',
+      } });
+
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('Sửa checkout trong proj-shop'));
+      expect(sendMessage.mock.calls[0][1]).toContain('project "proj-shop"');
+    });
+
+    it('streams automatic task replies and forwards permission requests to Telegram', async () => {
+      vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({
+        userMessageId: 'user-message',
+        assistantMessageId: 'assistant-message',
+      }));
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 501, message: {
+        message_id: 501, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: '/newtask Sửa checkout trong proj-shop',
+      } });
+      const handleChatEvent = (type: string, payload: Record<string, unknown>) =>
+        (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void })
+          .handleChatEvent(type, undefined, { sessionId: 'telegram:555', ...payload });
+
+      handleChatEvent('chat.delta', { text: 'Đã tạo task proj-shop/checkout' });
+      handleChatEvent('chat.permission_request', { id: 'permission-1', toolName: 'hub_create_task' });
+      handleChatEvent('chat.done', {});
+      await vi.waitFor(() => {
+        const edits = recordedCalls.filter((call) => call.url.includes('/editMessageText'));
+        expect(edits.some((call) => String(call.body?.text).includes('Đã tạo task proj-shop/checkout'))).toBe(true);
+      });
+
+      const messages = recordedCalls.filter((call) => call.url.includes('/sendMessage'));
+      expect(messages.some((call) => String(call.body?.text).includes('Claude cần quyền'))).toBe(true);
+    });
+
+    it('asks for a project when the description is ambiguous, then sends the selected project to Claude', async () => {
+      ctx.projectRepo.insert({ id: 'proj-api', name: 'API Service', path: tmpDir, defaultBranch: 'main', maxParallel: 2 });
+      const sendMessage = vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({
+        userMessageId: 'user-message',
+        assistantMessageId: 'assistant-message',
+      }));
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 51, message: {
+        message_id: 51, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: '/newtask Sửa lỗi đăng nhập',
+      } });
+      let calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      const keyboard = calls[calls.length - 1].body?.reply_markup as { inline_keyboard: InlineKeyboardButton[][] };
+      expect(keyboard.inline_keyboard.map((row) => row[0].callback_data)).toContain('newtask:proj:proj-api');
+
+      await bot.handleUpdate({ update_id: 52, callback_query: {
+        id: 'cb-ambiguous-project', from: { id: CHAT_ID },
+        message: { message_id: 51, chat: { id: CHAT_ID } }, data: 'newtask:proj:proj-api',
+      } });
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-api"'));
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Đang nhờ Claude');
+    });
+
+    it('remembers a project selected before the description is entered', async () => {
+      const sendMessage = vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({
+        userMessageId: 'user-message',
+        assistantMessageId: 'assistant-message',
+      }));
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 54, message: {
+        message_id: 54, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: '/newtask',
+      } });
+      await bot.handleUpdate({ update_id: 55, callback_query: {
+        id: 'cb-project-first', from: { id: CHAT_ID },
+        message: { message_id: 54, chat: { id: CHAT_ID } }, data: 'newtask:proj:proj-shop',
+      } });
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text).toContain('gửi một đoạn mô tả');
+
+      await bot.handleUpdate({ update_id: 56, message: {
+        message_id: 56, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: 'Cập nhật luồng thanh toán',
+      } });
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-shop"'));
+    });
+
+    it('falls back to a word-bounded draft when Claude is unavailable', async () => {
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID] });
+      const description = 'Thiết kế một màn hình thanh toán mới với nhiều bước xác thực và hướng dẫn chi tiết cho người dùng';
+
+      await bot.handleUpdate({ update_id: 57, message: {
+        message_id: 57, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: `/newtask ${description}`,
+      } });
+
+      const draft = ctx.taskRepo.getAll().find((task) => task.projectId === 'proj-shop' && task.status === 'draft');
+      expect(draft).toBeDefined();
+      expect(draft?.title.length).toBeLessThanOrEqual(60);
+      expect(draft?.title.endsWith('…')).toBe(true);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text).toContain('Đã lưu nháp từ mô tả');
+    });
+
+    it('creates a fallback draft on chat.error for the submitted automatic task turn', async () => {
+      const sendMessage = vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({
+        userMessageId: 'user-message',
+        assistantMessageId: 'assistant-message',
+      }));
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 58, message: {
+        message_id: 58, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: '/newtask Không thể kết nối thanh toán',
+      } });
+      (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void }).handleChatEvent(
+        'chat.error', undefined, { sessionId: 'telegram:555', message: 'quota' },
+      );
+
+      await vi.waitFor(() => expect(ctx.taskRepo.getAll().some((task) => task.status === 'draft')).toBe(true));
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not create a fallback draft for a later chat.error after a successful automatic turn', async () => {
+      vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({
+        userMessageId: 'user-message',
+        assistantMessageId: 'assistant-message',
+      }));
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 59, message: {
+        message_id: 59, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: '/newtask Cập nhật bộ lọc sản phẩm',
+      } });
+      const handleChatEvent = (type: string) => (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void })
+        .handleChatEvent(type, undefined, { sessionId: 'telegram:555' });
+      handleChatEvent('chat.done');
+      handleChatEvent('chat.error');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(ctx.taskRepo.getAll().filter((task) => task.status === 'draft')).toHaveLength(0);
+    });
+
+    it('/newtask_detail still opens the old wizard', async () => {
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID] });
+
+      await bot.handleUpdate({ update_id: 60, message: {
+        message_id: 60, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: '/newtask_detail',
+      } });
+
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text).toContain('Chọn project cho task mới');
     });
   });
 

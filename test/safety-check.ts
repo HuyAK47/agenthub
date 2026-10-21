@@ -21,7 +21,7 @@ function resolveTargetHomes(): string[] {
   const curr = os.homedir();
   homes.add(curr);
 
-  // If running inside isolated worker HOME e.g. /home/ducanh/.agy-homes/g2
+  // If running inside isolated worker HOME e.g. /home/user/.agy-homes/g2
   const match = curr.match(/(.*?)\/\.agy-homes\/[^/]+$/);
   if (match) {
     homes.add(match[1]);

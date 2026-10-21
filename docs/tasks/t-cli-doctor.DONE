@@ -33,17 +33,17 @@ Không có. Toàn bộ các yêu cầu của đề bài và tiêu chí nghiệm 
 ```text
 === AgentHub Doctor ===
 
-✓ [1/8] Phiên bản Node.js: Node v22.21.1 (/home/ducanh/.nvm/versions/node/v22.21.1/bin/node)
+✓ [1/8] Phiên bản Node.js: Node v22.21.1 (/home/user/.nvm/versions/node/v22.21.1/bin/node)
 ✓ [2/8] Git: git version 2.25.1
-✓ [3/8] Worker Engines (agy & codex): Tìm thấy agy (/home/ducanh/.gemini/bin/agy) và Codex CLI (/home/ducanh/.vscode/extensions/openai.chatgpt-26.1007.21434-linux-x64/bin/linux-x86_64/codex)
+✓ [3/8] Worker Engines (agy & codex): Tìm thấy agy (/home/user/.gemini/bin/agy) và Codex CLI (/home/user/.vscode/extensions/openai.chatgpt-26.1007.21434-linux-x64/bin/linux-x86_64/codex)
 ✗ [4/8] Daemon HTTP API: GET /health OK, đọc được token, nhưng GET /api/status trả về HTTP 401
-  ↳ Gợi ý: Token tại /home/ducanh/.agy-homes/g1/.agenthub/token không hợp lệ với daemon đang chạy. Thử khởi động lại daemon.
+  ↳ Gợi ý: Token tại /home/user/.agy-homes/g1/.agenthub/token không hợp lệ với daemon đang chạy. Thử khởi động lại daemon.
 ✗ [5/8] Service systemd: Service systemd 'agenthub' không hoạt động (inactive)
   ↳ Gợi ý: Chạy 'agenthub install-service' hoặc 'systemctl --user start agenthub'.
 - [6/8] Cấu hình Claude MCP: Không có lệnh claude (bỏ qua)
 ✗ [7/8] Hồ sơ worker: 3 hồ sơ, có 1 hồ sơ chưa đăng nhập (worker1)
   ↳ Gợi ý: Đăng nhập cho các hồ sơ chưa xác thực (worker1) bằng lệnh 'agenthub profile login <tên>'
-✓ [8/8] Quyền thư mục và file token: Thư mục /home/ducanh/.agy-homes/g1/.agenthub (700) và file token (600) đúng quyền bảo mật
+✓ [8/8] Quyền thư mục và file token: Thư mục /home/user/.agy-homes/g1/.agenthub (700) và file token (600) đúng quyền bảo mật
 
 Kết quả: 4/8 mục đạt, 3 mục lỗi, 1 mục bỏ qua.
 Vui lòng xem các gợi ý sửa cho từng mục lỗi ở trên.
