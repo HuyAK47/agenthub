@@ -114,11 +114,24 @@ export function forwardDecisionToBrain(
   const label = answer === 'agree' ? 'Đồng ý' : 'Không';
   const brainMsg = `Người dùng trả lời quyết định ${decisionId} («${text}»): ${label}`;
   try {
-    chatService.getOrCreateSession('brain', { title: 'Bộ não' });
+    chatService.getOrCreateSession('brain', { title: 'Bộ não', kind: 'brain' });
     chatService.sendMessage('brain', brainMsg);
   } catch {
     // ignore if brain session cannot receive (e.g. busy)
   }
+}
+
+/**
+ * Calculates the number of minutes elapsed since the most recent occurrence of the given HH:MM time.
+ */
+export function getMinutesSinceTime(timeStr: string, now = new Date()): number {
+  const parts = (timeStr || '00:00').split(':').map(Number);
+  const target = new Date(now);
+  target.setHours(parts[0] || 0, parts[1] || 0, 0, 0);
+  if (target.getTime() > now.getTime()) {
+    target.setDate(target.getDate() - 1);
+  }
+  return (now.getTime() - target.getTime()) / (60 * 1000);
 }
 
 /**

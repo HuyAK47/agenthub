@@ -17,6 +17,7 @@ import {
   areAllProfilesQuotaExhausted,
   isSystemIncident,
   forwardDecisionToBrain,
+  getMinutesSinceTime,
 } from './brain/digest.js';
 
 const execFileAsync = promisify(execFile);
@@ -554,7 +555,7 @@ export class TelegramBotService {
           const short = dec.text.length > 20 ? dec.text.slice(0, 17) + '...' : dec.text;
           keyboard.push([
             { text: `✅ ${short}`, callback_data: `decision:agree:${dec.id}` },
-            { text: `❌ ${dec.id}`, callback_data: `decision:reject:${dec.id}` },
+            { text: `❌ ${short}`, callback_data: `decision:reject:${dec.id}` },
           ]);
         }
       }
@@ -574,18 +575,18 @@ export class TelegramBotService {
     const inQuiet = isQuietHours(qh, d);
     if (inQuiet) return false;
 
-    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    if (this.lastMorningSummaryDate === dateKey) return false;
+    // Only send if there are queued quiet hours notifications or pending decisions
+    const hasContent = this.quietHoursQueue.length > 0 || this.decisionTracker.getPending().length > 0;
+    if (!hasContent) return false;
 
-    const endParts = (qh.end || '07:00').split(':').map(Number);
-    const endMins = (endParts[0] || 0) * 60 + (endParts[1] || 0);
-    const curMins = d.getHours() * 60 + d.getMinutes();
-    const startParts = (qh.start || '22:00').split(':').map(Number);
-    const startMins = (startParts[0] || 0) * 60 + (startParts[1] || 0);
-
-    if (startMins < endMins && curMins < endMins) {
+    // Only send within ~2 hours window after quietHours.end
+    const minsSinceEnd = getMinutesSinceTime(qh.end || '07:00', d);
+    if (minsSinceEnd < 0 || minsSinceEnd > 120) {
       return false;
     }
+
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (this.lastMorningSummaryDate === dateKey) return false;
 
     this.lastMorningSummaryDate = dateKey;
 
@@ -607,24 +608,23 @@ export class TelegramBotService {
 
     if (this.lastDigestDate === dateKey) return false;
 
-    const parts = digestTime.split(':').map(Number);
-    const targetMins = (parts[0] || 0) * 60 + (parts[1] || 0);
-    const curMins = d.getHours() * 60 + d.getMinutes();
-
-    if (curMins >= targetMins) {
-      this.lastDigestDate = dateKey;
-      const digest = this.buildCurrentDigest();
-      const keyboard: InlineKeyboardButton[][] = [
-        [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
-      ];
-      this.broadcastMessage(digest.text, { inline_keyboard: keyboard });
-      this.eventBus.emit('brain.digest', undefined, digest);
-
-      // Reset quiet hours queue after digest
-      this.quietHoursQueue = [];
-      return true;
+    // Only send within ~60 minutes window after digestTime
+    const minsSinceDigest = getMinutesSinceTime(digestTime, d);
+    if (minsSinceDigest < 0 || minsSinceDigest > 60) {
+      return false;
     }
-    return false;
+
+    this.lastDigestDate = dateKey;
+    const digest = this.buildCurrentDigest();
+    const keyboard: InlineKeyboardButton[][] = [
+      [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
+    ];
+    this.broadcastMessage(digest.text, { inline_keyboard: keyboard });
+    this.eventBus.emit('brain.digest', undefined, digest);
+
+    // Reset quiet hours queue after digest
+    this.quietHoursQueue = [];
+    return true;
   }
 
   async periodicCheck(): Promise<void> {

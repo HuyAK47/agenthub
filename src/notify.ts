@@ -3,7 +3,7 @@ import { AgentHubConfig } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { QuotaMarkRepo, TaskRepo, ProfileRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
-import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident } from './brain/digest.js';
+import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -62,23 +62,18 @@ export class NotificationService {
     const inQuiet = isQuietHours(qh, d);
     if (inQuiet) return false;
 
-    const endParts = (qh.end || '07:00').split(':').map(Number);
-    const endMins = (endParts[0] || 0) * 60 + (endParts[1] || 0);
-    const curMins = d.getHours() * 60 + d.getMinutes();
-    const startParts = (qh.start || '22:00').split(':').map(Number);
-    const startMins = (startParts[0] || 0) * 60 + (startParts[1] || 0);
+    if (this.quietHoursQueue.length === 0) return false;
 
-    if (startMins < endMins && curMins < endMins) {
+    // Only flush/notify within ~2 hours window after quietHours.end
+    const minsSinceEnd = getMinutesSinceTime(qh.end || '07:00', d);
+    if (minsSinceEnd < 0 || minsSinceEnd > 120) {
       return false;
     }
 
-    if (this.quietHoursQueue.length > 0) {
-      const count = this.quietHoursQueue.length;
-      this.quietHoursQueue = [];
-      this.notify(`AgentHub: ${count} thông báo trong đêm`, 'normal');
-      return true;
-    }
-    return false;
+    const count = this.quietHoursQueue.length;
+    this.quietHoursQueue = [];
+    this.notify(`AgentHub: ${count} thông báo trong đêm`, 'normal');
+    return true;
   }
 
   start(): void {

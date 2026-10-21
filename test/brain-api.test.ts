@@ -283,6 +283,7 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(list.decisions).toHaveLength(1);
     expect(list.decisions[0].id).toBe('dec-api-1');
 
+    const getOrCreateSpy = vi.spyOn(ctx.chatService, 'getOrCreateSession');
     const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({
       userMessageId: 'u-1',
       assistantMessageId: 'a-1',
@@ -300,6 +301,7 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(ansData.ok).toBe(true);
     expect(ansData.decision.answered).toBe(true);
     expect(ansData.decision.answer).toBe('agree');
+    expect(getOrCreateSpy).toHaveBeenCalledWith('brain', { title: 'Bộ não', kind: 'brain' });
     expect(sendSpy).toHaveBeenCalledWith(
       'brain',
       'Người dùng trả lời quyết định dec-api-1 («Xác nhận xóa tài nguyên tạm?»): Đồng ý',
