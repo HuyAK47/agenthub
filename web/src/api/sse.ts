@@ -185,7 +185,7 @@ export function connectSSE(queryClient: QueryClient): () => void {
           queryClient.invalidateQueries({ queryKey: ['status'] });
         } else if (type.startsWith('config.')) {
           queryClient.invalidateQueries({ queryKey: ['config'] });
-        } else if (type === 'brain.status') {
+        } else if (type === 'brain.status' || type === 'brain.updated') {
           queryClient.invalidateQueries({ queryKey: ['status'] });
           queryClient.invalidateQueries({ queryKey: ['brain'] });
         } else if (type.startsWith('chat.')) {
@@ -219,6 +219,8 @@ export function connectSSE(queryClient: QueryClient): () => void {
       'quota.exhausted',
       'quota.cleared',
       'config.updated',
+      'brain.status',
+      'brain.updated',
       'chat.delta',
       'chat.tool',
       'chat.done',

@@ -173,7 +173,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   claudeScanner.setEventBus(scheduler.getEventBus());
 
   const brainRepo = new BrainRepo(db);
-  const brainService = new BrainService(brainRepo, eventRepo, () => scheduler.getEventBus());
+  const brainService = new BrainService(brainRepo, eventRepo, () => scheduler.getEventBus(), claudeSessionRepo, db);
   const chatService = new ChatService(
     config,
     chatSessionRepo,

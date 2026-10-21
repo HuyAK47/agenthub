@@ -490,12 +490,20 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE chat_permissions ADD COLUMN reason TEXT;
   `,
-  // Migration 37: distinguish the resident brain chat from ordinary chats
+  // Migration 37: safe Claude transcript activity metadata for brain status
+  `
+  ALTER TABLE claude_sessions ADD COLUMN lastUserRequest TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolName TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolSummary TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastEventKind TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN fiveHourTokens REAL;
+  `,
+  // Migration 38: distinguish the resident brain chat from ordinary chats
   `
   ALTER TABLE chat_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'
     CHECK(kind IN ('chat','brain'));
   `,
-  // Migration 38: durable resident brain turn accounting
+  // Migration 39: durable resident brain turn accounting
   `
   CREATE TABLE IF NOT EXISTS brain_turns (
     id TEXT PRIMARY KEY,
