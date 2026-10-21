@@ -96,12 +96,18 @@ interface PersistentProcess {
   limitResetSeconds?: number;
 }
 
+interface WaitingUserMessage {
+  text: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
 const MAX_WAITING_USER_MESSAGES = 10;
 
 export class ChatService {
   private queue: QueuedTurn[] = [];
   /** Messages people sent while the session was busy, delivered in order after the current turn. */
-  private waitingUserMessages = new Map<string, string[]>();
+  private waitingUserMessages = new Map<string, WaitingUserMessage[]>();
   private runningTurns = new Map<string, RunningTurn>();
   private claudeBinOverride?: string;
   private persistentProcesses = new Map<string, PersistentProcess>();
@@ -712,7 +718,12 @@ export class ChatService {
   sendMessage(
     sessionId: string,
     text: string,
-    opts: { queueIfBusy?: boolean; fromQueue?: boolean; telegramChatId?: number } = {},
+    opts: {
+      queueIfBusy?: boolean;
+      fromQueue?: boolean;
+      telegramChatId?: number;
+      messageIds?: { userMessageId: string; assistantMessageId: string };
+    } = {},
   ): { userMessageId: string; assistantMessageId: string; queued?: boolean; position?: number } {
     if (typeof text !== 'string' || text.trim().length === 0) {
       throw new HttpError(400, 'bad_request', 'Nội dung tin nhắn không được để trống');
@@ -727,6 +738,9 @@ export class ChatService {
     }
     if (opts.telegramChatId !== undefined) this.setTelegramChat(sessionId, opts.telegramChatId);
 
+    const userMessageId = opts.messageIds?.userMessageId || crypto.randomUUID();
+    const assistantMessageId = opts.messageIds?.assistantMessageId || crypto.randomUUID();
+
     if (session.busy === 1 || this.runningTurns.has(sessionId)) {
       // A person writing to a busy session (typically a brain in the middle of an event turn) is
       // queued instead of rejected; the message runs as soon as the current turn finishes.
@@ -735,18 +749,15 @@ export class ChatService {
         if (waiting.length >= MAX_WAITING_USER_MESSAGES) {
           throw new HttpError(409, 'conflict', 'Phiên đang bận và hàng đợi đã đầy');
         }
-        waiting.push(text);
+        waiting.push({ text, userMessageId, assistantMessageId });
         this.waitingUserMessages.set(sessionId, waiting);
         this.emitEvent('chat.queued', { sessionId, position: waiting.length });
-        return { userMessageId: '', assistantMessageId: '', queued: true, position: waiting.length };
+        return { userMessageId, assistantMessageId, queued: true, position: waiting.length };
       }
       throw new HttpError(409, 'conflict', 'Phiên đang bận');
     }
 
     this.failoverState.noteActivity();
-
-    const userMessageId = crypto.randomUUID();
-    const assistantMessageId = crypto.randomUUID();
 
     // Auto set title from first user message (cut to 60 chars) if not yet set
     const isFirstMessage = this.chatMessageRepo.getBySession(sessionId, 1).length === 0;
@@ -1897,10 +1908,16 @@ export class ChatService {
       timer.unref?.();
       return;
     }
-    const text = waiting.shift()!;
+    const next = waiting.shift()!;
     if (waiting.length === 0) this.waitingUserMessages.delete(sessionId);
     try {
-      this.sendMessage(sessionId, text, { fromQueue: true });
+      this.sendMessage(sessionId, next.text, {
+        fromQueue: true,
+        messageIds: {
+          userMessageId: next.userMessageId,
+          assistantMessageId: next.assistantMessageId,
+        },
+      });
     } catch (error) {
       console.error(`[chat] queued message for ${sessionId} failed:`, error);
     }

@@ -629,13 +629,20 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       headers: authHeaders(),
       payload: { text: 'Tin thứ hai' },
     });
-    expect(JSON.parse(second.body)).toEqual(expect.objectContaining({ queued: true, position: 1 }));
+    const queued = JSON.parse(second.body);
+    expect(queued).toEqual(expect.objectContaining({ queued: true, position: 1 }));
+    expect(queued.userMessageId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(queued.assistantMessageId).toMatch(/^[0-9a-f-]{36}$/);
 
     await vi.waitFor(() => {
       const messages = ctx.chatMessageRepo.getBySession(session.id, 50);
       const users = messages.filter((m) => m.role === 'user').map((m) => m.content);
       expect(users).toEqual(['Tin đầu tiên', 'Tin thứ hai']);
       expect(messages.filter((m) => m.role === 'assistant').length).toBe(2);
+      const secondUser = messages.find((message) => message.content === 'Tin thứ hai');
+      expect(secondUser?.id).toBe(queued.userMessageId);
+      const secondAssistant = messages.find((message) => message.id === queued.assistantMessageId);
+      expect(secondAssistant?.role).toBe('assistant');
       expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
     }, { timeout: 15000 });
   });
