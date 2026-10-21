@@ -237,6 +237,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     eventBus: scheduler.getEventBus(),
     config,
     taskRepo,
+    profileRepo,
     quotaMarkRepo,
   });
 
@@ -246,6 +247,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     eventBus: scheduler.getEventBus(),
     taskRepo,
     projectRepo,
+    profileRepo,
     quotaMarkRepo,
     chatService,
     brainSession: true,

@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import { AgentHubConfig } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { QuotaMarkRepo, TaskRepo } from './db/index.js';
+import { QuotaMarkRepo, TaskRepo, ProfileRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
+import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident } from './brain/digest.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -14,6 +15,7 @@ export interface NotificationServiceOptions {
   eventBus: EventBus;
   config: AgentHubConfig;
   taskRepo?: TaskRepo;
+  profileRepo?: ProfileRepo;
   quotaMarkRepo?: QuotaMarkRepo;
   exec?: NotifyExecFn;
   now?: () => number;
@@ -23,19 +25,60 @@ export class NotificationService {
   private eventBus: EventBus;
   private config: AgentHubConfig;
   private taskRepo?: TaskRepo;
+  private profileRepo?: ProfileRepo;
   private quotaMarkRepo?: QuotaMarkRepo;
   private execFn?: NotifyExecFn;
   private now: () => number;
   private lastSent = new Map<string, number>();
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
+  private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
+  private checkTimer?: NodeJS.Timeout;
 
   constructor(opts: NotificationServiceOptions) {
     this.eventBus = opts.eventBus;
     this.config = opts.config;
     this.taskRepo = opts.taskRepo;
+    this.profileRepo = opts.profileRepo;
     this.quotaMarkRepo = opts.quotaMarkRepo;
     this.execFn = opts.exec;
     this.now = opts.now || (() => Date.now());
+  }
+
+  getQuietHoursQueue(): Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> {
+    return [...this.quietHoursQueue];
+  }
+
+  flushQuietHoursQueue(): Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> {
+    const queue = [...this.quietHoursQueue];
+    this.quietHoursQueue = [];
+    return queue;
+  }
+
+  checkQuietHoursEnd(nowMs = this.now()): boolean {
+    const qh = this.config.notifications?.quietHours;
+    if (!qh || !qh.enabled) return false;
+
+    const d = new Date(nowMs);
+    const inQuiet = isQuietHours(qh, d);
+    if (inQuiet) return false;
+
+    const endParts = (qh.end || '07:00').split(':').map(Number);
+    const endMins = (endParts[0] || 0) * 60 + (endParts[1] || 0);
+    const curMins = d.getHours() * 60 + d.getMinutes();
+    const startParts = (qh.start || '22:00').split(':').map(Number);
+    const startMins = (startParts[0] || 0) * 60 + (startParts[1] || 0);
+
+    if (startMins < endMins && curMins < endMins) {
+      return false;
+    }
+
+    if (this.quietHoursQueue.length > 0) {
+      const count = this.quietHoursQueue.length;
+      this.quietHoursQueue = [];
+      this.notify(`AgentHub: ${count} thông báo trong đêm`, 'normal');
+      return true;
+    }
+    return false;
   }
 
   start(): void {
@@ -44,12 +87,20 @@ export class NotificationService {
       this.handleEvent(type, taskId, payload);
     };
     this.eventBus.on('*', this.boundHandler);
+    this.checkTimer = setInterval(() => {
+      this.checkQuietHoursEnd();
+    }, 60_000);
+    this.checkTimer.unref?.();
   }
 
   stop(): void {
     if (this.boundHandler) {
       this.eventBus.off('*', this.boundHandler);
       this.boundHandler = null;
+    }
+    if (this.checkTimer) {
+      clearInterval(this.checkTimer);
+      this.checkTimer = undefined;
     }
   }
 
@@ -60,7 +111,55 @@ export class NotificationService {
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
 
+    // 1. In brain auto mode: suppress raw task notifications
+    if (this.config.brain?.mode === 'auto') {
+      const allExhausted =
+        type === 'quota.exhausted' &&
+        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now()));
+
+      const isSystemEvent =
+        type === 'brain.notify' ||
+        type === 'disk.low' ||
+        type === 'disk.docker_low' ||
+        type === 'claude.quota_exhausted' ||
+        type === 'hub.restart_failed' ||
+        type === 'system.error' ||
+        allExhausted;
+
+      if (!isSystemEvent) {
+        return;
+      }
+    }
+
+    // 2. Quiet hours: only send level 'incident'
+    const now = this.now();
+    this.checkQuietHoursEnd(now);
+
+    if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
+      const isIncident = isSystemIncident(type, payload, this.profileRepo, this.quotaMarkRepo, now);
+      if (!isIncident) {
+        if (this.quietHoursQueue.length >= 200) {
+          this.quietHoursQueue.shift();
+        }
+        this.quietHoursQueue.push({ type, taskId, payload, timestamp: now });
+        return;
+      }
+    }
+
     switch (type) {
+      case 'brain.notify': {
+        const text = typeof p.text === 'string' ? p.text : '';
+        if (!text) break;
+        if (p.level === 'incident') {
+          this.notify(`🚨 Sự cố AgentHub: ${text}`, 'critical');
+        } else if (p.level === 'decision') {
+          this.notify(`📌 Cần quyết định: ${text}`, 'normal');
+        } else {
+          this.notify(`ℹ️ AgentHub: ${text}`, 'normal');
+        }
+        break;
+      }
+
       case 'batch.created': {
         const count = typeof p.taskCount === 'number' ? p.taskCount : 0;
         const who = typeof p.createdBy === 'string' && p.createdBy ? p.createdBy : 'Claude';
@@ -135,13 +234,22 @@ export class NotificationService {
       }
 
       case 'quota.exhausted': {
+        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now());
+        if (this.config.brain?.mode === 'auto') {
+          if (isAllExhausted) {
+            this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
+          }
+          break;
+        }
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
         const family = (p.family || p.model || '') as string;
         const resetTimeStr = this.resolveResetTime(p, name, family);
-        const msg = resetTimeStr
+        const msg = isAllExhausted
+          ? 'AgentHub: Mọi tài khoản đều đã hết quota'
+          : resetTimeStr
           ? `Hồ sơ ${name} hết quota ${family} tới ${resetTimeStr}`
           : `Hồ sơ ${name} hết quota ${family}`;
-        this.notify(msg, 'normal');
+        this.notify(msg, isAllExhausted ? 'critical' : 'normal');
         break;
       }
 

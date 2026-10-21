@@ -312,4 +312,163 @@ describe('NotificationService (Desktop Notifications)', () => {
 
     notifier.stop();
   });
+
+  it('in brain auto mode, suppresses raw task notifications and only notifies brain.notify and system incidents', () => {
+    config.brain.mode = 'auto';
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      exec: fakeExec,
+    });
+    notifier.start();
+
+    // 1. Raw task events should be suppressed
+    eventBus.emit('task.review_ready', 'task-1', { title: 'T1' });
+    eventBus.emit('task.failed', 'task-2', { title: 'T2' });
+    eventBus.emit('task.blocked', 'task-3', { title: 'T3' });
+    eventBus.emit('batch.created', undefined, { taskCount: 3 });
+    // Single quota exhaustion when another profile is free should be suppressed
+    quotaMarkRepo.mark('g1', 'gemini', Math.floor(Date.now() / 1000) + 3600);
+    eventBus.emit('quota.exhausted', undefined, { profile: 'g1', family: 'gemini' });
+    expect(execCalls).toHaveLength(0);
+
+    // 2. brain.notify should be sent
+    eventBus.emit('brain.notify', undefined, { text: 'Cần xác nhận từ người dùng', level: 'decision' });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toBe('📌 Cần quyết định: Cần xác nhận từ người dùng');
+
+    // 3. System incidents should be sent
+    eventBus.emit('disk.low', undefined, { freeGB: 1, minFreeGB: 3 });
+    expect(execCalls).toHaveLength(2);
+    expect(execCalls[1].args.at(-1)).toContain('Ổ đĩa còn 1 GB');
+
+    // 4. All profiles quota exhausted is a system incident and should be notified
+    quotaMarkRepo.mark('chinh', 'claude', Math.floor(Date.now() / 1000) + 3600);
+    eventBus.emit('quota.exhausted', undefined, { profile: 'chinh', family: 'claude' });
+    expect(execCalls).toHaveLength(3);
+    expect(execCalls[2].args.at(-1)).toBe('AgentHub: Mọi tài khoản đều đã hết quota');
+
+    notifier.stop();
+  });
+
+  it('during quiet hours, defers non-incident notifications and sends only incidents', () => {
+    config.notifications.quietHours = {
+      enabled: true,
+      start: '22:00',
+      end: '07:00',
+    };
+
+    // 23:30 is in quiet hours
+    const mockNightTime = new Date();
+    mockNightTime.setHours(23, 30, 0, 0);
+    const currentMockTime = mockNightTime.getTime();
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      exec: fakeExec,
+      now: () => currentMockTime,
+    });
+    notifier.start();
+
+    // 1. Normal/info notifications should be queued into quietHoursQueue and not sent to exec
+    eventBus.emit('brain.notify', undefined, { text: 'Bản cập nhật thường', level: 'info' });
+    eventBus.emit('task.review_ready', 'task-1', { title: 'T1' });
+    expect(execCalls).toHaveLength(0);
+    expect(notifier.getQuietHoursQueue()).toHaveLength(2);
+
+    // 2. Incident notification should bypass quiet hours and be sent immediately
+    eventBus.emit('brain.notify', undefined, { text: 'Sự cố khẩn cấp', level: 'incident' });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toBe('🚨 Sự cố AgentHub: Sự cố khẩn cấp');
+
+    // 3. Disk low is an incident and should bypass quiet hours
+    eventBus.emit('disk.low', undefined, { freeGB: 0.5, minFreeGB: 3 });
+    expect(execCalls).toHaveLength(2);
+
+    // 4. Flush quiet hours queue returns the accumulated items
+    const flushed = notifier.flushQuietHoursQueue();
+    expect(flushed).toHaveLength(2);
+    expect(notifier.getQuietHoursQueue()).toHaveLength(0);
+
+    notifier.stop();
+  });
+
+  it('caps quietHoursQueue at 200 items, dropping oldest', () => {
+    config.notifications.quietHours = {
+      enabled: true,
+      start: '22:00',
+      end: '07:00',
+    };
+    const mockNightTime = new Date();
+    mockNightTime.setHours(23, 0, 0, 0);
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      exec: fakeExec,
+      now: () => mockNightTime.getTime(),
+    });
+    notifier.start();
+
+    for (let i = 1; i <= 250; i++) {
+      eventBus.emit('brain.notify', undefined, { text: `Notice ${i}`, level: 'info' });
+    }
+
+    const queue = notifier.getQuietHoursQueue();
+    expect(queue).toHaveLength(200);
+    expect((queue[0].payload as { text: string }).text).toBe('Notice 51');
+    expect((queue[199].payload as { text: string }).text).toBe('Notice 250');
+
+    notifier.stop();
+  });
+
+  it('when quiet hours end, sends grouped summary "N thông báo trong đêm" and flushes queue', () => {
+    config.notifications.quietHours = {
+      enabled: true,
+      start: '22:00',
+      end: '07:00',
+    };
+    let mockTime = new Date();
+    mockTime.setHours(23, 0, 0, 0);
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      exec: fakeExec,
+      now: () => mockTime.getTime(),
+    });
+    notifier.start();
+
+    // Accumulate 3 notifications in the night
+    eventBus.emit('brain.notify', undefined, { text: 'N1', level: 'info' });
+    eventBus.emit('brain.notify', undefined, { text: 'N2', level: 'info' });
+    eventBus.emit('brain.notify', undefined, { text: 'N3', level: 'info' });
+    expect(execCalls).toHaveLength(0);
+    expect(notifier.getQuietHoursQueue()).toHaveLength(3);
+
+    // Advance time to 07:00 (quiet hours end)
+    mockTime = new Date();
+    mockTime.setHours(7, 0, 0, 0);
+
+    // Calling checkQuietHoursEnd triggers the flush
+    const flushed = notifier.checkQuietHoursEnd(mockTime.getTime());
+    expect(flushed).toBe(true);
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toBe('AgentHub: 3 thông báo trong đêm');
+    expect(notifier.getQuietHoursQueue()).toHaveLength(0);
+
+    // Subsequent call does not duplicate
+    const flushedAgain = notifier.checkQuietHoursEnd(mockTime.getTime());
+    expect(flushedAgain).toBe(false);
+    expect(execCalls).toHaveLength(1);
+
+    notifier.stop();
+  });
 });

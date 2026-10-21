@@ -505,7 +505,12 @@ export interface SystemConfig {
   chat?: ChatConfig;
   reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
-    fallback: Array<
+    mode?: 'off' | 'suggest' | 'auto';
+    digest?: {
+      enabled: boolean;
+      time: string;
+    };
+    fallback?: Array<
       | { type: 'profile'; profile?: string }
       | { type: 'model'; model: string }
       | { type: 'apiKey'; dailyCapUSD: number }
@@ -515,6 +520,11 @@ export interface SystemConfig {
   };
   notifications?: {
     desktop: boolean;
+    quietHours?: {
+      enabled: boolean;
+      start: string;
+      end: string;
+    };
   };
   load?: {
     enabled: boolean;

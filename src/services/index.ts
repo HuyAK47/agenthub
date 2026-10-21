@@ -2729,7 +2729,12 @@ export class AppService {
         autoCompactPercent: this.config.chat.autoCompactPercent ?? 85,
         models: this.config.chat.models,
       },
-      brain: { fallback: this.config.brain.fallback, policy: this.config.brain.policy },
+      brain: {
+        mode: this.config.brain.mode,
+        digest: this.config.brain.digest,
+        fallback: this.config.brain.fallback,
+        policy: this.config.brain.policy,
+      },
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
