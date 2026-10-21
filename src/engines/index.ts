@@ -21,6 +21,7 @@ export interface SpawnOpts {
   hubHome?: string;
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null };
+  codexSandbox?: 'off' | 'workspace-write';
 }
 
 export interface QuotaDetection {
@@ -202,9 +203,11 @@ export class CodexEngine implements Engine {
   id = 'codex' as const;
 
   private codexPath: string | null;
+  private codexSandbox: 'off' | 'workspace-write';
 
-  constructor(codexPath?: string) {
+  constructor(codexPath?: string, codexSandbox: 'off' | 'workspace-write' = 'off') {
     this.codexPath = codexPath || null;
+    this.codexSandbox = codexSandbox;
   }
 
   static findCodexPath(): string | null {
@@ -258,8 +261,11 @@ export class CodexEngine implements Engine {
       opts.cwd,
       opts.prompt,
     ];
+    const sandboxMode = opts.codexSandbox ?? this.codexSandbox;
     if (opts.readOnly) {
       args.splice(2, 0, '--sandbox', 'read-only');
+    } else if (sandboxMode === 'workspace-write') {
+      args.splice(2, 0, '--sandbox', 'workspace-write');
     } else {
       args.splice(2, 0, '--dangerously-bypass-approvals-and-sandbox');
     }
@@ -369,6 +375,16 @@ export class FakeEngine implements Engine {
       FAKE_OUTPUT_PATH: opts.outputPath || '',
       ...(opts.env || {}),
     };
+    if (opts.hubHome || opts.project) {
+      Object.assign(
+        env,
+        workerEnvironment(
+          opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+          env,
+          { gitHooks: opts.gitHooks, project: opts.project },
+        ),
+      );
+    }
 
     const command = process.env.FAKE_MODE === 'reviewer-error' ? '/definitely-missing-agenthub-fixture' : process.execPath;
     const args = command === process.execPath ? [this.scriptPath] : [];

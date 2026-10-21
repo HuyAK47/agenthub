@@ -181,7 +181,7 @@ export function createContext(
     engines.set('agy', new AgyEngine());
     const codexPath = CodexEngine.findCodexPath();
     if (codexPath) {
-      engines.set('codex', new CodexEngine(codexPath));
+      engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
   }
 
