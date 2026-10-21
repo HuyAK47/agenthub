@@ -236,7 +236,7 @@ export const SettingsPage: React.FC = () => {
         <div className="p-8 text-center text-[var(--t-crit)] text-sm">{t('settings.loadError')}</div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3 shadow-xs" data-testid="planning-approval">
+          <div id="planning-approval" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3 shadow-xs" data-testid="planning-approval">
             <h2 className="text-sm font-semibold">{t('extra.planningApprovalTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.planningApprovalHint')}</p>
             {(['none', 'large', 'all'] as const).map((mode) => (
