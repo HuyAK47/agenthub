@@ -5,9 +5,18 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow } from './db/index.js';
+import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
+import {
+  DecisionTracker,
+  PendingDecision,
+  DigestData,
+  generateDigest,
+  isQuietHours,
+  areAllProfilesQuotaExhausted,
+  isSystemIncident,
+} from './brain/digest.js';
 
 function statusBrainWaiting(brain: { sessions?: Array<{ state: string; lastActivityAt: string }> } | undefined, now: number): boolean {
   return Boolean(brain?.sessions?.some((session) => session.state === 'waiting' && now - Date.parse(session.lastActivityAt) > 5 * 60_000));
@@ -109,6 +118,7 @@ export interface TelegramServiceOptions {
   eventBus: EventBus;
   taskRepo: TaskRepo;
   projectRepo: ProjectRepo;
+  profileRepo?: ProfileRepo;
   quotaMarkRepo?: QuotaMarkRepo;
   fetch?: typeof fetch;
   now?: () => number;
@@ -193,6 +203,7 @@ export class TelegramBotService {
   private eventBus: EventBus;
   private taskRepo: TaskRepo;
   private projectRepo: ProjectRepo;
+  private profileRepo?: ProfileRepo;
   private quotaMarkRepo?: QuotaMarkRepo;
   private fetchFn: typeof fetch;
   private now: () => number;
@@ -200,6 +211,10 @@ export class TelegramBotService {
   private execFileFn: GitDiffFn;
   private chatService?: ChatService;
   private brainSession: boolean;
+  private decisionTracker = new DecisionTracker();
+  private quietHoursQueue: Array<{ text: string; timestamp: number }> = [];
+  private lastDigestDate = '';
+  private timerInterval?: NodeJS.Timeout;
 
   private token: string | null = null;
   private running = false;
@@ -235,6 +250,7 @@ export class TelegramBotService {
     this.eventBus = opts.eventBus;
     this.taskRepo = opts.taskRepo;
     this.projectRepo = opts.projectRepo;
+    this.profileRepo = opts.profileRepo || (opts.service as unknown as { profileRepo?: ProfileRepo })?.profileRepo;
     this.quotaMarkRepo = opts.quotaMarkRepo;
     this.fetchFn = opts.fetch || globalThis.fetch;
     this.now = opts.now || (() => Date.now());
@@ -356,6 +372,13 @@ export class TelegramBotService {
 
     // Begin long polling loop in the background
     this.pollPromise = this.startPollingLoop();
+
+    // Periodic check for digest & decision reminders
+    if (!this.timerInterval) {
+      this.timerInterval = setInterval(() => {
+        void this.periodicCheck();
+      }, 60_000);
+    }
   }
 
   /**
@@ -363,6 +386,11 @@ export class TelegramBotService {
    */
   async stop(): Promise<void> {
     this.running = false;
+
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+      this.timerInterval = undefined;
+    }
 
     if (this.pollAbortController) {
       this.pollAbortController.abort();
@@ -385,6 +413,88 @@ export class TelegramBotService {
         // ignore
       }
       this.pollPromise = null;
+    }
+  }
+
+  getDashboardUrl(subPath = ''): string {
+    const base = `http://127.0.0.1:${this.config.port}/`;
+    return subPath ? `${base}#${subPath}` : base;
+  }
+
+  getDecisionTracker(): DecisionTracker {
+    return this.decisionTracker;
+  }
+
+  getQuietHoursQueue(): Array<{ text: string; timestamp: number }> {
+    return [...this.quietHoursQueue];
+  }
+
+  flushQuietHoursQueue(): Array<{ text: string; timestamp: number }> {
+    const queue = [...this.quietHoursQueue];
+    this.quietHoursQueue = [];
+    return queue;
+  }
+
+  buildCurrentDigest(): DigestData {
+    return generateDigest({
+      taskRepo: this.taskRepo,
+      projectRepo: this.projectRepo,
+      profileRepo: this.profileRepo,
+      quotaMarkRepo: this.quotaMarkRepo,
+      eventRepo: (this.service as unknown as { eventRepo?: EventRepo })?.eventRepo,
+      decisionTracker: this.decisionTracker,
+      now: () => this.now(),
+      accumulatedQuietHoursMessages: this.quietHoursQueue.map((q) => q.text),
+      port: this.config.port,
+    });
+  }
+
+  async checkDecisionReminders(): Promise<void> {
+    const due = this.decisionTracker.getRemindersDue(this.now(), 2 * 60 * 60 * 1000, 2);
+    for (const { decision, reminderIndex } of due) {
+      const keyboard: InlineKeyboardButton[][] = [
+        [
+          { text: '✅ Đồng ý', callback_data: `decision:agree:${decision.id}` },
+          { text: '❌ Không', callback_data: `decision:reject:${decision.id}` },
+        ],
+        [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
+      ];
+      const text = `⏰ <b>Nhắc lại quyết định (lần ${reminderIndex}/2):</b>\n${this.escapeHtml(decision.text)}`;
+      this.broadcastMessage(text, { inline_keyboard: keyboard });
+      this.decisionTracker.markReminderSent(decision.id, this.now());
+    }
+  }
+
+  async checkScheduledDigest(): Promise<boolean> {
+    if (this.config.brain?.digest?.enabled === false) return false;
+    const digestTime = this.config.brain?.digest?.time || '18:00';
+    const nowMs = this.now();
+    const d = new Date(nowMs);
+    const curHHMM = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+    if (curHHMM === digestTime && this.lastDigestDate !== dateKey) {
+      this.lastDigestDate = dateKey;
+      const digest = this.buildCurrentDigest();
+      const keyboard: InlineKeyboardButton[][] = [
+        [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
+      ];
+      this.broadcastMessage(digest.text, { inline_keyboard: keyboard });
+      this.eventBus.emit('brain.digest', undefined, digest);
+
+      // Reset quiet hours queue after digest
+      this.quietHoursQueue = [];
+      return true;
+    }
+    return false;
+  }
+
+  async periodicCheck(): Promise<void> {
+    try {
+      await this.checkDecisionReminders();
+      await this.checkScheduledDigest();
+    } catch {
+      // ignore
     }
   }
 
@@ -661,6 +771,10 @@ export class TelegramBotService {
         await this.handleStatusCommand(chatId);
         break;
 
+      case '/digest':
+        await this.handleDigestCommand(chatId);
+        break;
+
       case '/brain':
         await this.handleBrainCommand(chatId, argStr);
         break;
@@ -892,7 +1006,12 @@ export class TelegramBotService {
     return chunks;
   }
 
-  private async editMessage(chatId: number, messageId: number, text: string): Promise<unknown> {
+  private async editMessage(
+    chatId: number,
+    messageId: number,
+    text: string,
+    replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
+  ): Promise<unknown> {
     if (!this.token) return null;
     const url = `https://api.telegram.org/bot${this.token}/editMessageText`;
     const request = async (parseMode: boolean): Promise<Response> => this.fetchFn(url, {
@@ -903,6 +1022,7 @@ export class TelegramBotService {
           message_id: messageId,
           text: text || ' ',
           ...(parseMode ? { parse_mode: 'HTML' } : {}),
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }),
       });
     try {
@@ -955,6 +1075,39 @@ export class TelegramBotService {
     }
 
     switch (domain) {
+      case 'decision': {
+        const decisionId = taskIdOrParam;
+        const answer = action === 'agree' ? 'agree' : 'reject';
+        const updated = this.decisionTracker.answerDecision(decisionId, answer, this.now());
+        const label = answer === 'agree' ? 'Đồng ý' : 'Không';
+        const icon = answer === 'agree' ? '✅' : '❌';
+        await this.answerCallbackQuery(query.id, `Bạn đã chọn: ${label}`);
+
+        if (query.message) {
+          const originalText = query.message.text || '';
+          const updatedText = `${originalText}\n\n${icon} <b>Đã phản hồi: ${label}</b>`;
+          const keyboard: InlineKeyboardButton[][] = [
+            [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
+          ];
+          try {
+            await this.editMessage(query.message.chat.id, query.message.message_id, updatedText, {
+              inline_keyboard: keyboard,
+            });
+          } catch {
+            await this.sendMessage(chatId, `${icon} <b>Đã phản hồi quyết định: ${label}</b>`);
+          }
+        } else {
+          await this.sendMessage(chatId, `${icon} <b>Đã phản hồi quyết định: ${label}</b>`);
+        }
+
+        this.eventBus.emit('decision.answered', undefined, {
+          decisionId,
+          action: answer,
+          answer,
+          text: updated?.text || '',
+        });
+        break;
+      }
       case 'chatlimit': {
         if (!this.chatService) { await this.answerCallbackQuery(query.id, 'Chat chưa sẵn sàng.'); return; }
         const result = action === 'cancel' ? this.chatService.cancelLimitRetry(taskIdOrParam) : this.chatService.retryLimitNow(taskIdOrParam);
@@ -1316,6 +1469,14 @@ export class TelegramBotService {
     }
 
     await this.sendMessage(chatId, text);
+  }
+
+  private async handleDigestCommand(chatId: number): Promise<void> {
+    const digest = this.buildCurrentDigest();
+    const keyboard: InlineKeyboardButton[][] = [
+      [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
+    ];
+    await this.sendMessage(chatId, digest.text, { inline_keyboard: keyboard });
   }
 
   private brainLabel(value: { state?: string; stale?: boolean }): string {
@@ -1765,7 +1926,10 @@ export class TelegramBotService {
     const profileKey = (p.profile || p.worker || p.profileName || '') as string;
     const familyKey = (p.family || p.model || '') as string;
     const batchKey = (p.batchId || '') as string;
-    const dedupKey = `${type}:${taskId || batchKey}:${profileKey}:${familyKey}`;
+    const decisionKey = (p.decisionId || '') as string;
+    const textKey = typeof p.text === 'string' ? p.text.slice(0, 32) : '';
+    const levelKey = (p.level || '') as string;
+    const dedupKey = `${type}:${taskId || batchKey || decisionKey}:${profileKey}:${familyKey}:${levelKey}:${textKey}`;
     const now = this.now();
     const lastTime = this.lastNotificationTime.get(dedupKey) || 0;
     if (now - lastTime < 10_000) {
@@ -1773,11 +1937,69 @@ export class TelegramBotService {
     }
     this.lastNotificationTime.set(dedupKey, now);
 
+    // 1. Brain auto mode: suppress raw task notifications
+    if (this.config.brain?.mode === 'auto') {
+      const allExhausted =
+        type === 'quota.exhausted' &&
+        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
+
+      const isAllowedInAuto =
+        type === 'brain.notify' ||
+        type === 'disk.low' ||
+        type === 'disk.docker_low' ||
+        type === 'claude.quota_exhausted' ||
+        type === 'hub.restart_failed' ||
+        type === 'system.error' ||
+        allExhausted;
+
+      if (!isAllowedInAuto) {
+        return;
+      }
+    }
+
+    // 2. Quiet hours: only send level 'incident'
+    if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
+      const isIncident = isSystemIncident(type, payload, this.profileRepo, this.quotaMarkRepo, now);
+      if (!isIncident) {
+        const desc = this.describeEventForQuietHours(type, taskId, p);
+        if (desc) {
+          this.quietHoursQueue.push({ text: desc, timestamp: now });
+        }
+        return;
+      }
+    }
+
     switch (type) {
       case 'brain.notify': {
-        const level = p.level === 'incident' ? '🚨' : p.level === 'decision' ? '📌' : 'ℹ️';
         const text = typeof p.text === 'string' ? p.text : '';
-        if (text) this.broadcastMessage(`${level} <b>Bộ não</b>\n${this.escapeHtml(text)}`);
+        if (!text) break;
+
+        if (p.level === 'decision') {
+          const decisionId =
+            typeof p.decisionId === 'string' && p.decisionId
+              ? p.decisionId
+              : `dec-${now}-${Math.random().toString(36).slice(2, 8)}`;
+
+          this.decisionTracker.recordDecision(decisionId, text, allowedChats, now);
+
+          const dashboardUrl = this.getDashboardUrl();
+          const keyboard: InlineKeyboardButton[][] = [
+            [
+              { text: '✅ Đồng ý', callback_data: `decision:agree:${decisionId}` },
+              { text: '❌ Không', callback_data: `decision:reject:${decisionId}` },
+            ],
+            [{ text: '🌐 Xem dashboard', url: dashboardUrl }],
+          ];
+
+          this.broadcastMessage(`📌 <b>Bộ não yêu cầu quyết định</b>\n${this.escapeHtml(text)}`, {
+            inline_keyboard: keyboard,
+          });
+          break;
+        }
+
+        const icon = p.level === 'incident' ? '🚨' : 'ℹ️';
+        const title = p.level === 'incident' ? 'Sự cố bộ não' : 'Bộ não';
+        this.broadcastMessage(`${icon} <b>${title}</b>\n${this.escapeHtml(text)}`);
         break;
       }
       case 'batch.created': {
@@ -1900,7 +2122,18 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
+        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now);
+        if (this.config.brain?.mode === 'auto') {
+          if (isAllExhausted) {
+            this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
+          }
+          break;
+        }
         if (!notify.quota) return;
+        if (isAllExhausted) {
+          this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
+          break;
+        }
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
         const family = (p.family || p.model || '') as string;
         const resetStr = this.resolveResetTime(p, name, family);
@@ -2200,10 +2433,30 @@ export class TelegramBotService {
       .replace(/>/g, '&gt;');
   }
 
+  private describeEventForQuietHours(type: string, taskId?: string, p?: Record<string, unknown>): string {
+    switch (type) {
+      case 'brain.notify':
+        return `Bộ não: ${p?.text || 'Thông báo mới'}`;
+      case 'task.review_ready':
+        return `Task ${this.resolveTaskTitle(taskId, p)} chờ review`;
+      case 'task.failed':
+        return `Task ${this.resolveTaskTitle(taskId, p)} thất bại`;
+      case 'task.blocked':
+        return `Task ${this.resolveTaskTitle(taskId, p)} bị chặn`;
+      case 'batch.created':
+        return `Đợt task mới: ${p?.title || 'Kế hoạch đề xuất'}`;
+      case 'quota.exhausted':
+        return `Hồ sơ ${p?.profile || p?.profileName || 'tài khoản'} hết quota ${p?.family || ''}`;
+      default:
+        return taskId ? `${type} (${taskId})` : type;
+    }
+  }
+
   private renderHelp(): string {
     return `🤖 <b>Danh sách lệnh AgentHub Telegram Bot:</b>
 
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /brain - Xem Claude đang làm gì hoặc chờ bạn trả lời
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard
