@@ -215,7 +215,7 @@ export const SettingsPage: React.FC = () => {
                 rows={4}
                 value={hardChain}
                 onChange={(e) => setHardChain(e.target.value)}
-                placeholder="claude-opus-4-6-thinking&#10;codex:gpt-5.6-luna&#10;gemini-3.8-flash-high"
+                placeholder="codex:gpt-5.6-luna&#10;gemini-3.8-flash-high"
                 className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
               />
               <p className="text-[11px] text-[var(--t-text-3)] mt-1">

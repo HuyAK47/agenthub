@@ -128,17 +128,9 @@ export const ChatPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [isBusy, thinkingSince]);
 
-  // Detect compact API availability
-  const [hasCompactApi, setHasCompactApi] = useState(false);
-  useEffect(() => {
-    if (!activeSession?.id) {
-      setHasCompactApi(false);
-      return;
-    }
-    fetch(`/api/chat/sessions/${encodeURIComponent(activeSession.id)}/compact`, { method: 'OPTIONS' })
-      .then((r) => setHasCompactApi(r.status !== 404 && r.status !== 405))
-      .catch(() => setHasCompactApi(false));
-  }, [activeSession?.id]);
+  // The compact endpoint ships with this dashboard build; an unauthenticated OPTIONS probe
+  // used to log a 401 on every session switch.
+  const hasCompactApi = Boolean(activeSession?.id);
 
   // Load older messages (infinite scroll up)
   const handleLoadMore = async () => {
