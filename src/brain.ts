@@ -5,6 +5,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { AgentHubConfig } from './config.js';
 import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
+import { effectiveBrainMode } from './brain/mode.js';
 import { readExistingToken, getTokenPath } from './auth.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { generateDigest, forwardDecisionToBrain, DigestData } from './brain/digest.js';
@@ -269,7 +270,25 @@ export function registerBrainRoutes(
   appService?: AppService,
 ): void {
   fastify.get('/api/brain', async () => {
-    return brainService.getStatus();
+    const status = brainService.getStatus();
+    if (!appService) return status;
+    const sessions = appService.chatService?.chatSessionRepo;
+    const projects = appService.projectRepo.getAll();
+    const brains = [null, ...projects.map((project) => project.id)].map((projectId) => {
+      const project = projectId ? appService.projectRepo.get(projectId) : undefined;
+      const session = sessions?.get(projectId ? `brain:${projectId}` : 'brain');
+      return {
+        projectId,
+        projectName: project?.name || 'Hệ thống',
+        mode: effectiveBrainMode(projectId, project, appService.config.brain),
+        sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
+        state: session?.state || 'idle',
+        queued: false,
+        lastTurnAt: session?.lastMessageAt || null,
+        tokensToday: (session?.inputTokens || 0) + (session?.outputTokens || 0),
+      };
+    });
+    return { ...status, brains };
   });
 
   fastify.put('/api/brain', async (req: FastifyRequest, reply: FastifyReply) => {

@@ -122,6 +122,7 @@ export interface McpServerOptions {
   baseUrl?: string;
   tokenPath?: string;
   chatSessionId?: string;
+  projectId?: string;
 }
 
 export function createMcpServer(options?: McpServerOptions): McpServer {
@@ -147,6 +148,18 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       throw new DaemonDownError();
     }
     return token;
+  };
+
+  const scopedProject = (): string | undefined => options?.projectId || process.env.AGENTHUB_MCP_PROJECT || undefined;
+  const assertProject = (projectId: string | undefined, action: string): void => {
+    const scope = scopedProject();
+    if (scope && projectId !== scope) throw new Error(`${action} chỉ được phép trong project "${scope}"`);
+  };
+  const assertTaskId = (id: string, action: string): void => {
+    const scope = scopedProject();
+    if (!scope) return;
+    const taskId = id.replace('~', '/');
+    if (!taskId.startsWith(`${scope}/`)) throw new Error(`${action} chỉ được phép trong project "${scope}"`);
   };
 
   async function callApi<T>(method: string, apiPath: string, body?: unknown, timeoutMs?: number): Promise<T> {
@@ -367,11 +380,12 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           }>
         >('GET', '/api/projects');
 
-        if (projects.length === 0) {
+        const visibleProjects = scopedProject() ? projects.filter((project) => project.id === scopedProject()) : projects;
+        if (visibleProjects.length === 0) {
           return { content: [{ type: 'text', text: 'Chưa có project nào được đăng ký.' }] };
         }
         const lines = [`Projects (${projects.length}):`];
-        for (const p of projects) {
+        for (const p of visibleProjects) {
           lines.push(
             `- ${p.id} (${p.name}): ${p.path} (defaultBranch: ${p.defaultBranch || 'main'}, maxParallel: ${p.maxParallel})`,
           );
@@ -396,6 +410,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        if (scopedProject()) throw new Error(`hub_register_project không được phép từ brain của project "${scopedProject()}"`);
         let envTemplateObj: unknown = undefined;
         if (args.envTemplate) {
           try {
@@ -527,6 +542,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertProject(args.project, 'Tạo task');
         const res = await callApi<{ id: string; status: string; title: string }>('POST', '/api/tasks', { ...args, fromClaude: true });
         try {
           await callApi('PUT', '/api/brain', {
@@ -561,6 +577,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Cập nhật task');
         const { id, ...payload } = args;
         const routeId = toRouteId(id);
         const res = await callApi<{ id: string; status: string; title: string }>('PATCH', `/api/tasks/${routeId}`, payload);
@@ -597,6 +614,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertProject(args.project, 'Tạo batch');
         const res = await callApi<{
           id: string;
           projectId: string;
@@ -712,6 +730,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       try {
         const params = new URLSearchParams();
         if (args.project) params.set('project', args.project);
+        else if (scopedProject()) params.set('project', scopedProject()!);
         if (args.status) params.set('status', args.status);
         const query = params.toString() ? `?${params.toString()}` : '';
         const tasks = await callApi<
@@ -750,6 +769,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Xem task');
         const routeId = toRouteId(args.id);
         const data = await callApi<{
           task: {
@@ -855,6 +875,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Đọc log task');
         const routeId = toRouteId(args.id);
         const params = new URLSearchParams();
         if (args.tail) params.set('tail', String(args.tail));
@@ -882,6 +903,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Duyệt task');
         const routeId = toRouteId(args.id);
         await callApi('POST', `/api/tasks/${routeId}/review`, {
           verdict: args.verdict,
@@ -920,6 +942,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Retry task');
         const routeId = toRouteId(args.id);
         await callApi('POST', `/api/tasks/${routeId}/retry`, { note: args.note });
         return {
@@ -940,6 +963,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Huỷ task');
         const routeId = toRouteId(args.id);
         await callApi('POST', `/api/tasks/${routeId}/cancel`);
         return {

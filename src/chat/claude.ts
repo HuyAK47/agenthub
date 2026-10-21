@@ -251,7 +251,7 @@ export function chatMcpConfigPath(hubHome?: string, sessionId?: string): string 
   return path.join(targetHome, `chat-mcp${suffix}.json`);
 }
 
-export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number): string {
+export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number, projectId?: string | null): string {
   const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
   const mcpConfigFile = chatMcpConfigPath(targetHome, sessionId);
 
@@ -270,6 +270,7 @@ export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?:
         args: [cliPath, 'mcp'],
         env: {
           ...(sessionId ? { AGENTHUB_CHAT_SESSION_ID: sessionId } : {}),
+          ...(projectId ? { AGENTHUB_MCP_PROJECT: projectId } : {}),
           AGENTHUB_PORT: String(port || process.env.AGENTHUB_PORT || 7700),
           AGENTHUB_PERMISSION_TIMEOUT_SEC: String(permissionTimeoutSec || process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC || 600),
         },
