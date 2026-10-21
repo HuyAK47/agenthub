@@ -72,12 +72,12 @@ export function mandatoryChecks(repo: string, task: TaskRow, project: ProjectRow
   return ['zero-byte', 'uncommitted', 'conflict-markers'].map((name) => ({ name, cmd: [], timeoutSec: 30, _files: files } as CheckDefinition & { _files: string[] }));
 }
 function tail(value: string): string { return value.length > MAX_OUTPUT ? value.slice(-MAX_OUTPUT) : value; }
-function envFromFiles(repo: string, hubHome: string): NodeJS.ProcessEnv {
+function envFromFiles(repo: string, hubHome: string, project?: ProjectRow): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const file of ['.env', '.env.local']) if (fs.existsSync(path.join(repo, file))) for (const line of fs.readFileSync(path.join(repo, file), 'utf8').split('\n')) { const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^['"]|['"]$/g, ''); }
-  return workerEnvironment(hubHome, env);
+  return workerEnvironment(hubHome, env, { project });
 }
-async function runOne(check: CheckDefinition, repo: string, hubHome: string): Promise<CheckResult> {
+async function runOne(check: CheckDefinition, repo: string, hubHome: string, project?: ProjectRow): Promise<CheckResult> {
   const started = Date.now();
   if (['zero-byte', 'uncommitted', 'conflict-markers'].includes(check.name)) {
     const files = (check as CheckDefinition & { _files?: string[] })._files || []; let output = '';
@@ -115,7 +115,7 @@ async function runOne(check: CheckDefinition, repo: string, hubHome: string): Pr
     else output = files.filter((f) => { try { return CONFLICT_MARKER_REGEX.test(fs.readFileSync(path.join(repo, f), 'utf8')); } catch { return false; } }).join('\n');
     return { name: check.name, ok: !output, exitCode: output ? 1 : 0, durationMs: Date.now() - started, outputTail: tail(output || 'OK') };
   }
-  const r = await runInProcessGroup(check.cmd[0], check.cmd.slice(1), { cwd: repo, env: envFromFiles(repo, hubHome), timeoutMs: (check.timeoutSec || 600) * 1000 });
+  const r = await runInProcessGroup(check.cmd[0], check.cmd.slice(1), { cwd: repo, env: envFromFiles(repo, hubHome, project), timeoutMs: (check.timeoutSec || 600) * 1000 });
   const ok = r.code === 0 && !r.timedOut;
   return { name: check.name, ok, exitCode: r.code, durationMs: Date.now() - started, outputTail: tail(`${r.output}${r.timedOut ? `\nTimeout sau ${check.timeoutSec || 600}s` : ''}`) };
 }
@@ -129,7 +129,7 @@ export class CheckRunner {
     const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
     const configured = project.checks ? JSON.parse(project.checks) as CheckDefinition[] : detectChecks(repo);
     const results: CheckResult[] = [];
-    for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await runOne(check, repo, hubHome); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
+    for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await runOne(check, repo, hubHome, project); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
     return { passed: results.every((r) => r.ok), failed: results.filter((r) => !r.ok).map((r) => r.name), results };
   }
   private async prepare(repo: string, projectPath?: string, project?: ProjectRow): Promise<void> {

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { projectSettings } from './projects/settings.js';
 
 export const WORKER_SERVICE_MESSAGE = 'AgentHub: worker không được điều khiển service của hub';
 
@@ -36,7 +37,16 @@ exec ${shellQuote(realBinary)} "$@"
 `;
 }
 
-export function workerEnvironment(hubHome: string, baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export interface WorkerEnvOptions {
+  gitHooks?: 'run' | 'skip';
+  project?: { settings?: string | null } | null;
+}
+
+export function workerEnvironment(
+  hubHome: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  options?: WorkerEnvOptions | { settings?: string | null } | null,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
   const shimDir = path.join(hubHome, 'shims');
   fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
@@ -51,6 +61,28 @@ export function workerEnvironment(hubHome: string, baseEnv: NodeJS.ProcessEnv = 
     } catch { fs.writeFileSync(file, content, { mode: 0o700 }); }
   }
   env.PATH = [shimDir, env.PATH || ''].filter(Boolean).join(path.delimiter);
+
+  // Check gitHooks option
+  let gitHooks: 'run' | 'skip' | undefined;
+  if (options) {
+    if ('gitHooks' in options && options.gitHooks) {
+      gitHooks = options.gitHooks;
+    } else if ('settings' in options || ('project' in options && options.project)) {
+      const proj = 'project' in options ? options.project : options;
+      gitHooks = projectSettings(proj as { settings?: string | null }).worktree.gitHooks;
+    }
+  }
+
+  if (gitHooks === 'skip') {
+    const emptyHooksDir = path.join(hubHome, 'empty-hooks');
+    fs.mkdirSync(emptyHooksDir, { recursive: true, mode: 0o700 });
+    env.HUSKY = '0';
+    env.GIT_CONFIG_COUNT = '1';
+    env.GIT_CONFIG_KEY_0 = 'core.hooksPath';
+    env.GIT_CONFIG_VALUE_0 = emptyHooksDir;
+    env.GIT_CONFIG_PARAMETERS = `'core.hooksPath=${emptyHooksDir}'`;
+  }
+
   return env;
 }
 

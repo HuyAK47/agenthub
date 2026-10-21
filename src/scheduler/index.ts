@@ -1549,6 +1549,7 @@ export class Scheduler {
         runId: check.runId || 'unknown',
         runStartedAt: check.runStartedAt || 'unknown',
       }));
+      const project = this.projectRepo.get(task.projectId);
       child = engine.spawn({
         profile,
         model: reviewerModel,
@@ -1560,6 +1561,8 @@ export class Scheduler {
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
         hubHome: this.config.hubHome,
+        project,
+        gitHooks: project ? projectSettings(project).worktree.gitHooks : undefined,
       });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
@@ -2119,6 +2122,8 @@ export class Scheduler {
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
         hubHome: this.config.hubHome,
+        project,
+        gitHooks: projectSettings(project).worktree.gitHooks,
       });
 
       const pid = child.pid!;

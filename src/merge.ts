@@ -2,6 +2,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runInProcessGroup } from './priority.js';
+import { workerEnvironment } from './worker-guard.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 8192;
@@ -22,6 +23,7 @@ interface MergeTask {
 interface MergeProject {
   defaultBranch: string;
   merge?: string | null;
+  settings?: string | null;
 }
 
 export class MergeError extends Error {
@@ -76,12 +78,14 @@ export async function mergeTaskIntoBase(task: MergeTask, project: MergeProject):
   if (status) throw new MergeError(409, 'conflict', 'worktree tích hợp có thay đổi chưa commit');
 
   const before = await git(repo, ['rev-parse', 'HEAD']);
+  const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
+  const env = workerEnvironment(hubHome, process.env, { project });
   try {
-    await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${baseRef}`], { cwd: repo });
+    await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${baseRef}`], { cwd: repo, env });
   } catch {
     let conflicts = '';
     try { conflicts = await git(repo, ['diff', '--name-only', '--diff-filter=U']); } catch { /* keep original error */ }
-    try { await execFileAsync('git', ['merge', '--abort'], { cwd: repo }); } catch { /* best effort; caller sees conflict */ }
+    try { await execFileAsync('git', ['merge', '--abort'], { cwd: repo, env }); } catch { /* best effort; caller sees conflict */ }
     throw new MergeError(409, 'conflict', conflicts ? `Xung đột merge ở: ${conflicts.split('\n').filter(Boolean).join(', ')}` : 'Merge bị xung đột');
   }
 
