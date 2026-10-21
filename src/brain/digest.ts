@@ -1,5 +1,6 @@
 import { TaskRepo, ProjectRepo, ProfileRepo, QuotaMarkRepo, EventRepo } from '../db/index.js';
 import type { QuietHoursConfig } from '../config.js';
+import type { ChatService } from '../chat/service.js';
 
 export interface PendingDecision {
   id: string;
@@ -104,7 +105,7 @@ export class DecisionTracker {
  * Forwards an answered decision to the resident Claude brain session ('brain').
  */
 export function forwardDecisionToBrain(
-  chatService: { getOrCreateSession: (id: string, opts?: unknown) => unknown; sendMessage: (id: string, text: string) => unknown } | undefined,
+  chatService: Pick<ChatService, 'getOrCreateSession' | 'sendMessage'> | undefined,
   decisionId: string,
   text: string,
   answer: 'agree' | 'reject',
