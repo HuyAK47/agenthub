@@ -349,6 +349,15 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(listRes1.statusCode).toBe(200);
     expect(JSON.parse(listRes1.body)).toEqual([]);
 
+    // A client must not be able to impersonate an internal brain session.
+    const forgedBrainRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { mode: 'full', kind: 'brain' },
+    });
+    expect(forgedBrainRes.statusCode).toBe(403);
+
     // 2. POST /api/chat/sessions with mode 'full' -> 403 Forbidden
     const fullRes = await server.inject({
       method: 'POST',

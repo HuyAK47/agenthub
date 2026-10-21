@@ -1898,15 +1898,14 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
 
   // POST /api/chat/sessions
   fastify.post('/api/chat/sessions', async (req: FastifyRequest, reply: FastifyReply) => {
-    const session = chatService.createSession(
-      (req.body && typeof req.body === 'object' ? req.body : {}) as {
-        projectId?: string | null;
-        title?: string;
-        mode?: 'safe' | 'full';
-        model?: string;
-        profileName?: string | null;
-      },
-    );
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const session = chatService.createSession({
+      ...(typeof body.projectId === 'string' || body.projectId === null ? { projectId: body.projectId } : {}),
+      ...(typeof body.title === 'string' ? { title: body.title } : {}),
+      ...(body.mode === 'safe' || body.mode === 'full' ? { mode: body.mode } : {}),
+      ...(typeof body.model === 'string' ? { model: body.model } : {}),
+      ...(typeof body.profileName === 'string' || body.profileName === null ? { profileName: body.profileName } : {}),
+    });
     return reply.status(201).send(session);
   });
 
