@@ -21,6 +21,7 @@ import {
   KnowledgeRepo,
   TaskBatchRepo,
   BrainTurnRepo,
+  BrainDirectiveRepo,
   CiRepo,
 } from './db/index.js';
 import { CiWatchService } from './ci.js';
@@ -45,7 +46,7 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
-import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
+import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
@@ -83,6 +84,7 @@ export interface DaemonContext {
   usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
   brainRunner: BrainRunner;
+  directiveRepo: BrainDirectiveRepo;
   deployService: DeployService;
   ciRepo: CiRepo;
   ciService: CiWatchService;
@@ -130,6 +132,7 @@ export function createContext(
   const permissionRuleRepo = new PermissionRuleRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
+  const directiveRepo = new BrainDirectiveRepo(db);
   chatPermissionRepo.expirePending();
   const systemBrainPolicy = new BrainPolicy({
     roots: [process.cwd(), config.hubHome, config.worktreesDir],
@@ -138,11 +141,17 @@ export function createContext(
     }),
     mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
   });
+  const systemAssistantPolicy = globalAssistantPolicy(config);
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
   }, (sessionId) => {
     const session = chatSessionRepo.get(sessionId);
+    if (session?.kind === 'assistant' && session.projectId) {
+      const project = projectRepo.get(session.projectId);
+      return project ? assistantPolicy(project, config) : systemAssistantPolicy;
+    }
+    if (session?.kind === 'assistant') return systemAssistantPolicy;
     if (!session?.projectId) return systemBrainPolicy;
     const project = projectRepo.get(session.projectId);
     if (!project) return systemBrainPolicy;
@@ -248,6 +257,7 @@ export function createContext(
     taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
+    directiveRepo,
   });
 
   const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());
@@ -287,6 +297,7 @@ export function createContext(
     taskBatchRepo,
     setupManager,
     brainRunner,
+    directiveRepo,
   );
   service.deployService = deployService;
 
@@ -320,6 +331,7 @@ export function createContext(
     quotaMarkRepo,
     chatService,
     brainSession: true,
+    directiveRepo,
     ciRepo,
   });
   service.setTelegramBotService(telegramService);
@@ -357,6 +369,7 @@ export function createContext(
     usageRepo,
     telegramService,
     brainRunner,
+    directiveRepo,
     deployService,
     ciRepo,
     ciService,

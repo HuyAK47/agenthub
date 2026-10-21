@@ -26,6 +26,7 @@ import {
   KnowledgeRepo,
   KnowledgeEntryRow,
   TaskBatchRepo,
+  BrainDirectiveRepo,
   TaskBatchRow,
   CiRepo,
 } from '../db/index.js';
@@ -416,6 +417,11 @@ export const UpdateConfigSchema = z.object({
     maxTurnsPerHour: z.number().int().positive().optional(),
     dailyTokenBudget: z.number().int().nonnegative().optional(),
   }).optional(),
+  assistant: z.object({
+    enabled: z.boolean().optional(),
+    model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
+    policy: z.array(z.string().min(1)).max(100).optional(),
+  }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
   }).optional(),
@@ -738,6 +744,7 @@ export class AppService {
     public taskBatchRepo?: TaskBatchRepo,
     public setupManager?: SetupManager,
     public brainRunner?: BrainRunner,
+    public directiveRepo?: BrainDirectiveRepo,
   ) {}
 
   async getSetupStatus() {
@@ -3163,6 +3170,7 @@ export class AppService {
         fallback: this.config.brain.fallback,
         policy: this.config.brain.policy,
       },
+      assistant: this.config.assistant,
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,

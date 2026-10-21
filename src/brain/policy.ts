@@ -21,6 +21,8 @@ export interface BrainPolicyOptions {
   readOnlyRoots?: string[];
   extraPatterns?: RegExp[];
   mode?: 'suggest' | 'auto';
+  denyBashWrites?: boolean;
+  denyToolWrites?: boolean;
 }
 
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
@@ -200,11 +202,15 @@ export class BrainPolicy {
   private roots: string[];
   private readOnlyRoots: string[];
   private mode: 'suggest' | 'auto';
+  private denyBashWrites: boolean;
+  private denyToolWrites: boolean;
   constructor(options: BrainPolicyOptions) {
     this.roots = options.roots.filter((root) => Boolean(realPath(root)));
     this.readOnlyRoots = (options.readOnlyRoots || []).filter((root) => Boolean(realPath(root)));
     this.extraPatterns = options.extraPatterns || [];
     this.mode = options.mode || 'auto';
+    this.denyBashWrites = options.denyBashWrites === true;
+    this.denyToolWrites = options.denyToolWrites === true;
   }
   private extraPatterns: RegExp[];
 
@@ -226,6 +232,12 @@ export class BrainPolicy {
     }
     if (toolName === 'Bash' && DENY_COMMAND.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Lệnh thuộc danh sách luôn từ chối' };
+    }
+    if (toolName === 'Bash' && this.denyBashWrites && !allowedCommand(command, this.roots, typeof input.cwd === 'string' ? input.cwd : process.cwd())) {
+      return { action: 'deny', reason: 'policy:deny', message: 'Trợ lý chỉ được dùng Bash cho thao tác đọc an toàn' };
+    }
+    if (this.denyToolWrites && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
+      return { action: 'deny', reason: 'policy:deny', message: 'Trợ lý chỉ được đọc và điều phối qua MCP' };
     }
     const touchesReadOnly = paths.some((value) => this.readOnlyRoots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(process.cwd(), value), root)));
     if (touchesReadOnly && !READ_TOOLS.has(toolName)) {
@@ -270,5 +282,32 @@ export function projectBrainPolicy(
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
     mode: effectiveBrainModeFromSettings(settings, config.brain) === 'auto' ? 'auto' : 'suggest',
+  });
+}
+
+export function assistantPolicy(
+  project: { id: string; path: string },
+  config: { worktreesDir: string; assistant: Pick<BrainConfig, 'policy'> },
+): BrainPolicy {
+  return new BrainPolicy({
+    roots: [project.path, path.join(config.worktreesDir, project.id)],
+    extraPatterns: config.assistant.policy.flatMap((pattern) => {
+      try { return [new RegExp(pattern)]; } catch { return []; }
+    }),
+    mode: 'auto',
+    denyBashWrites: true,
+    denyToolWrites: true,
+  });
+}
+
+export function globalAssistantPolicy(config: { worktreesDir: string; assistant: Pick<BrainConfig, 'policy'> }): BrainPolicy {
+  return new BrainPolicy({
+    roots: [config.worktreesDir],
+    extraPatterns: config.assistant.policy.flatMap((pattern) => {
+      try { return [new RegExp(pattern)]; } catch { return []; }
+    }),
+    mode: 'auto',
+    denyBashWrites: true,
+    denyToolWrites: true,
   });
 }

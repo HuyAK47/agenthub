@@ -1,13 +1,13 @@
 import crypto from 'node:crypto';
 import type { BrainConfig } from '../config.js';
-import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, TaskRepo } from '../db/index.js';
+import { BrainDirectiveRepo, BrainTurnRepo, ChatSessionRepo, ProfileRepo, TaskRepo } from '../db/index.js';
 import { resolveClaudeProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
 import { effectiveBrainMode, type EffectiveBrainMode } from './mode.js';
 import { projectSettings } from '../projects/settings.js';
 
-const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high', 'ci.failed']);
+const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high', 'brain.directive_added', 'ci.failed']);
 const SYSTEM_EVENTS = new Set(['quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
 const MAX_RETRIES = 3;
 
@@ -20,11 +20,12 @@ export interface BrainRunnerOptions {
   taskRepo?: Pick<TaskRepo, 'get'>;
   turnRepo: BrainTurnRepo;
   projectRepo?: { get(id: string): { id: string; name: string; path: string; settings?: string | null } | undefined };
+  directiveRepo?: BrainDirectiveRepo;
   debounceMs?: number;
   now?: () => number;
 }
 
-export interface BrainQueuedEvent { id?: string; type: string; taskId?: string; projectId?: string | null; payload?: unknown; }
+export interface BrainQueuedEvent { id?: string; type: string; taskId?: string; projectId?: string | null; payload?: unknown; priority?: boolean; }
 interface ActiveTurn { id: string; events: BrainQueuedEvent[]; retries: number; timer?: NodeJS.Timeout; }
 
 /** Routes resident-brain turns by project while retaining the system brain for incidents. */
@@ -130,9 +131,11 @@ export class BrainRunner {
 
   private startProjectTurn(projectId: string | null): void {
     const sessionId = this.sessionIdFor(projectId);
-    const events = this.pending.filter((event) => (event.projectId ?? null) === projectId);
-    this.dropProjectEvents(projectId);
-    const input = this.formatEvents(events, this.mode(projectId), projectId);
+    const projectEvents = this.pending.filter((event) => (event.projectId ?? null) === projectId);
+    const priority = projectEvents.find((event) => event.priority);
+    const events = priority ? [priority] : projectEvents;
+    this.pending = this.pending.filter((event) => !(event.priority ? event === priority : !priority && (event.projectId ?? null) === projectId));
+    const input = priority ? this.formatDirectiveAcknowledgement(priority, projectId) : this.formatEvents(events, this.mode(projectId), projectId);
     const turn = this.opts.turnRepo.insert({ id: crypto.randomUUID(), trigger: 'event', input, projectId });
     const active: ActiveTurn = { id: turn.id, events, retries: Math.max(0, ...events.map((event) => this.retryCounts.get(event.id || '') || 0)) };
     this.active.set(sessionId, active);
@@ -178,7 +181,7 @@ export class BrainRunner {
     const candidate = typeof data.projectId === 'string' ? data.projectId : taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : null;
     const projectId = SYSTEM_EVENTS.has(type) ? null : (candidate && this.opts.projectRepo?.get(candidate) ? candidate : null);
     if (this.mode(projectId) === 'off' || this.mode(projectId) === 'external') return;
-    this.pending.push({ id: crypto.randomUUID(), type, taskId, projectId, payload });
+    this.pending.push({ id: crypto.randomUUID(), type, taskId, projectId, payload, priority: type === 'brain.directive_added' });
     this.schedule();
   }
 
@@ -224,7 +227,14 @@ export class BrainRunner {
       seenQuota.add(key);
       return true;
     }).slice(0, 30).map((event) => `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${event.payload ? ` ${JSON.stringify(event.payload).slice(0, 500)}` : ''}`);
-    return `${context}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
+    const directives = this.opts.directiveRepo?.list(projectId).map((directive) => `- ${directive.text}`).join('\n') || '- Không có';
+    return `${context}\nCHỈ THỊ CỦA NGƯỜI DÙNG (bắt buộc tuân theo):\n${directives}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
+  }
+
+  private formatDirectiveAcknowledgement(event: BrainQueuedEvent, projectId: string | null): string {
+    const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
+    const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
+    return `${project ? `Bạn là bộ não của dự án ${project.name} (${project.path}).` : 'Bạn là bộ não hệ thống.'}\nCHỈ THỊ MỚI CỦA NGƯỜI DÙNG (bắt buộc tuân theo):\n- ${typeof payload.text === 'string' ? payload.text : 'Đã có chỉ thị mới.'}\nHãy xác nhận đã nhận và áp dụng chỉ thị này trong các lượt sau; chưa xử lý sự kiện nào khác.`;
   }
 
   private failActive(sessionId: string, error: string): void {

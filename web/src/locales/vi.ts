@@ -91,7 +91,7 @@ export const vi = {
     loadNormal: 'Tải máy bình thường',
     overlapWarningTitle: 'Cảnh báo trùng file',
     overlapWarningDesc: 'Có {count} cảnh báo sửa trùng file giữa các task đang chạy:',
-    brains: 'Bộ não', brainMode: 'Chế độ', brainStatewaiting_limit: 'chờ hết giới hạn quota', brainStatewaiting_permission: 'chờ bạn cấp quyền', brainMode_off: 'tắt', brainMode_suggest: 'gợi ý', brainMode_auto: 'tự động', brainMode_external: 'Claude ngoài điều phối', brainStateidle: 'rảnh', brainStaterunning: 'đang chạy', brainStatewaiting: 'đang chờ', brainStateerror: 'lỗi', brainQueued: 'đang xếp hàng', brainTokens: 'Token hôm nay', openBrainChat: 'Mở phiên chat',
+    brains: 'Bộ não', assistant: 'Trợ lý', assistantWorking: 'đang trả lời', assistantReady: 'sẵn sàng', openAssistantChat: 'Mở Trợ lý', brainMode: 'Chế độ', brainStatewaiting_limit: 'chờ hết giới hạn quota', brainStatewaiting_permission: 'chờ bạn cấp quyền', brainMode_off: 'tắt', brainMode_suggest: 'gợi ý', brainMode_auto: 'tự động', brainMode_external: 'Claude ngoài điều phối', brainStateidle: 'rảnh', brainStaterunning: 'đang chạy', brainStatewaiting: 'đang chờ', brainStateerror: 'lỗi', brainQueued: 'đang xếp hàng', brainTokens: 'Token hôm nay', openBrainChat: 'Mở phiên chat',
     ciCardTitle: 'CI', ciCardSubtitle: 'Trạng thái CI GitHub Actions gần nhất', ciCardNoData: 'Chưa có dữ liệu CI', ciPassed: 'Thành công', ciFailed: 'Thất bại', ciRunning: 'Đang chạy',
   },
   tasks: {
@@ -557,7 +557,7 @@ export const vi = {
     hasTokenBadge: 'Token Telegram sẵn sàng',
   },
   extra: {
-    claudeVersion: 'Phiên bản Claude đang dùng', systemBrain: 'Bộ não hệ thống', projectBrains: 'Bộ não theo dự án',
+    claudeVersion: 'Phiên bản Claude đang dùng', systemBrain: 'Bộ não hệ thống', projectBrains: 'Bộ não theo dự án', assistantChats: 'Trợ lý',
     connected: 'Đã kết nối', disconnected: 'Mất kết nối', connectionAria: 'Trạng thái kết nối',
     themeAria: 'Chế độ giao diện', dark: 'Tối', light: 'Sáng', system: 'Hệ thống', default: 'Mặc định',
     sidebarAria: 'Sidebar điều hướng', pageTaskCreate: 'Tạo task mới', pageTaskDetail: 'Chi tiết task',

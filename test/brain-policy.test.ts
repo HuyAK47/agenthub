@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BrainPolicy, projectBrainPolicy } from '../src/brain/policy.js';
+import { BrainPolicy, assistantPolicy, globalAssistantPolicy, projectBrainPolicy } from '../src/brain/policy.js';
 
 describe('BrainPolicy', () => {
   const dirs: string[] = [];
@@ -104,6 +104,20 @@ describe('BrainPolicy', () => {
     dirs.push(root);
     const policy = new BrainPolicy({ roots: [root], extraPatterns: [/^custom-tool$/] });
     expect(policy.decide({ toolName: 'Bash', input: { command: 'custom-tool', cwd: root } })?.action).toBe('allow');
+  });
+
+  it('assistant policies deny file-writing tools, including global assistant scope', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-assistant-policy-'));
+    const worktreesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-assistant-worktrees-'));
+    dirs.push(root, worktreesDir);
+    const config = { worktreesDir, assistant: { policy: [] } };
+    const project = assistantPolicy({ id: 'p1', path: root }, config);
+    const global = globalAssistantPolicy(config);
+    for (const toolName of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+      expect(project.decide({ toolName, input: { file_path: path.join(root, 'file.txt'), cwd: root } })?.action).toBe('deny');
+      expect(global.decide({ toolName, input: { file_path: path.join(worktreesDir, 'file.txt'), cwd: worktreesDir } })?.action).toBe('deny');
+    }
+    expect(global.decide({ toolName: 'Read', input: { file_path: path.join(worktreesDir, 'file.txt'), cwd: worktreesDir } })?.action).toBe('allow');
   });
 
   it('allows reads in references but denies writes there and outside the project', () => {

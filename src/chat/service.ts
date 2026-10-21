@@ -39,6 +39,7 @@ import {
   buildHubSnapshot,
   readHubSnapshotFiles,
   FORK_SUMMARY_PROMPT,
+  buildAssistantPrompt,
 } from './claude.js';
 
 async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
@@ -95,18 +96,25 @@ interface PersistentProcess {
   limitResetSeconds?: number;
 }
 
+interface WaitingUserMessage {
+  text: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
 const MAX_WAITING_USER_MESSAGES = 10;
 
 export class ChatService {
   private queue: QueuedTurn[] = [];
   /** Messages people sent while the session was busy, delivered in order after the current turn. */
-  private waitingUserMessages = new Map<string, string[]>();
+  private waitingUserMessages = new Map<string, WaitingUserMessage[]>();
   private runningTurns = new Map<string, RunningTurn>();
   private claudeBinOverride?: string;
   private persistentProcesses = new Map<string, PersistentProcess>();
   private snapshotAt = new Map<string, number>();
   private snapshotEventAt = new Map<string, number>();
   private retryTimers = new Map<string, NodeJS.Timeout>();
+  private telegramChatBySession = new Map<string, number>();
   private earlyRetryAt = new Map<string, number>();
   private lastClaudeQuotaEventUntil?: number;
 
@@ -179,6 +187,9 @@ export class ChatService {
   setClaudeApiKey(value: string): void {
     this.failoverState.setApiKey(value);
   }
+
+  setTelegramChat(sessionId: string, chatId: number): void { this.telegramChatBySession.set(sessionId, chatId); }
+  getTelegramChat(sessionId: string): number | undefined { return this.telegramChatBySession.get(sessionId); }
 
   configureFailoverSteps(steps: ClaudeFallbackStep[]): void {
     this.failoverState.configureSteps(steps);
@@ -444,6 +455,7 @@ export class ChatService {
         contextTokens: number;
         createdAt: string;
         updatedAt: string;
+        kind: ChatSessionRow['kind'];
         lastMessage?: {
           id: string;
           role: string;
@@ -467,6 +479,7 @@ export class ChatService {
         contextTokens: s.contextTokens ?? 0,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
+        kind: s.kind,
       };
       if (last) {
         res.lastMessage = {
@@ -486,7 +499,7 @@ export class ChatService {
     mode?: 'safe' | 'full';
     model?: string;
     profileName?: string | null;
-    kind?: 'chat' | 'brain';
+    kind?: 'chat' | 'brain' | 'assistant';
   }): ChatSessionRow {
     const { mode, model } = this.validateSessionOptions(body);
 
@@ -521,7 +534,7 @@ export class ChatService {
     mode?: 'safe' | 'full';
     model?: string;
     profileName?: string | null;
-    kind?: 'chat' | 'brain';
+    kind?: 'chat' | 'brain' | 'assistant';
   }): ChatSessionRow {
     const existing = this.chatSessionRepo.get(id);
     if (existing) return existing;
@@ -726,7 +739,12 @@ export class ChatService {
   sendMessage(
     sessionId: string,
     text: string,
-    opts: { queueIfBusy?: boolean; fromQueue?: boolean } = {},
+    opts: {
+      queueIfBusy?: boolean;
+      fromQueue?: boolean;
+      telegramChatId?: number;
+      messageIds?: { userMessageId: string; assistantMessageId: string };
+    } = {},
   ): { userMessageId: string; assistantMessageId: string; queued?: boolean; position?: number } {
     if (typeof text !== 'string' || text.trim().length === 0) {
       throw new HttpError(400, 'bad_request', 'Nội dung tin nhắn không được để trống');
@@ -739,6 +757,10 @@ export class ChatService {
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
     }
+    if (opts.telegramChatId !== undefined) this.setTelegramChat(sessionId, opts.telegramChatId);
+
+    const userMessageId = opts.messageIds?.userMessageId || crypto.randomUUID();
+    const assistantMessageId = opts.messageIds?.assistantMessageId || crypto.randomUUID();
 
     if (session.busy === 1 || this.runningTurns.has(sessionId)) {
       // A person writing to a busy session (typically a brain in the middle of an event turn) is
@@ -748,18 +770,15 @@ export class ChatService {
         if (waiting.length >= MAX_WAITING_USER_MESSAGES) {
           throw new HttpError(409, 'conflict', 'Phiên đang bận và hàng đợi đã đầy');
         }
-        waiting.push(text);
+        waiting.push({ text, userMessageId, assistantMessageId });
         this.waitingUserMessages.set(sessionId, waiting);
         this.emitEvent('chat.queued', { sessionId, position: waiting.length });
-        return { userMessageId: '', assistantMessageId: '', queued: true, position: waiting.length };
+        return { userMessageId, assistantMessageId, queued: true, position: waiting.length };
       }
       throw new HttpError(409, 'conflict', 'Phiên đang bận');
     }
 
     this.failoverState.noteActivity();
-
-    const userMessageId = crypto.randomUUID();
-    const assistantMessageId = crypto.randomUUID();
 
     // Auto set title from first user message (cut to 60 chars) if not yet set
     const isFirstMessage = this.chatMessageRepo.getBySession(sessionId, 1).length === 0;
@@ -784,6 +803,7 @@ export class ChatService {
     this.emitEvent('chat.message', {
       sessionId,
       messageId: userMessageId,
+      assistantMessageId,
       role: 'user',
       content: text,
       ...(opts.fromQueue ? { fromQueue: true } : {}),
@@ -964,6 +984,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
           session.projectId,
+          session.kind,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: '/compact',
@@ -971,6 +992,7 @@ export class ChatService {
           mode: session.mode,
           mcpConfigPath,
           model: session.model,
+          systemPrompt: session.kind === 'assistant' ? buildAssistantPrompt() : undefined,
         });
 
         let child: ChildProcess;
@@ -1146,6 +1168,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
           session.projectId,
+          session.kind,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: FORK_SUMMARY_PROMPT,
@@ -1153,6 +1176,7 @@ export class ChatService {
           mode: session.mode,
           mcpConfigPath,
           model: session.model,
+          systemPrompt: session.kind === 'assistant' ? buildAssistantPrompt() : undefined,
         });
 
         let child: ChildProcess;
@@ -1283,10 +1307,9 @@ export class ChatService {
       }
     }
 
-    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId);
-    const supportsPartial = checkClaudePartialSupport(claudeBin);
-
     const session = this.chatSessionRepo.get(turn.sessionId);
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId, session?.kind);
+    const supportsPartial = checkClaudePartialSupport(claudeBin);
     const execution = this.failoverExecution(turn);
     const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
     const args = buildClaudeArgs({ planning: this.config.planning,
@@ -1296,6 +1319,7 @@ export class ChatService {
       mcpConfigPath,
       supportsPartial,
       model: execution.model,
+      systemPrompt: session?.kind === 'assistant' ? buildAssistantPrompt() : undefined,
       hubSnapshot: session ? this.hubSnapshot(session) : undefined,
     });
 
@@ -1303,7 +1327,7 @@ export class ChatService {
 
     let child: ChildProcess;
     try {
-      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: turn.sessionId, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
+      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: turn.sessionId, chatKind: session?.kind, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     } catch (err: unknown) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
       this.setSessionState(turn.sessionId, 'error');
@@ -1609,12 +1633,13 @@ export class ChatService {
     const proc = spawnClaude(claudeBin, buildClaudeArgs({ planning: this.config.planning,
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
-      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec, session.projectId),
+      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec, session.projectId, session.kind),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
       model: execution.model,
       hubSnapshot: this.hubSnapshot(session, (this.snapshotAt.get(session.id) || 0) > 0 && Date.now() - (this.snapshotAt.get(session.id) || 0) > 10 * 60 * 1000),
-    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: session.id, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
+      systemPrompt: session.kind === 'assistant' ? buildAssistantPrompt() : undefined,
+    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: session.id, chatKind: session.kind, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, profileName: session.profileName, stderrOutput: '' };
     this.persistentProcesses.set(session.id, state);
     proc.stdout?.on('data', (chunk: Buffer) => this.handlePersistentOutput(state, chunk));
@@ -1904,10 +1929,16 @@ export class ChatService {
       timer.unref?.();
       return;
     }
-    const text = waiting.shift()!;
+    const next = waiting.shift()!;
     if (waiting.length === 0) this.waitingUserMessages.delete(sessionId);
     try {
-      this.sendMessage(sessionId, text, { fromQueue: true });
+      this.sendMessage(sessionId, next.text, {
+        fromQueue: true,
+        messageIds: {
+          userMessageId: next.userMessageId,
+          assistantMessageId: next.assistantMessageId,
+        },
+      });
     } catch (error) {
       console.error(`[chat] queued message for ${sessionId} failed:`, error);
     }
