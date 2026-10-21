@@ -93,7 +93,18 @@ export interface Project {
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
   review?: ProjectReview | string | null;
+  /** Always present in API responses (defaults filled in by the server). */
+  settings?: ProjectSettings;
   createdAt?: string;
+}
+
+/** Mirrors src/projects/settings.ts. */
+export interface ProjectSettings {
+  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
+  integration: { enabled: boolean; branch?: string; baseRef?: string };
+  references: Array<{ name: string; path: string; inject: boolean }>;
+  notifications: { telegramContent: 'full' | 'minimal' };
 }
 
 export interface KnowledgeEntry {

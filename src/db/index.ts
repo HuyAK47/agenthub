@@ -524,6 +524,12 @@ export const MIGRATIONS: string[] = [
   `
   DELETE FROM claude_scan_state WHERE eligible = 0;
   `,
+  // Migration 41: per-project settings (JSON, see src/projects/settings.ts) and per-project brain turns.
+  `
+  ALTER TABLE projects ADD COLUMN settings TEXT;
+  ALTER TABLE brain_turns ADD COLUMN projectId TEXT;
+  CREATE INDEX IF NOT EXISTS idx_brain_turns_project ON brain_turns(projectId, startedAt);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -571,6 +577,8 @@ export interface ProjectRow {
   merge?: string | null;
   reviewChain?: string | null;
   review?: string | null;
+  /** JSON ProjectSettings; read through projectSettings() in src/projects/settings.ts. */
+  settings?: string | null;
   createdAt: string;
 }
 
@@ -694,17 +702,18 @@ export class ProjectRepo {
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'> & {
       checks?: string | null;
       hooks?: string | null;
       merge?: string | null;
       reviewChain?: string | null;
       review?: string | null;
+      settings?: string | null;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -718,12 +727,13 @@ export class ProjectRepo {
         row.merge || null,
         row.reviewChain || null,
         row.review || null,
+        row.settings || null,
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];

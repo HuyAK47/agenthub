@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -69,7 +70,7 @@ function apiProject(project: ProjectRow): ProjectRow {
   } else if (reviewChain) {
     review = { chain: reviewChain, maxRounds: 2 };
   }
-  return { ...project, merge, reviewChain, review, createdAt: toApiTime(project.createdAt)! } as ProjectRow;
+  return { ...project, merge, reviewChain, review, settings: projectSettings(project), createdAt: toApiTime(project.createdAt)! } as unknown as ProjectRow;
 }
 
 function apiProfile(profile: ProfileRow): ProfileRow {
@@ -186,6 +187,7 @@ export const CreateProjectSchema = z.object({
   merge: ProjectMergeSchema.nullable().optional(),
   reviewChain: ReviewChainSchema.nullable().optional(),
   review: ProjectReviewSchema.nullable().optional(),
+  settings: ProjectSettingsInputSchema.optional(),
 });
 
 export const UpdateProjectSchema = z.object({
@@ -198,6 +200,7 @@ export const UpdateProjectSchema = z.object({
   merge: ProjectMergeSchema.nullable().optional(),
   reviewChain: ReviewChainSchema.nullable().optional(),
   review: ProjectReviewSchema.nullable().optional(),
+  settings: ProjectSettingsInputSchema.optional(),
 });
 
 export const CreateTaskSchema = z.object({
@@ -1071,6 +1074,7 @@ export class AppService {
       merge: parsed.merge ? JSON.stringify(parsed.merge) : null,
       reviewChain: parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
       review: parsed.review ? JSON.stringify(parsed.review) : null,
+      settings: parsed.settings ? JSON.stringify(mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings)) : null,
     });
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -1080,8 +1084,11 @@ export class AppService {
   updateProject(id: string, raw: unknown): ProjectRow {
     this.getProject(id);
     const parsed = UpdateProjectSchema.parse(raw);
+    const current = this.projectRepo.get(id);
     this.projectRepo.update(id, {
       ...parsed,
+      // Partial settings merge over what is stored, so callers can change one switch at a time.
+      settings: parsed.settings === undefined ? undefined : JSON.stringify(mergeProjectSettings(projectSettings(current), parsed.settings)),
       checks: parsed.checks === undefined ? undefined : parsed.checks ? JSON.stringify(parsed.checks) : null,
       hooks: parsed.hooks === undefined ? undefined : parsed.hooks ? JSON.stringify(parsed.hooks) : null,
       merge: parsed.merge === undefined ? undefined : parsed.merge ? JSON.stringify(parsed.merge) : null,

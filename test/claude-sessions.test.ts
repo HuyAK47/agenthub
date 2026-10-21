@@ -245,7 +245,7 @@ describe('Claude session privacy and quota handling', () => {
     const insert = db.prepare('INSERT INTO claude_scan_state (path,inode,size,offset,mtime,turnId,turnTasks,eligible) VALUES (?,?,?,?,?,?,?,?)');
     insert.run('/x/-media-other-project/a.jsonl', 1, 1, 1, 1, 't', '[]', 0);
     insert.run('/x/-home-me-project/b.jsonl', 2, 1, 1, 1, 't', '[]', 1);
-    db.exec(MIGRATIONS[MIGRATIONS.length - 1]);
+    db.exec(MIGRATIONS.find((sql) => sql.includes('DELETE FROM claude_scan_state WHERE eligible = 0'))!);
     expect(db.prepare('SELECT path FROM claude_scan_state').all()).toEqual([{ path: '/x/-home-me-project/b.jsonl' }]);
     db.close();
   });
