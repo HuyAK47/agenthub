@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { openDatabase, ProfileRepo, QuotaMarkRepo, QuotaUsageRepo } from '../src/db/index.js';
 import { hasClaudeQuotaAvailable, parseUsage, QuotaUsageService } from '../src/quota/usage.js';
 import { ProfileLockService } from '../src/profiles/locks.js';
+import { AppService } from '../src/services/index.js';
+import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
 
 const sampleResetAt = Math.floor(Date.now() / 1000) + 3600;
 const sample = [
@@ -115,6 +117,24 @@ describe('quota usage', () => {
 
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('does not expose profiles without Claude usage in Claude quota', () => {
+    const db = openDatabase(':memory:');
+    const profiles = new ProfileRepo(db);
+    profiles.upsert({ name: 'codex', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
+    profiles.upsert({ name: 'gemini', engine: 'agy', kind: 'isolated', home: null, email: null, enabled: 1 });
+    const usageRows = [
+      { profileName: 'codex', grp: 'Codex', window: '5h', remainingPct: 0, resetAt: 1_900_000_000, fetchedAt: 1_800_000_000 },
+      { profileName: 'gemini', grp: 'Gemini Models', window: '5h', remainingPct: 80, resetAt: 1_900_000_000, fetchedAt: 1_800_000_000 },
+    ];
+    const service = Object.create(AppService.prototype) as AppService;
+    service.profileRepo = profiles;
+    service.usageService = { getAll: () => usageRows } as unknown as QuotaUsageService;
+    service.claudeSessionRepo = new ClaudeSessionRepo(db);
+
+    expect(service.getClaudeQuota().profiles).toEqual([]);
+    db.close();
   });
 });
 

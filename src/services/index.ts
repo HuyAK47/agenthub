@@ -774,6 +774,7 @@ export class AppService {
     }));
     const usageByProfile = new Map<string, ReturnType<typeof this.usageService.getAll>>();
     for (const row of this.usageService.getAll()) {
+      if (!row.grp.startsWith('Claude')) continue;
       const rows = usageByProfile.get(row.profileName) || [];
       rows.push(row);
       usageByProfile.set(row.profileName, rows);
