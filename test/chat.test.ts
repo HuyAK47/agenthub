@@ -607,7 +607,40 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(lastRun.argv[pIdx + 1]).toBe('--output-format');
   });
 
-  it('rejects concurrent message when session is busy (409) and cancel kills process', async () => {
+  it('delivers a queued message right after the current turn finishes', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Queue session' },
+    });
+    const session = JSON.parse(createRes.body);
+    const first = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Tin đầu tiên' },
+    });
+    expect(first.statusCode).toBe(202);
+    // The first turn marks the session busy synchronously, so this one is queued.
+    const second = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Tin thứ hai' },
+    });
+    expect(JSON.parse(second.body)).toEqual(expect.objectContaining({ queued: true, position: 1 }));
+
+    await vi.waitFor(() => {
+      const messages = ctx.chatMessageRepo.getBySession(session.id, 50);
+      const users = messages.filter((m) => m.role === 'user').map((m) => m.content);
+      expect(users).toEqual(['Tin đầu tiên', 'Tin thứ hai']);
+      expect(messages.filter((m) => m.role === 'assistant').length).toBe(2);
+      expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
+    }, { timeout: 15000 });
+  });
+
+  it('queues a message sent to a busy session and cancel drops the queue and kills the process', async () => {
     const createRes = await server.inject({
       method: 'POST',
       url: '/api/chat/sessions',
@@ -631,14 +664,15 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       expect(busySession?.busy).toBe(1);
     }, { timeout: 5000 });
 
-    // 3. Second message to same session returns 409 Conflict
+    // 3. Second message to the busy session is queued, not rejected
     const sendRes2 = await server.inject({
       method: 'POST',
       url: `/api/chat/sessions/${session.id}/messages`,
       headers: authHeaders(),
       payload: { text: 'Tin nhắn thứ 2 khi đang bận' },
     });
-    expect(sendRes2.statusCode).toBe(409);
+    expect(sendRes2.statusCode).toBe(202);
+    expect(JSON.parse(sendRes2.body)).toEqual(expect.objectContaining({ queued: true, position: 1 }));
 
     // 4. Delete session while busy returns 409 Conflict
     const delRes = await server.inject({

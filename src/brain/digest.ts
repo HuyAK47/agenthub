@@ -124,7 +124,7 @@ export function forwardDecisionToBrain(
     chatService.getOrCreateSession(sessionId, projectId
       ? { title: `Bộ não · ${projectId}`, kind: 'brain', projectId }
       : { title: 'Bộ não', kind: 'brain' });
-    chatService.sendMessage(sessionId, brainMsg);
+    chatService.sendMessage(sessionId, brainMsg, { queueIfBusy: true });
   } catch {
     // ignore if brain session cannot receive (e.g. busy)
   }

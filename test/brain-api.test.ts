@@ -347,6 +347,7 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       'brain',
       'Người dùng trả lời quyết định dec-api-1 («Xác nhận xóa tài nguyên tạm?»): Đồng ý',
+      { queueIfBusy: true },
     );
 
     // Answering again should fail with 404 "Quyết định đã hết hạn hoặc đã trả lời"
@@ -402,6 +403,6 @@ describe('Brain API Endpoints (/api/brain)', () => {
 
     expect(response.statusCode).toBe(200);
     expect(getOrCreateSpy).toHaveBeenCalledWith('brain:p1', { title: 'Bộ não · p1', kind: 'brain', projectId: 'p1' });
-    expect(sendSpy).toHaveBeenCalledWith('brain:p1', expect.stringContaining('Không'));
+    expect(sendSpy).toHaveBeenCalledWith('brain:p1', expect.stringContaining('Không'), { queueIfBusy: true });
   });
 });

@@ -1030,6 +1030,32 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(recordedCalls.some((call) => call.body?.text === '⏹ Đã dừng lượt chat hiện tại.')).toBe(true);
     });
 
+    it('queues a message for a busy session and answers it in the same Telegram message afterwards', async () => {
+      ctx.chatService.setClaudeBinOverride(fakeClaudeBin);
+      const bot = createTestBotService({ allowedChatIds: [321], chatService: ctx.chatService });
+      // Start a long turn so the session is busy.
+      await bot.handleUpdate({ update_id: 1100, message: {
+        message_id: 1100, date: 1, chat: { id: 321, type: 'private' }, text: 'sleep',
+      } });
+      await vi.waitFor(() => expect(ctx.chatSessionRepo.get('telegram:321')?.busy).toBe(1), { timeout: 5_000 });
+
+      await bot.handleUpdate({ update_id: 1101, message: {
+        message_id: 1101, date: 1, chat: { id: 321, type: 'private' }, text: 'Tình hình thế nào?',
+      } });
+      await vi.waitFor(() => expect(recordedCalls.some((call) => typeof call.body?.text === 'string'
+        && (call.body.text as string).includes('xếp hàng (thứ 1)'))).toBe(true));
+      const queuedEdit = recordedCalls.find((call) => typeof call.body?.text === 'string' && (call.body.text as string).includes('xếp hàng'));
+      const queuedMessageId = queuedEdit?.body?.message_id;
+      expect(queuedMessageId).toBeDefined();
+
+      // When the queued turn starts, its reply is attached to that placeholder message.
+      const handleChatEvent = (type: string, payload: unknown) => (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void }).handleChatEvent(type, undefined, payload);
+      handleChatEvent('chat.message', { sessionId: 'telegram:321', role: 'user', fromQueue: true, content: 'Tình hình thế nào?' });
+      const replies = (bot as unknown as { chatReplies: Map<string, { messageId: number }> }).chatReplies;
+      expect(replies.get('telegram:321')?.messageId).toBe(queuedMessageId);
+      ctx.chatService.cancelSession('telegram:321');
+    });
+
     it('keeps newlines, rate-limits progress edits, and splits long final replies', async () => {
       const bot = createTestBotService({ allowedChatIds: [321], chatService: ctx.chatService });
       const botAny = bot as unknown as { chatProgressText(text: string): string };
@@ -1413,7 +1439,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         text: '/newtask Sửa checkout trong proj-shop',
       } });
 
-      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('Sửa checkout trong proj-shop'));
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('Sửa checkout trong proj-shop'), { queueIfBusy: true });
       expect(sendMessage.mock.calls[0][1]).toContain('project "proj-shop"');
     });
 
@@ -1462,7 +1488,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         id: 'cb-ambiguous-project', from: { id: CHAT_ID },
         message: { message_id: 51, chat: { id: CHAT_ID } }, data: 'newtask:proj:proj-api',
       } });
-      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-api"'));
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-api"'), { queueIfBusy: true });
       calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[calls.length - 1].body?.text).toContain('Đang nhờ Claude');
     });
@@ -1486,7 +1512,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       await bot.handleUpdate({ update_id: 56, message: {
         message_id: 56, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: 'Cập nhật luồng thanh toán',
       } });
-      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-shop"'));
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-shop"'), { queueIfBusy: true });
     });
 
     it('falls back to a word-bounded draft when Claude is unavailable', async () => {
@@ -1999,6 +2025,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       'brain',
       'Người dùng trả lời quyết định dec-123 («Bạn có đồng ý merge đợt task này không?»): Đồng ý',
+      { queueIfBusy: true },
     );
 
     // Tracker marks decision as answered

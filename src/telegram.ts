@@ -271,6 +271,8 @@ export class TelegramBotService {
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private chatReplies = new Map<string, ChatReplyState>();
+  /** Telegram messages waiting for a busy session; each gets the reply of its queued turn. */
+  private queuedChatTurns = new Map<string, Array<{ chatId: number; messageId: number }>>();
   private chatSessions = new Map<number, string>();
   private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string }>();
   /** Per-chat selected project (persisted in config.telegram.chats). */
@@ -1267,8 +1269,17 @@ export class TelegramBotService {
       initial = await this.sendMessage(chatId, placeholder);
       const messageId = this.telegramMessageId(initial);
       if (messageId === null) throw new Error('Telegram không trả về message_id');
+      const result = this.chatService.sendMessage(sessionId, text, { queueIfBusy: true });
+      if (result?.queued) {
+        // The session (usually a brain busy with an event turn) answers this message right after the
+        // current turn; keep the placeholder and attach the reply to it when the queued turn starts.
+        const queued = this.queuedChatTurns.get(sessionId) ?? [];
+        queued.push({ chatId, messageId });
+        this.queuedChatTurns.set(sessionId, queued);
+        await this.editMessage(chatId, messageId, `📥 Đang bận một việc khác. Tin nhắn đã xếp hàng (thứ ${result.position ?? queued.length}), sẽ trả lời ngay sau.`);
+        return;
+      }
       this.chatReplies.set(sessionId, { chatId, messageId, text: placeholder, lastEditAt: this.now(), editing: false });
-      this.chatService.sendMessage(sessionId, text);
     } catch (err) {
       const reply = this.chatReplies.get(sessionId);
       if (reply?.editTimer) clearTimeout(reply.editTimer);
@@ -1295,6 +1306,15 @@ export class TelegramBotService {
     const data = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId : taskId;
     if (!sessionId) return;
+    if (type === 'chat.message' && data.role === 'user' && data.fromQueue === true) {
+      const next = this.queuedChatTurns.get(sessionId)?.shift();
+      if (next) {
+        if (this.queuedChatTurns.get(sessionId)?.length === 0) this.queuedChatTurns.delete(sessionId);
+        this.chatReplies.set(sessionId, { chatId: next.chatId, messageId: next.messageId, text: '⏳ Đang xử lý…', lastEditAt: 0, editing: false });
+        this.scheduleChatEdit(sessionId);
+      }
+      return;
+    }
     const reply = this.chatReplies.get(sessionId);
     const pending = this.pendingAutoTasks.get(sessionId);
     if (type === 'chat.done') {
