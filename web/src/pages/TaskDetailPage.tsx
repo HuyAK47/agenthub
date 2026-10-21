@@ -260,6 +260,18 @@ export const TaskDetailPage: React.FC = () => {
     onSuccess: (created) => { setCapture(null); queryClient.invalidateQueries({ queryKey: ['tasks'] }); navigate(`/tasks/${encodeURIComponent(created.id.replace('/', '~'))}`); },
   });
 
+  // Text currently selected inside the live log; drives the "create fix task" button.
+  const [logSelection, setLogSelection] = useState('');
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      const inLog = !!sel && !!sel.anchorNode && !!logContainerRef.current?.contains(sel.anchorNode);
+      setLogSelection(inLog ? sel.toString().trim() : '');
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
   const openCapture = (excerpt: string, checkName?: string) => {
     const first = excerpt.split(/\r?\n/).find((line) => line.trim())?.trim() || 'fix-error';
     setCapture({ excerpt, checkName });
@@ -722,7 +734,10 @@ export const TaskDetailPage: React.FC = () => {
           >
             {liveLog ? liveLog : <span className="text-[#8b93a7]">{t('taskDetail.noLog')}</span>}
           </div>
-          <button type="button" onClick={() => { const text = window.getSelection()?.toString().trim(); if (text) openCapture(text, 'log'); }} className="mt-2 px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer">{t('extra.captureFromSelection')}</button>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button type="button" disabled={!logSelection} title={t('extra.captureFromSelectionTip')} onClick={() => { if (logSelection) openCapture(logSelection, 'log'); }} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">{t('extra.captureFromSelection')}</button>
+            <span className="text-xs text-[var(--t-text-3)]">{logSelection ? t('extra.captureSelectedChars', { count: logSelection.length }) : t('extra.captureFromSelectionHint')}</span>
+          </div>
 
           {!autoScroll && (
             <button
@@ -1071,11 +1086,12 @@ export const TaskDetailPage: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <form onSubmit={(event) => { event.preventDefault(); captureMutation.mutate(); }} className="w-full max-w-2xl bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4">
             <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
-            <label className="block text-xs font-semibold">Tiêu đề<input value={captureTitle} onChange={(e) => setCaptureTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
+            <p className="text-xs text-[var(--t-text-3)]">{t('extra.captureDesc')}</p>
+            <label className="block text-xs font-semibold">{t('extra.captureFieldTitle')}<input value={captureTitle} onChange={(e) => setCaptureTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
             <label className="block text-xs font-semibold">Slug<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
             <pre className="max-h-48 overflow-auto rounded-lg bg-[#0b0d12] text-[#e6e8ee] p-3 text-xs whitespace-pre-wrap">{capture.excerpt}</pre>
             {captureMutation.error && <p className="text-sm text-[var(--t-crit)]">{(captureMutation.error as Error).message}</p>}
-            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">Hủy</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white cursor-pointer disabled:opacity-50">Tạo task</button></div>
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">{t('extra.cancel')}</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white cursor-pointer disabled:opacity-50">{t('extra.captureSubmit')}</button></div>
           </form>
         </div>
       )}
