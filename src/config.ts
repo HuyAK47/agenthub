@@ -26,6 +26,7 @@ export interface BrainConfig {
   mode: 'off' | 'suggest' | 'auto';
   maxTurnsPerHour: number;
   dailyTokenBudget: number;
+  turnTimeoutSec?: number;
 }
 
 export interface ClaudeSessionsConfig {
@@ -723,6 +724,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       dailyTokenBudget: typeof brainRaw.dailyTokenBudget === 'number' && brainRaw.dailyTokenBudget >= 0
         ? Math.floor(brainRaw.dailyTokenBudget)
         : 0,
+      turnTimeoutSec: typeof brainRaw.turnTimeoutSec === 'number' && brainRaw.turnTimeoutSec > 0
+        ? Math.floor(brainRaw.turnTimeoutSec)
+        : 20 * 60,
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),

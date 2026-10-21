@@ -105,11 +105,12 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     extraPatterns: config.brain.policy.flatMap((pattern) => {
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
+    mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
   });
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
-  }, brainPolicy);
+  }, brainPolicy, chatSessionRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { ChatPermissionRepo, ChatPermissionRow } from '../db/index.js';
+import { ChatPermissionRepo, ChatPermissionRow, ChatSessionRepo } from '../db/index.js';
 import { BrainPolicy } from '../brain/policy.js';
 
 export type PermissionDecision = 'allow' | 'deny' | 'allow_always';
@@ -35,6 +35,7 @@ export class PermissionBroker {
     private timeoutSec = 600,
     private onRequest?: PermissionEvent,
     private brainPolicy?: BrainPolicy,
+    private sessionRepo?: ChatSessionRepo,
   ) {}
 
   listPending(sessionId?: string): ChatPermissionRow[] {
@@ -50,7 +51,8 @@ export class PermissionBroker {
   }
 
   request(input: PermissionRequestInput): Promise<PermissionResult> {
-    if (input.kind === 'brain' && this.brainPolicy) {
+    const sessionKind = this.sessionRepo?.get(input.sessionId)?.kind;
+    if (sessionKind === 'brain' && this.brainPolicy) {
       const decision = this.brainPolicy.decide(input);
       if (decision) {
         const id = crypto.randomUUID();

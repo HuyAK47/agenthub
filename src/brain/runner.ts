@@ -21,6 +21,7 @@ export interface BrainRunnerOptions {
 }
 
 export interface BrainQueuedEvent {
+  id?: string;
   type: string;
   taskId?: string;
   payload?: unknown;
@@ -36,6 +37,8 @@ export class BrainRunner {
   private activeTurn = false;
   private activeTurnId?: string;
   private activeEvents: BrainQueuedEvent[] = [];
+  private turnTimer?: NodeJS.Timeout;
+  private retries = new Map<string, number>();
   private started = false;
   private bound = (type: string, taskId?: string, payload?: unknown) => this.onEvent(type, taskId, payload);
 
@@ -57,6 +60,8 @@ export class BrainRunner {
     this.opts.eventBus.off('*', this.bound);
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    if (this.turnTimer) clearTimeout(this.turnTimer);
+    this.turnTimer = undefined;
   }
 
   getQueuedEvents(): BrainQueuedEvent[] {
@@ -89,13 +94,10 @@ export class BrainRunner {
     this.activeEvents = events;
     try {
       this.opts.chatService.sendMessage(this.sessionId, input);
+      this.turnTimer = setTimeout(() => this.failActive('brain turn timeout'), (this.opts.config.turnTimeoutSec ?? 20 * 60) * 1000);
+      this.turnTimer.unref?.();
     } catch (error) {
-      this.activeTurn = false;
-      this.activeTurnId = undefined;
-      this.activeEvents = [];
-      this.pending.unshift(...events);
-      this.opts.turnRepo.finish(turn.id, { status: 'failed', error: error instanceof Error ? error.message : String(error) });
-      this.schedule();
+      this.failActive(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -135,15 +137,10 @@ export class BrainRunner {
       const data = this.asRecord(payload);
       if (data.sessionId !== this.sessionId) return;
       if (type === 'chat.error' && this.isQuota(data.message)) {
-        this.activeTurn = false;
-        if (this.activeTurnId) this.opts.turnRepo.finish(this.activeTurnId, { status: 'quota', error: String(data.message || 'quota') });
-        this.activeTurnId = undefined;
-        this.pending.unshift(...this.activeEvents);
-        this.activeEvents = [];
+        this.finishActive('quota', String(data.message || 'quota'));
         this.opts.eventBus.emit('brain.waiting', undefined, { reason: 'quota' });
         this.schedule();
       } else if (type === 'chat.done') {
-        this.activeTurn = false;
         const usage = this.asRecord(data.usage);
         if (this.activeTurnId) this.opts.turnRepo.finish(this.activeTurnId, {
           status: 'done',
@@ -151,14 +148,15 @@ export class BrainRunner {
           inputTokens: typeof usage.inputTokens === 'number' ? usage.inputTokens : 0,
           outputTokens: typeof usage.outputTokens === 'number' ? usage.outputTokens : 0,
         });
-        this.activeTurnId = undefined;
-        this.activeEvents = [];
+        this.clearActive();
         this.schedule();
+      } else if (type === 'chat.error') {
+        this.failActive(String(data.message || 'brain turn failed'));
       }
       return;
     }
     if (!EVENT_TYPES.has(type)) return;
-    this.pending.push({ type, taskId, payload });
+    this.pending.push({ id: crypto.randomUUID(), type, taskId, payload });
     this.schedule();
   }
 
@@ -172,11 +170,13 @@ export class BrainRunner {
   }
 
   private formatEvents(events: BrainQueuedEvent[]): string {
-    const lines = events.map((event) => {
+    const shown = events.slice(0, 30);
+    const lines = shown.map((event) => {
       const payload = this.asRecord(event.payload);
-      const detail = Object.keys(payload).length ? ` ${JSON.stringify(payload)}` : '';
+      const detail = Object.keys(payload).length ? ` ${JSON.stringify(payload).slice(0, 500)}` : '';
       return `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${detail}`;
     });
+    if (events.length > shown.length) lines.push(`- …và ${events.length - shown.length} sự kiện khác`);
     const policy = this.opts.config.mode === 'suggest'
       ? 'Chế độ suggest: chỉ đề xuất, không tự gọi hub_review hoặc merge; chờ người dùng duyệt.'
       : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.';
@@ -189,5 +189,41 @@ export class BrainRunner {
 
   private isQuota(value: unknown): boolean {
     return typeof value === 'string' && /(quota|rate.?limit|429|usage limit|limit reached)/i.test(value);
+  }
+
+  private clearActive(): void {
+    if (this.turnTimer) clearTimeout(this.turnTimer);
+    this.turnTimer = undefined;
+    this.activeTurn = false;
+    this.activeTurnId = undefined;
+    this.activeEvents = [];
+  }
+
+  private finishActive(status: 'quota' | 'failed', error: string): void {
+    if (this.activeTurnId) this.opts.turnRepo.finish(this.activeTurnId, { status, error });
+    const events = this.activeEvents;
+    this.clearActive();
+    if (status === 'quota') {
+      this.pending.unshift(...events);
+      return;
+    }
+    const retry: BrainQueuedEvent[] = [];
+    for (const event of events) {
+      const key = event.id || `${event.type}:${event.taskId || ''}:${JSON.stringify(event.payload)}`;
+      const attempt = (this.retries.get(key) || 0) + 1;
+      if (attempt < 3) {
+        this.retries.set(key, attempt);
+        retry.push(event);
+      } else {
+        this.opts.eventBus.emit('brain.notify', undefined, { level: 'incident', text: `Bỏ sự kiện brain sau 3 lần lỗi: ${event.type}` });
+      }
+    }
+    this.pending.unshift(...retry);
+    this.schedule();
+  }
+
+  private failActive(error: string): void {
+    if (!this.activeTurn) return;
+    this.finishActive('failed', error);
   }
 }
