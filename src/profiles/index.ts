@@ -6,6 +6,7 @@ import { AgentHubConfig, saveConfig } from '../config.js';
 import { CodexEngine } from '../engines/index.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { accountKey } from './account.js';
+import { findAgyPath } from '../doctor.js';
 
 export { accountKey, sameAccount } from './account.js';
 
@@ -35,7 +36,7 @@ export class ProfileService {
 
   /**
    * Register all profiles on startup:
-   * - "chinh" (keyring, agy engine)
+   * - "agy-default" (keyring, agy engine) when agy is installed
    * - "codex" if Codex CLI found
    * - All subdirectories in ~/.agy-homes/ (except .state)
    */
@@ -46,11 +47,11 @@ export class ProfileService {
       // Persist the migration choice so subsequent daemon starts are stable.
       saveConfig(this.config.hubHome, { multiplePerProvider: true });
     }
-    // Register keyring agy profile if none exists (handles renamed "chinh" -> "g0")
+    // Preserve existing keyring profiles, including the legacy "chinh" name.
     const hasKeyring = this.profileRepo.getAll(true).some((p) => p.kind === 'keyring' && p.engine === 'agy');
-    if (!hasKeyring) {
+    if (!hasKeyring && findAgyPath()) {
       this.profileRepo.upsert({
-        name: 'chinh',
+        name: 'agy-default',
         engine: 'agy',
         kind: 'keyring',
         home: os.homedir(),

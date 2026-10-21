@@ -19,6 +19,8 @@ export interface ServiceInstallResult {
   file: string;
   content: string;
   activate: string;
+  skipped?: boolean;
+  message?: string;
 }
 
 export interface ServiceRestartResult {

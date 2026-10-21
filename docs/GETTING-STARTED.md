@@ -30,10 +30,23 @@ Cách cài đặt một lệnh (hãy đọc script trước khi chạy):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
 less /tmp/agenthub-install.sh
-sh /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh --from-release
 ```
 
 Có thể xem trước thao tác bằng `sh /tmp/agenthub-install.sh --dry-run`. Gỡ cài đặt giữ nguyên dữ liệu bằng `sh /tmp/agenthub-install.sh --uninstall`; chỉ dùng `--purge` khi muốn xoá dữ liệu và đã xác nhận.
+
+Gỡ cài đặt:
+
+```bash
+sh /tmp/agenthub-install.sh --uninstall
+sh /tmp/agenthub-install.sh --uninstall --purge
+```
+
+Thử bộ cài trên máy sạch:
+
+```bash
+scripts/smoke-install.sh release/agenthub-*.tar.gz
+```
 
 Nếu đã có bản phát hành, không cần clone hoặc build mã nguồn:
 

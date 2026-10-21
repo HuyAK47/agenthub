@@ -85,9 +85,19 @@ function installService(opts: { nodePath: string; cliPath: string; currentPath: 
   const file = path.join(opts.homeDir, '.config', 'systemd', 'user', 'agenthub.service');
   const activate = `${systemctlCommand('--user', 'daemon-reload')} && ${systemctlCommand('--user', 'enable', '--now', 'agenthub')}`;
   if (!opts.print) {
+    try {
+      execFileSync(process.env.AGENTHUB_SYSTEMCTL || 'systemctl', ['--version'], { stdio: 'ignore' });
+    } catch {
+      return { file, content, activate, skipped: true, message: 'Không có systemd — chạy thủ công: agenthub daemon' };
+    }
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content, 'utf8');
-    (opts.exec || ((command, options) => execFileSync('sh', ['-c', command], options)))(activate, { stdio: 'inherit' });
+    try {
+      (opts.exec || ((command, options) => execFileSync('sh', ['-c', command], options)))(activate, { stdio: 'inherit' });
+    } catch {
+      try { fs.unlinkSync(file); } catch { /* ignore cleanup */ }
+      return { file, content, activate, skipped: true, message: 'Không có systemd user bus — chạy thủ công: agenthub daemon' };
+    }
   }
   return { file, content, activate };
 }

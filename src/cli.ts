@@ -77,6 +77,11 @@ export async function cmdInstallService(extraArgs: string[], projectRootOverride
     return output;
   }
 
+  if (result.skipped) {
+    console.log(`! ${result.message || 'Không có service nền tảng'}`);
+    return result.content;
+  }
+
   console.log(`✓ Đã tạo service file tại ${result.file}`);
   console.log(`✓ Đã bật và khởi chạy service agenthub (${result.activate})`);
   return result.content;
@@ -104,7 +109,7 @@ export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
 export async function cmdLink(): Promise<string> {
   const projectRoot = findProjectRoot();
   const wrapperPath = path.resolve(projectRoot, 'bin', 'agenthub');
-  const targetDir = path.join(os.homedir(), '.local', 'bin');
+  const targetDir = process.env.AGENTHUB_LINK_DIR || path.join(os.homedir(), '.local', 'bin');
   const targetPath = path.join(targetDir, 'agenthub');
 
   fs.mkdirSync(targetDir, { recursive: true });
@@ -634,7 +639,7 @@ export async function cmdProfile(
         });
         await new Promise<void>((resolve) => child.once('close', () => resolve()));
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').trim() : '';
-        const logDir = p.name === 'chinh'
+        const logDir = p.kind === 'keyring'
           ? config.defaultLogDir
           : path.join(p.home || os.homedir(), '.gemini', 'antigravity-cli', 'log');
         const email = ctx.profileService.readEmailFromLog(logDir);

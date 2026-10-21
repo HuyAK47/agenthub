@@ -46,7 +46,8 @@ describe('release packaging and installation', () => {
       for (const entry of ['dist/', 'dist/web/', 'package.json', 'package-lock.json', 'bin/', 'README.md', 'LICENSE', 'docs/GETTING-STARTED.md', 'scripts/install.sh']) {
         expect(listing).toContain(`./${entry}`);
       }
-      expect(listing.some((entry) => /(^|\/)(node_modules|\.agenthub|\.env)(\/|$)/.test(entry))).toBe(false);
+      expect(listing.some((entry) => /(^|\/)(\.agenthub|\.env)(\/|$)/.test(entry))).toBe(false);
+      expect(listing).toContain('./node_modules/');
       const expected = fs.readFileSync(path.join(releaseDir, 'SHA256SUMS'), 'utf8').split(/\s+/)[0];
       const actual = crypto.createHash('sha256').update(fs.readFileSync(archivePath)).digest('hex');
       expect(expected).toBe(actual);

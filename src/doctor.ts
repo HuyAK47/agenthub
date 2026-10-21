@@ -81,7 +81,7 @@ export function findAgyPath(customHome?: string, existsFn: (filePath: string) =>
   const candidates: string[] = [];
   if (process.env.AGENTHUB_TOOLS_DIR) candidates.push(path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'agy'));
   if (process.env.AGENTHUB_AGY_BIN) {
-    candidates.push(process.env.AGENTHUB_AGY_BIN);
+    return existsFn(process.env.AGENTHUB_AGY_BIN) ? process.env.AGENTHUB_AGY_BIN : null;
   }
   const homes = [customHome, os.homedir(), findRealUserHome()].filter(Boolean) as string[];
   for (const h of homes) {
@@ -210,6 +210,7 @@ export interface CheckEnginesDeps {
   codexPath?: string | null;
   homeDir?: string;
   checkFileExists?: (filePath: string) => boolean;
+  port?: number;
 }
 
 export async function checkEngines(deps?: CheckEnginesDeps): Promise<DoctorCheckItem> {
@@ -239,7 +240,8 @@ export async function checkEngines(deps?: CheckEnginesDeps): Promise<DoctorCheck
     suggestions.push(`Cài đặt Antigravity CLI tại ~/.gemini/bin/agy`);
   }
   if (!foundCodex) {
-    suggestions.push(`Cài đặt extension ChatGPT trong VS Code để có Codex CLI theo PLAN 2.2`);
+    const port = deps?.port ?? loadConfig().port ?? 7700;
+    suggestions.push(`Mở http://127.0.0.1:${port}/setup để cài Codex CLI/Claude Code một chạm; xem mục cài agy trong docs/GETTING-STARTED.md`);
   }
 
   let message = '';
