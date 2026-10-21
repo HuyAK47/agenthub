@@ -10,7 +10,7 @@ import { runInProcessGroup } from './priority.js';
 
 export interface DeployStatus {
   projectId: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped';
+  status: 'queued' | 'running' | 'restarting' | 'succeeded' | 'failed' | 'skipped';
   startedAt?: string;
   finishedAt?: string;
   commit?: string;
@@ -37,12 +37,28 @@ export class DeployService {
   ) {}
 
   start(): void {
+    this.restoreRestartState();
     this.eventBus.on('task.merged', (_taskId, payload) => {
       const value = (payload && typeof payload === 'object' ? payload : {}) as { projectId?: string; mergeCommit?: string };
       const taskId = _taskId || '';
       const projectId = value.projectId || taskId.split('/')[0];
       if (projectId) this.schedule(projectId, value.mergeCommit);
     });
+  }
+
+  private restoreRestartState(): void {
+    const statePath = path.join(this.config.hubHome, 'deploy-restart.json');
+    try {
+      if (!fs.existsSync(statePath)) return;
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as { projectId?: string; commit?: string; logPath?: string };
+      if (!state.projectId) return;
+      fs.rmSync(statePath, { force: true });
+      const status: DeployStatus = { projectId: state.projectId, status: 'succeeded', finishedAt: new Date().toISOString(), commit: state.commit, logPath: state.logPath };
+      this.latest.set(state.projectId, status);
+      this.eventBus.emit('deploy.succeeded', undefined, { projectId: state.projectId, commit: state.commit, logPath: state.logPath, afterRestart: true });
+    } catch {
+      // A malformed recovery marker must not prevent the daemon from starting.
+    }
   }
 
   private definition(projectId: string): DeployProjectConfig | undefined {
@@ -100,10 +116,10 @@ export class DeployService {
         write(`remote push ${definition.push.remote} ${definition.push.to}\n${pushed.output}`);
         if (pushed.code !== 0) throw new Error(`git push thất bại (exit ${pushed.code})`);
       }
-      status.status = 'succeeded';
+      status.status = definition.restartHub && this.isHubProject(project) ? 'restarting' : 'succeeded';
       status.finishedAt = new Date().toISOString();
-      write('deploy succeeded');
-      this.eventBus.emit('deploy.succeeded', undefined, { projectId, commit, logPath });
+      write(status.status === 'restarting' ? 'deploy completed; hub is restarting' : 'deploy succeeded');
+      if (status.status === 'succeeded') this.eventBus.emit('deploy.succeeded', undefined, { projectId, commit, logPath });
     } catch (error) {
       status.status = 'failed';
       status.finishedAt = new Date().toISOString();
@@ -114,7 +130,10 @@ export class DeployService {
       this.latest.set(projectId, { ...status });
       this.running = false;
     }
-    if (status.status === 'succeeded' && definition.restartHub && this.isHubProject(project)) this.restartHub(projectId, commit, logPath);
+    if (status.status === 'restarting') {
+      this.eventBus.emit('deploy.restarting', undefined, { projectId, commit, logPath });
+      this.restartHub(projectId, commit, logPath);
+    }
     return status;
   }
 

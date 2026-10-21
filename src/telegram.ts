@@ -1010,7 +1010,7 @@ export class TelegramBotService {
     }
     try {
       const status = await this.service.rerunDeploy(projectId);
-      await this.sendMessage(chatId, status.status === 'succeeded' ? `✅ Deploy ${projectId} thành công.` : `❌ Deploy ${projectId} thất bại: ${status.error || status.status}`);
+      await this.sendMessage(chatId, status.status === 'succeeded' || status.status === 'restarting' ? `✅ Deploy ${projectId} ${status.status === 'restarting' ? 'đang khởi động lại hub' : 'thành công'}.` : `❌ Deploy ${projectId} thất bại: ${status.error || status.status}`);
     } catch (error) {
       await this.sendMessage(chatId, `❌ ${this.escapeHtml(error instanceof Error ? error.message : String(error))}`);
     }
