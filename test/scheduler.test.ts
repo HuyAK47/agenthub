@@ -1257,12 +1257,12 @@ describe('Checking after worker completion', () => {
     // Case 1: scheduler is running (not stopped) -> console.error is called
     schedulerInternal.running.set('test-project/t1', fakeRt);
     await schedulerInternal.checkRunningTasks();
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(errorSpy).toHaveBeenCalledWith(
+    // Chờ theo điều kiện thay vì 20ms cố định: dưới tải nặng của cả bộ test, completion chạy chậm hơn.
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(
       '[scheduler] handleRunCompletion failed for test-project/t1:',
       expect.any(Error),
-    );
+    ), { timeout: 5_000 });
 
     // Case 2: scheduler is stopped -> console.error is NOT called
     errorSpy.mockClear();
