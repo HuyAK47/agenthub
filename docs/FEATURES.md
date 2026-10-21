@@ -456,3 +456,76 @@ Tính năng Điều khiển từ xa qua Telegram Bot cho phép bạn giám sát 
 - **Tin nhắn Telegram dài quá 4096 ký tự**: AgentHub tự động chia nhỏ các phản hồi dài thành nhiều tin nhắn tuần tự để đảm bảo không bị lỗi giới hạn độ dài của Telegram API.
 - **Giới hạn tốc độ cập nhật tin nhắn (Rate Limit)**: Trong lúc Claude streaming phản hồi, AgentHub điều tiết tần suất chỉnh sửa tin nhắn (`editMessageText`) tối thiểu 1.5 giây một lần để tránh bị Telegram chặn vì spam API.
 - **Gỡ bỏ chat đã ghép đôi**: Bạn có thể dễ dàng hủy quyền điều khiển của một chat ID bất kỳ trên trang Cài đặt (Settings) của Web Dashboard hoặc gọi API `DELETE /api/telegram/chats/:id`.
+
+## 13. Tham chiếu chỉ đọc (References) & Rào chắn bảo vệ worker (Worker Guardrails)
+### Làm gì
+Để tránh trường hợp AI worker tự ý sửa đổi code gốc của các thư viện dùng chung, tài liệu đặc tả, bảng thuật ngữ hoặc vô tình thực hiện các thao tác phá hủy (như `git push`, gọi lệnh mạng SSH ra ngoài, can thiệp container Docker hệ thống), AgentHub cung cấp cơ chế bảo vệ hai lớp:
+1. **Tham chiếu chỉ đọc (`settings.references`)**: Cung cấp đường dẫn và tài liệu ngữ cảnh ngoài repo cho worker với cam kết CHỈ ĐỌC, đồng thời chụp snapshot trước khi chạy và phát hiện mọi hành vi ghi/sửa file để chặn task kịp thời.
+2. **Rào chắn lệnh (Worker Command Shims & Codex Sandbox)**: Tạo các shim chặn các lệnh nguy hiểm (`ssh`, `docker`, `git push`, v.v.) trong môi trường worker, và hỗ trợ kích hoạt sandbox giới hạn ghi của Codex worker (`workers.codexSandbox`).
+
+### Dùng thế nào
+#### 1. Cấu hình Tham chiếu (`settings.references`)
+Trong cài đặt của dự án (`settings.references`), bạn có thể khai báo danh sách các thư mục hoặc file tài liệu dùng chung:
+```json
+{
+  "references": [
+    {
+      "name": "design_system",
+      "path": "/shared/docs/design-system.md",
+      "inject": true
+    },
+    {
+      "name": "shared_lib",
+      "path": "/shared/packages/core",
+      "inject": false
+    }
+  ]
+}
+```
+- **Tự động đưa vào ngữ cảnh worker (`.agenthub/context/references.md`)**:
+  - Liệt kê đầy đủ tên tham chiếu, đường dẫn tuyệt đối, và quy tắc nghiêm ngặt: **CHỈ ĐỌC, không sửa đổi, không commit vào git**.
+  - Tự động thiết lập biến môi trường `AGENTHUB_REF_<NAME>` (ví dụ: `AGENTHUB_REF_DESIGN_SYSTEM`) trỏ đến đường dẫn của từng tham chiếu để worker hoặc script kiểm tra có thể truy cập thuận tiện.
+- **Tự động nhúng nội dung (`inject: true`)**:
+  - Với file văn bản có kích thước $\le$ 64KB, nội dung file sẽ được nhúng trực tiếp vào `.agenthub/context/references.md` giúp worker nắm bắt quy ước và bảng thuật ngữ nhanh chóng mà không cần tốn lượt gọi công cụ đọc file.
+  - File lớn hơn 64KB hoặc thư mục sẽ chỉ được liệt kê đường dẫn kèm cảnh báo trong ngữ cảnh và log.
+  - Đường dẫn tham chiếu không tồn tại sẽ hiển thị cảnh báo trong ngữ cảnh nhưng không làm sập hay chặn task.
+- **Tự động chép `AGENTS.md` dự án**:
+  - File hướng dẫn quy tắc chung `AGENTS.md` (kích thước $\le$ 32KB) ở thư mục gốc của repository sẽ được tự động sao chép vào `.agenthub/context/AGENTS.md` để worker luôn đọc được dù ở trong nhánh worktree cô lập.
+- **Chụp snapshot và phát hiện sửa đổi (Modification Detection)**:
+  - Trước khi worker bắt đầu, scheduler tự động chụp snapshot trạng thái từng tham chiếu:
+    - Repository git: ghi nhận `git status --porcelain` và mã băm commit `HEAD`.
+    - Thư mục thông thường: ghi nhận đệ quy `mtime` và kích thước các file.
+    - File đơn lẻ: ghi nhận `mtime`, dung lượng và mã băm SHA-256.
+  - Khi worker kết thúc, scheduler kiểm tra lại snapshot. Nếu phát hiện bất kỳ file nào bị thêm, sửa hoặc xóa:
+    - Thu hồi và xóa file đánh dấu `.agenthub/DONE` nếu worker đã tạo.
+    - Tạo file `.agenthub/BLOCKED` liệt kê chi tiết danh sách file bị sửa đổi.
+    - Chuyển trạng thái task sang `blocked`, phát sự kiện `reference.modified` và `task.blocked`.
+    - **Lưu ý**: AgentHub tuyệt đối không tự ý hoàn tác (`revert`) để tránh rủi ro mất dữ liệu của bạn; người dùng có thể tự kiểm tra và hoàn tác thủ công.
+
+#### 2. Rào chắn lệnh cho Worker (`<hubHome>/shims`)
+Khi khởi chạy worker (`agy` hoặc `codex`), AgentHub đưa thư mục `shims` vào đầu biến môi trường `PATH`:
+- **Chặn các lệnh mạng và container nguy hiểm**:
+  - `ssh`, `scp`, `sftp`, `docker`, `docker-compose`, `podman`: Nếu worker gọi các lệnh này, shim sẽ ngay lập tức từ chối, in thông báo lỗi rõ ràng ra `stderr` và thoát với mã lỗi 1 (`exit 1`).
+- **Wrapper an toàn cho `git`**:
+  - Chặn lệnh `git push` và `git remote set-url` để ngăn worker vô tình đẩy code chưa qua review lên remote repo hoặc thay đổi cấu hình remote.
+  - Mọi lệnh git hợp lệ khác (`git status`, `git commit`, `git log`, `git diff`, `git add`, v.v.) được chuyển tiếp nguyên vẹn tới binary git thật của hệ điều hành (bỏ qua thư mục shims trong `PATH`).
+
+> [!WARNING]
+> **Hàng rào chống nhầm lẫn, không phải Sandbox an ninh tuyệt đối**:
+> Cơ chế shim hoạt động dựa trên độ ưu tiên tìm kiếm lệnh trong biến môi trường `PATH`. Shim chỉ chặn được các lệnh được worker gọi theo tên (ví dụ: `git push` hoặc `docker run`). Nếu một worker độc hại hoặc vô tình gọi bằng đường dẫn tuyệt đối (ví dụ: `/usr/bin/ssh` hoặc `/usr/bin/git`), lệnh đó vẫn có thể được thực thi. Đây là hàng rào bảo vệ (guardrail) nhằm ngăn chặn các sơ suất phổ biến của mô hình AI, không phải là một giải pháp sandbox bảo mật cô lập hoàn toàn.
+
+#### 3. Cấu hình Codex Sandbox (`workers.codexSandbox`)
+Đối với engine OpenAI Codex, bạn có thể cấu hình chế độ sandbox trong file `~/.agenthub/config.json`:
+```json
+{
+  "workers": {
+    "codexSandbox": "workspace-write"
+  }
+}
+```
+- `off` (mặc định): Chạy Codex với cờ `--dangerously-bypass-approvals-and-sandbox` như trước đây.
+- `workspace-write`: Chạy Codex với cờ `--sandbox workspace-write`, tận dụng cơ chế cô lập của chính CLI `codex` để chỉ cho phép quyền ghi trong thư mục worktree hiện tại của task.
+
+### Mẹo hoặc lỗi thường gặp
+- **Task bị chuyển sang trạng thái `blocked` với lý do tham chiếu bị sửa**: Kiểm tra nội dung file `.agenthub/BLOCKED` trong worktree của task để biết chính xác tham chiếu và file nào đã bị tác động. Sau khi hoàn tác sửa đổi trong thư mục tham chiếu, bạn có thể bấm **Retry** task trên Web Dashboard hoặc gửi `/retry <id>` qua Telegram.
+- **Biến môi trường `AGENTHUB_REF_<NAME>`**: Tên biến được chuẩn hóa thành chữ hoa và thay thế các ký tự không phải chữ cái/chữ số thành dấu gạch dưới `_`. Ví dụ tham chiếu có tên `core-api/v1` sẽ có biến tương ứng là `AGENTHUB_REF_CORE_API_V1`.
