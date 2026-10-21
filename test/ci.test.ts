@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -242,8 +242,9 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
       // Verify event
       const passed = events.find((e) => e.type === 'ci.passed');
       expect(passed).toBeDefined();
-      expect((passed?.payload as any).recoveredFromFailure).toBe(false);
-      expect((passed?.payload as any).runId).toBe(101);
+      const passedPayload = passed?.payload as Record<string, unknown>;
+      expect(passedPayload.recoveredFromFailure).toBe(false);
+      expect(passedPayload.runId).toBe(101);
     });
 
     it('emits ci.passed with recoveredFromFailure=true on red-to-green transition', async () => {
@@ -305,8 +306,9 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
 
       const passed = events.find((e) => e.type === 'ci.passed');
       expect(passed).toBeDefined();
-      expect((passed?.payload as any).recoveredFromFailure).toBe(true);
-      expect((passed?.payload as any).previousConclusion).toBe('failure');
+      const passedPayload = passed?.payload as Record<string, unknown>;
+      expect(passedPayload.recoveredFromFailure).toBe(true);
+      expect(passedPayload.previousConclusion).toBe('failure');
     });
 
     it('handles failed run: fetches jobs and annotations, and emits ci.failed once', async () => {
@@ -400,7 +402,11 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
       // Verify event
       const failed = events.find((e) => e.type === 'ci.failed');
       expect(failed).toBeDefined();
-      const payload = failed?.payload as any;
+      const payload = failed?.payload as Record<string, unknown> & {
+        runId: number;
+        jobs: GitHubJob[];
+        annotations: GitHubJobAnnotation[];
+      };
       expect(payload.runId).toBe(201);
       expect(payload.jobs.length).toBe(1);
       expect(payload.annotations.length).toBe(1);
@@ -725,7 +731,10 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
         url: 'https://github.com/org/repo/actions/runs/999',
       });
 
-      const sentBodies: any[] = [];
+      const sentBodies: Array<{
+        text: string;
+        reply_markup?: { inline_keyboard: Array<Array<{ text: string; url?: string }>> };
+      }> = [];
       const fakeFetch: typeof fetch = async (_url, init) => {
         if (init?.body) {
           sentBodies.push(JSON.parse(String(init.body)));
@@ -753,7 +762,9 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
       });
 
       // Execute /ci web-app
-      await (telegramService as any).handleCiCommand(12345, 'web-app');
+      await (
+        telegramService as unknown as { handleCiCommand: (chatId: number, arg: string) => Promise<void> }
+      ).handleCiCommand(12345, 'web-app');
 
       expect(sentBodies.length).toBe(1);
       const msg = sentBodies[0].text;
@@ -791,7 +802,10 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
         url: 'https://github.com/org/repo/actions/runs/1',
       });
 
-      const sentBodies: any[] = [];
+      const sentBodies: Array<{
+        text: string;
+        reply_markup?: { inline_keyboard: Array<Array<{ text: string; url?: string }>> };
+      }> = [];
       const fakeFetch: typeof fetch = async (_url, init) => {
         if (init?.body) {
           sentBodies.push(JSON.parse(String(init.body)));
@@ -818,7 +832,9 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
         sleep: async () => {},
       });
 
-      await (telegramService as any).handleCiCommand(12345, '');
+      await (
+        telegramService as unknown as { handleCiCommand: (chatId: number, arg: string) => Promise<void> }
+      ).handleCiCommand(12345, '');
 
       expect(sentBodies.length).toBe(1);
       const msg = sentBodies[0].text;
@@ -849,7 +865,15 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
         config: { ...config.brain, mode: 'auto' },
         eventBus,
         chatService: {
-          getOrCreateSession: (id: string, opts: any) => {
+          getOrCreateSession: (
+            id: string,
+            opts?: {
+              title?: string;
+              mode?: 'safe' | 'full';
+              kind?: 'chat' | 'brain';
+              projectId?: string | null;
+            },
+          ) => {
             chatSessionRepo.insert({
               id,
               title: opts?.title || id,

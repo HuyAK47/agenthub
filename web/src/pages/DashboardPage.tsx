@@ -21,6 +21,7 @@ import {
   Pause,
   ExternalLink,
   CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
