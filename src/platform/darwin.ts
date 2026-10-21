@@ -73,6 +73,8 @@ function measureProcessTree(rootPid: number): { rss: number; cpu: number; totalT
   // Unlike Linux, macOS has no /proc. A single ps snapshot includes PPID, so it
   // is sufficient to construct the complete descendant tree without shelling
   // out once per child (and without depending on pgrep being installed).
+  // worktreePath is intentionally ignored: processes reparented to PID 1 cannot
+  // be attributed safely without /proc/cwd, so only the root's process tree counts.
   const rows = command(['ps', '-axo', 'pid=,ppid=,rss=,%cpu=,stat=']).split('\n').flatMap((line) => {
     const fields = line.trim().split(/\s+/);
     if (fields.length < 5) return [];
