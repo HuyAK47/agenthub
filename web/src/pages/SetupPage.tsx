@@ -1,60 +1,460 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Download, ExternalLink, Loader2 } from 'lucide-react';
-import { completeSetup, getSetupStatus, installSetupMcp, installSetupTool } from '../api/client';
+import { Link } from 'react-router-dom';
+import {
+  Check,
+  AlertCircle,
+  Download,
+  ExternalLink,
+  Loader2,
+  Wrench,
+} from 'lucide-react';
+import {
+  completeSetup,
+  getSetupStatus,
+  installSetupMcp,
+  installSetupTool,
+} from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { useLocale } from '../context/LocaleContext';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { StatTile } from '../components/ui/StatTile';
+import { StatusBadge } from '../components/StatusBadge';
+import { Profile } from '../types/api';
+
+export interface SetupCheckItem {
+  key: string;
+  label: string;
+  ok: boolean;
+  action?: React.ReactNode;
+}
+
+export interface SetupCheckRowProps {
+  item: SetupCheckItem;
+  result?: boolean;
+  log?: string;
+}
+
+export const SetupCheckRow: React.FC<SetupCheckRowProps> = ({
+  item,
+  result,
+  log,
+}) => {
+  const { t } = useLocale();
+  const showLog = item.key !== 'node' && item.key !== 'git' && log !== undefined;
+
+  return (
+    <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex items-start gap-3 min-w-0 flex-1">
+        <div className="mt-0.5 shrink-0">
+          {item.ok ? (
+            <Check className="w-5 h-5 text-[var(--t-ok)]" />
+          ) : (
+            <AlertCircle className="w-5 h-5 text-[var(--t-warn)]" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-[var(--t-text)]">{item.label}</div>
+          {result !== undefined && (
+            <div
+              data-testid={`install-result-${item.key}`}
+              className={`text-xs font-medium flex items-center gap-1 mt-1 ${
+                result ? 'text-[var(--t-ok)]' : 'text-[var(--t-crit)]'
+              }`}
+            >
+              {result ? <Check size={13} /> : <AlertCircle size={13} />}
+              <span>{result ? t('setup.done') : t('setup.installFailed')}</span>
+            </div>
+          )}
+          {showLog && (
+            <div className="mt-2 space-y-1">
+              <pre className="max-h-36 overflow-auto rounded-lg bg-[var(--t-surface-2)] p-2.5 font-mono text-xs text-[var(--t-text)] border border-[var(--t-border)] whitespace-pre-wrap select-text leading-relaxed">
+                {log}
+              </pre>
+              <a
+                href={`/api/setup/log/${encodeURIComponent(item.key)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] hover:underline"
+              >
+                <ExternalLink size={12} />
+                <span>{t('setup.log')}</span>
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center sm:shrink-0 self-start sm:self-center pl-8 sm:pl-0">
+        {item.ok ? (
+          <StatusBadge status="done" />
+        ) : (
+          item.action || (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--t-warn)]/30 bg-[var(--t-warn)]/10 text-[var(--t-warn)] font-semibold text-xs px-3 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-warn)]" />
+              <span>{t('setup.needsCheck')}</span>
+            </span>
+          )
+        )}
+      </div>
+    </div>
+  );
+};
+
+export const SetupAccountsCard: React.FC<{ profiles: Profile[] }> = ({ profiles }) => {
+  const { t } = useLocale();
+
+  if (!profiles || profiles.length === 0) return null;
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-5 py-4 border-b border-[var(--t-border)]">
+        <h3 className="font-semibold text-base text-[var(--t-text)]">{t('setup.accounts')}</h3>
+      </div>
+      <div className="divide-y divide-[var(--t-border)]">
+        {profiles.map((profile) => (
+          <div
+            key={profile.name}
+            className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3">
+              <div className="shrink-0">
+                {profile.loggedIn ? (
+                  <Check className="w-5 h-5 text-[var(--t-ok)]" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 text-[var(--t-warn)]" />
+                )}
+              </div>
+              <span className="text-sm font-medium text-[var(--t-text)]">
+                {t('setup.account', { name: profile.name })}
+              </span>
+            </div>
+            <div className="flex items-center sm:shrink-0 self-start sm:self-center pl-8 sm:pl-0">
+              {profile.loggedIn ? (
+                <StatusBadge status="done" />
+              ) : (
+                <Link
+                  to="/profiles"
+                  className="text-xs font-medium text-[var(--t-accent)] hover:underline inline-flex items-center gap-1"
+                >
+                  <span>{t('setup.login')}</span>
+                  <ExternalLink size={12} />
+                </Link>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+};
+
+export interface SetupActionsProps {
+  missingCount: number;
+  installing: boolean;
+  finishing: boolean;
+  onInstallAll: () => void;
+  onSkip: () => void;
+  onComplete: () => void;
+}
+
+export const SetupActions: React.FC<SetupActionsProps> = ({
+  missingCount,
+  installing,
+  finishing,
+  onInstallAll,
+  onSkip,
+  onComplete,
+}) => {
+  const { t } = useLocale();
+
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+      <div>
+        {missingCount > 0 && (
+          <Button
+            variant="primary"
+            onClick={onInstallAll}
+            disabled={installing}
+            loading={installing}
+            className="w-full sm:w-auto"
+          >
+            {installing ? (
+              <>
+                <Loader2 className="animate-spin" size={16} />
+                <span>{t('setup.installing')}</span>
+              </>
+            ) : (
+              <>
+                <Download size={16} />
+                <span>{t('setup.installAll')}</span>
+              </>
+            )}
+          </Button>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          onClick={onSkip}
+          disabled={finishing}
+          loading={finishing}
+        >
+          {t('setup.skip')}
+        </Button>
+        <Button
+          variant="primary"
+          onClick={onComplete}
+          disabled={finishing}
+          loading={finishing}
+        >
+          <Check size={16} />
+          <span>{t('setup.complete')}</span>
+        </Button>
+      </div>
+    </div>
+  );
+};
 
 export const SetupPage: React.FC = () => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['setup-status'], queryFn: getSetupStatus, refetchInterval: 3000 });
+  const { data, isLoading } = useQuery({
+    queryKey: ['setup-status'],
+    queryFn: getSetupStatus,
+    refetchInterval: 3000,
+  });
+
   const [logs, setLogs] = useState<Record<string, string>>({});
   const [installingTool, setInstallingTool] = useState<string | null>(null);
   const [installResult, setInstallResult] = useState<Record<string, boolean>>({});
-  const install = useMutation({ mutationFn: installSetupTool });
-  const finish = useMutation({ mutationFn: completeSetup, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['setup-status'] }) });
-  const mcp = useMutation({ mutationFn: installSetupMcp, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['setup-status'] }) });
 
-  useEffect(() => subscribeToEvents((event) => {
-    if (!event.type.startsWith('setup.install_') || !event.payload?.tool) return;
-    const tool = String(event.payload.tool);
-    if (event.type === 'setup.install_progress') setLogs((old) => ({ ...old, [tool]: `${old[tool] || ''}${event.payload.line || ''}` }));
-    if (event.type === 'setup.install_done') {
-      setInstallResult((old) => ({ ...old, [tool]: Boolean(event.payload.ok) }));
-      queryClient.invalidateQueries({ queryKey: ['setup-status'] });
-    }
-  }), [queryClient]);
+  const install = useMutation({ mutationFn: (tool: string) => installSetupTool(tool) });
+  const finish = useMutation({
+    mutationFn: (skip: boolean) => completeSetup(skip),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['setup-status'] }),
+  });
+  const mcp = useMutation({
+    mutationFn: () => installSetupMcp(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['setup-status'] }),
+  });
 
-  const missing = useMemo(() => data?.tools.filter((tool) => !tool.installed && !tool.manual) || [], [data]);
+  useEffect(() => {
+    return subscribeToEvents((event) => {
+      if (!event.type.startsWith('setup.install_') || !event.payload?.tool) return;
+      const tool = String(event.payload.tool);
+      if (event.type === 'setup.install_progress') {
+        setLogs((old) => ({
+          ...old,
+          [tool]: `${old[tool] || ''}${event.payload.line || ''}`,
+        }));
+      }
+      if (event.type === 'setup.install_done') {
+        setInstallResult((old) => ({ ...old, [tool]: Boolean(event.payload.ok) }));
+        queryClient.invalidateQueries({ queryKey: ['setup-status'] });
+      }
+    });
+  }, [queryClient]);
+
+  const missing = useMemo(() => {
+    return data?.tools.filter((tool) => !tool.installed && !tool.manual) || [];
+  }, [data]);
+
   const installOne = async (tool: string) => {
     setInstallingTool(tool);
     setLogs((old) => ({ ...old, [tool]: '' }));
     let stop: (() => void) | undefined;
     const completed = new Promise<void>((resolve) => {
       const unsubscribe = subscribeToEvents((event) => {
-        if (event.type === 'setup.install_done' && event.payload?.tool === tool) { unsubscribe(); resolve(); }
+        if (event.type === 'setup.install_done' && event.payload?.tool === tool) {
+          unsubscribe();
+          resolve();
+        }
       });
       stop = unsubscribe;
     });
-    try { await install.mutateAsync(tool); await completed; } finally { stop?.(); setInstallingTool(null); }
+
+    try {
+      await install.mutateAsync(tool);
+      await completed;
+    } finally {
+      stop?.();
+      setInstallingTool(null);
+    }
   };
-  const installAll = async () => { for (const tool of missing) await installOne(tool.id); };
-  if (isLoading || !data) return <div className="p-8">{t('setup.loading')}</div>;
-  const toolLabel = (id: string) => t(`setup.${id}`);
-  const checks: Array<{ key: string; label: string; ok: boolean; action?: React.ReactNode }> = [
-    { key: 'node', label: t('setup.node', { version: data.node.version }), ok: data.node.ok },
-    { key: 'git', label: t('setup.git', { version: data.git.version ? ` (${data.git.version})` : '' }), ok: data.git.installed },
-    ...data.tools.map((tool) => ({ key: tool.id, label: toolLabel(tool.id), ok: tool.installed, action: tool.manual ? <a href={tool.docsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1">{t('setup.manualGuide')} <ExternalLink size={14} /></a> : <button onClick={() => installOne(tool.id)} disabled={installingTool !== null} className="inline-flex items-center gap-1 rounded-md bg-[var(--t-accent)] px-3 py-1.5 text-white"><Download size={14} /> {installingTool === tool.id ? t('setup.running') : t('setup.install')}</button> })),
-    { key: 'service', label: t('setup.service'), ok: data.serviceRunning },
-    { key: 'mcp', label: t('setup.mcp'), ok: data.mcpRegistered, action: !data.mcpRegistered ? <button onClick={() => mcp.mutate()} disabled={mcp.isPending} className="rounded-md border px-3 py-1.5">{mcp.isPending ? t('setup.running') : t('setup.install')}</button> : undefined },
-  ];
-  return <div className="max-w-3xl space-y-6">
-    <div><h2 className="text-2xl font-bold">{t('setup.title')}</h2><p className="text-[var(--t-text-2)] mt-1">{t('setup.subtitle')}</p></div>
-    <div className="space-y-2">{checks.map((item) => <div key={item.key} className="rounded-lg border border-[var(--t-border)] p-4 bg-[var(--t-surface)]"><div className="flex items-center justify-between"><span>{item.label}</span><span className={item.ok ? 'text-[var(--t-ok)]' : 'text-[var(--t-warn)]'}>{item.ok ? <Check size={18} /> : item.action || <span>{t('setup.needsCheck')}</span>}</span></div>{item.key !== 'node' && item.key !== 'git' && logs[item.key] !== undefined && <><pre className="mt-3 max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{logs[item.key]}</pre><a className="mt-2 inline-block text-xs underline" href={`/api/setup/log/${encodeURIComponent(item.key)}`} target="_blank" rel="noreferrer">{t('setup.log')}</a></>}</div>)}</div>
-    {data.profiles.length > 0 && <div className="rounded-lg border border-[var(--t-border)] p-4 bg-[var(--t-surface)]"><h3 className="font-semibold">{t('setup.accounts')}</h3><div className="mt-2 space-y-2">{data.profiles.map((profile) => <div key={profile.name} className="flex items-center justify-between"><span>{t('setup.account', { name: profile.name })}</span>{profile.loggedIn ? <Check className="text-[var(--t-ok)]" size={18} /> : <a className="underline" href="/profiles">{t('setup.login')}</a>}</div>)}</div></div>}
-    {missing.length > 0 && <button onClick={installAll} disabled={install.isPending || installingTool !== null} className="rounded-lg bg-[var(--t-accent)] px-4 py-2 text-white">{installingTool ? <><Loader2 className="inline animate-spin" size={16} /> {t('setup.installing')}</> : <><Download className="inline" size={16} /> {t('setup.installAll')}</>}</button>}
-    {Object.entries(installResult).map(([tool, ok]) => <div key={tool} className={ok ? 'text-[var(--t-ok)]' : 'text-[var(--t-warn)]'}>{toolLabel(tool)}: {ok ? t('setup.done') : t('setup.installFailed')}</div>)}
-    <div className="flex flex-wrap gap-3"><button onClick={() => finish.mutate(true)} className="rounded-lg border border-[var(--t-border)] px-4 py-2">{t('setup.skip')}</button><button onClick={() => finish.mutate(false)} className="rounded-lg bg-[var(--t-ok)] px-4 py-2 text-white">{t('setup.complete')}</button></div>
-  </div>;
+
+  const installAll = async () => {
+    for (const tool of missing) {
+      await installOne(tool.id);
+    }
+  };
+
+  const checks: SetupCheckItem[] = useMemo(() => {
+    if (!data) return [];
+    const toolLabel = (id: string) => t(`setup.${id}`);
+
+    return [
+      {
+        key: 'node',
+        label: t('setup.node', { version: data.node.version }),
+        ok: data.node.ok,
+      },
+      {
+        key: 'git',
+        label: t('setup.git', {
+          version: data.git.version ? ` (${data.git.version})` : '',
+        }),
+        ok: data.git.installed,
+      },
+      ...data.tools.map((tool) => ({
+        key: tool.id,
+        label: toolLabel(tool.id),
+        ok: tool.installed,
+        action: tool.manual ? (
+          <a
+            href={tool.docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--t-accent)] hover:underline"
+          >
+            <span>{t('setup.manualGuide')}</span>
+            <ExternalLink size={13} />
+          </a>
+        ) : (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => installOne(tool.id)}
+            disabled={installingTool !== null}
+            loading={installingTool === tool.id}
+          >
+            {installingTool === tool.id ? (
+              <>
+                <Loader2 className="animate-spin" size={14} />
+                <span>{t('setup.running')}</span>
+              </>
+            ) : (
+              <>
+                <Download size={14} />
+                <span>{t('setup.install')}</span>
+              </>
+            )}
+          </Button>
+        ),
+      })),
+      {
+        key: 'service',
+        label: t('setup.service'),
+        ok: data.serviceRunning,
+      },
+      {
+        key: 'mcp',
+        label: t('setup.mcp'),
+        ok: data.mcpRegistered,
+        action: !data.mcpRegistered ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => mcp.mutate()}
+            disabled={mcp.isPending}
+            loading={mcp.isPending}
+          >
+            {mcp.isPending ? (
+              <>
+                <Loader2 className="animate-spin" size={14} />
+                <span>{t('setup.running')}</span>
+              </>
+            ) : (
+              <span>{t('setup.install')}</span>
+            )}
+          </Button>
+        ) : undefined,
+      },
+    ];
+  }, [data, installingTool, mcp, t]);
+
+  const readyCount = useMemo(() => {
+    return checks.filter((c) => c.ok).length;
+  }, [checks]);
+
+  if (isLoading || !data) {
+    return (
+      <div className="flex items-center justify-center p-12 text-[var(--t-text-3)] text-sm">
+        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        <span>{t('setup.loading')}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl space-y-6">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--t-text)]">
+            {t('setup.title')}
+          </h1>
+          <p className="text-sm text-[var(--t-text-3)] mt-1">
+            {t('setup.subtitle')}
+          </p>
+        </div>
+      </div>
+
+      {/* Readiness Progress Summary */}
+      <StatTile
+        label={t('setup.progress')}
+        value={`${readyCount}/${checks.length}`}
+        subtext={
+          <div className="space-y-1.5 mt-1">
+            <div>
+              {t('setup.progressSummary', {
+                ready: readyCount,
+                total: checks.length,
+              })}
+            </div>
+            <div className="w-full bg-[var(--t-surface-2)] h-1.5 rounded-full overflow-hidden border border-[var(--t-border)]">
+              <div
+                className="bg-[var(--t-ok)] h-full transition-all duration-300 rounded-full"
+                style={{
+                  width: `${
+                    checks.length > 0 ? (readyCount / checks.length) * 100 : 0
+                  }%`,
+                }}
+              />
+            </div>
+          </div>
+        }
+        icon={<Wrench className="w-5 h-5" />}
+        iconColor={readyCount === checks.length ? 'var(--t-ok)' : 'var(--t-accent)'}
+      />
+
+      {/* Environment & Tools Checks */}
+      <Card className="overflow-hidden">
+        <div className="divide-y divide-[var(--t-border)]">
+          {checks.map((item) => (
+            <SetupCheckRow
+              key={item.key}
+              item={item}
+              result={installResult[item.key]}
+              log={logs[item.key]}
+            />
+          ))}
+        </div>
+      </Card>
+
+      {/* Accounts */}
+      <SetupAccountsCard profiles={data.profiles} />
+
+      {/* Bottom Actions */}
+      <SetupActions
+        missingCount={missing.length}
+        installing={installingTool !== null || install.isPending}
+        finishing={finish.isPending}
+        onInstallAll={installAll}
+        onSkip={() => finish.mutate(true)}
+        onComplete={() => finish.mutate(false)}
+      />
+    </div>
+  );
 };
