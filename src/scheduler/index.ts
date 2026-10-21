@@ -34,6 +34,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { projectSettings } from '../projects/settings.js';
+import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
@@ -1996,6 +1997,17 @@ export class Scheduler {
         return;
       }
       const branch = task.branch || `agenthub/${task.slug}`;
+      const settings = projectSettings(project);
+      if (settings.integration?.enabled) {
+        try {
+          ensureIntegrationWorktree(project, this.config.hubHome);
+        } catch (e) {
+          this.locks.release(profile.name, lockFile);
+          this.taskRepo.updateStatus(task.id, 'failed');
+          this.eventBus.emit('task.failed', task.id, { error: String(e) });
+          return;
+        }
+      }
       const baseRef = this.resolveBaseRef(task, project);
       try {
         worktreePath = this.worktreeService.create({
