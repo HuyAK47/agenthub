@@ -36,6 +36,7 @@ import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
+import type { BrainRunner } from '../brain/runner.js';
 import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
 import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
@@ -375,6 +376,7 @@ export const UpdateConfigSchema = z.object({
     claudeProfile: z.string().min(1).optional(),
     model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
     mode: z.enum(['off', 'suggest', 'auto']).optional(),
+    maxConcurrent: z.number().int().positive().optional(),
     maxTurnsPerHour: z.number().int().positive().optional(),
     dailyTokenBudget: z.number().int().nonnegative().optional(),
   }).optional(),
@@ -676,6 +678,7 @@ export function formatEventSummary(
 
 export class AppService {
   private profileChecks = new Set<string>();
+  private reviewingTasks = new Set<string>();
   constructor(
     public config: AgentHubConfig,
     public projectRepo: ProjectRepo,
@@ -700,6 +703,7 @@ export class AppService {
     public knowledgeRepo?: KnowledgeRepo,
     public taskBatchRepo?: TaskBatchRepo,
     public setupManager?: SetupManager,
+    public brainRunner?: BrainRunner,
   ) {}
 
   async getSetupStatus() {
@@ -2379,6 +2383,11 @@ export class AppService {
     }
 
     const parsed = ReviewTaskSchema.parse(raw);
+    if (this.reviewingTasks.has(taskId)) {
+      throw new HttpError(409, 'conflict', 'Task đang được duyệt');
+    }
+    this.reviewingTasks.add(taskId);
+    try {
 
     let mergeResult: { mergeCommit: string; checks: string[] } | undefined;
     if (parsed.verdict === 'approved' && parsed.merge) {
@@ -2417,6 +2426,9 @@ export class AppService {
       this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
     }
     return this.taskRepo.get(taskId)!;
+    } finally {
+      this.reviewingTasks.delete(taskId);
+    }
   }
 
   private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
@@ -2785,6 +2797,7 @@ export class AppService {
       },
       brain: {
         mode: this.config.brain.mode,
+        maxConcurrent: this.config.brain.maxConcurrent,
         digest: this.config.brain.digest,
         fallback: this.config.brain.fallback,
         policy: this.config.brain.policy,

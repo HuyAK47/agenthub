@@ -1444,8 +1444,11 @@ export class ChatSessionRepo {
       );
   }
 
-  getByKind(kind: 'chat' | 'brain'): ChatSessionRow | undefined {
-    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+  getByKind(kind: 'chat' | 'brain', projectId?: string | null): ChatSessionRow | undefined {
+    if (projectId === undefined) {
+      return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+    }
+    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
   }
 
   updateKind(id: string, kind: 'chat' | 'brain'): void {
@@ -1558,14 +1561,15 @@ export interface BrainTurnRow {
   startedAt: string;
   finishedAt: string | null;
   error: string | null;
+  projectId: string | null;
 }
 
 export class BrainTurnRepo {
   constructor(private db: Database.Database) {}
 
-  insert(row: { id: string; trigger: string; input: string; status?: BrainTurnRow['status'] }): BrainTurnRow {
-    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, status) VALUES (?, ?, ?, ?)')
-      .run(row.id, row.trigger, row.input, row.status || 'running');
+  insert(row: { id: string; trigger: string; input: string; projectId?: string | null; status?: BrainTurnRow['status'] }): BrainTurnRow {
+    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, projectId, status) VALUES (?, ?, ?, ?, ?)')
+      .run(row.id, row.trigger, row.input, row.projectId || null, row.status || 'running');
     return this.get(row.id)!;
   }
 
@@ -1573,18 +1577,36 @@ export class BrainTurnRepo {
     return this.db.prepare('SELECT * FROM brain_turns WHERE id = ?').get(id) as BrainTurnRow | undefined;
   }
 
+  latest(projectId?: string | null): BrainTurnRow | undefined {
+    const query = projectId === undefined
+      ? 'SELECT * FROM brain_turns ORDER BY startedAt DESC LIMIT 1'
+      : 'SELECT * FROM brain_turns WHERE projectId IS ? ORDER BY startedAt DESC LIMIT 1';
+    return (projectId === undefined ? this.db.prepare(query).get() : this.db.prepare(query).get(projectId)) as BrainTurnRow | undefined;
+  }
+
   finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {
     this.db.prepare(`UPDATE brain_turns SET status = ?, summary = ?, inputTokens = ?, outputTokens = ?, error = ?, finishedAt = datetime('now') WHERE id = ?`)
       .run(fields.status, fields.summary || null, fields.inputTokens || 0, fields.outputTokens || 0, fields.error || null, id);
   }
 
-  countSince(epochMs: number): number {
-    return (this.db.prepare("SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch')").get(Math.floor(epochMs / 1000)) as { count: number }).count;
+  countSince(epochMs: number, projectId?: string | null): number {
+    const query = projectId === undefined
+      ? "SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch')"
+      : "SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch') AND projectId IS ?";
+    const row = projectId === undefined
+      ? this.db.prepare(query).get(Math.floor(epochMs / 1000))
+      : this.db.prepare(query).get(Math.floor(epochMs / 1000), projectId);
+    return (row as { count: number }).count;
   }
 
-  tokensSince(isoDate: string): number {
-    const row = this.db.prepare('SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ?').get(isoDate) as { total: number };
-    return row.total;
+  tokensSince(isoDate: string, projectId?: string | null): number {
+    const query = projectId === undefined
+      ? 'SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ?'
+      : 'SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ? AND projectId IS ?';
+    const row = projectId === undefined
+      ? this.db.prepare(query).get(isoDate)
+      : this.db.prepare(query).get(isoDate, projectId);
+    return (row as { total: number }).total;
   }
 }
 

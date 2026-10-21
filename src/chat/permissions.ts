@@ -34,7 +34,7 @@ export class PermissionBroker {
     private repo: ChatPermissionRepo,
     private timeoutSec = 600,
     private onRequest?: PermissionEvent,
-    private brainPolicy?: BrainPolicy,
+    private brainPolicy?: BrainPolicy | ((sessionId: string) => BrainPolicy | undefined),
     private sessionRepo?: ChatSessionRepo,
   ) {}
 
@@ -52,8 +52,9 @@ export class PermissionBroker {
 
   request(input: PermissionRequestInput): Promise<PermissionResult> {
     const sessionKind = this.sessionRepo?.get(input.sessionId)?.kind;
-    if (sessionKind === 'brain' && this.brainPolicy) {
-      const decision = this.brainPolicy.decide(input);
+    const policy = typeof this.brainPolicy === 'function' ? this.brainPolicy(input.sessionId) : this.brainPolicy;
+    if (sessionKind === 'brain' && policy) {
+      const decision = policy.decide(input);
       if (decision) {
         const id = crypto.randomUUID();
         this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' });
