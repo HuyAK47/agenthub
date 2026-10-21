@@ -513,4 +513,11 @@ export const en: typeof vi = {
     compactRequested: 'Context compaction requested',
     failedCompact: 'Failed to compact context',
   },
+  claudeSessions: {
+    active: 'Active',
+    outsideTask: 'Outside tasks',
+    scopeNote: 'Only shows sessions within hub projects',
+    autoResumeLimit: 'Auto-resume after limit',
+    rateLimit5h: '5-hour limit · auto-resume after {time}',
+  },
 };

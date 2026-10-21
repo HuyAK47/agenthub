@@ -541,4 +541,11 @@ export const vi = {
     compactRequested: 'Đã gửi yêu cầu nén ngữ cảnh',
     failedCompact: 'Không thể nén ngữ cảnh',
   },
+  claudeSessions: {
+    active: 'Đang hoạt động',
+    outsideTask: 'Ngoài task',
+    scopeNote: 'Chỉ hiện phiên thuộc các project của hub',
+    autoResumeLimit: 'Tự tiếp tục khi hết giới hạn',
+    rateLimit5h: 'Giới hạn 5 giờ · tự tiếp tục sau {time}',
+  },
 };
