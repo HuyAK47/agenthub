@@ -163,29 +163,33 @@ export async function recalculateTaskLines(
     return null;
   }
 
-  const runs = runRepo.getByTask(taskId);
-  const targetRun = runs[runs.length - 1];
-  if (targetRun) {
-    const existing = runMetricsRepo.get(targetRun.id);
-    if (existing) {
-      runMetricsRepo.updateLines(targetRun.id, stats.linesAdded, stats.linesDeleted, stats.filesChanged);
-    } else {
-      runMetricsRepo.upsert({
-        runId: targetRun.id,
-        taskId: task.id,
-        engine: targetRun.engine,
-        model: targetRun.model,
-        profileName: targetRun.profileName,
-        tokensUsed: null,
-        usageBefore: null,
-        usageAfter: null,
-        linesAdded: stats.linesAdded,
-        linesDeleted: stats.linesDeleted,
-        filesChanged: stats.filesChanged,
-        durationMs: null,
-      });
+  try {
+    const runs = runRepo.getByTask(taskId);
+    const targetRun = runs[runs.length - 1];
+    if (targetRun) {
+      const existing = runMetricsRepo.get(targetRun.id);
+      if (existing) {
+        runMetricsRepo.updateLines(targetRun.id, stats.linesAdded, stats.linesDeleted, stats.filesChanged);
+      } else {
+        runMetricsRepo.upsert({
+          runId: targetRun.id,
+          taskId: task.id,
+          engine: targetRun.engine,
+          model: targetRun.model,
+          profileName: targetRun.profileName,
+          tokensUsed: null,
+          usageBefore: null,
+          usageAfter: null,
+          linesAdded: stats.linesAdded,
+          linesDeleted: stats.linesDeleted,
+          filesChanged: stats.filesChanged,
+          durationMs: null,
+        });
+      }
+      runMetricsRepo.clearOtherRunsLines(taskId, targetRun.id);
     }
-    runMetricsRepo.clearOtherRunsLines(taskId, targetRun.id);
+  } catch {
+    return null;
   }
 
   return stats;
