@@ -64,10 +64,7 @@ export function workerEnvironment(
   options?: WorkerEnvOptions | { settings?: string | null } | null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
-  const workerOptions = options && 'project' in options && options.project
-    ? options
-    : options;
-  if (!hasGitIdentity(workerOptions && 'cwd' in workerOptions ? workerOptions.cwd : undefined, env)) {
+  if (!hasGitIdentity(options && 'cwd' in options ? options.cwd : undefined, env)) {
     env.GIT_AUTHOR_NAME ??= HUB_GIT_NAME;
     env.GIT_AUTHOR_EMAIL ??= HUB_GIT_EMAIL;
     env.GIT_COMMITTER_NAME ??= HUB_GIT_NAME;
