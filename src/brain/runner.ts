@@ -149,7 +149,7 @@ export class BrainRunner {
   private mode(projectId: string | null): EffectiveBrainMode { return effectiveBrainMode(projectId, projectId ? this.opts.projectRepo?.get(projectId) : null, this.opts.config); }
   private sessionIdFor(projectId: string | null): string { return projectId ? `brain:${projectId}` : 'brain'; }
 
-  private ensureSession(projectId: string | null) {
+  ensureSession(projectId: string | null) {
     const id = this.sessionIdFor(projectId);
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
     const permission = effectiveBrainPermission(project, this.opts.config);
@@ -157,9 +157,14 @@ export class BrainRunner {
     const existing = this.opts.chatSessionRepo.get(id) || this.opts.chatSessionRepo.getByKind('brain', projectId);
     if (existing) {
       if (existing.mode !== mode && existing.busy !== 1) {
-        (this.opts.chatService as ChatService & { setSessionMode?: (id: string, mode: 'safe' | 'full') => unknown }).setSessionMode?.(id, mode);
+        const chatService = this.opts.chatService as ChatService & { setSessionMode?: (id: string, mode: 'safe' | 'full') => unknown };
+        if (typeof chatService.setSessionMode === 'function') {
+          chatService.setSessionMode(existing.id, mode);
+        } else {
+          this.opts.chatSessionRepo.updateMode(existing.id, mode);
+        }
       }
-      return this.opts.chatSessionRepo.get(id) || existing;
+      return this.opts.chatSessionRepo.get(existing.id) || existing;
     }
     this.opts.chatService.getOrCreateSession(id, { title: project ? `Bộ não · ${project.name}` : 'Bộ não', mode, model: this.opts.config.model, profileName: this.profileName(), kind: 'brain', projectId } as never);
     this.opts.chatSessionRepo.updatePinned(id, 1);
