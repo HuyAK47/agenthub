@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProjectsPage } from '../pages/ProjectsPage';
@@ -328,5 +328,16 @@ describe('ProjectsPage', () => {
     const formError = await screen.findByTestId('form-error-msg');
     expect(formError).toBeInTheDocument();
     expect(formError).toHaveTextContent('Đường dẫn repo phải là đường dẫn tuyệt đối: relative/path');
+  });
+
+  it('11. Lưu settings project gửi đúng section thay đổi', async () => {
+    const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue(mockProject);
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+    const mode = screen.getAllByRole('combobox')[0];
+    fireEvent.change(mode, { target: { value: 'external' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu cài đặt' }));
+    await waitFor(() => expect(updateSpy).toHaveBeenCalledWith('proj-1', { settings: { brain: { mode: 'external' } } }));
   });
 });

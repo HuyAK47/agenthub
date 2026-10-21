@@ -314,6 +314,18 @@ export interface BrainStatus {
   source?: 'manual' | 'transcript';
   sessions?: BrainSession[];
   state?: 'working' | 'waiting' | 'inactive';
+  brains?: ProjectBrain[];
+}
+
+export interface ProjectBrain {
+  projectId: string | null;
+  projectName: string;
+  mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  sessionId: string;
+  state: 'idle' | 'running' | 'waiting' | 'error';
+  queued: boolean;
+  lastTurnAt: string | null;
+  tokensToday: number;
 }
 
 export interface BrainSession {
@@ -528,6 +540,7 @@ export interface SystemConfig {
   reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
+    maxConcurrent?: number;
     digest?: {
       enabled: boolean;
       time: string;
@@ -658,6 +671,7 @@ export interface CreateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: ProjectSettings;
 }
 
 export interface UpdateProjectInput {
@@ -669,6 +683,7 @@ export interface UpdateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: Partial<ProjectSettings>;
 }
 
 export interface CreateProfileInput {
