@@ -125,4 +125,29 @@ describe('PermissionBroker', () => {
     await expect(restarted.request({ sessionId: 's2', toolName: 'Bash', input: { command: 'npm run build --silent' } })).resolves.toMatchObject({ behavior: 'allow' });
     const other = restarted.request({ sessionId: 's3', toolName: 'Bash', input: { command: 'npm run build' } }); expect(restarted.listPending()).toHaveLength(1); restarted.resolve(restarted.listPending()[0].id, 'deny'); await other;
   });
+
+  it('requires an exact rule for dynamic commands and ignores empty prefixes', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-permission-'));
+    db = openDatabase(path.join(dir, 'hub.db'));
+    const sessions = new ChatSessionRepo(db); sessions.insert({ id: 'session-1', title: 'Test' });
+    const rules = new PermissionRuleRepo(db); const requests = new ChatPermissionRepo(db);
+    const broker = new PermissionBroker(requests, 1, undefined, undefined, sessions, rules);
+    rules.insert({ id: 'prefix', scope: 'session', sessionId: 'session-1', projectId: null, toolName: 'Bash', pattern: 'command:curl', createdBy: 'test' });
+    const dynamic = broker.request({ sessionId: 'session-1', toolName: 'Bash', input: { command: 'curl $(printf url)' } });
+    expect(broker.listPending()).toHaveLength(1);
+    broker.resolve(broker.listPending()[0].id, 'deny'); await dynamic;
+    const empty = broker.request({ sessionId: 'session-1', toolName: 'Bash', input: { command: 'FOO=bar' } });
+    expect(broker.listPending()).toHaveLength(1);
+    broker.resolve(broker.listPending()[0].id, 'deny'); await empty;
+  });
+
+  it('keeps legacy allow_always records working with durable rules enabled', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-permission-'));
+    db = openDatabase(path.join(dir, 'hub.db'));
+    const sessions = new ChatSessionRepo(db); sessions.insert({ id: 'session-1', title: 'Test' });
+    const requests = new ChatPermissionRepo(db); const rules = new PermissionRuleRepo(db);
+    requests.insert({ id: 'legacy', sessionId: 'session-1', toolName: 'Bash', input: JSON.stringify({ command: 'git status' }), status: 'allow_always' });
+    const broker = new PermissionBroker(requests, 1, undefined, undefined, sessions, rules);
+    await expect(broker.request({ sessionId: 'session-1', toolName: 'Bash', input: { command: 'git status' } })).resolves.toMatchObject({ behavior: 'allow' });
+  });
 });

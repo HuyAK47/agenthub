@@ -19,7 +19,7 @@ import {
   ChatRetryRepo,
   ChatRetryRow,
 } from '../db/index.js';
-import { PermissionBroker } from './permissions.js';
+import { PermissionBroker, commandPermissionLabel } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
@@ -183,10 +183,18 @@ export class ChatService {
   }
 
   listPermissions(sessionId?: string) {
-    return this.permissionBroker.listPending(sessionId).map((row) => ({
-      ...row,
-      input: JSON.parse(row.input) as Record<string, unknown>,
-    }));
+    return this.permissionBroker.listPending(sessionId).map((row) => {
+      const session = this.chatSessionRepo.get(row.sessionId);
+      const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
+      const input = JSON.parse(row.input) as Record<string, unknown>;
+      return {
+        ...row,
+        input,
+        sessionTitle: session?.title || null,
+        projectName: project?.name || null,
+        permissionLabel: typeof input.command === 'string' ? commandPermissionLabel(input.command) : row.toolName,
+      };
+    });
   }
 
   listPermissionRules() { return this.permissionBroker.listRules(); }

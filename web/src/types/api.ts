@@ -619,6 +619,9 @@ export interface ChatPermissionRequest {
   status: 'pending' | 'allow' | 'deny' | 'allow_always';
   message?: string | null;
   createdAt: string;
+  sessionTitle?: string | null;
+  projectName?: string | null;
+  permissionLabel?: string;
 }
 
 export interface ChatMessage {

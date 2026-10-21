@@ -21,7 +21,7 @@ import {
 } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
-import { commandPermissionInfo } from './chat/permissions.js';
+import { commandPermissionLabel } from './chat/permissions.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1454,13 +1454,13 @@ export class TelegramBotService {
     let input: Record<string, unknown> = {};
     try { input = typeof data.input === 'string' ? JSON.parse(data.input) as Record<string, unknown> : (data.input as Record<string, unknown> || {}); } catch { /* malformed input is still shown as a generic request */ }
     const command = typeof input.command === 'string' ? input.command : undefined;
-    const info = command ? commandPermissionInfo(command) : null;
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
     const session = this.chatService?.listSessions().find((item) => item.id === sessionId);
     const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
-    const label = info?.dynamic ? 'chỉ lệnh này' : (info?.patterns[0]?.replace(/^command:/, '') || tool);
+    const label = command ? commandPermissionLabel(command) : tool;
     const text = [
-      `🔐 <b>${this.escapeHtml(project?.name || (sessionId.startsWith('brain:') ? 'Bộ não' : 'Phiên chat'))}</b> — Claude cần quyền`,
+      `🔐 <b>Dự án: ${this.escapeHtml(project ? `${project.name} (${project.id})` : 'Không gắn dự án')}</b>`,
+      `Phiên: <b>${this.escapeHtml(session ? `${session.title || 'Phiên chat'} (${session.id})` : sessionId || 'Phiên chat')}</b> — Claude cần quyền`,
       `Công cụ: <b>${this.escapeHtml(tool)}</b>`,
       command ? `<pre>${this.escapeHtml(command.slice(0, 500))}</pre>` : '',
       typeof input.cwd === 'string' ? `Thư mục: <code>${this.escapeHtml(input.cwd)}</code>` : '',

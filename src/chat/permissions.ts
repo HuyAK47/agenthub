@@ -41,6 +41,11 @@ export function commandPermissionInfo(command: string): CommandPermissionInfo {
   const dangerous = DANGEROUS.test(command) || /\b(?:curl|wget)\b[^;&|]*(?:\||&&)\s*(?:sh|bash|zsh)\b/i.test(command);
   return { patterns: segments.map(segmentPrefix).filter((x): x is string => Boolean(x)).map((x) => `command:${x}`), dynamic, dangerous, exact: `command-exact:${command}` };
 }
+export function commandPermissionLabel(command: string): string {
+  const info = commandPermissionInfo(command);
+  if (info.dynamic) return 'chỉ lệnh này';
+  return info.patterns[0]?.replace(/^command:/, '') || 'lệnh này';
+}
 export function permissionPattern(input: Record<string, unknown>): string | null {
   if (typeof input.command === 'string' && input.command) return commandPermissionInfo(input.command).patterns[0] || null;
   for (const key of ['file_path', 'path']) if (typeof input[key] === 'string' && input[key]) return `${key}:${input[key]}`;
@@ -63,13 +68,22 @@ export class PermissionBroker {
     const pattern = permissionPattern(input); return pattern ? [pattern] : [];
   }
   private allowed(input: Record<string, unknown>, toolName: string, sessionId: string): boolean {
-    if (!this.ruleRepo) {
-      const current = permissionPattern(input);
-      return Boolean(current && this.repo.listAlways(sessionId, toolName).some((row) => permissionPattern(JSON.parse(row.input) as Record<string, unknown>) === current));
-    }
     const ctx = this.context(sessionId); const info = typeof input.command === 'string' ? commandPermissionInfo(input.command) : null; if (info?.dangerous) return false;
+    const legacyAllowed = this.repo.listAlways(sessionId, toolName).some((row) => {
+      try {
+        const stored = JSON.parse(row.input) as Record<string, unknown>;
+        if (typeof input.command === 'string' && typeof stored.command === 'string') return input.command === stored.command;
+        const current = permissionPattern(input);
+        return Boolean(current && permissionPattern(stored) === current);
+      } catch { return false; }
+    });
+    if (legacyAllowed) return true;
+    if (!this.ruleRepo) return false;
     const rules = this.ruleRepo.list({ sessionId, projectId: ctx.projectId || undefined, toolName });
-    if (info) return (info.dynamic && rules.some((r) => r.pattern === info.exact)) || info.patterns.every((p) => rules.some((r) => r.pattern === p));
+    if (info) {
+      if (info.dynamic) return rules.some((r) => r.pattern === info.exact);
+      return info.patterns.length > 0 && info.patterns.every((p) => rules.some((r) => r.pattern === p));
+    }
     const file = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : null;
     if (file && FILE_TOOLS.has(toolName) && ctx.projectPath && !isWithin(file, ctx.projectPath)) return false;
     return rules.some((r) => this.patterns(input, toolName, ctx).includes(r.pattern));
