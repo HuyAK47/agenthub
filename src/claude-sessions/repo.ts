@@ -26,8 +26,28 @@ export class ClaudeSessionRepo {
   setTasks(sessionId: string, turnId: string, rows: Array<{ taskId: string; effectiveTokens: number }>) { const del = this.db.prepare('DELETE FROM claude_task_usage WHERE sessionId=? AND turnId=?'); const ins = this.db.prepare('INSERT INTO claude_task_usage VALUES (?,?,?,?)'); const tx = this.db.transaction(() => { del.run(sessionId, turnId); for (const row of rows) ins.run(row.taskId, sessionId, turnId, row.effectiveTokens); }); tx(); }
   topTasks(sessionId: string, limit = 5) { return this.db.prepare('SELECT taskId, SUM(effectiveTokens) effectiveTokens FROM claude_task_usage WHERE sessionId=? GROUP BY taskId ORDER BY effectiveTokens DESC LIMIT ?').all(sessionId, limit) as Array<{taskId:string; effectiveTokens:number}>; }
   taskCost(taskId: string) { return this.db.prepare('SELECT COALESCE(SUM(effectiveTokens),0) effectiveTokens, COUNT(DISTINCT sessionId) sessions FROM claude_task_usage WHERE taskId=?').get(taskId) as { effectiveTokens: number; sessions: number }; }
-  quota() { return this.db.prepare('SELECT status,resetsAt,rateLimitType,observedAt FROM claude_quota WHERE id=1').get() as {status:string|null;resetsAt:number|null;rateLimitType:string|null;observedAt:string}|undefined; }
-  setQuota(row: {status:string;resetsAt:number|null;rateLimitType:string|null;isUsingOverage:boolean;observedAt:string}) { this.db.prepare('INSERT OR REPLACE INTO claude_quota VALUES (1,?,?,?,?,?)').run(row.status,row.resetsAt,row.rateLimitType,row.isUsingOverage?1:0,row.observedAt); }
+  quota(profileName?: string | null) {
+    const row = profileName
+      ? this.db.prepare('SELECT status,resetsAt,rateLimitType,observedAt FROM claude_quota_profiles WHERE profileName=?').get(profileName)
+      : this.db.prepare('SELECT status,resetsAt,rateLimitType,observedAt FROM claude_quota WHERE id=1').get();
+    return row as {status:string|null;resetsAt:number|null;rateLimitType:string|null;observedAt:string}|undefined;
+  }
+  quotaProfiles() { return this.db.prepare('SELECT profileName,status,resetsAt,rateLimitType,isUsingOverage,observedAt FROM claude_quota_profiles ORDER BY profileName').all() as Array<{profileName:string;status:string|null;resetsAt:number|null;rateLimitType:string|null;isUsingOverage:number;observedAt:string}>; }
+  setQuota(row: {status:string;resetsAt:number|null;rateLimitType:string|null;isUsingOverage:boolean;observedAt:string;profileName?:string|null}) {
+    if (row.profileName) {
+      const previous = this.quota(row.profileName);
+      if (previous?.observedAt && Date.parse(previous.observedAt) > Date.parse(row.observedAt)) return;
+      this.db.prepare('INSERT INTO claude_quota_profiles (profileName,status,resetsAt,rateLimitType,isUsingOverage,observedAt) VALUES (?,?,?,?,?,?) ON CONFLICT(profileName) DO UPDATE SET status=excluded.status,resetsAt=excluded.resetsAt,rateLimitType=excluded.rateLimitType,isUsingOverage=excluded.isUsingOverage,observedAt=excluded.observedAt').run(row.profileName,row.status,row.resetsAt,row.rateLimitType,row.isUsingOverage?1:0,row.observedAt);
+      return;
+    }
+    this.db.prepare('INSERT OR REPLACE INTO claude_quota VALUES (1,?,?,?,?,?)').run(row.status,row.resetsAt,row.rateLimitType,row.isUsingOverage?1:0,row.observedAt);
+  }
+  markAllowedAfter(profileName: string | null | undefined, observedAt: string): boolean {
+    const current = this.quota(profileName);
+    if (!current || Date.parse(observedAt) <= Date.parse(current.observedAt)) return false;
+    this.setQuota({ profileName, status: 'allowed', resetsAt: current.resetsAt, rateLimitType: current.rateLimitType, isUsingOverage: false, observedAt });
+    return true;
+  }
   setLimit(sessionId: string, resetAt: number | null, hitAt: string | null) { this.db.prepare('UPDATE claude_sessions SET limitResetAt=?,limitHitAt=? WHERE sessionId=?').run(resetAt, hitAt, sessionId); }
   setAutoResume(sessionId: string, enabled: boolean) { this.db.prepare('UPDATE claude_sessions SET autoResumeEnabled=? WHERE sessionId=?').run(enabled ? 1 : 0, sessionId); return this.get(sessionId); }
 }

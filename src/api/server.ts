@@ -286,6 +286,11 @@ export async function createServer(
     return reply.status(201).send(profile);
   });
 
+  fastify.post('/api/profiles/import-tokens', async (req: FastifyRequest, reply: FastifyReply) => {
+    const result = await service.importAgyTokens(req.body);
+    return reply.status(200).send(result);
+  });
+
   fastify.post('/api/profiles/:name/check', async (req: FastifyRequest, reply: FastifyReply) => {
     const { name } = req.params as { name: string };
     return reply.status(202).send(service.startProfileCheck(name));

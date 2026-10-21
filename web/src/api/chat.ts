@@ -140,6 +140,10 @@ export async function stopChatSession(sessionId: string): Promise<{ ok: boolean 
   );
 }
 
+export async function retryChatLimitNow(sessionId: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/limit-retry/now`, { method: 'POST' });
+}
+
 export async function compactChatSession(sessionId: string): Promise<{ ok: boolean; contextTokens?: number }> {
   return apiFetch<{ ok: boolean; contextTokens?: number }>(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`,

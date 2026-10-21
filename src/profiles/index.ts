@@ -9,6 +9,7 @@ import { accountKey } from './account.js';
 import { findAgyPath } from '../doctor.js';
 
 export { accountKey, sameAccount } from './account.js';
+export { exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, readAgyAccessToken, inspectAgyAccessToken, getAgyGoogleClientId, getAgyGoogleClientSecret, GOOGLE_TOKEN_ENDPOINT } from './agyToken.js';
 
 /** Resolve the system Claude profile while keeping existing installations compatible. */
 export function resolveClaudeProfile(
@@ -355,10 +356,11 @@ export class ProfileService {
   deleteProfile(name: string, purgeHome = true): void {
     const profile = this.profileRepo.get(name);
     if (!profile || profile.deletedAt) throw new Error(`Hồ sơ "${name}" không tồn tại`);
-    if (profile.kind === 'system' || profile.kind === 'keyring') {
-      throw new Error('Từ chối xóa: không thể xóa hồ sơ hệ thống hoặc keyring');
+    if (profile.kind === 'system') {
+      throw new Error('Từ chối xóa: không thể xóa hồ sơ hệ thống');
     }
-    if (purgeHome && profile.home && fs.existsSync(profile.home)) {
+    // Keyring dùng HOME thật và keyring hệ thống (PLAN 2.1): chỉ xoá mềm, không đụng tới thư mục.
+    if (purgeHome && profile.kind !== 'keyring' && profile.home && fs.existsSync(profile.home)) {
       this.purgeHomeDirectory(profile);
     }
     this.profileRepo.softDelete(name);
@@ -430,7 +432,10 @@ export function isProfileLoggedIn(profile: ProfileRow): boolean {
     }
     return fs.existsSync(path.join(profile.home || os.homedir(), '.codex', 'auth.json'));
   }
-  if (profile.kind === 'keyring') return true;
+  if (profile.kind === 'keyring') {
+    if (profile.authState === 'not_logged_in') return false;
+    return Boolean(profile.email) || profile.authState === 'ok';
+  }
   if (profile.engine === 'claude') {
     const home = profile.home || os.homedir();
     const accountFile = path.join(home, '.claude.json');
