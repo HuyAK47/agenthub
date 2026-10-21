@@ -1936,12 +1936,13 @@ export class TelegramBotService {
 
   // --- Message Sending & Anti-Flood Queue (1 msg/sec/chat) ---
 
-  async sendMessage(
+  // Not `async`: an async wrapper would re-wrap the rejection in a new, unhandled promise.
+  sendMessage(
     chatId: number,
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
   ): Promise<unknown> {
-    return new Promise((resolve, reject) => {
+    const promise = new Promise<unknown>((resolve, reject) => {
       let queue = this.chatQueues.get(chatId);
       if (!queue) {
         queue = [];
@@ -1951,6 +1952,13 @@ export class TelegramBotService {
       queue.push({ chatId, text, replyMarkup, resolve, reject });
       void this.processChatQueue(chatId);
     });
+    // Many callers fire and forget (notifications). A network blip must never become an
+    // unhandled rejection: that crashed the whole daemon on 21/10. Awaiting callers still
+    // receive the rejection.
+    promise.catch((err) => {
+      console.error(`[telegram] send failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return promise;
   }
 
   private async processChatQueue(chatId: number): Promise<void> {
@@ -1979,7 +1987,18 @@ export class TelegramBotService {
         this.chatLastSent.set(chatId, this.now());
 
         try {
-          const res = await this.sendDirectMessage(item.chatId, item.text, item.replyMarkup);
+          let res: unknown;
+          for (let attempt = 1; ; attempt += 1) {
+            try {
+              res = await this.sendDirectMessage(item.chatId, item.text, item.replyMarkup);
+              break;
+            } catch (err) {
+              // Retry transient network errors (fetch failed, timeouts) a couple of times.
+              const transient = /fetch failed|ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND|network|socket/i.test(err instanceof Error ? `${err.message} ${String((err as { cause?: unknown }).cause ?? '')}` : String(err));
+              if (!transient || attempt >= 3) throw err;
+              await this.sleepFn(2000 * attempt);
+            }
+          }
           item.resolve(res);
         } catch (err) {
           item.reject(err);

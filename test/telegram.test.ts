@@ -1594,3 +1594,22 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
     });
   });
 });
+
+describe('Telegram gửi lỗi mạng không làm sập daemon', () => {
+  it('sendMessage bị từ chối nhưng không thành unhandled rejection khi gọi kiểu fire-and-forget', async () => {
+    const { TelegramBotService } = await import('../src/telegram.js');
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    const svc = Object.create(TelegramBotService.prototype) as InstanceType<typeof TelegramBotService> & Record<string, unknown>;
+    Object.assign(svc, {
+      chatQueues: new Map(), chatProcessing: new Map(), chatLastSent: new Map(),
+      now: () => Date.now(), sleepFn: async () => {},
+      sendDirectMessage: async () => { throw new Error('Telegram sendMessage request failed: fetch failed'); },
+    });
+    void svc.sendMessage(1, 'hello');
+    await new Promise((r) => setTimeout(r, 50));
+    process.off('unhandledRejection', onUnhandled);
+    expect(unhandled).toHaveLength(0);
+  });
+});

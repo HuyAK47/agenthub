@@ -404,6 +404,10 @@ export async function startDaemon(
     void shutdown();
   };
 
+  // Last line of defence: log stray async errors instead of taking the whole hub down.
+  process.on('unhandledRejection', (reason) => {
+    console.error('[daemon] unhandled rejection:', reason instanceof Error ? reason.stack || reason.message : reason);
+  });
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', onTerm);
 
