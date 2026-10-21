@@ -260,6 +260,7 @@ export function buildBrainDigest(appService: AppService): DigestData {
       quotaMarkRepo: appService.quotaMarkRepo,
       eventRepo: appService.eventRepo,
       decisionTracker: appService.telegramBotService?.getDecisionTracker(),
+      ciRepo: appService.ciRepo,
       port: appService.config.port,
     })
   );

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { AgentHubConfig } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { QuotaMarkRepo, TaskRepo, ProfileRepo } from './db/index.js';
+import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
 import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
@@ -19,6 +19,7 @@ export interface NotificationServiceOptions {
   profileRepo?: ProfileRepo;
   quotaMarkRepo?: QuotaMarkRepo;
   projectRepo?: { get(id: string): { settings?: string | null } | undefined };
+  ciRepo?: CiRepo;
   exec?: NotifyExecFn;
   now?: () => number;
 }
@@ -33,6 +34,7 @@ export class NotificationService {
   private execFn?: NotifyExecFn;
   private now: () => number;
   private lastSent = new Map<string, number>();
+  private lastSentCi = new Map<string, number>();
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
   private checkTimer?: NodeJS.Timeout;
@@ -125,6 +127,8 @@ export class NotificationService {
         type === 'claude.quota_exhausted' ||
         type === 'hub.restart_failed' ||
         type === 'system.error' ||
+        type === 'ci.failed' ||
+        type === 'ci.passed' ||
         allExhausted;
 
       if (!isSystemEvent) {
@@ -291,6 +295,37 @@ export class NotificationService {
         this.notify(msg, 'normal');
         break;
       }
+
+      case 'ci.failed': {
+        const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || 'dự án';
+        const workflow = (typeof p.workflow === 'string' ? p.workflow : '') || 'CI';
+        const sha = typeof p.sha === 'string' ? p.sha.slice(0, 7) : '';
+        const throttleKey = `${projId}:${workflow}`;
+        const last = this.lastSentCi.get(throttleKey) || 0;
+        if (now - last < 3600_000) {
+          break;
+        }
+        this.lastSentCi.set(throttleKey, now);
+
+        const jobs = Array.isArray(p.jobs) ? (p.jobs as Array<{ name?: string }>) : [];
+        const failedJobNames = jobs.map((j) => j.name).filter(Boolean);
+        const jobDetails = failedJobNames.length > 0 ? ` (${failedJobNames.join(', ')})` : '';
+        const msg = `CI thất bại [${projId}]: ${workflow}${sha ? ` @ ${sha}` : ''}${jobDetails}`;
+        this.notify(msg, 'warning');
+        break;
+      }
+
+      case 'ci.passed': {
+        if (p.recoveredFromFailure !== true && p.previousConclusion !== 'failure') {
+          break;
+        }
+        const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || 'dự án';
+        const workflow = (typeof p.workflow === 'string' ? p.workflow : '') || 'CI';
+        const sha = typeof p.sha === 'string' ? p.sha.slice(0, 7) : '';
+        const msg = `CI đã xanh: [${projId}] ${workflow}${sha ? ` @ ${sha}` : ''}`;
+        this.notify(msg, 'normal');
+        break;
+      }
     }
   }
 
@@ -336,7 +371,7 @@ export class NotificationService {
     return '';
   }
 
-  private notify(message: string, urgency: 'normal' | 'critical' = 'normal'): void {
+  private notify(message: string, urgency: 'normal' | 'warning' | 'critical' = 'normal'): void {
     const key = `${urgency}:${message}`;
     const now = this.now();
     const last = this.lastSent.get(key);
@@ -345,8 +380,12 @@ export class NotificationService {
     }
     this.lastSent.set(key, now);
 
+    // notify-send supports low, normal, and critical (not warning). Keep the
+    // service's warning classification while explicitly using normal urgency.
     const args = urgency === 'critical'
       ? ['-u', 'critical', '-t', '10000', '-a', 'AgentHub', message]
+      : urgency === 'warning'
+      ? ['-u', 'normal', '-t', '10000', '-a', 'AgentHub', message]
       : ['-t', '10000', '-a', 'AgentHub', message];
 
     try {

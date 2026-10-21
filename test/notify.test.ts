@@ -149,6 +149,16 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
+  it('maps CI warning level to explicit normal desktop urgency', () => {
+    const notifier = new NotificationService({ config, eventBus, exec: fakeExec });
+    notifier.start();
+
+    eventBus.emit('ci.failed', 'proj', { projectId: 'proj', workflow: 'CI', sha: 'abcdef' });
+
+    expect(execCalls[0].args.slice(0, 2)).toEqual(['-u', 'normal']);
+    notifier.stop();
+  });
+
   it('notifies when a task is escalated to a human reviewer', () => {
     taskRepo.insert({
       id: 'proj/task-escalated',

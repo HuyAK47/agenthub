@@ -550,7 +550,25 @@ export const MIGRATIONS: string[] = [
     observedAt TEXT NOT NULL
   );
   `,
-  // Migration 44: assistant sessions and durable user directives for the brain.
+  // Migration 44: GitHub Actions CI runs and annotations
+  `
+  CREATE TABLE IF NOT EXISTS ci_runs (
+    projectId TEXT NOT NULL,
+    runId INTEGER NOT NULL,
+    workflow TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    status TEXT NOT NULL,
+    conclusion TEXT,
+    jobs TEXT NOT NULL DEFAULT '[]',
+    completedAt TEXT,
+    url TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (projectId, runId),
+    FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_ci_runs_project ON ci_runs(projectId, completedAt);
+  `,
+  // Migration 45: assistant sessions and durable user directives for the brain.
   // chat_sessions had a CHECK on kind, so rebuild it while preserving every column.
   `
   PRAGMA foreign_keys = OFF;
@@ -1002,8 +1020,8 @@ export class QuotaMarkRepo {
     return this.db.prepare('SELECT * FROM quota_marks').all() as QuotaMarkRow[];
   }
 
-  getActive(): QuotaMarkRow[] {
-    const now = Math.floor(Date.now() / 1000);
+  getActive(nowSeconds?: number): QuotaMarkRow[] {
+    const now = nowSeconds !== undefined ? nowSeconds : Math.floor(Date.now() / 1000);
     return this.db
       .prepare('SELECT * FROM quota_marks WHERE until > ?')
       .all(now) as QuotaMarkRow[];
@@ -2128,4 +2146,98 @@ export class TaskNoteRepo {
   }
 }
 
+export interface CiRunRow {
+  projectId: string;
+  runId: number;
+  workflow: string;
+  sha: string;
+  status: string;
+  conclusion: string | null;
+  jobs: string; // JSON
+  completedAt: string | null;
+  url?: string | null;
+  createdAt?: string;
+}
+
+export class CiRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: {
+    projectId: string;
+    runId: number;
+    workflow: string;
+    sha: string;
+    status: string;
+    conclusion: string | null;
+    jobs: string;
+    completedAt: string | null;
+    url?: string | null;
+  }): CiRunRow {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO ci_runs (projectId, runId, workflow, sha, status, conclusion, jobs, completedAt, url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.projectId,
+        row.runId,
+        row.workflow,
+        row.sha,
+        row.status,
+        row.conclusion,
+        row.jobs,
+        row.completedAt,
+        row.url ?? null,
+      );
+    return this.get(row.projectId, row.runId)!;
+  }
+
+  get(projectId: string, runId: number): CiRunRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM ci_runs WHERE projectId = ? AND runId = ?')
+      .get(projectId, runId) as CiRunRow | undefined;
+  }
+
+  listActiveProjects(): string[] {
+    return (
+      this.db
+        .prepare("SELECT DISTINCT projectId FROM ci_runs WHERE completedAt IS NULL AND status != 'completed'")
+        .all() as Array<{ projectId: string }>
+    ).map((row) => row.projectId);
+  }
+
+  getLatest(projectId: string): CiRunRow | undefined {
+    return this.db
+      .prepare(
+        'SELECT * FROM ci_runs WHERE projectId = ? ORDER BY runId DESC LIMIT 1',
+      )
+      .get(projectId) as CiRunRow | undefined;
+  }
+
+  listByProject(projectId: string, limit = 20): CiRunRow[] {
+    return this.db
+      .prepare(
+        'SELECT * FROM ci_runs WHERE projectId = ? ORDER BY runId DESC LIMIT ?',
+      )
+      .all(projectId, limit) as CiRunRow[];
+  }
+
+  getLatestForAllProjects(): Map<string, CiRunRow> {
+    const rows = this.db
+      .prepare(
+        `SELECT c.* FROM ci_runs c
+         INNER JOIN (
+           SELECT projectId, MAX(runId) AS maxRunId
+           FROM ci_runs
+           GROUP BY projectId
+         ) latest ON c.projectId = latest.projectId AND c.runId = latest.maxRunId`,
+      )
+      .all() as CiRunRow[];
+    const map = new Map<string, CiRunRow>();
+    for (const row of rows) {
+      map.set(row.projectId, row);
+    }
+    return map;
+  }
+}
 
