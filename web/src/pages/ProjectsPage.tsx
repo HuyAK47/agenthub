@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addProjectKnowledge, createProject, deleteProject, deleteProjectKnowledge, getProjectKnowledge, getProjects, updateProject, updateProjectKnowledge } from '../api/client';
-import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin, ChevronDown } from 'lucide-react';
+import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin, ChevronDown, Settings2 } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { Project } from '../types/api';
 
@@ -17,6 +17,47 @@ function getProjectHooksString(proj: Project): string {
     }
   }
   return Array.isArray(proj.hooks.onWorktreeRemoved) ? proj.hooks.onWorktreeRemoved.join('\n') : '';
+}
+
+const defaultSettings = (): NonNullable<Project['settings']> => ({
+  brain: { mode: 'inherit' }, worktree: { install: 'auto', gitHooks: 'run' },
+  integration: { enabled: false }, references: [], notifications: { telegramContent: 'full' },
+});
+
+function changedSettings(current: NonNullable<Project['settings']>, original: NonNullable<Project['settings']>): Partial<NonNullable<Project['settings']>> {
+  const result: Partial<NonNullable<Project['settings']>> = {};
+  (['brain', 'worktree', 'integration', 'references', 'notifications'] as const).forEach((section) => {
+    if (JSON.stringify(current[section]) !== JSON.stringify(original[section])) {
+      (result as Record<string, unknown>)[section] = current[section];
+    }
+  });
+  return result;
+}
+
+function ProjectSettingsForm({
+  value, onChange, compact = false,
+}: { value: NonNullable<Project['settings']>; onChange: (value: NonNullable<Project['settings']>) => void; compact?: boolean }) {
+  const { t } = useLocale();
+  const update = (section: keyof NonNullable<Project['settings']>, patch: object) => onChange({ ...value, [section]: { ...value[section], ...patch } });
+  const addReference = () => onChange({ ...value, references: [...value.references, { name: '', path: '', inject: false }] });
+  return <div className="space-y-4" data-testid="project-settings-form">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.brainMode')}</span><select value={value.brain.mode} onChange={(e) => update('brain', { mode: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="inherit">{t('projects.brainInherit')}</option><option value="off">{t('projects.brainOff')}</option><option value="suggest">{t('projects.brainSuggest')}</option><option value="auto">{t('projects.brainAuto')}</option><option value="external">{t('projects.brainExternal')}</option></select><span className="text-[var(--t-text-3)]">{t(`projects.brainDesc${value.brain.mode}`)}</span></label>
+      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.dailyTokenBudget')}</span><input type="text" inputMode="numeric" value={value.brain.dailyTokenBudget ?? ''} onChange={(e) => update('brain', { dailyTokenBudget: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
+      <label className="text-xs space-y-1"><span className="font-semibold">{t('projects.maxTurnsPerHour')}</span><input type="text" inputMode="numeric" value={value.brain.maxTurnsPerHour ?? ''} onChange={(e) => update('brain', { maxTurnsPerHour: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]" /></label>
+    </div>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+      <label className="space-y-1"><span className="font-semibold block">{t('projects.worktreeInstall')}</span><select value={value.worktree.install} onChange={(e) => update('worktree', { install: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="auto">{t('projects.worktreeAuto')}</option><option value="skip">{t('projects.worktreeSkip')}</option></select></label>
+      <label className="space-y-1"><span className="font-semibold block">{t('projects.gitHooks')}</span><select value={value.worktree.gitHooks} onChange={(e) => update('worktree', { gitHooks: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="run">{t('projects.gitHooksRun')}</option><option value="skip">{t('projects.gitHooksSkip')}</option></select></label>
+    </div>
+    <div className="space-y-2 text-xs">
+      <label className="flex items-center gap-2"><input type="checkbox" checked={value.integration.enabled} onChange={(e) => update('integration', { enabled: e.target.checked })} /> <span className="font-semibold">{t('projects.integrationEnabled')}</span></label>
+      {value.integration.enabled && <div className="grid grid-cols-1 md:grid-cols-2 gap-2"><input aria-label={t('projects.integrationBranch')} placeholder={t('projects.integrationBranch')} value={value.integration.branch ?? ''} onChange={(e) => update('integration', { branch: e.target.value || undefined })} className="rounded border p-2 bg-[var(--t-surface-2)]" /><input aria-label={t('projects.integrationBaseRef')} placeholder={t('projects.integrationBaseRef')} value={value.integration.baseRef ?? ''} onChange={(e) => update('integration', { baseRef: e.target.value || undefined })} className="rounded border p-2 bg-[var(--t-surface-2)]" /></div>}
+    </div>
+    <div className="space-y-2 text-xs"><div className="flex justify-between items-center"><span className="font-semibold">{t('projects.references')}</span><button type="button" onClick={addReference} className="text-[var(--t-accent)]">+ {t('projects.addReference')}</button></div>{value.references.map((ref, index) => <div key={index} className="grid grid-cols-[1fr_2fr_auto_auto] gap-2 items-center"><input aria-label={`${t('projects.referenceName')} ${index + 1}`} placeholder={t('projects.referenceName')} value={ref.name} onChange={(e) => { const refs = [...value.references]; refs[index] = { ...ref, name: e.target.value }; onChange({ ...value, references: refs }); }} className="rounded border p-2 bg-[var(--t-surface-2)]" /><input aria-label={`${t('projects.referencePath')} ${index + 1}`} placeholder={t('projects.referencePath')} value={ref.path} onChange={(e) => { const refs = [...value.references]; refs[index] = { ...ref, path: e.target.value }; onChange({ ...value, references: refs }); }} className="rounded border p-2 bg-[var(--t-surface-2)]" /><label className="flex gap-1 items-center"><input type="checkbox" checked={ref.inject} onChange={(e) => { const refs = [...value.references]; refs[index] = { ...ref, inject: e.target.checked }; onChange({ ...value, references: refs }); }} />{t('projects.inject')}</label><button type="button" onClick={() => onChange({ ...value, references: value.references.filter((_, i) => i !== index) })} className="text-[var(--t-crit)]">×</button></div>)}</div>
+    <label className="text-xs space-y-1 block"><span className="font-semibold">{t('projects.telegramContent')}</span><select value={value.notifications.telegramContent} onChange={(e) => update('notifications', { telegramContent: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="full">{t('projects.telegramFull')}</option><option value="minimal">{t('projects.telegramMinimal')}</option></select></label>
+    {!compact && <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.settingsPartialHint')}</p>}
+  </div>;
 }
 
 export const ProjectsPage: React.FC = () => {
@@ -38,6 +79,9 @@ export const ProjectsPage: React.FC = () => {
   const [envTemplate, setEnvTemplate] = useState('');
   const [checksJson, setChecksJson] = useState('');
   const [hooksText, setHooksText] = useState('');
+  const [newSettings, setNewSettings] = useState(defaultSettings());
+  const [projectSettings, setProjectSettings] = useState<Record<string, NonNullable<Project['settings']>>>({});
+  const [openSettings, setOpenSettings] = useState<string | null>(null);
   const [projectChecks, setProjectChecks] = useState<Record<string, string>>({});
   const [projectHooks, setProjectHooks] = useState<Record<string, string>>({});
   const [projectReview, setProjectReview] = useState<Record<string, string>>({});
@@ -114,6 +158,7 @@ export const ProjectsPage: React.FC = () => {
     setEnvTemplate('');
     setChecksJson('');
     setHooksText('');
+    setNewSettings(defaultSettings());
     setJsonError(null);
     setFormError(null);
   };
@@ -172,9 +217,18 @@ export const ProjectsPage: React.FC = () => {
       maxParallel: Number(maxParallel) || 3,
       envTemplate: envTemplate.trim() ? envTemplate.trim() : null,
       checks: checks as any,
+      ...(JSON.stringify(newSettings) !== JSON.stringify(defaultSettings()) ? { settings: newSettings } : {}),
       ...(hookLines.length > 0 ? { hooks: { onWorktreeRemoved: hookLines } } : {}),
     });
   };
+
+  const settingsMutation = useMutation({
+    mutationFn: ({ id, settings }: { id: string; settings: Partial<NonNullable<Project['settings']>> }) => updateProject(id, { settings }),
+    onSuccess: (_project, variables) => {
+      setProjectSettings((current) => ({ ...current, [variables.id]: { ...(current[variables.id] ?? defaultSettings()), ...variables.settings } as NonNullable<Project['settings']> }));
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
 
   return (
     <div className="space-y-6">
@@ -278,6 +332,7 @@ export const ProjectsPage: React.FC = () => {
                 <ChevronDown className="w-4 h-4 transition-transform group-open:rotate-180" />
               </summary>
               <div className="mt-4 space-y-4">
+                <ProjectSettingsForm value={newSettings} onChange={setNewSettings} compact />
                 {/* envTemplate JSON with Validation */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -450,6 +505,11 @@ export const ProjectsPage: React.FC = () => {
               <button type="button" onClick={() => setKnowledgeProject(knowledgeProject === proj.id ? null : proj.id)} className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)]">
                 <BookOpen className="w-3.5 h-3.5" /> Kiến thức
               </button>
+
+              <div className="pt-2 border-t border-[var(--t-border)]">
+                <button type="button" onClick={() => setOpenSettings(openSettings === proj.id ? null : proj.id)} className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)]"><Settings2 className="w-3.5 h-3.5" />{t('projects.settings')}</button>
+                {openSettings === proj.id && <div className="mt-3 space-y-3"><ProjectSettingsForm value={projectSettings[proj.id] ?? proj.settings ?? defaultSettings()} onChange={(settings) => setProjectSettings((current) => ({ ...current, [proj.id]: settings }))} /><button type="button" onClick={() => { const current = projectSettings[proj.id] ?? proj.settings ?? defaultSettings(); settingsMutation.mutate({ id: proj.id, settings: changedSettings(current, proj.settings ?? defaultSettings()) }); }} disabled={settingsMutation.isPending} className="px-3 py-1.5 rounded bg-[var(--t-accent)] text-white text-xs">{settingsMutation.isPending ? t('projects.savingBtn') : t('projects.saveSettings')}</button></div>}
+              </div>
 
               {knowledgeProject === proj.id && (
                 <div className="pt-2 border-t border-[var(--t-border)] space-y-2">

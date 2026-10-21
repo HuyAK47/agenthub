@@ -91,6 +91,7 @@ export const vi = {
     loadNormal: 'Tải máy bình thường',
     overlapWarningTitle: 'Cảnh báo trùng file',
     overlapWarningDesc: 'Có {count} cảnh báo sửa trùng file giữa các task đang chạy:',
+    brains: 'Bộ não', brainMode: 'Chế độ', brainStateidle: 'rảnh', brainStaterunning: 'đang chạy', brainStatewaiting: 'đang chờ', brainStateerror: 'lỗi', brainQueued: 'đang xếp hàng', brainTokens: 'Token hôm nay', openBrainChat: 'Mở phiên chat',
   },
   tasks: {
     title: 'Quản lý Task',
@@ -432,6 +433,7 @@ export const vi = {
     envHint: 'Tuỳ chọn, ví dụ cổng/DB riêng cho mỗi worktree với {slot}',
     checksHint: 'Các lệnh kiểm tra tự động trước khi review (JSON array)',
     hooksHint: 'Lệnh chạy sau khi xoá worktree (tuỳ chọn)',
+    settings: 'Cài đặt', saveSettings: 'Lưu cài đặt', settingsPartialHint: 'Thay đổi được gửi theo từng phần settings của project.', brainMode: 'Bộ não', brainInherit: 'Kế thừa toàn cục', brainOff: 'Tắt', brainSuggest: 'Gợi ý', brainAuto: 'Tự động', brainExternal: 'Claude ngoài (VS Code) điều phối', brainDescinherit: 'Dùng cấu hình toàn cục.', brainDescoff: 'Không điều phối tự động.', brainDescsuggest: 'Chỉ gợi ý khi cần.', brainDescauto: 'Tự động lập kế hoạch và giao việc.', brainDescexternal: 'Claude ngoài (VS Code) điều phối.', dailyTokenBudget: 'Ngân sách token/ngày', maxTurnsPerHour: 'Lượt tối đa/giờ', worktreeInstall: 'Cài phụ thuộc', worktreeAuto: 'Tự động', worktreeSkip: 'Không cài', gitHooks: 'Git hooks', gitHooksRun: 'Chạy', gitHooksSkip: 'Bỏ qua', integrationEnabled: 'Bật nhánh tích hợp', integrationBaseRef: 'Nhánh gốc', references: 'Tham chiếu chỉ đọc', addReference: 'Thêm', referenceName: 'Tên', referencePath: 'Đường dẫn', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Đầy đủ', telegramMinimal: 'Tối giản',
   },
   settings: {
     title: 'Cài đặt hệ thống',
@@ -460,7 +462,7 @@ export const vi = {
     desktopNotifyLabel: 'Thông báo trên máy tính (Desktop Notifications)',
     desktopNotifyHint: 'Gửi thông báo desktop qua notify-send / osascript khi có sự kiện quan trọng.',
     brainModeLabel: 'Chế độ hoạt động của Bộ não',
-    brainModeHint: 'Trong chế độ Tự động, các thông báo thô từng task được chặn, chỉ gửi thông báo quan trọng và sự cố.',
+    brainModeHint: 'Trong chế độ Tự động, các thông báo thô từng task được chặn, chỉ gửi thông báo quan trọng và sự cố.', brainMaxConcurrent: 'Số lượt bộ não chạy đồng thời tối đa',
     brainMode: {
       off: 'Tắt (Off)',
       suggest: 'Gợi ý (Suggest)',
@@ -519,7 +521,7 @@ export const vi = {
     hasTokenBadge: 'Token Telegram sẵn sàng',
   },
   extra: {
-    claudeVersion: 'Phiên bản Claude đang dùng',
+    claudeVersion: 'Phiên bản Claude đang dùng', systemBrain: 'Bộ não hệ thống', projectBrains: 'Bộ não theo dự án',
     connected: 'Đã kết nối', disconnected: 'Mất kết nối', connectionAria: 'Trạng thái kết nối',
     themeAria: 'Chế độ giao diện', dark: 'Tối', light: 'Sáng', system: 'Hệ thống', default: 'Mặc định',
     sidebarAria: 'Sidebar điều hướng', pageTaskCreate: 'Tạo task mới', pageTaskDetail: 'Chi tiết task',
