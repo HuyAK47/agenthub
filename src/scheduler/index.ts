@@ -536,7 +536,11 @@ export class Scheduler {
     }
 
     // Re-check tasks that were in 'checking' status when daemon restarted
-    void this.recoverCheckingTasks();
+    void this.recoverCheckingTasks().catch((error) => {
+      if (!this.stopped) {
+        console.error('[scheduler] recoverCheckingTasks failed:', error);
+      }
+    });
   }
 
   private markerForRun(task: TaskRow, startedAt: number): 'done' | 'blocked' | null {
@@ -577,7 +581,11 @@ export class Scheduler {
       this.runRepo.finish(run.id, 'done');
       this.taskRepo.update(run.taskId, { status: 'checking' });
       this.eventBus.emit('task.checking', run.taskId, { reason: 'restart_marker' });
-      void this.recoverCheckingTasks();
+      void this.recoverCheckingTasks().catch((error) => {
+        if (!this.stopped) {
+          console.error(`[scheduler] recoverCheckingTasks failed for ${run.taskId}:`, error);
+        }
+      });
       return true;
     }
     if (marker === 'blocked') {
@@ -597,12 +605,24 @@ export class Scheduler {
 
   async recoverCheckingTasks(): Promise<void> {
     if (this.stopped) return;
-    const checkingTasks = this.taskRepo.getByStatus('checking');
-    for (const task of checkingTasks) {
-      if (this.stopped) return;
-      const runs = this.runRepo.getByTask(task.id);
-      const runId = runs[runs.length - 1]?.id || 'recovered';
-      await this.runChecksForTask(task.id, runId);
+    try {
+      const checkingTasks = this.taskRepo.getByStatus('checking');
+      for (const task of checkingTasks) {
+        if (this.stopped) return;
+        const runs = this.runRepo.getByTask(task.id);
+        const runId = runs[runs.length - 1]?.id || 'recovered';
+        try {
+          await this.runChecksForTask(task.id, runId);
+        } catch (error) {
+          if (!this.stopped) {
+            console.error(`[scheduler] recoverCheckingTasks failed for ${task.id}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      if (!this.stopped) {
+        console.error('[scheduler] recoverCheckingTasks failed:', error);
+      }
     }
   }
 
@@ -642,16 +662,24 @@ export class Scheduler {
       }
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
     } else {
-      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
+      if (this.stopped) return;
       if (this.runMetricsRepo) {
-        await recalculateTaskLines(
-          this.taskRepo,
-          this.projectRepo,
-          this.runRepo,
-          this.runMetricsRepo,
-          taskId,
-        );
+        try {
+          await recalculateTaskLines(
+            this.taskRepo,
+            this.projectRepo,
+            this.runRepo,
+            this.runMetricsRepo,
+            taskId,
+          );
+        } catch (error) {
+          if (!this.stopped) {
+            console.error(`[scheduler] recalculateTaskLines failed for ${taskId}:`, error);
+          }
+        }
       }
+      if (this.stopped) return;
+      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
       if (this.reviewChainForTask(currentTask).length === 0) {
         this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
       } else {
@@ -696,7 +724,7 @@ export class Scheduler {
             });
           }
         }
-      } else if (!load.overloaded) {
+      } else if (!this.loadGuard.isOverloaded()) {
         const autoPaused = Array.from(this.running.values())
           .filter((rt) => rt.paused && rt.pauseReason === 'load')
           .sort((a, b) => (a.pausedAt || 0) - (b.pausedAt || 0));
@@ -887,7 +915,11 @@ export class Scheduler {
       // Check if process is still alive
       if (!this.isProcessAlive(rt.pid, rt.pidStart)) {
         // Process has ended, check results
-        void this.handleRunCompletion(taskId, rt);
+        void this.handleRunCompletion(taskId, rt).catch((error) => {
+          if (!this.stopped) {
+            console.error(`[scheduler] handleRunCompletion failed for ${taskId}:`, error);
+          }
+        });
         continue;
       }
 
@@ -1446,8 +1478,10 @@ export class Scheduler {
       }
     }
     if (!this.stopped) this.triggerTick();
-    } catch {
-      // safely ignore if DB closed during teardown
+    } catch (error) {
+      if (!this.stopped) {
+        console.error(`[scheduler] handleRunCompletion failed for ${taskId}:`, error);
+      }
     }
   }
 
