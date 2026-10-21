@@ -974,8 +974,9 @@ export class AppService {
       };
     });
 
-    const disk = getDiskSpaceSync(this.config.worktreesDir);
-    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    const diskReader = this.scheduler ? this.scheduler.getDiskReader() : getDiskSpaceSync;
+    const disk = diskReader(this.config.worktreesDir);
+    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
     const runningTaskIds = runningTasks.map((r) => r.taskId);
     const overlaps = this.taskNoteRepo
       ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)

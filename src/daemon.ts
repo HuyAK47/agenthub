@@ -81,7 +81,29 @@ export interface DaemonContext {
   brainRunner: BrainRunner;
 }
 
-export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>, diskReader?: (p: string) => DiskSpace): DaemonContext {
+export interface CreateContextOptions {
+  diskSpace?: (path: string) => DiskSpace;
+}
+
+export function createContext(
+  config: AgentHubConfig,
+  engineOverrides?: Map<string, Engine> | CreateContextOptions,
+  diskReader?: ((p: string) => DiskSpace) | CreateContextOptions,
+): DaemonContext {
+  let enginesOverride: Map<string, Engine> | undefined;
+  let diskFn: ((p: string) => DiskSpace) | undefined;
+
+  if (engineOverrides instanceof Map) {
+    enginesOverride = engineOverrides;
+  } else if (engineOverrides && typeof engineOverrides === 'object') {
+    diskFn = engineOverrides.diskSpace;
+  }
+
+  if (typeof diskReader === 'function') {
+    diskFn = diskReader;
+  } else if (diskReader && typeof diskReader === 'object') {
+    diskFn = diskReader.diskSpace;
+  }
   const db = openDatabase(config.dbPath);
   const projectRepo = new ProjectRepo(db);
   const profileRepo = new ProfileRepo(db);
@@ -135,8 +157,8 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   );
 
   const engines = new Map<string, Engine>();
-  if (engineOverrides) {
-    for (const [k, v] of engineOverrides) engines.set(k, v);
+  if (enginesOverride) {
+    for (const [k, v] of enginesOverride) engines.set(k, v);
   } else if (process.env.AGENTHUB_FAKE_ENGINE === '1') {
     const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const fakeScript =
@@ -169,7 +191,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     db,
     runMetricsRepo,
     knowledgeRepo,
-    diskReader,
+    diskFn ? { diskSpace: diskFn } : undefined,
   );
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
     profileService.registerAll();
