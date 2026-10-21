@@ -1417,6 +1417,32 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(sendMessage.mock.calls[0][1]).toContain('project "proj-shop"');
     });
 
+    it('streams automatic task replies and forwards permission requests to Telegram', async () => {
+      vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({
+        userMessageId: 'user-message',
+        assistantMessageId: 'assistant-message',
+      }));
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+
+      await bot.handleUpdate({ update_id: 501, message: {
+        message_id: 501, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: '/newtask Sửa checkout trong proj-shop',
+      } });
+      const handleChatEvent = (type: string, payload: Record<string, unknown>) =>
+        (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void })
+          .handleChatEvent(type, undefined, { sessionId: 'telegram:555', ...payload });
+
+      handleChatEvent('chat.delta', { text: 'Đã tạo task proj-shop/checkout' });
+      handleChatEvent('chat.permission_request', { id: 'permission-1', toolName: 'hub_create_task' });
+      handleChatEvent('chat.done', {});
+      await vi.waitFor(() => {
+        const edits = recordedCalls.filter((call) => call.url.includes('/editMessageText'));
+        expect(edits.some((call) => String(call.body?.text).includes('Đã tạo task proj-shop/checkout'))).toBe(true);
+      });
+
+      const messages = recordedCalls.filter((call) => call.url.includes('/sendMessage'));
+      expect(messages.some((call) => String(call.body?.text).includes('Claude cần quyền'))).toBe(true);
+    });
+
     it('asks for a project when the description is ambiguous, then sends the selected project to Claude', async () => {
       ctx.projectRepo.insert({ id: 'proj-api', name: 'API Service', path: tmpDir, defaultBranch: 'main', maxParallel: 2 });
       const sendMessage = vi.spyOn(ctx.chatService, 'sendMessage').mockImplementation(() => ({

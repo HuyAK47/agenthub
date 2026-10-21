@@ -8,6 +8,7 @@ import { EventBus } from './scheduler/index.js';
 import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
+import { planningRule } from './chat/claude.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -831,20 +832,32 @@ export class TelegramBotService {
       return;
     }
     if (!text) return;
-    const sessionId = this.sessionIdForChat(chatId);
-    let initial: unknown;
     try {
-      this.chatService.getOrCreateSession(sessionId, {
-        title: sessionId === 'brain' ? 'Bộ não' : 'Cuộc trò chuyện Telegram',
-        kind: sessionId === 'brain' ? 'brain' : 'chat',
-      });
-      initial = await this.sendMessage(chatId, '⏳ Đang xử lý…');
-      const messageId = this.telegramMessageId(initial);
-      if (messageId === null) throw new Error('Telegram không trả về message_id');
-      this.chatReplies.set(sessionId, { chatId, messageId, text: '⏳ Đang xử lý…', lastEditAt: this.now(), editing: false });
-      this.chatService.sendMessage(sessionId, text);
+      await this.startChatTurn(chatId, '⏳ Đang xử lý…', text);
     } catch (err: unknown) {
       await this.sendMessage(chatId, `❌ ${this.escapeHtml(err instanceof Error ? err.message : String(err))}`);
+    }
+  }
+
+  private async startChatTurn(chatId: number, placeholder: string, text: string): Promise<void> {
+    if (!this.chatService) throw new Error('Chat Claude chưa được bật.');
+    const sessionId = this.sessionIdForChat(chatId);
+    this.chatService.getOrCreateSession(sessionId, {
+      title: sessionId === 'brain' ? 'Bộ não' : 'Cuộc trò chuyện Telegram',
+      kind: sessionId === 'brain' ? 'brain' : 'chat',
+    });
+    let initial: unknown;
+    try {
+      initial = await this.sendMessage(chatId, placeholder);
+      const messageId = this.telegramMessageId(initial);
+      if (messageId === null) throw new Error('Telegram không trả về message_id');
+      this.chatReplies.set(sessionId, { chatId, messageId, text: placeholder, lastEditAt: this.now(), editing: false });
+      this.chatService.sendMessage(sessionId, text);
+    } catch (err) {
+      const reply = this.chatReplies.get(sessionId);
+      if (reply?.editTimer) clearTimeout(reply.editTimer);
+      this.chatReplies.delete(sessionId);
+      throw err;
     }
   }
 
@@ -1621,15 +1634,10 @@ export class TelegramBotService {
   }
 
   private autoTaskPrompt(projectId: string, description: string): string {
-    const planning = this.config.planning?.requireApproval
-      ? 'Mọi task phải nằm trong batch nháp chờ người dùng duyệt.'
-      : (this.config.planning?.approvalMinTasks || 0) > 0
-        ? `Từ ${this.config.planning.approvalMinTasks} task trở lên phải tạo batch nháp chờ duyệt; kế hoạch nhỏ hơn giao thẳng.`
-        : 'Không cần duyệt kế hoạch: giao thẳng task hoặc batch ngay sau khi tạo.';
     return `Người dùng muốn thực hiện việc sau trong project "${projectId}":\n${description}\n\n` +
       'Hãy xử lý như một yêu cầu việc mới theo docs/BRAIN-PLAYBOOK.md: tự đặt tiêu đề ngắn, slug, viết đề bài markdown chi tiết gồm phạm vi và tiêu chí nghiệm thu; đặt phần migration ở cuối nếu có; không commit .agenthub/. ' +
       'Chọn độ khó và model theo quy tắc: việc nặng dùng Codex trước, việc lá/UI dùng Gemini. Nếu việc lớn, tách thành nhiều task có phụ thuộc hợp lý. ' +
-      `${planning} Dùng các MCP tool của AgentHub để tạo task/batch. Trả lời ngắn gọn bằng tiếng Việt: đã tạo task nào (id + tiêu đề), hoặc đợt nháp nào đang chờ duyệt.`;
+      `${planningRule(this.config.planning)}Dùng các MCP tool của AgentHub để tạo task/batch. Trả lời ngắn gọn bằng tiếng Việt: đã tạo task nào (id + tiêu đề), hoặc đợt nháp nào đang chờ duyệt.`;
   }
 
   private async sendAutoTaskToClaude(chatId: number, projectId: string, description: string): Promise<void> {
@@ -1639,13 +1647,8 @@ export class TelegramBotService {
     }
     const sessionId = this.sessionIdForChat(chatId);
     try {
-      this.chatService.getOrCreateSession(sessionId, {
-        title: sessionId === 'brain' ? 'Bộ não' : 'Cuộc trò chuyện Telegram',
-        kind: sessionId === 'brain' ? 'brain' : 'chat',
-      });
       this.pendingAutoTasks.set(sessionId, { chatId, projectId, description });
-      await this.sendMessage(chatId, '⏳ Đang nhờ Claude phân tích và tạo task…');
-      this.chatService.sendMessage(sessionId, this.autoTaskPrompt(projectId, description));
+      await this.startChatTurn(chatId, '⏳ Đang nhờ Claude phân tích và tạo task…', this.autoTaskPrompt(projectId, description));
     } catch {
       this.pendingAutoTasks.delete(sessionId);
       await this.saveFallbackDraft(chatId, description, projectId);
