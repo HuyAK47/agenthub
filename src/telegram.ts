@@ -109,6 +109,7 @@ export interface TelegramServiceOptions {
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  sleepFn?: (ms: number) => Promise<void>;
   execFile?: GitDiffFn;
   tokenOverride?: string;
   chatService?: ChatService;
@@ -230,7 +231,7 @@ export class TelegramBotService {
     this.quotaMarkRepo = opts.quotaMarkRepo;
     this.fetchFn = opts.fetch || globalThis.fetch;
     this.now = opts.now || (() => Date.now());
-    this.sleepFn = opts.sleep || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleepFn = opts.sleep || opts.sleepFn || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
     this.chatService = opts.chatService;
 
@@ -662,6 +663,14 @@ export class TelegramBotService {
 
       case '/newtask':
         await this.handleNewTaskCommand(chatId, argStr);
+        break;
+
+      case '/plan':
+        await this.handlePlanCommand(chatId, args);
+        break;
+
+      case '/drafts':
+        await this.handleDraftsCommand(chatId);
         break;
 
       case '/log':
@@ -1184,6 +1193,35 @@ export class TelegramBotService {
         break;
       }
 
+      case 'batch': {
+        const batchId = taskIdOrParam;
+        if (action === 'dispatch') {
+          try {
+            const result = this.service.dispatchBatch(batchId);
+            await this.answerCallbackQuery(query.id, 'Đã giao cả đợt!');
+            await this.sendMessage(
+              chatId,
+              `🚀 Đã giao ${result.dispatchedCount} task của đợt <b>${this.escapeHtml(batchId)}</b> vào hàng đợi.`,
+            );
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await this.answerCallbackQuery(query.id, 'Lỗi giao đợt.');
+            await this.sendMessage(chatId, `❌ Lỗi khi giao đợt: ${errMsg}`);
+          }
+        } else if (action === 'discard') {
+          try {
+            this.service.discardBatch(batchId);
+            await this.answerCallbackQuery(query.id, 'Đã huỷ đợt!');
+            await this.sendMessage(chatId, `🛑 Đã huỷ đợt <b>${this.escapeHtml(batchId)}</b>.`);
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await this.answerCallbackQuery(query.id, 'Lỗi huỷ đợt.');
+            await this.sendMessage(chatId, `❌ Lỗi khi huỷ đợt: ${errMsg}`);
+          }
+        }
+        break;
+      }
+
       default:
         await this.answerCallbackQuery(query.id);
         break;
@@ -1391,6 +1429,70 @@ export class TelegramBotService {
     await this.sendMessage(chatId, '📁 <b>Chọn project cho task mới:</b>', {
       inline_keyboard: keyboard,
     });
+  }
+
+  private async handlePlanCommand(chatId: number, args: string[]): Promise<void> {
+    if (args.length < 2) {
+      await this.sendMessage(chatId, 'Cú pháp: /plan &lt;project&gt; &lt;mục tiêu&gt;');
+      return;
+    }
+
+    const project = args[0];
+    const goal = args.slice(1).join(' ').trim();
+
+    const projObj = this.projectRepo.get(project);
+    if (!projObj) {
+      await this.sendMessage(chatId, `❌ Project "${this.escapeHtml(project)}" không tồn tại.`);
+      return;
+    }
+
+    if (!this.chatService) {
+      await this.sendMessage(chatId, 'Chat Claude chưa được bật.');
+      return;
+    }
+
+    const prompt = `Lập kế hoạch cho dự án "${project}" với mục tiêu: ${goal}\nHãy sử dụng công cụ hub_create_batch để đề xuất một đợt (batch) task nháp cho dự án này.`;
+    await this.handleChatMessage(chatId, prompt);
+  }
+
+  private async handleDraftsCommand(chatId: number): Promise<void> {
+    const draftTasks = this.service.listTasks({ status: 'draft' });
+    const draftBatches = this.service.listBatches({ status: 'draft' });
+
+    if (draftTasks.length === 0 && draftBatches.length === 0) {
+      await this.sendMessage(chatId, '📝 Hiện không có task hoặc đợt nháp nào.');
+      return;
+    }
+
+    let text = '📋 <b>Danh sách bản nháp:</b>\n';
+    const keyboard: InlineKeyboardButton[][] = [];
+
+    if (draftBatches.length > 0) {
+      text = text + `\n📦 <b>Đợt nháp (${draftBatches.length}):</b>\n`;
+      for (const b of draftBatches.slice(0, 5)) {
+        text = text + `• <b>${this.escapeHtml(b.title)}</b> (<code>${b.id}</code>)\n`;
+        keyboard.push([
+          { text: `🚀 Giao đợt: ${b.title.slice(0, 15)}`, callback_data: `batch:dispatch:${b.id}` },
+          { text: '🗑️ Xoá đợt', callback_data: `batch:discard:${b.id}` },
+        ]);
+      }
+    }
+
+    if (draftTasks.length > 0) {
+      text = text + `\n📝 <b>Task nháp (${draftTasks.length}):</b>\n`;
+      for (const t of draftTasks.slice(0, 10)) {
+        text = text + `• <code>${t.id}</code>: ${this.escapeHtml(t.title)}\n`;
+        keyboard.push([
+          { text: `🚀 Giao: ${t.slug.slice(0, 15)}`, callback_data: `draft:start:${t.id}` },
+          { text: '🗑️ Xoá', callback_data: `draft:delete:${t.id}` },
+        ]);
+      }
+      if (draftTasks.length > 10) {
+        text = text + `<i>... và còn ${draftTasks.length - 10} task nháp khác.</i>\n`;
+      }
+    }
+
+    await this.sendMessage(chatId, text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
   }
 
   private async handleLogCommand(chatId: number, idOrSlug: string): Promise<void> {
@@ -1604,7 +1706,8 @@ export class TelegramBotService {
     // Deduplication check: ignore duplicate events within 10 seconds
     const profileKey = (p.profile || p.worker || p.profileName || '') as string;
     const familyKey = (p.family || p.model || '') as string;
-    const dedupKey = `${type}:${taskId || ''}:${profileKey}:${familyKey}`;
+    const batchKey = (p.batchId || '') as string;
+    const dedupKey = `${type}:${taskId || batchKey}:${profileKey}:${familyKey}`;
     const now = this.now();
     const lastTime = this.lastNotificationTime.get(dedupKey) || 0;
     if (now - lastTime < 10_000) {
@@ -1614,10 +1717,59 @@ export class TelegramBotService {
 
     switch (type) {
       case 'batch.created': {
-        const count = typeof p.taskCount === 'number' ? p.taskCount : 0;
+        const batchId = typeof p.batchId === 'string' ? p.batchId : undefined;
+        let batchInfo: (TaskBatchRow & { tasks: TaskRow[] }) | null = null;
+        if (batchId) {
+          try {
+            batchInfo = this.service.getBatch(batchId);
+          } catch {
+            // ignore
+          }
+        }
+
+        const count = batchInfo ? batchInfo.tasks.length : (typeof p.taskCount === 'number' ? p.taskCount : 0);
+        const title = batchInfo?.title || (typeof p.title === 'string' ? p.title : 'Kế hoạch đề xuất');
         const who = typeof p.createdBy === 'string' && p.createdBy ? p.createdBy : 'Claude';
         const label = who.toLowerCase() === 'claude' ? 'Claude' : who;
-        this.broadcastMessage(`${label} đề xuất ${count} task, chờ bạn duyệt`);
+
+        let text = `📦 <b>${this.escapeHtml(label)} đề xuất đợt task mới:</b>\n`;
+        text = text + `• Tiêu đề đợt: <b>${this.escapeHtml(title)}</b>\n`;
+        text = text + `• Số lượng: <b>${count} task</b>\n\n`;
+
+        if (batchInfo && batchInfo.tasks.length > 0) {
+          text = text + '<b>Danh sách task:</b>\n';
+          for (const t of batchInfo.tasks) {
+            let depStr = '';
+            let parsedDeps: string[] = [];
+            if (typeof t.dependsOn === 'string') {
+              try {
+                const parsed = JSON.parse(t.dependsOn);
+                if (Array.isArray(parsed)) parsedDeps = parsed;
+                else if (parsed) parsedDeps = [String(parsed)];
+              } catch {
+                if (t.dependsOn.trim()) parsedDeps = [t.dependsOn.trim()];
+              }
+            } else if (Array.isArray(t.dependsOn)) {
+              parsedDeps = t.dependsOn;
+            }
+            if (parsedDeps.length > 0) {
+              depStr = ` <i>(phụ thuộc: ${this.escapeHtml(parsedDeps.join(', '))})</i>`;
+            }
+            text = text + `• <code>${t.id}</code>: ${this.escapeHtml(t.title)}${depStr}\n`;
+          }
+        }
+
+        const keyboard: InlineKeyboardButton[][] = [];
+        if (batchId) {
+          const dashboardUrl = `http://127.0.0.1:${this.config.port}/#/plans/${encodeURIComponent(batchId)}`;
+          keyboard.push([
+            { text: '🚀 Giao cả đợt', callback_data: `batch:dispatch:${batchId}` },
+            { text: '❌ Huỷ đợt', callback_data: `batch:discard:${batchId}` },
+          ]);
+          keyboard.push([{ text: '🌐 Xem trên dashboard', url: dashboardUrl }]);
+        }
+
+        this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
         break;
       }
 
@@ -1961,6 +2113,9 @@ export class TelegramBotService {
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard
+/newtask - Tạo task mới (hội thoại từng bước hoặc: /newtask &lt;project&gt; &lt;tiêu đề&gt; | &lt;đề bài&gt;)
+/plan &lt;project&gt; &lt;mục tiêu&gt; - Nhờ Claude lập kế hoạch và đề xuất một đợt task nháp
+/drafts - Xem danh sách task và đợt nháp, kèm nút giao hoặc xoá
 /log &lt;id&gt; - Xem 30 dòng cuối log của task
 /retry &lt;id&gt; - Chạy lại task bị failed hoặc blocked
 /cancel &lt;id&gt; - Hủy task (kèm nút xác nhận)

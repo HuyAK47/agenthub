@@ -137,6 +137,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       quotaMarkRepo: ctx.quotaMarkRepo,
       fetch: fakeFetch,
       now: () => currentTime,
+      sleep: async () => {},
       sleepFn: async () => {},
       execFile: async () => ({ stdout: opts?.execStdout || '1 file changed, 10 insertions(+)' }),
       tokenOverride: 'test-bot-token-123456',
@@ -532,6 +533,9 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(calls[0].body?.text).toContain('/status');
       expect(calls[0].body?.text).toContain('/tasks');
       expect(calls[0].body?.text).toContain('/task');
+      expect(calls[0].body?.text).toContain('/newtask');
+      expect(calls[0].body?.text).toContain('/plan');
+      expect(calls[0].body?.text).toContain('/drafts');
       expect(calls[0].body?.text).toContain('&lt;id&gt;');
       expect(calls[0].body?.text).toContain('/approve');
       expect(calls[0].body?.text).toContain('/reject');
@@ -1340,6 +1344,210 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
 
       const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[calls.length - 1].body?.text).toContain('Đã hủy thao tác.');
+    });
+  });
+
+  describe('10. /plan command and batch.created notifications', () => {
+    const CHAT_ID = 666;
+    let bot: TelegramBotService;
+
+    beforeEach(() => {
+      ctx.projectRepo.insert({
+        id: 'proj-plan',
+        name: 'Planning Project',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 2,
+      });
+      ctx.chatService.setClaudeBinOverride(fakeClaudeBin);
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID], chatService: ctx.chatService });
+    });
+
+    it('/plan routes prompt with hub_create_batch instruction to Claude chat session', async () => {
+      await bot.handleUpdate({
+        update_id: 40,
+        message: {
+          message_id: 40,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/plan proj-plan Thiết kế tính năng bình luận',
+        },
+      });
+
+      const messages = ctx.chatMessageRepo.getBySession(`telegram:${CHAT_ID}`, 10);
+      const planMsg = messages.find((m) => m.content.includes('hub_create_batch'));
+      expect(planMsg).toBeDefined();
+      expect(planMsg?.content).toContain('proj-plan');
+      expect(planMsg?.content).toContain('Thiết kế tính năng bình luận');
+
+      await vi.waitFor(() => expect(ctx.chatSessionRepo.get(`telegram:${CHAT_ID}`)?.busy).toBe(0), { timeout: 10_000 });
+      ctx.chatService.stop();
+    });
+
+    it('batch.created event broadcasts summary with dispatch, dashboard, and discard buttons', async () => {
+      const batch = ctx.service.createBatch({
+        project: 'proj-plan',
+        title: 'Đợt nâng cấp bảo mật',
+        goal: 'Bảo mật API',
+        tasks: [
+          { slug: 'task-sec-1', title: 'Thêm rate limit' },
+          { slug: 'task-sec-2', title: 'Kiểm tra CSRF', dependsOn: ['task-sec-1'] },
+        ],
+        createdBy: 'claude',
+      });
+
+      bot.handleEvent('batch.created', undefined, {
+        batchId: batch.id,
+        projectId: batch.projectId,
+        title: batch.title,
+        taskCount: batch.tasks.length,
+        createdBy: 'claude',
+      });
+
+      await bot.flushQueue(CHAT_ID);
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      const batchCall = calls.find((c) => c.body?.text && (c.body.text as string).includes('Đợt nâng cấp bảo mật'));
+      expect(batchCall).toBeDefined();
+      const text = batchCall?.body?.text as string;
+      expect(text).toContain('Đợt nâng cấp bảo mật');
+      expect(text).toContain('2 task');
+      expect(text).toContain('proj-plan/task-sec-1');
+      expect(text).toContain('proj-plan/task-sec-2');
+      expect(text).toContain('phụ thuộc: proj-plan/task-sec-1');
+
+      const markup = batchCall?.body?.reply_markup as { inline_keyboard: InlineKeyboardButton[][] };
+      expect(markup).toBeDefined();
+      expect(markup.inline_keyboard[0][0].text).toContain('Giao cả đợt');
+      expect(markup.inline_keyboard[0][0].callback_data).toBe(`batch:dispatch:${batch.id}`);
+      expect(markup.inline_keyboard[0][1].text).toContain('Huỷ đợt');
+      expect(markup.inline_keyboard[0][1].callback_data).toBe(`batch:discard:${batch.id}`);
+      expect(markup.inline_keyboard[1][0].text).toContain('Xem trên dashboard');
+      expect(markup.inline_keyboard[1][0].url).toContain(`/plans/${batch.id}`);
+
+      // Test clicking Giao cả đợt
+      await bot.handleUpdate({
+        update_id: 41,
+        callback_query: {
+          id: 'cb-batch-dispatch',
+          from: { id: CHAT_ID },
+          message: { message_id: 100, chat: { id: CHAT_ID } },
+          data: `batch:dispatch:${batch.id}`,
+        },
+      });
+
+      const updatedBatch = ctx.service.getBatch(batch.id);
+      expect(updatedBatch.status).toBe('dispatched');
+      const t1 = ctx.taskRepo.get('proj-plan/task-sec-1');
+      const t2 = ctx.taskRepo.get('proj-plan/task-sec-2');
+      expect(['queued', 'waiting_quota']).toContain(t1?.status);
+      expect(['queued', 'waiting_quota']).toContain(t2?.status);
+    });
+
+    it('batch:discard callback cancels draft tasks and marks batch as discarded', async () => {
+      const batch = ctx.service.createBatch({
+        project: 'proj-plan',
+        title: 'Đợt thử nghiệm huỷ',
+        tasks: [{ slug: 'task-disc-1', title: 'Task huỷ' }],
+        createdBy: 'claude',
+      });
+
+      await bot.handleUpdate({
+        update_id: 42,
+        callback_query: {
+          id: 'cb-batch-discard',
+          from: { id: CHAT_ID },
+          message: { message_id: 101, chat: { id: CHAT_ID } },
+          data: `batch:discard:${batch.id}`,
+        },
+      });
+
+      const updatedBatch = ctx.service.taskBatchRepo?.get(batch.id);
+      expect(updatedBatch?.status).toBe('discarded');
+      const t = ctx.taskRepo.get('proj-plan/task-disc-1');
+      expect(t?.status).toBe('cancelled');
+    });
+  });
+
+  describe('11. /drafts command', () => {
+    const CHAT_ID = 777;
+    let bot: TelegramBotService;
+
+    beforeEach(() => {
+      ctx.projectRepo.insert({
+        id: 'proj-drafts',
+        name: 'Drafts Project',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 2,
+      });
+      bot = createTestBotService({ allowedChatIds: [CHAT_ID] });
+    });
+
+    it('reports empty message when no drafts exist', async () => {
+      await bot.handleUpdate({
+        update_id: 50,
+        message: {
+          message_id: 50,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/drafts',
+        },
+      });
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[calls.length - 1].body?.text).toContain('Hiện không có task hoặc đợt nháp nào');
+    });
+
+    it('lists draft batches and draft tasks with interactive buttons', async () => {
+      // Create draft batch
+      ctx.service.createBatch({
+        project: 'proj-drafts',
+        title: 'Đợt nháp 1',
+        tasks: [{ slug: 'task-in-batch', title: 'Task in batch' }],
+      });
+
+      // Create standalone draft task
+      const draftTask = ctx.service.createTask({
+        project: 'proj-drafts',
+        slug: 'task-standalone',
+        title: 'Task standalone',
+        start: false,
+      });
+
+      await bot.handleUpdate({
+        update_id: 51,
+        message: {
+          message_id: 51,
+          date: 123457,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/drafts',
+        },
+      });
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      const text = calls[calls.length - 1].body?.text as string;
+      expect(text).toContain('Danh sách bản nháp');
+      expect(text).toContain('Đợt nháp');
+      expect(text).toContain('Đợt nháp 1');
+      expect(text).toContain('task-standalone');
+
+      const markup = calls[calls.length - 1].body?.reply_markup as { inline_keyboard: InlineKeyboardButton[][] };
+      expect(markup).toBeDefined();
+
+      // Find delete button for draft task and click it
+      await bot.handleUpdate({
+        update_id: 52,
+        callback_query: {
+          id: 'cb-del-draft',
+          from: { id: CHAT_ID },
+          message: { message_id: 51, chat: { id: CHAT_ID } },
+          data: `draft:delete:${draftTask.id}`,
+        },
+      });
+
+      // Verify task deleted from DB
+      expect(ctx.taskRepo.get(draftTask.id)).toBeUndefined();
     });
   });
 });
