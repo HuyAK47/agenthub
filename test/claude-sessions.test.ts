@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../src/db/index.js';
-import { ClaudeSessionScanner, isClaudeQuotaLimited } from '../src/claude-sessions/scanner.js';
+import { ClaudeSessionScanner, isClaudeProcessOpen, isClaudeQuotaLimited } from '../src/claude-sessions/scanner.js';
+import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
 import { ClaudeFailoverState } from '../src/chat/failover.js';
 import { attributeTurn, taskRefsFromToolInput } from '../src/claude-sessions/attribution.js';
 
@@ -249,6 +250,103 @@ describe('Claude session privacy and quota handling', () => {
     await scanner.scan();
     expect(db.prepare('SELECT offset,eligible FROM claude_scan_state WHERE path=?').get(file)).toEqual({ offset: Buffer.byteLength(`${first}\n${second}\n`), eligible: 0 });
     expect(db.prepare('SELECT COUNT(*) count FROM claude_sessions').get()).toEqual({ count: 0 });
+    db.close();
+  });
+
+  it('sets session title from first user message up to 80 characters when ai-title is missing', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db')); addProjectAndTask(db, projectDir);
+    const file = path.join(transcriptDir, 'sess-title.jsonl');
+    const longPrompt = 'This is a very long user prompt that exceeds eighty characters and needs to be truncated appropriately';
+    fs.writeFileSync(file, [
+      JSON.stringify({ type: 'user', sessionId: 'sess-title', cwd: projectDir, message: { content: [{ type: 'text', text: longPrompt }] } }),
+      JSON.stringify(assistantEvent('sess-title', projectDir, 'msg-1', new Date().toISOString())),
+    ].join('\n') + '\n');
+    const scanner = new ClaudeSessionScanner(db, { dir: path.join(root, 'projects') });
+    await scanner.scan();
+    const row = db.prepare('SELECT title FROM claude_sessions WHERE sessionId=?').get('sess-title') as { title: string };
+    expect(row.title).toBe(longPrompt.slice(0, 80));
+    expect(row.title.length).toBe(80);
+    db.close();
+  });
+
+  it('prefers ai-title over first user message', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db')); addProjectAndTask(db, projectDir);
+    const file = path.join(transcriptDir, 'sess-ai.jsonl');
+    fs.writeFileSync(file, [
+      JSON.stringify({ type: 'user', sessionId: 'sess-ai', cwd: projectDir, message: { content: 'user said something' } }),
+      JSON.stringify(assistantEvent('sess-ai', projectDir, 'msg-1', new Date().toISOString())),
+      JSON.stringify({ type: 'ai-title', sessionId: 'sess-ai', cwd: projectDir, aiTitle: 'AI Generated Title' }),
+    ].join('\n') + '\n');
+    const scanner = new ClaudeSessionScanner(db, { dir: path.join(root, 'projects') });
+    await scanner.scan();
+    const row = db.prepare('SELECT title FROM claude_sessions WHERE sessionId=?').get('sess-ai') as { title: string };
+    expect(row.title).toBe('AI Generated Title');
+    db.close();
+  });
+
+  it('detects running claude process via isClaudeProcessOpen', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-proc-')); dirs.push(root);
+    const fakeProc = path.join(root, 'proc');
+    const targetCwd = path.join(root, 'my-project');
+    const otherCwd = path.join(root, 'other-project');
+    fs.mkdirSync(fakeProc, { recursive: true });
+    fs.mkdirSync(targetCwd, { recursive: true });
+    fs.mkdirSync(otherCwd, { recursive: true });
+
+    // Process 123: running claude in targetCwd
+    const proc123 = path.join(fakeProc, '123');
+    fs.mkdirSync(proc123);
+    fs.writeFileSync(path.join(proc123, 'cmdline'), 'node\0/usr/bin/claude\0--resume\0');
+    fs.symlinkSync(targetCwd, path.join(proc123, 'cwd'));
+
+    // Process 456: running something else in targetCwd
+    const proc456 = path.join(fakeProc, '456');
+    fs.mkdirSync(proc456);
+    fs.writeFileSync(path.join(proc456, 'cmdline'), 'bash\0-i\0');
+    fs.symlinkSync(targetCwd, path.join(proc456, 'cwd'));
+
+    expect(isClaudeProcessOpen(targetCwd, fakeProc)).toBe(true);
+    expect(isClaudeProcessOpen(otherCwd, fakeProc)).toBe(false);
+    expect(isClaudeProcessOpen('', fakeProc)).toBe(false);
+  });
+
+  it('computes active status and falls back to shortened sessionId for title', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    const repo = new ClaudeSessionRepo(db);
+    const recentTime = new Date(Date.now() - 3 * 60_000).toISOString();
+    const oldTime = new Date(Date.now() - 30 * 60_000).toISOString();
+
+    repo.upsert({ sessionId: '12345678-abcd-ef01-2345-6789abcdef01', cwd: '/work/active', lastAt: recentTime, title: null });
+    repo.upsert({ sessionId: '87654321-dcba-10fe-5432-10fedcba9876', cwd: '/work/idle', lastAt: oldTime, title: null });
+
+    const { AppService } = await import('../src/services/index.js');
+    const service = Object.create(AppService.prototype);
+    Object.assign(service, {
+      claudeSessionRepo: repo,
+      config: { claudeSessions: { activeWithinMin: 10 } },
+      scheduler: { getDatabase: () => db },
+    });
+
+    const list = service.listClaudeSessions();
+    const activeSession = list.find((s: { sessionId: string }) => s.sessionId === '12345678-abcd-ef01-2345-6789abcdef01');
+    const idleSession = list.find((s: { sessionId: string }) => s.sessionId === '87654321-dcba-10fe-5432-10fedcba9876');
+
+    expect(activeSession?.active).toBe(true);
+    expect(activeSession?.title).toBe('12345678');
+
+    expect(idleSession?.active).toBe(false);
+    expect(idleSession?.title).toBe('87654321');
+
+    const detail = service.getClaudeSession('12345678-abcd-ef01-2345-6789abcdef01');
+    expect(detail.active).toBe(true);
+    expect(detail.title).toBe('12345678');
     db.close();
   });
 });

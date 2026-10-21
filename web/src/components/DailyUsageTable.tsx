@@ -210,7 +210,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
 
           {/* Day summary badges */}
           {currentDayData && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]/60 p-3">
                 <span className="text-[11px] text-[var(--t-text-3)] block">{t('dailyUsage.runs')}</span>
                 <span className="text-lg font-bold text-[var(--t-text-1)]">{currentDayData.totalRuns}</span>
@@ -225,6 +225,12 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                 <span className="text-[11px] text-[var(--t-text-3)] block">{t('dailyUsage.tokens')}</span>
                 <span className="text-lg font-bold text-[var(--t-text-1)]">
                   {formatNumber(currentDayData.totalTokens)}
+                </span>
+              </div>
+              <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]/60 p-3">
+                <span className="text-[11px] text-[var(--t-text-3)] block">{t('dailyUsage.claudeTokens')}</span>
+                <span className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                  {formatNumber(currentDayData.claudeTokens ?? 0)}
                 </span>
               </div>
               <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]/60 p-3">
@@ -246,6 +252,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                   <th className="py-3 px-4 text-center">{t('dailyUsage.runs')}</th>
                   <th className="py-3 px-4">{t('dailyUsage.duration')}</th>
                   <th className="py-3 px-4 text-right">{t('dailyUsage.tokens')}</th>
+                  <th className="py-3 px-4 text-right">{t('dailyUsage.claudeTokens')}</th>
                   <th className="py-3 px-4">{t('dailyUsage.status')}</th>
                 </tr>
               </thead>
@@ -272,7 +279,9 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                             className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
                               profile.engine === 'codex'
                                 ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30'
-                                : 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30'
+                                : profile.engine === 'claude'
+                                  ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                                  : 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30'
                             }`}
                           >
                             {profile.engine}
@@ -282,7 +291,11 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
 
                       {/* Quota Remaining */}
                       <td className="py-3.5 px-4">
-                        {profile.engine === 'codex' ? (
+                        {profile.engine === 'claude' ? (
+                          <span className="text-[11px] text-[var(--t-text-3)]">
+                            Claude CLI
+                          </span>
+                        ) : profile.engine === 'codex' ? (
                           <span className="text-[11px] text-[var(--t-text-3)]">
                             Codex CLI · GPT-5.6
                           </span>
@@ -296,7 +309,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                               </span>
                               <span
                                 className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${getQuotaColor(
-                                  profile.quota.gemini5h,
+                                   profile.quota.gemini5h,
                                 )}`}
                               >
                                 {profile.quota.gemini5h != null ? `${profile.quota.gemini5h}%` : '—'}
@@ -369,6 +382,21 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                         )}
                       </td>
 
+                      {/* Claude Tokens */}
+                      <td className="py-3.5 px-4 text-right font-mono font-medium text-[var(--t-text-1)]">
+                        {(metric.claudeTokens ?? 0) > 0 ? (
+                          <span className="text-purple-600 dark:text-purple-400">
+                            {formatNumber(metric.claudeTokens!)}
+                          </span>
+                        ) : profile.engine === 'claude' && metric.tokens > 0 ? (
+                          <span className="text-purple-600 dark:text-purple-400">
+                            {formatNumber(metric.tokens)}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--t-text-3)]">—</span>
+                        )}
+                      </td>
+
                       {/* Status / Idle Suggestion */}
                       <td className="py-3.5 px-4">
                         {profile.isIdle ? (
@@ -391,6 +419,23 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                   );
                 })}
               </tbody>
+              {currentDayData && (
+                <tfoot>
+                  <tr className="border-t border-[var(--t-border)] bg-[var(--t-surface-2)]/40 font-semibold text-[11px] text-[var(--t-text-2)]">
+                    <td className="py-2.5 px-4">{t('dailyUsage.total')}</td>
+                    <td className="py-2.5 px-4">—</td>
+                    <td className="py-2.5 px-4 text-center">{currentDayData.totalRuns}</td>
+                    <td className="py-2.5 px-4 font-mono">{formatDuration(currentDayData.totalDurationMs)}</td>
+                    <td className="py-2.5 px-4 text-right font-mono text-[var(--t-accent)]">
+                      {formatNumber(currentDayData.totalTokens)}
+                    </td>
+                    <td className="py-2.5 px-4 text-right font-mono text-purple-600 dark:text-purple-400">
+                      {formatNumber(currentDayData.claudeTokens ?? 0)}
+                    </td>
+                    <td className="py-2.5 px-4">—</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </div>

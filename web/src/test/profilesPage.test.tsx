@@ -353,4 +353,70 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     const removeBtn = screen.getByRole('button', { name: /^Remove$/ });
     expect(removeBtn).toBeInTheDocument();
   });
+
+  it('12. Claude card: displays limited sessions with auto-resume toggle and detail link', async () => {
+    const claudeProfile: Profile = {
+      name: 'claude-may',
+      engine: 'claude',
+      kind: 'system',
+      email: 'user@example.com',
+      loggedIn: true,
+      enabled: 1,
+      quotaMarks: [],
+      limitedSessions: [
+        {
+          sessionId: 'sess-abc-12345',
+          title: 'Implement feature X',
+          cwd: '/projects/repo-a',
+          limitResetAt: Math.floor(Date.now() / 1000) + 1800,
+          autoResumeEnabled: true,
+        },
+      ],
+    };
+    vi.spyOn(client, 'getProfiles').mockResolvedValue([claudeProfile]);
+    const apiFetchSpy = vi.spyOn(client, 'apiFetch').mockResolvedValue({} as any);
+
+    renderPage();
+
+    expect(await screen.findByText('claude-may')).toBeInTheDocument();
+    expect(screen.getByText('Phiên bị giới hạn')).toBeInTheDocument();
+    expect(screen.getByText('Implement feature X')).toBeInTheDocument();
+    expect(screen.getByText('/projects/repo-a')).toBeInTheDocument();
+
+    const detailLink = screen.getByText('Xem chi tiết →');
+    expect(detailLink).toBeInTheDocument();
+    expect(detailLink.closest('a')).toHaveAttribute('href', '/claude-sessions/sess-abc-12345');
+
+    const toggle = screen.getByRole('checkbox', { name: /Tự tiếp tục khi hết giới hạn/ });
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+    expect(apiFetchSpy).toHaveBeenCalledWith(
+      '/api/claude/sessions/sess-abc-12345/auto-resume',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
+  });
+
+  it('13. Claude card: displays empty state when there are no limited sessions', async () => {
+    const claudeProfile: Profile = {
+      name: 'claude-may',
+      engine: 'claude',
+      kind: 'system',
+      email: 'user@example.com',
+      loggedIn: true,
+      enabled: 1,
+      quotaMarks: [],
+      limitedSessions: [],
+    };
+    vi.spyOn(client, 'getProfiles').mockResolvedValue([claudeProfile]);
+
+    renderPage();
+
+    expect(await screen.findByText('claude-may')).toBeInTheDocument();
+    expect(screen.getByText('Phiên bị giới hạn')).toBeInTheDocument();
+    expect(screen.getByText('Không có phiên nào bị giới hạn')).toBeInTheDocument();
+  });
 });
