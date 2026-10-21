@@ -21,6 +21,10 @@ export interface WorktreeHookContext {
 export interface DependencyContext {
   id: string;
   title: string;
+  projectId?: string;
+  projectName?: string;
+  repoPath?: string;
+  isCrossProject?: boolean;
   doneContent?: string;
   review?: string;
   diffStat?: string;
@@ -436,8 +440,15 @@ export class WorktreeService {
     const sections = dependencies.map((dependency) => {
       const done = (dependency.doneContent || '').slice(0, 4000);
       const diff = (dependency.diffStat || '').split('\n').slice(0, 60).join('\n');
-      return [
+      const lines = [
         `## ${dependency.title} (${dependency.id})`,
+      ];
+      if (dependency.isCrossProject) {
+        lines.push('');
+        lines.push(`- Dự án: ${dependency.projectName ? `${dependency.projectName} (${dependency.projectId})` : (dependency.projectId || '')}`);
+        lines.push(`- Repo: ${dependency.repoPath || '(không xác định)'}`);
+      }
+      lines.push(
         '',
         '### DONE',
         done || '(không có DONE)',
@@ -447,7 +458,8 @@ export class WorktreeService {
         '',
         '### Diff stat',
         diff || '(không lấy được diff stat)',
-      ].join('\n');
+      );
+      return lines.join('\n');
     });
     const full = sections.join('\n\n');
     if (full.length <= limit) return full;
