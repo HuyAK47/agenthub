@@ -82,6 +82,16 @@ export interface ProjectMerge {
 export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
 export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
 
+export interface IntegrationStatus {
+  path: string;
+  branch: string;
+  exists: boolean;
+  currentBranch: string | null;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -95,6 +105,7 @@ export interface Project {
   review?: ProjectReview | string | null;
   /** Always present in API responses (defaults filled in by the server). */
   settings?: ProjectSettings;
+  integrationStatus?: IntegrationStatus | null;
   createdAt?: string;
 }
 

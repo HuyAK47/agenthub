@@ -35,6 +35,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
+import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
@@ -2023,7 +2024,20 @@ export class Scheduler {
         ? `approved${lastReview.feedback ? ` — ${lastReview.feedback}` : ''}`
         : undefined;
 
-      return [{ id: dependency.id, title: dependency.title, doneContent, review, diffStat: dependency.diffStat ?? undefined }];
+      const isCrossProject = dependency.projectId !== task.projectId;
+      const depProject = this.projectRepo.get(dependency.projectId);
+
+      return [{
+        id: dependency.id,
+        title: dependency.title,
+        projectId: dependency.projectId,
+        projectName: depProject?.name,
+        repoPath: depProject?.path,
+        isCrossProject,
+        doneContent,
+        review,
+        diffStat: dependency.diffStat ?? undefined,
+      }];
     });
   }
 
@@ -2102,6 +2116,17 @@ export class Scheduler {
         return;
       }
       const branch = task.branch || `agenthub/${task.slug}`;
+      const settings = projectSettings(project);
+      if (settings.integration?.enabled) {
+        try {
+          ensureIntegrationWorktree(project, this.config.hubHome);
+        } catch (e) {
+          this.locks.release(profile.name, lockFile);
+          this.taskRepo.updateStatus(task.id, 'failed');
+          this.eventBus.emit('task.failed', task.id, { error: String(e) });
+          return;
+        }
+      }
       const baseRef = this.resolveBaseRef(task, project);
       try {
         worktreePath = this.worktreeService.create({
@@ -2133,7 +2158,6 @@ export class Scheduler {
       // Dependency installation can take minutes. Keep the task out of the
       // queue while it runs, but never let a cache/native-module failure stop
       // the worker from starting with its own install.
-      const settings = projectSettings(project);
       if (settings.worktree.install !== 'skip') {
         const hasDependencyLock = (dir: string): boolean =>
           fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
@@ -2315,14 +2339,26 @@ export class Scheduler {
     }
   }
 
-  private resolveBaseRef(task: TaskRow, project: { defaultBranch: string }): string {
+  private resolveBaseRef(task: TaskRow, project: { defaultBranch: string; settings?: string | null }): string {
     if (task.baseRef) return task.baseRef;
 
-    // If task has dependencies, use the last dependency's branch
-    const deps: string[] = JSON.parse(task.dependsOn);
-    if (deps.length > 0) {
-      const lastDep = this.taskRepo.get(deps[deps.length - 1]);
-      if (lastDep?.branch) return lastDep.branch;
+    // Only inherit branch from the nearest dependency in the SAME project
+    let deps: string[] = [];
+    try {
+      deps = JSON.parse(task.dependsOn || '[]');
+    } catch {
+      deps = [];
+    }
+    for (let i = deps.length - 1; i >= 0; i--) {
+      const dep = this.taskRepo.get(deps[i]);
+      if (dep && dep.projectId === task.projectId && dep.branch) {
+        return dep.branch;
+      }
+    }
+
+    const settings = projectSettings(project);
+    if (settings.integration?.enabled) {
+      return settings.integration.branch || 'agenthub/integration';
     }
 
     return project.defaultBranch;
