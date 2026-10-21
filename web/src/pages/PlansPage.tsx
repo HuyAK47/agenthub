@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getBatches,
   getBatch,
   getProjects,
+  getConfig,
   dispatchBatch,
   discardBatch,
   addTaskToBatch,
@@ -29,6 +30,7 @@ import {
   User,
   Clock,
   Sparkles,
+  ArrowRight,
 } from 'lucide-react';
 import { formatTimeAgo } from '../lib/time';
 
@@ -90,6 +92,25 @@ export const PlansPage: React.FC = () => {
   const [editFormError, setEditFormError] = useState<string | null>(null);
 
   // Queries
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+  });
+
+  const planningConfig = config?.planning;
+  const isRequireAll = Boolean(planningConfig?.requireApproval);
+  const minTasks = planningConfig?.approvalMinTasks ?? 0;
+
+  const planningSettingText = useMemo(() => {
+    if (isRequireAll) {
+      return t('plans.settingAll');
+    }
+    if (minTasks > 0) {
+      return t('plans.settingMinTasks', { count: minTasks });
+    }
+    return t('plans.settingNone');
+  }, [isRequireAll, minTasks, t]);
+
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
@@ -176,7 +197,7 @@ export const PlansPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['batch', activeBatchId] });
     },
     onError: (err: any) => {
-      setAddFormError(err.response?.data?.message || err.message || 'Lỗi thêm task');
+      setAddFormError(err.response?.data?.message || err.message || t('plans.addTaskError'));
     },
   });
 
@@ -214,7 +235,7 @@ export const PlansPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['batch', activeBatchId] });
     },
     onError: (err: any) => {
-      setEditFormError(err.response?.data?.message || err.message || 'Lỗi cập nhật task');
+      setEditFormError(err.response?.data?.message || err.message || t('plans.updateTaskError'));
     },
   });
 
@@ -241,11 +262,11 @@ export const PlansPage: React.FC = () => {
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSlug.trim()) {
-      setAddFormError('Slug không được để trống');
+      setAddFormError(t('plans.slugRequired'));
       return;
     }
     if (!newTitle.trim()) {
-      setAddFormError('Tiêu đề không được để trống');
+      setAddFormError(t('plans.titleRequired'));
       return;
     }
 
@@ -267,7 +288,7 @@ export const PlansPage: React.FC = () => {
     e.preventDefault();
     if (!editingTask) return;
     if (!editTitle.trim()) {
-      setEditFormError('Tiêu đề không được để trống');
+      setEditFormError(t('plans.titleRequired'));
       return;
     }
 
@@ -350,11 +371,44 @@ export const PlansPage: React.FC = () => {
             {isLoadingBatches ? (
               <div className="p-8 text-center text-xs text-[var(--t-text-3)]">
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-[var(--t-accent)] mx-auto mb-2" />
-                Đang tải...
+                {t('common.loading')}
               </div>
             ) : batches.length === 0 ? (
-              <div className="p-8 text-center text-xs text-[var(--t-text-3)]">
-                {t('plans.noBatches')}
+              <div
+                data-testid="plans-empty-state"
+                className="p-4 space-y-3 text-xs"
+              >
+                <div className="p-3.5 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] space-y-1.5">
+                  <div className="font-semibold text-[var(--t-text)] flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-[var(--t-accent)] shrink-0" />
+                    <span>{t('plans.emptyWhenTitle')}</span>
+                  </div>
+                  <p className="text-[var(--t-text-3)] leading-relaxed">
+                    {t('plans.emptyWhenDesc')}
+                  </p>
+                </div>
+
+                <div className="p-3.5 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] space-y-2">
+                  <div className="font-semibold text-[var(--t-text)]">
+                    {t('plans.emptyCurrentSetting')}
+                  </div>
+                  <p
+                    data-testid="planning-current-setting"
+                    className="text-[var(--t-text-2)] font-medium"
+                  >
+                    {planningSettingText}
+                  </p>
+                  <div>
+                    <Link
+                      to="/settings"
+                      data-testid="link-to-settings-planning"
+                      className="inline-flex items-center gap-1 text-[var(--t-accent)] hover:underline font-medium text-xs mt-0.5"
+                    >
+                      {t('plans.settingsLink')}
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </Link>
+                  </div>
+                </div>
               </div>
             ) : (
               batches.map((batch) => {
@@ -409,12 +463,51 @@ export const PlansPage: React.FC = () => {
           {isLoadingBatch ? (
             <div className="flex-1 flex items-center justify-center p-12 text-sm text-[var(--t-text-3)]">
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--t-accent)] mr-2" />
-              Đang tải chi tiết đợt...
+              {t('plans.loadingDetail')}
             </div>
           ) : !currentBatch ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center text-[var(--t-text-3)]">
-              <Layers className="w-12 h-12 stroke-1 mb-3 text-[var(--t-text-3)] opacity-40" />
-              <p className="text-sm font-medium">{t('plans.selectBatch')}</p>
+            <div
+              data-testid="plans-no-batch-selected"
+              className="flex-1 flex flex-col items-center justify-center p-12 text-center text-[var(--t-text-3)] max-w-md mx-auto"
+            >
+              <div className="w-14 h-14 rounded-2xl bg-[var(--t-surface-2)] border border-[var(--t-border)] flex items-center justify-center mb-4 text-[var(--t-accent)] shadow-xs">
+                <Layers className="w-7 h-7 stroke-1.5" />
+              </div>
+              <h3 className="text-base font-semibold text-[var(--t-text)] mb-2">
+                {t('plans.selectBatch')}
+              </h3>
+              <p className="text-xs text-[var(--t-text-3)] mb-6 max-w-sm">
+                {t('plans.selectBatchHint')}
+              </p>
+
+              {/* 3 short steps */}
+              <div className="w-full p-4 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] text-left space-y-3 shadow-xs">
+                <div className="text-xs font-semibold text-[var(--t-text-2)] uppercase tracking-wider">
+                  {t('plans.stepsTitle')}
+                </div>
+                <div className="flex items-center justify-between text-xs font-medium text-[var(--t-text)] py-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-5 h-5 rounded-full bg-[var(--t-accent)]/15 text-[var(--t-accent)] flex items-center justify-center text-[11px] font-bold shrink-0">
+                      1
+                    </span>
+                    <span>{t('plans.step1')}</span>
+                  </div>
+                  <span className="text-[var(--t-text-3)]">→</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-5 h-5 rounded-full bg-[var(--t-accent)]/15 text-[var(--t-accent)] flex items-center justify-center text-[11px] font-bold shrink-0">
+                      2
+                    </span>
+                    <span>{t('plans.step2')}</span>
+                  </div>
+                  <span className="text-[var(--t-text-3)]">→</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-5 h-5 rounded-full bg-[var(--t-accent)]/15 text-[var(--t-accent)] flex items-center justify-center text-[11px] font-bold shrink-0">
+                      3
+                    </span>
+                    <span>{t('plans.step3')}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="p-6 space-y-6 max-w-6xl w-full mx-auto">
@@ -569,7 +662,7 @@ export const PlansPage: React.FC = () => {
 
                 {batchTasks.length === 0 ? (
                   <div className="py-8 text-center text-xs text-[var(--t-text-3)]">
-                    Đợt này chưa có task nào
+                    {t('plans.noTasksInBatch')}
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
@@ -581,9 +674,9 @@ export const PlansPage: React.FC = () => {
                           <th className="py-2.5 px-3">{t('plans.level')}</th>
                           <th className="py-2.5 px-3">{t('plans.modelChain')}</th>
                           <th className="py-2.5 px-3">{t('plans.dependsOn')}</th>
-                          <th className="py-2.5 px-3">Trạng thái</th>
+                          <th className="py-2.5 px-3">{t('plans.status')}</th>
                           {isDraft && (
-                            <th className="py-2.5 px-3 text-right">Thao tác</th>
+                            <th className="py-2.5 px-3 text-right">{t('plans.actions')}</th>
                           )}
                         </tr>
                       </thead>
@@ -739,7 +832,7 @@ export const PlansPage: React.FC = () => {
               {t('plans.dependsOn')}
             </label>
             {batchTasks.length === 0 ? (
-              <p className="text-xs text-[var(--t-text-3)] italic">Không có task nào khác để phụ thuộc</p>
+              <p className="text-xs text-[var(--t-text-3)] italic">{t('plans.noOtherTasksForDeps')}</p>
             ) : (
               <div className="max-h-32 overflow-y-auto space-y-1.5 p-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)]">
                 {batchTasks.map((tItem) => (
@@ -776,7 +869,7 @@ export const PlansPage: React.FC = () => {
               value={newBody}
               onChange={(e) => setNewBody(e.target.value)}
               rows={4}
-              placeholder="Chi tiết yêu cầu markdown..."
+              placeholder={t('plans.taskBodyPlaceholder')}
               className="w-full px-3 py-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-xs text-[var(--t-text)] focus:outline-hidden focus:ring-1 focus:ring-[var(--t-accent)] font-mono resize-y"
             />
           </div>
