@@ -93,7 +93,7 @@ export const en: typeof vi = {
     loadNormal: 'Load normal',
     overlapWarningTitle: 'File Overlap Warnings',
     overlapWarningDesc: 'There are {count} file overlap warnings among running tasks:',
-    brains: 'Brains', brainMode: 'Mode', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
+    brains: 'Brains', brainMode: 'Mode', brainStatewaiting_limit: 'waiting for quota reset', brainStatewaiting_permission: 'waiting for your permission', brainMode_off: 'off', brainMode_suggest: 'suggest', brainMode_auto: 'auto', brainMode_external: 'external Claude', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
   },
   tasks: {
     title: 'Task Management',
