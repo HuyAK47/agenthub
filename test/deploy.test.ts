@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DeployService } from '../src/deploy.js';
+import { DeployService, isRunningHubCheckout } from '../src/deploy.js';
 
 const dirs: string[] = [];
 
@@ -272,5 +272,23 @@ describe('DeployService', () => {
 
     fs.writeFileSync(path.join(f.root, 'deploy-restart.json'), '{broken');
     expect(() => new DeployService({ hubHome: f.root, logsDir: path.join(f.root, 'logs') } as never, { get: vi.fn() } as never, deployEventBus([]) as never).start()).not.toThrow();
+  });
+});
+
+describe('isRunningHubCheckout', () => {
+  it('recognises the hub when it runs from the deployed worktree rather than the project path', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-hubroot-'));
+    const main = path.join(root, 'main');
+    const worktree = path.join(root, 'integration');
+    fs.mkdirSync(main);
+    fs.mkdirSync(worktree);
+    try {
+      expect(isRunningHubCheckout([worktree, main], worktree)).toBe(true);
+      expect(isRunningHubCheckout([path.join(worktree, '.'), main], worktree)).toBe(true);
+      expect(isRunningHubCheckout([main], worktree)).toBe(false);
+      expect(isRunningHubCheckout([undefined, path.join(root, 'missing')], worktree)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
