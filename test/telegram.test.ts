@@ -1706,6 +1706,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
       sleep: async () => {},
       sleepFn: async () => {},
       tokenOverride: 'test-token',
+      chatService: ctx.chatService,
     });
   }
 
@@ -1796,6 +1797,11 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(markup.inline_keyboard[0][1].callback_data).toBe('decision:reject:dec-123');
     expect(markup.inline_keyboard[1][0].text).toContain('Xem dashboard');
 
+    const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({
+      userMessageId: 'u-1',
+      assistantMessageId: 'a-1',
+    });
+
     // Click Đồng ý
     await bot.handleUpdate({
       update_id: 1,
@@ -1811,10 +1817,43 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(edits.length).toBeGreaterThan(0);
     expect(edits[0].body?.text).toContain('Đã phản hồi: Đồng ý');
 
+    // Message sent to brain session
+    expect(sendSpy).toHaveBeenCalledWith(
+      'brain',
+      'Người dùng trả lời quyết định dec-123 («Bạn có đồng ý merge đợt task này không?»): Đồng ý',
+    );
+
     // Tracker marks decision as answered
     const decision = bot.getDecisionTracker().getDecision('dec-123');
     expect(decision?.answered).toBe(true);
     expect(decision?.answer).toBe('agree');
+
+    // Click again: should report expired or already answered
+    await bot.handleUpdate({
+      update_id: 2,
+      callback_query: {
+        id: 'cb-2',
+        from: { id: CHAT_ID },
+        message: { message_id: 10, chat: { id: CHAT_ID }, text: msg?.text as string },
+        data: 'decision:agree:dec-123',
+      },
+    });
+    const ansCalls = recordedCalls.filter((c) => c.url.includes('/answerCallbackQuery'));
+    const lastAns = ansCalls.at(-1);
+    expect(lastAns?.body?.text).toContain('Quyết định đã hết hạn hoặc đã trả lời');
+
+    // Click non-existent decision
+    await bot.handleUpdate({
+      update_id: 3,
+      callback_query: {
+        id: 'cb-3',
+        from: { id: CHAT_ID },
+        message: { message_id: 10, chat: { id: CHAT_ID }, text: msg?.text as string },
+        data: 'decision:agree:non-existent',
+      },
+    });
+    const lastAnsNonExistent = recordedCalls.filter((c) => c.url.includes('/answerCallbackQuery')).at(-1);
+    expect(lastAnsNonExistent?.body?.text).toContain('Quyết định đã hết hạn hoặc đã trả lời');
   });
 
   it('4. nhac lai tin decision sau 2 gio neu chua tra loi (toi da 2 lan)', async () => {

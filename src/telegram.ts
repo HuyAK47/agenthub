@@ -15,6 +15,7 @@ import {
   isQuietHours,
   areAllProfilesQuotaExhausted,
   isSystemIncident,
+  forwardDecisionToBrain,
 } from './brain/digest.js';
 
 const execFileAsync = promisify(execFile);
@@ -1116,14 +1117,27 @@ export class TelegramBotService {
     switch (domain) {
       case 'decision': {
         const decisionId = taskIdOrParam;
-        const answer = action === 'agree' ? 'agree' : 'reject';
+        if (action !== 'agree' && action !== 'reject') {
+          await this.answerCallbackQuery(query.id, 'Lựa chọn không hợp lệ.');
+          return;
+        }
+        const d = this.decisionTracker.getDecision(decisionId);
+        if (!d || d.answered) {
+          await this.answerCallbackQuery(query.id, 'Quyết định đã hết hạn hoặc đã trả lời.');
+          return;
+        }
+        const answer = action;
         const updated = this.decisionTracker.answerDecision(decisionId, answer, this.now());
         const label = answer === 'agree' ? 'Đồng ý' : 'Không';
         const icon = answer === 'agree' ? '✅' : '❌';
         await this.answerCallbackQuery(query.id, `Bạn đã chọn: ${label}`);
 
+        if (this.chatService) {
+          forwardDecisionToBrain(this.chatService, decisionId, updated?.text || d.text, answer);
+        }
+
         if (query.message) {
-          const originalText = query.message.text || '';
+          const originalText = this.escapeHtml(query.message.text || '');
           const updatedText = `${originalText}\n\n${icon} <b>Đã phản hồi: ${label}</b>`;
           const keyboard: InlineKeyboardButton[][] = [
             [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
@@ -1143,7 +1157,7 @@ export class TelegramBotService {
           decisionId,
           action: answer,
           answer,
-          text: updated?.text || '',
+          text: updated?.text || d.text,
         });
         break;
       }

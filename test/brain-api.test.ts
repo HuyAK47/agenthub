@@ -283,6 +283,11 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(list.decisions).toHaveLength(1);
     expect(list.decisions[0].id).toBe('dec-api-1');
 
+    const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({
+      userMessageId: 'u-1',
+      assistantMessageId: 'a-1',
+    });
+
     // POST /api/brain/decisions/:id/answer
     const ansRes = await server.inject({
       method: 'POST',
@@ -295,6 +300,30 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(ansData.ok).toBe(true);
     expect(ansData.decision.answered).toBe(true);
     expect(ansData.decision.answer).toBe('agree');
+    expect(sendSpy).toHaveBeenCalledWith(
+      'brain',
+      'Người dùng trả lời quyết định dec-api-1 («Xác nhận xóa tài nguyên tạm?»): Đồng ý',
+    );
+
+    // Answering again should fail with 404 "Quyết định đã hết hạn hoặc đã trả lời"
+    const ansResAgain = await server.inject({
+      method: 'POST',
+      url: '/api/brain/decisions/dec-api-1/answer',
+      headers: authHeaders(),
+      payload: { answer: 'reject' },
+    });
+    expect(ansResAgain.statusCode).toBe(404);
+    expect(JSON.parse(ansResAgain.body).message).toContain('Quyết định đã hết hạn hoặc đã trả lời');
+
+    // Answering non-existent should fail with 404 "Quyết định đã hết hạn hoặc đã trả lời"
+    const ansResNonExistent = await server.inject({
+      method: 'POST',
+      url: '/api/brain/decisions/non-existent-id/answer',
+      headers: authHeaders(),
+      payload: { answer: 'agree' },
+    });
+    expect(ansResNonExistent.statusCode).toBe(404);
+    expect(JSON.parse(ansResNonExistent.body).message).toContain('Quyết định đã hết hạn hoặc đã trả lời');
 
     // Check again, pending decisions should now be 0
     const getRes2 = await server.inject({

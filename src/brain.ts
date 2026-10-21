@@ -7,7 +7,7 @@ import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
 import { readExistingToken, getTokenPath } from './auth.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
-import { generateDigest } from './brain/digest.js';
+import { generateDigest, forwardDecisionToBrain, DigestData } from './brain/digest.js';
 import { AppService, HttpError } from './services/index.js';
 
 export const BRAIN_ACTIVITIES = [
@@ -248,6 +248,21 @@ function isWithin(child: string, root: string): boolean {
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
+export function buildBrainDigest(appService: AppService): DigestData {
+  return (
+    appService.telegramBotService?.buildCurrentDigest() ??
+    generateDigest({
+      taskRepo: appService.taskRepo,
+      projectRepo: appService.projectRepo,
+      profileRepo: appService.profileRepo,
+      quotaMarkRepo: appService.quotaMarkRepo,
+      eventRepo: appService.eventRepo,
+      decisionTracker: appService.telegramBotService?.getDecisionTracker(),
+      port: appService.config.port,
+    })
+  );
+}
+
 export function registerBrainRoutes(
   fastify: FastifyInstance,
   brainService: BrainService,
@@ -267,31 +282,14 @@ export function registerBrainRoutes(
     if (!appService) {
       throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
     }
-    const digest = appService.telegramBotService?.buildCurrentDigest() ?? generateDigest({
-      taskRepo: appService.taskRepo,
-      projectRepo: appService.projectRepo,
-      profileRepo: appService.profileRepo,
-      quotaMarkRepo: appService.quotaMarkRepo,
-      eventRepo: appService.eventRepo,
-      decisionTracker: appService.telegramBotService?.getDecisionTracker(),
-      port: appService.config.port,
-    });
-    return digest;
+    return buildBrainDigest(appService);
   });
 
   fastify.post('/api/brain/digest', async () => {
     if (!appService) {
       throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
     }
-    const digest = appService.telegramBotService?.buildCurrentDigest() ?? generateDigest({
-      taskRepo: appService.taskRepo,
-      projectRepo: appService.projectRepo,
-      profileRepo: appService.profileRepo,
-      quotaMarkRepo: appService.quotaMarkRepo,
-      eventRepo: appService.eventRepo,
-      decisionTracker: appService.telegramBotService?.getDecisionTracker(),
-      port: appService.config.port,
-    });
+    const digest = buildBrainDigest(appService);
     appService.scheduler.getEventBus().emit('brain.digest', undefined, digest);
     if (appService.telegramBotService) {
       appService.telegramBotService.broadcastMessage(digest.text, {
@@ -315,9 +313,16 @@ export function registerBrainRoutes(
     if (!answer || (answer !== 'agree' && answer !== 'reject')) {
       throw new HttpError(400, 'bad_request', 'answer must be agree or reject');
     }
+    const d = tracker?.getDecision(id);
+    if (!d || d.answered) {
+      throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
+    }
     const updated = tracker?.answerDecision(id, answer);
     if (!updated) {
-      throw new HttpError(404, 'not_found', `Decision ${id} not found`);
+      throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
+    }
+    if (appService?.chatService) {
+      forwardDecisionToBrain(appService.chatService, id, updated.text, answer);
     }
     appService?.scheduler.getEventBus().emit('decision.answered', undefined, {
       decisionId: id,

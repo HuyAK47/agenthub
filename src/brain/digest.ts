@@ -101,6 +101,26 @@ export class DecisionTracker {
 }
 
 /**
+ * Forwards an answered decision to the resident Claude brain session ('brain').
+ */
+export function forwardDecisionToBrain(
+  chatService: { getOrCreateSession: (id: string, opts?: unknown) => unknown; sendMessage: (id: string, text: string) => unknown } | undefined,
+  decisionId: string,
+  text: string,
+  answer: 'agree' | 'reject',
+): void {
+  if (!chatService) return;
+  const label = answer === 'agree' ? 'Đồng ý' : 'Không';
+  const brainMsg = `Người dùng trả lời quyết định ${decisionId} («${text}»): ${label}`;
+  try {
+    chatService.getOrCreateSession('brain', { title: 'Bộ não' });
+    chatService.sendMessage('brain', brainMsg);
+  } catch {
+    // ignore if brain session cannot receive (e.g. busy)
+  }
+}
+
+/**
  * Checks whether the current time falls inside quiet hours.
  * Handles ranges spanning midnight (e.g. 22:00 -> 07:00).
  */
