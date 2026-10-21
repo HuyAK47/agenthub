@@ -6,12 +6,14 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
+import type { DiskSpace } from '../src/disk.js';
 
 describe('Disk Guard (chống đầy ổ đĩa)', () => {
   let tmpDir: string;
   let config: ReturnType<typeof loadConfig>;
   let ctx: ReturnType<typeof createContext>;
   let fakeEngine: FakeEngine;
+  let fakeDiskReader: (p: string) => DiskSpace;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-disk-test-'));
@@ -24,10 +26,13 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
     config = loadConfig(tmpDir);
     config.disk.minFreeGB = 3;
 
+    // Default: plenty of disk — overridden per test
+    fakeDiskReader = (_p: string) => ({ freeGB: 100, totalGB: 200 });
+
     fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
     const engines = new Map<string, Engine>([['agy', fakeEngine]]);
 
-    ctx = createContext(config, engines);
+    ctx = createContext(config, engines, (p) => fakeDiskReader(p));
     ctx.scheduler.stop();
 
     // Setup git repo for project
@@ -80,14 +85,8 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
   });
 
   it('blocks task from starting when disk space is below minFreeGB', () => {
-    // Mock fs.statfs to report 1GB free (less than 3GB threshold)
-    vi.spyOn(fs, 'statfs').mockImplementation((_target: unknown, cb: unknown) => {
-      (cb as (err: unknown, stats: unknown) => void)(null, {
-        bsize: 1024 * 1024,
-        bavail: 1024, // 1 GB
-        blocks: 100 * 1024, // 100 GB
-      });
-    });
+    // Inject fake disk reader: 1GB free (less than 3GB threshold)
+    fakeDiskReader = (_p: string) => ({ freeGB: 1, totalGB: 100 });
 
     const emittedEvents: Array<{ type: string; taskId?: string; payload?: Record<string, unknown> }> = [];
     ctx.scheduler.getEventBus().on('*', (type, taskId, payload) => {
@@ -126,14 +125,7 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
 
   it('automatically resumes waiting task when disk space recovers', () => {
     let mockFreeGB = 1; // below 3GB initially
-
-    vi.spyOn(fs, 'statfs').mockImplementation((_target: unknown, cb: unknown) => {
-      (cb as (err: unknown, stats: unknown) => void)(null, {
-        bsize: 1024 * 1024,
-        bavail: mockFreeGB * 1024,
-        blocks: 100 * 1024,
-      });
-    });
+    fakeDiskReader = (_p: string) => ({ freeGB: mockFreeGB, totalGB: 100 });
 
     ctx.taskRepo.insert({
       id: 'proj/t1',
@@ -162,14 +154,7 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
 
   it('emits disk transitions once even when ticks repeat', () => {
     let mockFreeGB = 1;
-
-    vi.spyOn(fs, 'statfs').mockImplementation((_target: unknown, cb: unknown) => {
-      (cb as (err: unknown, stats: unknown) => void)(null, {
-        bsize: 1024 * 1024,
-        bavail: mockFreeGB * 1024,
-        blocks: 100 * 1024,
-      });
-    });
+    fakeDiskReader = (_p: string) => ({ freeGB: mockFreeGB, totalGB: 100 });
 
     const diskEvents: string[] = [];
     ctx.scheduler.getEventBus().on('*', (type) => {
@@ -208,12 +193,9 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
     expect(diskEvents).toEqual(['disk.low', 'disk.ok', 'disk.low']);
   });
 
-  it('works with statfsSync mock as well', () => {
-    vi.spyOn(fs, 'statfsSync').mockReturnValue({
-      bsize: 1024 * 1024,
-      bavail: 500, // 0.5 GB (< 3GB)
-      blocks: 50 * 1024,
-    } as unknown as fs.StatFs);
+  it('works with injected low-disk reader', () => {
+    // 0.5 GB < 3 GB threshold
+    fakeDiskReader = (_p: string) => ({ freeGB: 0.5, totalGB: 50 });
 
     ctx.taskRepo.insert({
       id: 'proj/t1',
@@ -232,14 +214,10 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
     const extraPath = path.join(tmpDir, 'shared-docker');
     fs.mkdirSync(extraPath);
     config.disk.extraPaths = [{ path: extraPath, minFreeGB: 5, label: 'Ổ Docker dùng chung' }];
-    vi.spyOn(fs, 'statfs').mockImplementation((target: unknown, cb: unknown) => {
-      const freeGB = target === extraPath ? 1 : 20;
-      (cb as (err: unknown, stats: unknown) => void)(null, {
-        bsize: 1024 * 1024,
-        bavail: freeGB * 1024,
-        blocks: 100 * 1024,
-      });
-    });
+    fakeDiskReader = (p: string) => {
+      const freeGB = p === extraPath ? 1 : 20;
+      return { freeGB, totalGB: 100 };
+    };
 
     const events: Array<{ type: string; payload?: Record<string, unknown> }> = [];
     ctx.scheduler.getEventBus().on('*', (type, _taskId, payload) => events.push({ type, payload: payload as Record<string, unknown> }));
