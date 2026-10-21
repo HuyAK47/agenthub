@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { openDatabase, ProjectRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo } from '../src/db/index.js';
 import { Scheduler, isProjectAccessible } from '../src/scheduler/index.js';
-import { FakeEngine } from '../src/engines/index.js';
+import { FakeEngine, Engine } from '../src/engines/index.js';
 
 describe('Project availability and unmounted drive handling', () => {
   let tmpDir: string;
@@ -92,9 +92,9 @@ describe('Project availability and unmounted drive handling', () => {
       status: 'queued',
     });
 
-    const emittedEvents: Array<{ type: string; taskId?: string; payload?: any }> = [];
+    const emittedEvents: Array<{ type: string; taskId?: string; payload?: unknown }> = [];
     const fakeEngine = new FakeEngine();
-    const engines = new Map<string, any>([['agy', fakeEngine]]);
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
 
     // Daemon starts with unmounted path without errors
     const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines, undefined, undefined, db);
@@ -194,7 +194,7 @@ describe('Project availability and unmounted drive handling', () => {
     });
 
     const fakeEngine = new FakeEngine();
-    const engines = new Map<string, any>([['agy', fakeEngine]]);
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
     const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines, undefined, undefined, db);
 
     // 1. Tick: worktreePath does not exist

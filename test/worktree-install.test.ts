@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { openDatabase, ProjectRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, TaskNoteRepo } from '../src/db/index.js';
 import { Scheduler } from '../src/scheduler/index.js';
-import { FakeEngine } from '../src/engines/index.js';
+import { FakeEngine, Engine } from '../src/engines/index.js';
 import * as cacheModule from '../src/cache.js';
 import { CheckRunner } from '../src/checks.js';
 
@@ -105,7 +105,7 @@ describe('settings.worktree.install option', () => {
     });
 
     const fakeEngine = new FakeEngine();
-    const engines = new Map<string, any>([['agy', fakeEngine]]);
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
     const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines, undefined, undefined, db);
 
     const task = taskRepo.get('proj-skip/task-1')!;
@@ -188,10 +188,10 @@ describe('settings.worktree.install option', () => {
       status: 'queued',
     });
 
-    const emittedEvents: Array<{ type: string; taskId?: string; payload?: any }> = [];
+    const emittedEvents: Array<{ type: string; taskId?: string; payload?: unknown }> = [];
     const fakeEngine = new FakeEngine();
     const spawnSpy = vi.spyOn(fakeEngine, 'spawn');
-    const engines = new Map<string, any>([['agy', fakeEngine]]);
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
     const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, engines, undefined, undefined, db);
     scheduler.getEventBus().on('worktree.install_failed', (taskId, payload) => {
       emittedEvents.push({ type: 'worktree.install_failed', taskId, payload });
