@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain } from '../api/client';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -19,6 +19,8 @@ import {
   HardDrive,
   Play,
   Pause,
+  ExternalLink,
+  CheckCircle2,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
@@ -91,6 +93,7 @@ export const DashboardPage: React.FC = () => {
   const { data: claudeFailover } = useQuery({ queryKey: ['claude-failover'], queryFn: getClaudeFailover, refetchInterval: 5000 });
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
+  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: getProjects, refetchInterval: 30_000 });
 
   const queryClient = useQueryClient();
   const pauseMutation = useMutation({
@@ -283,6 +286,72 @@ export const DashboardPage: React.FC = () => {
           <div className="flex items-center gap-3 text-xs"><span>{t('dashboard.brainTokens')}: {brain.tokensToday.toLocaleString()}</span><Link to={`/chat/${encodeURIComponent(brain.sessionId)}`} className="text-[var(--t-accent)] hover:underline">{t('dashboard.openBrainChat')}</Link></div>
         </div>)}
       </div>}
+
+      {/* CI Card */}
+      <div data-testid="dashboard-ci" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity className="w-5 h-5 text-[var(--t-accent)]" />
+            <h2 className="text-base font-semibold">{t('dashboard.ciCardTitle')}</h2>
+          </div>
+          <span className="text-xs text-[var(--text-secondary)]">{t('dashboard.ciCardSubtitle')}</span>
+        </div>
+        {projects.length === 0 ? (
+          <p className="text-xs text-[var(--text-secondary)]">{t('dashboard.ciCardNoData')}</p>
+        ) : (
+          <div className="space-y-2">
+            {projects.map((proj) => {
+              const ci = proj.ciStatus;
+              return (
+                <div
+                  key={proj.id}
+                  data-testid={`dashboard-ci-${proj.id}`}
+                  className="flex items-center justify-between border-t border-[var(--t-border)] pt-2.5 first:border-0 first:pt-0 text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm">{proj.name}</span>
+                    <span className="font-mono text-[var(--text-secondary)]">({proj.id})</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!ci ? (
+                      <span className="text-[var(--text-secondary)] italic">{t('projects.ciNoRun')}</span>
+                    ) : ci.status !== 'completed' ? (
+                      <span className="inline-flex items-center gap-1 text-[var(--t-warn)] font-medium">
+                        <Clock className="w-3.5 h-3.5 animate-spin" />
+                        <span>{t('dashboard.ciRunning')}</span>
+                        {ci.sha && <span className="font-mono">({ci.sha.slice(0, 7)})</span>}
+                      </span>
+                    ) : ci.conclusion === 'success' ? (
+                      <span className="inline-flex items-center gap-1 text-[var(--t-ok)] font-medium">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{t('dashboard.ciPassed')}</span>
+                        {ci.sha && <span className="font-mono">({ci.sha.slice(0, 7)})</span>}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[var(--t-crit)] font-medium">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>{t('dashboard.ciFailed')}</span>
+                        {ci.sha && <span className="font-mono">({ci.sha.slice(0, 7)})</span>}
+                      </span>
+                    )}
+                    {ci?.url && (
+                      <a
+                        href={ci.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[var(--t-accent)] hover:underline ml-2"
+                        title={t('projects.ciViewRun')}
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">

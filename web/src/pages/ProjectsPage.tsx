@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addProjectKnowledge, createProject, deleteProject, deleteProjectKnowledge, getProjectKnowledge, getProjects, rerunProjectDeploy, updateProject, updateProjectKnowledge } from '../api/client';
-import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin, ChevronDown, Settings2 } from 'lucide-react';
+import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin, ChevronDown, Settings2, Clock, ExternalLink } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { Project } from '../types/api';
 
@@ -21,12 +21,12 @@ function getProjectHooksString(proj: Project): string {
 
 const defaultSettings = (): NonNullable<Project['settings']> => ({
   brain: { mode: 'inherit' }, worktree: { install: 'auto', gitHooks: 'run' },
-  integration: { enabled: false }, references: [], notifications: { telegramContent: 'full' },
+  integration: { enabled: false }, ci: {}, references: [], notifications: { telegramContent: 'full' },
 });
 
 function changedSettings(current: NonNullable<Project['settings']>, original: NonNullable<Project['settings']>): Partial<NonNullable<Project['settings']>> {
   const result: Partial<NonNullable<Project['settings']>> = {};
-  (['brain', 'worktree', 'integration', 'references', 'notifications'] as const).forEach((section) => {
+  (['brain', 'worktree', 'integration', 'ci', 'references', 'notifications'] as const).forEach((section) => {
     if (JSON.stringify(current[section]) !== JSON.stringify(original[section])) {
       (result as Record<string, unknown>)[section] = current[section];
     }
@@ -53,6 +53,10 @@ function ProjectSettingsForm({
     <div className="space-y-2 text-xs">
       <label className="flex items-center gap-2"><input type="checkbox" checked={value.integration.enabled} onChange={(e) => update('integration', { enabled: e.target.checked })} /> <span className="font-semibold">{t('projects.integrationEnabled')}</span></label>
       {value.integration.enabled && <div className="grid grid-cols-1 md:grid-cols-2 gap-2"><input aria-label={t('projects.integrationBranch')} placeholder={t('projects.integrationBranch')} value={value.integration.branch ?? ''} onChange={(e) => update('integration', { branch: e.target.value || undefined })} className="rounded border p-2 bg-[var(--t-surface-2)]" /><input aria-label={t('projects.integrationBaseRef')} placeholder={t('projects.integrationBaseRef')} value={value.integration.baseRef ?? ''} onChange={(e) => update('integration', { baseRef: e.target.value || undefined })} className="rounded border p-2 bg-[var(--t-surface-2)]" /></div>}
+    </div>
+    <div className="space-y-2 text-xs">
+      <label className="flex items-center gap-2"><input type="checkbox" checked={value.ci?.enabled ?? false} onChange={(e) => update('ci', { enabled: e.target.checked })} /> <span className="font-semibold">{t('projects.ciEnabled')}</span></label>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2"><input aria-label={t('projects.ciBranch')} placeholder={t('projects.ciBranch')} value={value.ci?.branch ?? ''} onChange={(e) => update('ci', { branch: e.target.value || undefined })} className="rounded border p-2 bg-[var(--t-surface-2)]" /></div>
     </div>
     <div className="space-y-2 text-xs"><div className="flex justify-between items-center"><span className="font-semibold">{t('projects.references')}</span><button type="button" onClick={addReference} className="text-[var(--t-accent)]">+ {t('projects.addReference')}</button></div>{value.references.map((ref, index) => <div key={index} className="grid grid-cols-[1fr_2fr_auto_auto] gap-2 items-center"><input aria-label={`${t('projects.referenceName')} ${index + 1}`} placeholder={t('projects.referenceName')} value={ref.name} onChange={(e) => { const refs = [...value.references]; refs[index] = { ...ref, name: e.target.value }; onChange({ ...value, references: refs }); }} className="rounded border p-2 bg-[var(--t-surface-2)]" /><input aria-label={`${t('projects.referencePath')} ${index + 1}`} placeholder={t('projects.referencePath')} value={ref.path} onChange={(e) => { const refs = [...value.references]; refs[index] = { ...ref, path: e.target.value }; onChange({ ...value, references: refs }); }} className="rounded border p-2 bg-[var(--t-surface-2)]" /><label className="flex gap-1 items-center"><input type="checkbox" checked={ref.inject} onChange={(e) => { const refs = [...value.references]; refs[index] = { ...ref, inject: e.target.checked }; onChange({ ...value, references: refs }); }} />{t('projects.inject')}</label><button type="button" onClick={() => onChange({ ...value, references: value.references.filter((_, i) => i !== index) })} className="text-[var(--t-crit)]">×</button></div>)}</div>
     <label className="text-xs space-y-1 block"><span className="font-semibold">{t('projects.telegramContent')}</span><select value={value.notifications.telegramContent} onChange={(e) => update('notifications', { telegramContent: e.target.value })} className="w-full rounded border p-2 bg-[var(--t-surface-2)]"><option value="full">{t('projects.telegramFull')}</option><option value="minimal">{t('projects.telegramMinimal')}</option></select></label>
@@ -506,6 +510,38 @@ export const ProjectsPage: React.FC = () => {
                   <span className="font-mono font-medium">{proj.maxParallel}</span>
                 </div>
               </div>
+
+              {proj.ciStatus && (
+                <div className="flex items-center gap-2 pt-2 border-t border-[var(--t-border)] text-xs" data-testid={`project-ci-${proj.id}`}>
+                  {proj.ciStatus.status !== 'completed' ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border border-[var(--t-warn)]">
+                      <Clock className="w-3.5 h-3.5 animate-spin" />
+                      {t('projects.ciStatusRunning')}
+                    </span>
+                  ) : proj.ciStatus.conclusion === 'success' ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border border-[var(--t-ok)]">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {t('projects.ciStatusPassed')}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] border border-[var(--t-crit)]">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      {t('projects.ciStatusFailed')}
+                    </span>
+                  )}
+                  {proj.ciStatus.url && (
+                    <a
+                      href={proj.ciStatus.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[var(--t-accent)] hover:underline inline-flex items-center gap-1 ml-auto"
+                    >
+                      <span>{t('projects.ciViewRun')}</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              )}
 
               {proj.afterMerge && <button type="button" onClick={() => deployMutation.mutate(proj.id)} disabled={deployMutation.isPending} className="px-3 py-1.5 rounded bg-[var(--t-accent)] text-white text-xs disabled:opacity-50">{deployMutation.isPending ? 'Đang deploy…' : 'Deploy lại'}</button>}
 
