@@ -177,7 +177,7 @@ export function areAllProfilesQuotaExhausted(
   const profiles = profileRepo.getAll(true);
   if (profiles.length === 0) return false;
 
-  const marks = quotaMarkRepo.getActive().filter((m) => m.until > Math.floor(now / 1000));
+  const marks = quotaMarkRepo.getActive(Math.floor(now / 1000)).filter((m) => m.until > Math.floor(now / 1000));
   const exhaustedProfiles = new Set(marks.map((m) => m.profileName));
 
   return profiles.every((p) => exhaustedProfiles.has(p.name));
@@ -331,7 +331,7 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
   // 3. Quota summary
   const profiles = opts.profileRepo ? opts.profileRepo.getAll(true) : [];
   const activeMarks = opts.quotaMarkRepo
-    ? opts.quotaMarkRepo.getActive().filter((m) => m.until > Math.floor(nowMs / 1000))
+    ? opts.quotaMarkRepo.getActive(Math.floor(nowMs / 1000)).filter((m) => m.until > Math.floor(nowMs / 1000))
     : [];
   const exhaustedMap = new Map<string, { family: string; until: string }>();
   for (const m of activeMarks) {

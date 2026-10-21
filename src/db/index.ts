@@ -976,8 +976,8 @@ export class QuotaMarkRepo {
     return this.db.prepare('SELECT * FROM quota_marks').all() as QuotaMarkRow[];
   }
 
-  getActive(): QuotaMarkRow[] {
-    const now = Math.floor(Date.now() / 1000);
+  getActive(nowSeconds?: number): QuotaMarkRow[] {
+    const now = nowSeconds !== undefined ? nowSeconds : Math.floor(Date.now() / 1000);
     return this.db
       .prepare('SELECT * FROM quota_marks WHERE until > ?')
       .all(now) as QuotaMarkRow[];
