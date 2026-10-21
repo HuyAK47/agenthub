@@ -6,6 +6,7 @@ import {
   Check,
   Clock,
   ExternalLink,
+  KeyRound,
   MoreVertical,
   Plus,
   RefreshCw,
@@ -106,6 +107,7 @@ export const ProfilesPage: React.FC = () => {
   const [editing, setEditing] = useState<Profile | null>(null);
   const [renaming, setRenaming] = useState<Profile | null>(null);
   const [deleting, setDeleting] = useState<Profile | null>(null);
+  const [tokenLogin, setTokenLogin] = useState<Profile | null>(null);
   const [checking, setChecking] = useState<Record<string, boolean>>({});
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -245,6 +247,7 @@ export const ProfilesPage: React.FC = () => {
                         setMenu={setMenu}
                         checking={Boolean(checking[profile.name])}
                         onLogin={runLogin}
+                        onTokenLogin={setTokenLogin}
                         onCheck={runCheck}
                         onEdit={setEditing}
                         onRename={setRenaming}
@@ -281,6 +284,7 @@ export const ProfilesPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
             await runLogin(name, engine);
           }}
+          onImported={() => queryClient.invalidateQueries({ queryKey: ['profiles'] })}
         />
       )}
       {editing && (
@@ -313,6 +317,17 @@ export const ProfilesPage: React.FC = () => {
           }}
         />
       )}
+      {tokenLogin && (
+        <TokenLoginModal
+          profile={tokenLogin}
+          onClose={() => setTokenLogin(null)}
+          onDone={(email) => {
+            setTokenLogin(null);
+            toast(t('profiles.tokenLoginSuccess', { name: tokenLogin.name, email }));
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+          }}
+        />
+      )}
       {activeLogin && (
         <LoginWizard
           profileName={activeLogin.name}
@@ -328,6 +343,59 @@ export const ProfilesPage: React.FC = () => {
   );
 };
 
+function getAvatarGradient(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const h1 = Math.abs(hash) % 360;
+  const h2 = (h1 + 45) % 360;
+  return `linear-gradient(135deg, hsl(${h1}, 65%, 45%), hsl(${h2}, 75%, 35%))`;
+}
+
+function ProfileAvatar({ profile }: { profile: Profile }) {
+  const [imgError, setImgError] = useState(false);
+  const avatarUrl = profile.avatarUrl;
+
+  useEffect(() => {
+    setImgError(false);
+  }, [avatarUrl]);
+
+  if (avatarUrl && !imgError) {
+    return (
+      <div className="relative shrink-0">
+        <img
+          src={avatarUrl}
+          alt={profile.label || profile.name}
+          referrerPolicy="no-referrer"
+          onError={() => setImgError(true)}
+          className="h-10 w-10 rounded-xl object-cover shadow-xs ring-1 ring-[var(--t-border)]"
+        />
+      </div>
+    );
+  }
+
+  const displayName = profile.label || profile.email || profile.name;
+  const initial = displayName.trim().charAt(0).toUpperCase();
+
+  if (initial) {
+    return (
+      <div
+        className="flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
+        style={{ background: getAvatarGradient(profile.email || profile.name) }}
+      >
+        <span className="text-base tracking-wider drop-shadow-xs">{initial}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--t-surface-2)] text-[var(--t-accent)] shadow-xs ring-1 ring-[var(--t-border)]">
+      <UserRound className="h-5 w-5" />
+    </div>
+  );
+}
+
 function ProfileCard({
   profile,
   run,
@@ -335,6 +403,7 @@ function ProfileCard({
   setMenu,
   checking,
   onLogin,
+  onTokenLogin,
   onCheck,
   onEdit,
   onRename,
@@ -349,6 +418,7 @@ function ProfileCard({
   setMenu: (name: string | null) => void;
   checking: boolean;
   onLogin: (name: string, engine: Provider) => void;
+  onTokenLogin: (profile: Profile) => void;
   onCheck: (name: string) => void;
   onEdit: (profile: Profile) => void;
   onRename: (profile: Profile) => void;
@@ -360,6 +430,8 @@ function ProfileCard({
   const { t } = useLocale();
   const logged = profile.loggedIn ?? Boolean(profile.email);
   const canLogin = profile.kind !== 'keyring' || profile.engine === 'claude';
+  // Refresh token chỉ ghi được vào HOME riêng của hồ sơ agy isolated.
+  const canTokenLogin = profile.engine === 'agy' && profile.kind === 'isolated';
   const busy = Boolean(profile.busy || profile.isBusy);
   const activeMarks = (profile.quotaMarks || []).filter((mark) => mark.until > Math.floor(Date.now() / 1000));
   return (
@@ -369,9 +441,7 @@ function ProfileCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="rounded-lg bg-[var(--t-surface-2)] p-2 text-[var(--t-accent)]">
-            <UserRound className="h-5 w-5" />
-          </div>
+          <ProfileAvatar profile={profile} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="truncate font-semibold">{profile.label || profile.name}</h3>
@@ -418,6 +488,18 @@ function ProfileCard({
               >
                 {logged ? t('extra.reLogin') : t('profiles.loginNow')}
               </button>
+              {canTokenLogin && (
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setMenu(null);
+                    onTokenLogin(profile);
+                  }}
+                >
+                  {t('profiles.tokenLogin')}
+                </button>
+              )}
               <button
                 type="button"
                 className="menu-item"
@@ -612,6 +694,16 @@ function ProfileCard({
             )}
             {checking ? t('profiles.checkingBtn') : t('profiles.checkBtn')}
           </button>
+          {canTokenLogin && !logged && (
+            <button
+              type="button"
+              onClick={() => onTokenLogin(profile)}
+              className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2.5 py-1 text-xs"
+            >
+              <KeyRound className="h-3 w-3" />
+              {t('profiles.tokenLoginShort')}
+            </button>
+          )}
           {canLogin && (
             <button
               type="button"
@@ -657,9 +749,11 @@ function Modal({
 function AddProfileModal({
   onClose,
   onCreated,
+  onImported,
 }: {
   onClose: () => void;
   onCreated: (name: string, engine: Provider) => void;
+  onImported: () => void;
 }) {
   const { t } = useLocale();
   const [engine, setEngine] = useState<Provider>('agy');
@@ -681,7 +775,7 @@ function AddProfileModal({
   const handleCreateTerminal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      setError('Vui lòng nhập tên tài khoản');
+      setError(t('profiles.accountNameRequired'));
       return;
     }
     setLoading(true);
@@ -690,7 +784,7 @@ function AddProfileModal({
       await createProfile({ name: name.trim(), engine, accountType });
       onCreated(name.trim(), engine);
     } catch (err: any) {
-      setError(err?.message || 'Không thể tạo tài khoản');
+      setError(err?.message || t('profiles.createFailed'));
     } finally {
       setLoading(false);
     }
@@ -699,7 +793,7 @@ function AddProfileModal({
   const handleImportCockpit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cockpitJson.trim()) {
-      setCockpitError('Vui lòng dán dữ liệu JSON từ Cockpit tools');
+      setCockpitError(t('profiles.cockpitJsonRequired'));
       return;
     }
     let parsed: unknown;
@@ -717,8 +811,11 @@ function AddProfileModal({
         accountType: cockpitAccountType,
       });
       setCockpitResult(result);
+      // Không giữ refresh token trong state khi đã nhập xong; giữ lại để sửa nếu có mục lỗi.
+      if (result.failedCount === 0) setCockpitJson('');
+      onImported();
     } catch (err: any) {
-      setCockpitError(err?.message || 'Lỗi khi nhập tài khoản');
+      setCockpitError(err?.message || t('profiles.importFailed'));
     } finally {
       setCockpitLoading(false);
     }
@@ -764,8 +861,8 @@ function AddProfileModal({
                 }}
                 className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
                   method === 'terminal'
-                    ? 'bg-[var(--t-surface)] text-[var(--t-text-1)] shadow-sm font-semibold'
-                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
+                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
                 }`}
               >
                 {t('profiles.tabTerminalLogin')}
@@ -778,8 +875,8 @@ function AddProfileModal({
                 }}
                 className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
                   method === 'cockpit'
-                    ? 'bg-[var(--t-surface)] text-[var(--t-text-1)] shadow-sm font-semibold'
-                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
+                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
                 }`}
               >
                 {t('profiles.tabImportCockpit')}
@@ -825,7 +922,7 @@ function AddProfileModal({
                 {t('common.cancel')}
               </button>
               <button type="submit" disabled={loading} className="button-primary">
-                {loading ? 'Đang tạo…' : t('profiles.createAndGuide')}
+                {loading ? t('profiles.creating') : t('profiles.createAndGuide')}
               </button>
             </div>
           </form>
@@ -847,7 +944,7 @@ function AddProfileModal({
                       key={i}
                       className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs ${
                         res.status === 'ok'
-                          ? 'border-[var(--t-ok)]/30 bg-[var(--t-ok)]/10 text-[var(--t-text-1)]'
+                          ? 'border-[var(--t-ok)]/30 bg-[var(--t-ok)]/10 text-[var(--t-text)]'
                           : 'border-[var(--t-crit)]/30 bg-[var(--t-crit)]/10 text-[var(--t-crit)]'
                       }`}
                     >
@@ -856,7 +953,7 @@ function AddProfileModal({
                       </span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold">{res.name}</span>
+                          {res.name && <span className="font-semibold">{res.name}</span>}
                           {res.email && (
                             <span className="text-[var(--t-text-3)] truncate">({res.email})</span>
                           )}
@@ -868,7 +965,12 @@ function AddProfileModal({
                     </div>
                   ))}
                 </div>
-                <div className="flex justify-end pt-2">
+                <div className="flex justify-end gap-2 pt-2">
+                  {cockpitResult.failedCount > 0 && (
+                    <button type="button" onClick={() => setCockpitResult(null)} className="button-secondary">
+                      {t('profiles.importBack')}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onClose}
@@ -889,9 +991,11 @@ function AddProfileModal({
                   </p>
                 )}
                 <label className="block text-sm">
-                  JSON Token
+                  {t('profiles.cockpitJsonLabel')}
                   <textarea
                     autoFocus
+                    spellCheck={false}
+                    autoComplete="off"
                     value={cockpitJson}
                     onChange={(e) => setCockpitJson(e.target.value)}
                     placeholder={t('profiles.cockpitJsonPlaceholder')}
@@ -928,6 +1032,91 @@ function AddProfileModal({
           </div>
         )}
       </div>
+    </Modal>
+  );
+}
+function TokenLoginModal({
+  profile,
+  onClose,
+  onDone,
+}: {
+  profile: Profile;
+  onClose: () => void;
+  onDone: (email: string) => void;
+}) {
+  const { t } = useLocale();
+  const [email, setEmail] = useState(profile.email || '');
+  const [refreshToken, setRefreshToken] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  return (
+    <Modal title={t('profiles.tokenLoginTitle', { name: profile.label || profile.name })} onClose={onClose}>
+      <form
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!email.trim() || !refreshToken.trim()) {
+            setError(t('profiles.tokenLoginRequired'));
+            return;
+          }
+          setLoading(true);
+          setError('');
+          try {
+            const result = await importAgyTokens({
+              tokens: [{ name: profile.name, email: email.trim(), refresh_token: refreshToken.trim() }],
+              accountType: profile.accountType,
+            });
+            const item = result.results[0];
+            if (item?.status === 'ok') {
+              setRefreshToken('');
+              onDone(item.email);
+            } else {
+              setError(item?.message || t('profiles.importFailed'));
+            }
+          } catch (err: any) {
+            setError(err?.message || t('profiles.importFailed'));
+          } finally {
+            setLoading(false);
+          }
+        }}
+      >
+        <p className="text-xs text-[var(--t-text-3)]">{t('profiles.tokenLoginDesc')}</p>
+        {error && (
+          <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">{error}</p>
+        )}
+        <label className="block text-sm">
+          Email
+          <input
+            type="email"
+            autoFocus={!email}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="user@gmail.com"
+            className="field mt-1"
+          />
+        </label>
+        <label className="block text-sm">
+          Refresh token
+          <textarea
+            autoFocus={Boolean(email)}
+            spellCheck={false}
+            autoComplete="off"
+            rows={3}
+            value={refreshToken}
+            onChange={(e) => setRefreshToken(e.target.value)}
+            placeholder="1//..."
+            className="field mt-1 font-mono text-xs"
+          />
+        </label>
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="button-secondary">
+            {t('common.cancel')}
+          </button>
+          <button type="submit" disabled={loading} className="button-primary">
+            {loading ? t('profiles.tokenLoginVerifying') : t('profiles.tokenLoginBtn')}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

@@ -139,11 +139,74 @@ export function writeAgyIsolatedToken(
     }
     const logFilePath = path.join(logDir, 'auth.log');
     const logContent = `[${new Date().toISOString()}] authenticated successfully as ${cleanEmail}\n`;
-    fs.writeFileSync(logFilePath, logContent, { mode: 0o600, flag: 'a' });
+    // Ghi đè (không append): readEmailFromLog lấy match đầu tiên trong file, append sẽ giữ email cũ.
+    fs.writeFileSync(logFilePath, logContent, { mode: 0o600 });
     try {
       fs.chmodSync(logFilePath, 0o600);
     } catch {
       // ignore
     }
+  }
+}
+
+export interface GoogleUserInfo {
+  sub?: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+}
+
+/**
+ * Lấy thông tin tài khoản Google (bao gồm picture / avatar) từ Google OAuth userinfo endpoint.
+ */
+export async function fetchAgyGoogleUserInfo(
+  accessToken: string,
+  options?: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<GoogleUserInfo | null> {
+  const timeoutMs = options?.timeoutMs ?? 8_000;
+  const signal = options?.signal ?? AbortSignal.timeout(timeoutMs);
+
+  try {
+    const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal,
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as Record<string, unknown>;
+    return {
+      sub: typeof data.sub === 'string' ? data.sub : undefined,
+      email: typeof data.email === 'string' ? data.email : undefined,
+      name: typeof data.name === 'string' ? data.name : undefined,
+      picture: typeof data.picture === 'string' ? data.picture : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Đọc file token Antigravity từ thư mục profile home nếu có.
+ */
+export function readAgyToken(profileHome: string): {
+  accessToken?: string;
+  refreshToken?: string;
+  tokenType?: string;
+  expiry?: string;
+} | null {
+  const tokenFile = path.join(profileHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+  if (!fs.existsSync(tokenFile)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8')) as Record<string, unknown>;
+    return {
+      accessToken: typeof raw.access_token === 'string' ? raw.access_token : undefined,
+      refreshToken: typeof raw.refresh_token === 'string' ? raw.refresh_token : undefined,
+      tokenType: typeof raw.token_type === 'string' ? raw.token_type : undefined,
+      expiry: typeof raw.expiry === 'string' ? raw.expiry : undefined,
+    };
+  } catch {
+    return null;
   }
 }

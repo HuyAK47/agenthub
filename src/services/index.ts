@@ -26,7 +26,7 @@ import {
   TaskBatchRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
-import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, readAgyToken } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -79,6 +79,7 @@ function apiProfile(profile: ProfileRow): ProfileRow {
     authState: profile.authState ?? null,
     authMessage: profile.authMessage ?? null,
     verifyUrl: profile.verifyUrl ?? null,
+    avatarUrl: profile.avatarUrl ?? null,
   };
 }
 
@@ -1112,6 +1113,58 @@ export class AppService {
   }
 
   private emailCheckCache = new Map<string, number>();
+  private avatarSyncCache = new Map<string, number>();
+
+  async syncAgyAvatar(name: string): Promise<string | null> {
+    let profile: ProfileRow | undefined;
+    try {
+      profile = this.profileRepo.get(name);
+    } catch {
+      return null;
+    }
+    if (!profile || profile.engine !== 'agy') return null;
+
+    const profileHome =
+      profile.name === 'chinh'
+        ? (profile.home || os.homedir())
+        : (profile.home || path.join(this.config.agyHomesDir, profile.name));
+
+    const tokenData = readAgyToken(profileHome);
+    if (!tokenData) return null;
+
+    let accessToken = tokenData.accessToken;
+    const isExpired = tokenData.expiry ? new Date(tokenData.expiry).getTime() <= Date.now() + 60_000 : false;
+    if ((!accessToken || isExpired) && tokenData.refreshToken) {
+      try {
+        const exchanged = await exchangeAgyRefreshToken(tokenData.refreshToken);
+        accessToken = exchanged.accessToken;
+        if (profile.kind === 'isolated') {
+          writeAgyIsolatedToken(profileHome, exchanged, profile.email);
+        }
+      } catch {
+        // bỏ qua nếu refresh không thành công
+      }
+    }
+
+    if (!accessToken) return null;
+
+    try {
+      const userInfo = await fetchAgyGoogleUserInfo(accessToken);
+      if (userInfo?.picture) {
+        if (userInfo.picture !== profile.avatarUrl) {
+          this.profileRepo.updateAvatarUrl(name, userInfo.picture);
+          this.scheduler.getEventBus().emit('profile.updated', undefined, {
+            name: profile.name,
+            avatarUrl: userInfo.picture,
+          });
+        }
+        return userInfo.picture;
+      }
+    } catch {
+      // bỏ qua lỗi fetch userinfo
+    }
+    return null;
+  }
 
   refreshProfileEmail(name: string): string | null {
     let profile: ProfileRow | undefined;
@@ -1184,6 +1237,13 @@ export class AppService {
           if (email) {
             p.email = email;
           }
+        }
+      }
+      if (p.engine === 'agy' && !p.avatarUrl && this.isProfileLoggedIn(p)) {
+        const lastSync = this.avatarSyncCache.get(p.name) || 0;
+        if (now - lastSync > 60_000) {
+          this.avatarSyncCache.set(p.name, now);
+          this.syncAgyAvatar(p.name).catch(() => {});
         }
       }
       if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
@@ -1302,13 +1362,6 @@ export class AppService {
       throw new HttpError(400, 'bad_request', 'Danh sách token trống');
     }
 
-    // Tự động bật multiplePerProvider nếu đang tắt để cho phép lưu nhiều tài khoản Google
-    if (!this.config.multiplePerProvider) {
-      this.config.multiplePerProvider = true;
-      this.config.multiplePerProviderConfigured = true;
-      saveConfig(this.config.hubHome, { multiplePerProvider: true });
-    }
-
     const results: Array<{
       name: string;
       email: string;
@@ -1316,79 +1369,67 @@ export class AppService {
       status: 'ok' | 'error';
       message?: string;
     }> = [];
+    const fail = (name: string, email: string, message: string) =>
+      results.push({ name, email, action: 'skipped', status: 'error', message });
 
     for (const rawItem of rawList) {
       if (!rawItem || typeof rawItem !== 'object') {
-        results.push({
-          name: 'unknown',
-          email: '',
-          action: 'skipped',
-          status: 'error',
-          message: 'Mục dữ liệu không phải là object hợp lệ',
-        });
+        fail('', '', 'Mục dữ liệu không phải là object hợp lệ');
         continue;
       }
       const item = rawItem as Record<string, unknown>;
 
       const emailRaw = item.email || item.Email || item.mail;
       if (!emailRaw || typeof emailRaw !== 'string' || !emailRaw.includes('@')) {
-        results.push({
-          name: 'unknown',
-          email: typeof emailRaw === 'string' ? emailRaw : '',
-          action: 'skipped',
-          status: 'error',
-          message: 'Địa chỉ email không hợp lệ hoặc thiếu',
-        });
+        fail('', typeof emailRaw === 'string' ? emailRaw : '', 'Địa chỉ email không hợp lệ hoặc thiếu');
         continue;
       }
       const email = emailRaw.trim().toLowerCase();
 
       const refreshTokenRaw = item.refresh_token || item.refreshToken || item.token;
       if (!refreshTokenRaw || typeof refreshTokenRaw !== 'string' || !refreshTokenRaw.trim()) {
-        results.push({
-          name: 'unknown',
-          email,
-          action: 'skipped',
-          status: 'error',
-          message: 'Thiếu refresh_token',
-        });
+        fail('', email, 'Thiếu refresh_token');
         continue;
       }
       const refreshToken = refreshTokenRaw.trim();
 
-      // Xác định tên profile mục tiêu
-      let targetName = '';
-      let action: 'created' | 'updated' = 'created';
+      // Chỉ cập nhật hồ sơ agy isolated; không bao giờ ghi token vào hồ sơ keyring hay engine khác.
+      const isAgyIsolated = (p: ProfileRow) => p.engine === 'agy' && p.kind === 'isolated';
+      const sameEmail = (p: ProfileRow) => (p.email || '').toLowerCase() === email;
       const customName = String(item.name || item.profile_name || item.profileName || '').trim();
-
-      if (customName && /^[a-zA-Z0-9_-]+$/.test(customName)) {
-        targetName = customName;
-        const existing = this.profileRepo.get(targetName);
-        if (existing) {
-          action = 'updated';
+      let targetName = '';
+      if (customName) {
+        if (!/^[a-zA-Z0-9_-]+$/.test(customName)) {
+          fail(customName, email, 'Tên hồ sơ chỉ được chứa chữ, số, "_" và "-"');
+          continue;
         }
+        const existing = this.profileRepo.get(customName);
+        if (existing && !isAgyIsolated(existing)) {
+          fail(customName, email, `Hồ sơ "${customName}" đã tồn tại và không phải hồ sơ Antigravity riêng`);
+          continue;
+        }
+        targetName = customName;
       } else {
-        const base = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'agy_account';
-        const existing = this.profileRepo.get(base);
-        if (!existing) {
-          targetName = base;
-        } else if (existing.engine === 'agy' && existing.email === email) {
-          targetName = base;
-          action = 'updated';
+        const all = this.profileRepo.getAll(true).filter((p) => isAgyIsolated(p) && sameEmail(p));
+        const match = all.find((p) => !p.deletedAt) || all[0];
+        if (match) {
+          targetName = match.name;
         } else {
-          let idx = 2;
-          let cand = `${base}_${idx}`;
-          while (this.profileRepo.get(cand)) {
-            const candProf = this.profileRepo.get(cand);
-            if (candProf && candProf.engine === 'agy' && candProf.email === email) {
-              cand = candProf.name;
-              break;
-            }
-            idx++;
-            cand = `${base}_${idx}`;
-          }
-          targetName = cand;
-          action = this.profileRepo.get(targetName) ? 'updated' : 'created';
+          const base = email.split('@')[0].replace(/[^a-z0-9_-]/g, '_') || 'agy_account';
+          targetName = base;
+          for (let idx = 2; this.profileRepo.get(targetName); idx++) targetName = `${base}_${idx}`;
+        }
+      }
+
+      const existing = this.profileRepo.get(targetName);
+      const action: 'created' | 'updated' = existing && !existing.deletedAt ? 'updated' : 'created';
+
+      // Cùng chính sách với createProfile: không tạo thêm hồ sơ cá nhân khi multiplePerProvider tắt.
+      if (action === 'created' && !this.config.multiplePerProvider && accountType === 'personal') {
+        const personal = this.profileRepo.getAll().find((p) => p.engine === 'agy' && p.accountType === 'personal');
+        if (personal) {
+          fail(targetName, email, `Đã có hồ sơ cá nhân cho engine agy (${personal.name}); hãy chọn loại Team/API hoặc bật multiplePerProvider`);
+          continue;
         }
       }
 
@@ -1397,41 +1438,35 @@ export class AppService {
       try {
         exchanged = await exchangeAgyRefreshToken(refreshToken);
       } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        results.push({
-          name: targetName,
-          email,
-          action: 'skipped',
-          status: 'error',
-          message: errMsg,
-        });
+        fail(targetName, email, err instanceof Error ? err.message : String(err));
         continue;
       }
 
-      // Khởi tạo thư mục profile isolated nếu chưa có
-      const homeDir = path.join(this.config.agyHomesDir, targetName);
-      if (!this.profileRepo.get(targetName)) {
+      // Lấy Google user info (bao gồm avatar / picture)
+      let avatarUrl: string | null = null;
+      try {
+        const userInfo = await fetchAgyGoogleUserInfo(exchanged.accessToken);
+        if (userInfo?.picture) {
+          avatarUrl = userInfo.picture;
+        }
+      } catch {
+        // bỏ qua nếu không lấy được ảnh
+      }
+
+      if (action === 'created') {
+        if (existing) this.profileRepo.restore(targetName);
         this.coreProfileService.createProfile(targetName, 'agy', accountType);
-      } else if (this.profileRepo.isDeleted(targetName)) {
-        this.profileRepo.restore(targetName);
       }
+      const current = this.profileRepo.get(targetName)!;
+      writeAgyIsolatedToken(current.home || path.join(this.config.agyHomesDir, targetName), exchanged, email);
+      this.profileRepo.upsert({ ...current, email, avatarUrl: avatarUrl || current.avatarUrl });
+      this.profileRepo.updateAuthState(targetName, 'ok', 'Đã xác thực qua refresh token', null);
 
-      // Ghi token và log giả lập
-      writeAgyIsolatedToken(homeDir, exchanged, email);
-
-      // Cập nhật email và authState vào DB
-      const current = this.profileRepo.get(targetName);
-      if (current) {
-        this.profileRepo.upsert({
-          ...current,
-          email,
-          enabled: 1,
-        });
-        this.profileRepo.updateAuthState(targetName, 'ok', 'Đã xác thực qua Cockpit refresh token', null);
+      if (action === 'created') {
+        this.scheduler.getEventBus().emit('profile.created', undefined, { name: targetName });
+      } else {
+        this.scheduler.getEventBus().emit('profile.updated', undefined, { name: targetName, email, avatarUrl: avatarUrl || current.avatarUrl });
       }
-
-      this.scheduler.getEventBus().emit('profile.created', undefined, { name: targetName });
-      this.scheduler.wakeWaitingQuotaTasks('profile_created');
 
       results.push({
         name: targetName,
@@ -1625,6 +1660,7 @@ export class AppService {
         }
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
+        void this.syncAgyAvatar(profile.name);
       } else if (profile.engine === 'claude') {
         // Claude profiles: login state comes from the Claude config dir, not from the Codex CLI.
         const account = this.coreProfileService.readClaudeAccount(profile.home || os.homedir());

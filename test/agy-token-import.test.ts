@@ -23,6 +23,7 @@ describe('Antigravity Token Import from Cockpit', () => {
 
     config = loadConfig(tmpDir);
     config.agyHomesDir = agyHomesDir;
+    config.multiplePerProvider = true;
 
     ctx = createContext(config);
     originalFetch = globalThis.fetch;
@@ -208,4 +209,114 @@ describe('Antigravity Token Import from Cockpit', () => {
     expect(ctx.profileRepo.get('bad')).toBeUndefined();
     expect(ctx.profileRepo.get('good')).toBeDefined();
   });
+  function mockOkFetch() {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: 'ok_token', expires_in: 3600, token_type: 'Bearer' }),
+    } as unknown as Response);
+  }
+
+  it('importAgyTokens updates the existing agy profile that already has the email, even under another name', async () => {
+    mockOkFetch();
+    ctx.service.createProfile({ name: 'g1', engine: 'agy', accountType: 'team' });
+    ctx.profileRepo.upsert({ ...ctx.profileRepo.get('g1')!, email: 'owner@example.com' });
+
+    const result = await ctx.service.importAgyTokens({ email: 'Owner@Example.com', refresh_token: 'tok' });
+
+    expect(result.results[0]).toMatchObject({ name: 'g1', action: 'updated', status: 'ok' });
+    expect(ctx.profileRepo.get('owner')).toBeUndefined();
+    expect(ctx.profileRepo.get('g1')?.accountType).toBe('team');
+  });
+
+  it('importAgyTokens never writes into a profile of another engine or a keyring profile', async () => {
+    mockOkFetch();
+    ctx.service.createProfile({ name: 'cx', engine: 'codex', accountType: 'team' });
+
+    const result = await ctx.service.importAgyTokens([{ email: 'a@example.com', refresh_token: 'tok', name: 'cx' }]);
+
+    expect(result.results[0].status).toBe('error');
+    expect(ctx.profileRepo.get('cx')?.engine).toBe('codex');
+    expect(fs.existsSync(path.join(agyHomesDir, 'cx'))).toBe(false);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('importAgyTokens respects multiplePerProvider instead of silently enabling it', async () => {
+    mockOkFetch();
+    config.multiplePerProvider = false;
+
+    const result = await ctx.service.importAgyTokens([
+      { email: 'p1@example.com', refresh_token: 't1' },
+      { email: 'p2@example.com', refresh_token: 't2' },
+    ]);
+
+    expect(config.multiplePerProvider).toBe(false);
+    expect(result.results[1].status).toBe('error');
+    expect(ctx.profileRepo.get('p2')).toBeUndefined();
+  });
+
+  it('writeAgyIsolatedToken replaces the auth log so the latest email wins', () => {
+    const profileHome = path.join(agyHomesDir, 'swap');
+    writeAgyIsolatedToken(profileHome, { refreshToken: 'r1' }, 'old@example.com');
+    writeAgyIsolatedToken(profileHome, { refreshToken: 'r2' }, 'new@example.com');
+    const log = fs.readFileSync(path.join(profileHome, '.gemini', 'antigravity-cli', 'log', 'auth.log'), 'utf8');
+    expect(log).toContain('new@example.com');
+    expect(log).not.toContain('old@example.com');
+  });
+  it('importAgyTokens signs an existing not-logged-in agy profile in by name', async () => {
+    mockOkFetch();
+    ctx.service.createProfile({ name: 'g5', engine: 'agy', accountType: 'personal' });
+
+    const result = await ctx.service.importAgyTokens({
+      tokens: [{ name: 'g5', email: 'g5@example.com', refresh_token: 'tok' }],
+      accountType: 'personal',
+    });
+
+    expect(result.results[0]).toMatchObject({ name: 'g5', action: 'updated', status: 'ok' });
+    expect(ctx.profileRepo.get('g5')).toMatchObject({ email: 'g5@example.com', authState: 'ok' });
+    expect(fs.existsSync(path.join(agyHomesDir, 'g5', '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))).toBe(true);
+  });
+
+  it('importAgyTokens fetches Google user avatar and stores in database', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL) => {
+      const urlStr = String(url);
+      if (urlStr.includes('oauth2.googleapis.com/token')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'mock_access_token_avatar',
+            expires_in: 3600,
+            token_type: 'Bearer',
+          }),
+        } as unknown as Response;
+      }
+      if (urlStr.includes('googleapis.com/oauth2/v3/userinfo')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sub: '123456789',
+            email: 'avatar_user@example.com',
+            picture: 'https://lh3.googleusercontent.com/a/mock_avatar_img_123',
+          }),
+        } as unknown as Response;
+      }
+      return { ok: false, status: 404 } as unknown as Response;
+    });
+
+    const result = await ctx.service.importAgyTokens([
+      { email: 'avatar_user@example.com', refresh_token: 'mock_rt_avatar' },
+    ]);
+
+    expect(result.success).toBe(true);
+    const profile = ctx.profileRepo.get('avatar_user');
+    expect(profile).toBeDefined();
+    expect(profile?.avatarUrl).toBe('https://lh3.googleusercontent.com/a/mock_avatar_img_123');
+
+    // Test syncAgyAvatar updates avatarUrl
+    const synced = await ctx.service.syncAgyAvatar('avatar_user');
+    expect(synced).toBe('https://lh3.googleusercontent.com/a/mock_avatar_img_123');
+  });
 });
+

@@ -66,6 +66,7 @@ export interface Profile {
   label?: string | null;
   notes?: string | null;
   priority?: number;
+  avatarUrl?: string | null;
   currentTask?: { id?: string; title?: string } | null;
 }
 

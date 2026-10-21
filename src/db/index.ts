@@ -524,6 +524,10 @@ export const MIGRATIONS: string[] = [
   `
   DELETE FROM claude_scan_state WHERE eligible = 0;
   `,
+  // Migration 41: profile avatar URL (e.g. Google user picture)
+  `
+  ALTER TABLE profiles ADD COLUMN avatarUrl TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -591,6 +595,7 @@ export interface ProfileRow {
   notes?: string | null;
   priority?: number;
   accountType?: 'personal' | 'team' | 'api';
+  avatarUrl?: string | null;
   deletedAt?: string | null;
 }
 
@@ -762,8 +767,8 @@ export class ProfileRepo {
   upsert(row: Omit<ProfileRow, 'createdAt'>): void {
     this.db
       .prepare(
-        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt, accountType)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt, accountType, avatarUrl)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            engine=excluded.engine,
            kind=excluded.kind,
@@ -776,6 +781,7 @@ export class ProfileRepo {
            notes=COALESCE(excluded.notes, profiles.notes),
            priority=COALESCE(excluded.priority, profiles.priority),
            accountType=COALESCE(excluded.accountType, profiles.accountType),
+           avatarUrl=COALESCE(excluded.avatarUrl, profiles.avatarUrl),
            deletedAt=COALESCE(excluded.deletedAt, profiles.deletedAt)`,
       )
       .run(
@@ -793,7 +799,12 @@ export class ProfileRepo {
         row.priority ?? 0,
         row.deletedAt ?? null,
         row.accountType ?? 'personal',
+        row.avatarUrl ?? null,
       );
+  }
+
+  updateAvatarUrl(name: string, avatarUrl: string | null): void {
+    this.db.prepare('UPDATE profiles SET avatarUrl = ? WHERE name = ?').run(avatarUrl, name);
   }
 
   update(
