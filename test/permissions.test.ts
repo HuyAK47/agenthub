@@ -93,6 +93,15 @@ describe('PermissionBroker', () => {
     expect(commandPermissionInfo('curl https://example.test').patterns).toEqual(['command:curl']);
     expect(commandPermissionInfo('echo x > /tmp/file').dynamic).toBe(true);
     expect(commandPermissionInfo('echo x >> ../outside').dynamic).toBe(true);
+    expect(commandPermissionInfo('echo x > .git/hooks/pre-commit').dynamic).toBe(true);
+    expect(commandPermissionInfo('bash build.sh').dynamic).toBe(true);
+    expect(commandPermissionInfo('python3 -c "print(1)"').dynamic).toBe(true);
+    expect(commandPermissionInfo('node -e "console.log(1)"').dynamic).toBe(true);
+    expect(commandPermissionInfo('rm -r -f tmp').dangerous).toBe(true);
+    expect(commandPermissionInfo('rm --recursive --force tmp').dangerous).toBe(true);
+    expect(commandPermissionInfo('find . -delete').dynamic).toBe(true);
+    expect(commandPermissionInfo('git -C /tmp/repo push origin main').dynamic).toBe(true);
+    expect(commandPermissionInfo('git push origin +main').dynamic).toBe(true);
 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-permission-'));
     db = openDatabase(path.join(dir, 'hub.db'));
@@ -113,6 +122,25 @@ describe('PermissionBroker', () => {
     broker.resolve(broker.listPending()[0].id, 'allow_always');
     await dangerous;
     expect(rules.listAll()).toHaveLength(1);
+
+    for (const [approved, rejected] of [
+      ['bash build.sh', 'bash -c "echo unsafe"'],
+      ['python3 script.py', 'python3 -c "print(unsafe)"'],
+      ['node app.js', 'node -e "process.exit(1)"'],
+      ['find . -name x', 'find . -delete'],
+      ['echo x > file', 'echo x > .git/hooks/pre-commit'],
+    ]) {
+      const allowed = broker.request({ sessionId: 'session-1', toolName: 'Bash', input: { command: approved } });
+      const allowedRow = broker.listPending()[0]; broker.resolve(allowedRow.id, 'allow_always'); await allowed;
+      const rejectedRequest = broker.request({ sessionId: 'session-1', toolName: 'Bash', input: { command: rejected } });
+      expect(broker.listPending()).toHaveLength(1);
+      broker.resolve(broker.listPending()[0].id, 'deny'); await rejectedRequest;
+    }
+
+    const gitPush = broker.request({ sessionId: 'session-1', toolName: 'Bash', input: { command: 'git -C /tmp/repo push origin main' } });
+    expect(broker.listPending()).toHaveLength(1); broker.resolve(broker.listPending()[0].id, 'allow_always'); await gitPush;
+    const gitPushVariant = broker.request({ sessionId: 'session-1', toolName: 'Bash', input: { command: 'git -C /tmp/repo push origin other' } });
+    expect(broker.listPending()).toHaveLength(1); broker.resolve(broker.listPending()[0].id, 'deny'); await gitPushVariant;
   });
 
   it('persists project rules and does not cross project boundaries', async () => {
@@ -126,6 +154,17 @@ describe('PermissionBroker', () => {
     const restarted = new PermissionBroker(requestRepo, 1, undefined, undefined, sessions, ruleRepo, projects);
     await expect(restarted.request({ sessionId: 's2', toolName: 'Bash', input: { command: 'npm run build --silent' } })).resolves.toMatchObject({ behavior: 'allow' });
     const other = restarted.request({ sessionId: 's3', toolName: 'Bash', input: { command: 'npm run build' } }); expect(restarted.listPending()).toHaveLength(1); restarted.resolve(restarted.listPending()[0].id, 'deny'); await other;
+
+    const gitFile = path.join(dir, 'p1', '.git', 'hooks', 'pre-commit');
+    const gitWrite = restarted.request({ sessionId: 's1', toolName: 'Write', input: { file_path: gitFile } });
+    expect(restarted.listPending()).toHaveLength(1);
+    restarted.resolve(restarted.listPending()[0].id, 'allow_always');
+    await gitWrite;
+    expect(ruleRepo.list({ sessionId: 's1', projectId: 'p1', toolName: 'Write' })).toHaveLength(0);
+    const gitWriteAgain = restarted.request({ sessionId: 's1', toolName: 'Write', input: { file_path: gitFile } });
+    expect(restarted.listPending()).toHaveLength(1);
+    restarted.resolve(restarted.listPending()[0].id, 'deny');
+    await gitWriteAgain;
   });
 
   it('requires an exact rule for dynamic commands and ignores empty prefixes', async () => {

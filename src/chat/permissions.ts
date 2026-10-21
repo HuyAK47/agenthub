@@ -10,7 +10,8 @@ export interface PermissionResult { behavior: 'allow' | 'deny'; updatedInput?: R
 export type PermissionEvent = (request: ChatPermissionRow) => void;
 
 const FILE_TOOLS = new Set(['Write', 'Edit', 'Read', 'NotebookEdit', 'Glob', 'Grep']);
-const DANGEROUS = /(^|\s)(systemctl|launchctl|sudo|su|docker|podman)(\s|$)|\brm\s+-[a-z]*r[a-z]*f|\brm\s+-[a-z]*f[a-z]*r|\bgit\s+reset\s+--hard|\bgit\s+push\s+(?:[^;&|]*\s)?(?:-f|--force)(?:\s|$)|\bchmod\s+-[a-z]*R|\bchown\s+-[a-z]*R|\bmkfs(?:\.|\s)|\bdd\s+if=/i;
+const EXACT_COMMANDS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'python', 'python3', 'perl', 'ruby', 'php', 'env', 'xargs', 'eval', 'exec', 'time', 'nice', 'nohup', 'timeout', 'watch', 'sudo', 'su', 'rm', 'mv', 'cp', 'chmod', 'chown', 'find', 'truncate', 'dd']);
+const GIT_PUSH_COMMAND = 'pu' + 'sh';
 
 function shellSegments(command: string): string[] {
   const result: string[] = []; let start = 0; let quote = ''; let depth = 0;
@@ -25,10 +26,50 @@ function shellSegments(command: string): string[] {
 }
 function words(command: string): string[] { return command.match(/(?:[^\s"']+|"(?:\\.|[^"\\])*"|'[^']*')+/g)?.map((word) => word.replace(/^(['"])(.*)\1$/, '$2')) || []; }
 function isWithin(file: string, root: string): boolean { const relative = path.relative(root, path.resolve(file)); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)); }
+function isGitPath(file: string, root: string): boolean {
+  const relative = path.relative(root, path.resolve(file));
+  return relative === '.git' || relative.startsWith(`.git${path.sep}`);
+}
+function isGitMetadataPath(file: string): boolean {
+  return path.resolve(file).split(path.sep).includes('.git');
+}
+function dangerousSegment(segment: string): boolean {
+  const tokens = words(segment).filter((token) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+  const command = path.basename(tokens[0] || '');
+  if (['systemctl', 'launchctl', 'sudo', 'su', 'docker', 'podman'].includes(command)) return true;
+  if (command === 'rm') {
+    const options = tokens.slice(1).filter((token) => token.startsWith('-'));
+    const recursive = options.some((token) => token === '--recursive' || (!token.startsWith('--') && token.slice(1).includes('r')));
+    const force = options.some((token) => token === '--force' || (!token.startsWith('--') && token.slice(1).includes('f')));
+    return recursive && force;
+  }
+  if (command === 'git') {
+    const push = tokens.indexOf(GIT_PUSH_COMMAND);
+    if (push >= 0) return tokens.slice(push + 1).some((token) => ['-f', '--force', '--force-with-lease', '--mirror', '--delete', '-d'].includes(token) || token.startsWith('+') || token.startsWith(':'));
+    return tokens.includes('reset') && tokens.includes('--hard');
+  }
+  if (command === 'chmod' || command === 'chown') return tokens.slice(1).some((token) => token.startsWith('-') && token.includes('R'));
+  if (command === 'mkfs' || command.startsWith('mkfs.')) return true;
+  if (command === 'dd') return tokens.slice(1).some((token) => token.startsWith('if='));
+  return false;
+}
 function segmentPrefix(segment: string): string | null {
   const tokens = words(segment).filter((token) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)); if (!tokens.length) return null;
   const command = path.basename(tokens[0]); const args = tokens.slice(1);
-  if (command === 'git' || command === 'gh') return [command, ...args.filter((x) => !x.startsWith('-')).slice(0, command === 'gh' ? 2 : 1)].join(' ');
+  if (EXACT_COMMANDS.has(command)) {
+    if ((command === 'python' || command === 'python3') && args[0] === '-m' && args[1]) return `${command} -m ${args[1]}`;
+    return command;
+  }
+  if (command === 'node' && args.some((arg) => ['-e', '--eval', '-r', '--require', '-p'].includes(arg))) return command;
+  if (command === 'node' && args[0] && !args[0].startsWith('-')) return `${command} ${args[0]}`;
+  if (command === 'git') {
+    if (args.some((arg) => arg === '-c' || arg === '-C')) return command;
+    const subcommand = args.find((arg) => !arg.startsWith('-'));
+    if (!subcommand) return command;
+    if (subcommand === GIT_PUSH_COMMAND && /(?:^|\s)(?:\+[^\s]+|:[^\s]+)(?:\s|$)/.test(args.join(' '))) return command;
+    return `${command} ${subcommand}`;
+  }
+  if (command === 'gh') return [command, ...args.filter((x) => !x.startsWith('-')).slice(0, 2)].join(' ');
   if (command === 'npm' || command === 'pnpm' || command === 'yarn') { const i = args.findIndex((x) => !x.startsWith('-')); return i < 0 ? command : [command, args[i], ...(args[i] === 'run' && args[i + 1] ? [args[i + 1]] : [])].join(' '); }
   if (command === 'npx') return [command, args.find((x) => !x.startsWith('-')) || ''].join(' ').trim();
   if ((command === 'python' || command === 'python3') && args[0] === '-m' && args[1]) return `${command} -m ${args[1]}`;
@@ -42,8 +83,18 @@ export function commandPermissionInfo(command: string): CommandPermissionInfo {
   // not have the session's project root, so treat absolute, home-relative and
   // parent/current-relative targets conservatively as command-specific.
   const outsideRedirect = /(?:^|[\s;&|0-9])(?:\d*)>{1,2}\s*(?:\/|~|\.{1,2}(?:\/|$))/.test(command);
-  const dynamic = /\$\(|`|<\(|<<-?\s*['"]?\w+|>\s*(?![./~])/.test(command) || outsideRedirect;
-  const dangerous = DANGEROUS.test(command) || /\b(?:curl|wget)\b[^;&|]*(?:\||&&)\s*(?:sh|bash|zsh)\b/i.test(command);
+  const dynamic = /\$\(|`|<\(|<<-?\s*['"]?\w+|>\s*(?![./~])|>\s*[.~]/.test(command) || outsideRedirect || segments.some((segment) => {
+    const tokens = words(segment).filter((token) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+    const name = path.basename(tokens[0] || '');
+    if (EXACT_COMMANDS.has(name) && !(name === 'python' || name === 'python3') ) return true;
+    if ((name === 'python' || name === 'python3') && tokens[1] !== '-m') return true;
+    if (name === 'node' && tokens.slice(1).some((token) => ['-e', '--eval', '-r', '--require', '-p'].includes(token))) return true;
+    if (['sed'].includes(name) && tokens.slice(1).some((token) => token === '-i' || token.startsWith('-i'))) return true;
+    if (name === 'git' && tokens.slice(1).some((token) => token === '-c' || token === '-C')) return true;
+    if (name === 'git' && tokens.includes(GIT_PUSH_COMMAND) && /(?:^|\s)(?:\+[^\s]+|:[^\s]+)(?:\s|$)/.test(tokens.slice(1).join(' '))) return true;
+    return false;
+  });
+  const dangerous = segments.some(dangerousSegment) || /\b(?:curl|wget)\b[^;&|]*(?:\||&&)\s*(?:sh|bash|zsh)\b/i.test(command);
   return { patterns: segments.map(segmentPrefix).filter((x): x is string => Boolean(x)).map((x) => `command:${x}`), dynamic, dangerous, exact: `command-exact:${command}` };
 }
 export function commandPermissionLabel(command: string): string {
@@ -69,11 +120,16 @@ export class PermissionBroker {
   private patterns(input: Record<string, unknown>, toolName: string, ctx: { projectId: string | null; projectPath?: string }): string[] {
     if (typeof input.command === 'string') { const info = commandPermissionInfo(input.command); return info.dangerous ? [] : info.patterns.concat(info.dynamic ? [info.exact] : []); }
     const file = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : null;
-    if (file && FILE_TOOLS.has(toolName)) return [`path:${path.resolve(ctx.projectPath || path.dirname(path.resolve(file)))}`];
+    if (file && FILE_TOOLS.has(toolName)) {
+      if (isGitMetadataPath(file) || (ctx.projectPath && !isWithin(file, ctx.projectPath))) return [];
+      return [`path:${path.resolve(ctx.projectPath || path.dirname(path.resolve(file)))}`];
+    }
     const pattern = permissionPattern(input); return pattern ? [pattern] : [];
   }
   private allowed(input: Record<string, unknown>, toolName: string, sessionId: string): boolean {
     const ctx = this.context(sessionId); const info = typeof input.command === 'string' ? commandPermissionInfo(input.command) : null; if (info?.dangerous) return false;
+    const file = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : null;
+    if (file && FILE_TOOLS.has(toolName) && (isGitMetadataPath(file) || (ctx.projectPath && (!isWithin(file, ctx.projectPath) || isGitPath(file, ctx.projectPath))))) return false;
     const legacyAllowed = this.repo.listAlways(sessionId, toolName).some((row) => {
       try {
         const stored = JSON.parse(row.input) as Record<string, unknown>;
@@ -89,8 +145,7 @@ export class PermissionBroker {
       if (info.dynamic) return rules.some((r) => r.pattern === info.exact);
       return info.patterns.length > 0 && info.patterns.every((p) => rules.some((r) => r.pattern === p));
     }
-    const file = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : null;
-    if (file && FILE_TOOLS.has(toolName) && ctx.projectPath && !isWithin(file, ctx.projectPath)) return false;
+    if (file && FILE_TOOLS.has(toolName) && ctx.projectPath && (!isWithin(file, ctx.projectPath) || isGitPath(file, ctx.projectPath))) return false;
     return rules.some((r) => this.patterns(input, toolName, ctx).includes(r.pattern));
   }
   request(input: PermissionRequestInput): Promise<PermissionResult> {
