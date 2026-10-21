@@ -336,4 +336,30 @@ describe('Brain API Endpoints (/api/brain)', () => {
     const list2 = JSON.parse(getRes2.body);
     expect(list2.decisions).toHaveLength(0);
   });
+
+  it('forwards a dashboard decision to the related project brain', async () => {
+    ctx.projectRepo.insert({
+      id: 'p1',
+      name: 'Project 1',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    const tracker = ctx.telegramService.getDecisionTracker();
+    tracker.recordDecision('dec-api-project', 'Duyệt task?', [], Date.now(), 'p1/task-1');
+    const getOrCreateSpy = vi.spyOn(ctx.chatService, 'getOrCreateSession');
+    const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({ userMessageId: 'u-2', assistantMessageId: 'a-2' });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/brain/decisions/dec-api-project/answer',
+      headers: authHeaders(),
+      payload: { answer: 'reject' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getOrCreateSpy).toHaveBeenCalledWith('brain:p1', { title: 'Bộ não · p1', kind: 'brain', projectId: 'p1' });
+    expect(sendSpy).toHaveBeenCalledWith('brain:p1', expect.stringContaining('Không'));
+  });
 });

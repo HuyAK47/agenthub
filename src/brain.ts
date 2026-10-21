@@ -342,7 +342,7 @@ export function registerBrainRoutes(
       throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
     }
     if (appService?.chatService) {
-      forwardDecisionToBrain(appService.chatService, id, updated.text, answer);
+      forwardDecisionToBrain(appService.chatService, id, updated.text, answer, updated.taskId);
     }
     appService?.scheduler.getEventBus().emit('decision.answered', undefined, {
       decisionId: id,

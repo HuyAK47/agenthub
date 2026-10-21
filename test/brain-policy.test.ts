@@ -106,6 +106,20 @@ describe('BrainPolicy', () => {
     expect(policy.decide({ toolName: 'Bash', input: { command: 'custom-tool', cwd: root } })?.action).toBe('allow');
   });
 
+  it('allows reads in references but denies writes there and outside the project', () => {
+    const { root } = make();
+    const reference = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-reference-'));
+    const otherProject = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-other-'));
+    dirs.push(reference, otherProject);
+    fs.writeFileSync(path.join(reference, 'notes.md'), 'reference');
+    const policy = new BrainPolicy({ roots: [root], readOnlyRoots: [reference] });
+
+    expect(policy.decide({ toolName: 'Read', input: { file_path: path.join(reference, 'notes.md'), cwd: root } })?.action).toBe('allow');
+    expect(policy.decide({ toolName: 'Grep', input: { path: reference, cwd: root } })?.action).toBe('allow');
+    expect(policy.decide({ toolName: 'Write', input: { file_path: path.join(reference, 'notes.md'), cwd: root } })?.action).toBe('deny');
+    expect(policy.decide({ toolName: 'Edit', input: { file_path: path.join(otherProject, 'file.ts'), cwd: root } })?.action).toBe('deny');
+  });
+
   it('requires approval for merge-affecting MCP tools in suggest mode', () => {
     const { root, policy } = make();
     const suggest = new BrainPolicy({ roots: [root], mode: 'suggest' });

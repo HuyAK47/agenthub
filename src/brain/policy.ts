@@ -232,12 +232,17 @@ export class BrainPolicy {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'Khớp brain.policy' };
     }
     const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
-    if (!this.roots.some((root) => within(cwd, root))) return null;
     if (READ_TOOLS.has(toolName)) {
-      return paths.length === 0 || paths.every((value) => safePath(value, this.roots, cwd))
+      return paths.length === 0 || paths.every((value) => safePath(value, [...this.roots, ...this.readOnlyRoots], cwd))
         ? { action: 'allow', reason: 'policy:auto_allow', message: 'Đọc trong phạm vi project/worktree' }
         : null;
     }
+    if (toolName === 'Write' || toolName === 'Edit') {
+      if (!paths.every((value) => safePath(value, this.roots, cwd))) {
+        return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối ghi ngoài phạm vi project/worktree' };
+      }
+    }
+    if (!this.roots.some((root) => within(cwd, root))) return null;
     if (toolName === 'Bash' && allowedCommand(command, this.roots, cwd)) {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'Lệnh Bash an toàn trong phạm vi project/worktree' };
     }
