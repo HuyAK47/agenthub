@@ -438,6 +438,8 @@ describe('Integration branch and cross-project dependencies', () => {
       path: intPath,
       branch: 'agenthub/integration',
       exists: true,
+      currentBranch: 'agenthub/integration',
+      dirty: false,
       ahead: 0,
       behind: 0,
     });
@@ -470,6 +472,81 @@ describe('Integration branch and cross-project dependencies', () => {
       { encoding: 'utf8' },
     ).trim();
     expect(branchCheck).toContain('refs/heads/agenthub/integration');
+  });
+
+  it('does not delete an unusable integration directory', () => {
+    const repo = path.join(tmpDir, 'unusable-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'unusable-proj',
+      name: 'Unusable Project',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { integration: { enabled: true, branch: 'agenthub/integration' } },
+    });
+
+    const intPath = path.join(tmpDir, 'integration', 'unusable-proj');
+    const marker = path.join(intPath, 'keep-me.txt');
+    fs.writeFileSync(marker, 'do not delete\n');
+    fs.writeFileSync(path.join(intPath, '.git'), 'not a gitfile\n');
+
+    expect(() => ctx.service.updateProject('unusable-proj', {
+      settings: { integration: { branch: 'agenthub/integration' } },
+    })).toThrow(/không sử dụng được/);
+    expect(fs.existsSync(marker)).toBe(true);
+  });
+
+  it('keeps a dirty integration worktree when deleting a project and returns a warning', () => {
+    const repo = path.join(tmpDir, 'dirty-delete-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'dirty-delete',
+      name: 'Dirty Delete',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { integration: { enabled: true, branch: 'agenthub/integration' } },
+    });
+    const intPath = path.join(tmpDir, 'integration', 'dirty-delete');
+    fs.writeFileSync(path.join(intPath, 'uncommitted.txt'), 'keep me\n');
+
+    const result = ctx.service.deleteProject('dirty-delete');
+    expect(result.warnings?.[0]).toContain('thay đổi chưa commit');
+    expect(fs.existsSync(path.join(intPath, 'uncommitted.txt'))).toBe(true);
+  });
+
+  it('switches a clean integration worktree to a changed configured branch and rejects a dirty one', () => {
+    const repo = path.join(tmpDir, 'switch-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'switch-proj',
+      name: 'Switch Project',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { integration: { enabled: true, branch: 'agenthub/old' } },
+    });
+    const intPath = path.join(tmpDir, 'integration', 'switch-proj');
+
+    ctx.service.updateProject('switch-proj', { settings: { integration: { branch: 'agenthub/new' } } });
+    expect(execFileSync('git', ['-C', intPath, 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' }).trim()).toBe('agenthub/new');
+
+    fs.writeFileSync(path.join(intPath, 'uncommitted.txt'), 'keep me\n');
+    expect(() => ctx.service.updateProject('switch-proj', { settings: { integration: { branch: 'agenthub/another' } } })).toThrow(/thay đổi chưa commit/);
+    expect(execFileSync('git', ['-C', intPath, 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' }).trim()).toBe('agenthub/new');
+  });
+
+  it('reports a clear error when the integration branch is checked out elsewhere', () => {
+    const repo = path.join(tmpDir, 'checked-out-repo');
+    const otherWorktree = path.join(tmpDir, 'checked-out-worktree');
+    initGitRepo(repo, 'main');
+    execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', 'agenthub/taken', otherWorktree, 'main']);
+
+    expect(() => ctx.service.createProject({
+      id: 'taken-proj',
+      name: 'Taken Project',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { integration: { enabled: true, branch: 'agenthub/taken' } },
+    })).toThrow(/Nhánh agenthub\/taken đang được checkout tại/);
   });
 
   it('guarantees hub NEVER calls git push', async () => {

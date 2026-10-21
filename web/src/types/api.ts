@@ -86,6 +86,8 @@ export interface IntegrationStatus {
   path: string;
   branch: string;
   exists: boolean;
+  currentBranch: string | null;
+  dirty: boolean;
   ahead: number;
   behind: number;
 }

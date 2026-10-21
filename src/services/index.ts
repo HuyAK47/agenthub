@@ -1133,7 +1133,7 @@ export class AppService {
     return this.getProject(id);
   }
 
-  deleteProject(id: string): { ok: boolean } {
+  deleteProject(id: string): { ok: boolean; warnings?: string[] } {
     const proj = this.projectRepo.get(id);
     if (!proj) {
       throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
@@ -1146,11 +1146,11 @@ export class AppService {
       throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy`);
     }
 
-    removeIntegrationWorktree(proj, this.config.hubHome);
+    const warning = removeIntegrationWorktree(proj, this.config.hubHome);
 
     this.projectRepo.delete(id);
     this.invalidateOutOfScopeClaudeScanStates();
-    return { ok: true };
+    return warning ? { ok: true, warnings: [warning] } : { ok: true };
   }
 
   private invalidateOutOfScopeClaudeScanStates() {

@@ -583,6 +583,8 @@ export interface ProjectRow {
     path: string;
     branch: string;
     exists: boolean;
+    currentBranch: string | null;
+    dirty: boolean;
     ahead: number;
     behind: number;
   } | null;
