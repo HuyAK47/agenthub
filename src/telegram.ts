@@ -973,6 +973,10 @@ export class TelegramBotService {
         await this.handleDigestCommand(chatId);
         break;
 
+      case '/ci':
+        await this.handleCiCommand(chatId, argStr);
+        break;
+
       case '/brain':
         await this.handleBrainCommand(chatId, argStr);
         break;
@@ -2004,6 +2008,143 @@ export class TelegramBotService {
       [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
     ];
     await this.sendMessage(chatId, digest.text, { inline_keyboard: keyboard });
+  }
+
+  private async handleCiCommand(chatId: number, argStr: string): Promise<void> {
+    const target = argStr.trim();
+    const projects = this.projectRepo.getAll();
+
+    if (!target) {
+      const selected = this.selectedProject.get(chatId);
+      if (selected) {
+        await this.renderProjectCiStatus(chatId, selected);
+        return;
+      }
+
+      // No argument and no selected project: list all projects
+      if (projects.length === 0) {
+        await this.sendMessage(chatId, 'ℹ️ Không có dự án nào trong hệ thống.');
+        return;
+      }
+
+      let msg = '🚦 <b>Trạng thái CI các dự án:</b>\n\n';
+      for (const p of projects) {
+        const run = this.ciRepo?.getLatest(p.id);
+        let icon = '⚪️';
+        let statusSummary = 'Chưa có dữ liệu';
+        if (run) {
+          if (run.status !== 'completed') {
+            icon = '🟡';
+            statusSummary = `Đang chạy (${run.workflow})`;
+          } else if (run.conclusion === 'success') {
+            icon = '🟢';
+            statusSummary = `Thành công (${run.workflow} @ ${run.sha.slice(0, 7)})`;
+          } else if (run.conclusion === 'failure') {
+            icon = '🔴';
+            statusSummary = `Thất bại (${run.workflow} @ ${run.sha.slice(0, 7)})`;
+          } else {
+            statusSummary = `${run.conclusion || run.status} (${run.workflow})`;
+          }
+        }
+        msg += `• <b>${this.escapeHtml(p.name)}</b> (<code>${p.id}</code>): ${icon} ${this.escapeHtml(statusSummary)}\n`;
+      }
+      msg += '\nGõ <code>/ci &lt;dự án&gt;</code> để xem chi tiết run và job lỗi.';
+      await this.sendMessage(chatId, msg);
+      return;
+    }
+
+    // Target provided
+    let proj = this.projectRepo.get(target);
+    if (!proj) {
+      proj = projects.find(
+        (p) =>
+          p.name.toLowerCase() === target.toLowerCase() ||
+          p.id.toLowerCase() === target.toLowerCase(),
+      );
+    }
+    if (!proj) {
+      await this.sendMessage(chatId, `❌ Không tìm thấy dự án <b>${this.escapeHtml(target)}</b>.`);
+      return;
+    }
+
+    await this.renderProjectCiStatus(chatId, proj.id);
+  }
+
+  private async renderProjectCiStatus(chatId: number, projectId: string): Promise<void> {
+    const proj = this.projectRepo.get(projectId);
+    if (!proj) {
+      await this.sendMessage(chatId, `❌ Không tìm thấy dự án <code>${this.escapeHtml(projectId)}</code>.`);
+      return;
+    }
+
+    const run = this.ciRepo?.getLatest(proj.id);
+    if (!run) {
+      await this.sendMessage(
+        chatId,
+        `ℹ️ Dự án <b>${this.escapeHtml(proj.name)}</b> (<code>${proj.id}</code>) chưa có dữ liệu CI nào được ghi nhận.`,
+      );
+      return;
+    }
+
+    let statusIcon = '⚪️';
+    let statusText = run.status;
+    if (run.status !== 'completed') {
+      statusIcon = '🟡';
+      statusText = 'Đang chạy';
+    } else if (run.conclusion === 'success') {
+      statusIcon = '🟢';
+      statusText = 'Thành công (Passed)';
+    } else if (run.conclusion === 'failure') {
+      statusIcon = '🔴';
+      statusText = 'Thất bại (Failed)';
+    } else {
+      statusText = run.conclusion || run.status;
+    }
+
+    let msg = `🚦 <b>Trạng thái CI · ${this.escapeHtml(proj.name)}</b> (<code>${proj.id}</code>)\n\n`;
+    msg += `• Trạng thái: ${statusIcon} <b>${this.escapeHtml(statusText)}</b>\n`;
+    msg += `• Workflow: <b>${this.escapeHtml(run.workflow)}</b>\n`;
+    if (run.sha) msg += `• Commit: <code>${this.escapeHtml(run.sha.slice(0, 7))}</code>\n`;
+    if (run.completedAt) msg += `• Thời gian: ${this.escapeHtml(run.completedAt)}\n`;
+
+    let jobs: Array<{
+      id?: number;
+      name?: string;
+      conclusion?: string;
+      annotations?: Array<{ message?: string; path?: string; start_line?: number }>;
+    }> = [];
+    try {
+      jobs = JSON.parse(run.jobs);
+    } catch {
+      jobs = [];
+    }
+
+    const failedJobs = jobs.filter(
+      (j) => j.conclusion === 'failure' || (j.annotations && j.annotations.length > 0),
+    );
+    if (failedJobs.length > 0) {
+      msg += `\n❌ <b>Job lỗi (${failedJobs.length}):</b>\n`;
+      for (const j of failedJobs) {
+        msg += `\n• <b>${this.escapeHtml(j.name || 'Job')}</b>:`;
+        if (j.annotations && j.annotations.length > 0) {
+          for (const a of j.annotations.slice(0, 5)) {
+            const loc = a.path ? ` (${this.escapeHtml(a.path)}${a.start_line ? `:${a.start_line}` : ''})` : '';
+            msg += `\n  - ${this.escapeHtml(a.message || 'Lỗi')}${loc}`;
+          }
+          if (j.annotations.length > 5) {
+            msg += `\n  <i>... và ${j.annotations.length - 5} chú thích lỗi khác.</i>`;
+          }
+        } else {
+          msg += ` Thất bại`;
+        }
+      }
+    }
+
+    const keyboard: InlineKeyboardButton[][] = [];
+    if (run.url) {
+      keyboard.push([{ text: '🔗 Xem run trên GitHub', url: run.url }]);
+    }
+    await this.sendMessage(chatId, msg, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
   }
 
   private brainLabel(value: { state?: string; stale?: boolean }): string {
@@ -3318,6 +3459,7 @@ export class TelegramBotService {
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
+/ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi
 /brain - Xem Claude đang làm gì và bộ não từng dự án · /brain mode [dự án] off|suggest|auto|external|inherit
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard
