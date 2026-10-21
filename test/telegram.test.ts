@@ -2836,6 +2836,40 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(helpMsg).toContain('/brain');
   });
 
+  it('/brain trust changes permission with confirmation and emits event', async () => {
+    createProject('p-trust', 'Project Trust', 'suggest', 'standard');
+    const bot = createProjectBot('suggest');
+
+    const trustEvents: unknown[] = [];
+    ctx.scheduler.getEventBus().on('brain.trust_changed', (_taskId, payload) => trustEvents.push(payload));
+
+    // /brain trust p-trust full without confirm -> does not change
+    await bot.handleUpdate({
+      update_id: 10,
+      message: { message_id: 10, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/brain trust p-trust full' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const warnCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(warnCall?.body?.text as string).toContain('Toàn quyền');
+    const projBefore = ctx.projectRepo.get('p-trust');
+    const settingsBefore = JSON.parse(projBefore?.settings || '{}');
+    expect(settingsBefore.brain?.permissions ?? 'standard').not.toBe('full');
+    expect(trustEvents).toHaveLength(0);
+
+    // /brain trust p-trust full confirm -> changes to full and emits event
+    await bot.handleUpdate({
+      update_id: 11,
+      message: { message_id: 11, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/brain trust p-trust full confirm' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const confirmMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(confirmMsg).toContain('Đã đổi quyền bộ não dự án <b>p-trust</b> sang <b>full</b>');
+    const projAfter = ctx.projectRepo.get('p-trust');
+    const settingsAfter = JSON.parse(projAfter?.settings || '{}');
+    expect(settingsAfter.brain.permissions).toBe('full');
+    expect(trustEvents).toContainEqual(expect.objectContaining({ projectId: 'p-trust', permissions: 'full' }));
+  });
+
   it('6. addAllowedChatId (pairing lai) giu lai projectId va kind cua entry cu', async () => {
     createProject('p-keep', 'Project Keep', 'suggest', 'full');
     const bot = createProjectBot('suggest');

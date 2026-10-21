@@ -1046,7 +1046,8 @@ export class TelegramBotService {
       const project = this.projectRepo.get(projectId);
       if (!project) { await this.sendMessage(chatId, `❌ Không tìm thấy dự án "${this.escapeHtml(projectId)}".`); return; }
       if (permission === 'full' && parts[3] !== 'confirm') {
-        await this.sendMessage(chatId, `⚠️ Toàn quyền cho <b>${this.escapeHtml(projectId)}</b> cho phép Claude chạy mọi lệnh. Gửi lại: <code>/brain trust ${this.escapeHtml(projectId)} full confirm</code> để xác nhận.`);
+        const keyboard = [[{ text: '⚠️ Xác nhận Toàn quyền', callback_data: `braintrust:full:${projectId}` }]];
+        await this.sendMessage(chatId, `⚠️ Toàn quyền cho <b>${this.escapeHtml(projectId)}</b> cho phép Claude chạy mọi lệnh. Gửi lại: <code>/brain trust ${this.escapeHtml(projectId)} full confirm</code> để xác nhận.`, { inline_keyboard: keyboard });
         return;
       }
       const updated = mergeProjectSettings(projectSettings(project), { brain: { permissions: permission as 'standard' | 'trusted' | 'full' | 'inherit' } });
@@ -1516,6 +1517,22 @@ export class TelegramBotService {
     }
 
     switch (domain) {
+      case 'braintrust': {
+        if (action === 'full') {
+          const project = this.projectRepo.get(taskIdOrParam);
+          if (!project) {
+            await this.answerCallbackQuery(query.id, 'Dự án không tồn tại.');
+            return;
+          }
+          const updated = mergeProjectSettings(projectSettings(project), { brain: { permissions: 'full' } });
+          this.projectRepo.update(project.id, { settings: JSON.stringify(updated) });
+          this.eventBus.emit('brain.trust_changed', undefined, { projectId: project.id, permissions: 'full', source: 'telegram' });
+          await this.answerCallbackQuery(query.id, 'Đã xác nhận Toàn quyền.');
+          await this.sendMessage(chatId, `🧠 Đã đổi quyền bộ não dự án <b>${this.escapeHtml(project.id)}</b> sang <b>full</b>.`);
+          return;
+        }
+        break;
+      }
       case 'use': {
         if (action === 'select') {
           const projectId = taskIdOrParam;
