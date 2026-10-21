@@ -101,6 +101,7 @@ const mockReport: DailyUsageReport = {
       totalRuns: 4,
       totalDurationMs: 240000,
       totalTokens: 90000,
+      claudeTokens: 25000,
       profiles: [],
     },
     {
@@ -109,6 +110,7 @@ const mockReport: DailyUsageReport = {
       totalRuns: 6,
       totalDurationMs: 360000,
       totalTokens: 135000,
+      claudeTokens: 40000,
       profiles: [],
     },
   ],
@@ -197,6 +199,10 @@ describe('DailyUsageTable Component', () => {
     // Check metric values for today (2026-10-20)
     // chinh has 3 runs, 65,000 tokens
     expect(screen.getByText(formatNumber(65000))).toBeInTheDocument();
+
+    // Check Claude Tokens column header and values
+    expect(screen.getAllByText('Token Claude').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(formatNumber(25000)).length).toBeGreaterThanOrEqual(1);
   });
 
   it('allows switching dates via date selector pills', async () => {

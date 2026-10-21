@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import path from 'node:path';
+import os from 'node:os';
 import { parseDbTime } from './db/time.js';
 import { calculateAgyTokens } from './savings.js';
 import { getModelFamily } from './quota/index.js';
@@ -72,11 +74,12 @@ export interface DayMetric {
   runs: number;
   durationMs: number;
   tokens: number;
+  claudeTokens?: number;
 }
 
 export interface DailyProfileSummary {
   name: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   enabled: boolean;
   isIdle: boolean;
   idleReason?: string;
@@ -89,7 +92,7 @@ export interface DailyProfileSummary {
 
 export interface DailyUsageDayProfile extends DayMetric {
   profileName: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   isIdle: boolean;
   quota: ProfileQuotaInfo;
 }
@@ -100,6 +103,7 @@ export interface DailyUsageDay {
   totalRuns: number;
   totalDurationMs: number;
   totalTokens: number;
+  claudeTokens?: number;
   profiles: DailyUsageDayProfile[];
 }
 
@@ -357,6 +361,87 @@ export function getDailyUsageReport(options: DailyUsageOptions): DailyUsageRepor
     metric.tokens += runTokens;
   }
 
+  // 5b. Query claude_usage to compute Claude tokens per day and by profile
+  const claudeDailyTokens = new Map<string, number>();
+  for (const d of dates) {
+    claudeDailyTokens.set(d, 0);
+  }
+  const claudeProfileDailyTokens = new Map<string, Map<string, number>>();
+  for (const p of profiles) {
+    if (p.engine === 'claude') {
+      const dayMap = new Map<string, number>();
+      for (const d of dates) {
+        dayMap.set(d, 0);
+      }
+      claudeProfileDailyTokens.set(p.name, dayMap);
+    }
+  }
+
+  try {
+    const claudeRows = db.prepare('SELECT sessionId, ts, effective FROM claude_usage').all() as Array<{
+      sessionId: string;
+      ts: string;
+      effective: number;
+    }>;
+
+    let sessionToPath: Map<string, string> | undefined;
+    try {
+      const scanPaths = db.prepare('SELECT path FROM claude_scan_state').all() as Array<{ path: string }>;
+      sessionToPath = new Map<string, string>();
+      for (const sp of scanPaths) {
+        const base = path.basename(sp.path, '.jsonl');
+        sessionToPath.set(base, sp.path);
+      }
+    } catch {
+      // claude_scan_state may not exist
+    }
+
+    for (const row of claudeRows) {
+      const d = formatHoChiMinhDate(row.ts);
+      if (!claudeDailyTokens.has(d)) continue;
+      const effectiveTokens = Math.round(row.effective);
+      claudeDailyTokens.set(d, (claudeDailyTokens.get(d) || 0) + effectiveTokens);
+
+      const transcriptPath = sessionToPath?.get(row.sessionId);
+      const sessionConfigDir = transcriptPath
+        ? path.resolve(path.dirname(path.dirname(path.dirname(transcriptPath))))
+        : null;
+
+      const defaultClaudeConfigDir = path.resolve(os.homedir(), '.claude');
+
+      for (const p of profiles) {
+        if (p.engine !== 'claude') continue;
+        let matched = false;
+        const isSystemProfile =
+          p.kind === 'system' ||
+          !p.home ||
+          path.resolve(p.home) === path.resolve(os.homedir()) ||
+          path.resolve(p.home) === defaultClaudeConfigDir;
+        const profileHome = p.home ? path.resolve(p.home) : null;
+        const profileClaudeDir = profileHome ? path.join(profileHome, '.claude') : null;
+
+        if (sessionConfigDir) {
+          if (isSystemProfile) {
+            matched = sessionConfigDir === defaultClaudeConfigDir;
+          } else {
+            matched = sessionConfigDir === profileHome || sessionConfigDir === profileClaudeDir;
+          }
+        } else if (profiles.filter((pr) => pr.engine === 'claude').length === 1) {
+          matched = true;
+        }
+
+        if (matched) {
+          const pMap = claudeProfileDailyTokens.get(p.name);
+          if (pMap && pMap.has(d)) {
+            pMap.set(d, (pMap.get(d) || 0) + effectiveTokens);
+          }
+        }
+      }
+    }
+  } catch {
+    // claude_usage may not exist in minimal environments
+  }
+
   // 6. Build DailyProfileSummary list
   const profileSummaries: DailyProfileSummary[] = profiles.map((p) => {
     const usageRows = usageByProfile.get(p.name) || [];
@@ -373,6 +458,11 @@ export function getDailyUsageReport(options: DailyUsageOptions): DailyUsageRepor
 
     for (const d of dates) {
       const m = dayMap.get(d) || { runs: 0, durationMs: 0, tokens: 0 };
+      if (p.engine === 'claude') {
+        const cTok = claudeProfileDailyTokens.get(p.name)?.get(d) ?? claudeDailyTokens.get(d) ?? 0;
+        m.tokens = cTok;
+        m.claudeTokens = cTok;
+      }
       dailyRecord[d] = { ...m };
       totalRuns += m.runs;
       totalDurationMs += m.durationMs;
@@ -392,7 +482,7 @@ export function getDailyUsageReport(options: DailyUsageOptions): DailyUsageRepor
 
     return {
       name: p.name,
-      engine: (p.engine === 'codex' ? 'codex' : 'agy') as 'agy' | 'codex',
+      engine: (p.engine === 'codex' ? 'codex' : p.engine === 'claude' ? 'claude' : 'agy') as 'agy' | 'codex' | 'claude',
       enabled: Boolean(p.enabled),
       isIdle: idleInfo.isIdle,
       idleReason: idleInfo.reason,
@@ -426,6 +516,7 @@ export function getDailyUsageReport(options: DailyUsageOptions): DailyUsageRepor
         runs: metric.runs,
         durationMs: metric.durationMs,
         tokens: metric.tokens,
+        claudeTokens: metric.claudeTokens ?? (ps.engine === 'claude' ? metric.tokens : 0),
         isIdle: ps.isIdle,
         quota: ps.quota,
       };
@@ -437,6 +528,7 @@ export function getDailyUsageReport(options: DailyUsageOptions): DailyUsageRepor
       totalRuns: dayTotalRuns,
       totalDurationMs: dayTotalDurationMs,
       totalTokens: dayTotalTokens,
+      claudeTokens: claudeDailyTokens.get(dateStr) || 0,
       profiles: dayProfiles,
     };
   });
