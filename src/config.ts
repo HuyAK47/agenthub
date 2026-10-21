@@ -105,6 +105,9 @@ export interface TelegramChat {
   id: number;
   name: string;
   username?: string;
+  /** Optional: associate this chat entry with a project for /use routing. */
+  kind?: 'chat';
+  projectId?: string;
 }
 
 export interface TelegramConfig {
