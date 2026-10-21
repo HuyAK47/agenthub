@@ -5,7 +5,7 @@ Thời lượng dự kiến khoảng 30 phút. Commit nhỏ. Lệnh có thể ch
 Khi xong tạo `docs/tasks/a3a-web-contract.DONE`. Nếu bị chặn thì tạo `.BLOCKED`.
 
 ## Bối cảnh
-Web (`web/`) được viết dựa trên **mock**. API thật đã được viết ở một nhánh khác, nằm trong thư mục **`/home/ducanh/Desktop/AgentHub-wt/a1-api-mcp/`**. Ở thư mục đó chỉ **ĐỌC**, tuyệt đối không sửa và không chạy git:
+Web (`web/`) được viết dựa trên **mock**. API thật đã được viết ở một nhánh khác, nằm trong thư mục **`/home/user/Desktop/AgentHub-wt/a1-api-mcp/`**. Ở thư mục đó chỉ **ĐỌC**, tuyệt đối không sửa và không chạy git:
 - `src/api/server.ts`: các route;
 - `src/services/index.ts`: dữ liệu trả về và schema zod của input;
 - `src/api/sse.ts`: tên sự kiện SSE và payload;

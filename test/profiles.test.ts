@@ -99,7 +99,7 @@ describe('Profile import from ~/.agy-homes', () => {
       fs.mkdirSync(logDir, { recursive: true });
       fs.writeFileSync(
         path.join(logDir, '2024-01-01.log'),
-        `Starting...\nauthenticated successfully as ${name}@gmail.com\nDone.`,
+        `Starting...\nauthenticated successfully as ${name}@example.com\nDone.`,
       );
     }
 
@@ -122,9 +122,9 @@ describe('Profile import from ~/.agy-homes', () => {
     const chinh = profileRepo.get('chinh')!;
     expect(chinh.email).toBe('fake-default@example.com');
     const g1 = profileRepo.get('g1')!;
-    expect(g1.email).toBe('g1@gmail.com');
+    expect(g1.email).toBe('g1@example.com');
     const g2 = profileRepo.get('g2')!;
-    expect(g2.email).toBe('g2@gmail.com');
+    expect(g2.email).toBe('g2@example.com');
   });
 
   it('imports quota marks from .state/*.exhausted', () => {
@@ -133,7 +133,7 @@ describe('Profile import from ~/.agy-homes', () => {
     fs.mkdirSync(profileDir, { recursive: true });
     const logDir = path.join(profileDir, '.gemini', 'antigravity-cli', 'log');
     fs.mkdirSync(logDir, { recursive: true });
-    fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as g1@gmail.com\n');
+    fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as g1@example.com\n');
 
     // Create .state with quota marks
     const stateDir = path.join(agyHomesDir, '.state');
@@ -167,14 +167,14 @@ describe('Profile import from ~/.agy-homes', () => {
       fs.mkdirSync(profileDir, { recursive: true });
       const logDir = path.join(profileDir, '.gemini', 'antigravity-cli', 'log');
       fs.mkdirSync(logDir, { recursive: true });
-      fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as same@gmail.com\n');
+      fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as same@example.com\n');
     }
 
     profileService.registerAll();
 
     const dupes = profileService.getDuplicateEmails();
     expect(dupes.size).toBeGreaterThanOrEqual(1);
-    const sameEmailProfiles = dupes.get('agy:same@gmail.com');
+    const sameEmailProfiles = dupes.get('agy:same@example.com');
     expect(sameEmailProfiles).toBeTruthy();
     expect(sameEmailProfiles!.length).toBeGreaterThanOrEqual(2);
   });

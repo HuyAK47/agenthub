@@ -98,7 +98,7 @@ function setupMockWebSocket() {
           const parsed = JSON.parse(data);
           if (parsed.type === 'input') {
             setTimeout(() => {
-              this.emitMessage('\r\n\x1b[32m✔ Đăng nhập thành công!\x1b[0m\r\nEmail liên kết: \x1b[1mnew.account@gmail.com\x1b[0m\r\nPhiên kết thúc.\r\n');
+              this.emitMessage('\r\n\x1b[32m✔ Đăng nhập thành công!\x1b[0m\r\nEmail liên kết: \x1b[1mnew.account@example.com\x1b[0m\r\nPhiên kết thúc.\r\n');
               setTimeout(() => {
                 this.close();
               }, 1200);

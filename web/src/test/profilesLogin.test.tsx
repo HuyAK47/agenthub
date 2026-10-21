@@ -55,7 +55,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
         name: 'g1',
         engine: 'agy',
         kind: 'isolated',
-        email: 'old.expired@gmail.com',
+        email: 'old.expired@example.com',
         loggedIn: false,
         enabled: 1,
       },
@@ -73,7 +73,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
 
     expect(await screen.findByText('Chưa đăng nhập')).toBeInTheDocument();
     expect(screen.getByText('Đăng nhập ngay')).toBeInTheDocument();
-    expect(screen.queryByText('old.expired@gmail.com')).not.toBeInTheDocument();
+    expect(screen.queryByText('old.expired@example.com')).not.toBeInTheDocument();
   });
 
   it('nút Đăng nhập hiện với hồ sơ agy isolated và codex, không với keyring', async () => {
@@ -131,7 +131,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
         name: 'legacy-logged-in',
         engine: 'agy',
         kind: 'keyring',
-        email: 'legacy@gmail.com',
+        email: 'legacy@example.com',
         // loggedIn undefined
         enabled: 1,
       },
@@ -155,7 +155,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText('legacy@gmail.com')).toBeInTheDocument();
+    expect(await screen.findByText('legacy@example.com')).toBeInTheDocument();
     expect(screen.getByText('Chưa đăng nhập')).toBeInTheDocument();
   });
 

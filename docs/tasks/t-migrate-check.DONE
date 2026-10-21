@@ -22,7 +22,7 @@
    - Hướng dẫn cấu hình qua API `PATCH /api/projects/agenthub` với `checks` bổ sung `{name: 'migrate-live', cmd: ['npm', 'run', 'check:migrate']}` đặt ngay sau bước `build`.
 
 4. **Nghiệm thu trên máy**:
-   - Đã chạy thực tế `npm run build && npm run check:migrate` với DB thật (`/home/ducanh/.agenthub/hub.db`), kết quả đạt mọi tiêu chí.
+   - Đã chạy thực tế `npm run build && npm run check:migrate` với DB thật (`/home/user/.agenthub/hub.db`), kết quả đạt mọi tiêu chí.
    - Chạy toàn bộ test suite `npm run test -- --run`: Đạt 21/21 test files, 184/184 tests passed.
 
 ## 2. Kết quả kiểm tra & nghiệm thu
@@ -41,7 +41,7 @@
 > agenthub@0.1.0 check:migrate
 > node scripts/check-migrations-live.mjs
 
-[check:migrate] Tìm thấy DB thật: /home/ducanh/.agenthub/hub.db
+[check:migrate] Tìm thấy DB thật: /home/user/.agenthub/hub.db
 [check:migrate] Số dòng trước migrate: tasks=52, runs=76, profiles=5
 [check:migrate] Đang sao lưu DB ra thư mục tạm (/tmp/agenthub-migrate-live-mFWVz2/hub.db) bằng .backup()...
 [check:migrate] Đang mở bản sao và thực hiện migration bằng openDatabase...

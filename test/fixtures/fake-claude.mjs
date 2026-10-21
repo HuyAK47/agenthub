@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import readline from 'node:readline';
+import './orphan-guard.mjs';
 
 const args = process.argv.slice(2);
 
