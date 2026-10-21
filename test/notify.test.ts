@@ -362,8 +362,9 @@ describe('NotificationService (Desktop Notifications)', () => {
     };
 
     // 23:30 is in quiet hours
-    const mockNightTime = new Date('2026-10-21T23:30:00Z').getTime();
-    let currentMockTime = mockNightTime;
+    const mockNightTime = new Date();
+    mockNightTime.setHours(23, 30, 0, 0);
+    const currentMockTime = mockNightTime.getTime();
 
     const notifier = new NotificationService({
       eventBus,

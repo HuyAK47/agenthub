@@ -10,7 +10,6 @@ import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 import {
   DecisionTracker,
-  PendingDecision,
   DigestData,
   generateDigest,
   isQuietHours,
@@ -2236,7 +2235,7 @@ export class TelegramBotService {
     }
   }
 
-  private broadcastMessage(
+  broadcastMessage(
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
   ): void {
