@@ -186,3 +186,20 @@ export async function fetchAgyGoogleUserInfo(
     return null;
   }
 }
+
+/**
+ * Ngoại lệ DEC-006: chỉ lấy access_token còn hạn để gọi Google userinfo.
+ * Không đọc refresh_token, không ghi lại file, không log token.
+ */
+export function readAgyAccessToken(profileHome: string): string | null {
+  const tokenFile = path.join(profileHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+  try {
+    const raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8')) as Record<string, unknown>;
+    const accessToken = typeof raw.access_token === 'string' ? raw.access_token : '';
+    const expiry = typeof raw.expiry === 'string' ? Date.parse(raw.expiry) : NaN;
+    if (!accessToken || !(expiry > Date.now() + 60_000)) return null;
+    return accessToken;
+  } catch {
+    return null;
+  }
+}

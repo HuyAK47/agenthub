@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { loadConfig } from '../src/config.js';
-import { exchangeAgyRefreshToken, writeAgyIsolatedToken } from '../src/profiles/agyToken.js';
+import { exchangeAgyRefreshToken, writeAgyIsolatedToken, readAgyAccessToken } from '../src/profiles/agyToken.js';
 import { createContext } from '../src/daemon.js';
 
 describe('Antigravity Token Import from Cockpit', () => {
@@ -325,6 +325,51 @@ describe('Antigravity Token Import from Cockpit', () => {
     await ctx.service.importAgyTokens({ tokens: [{ name: 'g6', email: 'new@example.com', refresh_token: 'tok' }] });
 
     expect(ctx.profileRepo.get('g6')).toMatchObject({ email: 'new@example.com', avatarUrl: null });
+  });
+
+  describe('syncAgyAvatarFromToken (DEC-006)', () => {
+    const picture = 'https://lh3.googleusercontent.com/a/terminal';
+    function setupProfile(expiry: string) {
+      ctx.service.createProfile({ name: 'term', engine: 'agy', accountType: 'personal' });
+      ctx.profileRepo.upsert({ ...ctx.profileRepo.get('term')!, email: 'term@example.com' });
+      writeAgyIsolatedToken(path.join(agyHomesDir, 'term'), { accessToken: 'at', refreshToken: 'rt', expiry });
+    }
+    function mockUserInfo(email: string) {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ email, picture }),
+      } as unknown as Response);
+    }
+
+    it('stores the avatar using a still-valid access token without rewriting the token file', async () => {
+      setupProfile(new Date(Date.now() + 3_600_000).toISOString());
+      const tokenFile = path.join(agyHomesDir, 'term', '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+      const before = fs.readFileSync(tokenFile, 'utf8');
+      mockUserInfo('term@example.com');
+
+      expect(await ctx.service.syncAgyAvatarFromToken('term')).toBe(picture);
+      expect(ctx.profileRepo.get('term')?.avatarUrl).toBe(picture);
+      expect(fs.readFileSync(tokenFile, 'utf8')).toBe(before);
+      expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toContain('/oauth2/v3/userinfo');
+    });
+
+    it('does not refresh an expired token', async () => {
+      setupProfile(new Date(Date.now() - 1000).toISOString());
+      mockUserInfo('term@example.com');
+
+      expect(await ctx.service.syncAgyAvatarFromToken('term')).toBeNull();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(readAgyAccessToken(path.join(agyHomesDir, 'term'))).toBeNull();
+    });
+
+    it('ignores the picture when Google reports another email', async () => {
+      setupProfile(new Date(Date.now() + 3_600_000).toISOString());
+      mockUserInfo('someone-else@example.com');
+
+      expect(await ctx.service.syncAgyAvatarFromToken('term')).toBeNull();
+      expect(ctx.profileRepo.get('term')?.avatarUrl ?? null).toBeNull();
+    });
   });
 });
 

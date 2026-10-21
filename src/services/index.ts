@@ -26,7 +26,7 @@ import {
   TaskBatchRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
-import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, readAgyAccessToken } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -1114,6 +1114,22 @@ export class AppService {
 
   private emailCheckCache = new Map<string, number>();
 
+  /** Lấy ảnh Google cho hồ sơ agy đăng nhập qua terminal (ngoại lệ DEC-006). */
+  async syncAgyAvatarFromToken(name: string): Promise<string | null> {
+    const profile = this.profileRepo.get(name);
+    if (!profile || profile.engine !== 'agy' || profile.kind !== 'isolated' || !profile.home) return null;
+    const accessToken = readAgyAccessToken(profile.home);
+    if (!accessToken) return null;
+    const info = await fetchAgyGoogleUserInfo(accessToken);
+    if (!info?.picture) return null;
+    if (info.email && profile.email && info.email.toLowerCase() !== profile.email.toLowerCase()) return null;
+    if (info.picture !== profile.avatarUrl) {
+      this.profileRepo.updateAvatarUrl(name, info.picture);
+      this.scheduler.getEventBus().emit('profile.updated', undefined, { name, avatarUrl: info.picture });
+    }
+    return info.picture;
+  }
+
   refreshProfileEmail(name: string): string | null {
     let profile: ProfileRow | undefined;
     try {
@@ -1606,6 +1622,7 @@ export class AppService {
         }
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
+        if (ok) await this.syncAgyAvatarFromToken(profile.name).catch(() => null);
       } else if (profile.engine === 'claude') {
         // Claude profiles: login state comes from the Claude config dir, not from the Codex CLI.
         const account = this.coreProfileService.readClaudeAccount(profile.home || os.homedir());
