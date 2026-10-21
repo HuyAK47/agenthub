@@ -96,14 +96,19 @@ export class DeployService {
   private enqueue(projectId: string, commit?: string): DeployStatus {
     const queued: DeployStatus = { projectId, status: 'queued', commit };
     this.latest.set(projectId, queued);
-    this.queue = this.queue.then(() => this.execute(projectId, commit)).then(() => undefined);
+    this.queue = this.queue
+      .then(() => this.execute(projectId, commit))
+      .then(() => undefined)
+      .catch((error) => console.error(`[deploy] ${projectId} failed outside execute`, error));
     return queued;
   }
 
   async run(projectId: string, commit?: string): Promise<DeployStatus> {
     let result: DeployStatus | undefined;
     const previous = this.queue;
-    this.queue = previous.then(async () => { result = await this.execute(projectId, commit); });
+    this.queue = previous
+      .then(async () => { result = await this.execute(projectId, commit); })
+      .catch((error) => console.error(`[deploy] ${projectId} failed outside execute`, error));
     await this.queue;
     return result || { projectId, status: 'skipped' };
   }
@@ -114,14 +119,14 @@ export class DeployService {
     if (!definition || !project) return { projectId, status: 'skipped' };
     const startedAt = new Date().toISOString();
     const logDir = path.join(this.config.logsDir, 'deploy', projectId);
-    fs.mkdirSync(logDir, { recursive: true });
     const logPath = path.join(logDir, `${Date.now()}.log`);
     const write = (line: string) => fs.appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
     const status: DeployStatus = { projectId, status: 'running', startedAt, commit, logPath };
-    this.latest.set(projectId, status);
-    this.eventBus.emit('deploy.started', undefined, { projectId, commit, logPath });
-    write(`deploy started project=${projectId} commit=${commit || 'unknown'}`);
     try {
+      fs.mkdirSync(logDir, { recursive: true });
+      this.latest.set(projectId, status);
+      this.eventBus.emit('deploy.started', undefined, { projectId, commit, logPath });
+      write(`deploy started project=${projectId} commit=${commit || 'unknown'}`);
       const worktree = this.resolveWorktree(project);
       if (!worktree) {
         status.status = 'skipped';
