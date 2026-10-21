@@ -231,12 +231,6 @@ describe('dependency context in worker files', () => {
       const config = loadConfig(root);
       config.hubHome = root;
       config.worktreesDir = path.join(root, 'worktrees');
-      // Keep this scheduler test independent of the host's actual free disk.
-      vi.spyOn(fs, 'statfsSync').mockReturnValue({
-        bsize: 1024 * 1024,
-        bavail: 10 * 1024,
-        blocks: 100 * 1024,
-      } as fs.StatFs);
       const db = openDatabase(config.dbPath);
       const projectRepo = new ProjectRepo(db);
       const profileRepo = new ProfileRepo(db);
@@ -306,6 +300,7 @@ describe('dependency context in worker files', () => {
         profileRepo,
         quotaMarkRepo,
         new Map<string, Engine>([['agy', fakeEngine]]),
+        { diskSpace: () => ({ freeGB: 10, totalGB: 100 }) },
       );
       scheduler.configureReviewer(reviewRepo, new ClaudeFailoverState());
 

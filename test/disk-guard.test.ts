@@ -233,4 +233,17 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
       minFreeGB: 5,
     });
   });
+
+  it('supports injecting diskSpace via options object in createContext and exposes via getStatus', () => {
+    const customCtx = createContext(config, { diskSpace: () => ({ freeGB: 42, totalGB: 100 }) });
+    try {
+      customCtx.scheduler.stop();
+      const status = customCtx.service.getStatus();
+      expect(status.disk.freeGB).toBe(42);
+      expect(status.disk.totalGB).toBe(100);
+    } finally {
+      customCtx.scheduler.stop();
+      customCtx.db.close();
+    }
+  });
 });
