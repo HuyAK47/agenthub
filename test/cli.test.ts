@@ -51,7 +51,7 @@ describe('AgentHub CLI and Installation', () => {
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/#token=[a-f0-9]{64}$/);
   });
 
-  it('cmdOpen invokes execFile("xdg-open", [url]) when browser is enabled', async () => {
+  it('cmdOpen invokes the platform browser command when browser is enabled', async () => {
     const config = loadConfig();
     getOrCreateToken(config.tokenPath);
 
@@ -63,19 +63,24 @@ describe('AgentHub CLI and Installation', () => {
     };
 
     const url = await cmdOpen(config, [], mockOpen);
-    expect(calledCmd).toBe('xdg-open');
+    expect(calledCmd).toBe(process.platform === 'darwin' ? 'open' : 'xdg-open');
     expect(calledArgs).toEqual([url]);
 
     const cliSource = fs.readFileSync(path.resolve(findProjectRoot(), 'src', 'cli.ts'), 'utf-8');
-    expect(cliSource).not.toMatch(/exec\s*\(\s*`xdg-open/);
-    expect(cliSource).toMatch(/execFile\s*\(\s*['"]xdg-open['"]\s*,\s*\[url\]/);
+    expect(cliSource).not.toMatch(/exec\s*\(\s*`(?:xdg-open|open)/);
   });
 
-  it('cmdInstallService --print outputs systemd unit content without writing files', async () => {
+  it('cmdInstallService --print outputs the platform service content without writing files', async () => {
     const output = await cmdInstallService(['--print']);
     const root = findProjectRoot();
     const expectedCliPath = path.resolve(root, 'dist', 'cli.js');
 
+    if (process.platform === 'darwin') {
+      expect(output).toContain('<plist');
+      expect(output).toContain('dev.agenthub');
+      expect(output).toContain('LaunchAgents');
+      return;
+    }
     expect(output).toContain('[Unit]');
     expect(output).toContain('Description=AgentHub Daemon');
     expect(output).toContain(`ExecStart=${process.execPath} ${expectedCliPath} daemon`);

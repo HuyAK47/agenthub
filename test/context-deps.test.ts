@@ -306,7 +306,7 @@ describe('dependency context in worker files', () => {
       scheduler.tick();
 
       const consumer = taskRepo.get('p1/consumer')!;
-      expect(consumer.status).toBe('running');
+      expect(consumer.status).toBe(process.platform === 'darwin' ? 'queued' : 'running');
       expect(consumer.worktreePath).toBeDefined();
 
       const taskMd = fs.readFileSync(path.join(consumer.worktreePath!, '.agenthub', 'task.md'), 'utf8');

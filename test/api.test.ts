@@ -530,6 +530,9 @@ describe('AgentHub HTTP API Endpoints', () => {
     // 5. Test detail endpoint with git commits and worktree DONE/BLOCKED
     const worktreeDir = path.join(tmpDir, 'worktrees', 'myproj', 'task-abc');
     fs.mkdirSync(path.join(worktreeDir, '.agenthub'), { recursive: true });
+    execFileSync('git', ['init'], { cwd: worktreeDir });
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: worktreeDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
     fs.writeFileSync(path.join(worktreeDir, '.agenthub', 'DONE'), 'All completed successfully');
 
     ctx.taskRepo.update('myproj/task-abc', {

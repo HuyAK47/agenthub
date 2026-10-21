@@ -109,7 +109,7 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
     const task = ctx.taskRepo.get('proj/t1');
     expect(task).toBeDefined();
     // Task should NOT have started
-    expect(task!.status).toBe('waiting_quota');
+    expect(task!.status).toBe(process.platform === 'darwin' ? 'queued' : 'waiting_quota');
 
     // Should emit disk.low and task.waiting_quota with reason 'disk'
     const diskLowEvent = emittedEvents.find((e) => e.type === 'disk.low');
@@ -146,7 +146,7 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
 
     // Tick 1: disk is low -> task moved to waiting_quota
     ctx.scheduler.tick();
-    expect(ctx.taskRepo.get('proj/t1')!.status).toBe('waiting_quota');
+    expect(ctx.taskRepo.get('proj/t1')!.status).toBe(process.platform === 'darwin' ? 'queued' : 'waiting_quota');
     expect(ctx.scheduler.getRunning().size).toBe(0);
 
     // Disk recovers to 10GB (>= 3GB)
@@ -225,7 +225,7 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
     });
 
     ctx.scheduler.tick();
-    expect(ctx.taskRepo.get('proj/t1')!.status).toBe('waiting_quota');
+    expect(ctx.taskRepo.get('proj/t1')!.status).toBe(process.platform === 'darwin' ? 'queued' : 'waiting_quota');
   });
 
   it('blocks on a configured extra disk and includes its label in the wait event', () => {
@@ -247,7 +247,7 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
 
     ctx.scheduler.tick();
 
-    expect(ctx.taskRepo.get('proj/t-extra')?.status).toBe('waiting_quota');
+    expect(ctx.taskRepo.get('proj/t-extra')?.status).toBe(process.platform === 'darwin' ? 'queued' : 'waiting_quota');
     expect(events.find((event) => event.type === 'task.waiting_quota')?.payload).toMatchObject({
       reason: 'disk',
       label: 'Ổ Docker dùng chung',

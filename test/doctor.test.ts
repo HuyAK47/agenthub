@@ -227,7 +227,11 @@ describe('Doctor checks', () => {
       });
       const res = await checkSystemd({ exec: mockExec });
       expect(res.status).toBe('skip');
-      expect(res.message).toContain('bỏ qua');
+      if (process.platform === 'darwin') {
+        expect(res.message).toContain('LaunchAgent');
+      } else {
+        expect(res.message).toContain('bỏ qua');
+      }
     });
 
     it('returns skip when systemd user bus is unavailable', async () => {
@@ -240,7 +244,11 @@ describe('Doctor checks', () => {
         }); // systemctl --user is-active
       const res = await checkSystemd({ exec: mockExec });
       expect(res.status).toBe('skip');
-      expect(res.message).toContain('Không có systemd user bus (bỏ qua)');
+      if (process.platform === 'darwin') {
+        expect(res.message).toContain('LaunchAgent');
+      } else {
+        expect(res.message).toContain('Không có systemd user bus (bỏ qua)');
+      }
     });
 
     it('returns ok when service is active', async () => {
