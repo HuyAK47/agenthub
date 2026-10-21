@@ -436,8 +436,14 @@ export async function createServer(
     return service.getDailyUsage(Number.isNaN(days) ? 7 : days);
   });
 
-  fastify.get('/api/claude/sessions', async (req: FastifyRequest) => service.listClaudeSessions(Number((req.query as { activeWithinMin?: string }).activeWithinMin || 5)));
-  fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => service.getClaudeSession((req.params as { id: string }).id));
+  fastify.get('/api/claude/sessions', async (req: FastifyRequest) => {
+    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
+    return service.listClaudeSessions(raw ? Number(raw) : undefined);
+  });
+  fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => {
+    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
+    return service.getClaudeSession((req.params as { id: string }).id, raw ? Number(raw) : undefined);
+  });
   fastify.patch('/api/claude/sessions/:id/auto-resume', async (req: FastifyRequest) => {
     const body = req.body as { enabled?: unknown };
     if (typeof body?.enabled !== 'boolean') throw new HttpError(400, 'bad_request', 'enabled phải là boolean');

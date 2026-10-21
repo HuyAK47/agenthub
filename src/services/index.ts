@@ -41,8 +41,7 @@ import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
-import { isClaudeQuotaLimited } from '../claude-sessions/scanner.js';
-import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
+import { isClaudeProcessOpen, isClaudeQuotaLimited, ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
@@ -683,19 +682,33 @@ export class AppService {
     public taskBatchRepo?: TaskBatchRepo,
   ) {}
 
-  listClaudeSessions(activeWithinMin = 5) {
+  listClaudeSessions(activeWithinMin?: number) {
     if (!this.claudeSessionRepo) return [];
-    const cutoff = Date.now() - activeWithinMin * 60_000;
-    return this.claudeSessionRepo.list().map((session) => ({ ...session, active: !!session.lastAt && Date.parse(session.lastAt) >= cutoff, topTasks: this.claudeSessionRepo!.topTasks(session.sessionId) }));
+    const min = typeof activeWithinMin === 'number' && !Number.isNaN(activeWithinMin) ? activeWithinMin : (this.config.claudeSessions?.activeWithinMin ?? 10);
+    const cutoff = Date.now() - min * 60_000;
+    return this.claudeSessionRepo.list().map((session) => {
+      const active = (!!session.lastAt && Date.parse(session.lastAt) >= cutoff) || (!!session.cwd && isClaudeProcessOpen(session.cwd));
+      const title = session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId);
+      return {
+        ...session,
+        title,
+        active,
+        topTasks: this.claudeSessionRepo!.topTasks(session.sessionId),
+      };
+    });
   }
-  getClaudeSession(id: string) {
+  getClaudeSession(id: string, activeWithinMin?: number) {
     if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');
     const session = this.claudeSessionRepo.get(id);
     if (!session) throw new HttpError(404, 'not_found', `Claude session "${id}" không tồn tại`);
     const db = this.scheduler.getDatabase();
     if (!db) throw new HttpError(500, 'internal_error', 'Database chưa sẵn sàng');
+    const min = typeof activeWithinMin === 'number' && !Number.isNaN(activeWithinMin) ? activeWithinMin : (this.config.claudeSessions?.activeWithinMin ?? 10);
+    const cutoff = Date.now() - min * 60_000;
+    const active = (!!session.lastAt && Date.parse(session.lastAt) >= cutoff) || (!!session.cwd && isClaudeProcessOpen(session.cwd));
+    const title = session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId);
     const turns = db.prepare(`SELECT turnId, MIN(ts) ts, SUM(input) input, SUM(output) output, SUM(cacheCreation) cacheCreation, SUM(cacheRead) cacheRead, SUM(effective) effectiveTokens FROM claude_usage WHERE sessionId=? GROUP BY turnId ORDER BY ts`).all(id) as Array<{ turnId: string; ts: string; input: number; output: number; cacheCreation: number; cacheRead: number; effectiveTokens: number }>;
-    return { ...session, turns: turns.map((turn) => ({ ...turn, tasks: db.prepare('SELECT taskId,effectiveTokens FROM claude_task_usage WHERE sessionId=? AND turnId=?').all(id, turn.turnId) })) };
+    return { ...session, title, active, turns: turns.map((turn) => ({ ...turn, tasks: db.prepare('SELECT taskId,effectiveTokens FROM claude_task_usage WHERE sessionId=? AND turnId=?').all(id, turn.turnId) })) };
   }
   setClaudeAutoResume(id: string, enabled: boolean) {
     if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');

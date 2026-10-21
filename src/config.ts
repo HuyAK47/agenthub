@@ -25,6 +25,7 @@ export interface BrainConfig {
 export interface ClaudeSessionsConfig {
   dir: string;
   maxAgeDays: number;
+  activeWithinMin: number;
   include: string[];
   weights: { cacheCreation: number; cacheRead: number };
   autoResume: { enabled: boolean; prompt: string; allowFullMode: boolean };
@@ -639,6 +640,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
       maxAgeDays: typeof rawClaudeSessions.maxAgeDays === 'number' ? rawClaudeSessions.maxAgeDays : 14,
+      activeWithinMin: typeof rawClaudeSessions.activeWithinMin === 'number' ? rawClaudeSessions.activeWithinMin : 10,
       include: rawClaudeInclude,
       weights: {
         cacheCreation: typeof rawClaudeWeights.cacheCreation === 'number' ? rawClaudeWeights.cacheCreation : 1.25,
