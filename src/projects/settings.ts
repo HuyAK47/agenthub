@@ -45,6 +45,12 @@ export const ProjectSettingsSchema = z.object({
     /** Branch/ref the integration branch starts from; defaults to the project's defaultBranch. */
     baseRef: z.string().min(1).max(200).optional(),
   }).default({}),
+  ci: z.object({
+    /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */
+    enabled: z.boolean().optional(),
+    /** Branch to monitor; defaults to the project's defaultBranch or pushed branch. */
+    branch: z.string().min(1).max(200).optional(),
+  }).default({}),
   /** Read-only material workers may consult (another repo, shared data, glossary). */
   references: z.array(ReferenceSchema).max(20).default([]),
   notifications: z.object({
@@ -60,6 +66,7 @@ export const ProjectSettingsInputSchema = z.object({
   brain: ProjectSettingsSchema.shape.brain.removeDefault().partial().optional(),
   worktree: ProjectSettingsSchema.shape.worktree.removeDefault().partial().optional(),
   integration: ProjectSettingsSchema.shape.integration.removeDefault().partial().optional(),
+  ci: ProjectSettingsSchema.shape.ci.removeDefault().partial().optional(),
   references: z.array(ReferenceSchema).max(20).optional(),
   notifications: ProjectSettingsSchema.shape.notifications.removeDefault().partial().optional(),
 });
@@ -90,6 +97,7 @@ export function mergeProjectSettings(current: ProjectSettings, input: ProjectSet
     brain: { ...current.brain, ...input.brain },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },
+    ci: { ...current.ci, ...input.ci },
     references: input.references ?? current.references,
     notifications: { ...current.notifications, ...input.notifications },
   });
