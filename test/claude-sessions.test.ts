@@ -134,6 +134,18 @@ describe('Claude session privacy and quota handling', () => {
     expect(isClaudeQuotaLimited(undefined)).toBe(false);
   });
 
+  it('keeps Claude quota observations per profile and accepts newer successful evidence', () => {
+    const db = openDatabase(':memory:');
+    const repo = new ClaudeSessionRepo(db);
+    repo.setQuota({ profileName: 'claude-may', status: 'rejected', resetsAt: 1_900_000_000, rateLimitType: 'five_hour', isUsingOverage: false, observedAt: '2026-10-21T08:00:00.000Z' });
+    repo.setQuota({ profileName: 'claude-other', status: 'rejected', resetsAt: 1_900_000_000, rateLimitType: 'five_hour', isUsingOverage: false, observedAt: '2026-10-21T08:01:00.000Z' });
+    expect(repo.markAllowedAfter('claude-may', '2026-10-21T08:05:00.000Z')).toBe(true);
+    expect(repo.quota('claude-may')).toMatchObject({ status: 'allowed', observedAt: '2026-10-21T08:05:00.000Z' });
+    expect(repo.quota('claude-other')).toMatchObject({ status: 'rejected' });
+    expect(repo.markAllowedAfter('claude-may', '2026-10-21T08:04:00.000Z')).toBe(false);
+    db.close();
+  });
+
   it('redacts transcript metadata without hiding ordinary file paths', () => {
     const text = redactTranscriptText('Contact dev.user+test@example.com; token=abc123456789; sk-abcdefghijklmnopqrstuvwxyz; /home/user/project/src/file.ts', 200);
     expect(text).toContain('[email]');

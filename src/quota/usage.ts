@@ -102,6 +102,7 @@ export class QuotaUsageService {
 
   /** Enable Claude `/usage` collection (bin resolver avoids importing chat code here). */
   configureClaude(opts: { bin: () => string | null; cwd: string }): void { this.claude = opts; }
+  setEventBus(eventBus: UsageEventSink): void { this.eventBus = eventBus; }
 
   getForProfile(name: string): QuotaUsageRow[] { return this.usage.getForProfile(name); }
   getAll(): QuotaUsageRow[] { return this.usage.getAll(); }
@@ -178,6 +179,8 @@ export class QuotaUsageService {
         fetchedAt,
       }));
       for (const row of rows) this.usage.upsert(row);
+      const remaining = rows.filter((row) => row.grp.startsWith('Claude') && row.remainingPct > 0);
+      if (remaining.length) this.eventBus?.emit('claude.quota_available', undefined, { profileName: profile.name, observedAt: new Date(fetchedAt * 1000).toISOString(), remainingPct: Math.max(...remaining.map((row) => row.remainingPct)) });
       return rows;
     } catch {
       return [];

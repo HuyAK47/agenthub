@@ -539,6 +539,17 @@ export const MIGRATIONS: string[] = [
   UPDATE tasks SET waitReason = waitReason_old;
   ALTER TABLE tasks DROP COLUMN waitReason_old;
   `,
+  // Migration 43: Claude quota observations per profile (keep claude_quota for legacy clients).
+  `
+  CREATE TABLE IF NOT EXISTS claude_quota_profiles (
+    profileName TEXT PRIMARY KEY,
+    status TEXT,
+    resetsAt INTEGER,
+    rateLimitType TEXT,
+    isUsingOverage INTEGER NOT NULL DEFAULT 0,
+    observedAt TEXT NOT NULL
+  );
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {

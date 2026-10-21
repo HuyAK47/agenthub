@@ -108,7 +108,7 @@ export class ClaudeSessionScanner {
         if (!eligible && this.isAllowed(event, sessionId)) eligible = true;
         const quota = quotaInfo(event);
         if (eligible && quota) {
-          repo.setQuota({ ...quota, observedAt: typeof event.timestamp === 'string' ? event.timestamp : new Date().toISOString() });
+          repo.setQuota({ ...quota, profileName: this.profileForSession(sessionId), observedAt: typeof event.timestamp === 'string' ? event.timestamp : new Date().toISOString() });
           if (isClaudeQuotaLimited(quota.status) && quota.resetsAt) latestLimit = { resetAt: quota.resetsAt, observedAt: typeof event.timestamp === 'string' ? event.timestamp : new Date().toISOString() };
         }
         if (event.type === 'assistant' || event.type === 'user') latestActivity = typeof event.timestamp === 'string' ? event.timestamp : latestActivity;
@@ -162,7 +162,11 @@ export class ClaudeSessionScanner {
           const messageId = String(event.message?.id || event.requestId || `${record.sessionId}:${offset}`);
           repo.addUsage({ sessionId: record.sessionId, messageId, ts, turnId: record.turnId, model, input, output, cacheCreation, cacheRead, effective, isSidechain: event.isSidechain ? 1 : 0 });
           const quota = quotaInfo(event);
-          if (quota) repo.setQuota({ ...quota, observedAt: ts });
+          const profileName = this.profileForSession(record.sessionId);
+          if (quota) repo.setQuota({ ...quota, profileName, observedAt: ts });
+          else if (event.type === 'assistant') {
+            if (repo.markAllowedAfter(profileName, ts)) this.options.eventBus?.emit('claude.quota_available', undefined, { profileName, observedAt: ts, source: 'transcript' });
+          }
         }
         for (const [id, refs] of turns) {
           const total = repo.turnTotal(sessionId, id).effective;
@@ -268,6 +272,10 @@ export class ClaudeSessionScanner {
     state.activate(resetSeconds, 'claude_usage_limit', { file, line: latestQuota.line, observedAt: latestQuota.observedAt });
   }
   private isHubChat(sessionId: string) { return !!this.db.prepare('SELECT 1 FROM chat_sessions WHERE claudeSessionId=?').get(sessionId); }
+  private profileForSession(sessionId: string): string | null {
+    const row = this.db.prepare('SELECT profileName FROM chat_sessions WHERE claudeSessionId=? AND profileName IS NOT NULL ORDER BY updatedAt DESC LIMIT 1').get(sessionId) as { profileName: string } | undefined;
+    return row?.profileName || null;
+  }
   private isAllowed(event: ClaudeTranscriptEvent, sessionId: string): boolean {
     if (this.isHubChat(sessionId)) return true;
     if (typeof event.cwd !== 'string' || event.cwd.length === 0) return false;

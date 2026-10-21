@@ -763,7 +763,20 @@ export class AppService {
     return this.claudeSessionRepo.setAutoResume(id, enabled);
   }
   async rescanClaudeSessions() { await this.claudeScanner?.scan(); return { ok: true }; }
-  getClaudeQuota() { const quota = this.claudeSessionRepo?.quota() || { status: null, resetsAt: null, rateLimitType: null, observedAt: null }; return { ...quota, limited: isClaudeQuotaLimited(quota.status || undefined) }; }
+  getClaudeQuota() {
+    const quota = this.claudeSessionRepo?.quota() || { status: null, resetsAt: null, rateLimitType: null, observedAt: null };
+    const profiles = (this.claudeSessionRepo?.quotaProfiles() || []).map((row) => ({
+      profileName: row.profileName, status: row.status, resetsAt: row.resetsAt, rateLimitType: row.rateLimitType,
+      observedAt: row.observedAt, limited: isClaudeQuotaLimited(row.status || undefined), source: 'transcript',
+    }));
+    for (const row of this.usageService.getAll().filter((item) => item.grp.startsWith('Claude') && item.remainingPct > 0)) {
+      if (!profiles.some((item) => item.profileName === row.profileName)) profiles.push({ profileName: row.profileName, status: 'allowed', resetsAt: row.resetAt, rateLimitType: null, observedAt: new Date(row.fetchedAt * 1000).toISOString(), limited: false, source: '/usage' });
+    }
+    for (const profile of this.profileRepo.getAll().filter((item) => item.engine === 'claude' && !profiles.some((row) => row.profileName === item.name))) {
+      profiles.push({ profileName: profile.name, status: null, resetsAt: null, rateLimitType: null, observedAt: new Date().toISOString(), limited: false, source: 'chưa quan sát' });
+    }
+    return { ...quota, limited: isClaudeQuotaLimited(quota.status || undefined), profiles };
+  }
   getClaudeFailover() { return this.chatService?.getClaudeFailover() || { active: false, until: null, reason: null, activatedAt: null, evidence: null, lastActivityAt: null }; }
   clearClaudeFailover() {
     if (!this.chatService) throw new HttpError(500, 'internal_error', 'ChatService chưa sẵn sàng');
