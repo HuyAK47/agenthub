@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
+import { execFileSync } from 'node:child_process';
 import { FastifyInstance } from 'fastify';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -165,11 +166,28 @@ describe('AgentHub MCP Server Tools', () => {
     expect(listRes.content[0].text).toContain('Chưa có project nào được đăng ký.');
 
     // Register project
+    const repoPath = path.join(tmpDir, 'test-repo');
+    fs.mkdirSync(repoPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: repoPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
+    fs.writeFileSync(path.join(repoPath, 'README.md'), '# Initial Repo\n');
+    execFileSync('git', ['add', '.'], { cwd: repoPath });
+    execFileSync('git', ['commit', '-m', 'chore: initial commit', '--allow-empty'], {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    });
+
     const regRes = (await client.callTool({
       name: 'hub_register_project',
       arguments: {
         name: 'proj1',
-        path: tmpDir,
+        path: repoPath,
         defaultBranch: 'main',
         maxParallel: 2,
       },
@@ -184,6 +202,39 @@ describe('AgentHub MCP Server Tools', () => {
     };
     expect(listRes.content[0].text).toContain('Projects (1):');
     expect(listRes.content[0].text).toContain('proj1 (proj1):');
+  });
+
+  it('scopes project writes and batch dispatches with AGENTHUB_MCP_PROJECT', async () => {
+    for (const id of ['p1', 'p2']) {
+      ctx.projectRepo.insert({ id, name: id, path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    }
+    ctx.db.prepare("INSERT INTO task_batches (id, projectId, title, status) VALUES ('batch-p2', 'p2', 'P2 batch', 'draft')").run();
+    process.env.AGENTHUB_MCP_PROJECT = 'p1';
+    const scopedServer = createMcpServer({ port, token, baseUrl: `http://127.0.0.1:${port}` });
+    const [scopedClientTransport, scopedServerTransport] = InMemoryTransport.createLinkedPair();
+    await scopedServer.connect(scopedServerTransport);
+    const scopedClient = new Client({ name: 'scoped-client', version: '1.0' }, { capabilities: {} });
+    await scopedClient.connect(scopedClientTransport);
+    try {
+      const create = (await scopedClient.callTool({
+        name: 'hub_create_task',
+        arguments: { project: 'p2', slug: 'forbidden', title: 'Nope', body: 'x' },
+      })) as { isError?: boolean; content: Array<{ text: string }> };
+      expect(create.isError).toBe(true);
+      expect(create.content[0].text).toContain('project "p1"');
+
+      const dispatch = (await scopedClient.callTool({ name: 'hub_dispatch_batch', arguments: { id: 'batch-p2' } })) as { isError?: boolean; content: Array<{ text: string }> };
+      expect(dispatch.isError).toBe(true);
+      expect(dispatch.content[0].text).toContain('project "p1"');
+
+      const projects = (await scopedClient.callTool({ name: 'hub_projects', arguments: {} })) as { content: Array<{ text: string }> };
+      expect(projects.content[0].text).toContain('Projects (1):');
+      expect(projects.content[0].text).toContain('p1 (p1):');
+      expect(projects.content[0].text).not.toContain('p2 (p2):');
+    } finally {
+      await scopedClient.close();
+      delete process.env.AGENTHUB_MCP_PROJECT;
+    }
   });
 
   it('hub_profiles and hub_mark_quota manage profiles and quota marks', async () => {

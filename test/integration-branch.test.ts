@@ -2,11 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { FakeEngine, type Engine } from '../src/engines/index.js';
 import { HttpError } from '../src/errors.js';
+import { getIntegrationStatus } from '../src/projects/integration.js';
+
+vi.mock('../src/projects/integration.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/projects/integration.js')>();
+  return { ...actual, getIntegrationStatus: vi.fn(actual.getIntegrationStatus) };
+});
 
 describe('Integration branch and cross-project dependencies', () => {
   let tmpDir: string;
@@ -472,6 +478,23 @@ describe('Integration branch and cross-project dependencies', () => {
       { encoding: 'utf8' },
     ).trim();
     expect(branchCheck).toContain('refs/heads/agenthub/integration');
+  });
+
+  it('does not inspect git for integrationStatus when integration is disabled', () => {
+    const repo = path.join(tmpDir, 'disabled-status-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'disabled-status',
+      name: 'Disabled Status',
+      path: repo,
+      defaultBranch: 'main',
+    });
+
+    const gitSpy = vi.mocked(getIntegrationStatus);
+    gitSpy.mockClear();
+    expect(ctx.service.getProject('disabled-status').integrationStatus).toBeNull();
+    expect(ctx.service.listProjects().find((project) => project.id === 'disabled-status')?.integrationStatus).toBeNull();
+    expect(gitSpy).not.toHaveBeenCalled();
   });
 
   it('does not delete an unusable integration directory', () => {

@@ -217,6 +217,12 @@
   --wait-profile_busy-border: color-mix(in srgb, var(--t-checking) 30%, transparent);
   --wait-profile_busy-dot: var(--t-checking);
 
+  --wait-project_unavailable-color: #ea580c;
+  --wait-project_unavailable-bg: color-mix(in srgb, #ea580c 12%, transparent);
+  --wait-project_unavailable-text: #c2410c;
+  --wait-project_unavailable-border: color-mix(in srgb, #ea580c 30%, transparent);
+  --wait-project_unavailable-dot: #ea580c;
+
   --status-draft-color: var(--t-text-3);
   --status-draft-bg: color-mix(in srgb, var(--t-text-3) 12%, transparent);
   --status-draft-text: var(--t-text-3);
@@ -350,6 +356,12 @@
   --wait-profile_busy-text: #2dd4bf;
   --wait-profile_busy-border: color-mix(in srgb, var(--t-checking) 35%, transparent);
   --wait-profile_busy-dot: var(--t-checking);
+
+  --wait-project_unavailable-color: #f97316;
+  --wait-project_unavailable-bg: color-mix(in srgb, #f97316 15%, transparent);
+  --wait-project_unavailable-text: #fb923c;
+  --wait-project_unavailable-border: color-mix(in srgb, #f97316 35%, transparent);
+  --wait-project_unavailable-dot: #f97316;
 
   --status-draft-color: var(--t-text-3);
   --status-draft-bg: color-mix(in srgb, var(--t-text-3) 12%, transparent);

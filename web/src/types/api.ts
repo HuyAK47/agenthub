@@ -150,7 +150,7 @@ export interface Review {
   createdAt: string;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
 
 export interface Task {
   id: string; // project~slug or project/slug

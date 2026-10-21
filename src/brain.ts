@@ -5,6 +5,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { AgentHubConfig } from './config.js';
 import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
+import { effectiveBrainMode } from './brain/mode.js';
 import { readExistingToken, getTokenPath } from './auth.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { generateDigest, forwardDecisionToBrain, DigestData } from './brain/digest.js';
@@ -269,7 +270,26 @@ export function registerBrainRoutes(
   appService?: AppService,
 ): void {
   fastify.get('/api/brain', async () => {
-    return brainService.getStatus();
+    const status = brainService.getStatus();
+    if (!appService) return status;
+    const sessions = appService.chatService?.chatSessionRepo;
+    const projects = appService.projectRepo.getAll();
+    const brains = [null, ...projects.map((project) => project.id)].map((projectId) => {
+      const project = projectId ? appService.projectRepo.get(projectId) : undefined;
+      const session = sessions?.get(projectId ? `brain:${projectId}` : 'brain');
+      const usage = appService.brainRunner?.getUsage(projectId);
+      return {
+        projectId,
+        projectName: project?.name || 'Hệ thống',
+        mode: effectiveBrainMode(projectId, project, appService.config.brain),
+        sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
+        state: session?.state || 'idle',
+        queued: usage?.queued || false,
+        lastTurnAt: usage?.lastTurnAt || session?.lastMessageAt || null,
+        tokensToday: usage?.tokensToday || 0,
+      };
+    });
+    return { ...status, brains };
   });
 
   fastify.put('/api/brain', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -322,7 +342,7 @@ export function registerBrainRoutes(
       throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
     }
     if (appService?.chatService) {
-      forwardDecisionToBrain(appService.chatService, id, updated.text, answer);
+      forwardDecisionToBrain(appService.chatService, id, updated.text, answer, updated.taskId);
     }
     appService?.scheduler.getEventBus().emit('decision.answered', undefined, {
       decisionId: id,

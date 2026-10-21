@@ -18,6 +18,8 @@ export interface SpawnOpts {
   readOnly?: boolean;
   env?: Record<string, string>;
   hubHome?: string;
+  gitHooks?: 'run' | 'skip';
+  project?: { settings?: string | null };
 }
 
 export interface QuotaDetection {
@@ -137,7 +139,14 @@ export class AgyEngine implements Engine {
     }
 
     Object.assign(env, LIMITED_TEST_ENV);
-    Object.assign(env, workerEnvironment(opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'), env));
+    Object.assign(
+      env,
+      workerEnvironment(
+        opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+        env,
+        { gitHooks: opts.gitHooks, project: opts.project },
+      ),
+    );
     const [agyExe, agyArgs] = lowPriority(this.agyPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, agyExe, ...agyArgs] : agyArgs;
     const executable = opts.lockFile ? 'flock' : agyExe;
@@ -273,7 +282,14 @@ export class CodexEngine implements Engine {
     if (opts.env) {
       Object.assign(env, opts.env);
     }
-    Object.assign(env, workerEnvironment(opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'), env));
+    Object.assign(
+      env,
+      workerEnvironment(
+        opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+        env,
+        { gitHooks: opts.gitHooks, project: opts.project },
+      ),
+    );
 
     const [codexExe, codexArgs] = lowPriority(codexPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;

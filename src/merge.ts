@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { runInProcessGroup } from './priority.js';
 import { projectSettings } from './projects/settings.js';
 import { ensureIntegrationWorktree } from './projects/integration.js';
+import { workerEnvironment } from './worker-guard.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 8192;
@@ -125,12 +126,14 @@ export async function mergeTaskIntoBase(
   if (status) throw new MergeError(409, 'conflict', 'worktree tích hợp có thay đổi chưa commit');
 
   const before = await git(repo, ['rev-parse', 'HEAD']);
+  const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
+  const env = workerEnvironment(hubHome, process.env, { project });
   try {
-    await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${targetBranch}`], { cwd: repo });
+    await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${targetBranch}`], { cwd: repo, env });
   } catch {
     let conflicts = '';
     try { conflicts = await git(repo, ['diff', '--name-only', '--diff-filter=U']); } catch { /* keep original error */ }
-    try { await execFileAsync('git', ['merge', '--abort'], { cwd: repo }); } catch { /* best effort; caller sees conflict */ }
+    try { await execFileAsync('git', ['merge', '--abort'], { cwd: repo, env }); } catch { /* best effort; caller sees conflict */ }
     throw new MergeError(409, 'conflict', conflicts ? `Xung đột merge ở: ${conflicts.split('\n').filter(Boolean).join(', ')}` : 'Merge bị xung đột');
   }
 
@@ -146,7 +149,7 @@ export async function mergeTaskIntoBase(
     if (argv.length === 0) continue;
     const result = await runInProcessGroup(argv[0], argv.slice(1), {
       cwd: repo,
-      env: process.env,
+      env,
       timeoutMs: timeoutSec * 1000,
     });
     if (result.code !== 0 || result.timedOut) failures.push(`${command}: ${tail(`${result.output}${result.timedOut ? `\nTimeout sau ${timeoutSec}s` : ''}`)}`);
@@ -155,7 +158,7 @@ export async function mergeTaskIntoBase(
     const current = await git(repo, ['rev-parse', 'HEAD']);
     const orig = await git(repo, ['rev-parse', 'ORIG_HEAD']).catch(() => '');
     if (current !== mergeCommit || orig !== before) throw new MergeError(422, 'unprocessable_entity', 'Không an toàn để rollback merge thất bại');
-    await execFileAsync('git', ['reset', '--hard', 'ORIG_HEAD'], { cwd: repo });
+    await execFileAsync('git', ['reset', '--hard', 'ORIG_HEAD'], { cwd: repo, env });
     throw new MergeError(422, 'unprocessable_entity', `Checks sau merge thất bại:\n${failures.join('\n\n')}`);
   }
   return { mergeCommit, checks };

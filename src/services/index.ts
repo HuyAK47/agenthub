@@ -38,6 +38,7 @@ import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
+import type { BrainRunner } from '../brain/runner.js';
 import { getDiskSpaceSync, getMonitoredDisks } from '../disk.js';
 import { WorktreeService } from '../worktrees/index.js';
 import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
@@ -72,14 +73,15 @@ function apiProject(project: ProjectRow, hubHome?: string): ProjectRow {
   } else if (reviewChain) {
     review = { chain: reviewChain, maxRounds: 2 };
   }
+  const settings = projectSettings(project);
   const resolvedHubHome = hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub');
-  const integrationStatus = getIntegrationStatus(project, resolvedHubHome);
+  const integrationStatus = settings.integration.enabled ? getIntegrationStatus(project, resolvedHubHome) : null;
   return {
     ...project,
     merge,
     reviewChain,
     review,
-    settings: projectSettings(project),
+    settings,
     integrationStatus,
     createdAt: toApiTime(project.createdAt)!,
   } as unknown as ProjectRow;
@@ -387,6 +389,7 @@ export const UpdateConfigSchema = z.object({
     claudeProfile: z.string().min(1).optional(),
     model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
     mode: z.enum(['off', 'suggest', 'auto']).optional(),
+    maxConcurrent: z.number().int().positive().optional(),
     maxTurnsPerHour: z.number().int().positive().optional(),
     dailyTokenBudget: z.number().int().nonnegative().optional(),
   }).optional(),
@@ -683,6 +686,7 @@ export function formatEventSummary(
 
 export class AppService {
   private profileChecks = new Set<string>();
+  private reviewingTasks = new Set<string>();
   constructor(
     public config: AgentHubConfig,
     public projectRepo: ProjectRepo,
@@ -707,6 +711,7 @@ export class AppService {
     public knowledgeRepo?: KnowledgeRepo,
     public taskBatchRepo?: TaskBatchRepo,
     public setupManager?: SetupManager,
+    public brainRunner?: BrainRunner,
   ) {}
 
   async getSetupStatus() {
@@ -981,8 +986,9 @@ export class AppService {
       };
     });
 
-    const disk = getDiskSpaceSync(this.config.worktreesDir);
-    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    const diskReader = this.scheduler ? this.scheduler.getDiskReader() : getDiskSpaceSync;
+    const disk = diskReader(this.config.worktreesDir);
+    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
     const runningTaskIds = runningTasks.map((r) => r.taskId);
     const overlaps = this.taskNoteRepo
       ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)
@@ -1064,6 +1070,10 @@ export class AppService {
       throw new HttpError(409, 'conflict', `Project ID "${id}" đã tồn tại`);
     }
 
+    if (!path.isAbsolute(parsed.path)) {
+      throw new HttpError(400, 'bad_request', `Đường dẫn repo phải là đường dẫn tuyệt đối: ${parsed.path}`);
+    }
+
     const resolvedPath = path.resolve(parsed.path);
     if (!fs.existsSync(resolvedPath)) {
       throw new HttpError(400, 'bad_request', `Thư mục repo không tồn tại: ${resolvedPath}`);
@@ -1072,6 +1082,49 @@ export class AppService {
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
     if (effectiveSettings.integration.enabled || effectiveSettings.integration.branch) {
       validateIntegrationBranch(effectiveSettings.integration.branch || 'agenthub/integration', parsed.defaultBranch);
+    }
+
+    let isGitRepo = false;
+    if (fs.existsSync(path.join(resolvedPath, '.git'))) {
+      isGitRepo = true;
+    } else {
+      try {
+        const topLevel = execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--show-toplevel'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (topLevel) {
+          isGitRepo = true;
+        }
+      } catch {
+        isGitRepo = false;
+      }
+    }
+    if (!isGitRepo) {
+      throw new HttpError(400, 'bad_request', `Thư mục không phải là git repository: ${resolvedPath}`);
+    }
+
+    let branchExists = false;
+    try {
+      execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--verify', parsed.defaultBranch], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      branchExists = true;
+    } catch {
+      try {
+        const headBranch = execFileSync('git', ['-C', resolvedPath, 'symbolic-ref', '--short', 'HEAD'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (headBranch === parsed.defaultBranch) {
+          branchExists = true;
+        }
+      } catch {
+        branchExists = false;
+      }
+    }
+    if (!branchExists) {
+      throw new HttpError(400, 'bad_request', `Nhánh mặc định "${parsed.defaultBranch}" không tồn tại trong repository`);
     }
 
     this.projectRepo.insert({
@@ -2371,6 +2424,11 @@ export class AppService {
     }
 
     const parsed = ReviewTaskSchema.parse(raw);
+    if (this.reviewingTasks.has(taskId)) {
+      throw new HttpError(409, 'conflict', 'Task đang được duyệt');
+    }
+    this.reviewingTasks.add(taskId);
+    try {
 
     let mergeResult: { mergeCommit: string; checks: string[] } | undefined;
     if (parsed.verdict === 'approved' && parsed.merge) {
@@ -2409,6 +2467,9 @@ export class AppService {
       this.scheduler.getEventBus().emit('task.merged', taskId, mergeResult);
     }
     return this.taskRepo.get(taskId)!;
+    } finally {
+      this.reviewingTasks.delete(taskId);
+    }
   }
 
   private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
@@ -2777,6 +2838,7 @@ export class AppService {
       },
       brain: {
         mode: this.config.brain.mode,
+        maxConcurrent: this.config.brain.maxConcurrent,
         digest: this.config.brain.digest,
         fallback: this.config.brain.fallback,
         policy: this.config.brain.policy,

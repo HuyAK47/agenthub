@@ -3,38 +3,44 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BrainRunner } from '../src/brain/runner.js';
-import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, openDatabase } from '../src/db/index.js';
+import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, ProjectRepo, openDatabase } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-function setup(mode: 'suggest' | 'auto' = 'suggest') {
+function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: number; dailyTokenBudget?: number; projectSettings?: Record<string, string> } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-runner-'));
   dirs.push(dir);
   const db = openDatabase(path.join(dir, 'hub.db'));
   const sessions = new ChatSessionRepo(db);
   const turns = new BrainTurnRepo(db);
   const profiles = new ProfileRepo(db);
+  const projects = new ProjectRepo(db);
+  for (const id of Object.keys(options.projectSettings || {})) {
+    projects.insert({ id, name: id.toUpperCase(), path: dir, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: options.projectSettings?.[id] });
+  }
   const events = new EventBus({ insert: () => 0 } as never);
   const sent: string[] = [];
   const chat = {
     getOrCreateSession(id: string, body: { title?: string; mode?: 'safe' | 'full'; model?: string; profileName?: string; kind?: 'chat' | 'brain' }) {
-      if (!sessions.get(id)) sessions.insert({ id, title: body.title, mode: body.mode, model: body.model, profileName: body.profileName, kind: body.kind });
+      if (!sessions.get(id)) sessions.insert({ id, title: body.title, mode: body.mode, model: body.model, profileName: body.profileName, kind: body.kind, projectId: id.startsWith('brain:') ? id.slice('brain:'.length) : null });
       return sessions.get(id)!;
     },
-    sendMessage(_id: string, text: string) { sent.push(text); return { userMessageId: 'u', assistantMessageId: 'a' }; },
+    sendMessage(_id: string, text: string) { sent.push(`${_id}: ${text}`); return { userMessageId: 'u', assistantMessageId: 'a' }; },
   };
+  const brainConfig = { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode, maxConcurrent: options.maxConcurrent ?? 2, maxTurnsPerHour: 20, dailyTokenBudget: options.dailyTokenBudget ?? 0 } as const;
   const runner = new BrainRunner({
-    config: { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode, maxTurnsPerHour: 20, dailyTokenBudget: 0 },
+    config: brainConfig,
     eventBus: events,
     chatService: chat,
     chatSessionRepo: sessions,
     profileRepo: profiles,
     turnRepo: turns,
     debounceMs: 60_000,
+    projectRepo: projects,
   });
-  return { db, sessions, turns, profiles, events, sent, runner };
+  return { db, sessions, turns, profiles, projects, events, sent, runner };
 }
 
 describe('BrainRunner', () => {
@@ -69,5 +75,99 @@ describe('BrainRunner', () => {
     ctx.profiles.upsert({ name: 'claude-may', engine: 'claude', kind: 'system', home: os.homedir(), email: null, enabled: 1 });
     ctx.runner.start();
     expect(ctx.sessions.get('brain')?.profileName).toBe('claude-may');
+  });
+
+  it('routes project events to separate pinned sessions and system incidents to brain', () => {
+    const ctx = setup('suggest', { projectSettings: { p1: '{}', p2: '{}' }, maxConcurrent: 3 });
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p1/task');
+    ctx.events.emit('task.done', 'p2/task');
+    ctx.events.emit('disk.low', undefined, { freeGB: 1 });
+    ctx.runner.flush();
+    expect(ctx.sent).toHaveLength(3);
+    expect(ctx.sessions.get('brain:p1')).toMatchObject({ projectId: 'p1', pinned: 1, title: 'Bộ não · P1' });
+    expect(ctx.sessions.get('brain:p2')).toMatchObject({ projectId: 'p2', pinned: 1, title: 'Bộ não · P2' });
+    expect(ctx.sessions.get('brain')).toMatchObject({ projectId: null, pinned: 1 });
+  });
+
+  it('skips off/external projects and inherits the global mode', () => {
+    const ctx = setup('auto', { projectSettings: { off: '{"brain":{"mode":"off"}}', external: '{"brain":{"mode":"external"}}', inherited: '{"brain":{"mode":"inherit"}}' }, maxConcurrent: 2 });
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'off/task');
+    ctx.events.emit('task.done', 'external/task');
+    ctx.events.emit('task.done', 'inherited/task');
+    ctx.runner.flush();
+    expect(ctx.sent).toHaveLength(1);
+    expect(ctx.sent[0]).toContain('brain:inherited');
+    expect(ctx.sessions.get('brain:off')).toBeUndefined();
+    expect(ctx.sessions.get('brain:external')).toBeUndefined();
+  });
+
+  it('uses round-robin scheduling when one project is busy', () => {
+    const ctx = setup('suggest', { projectSettings: { p1: '{}', p2: '{}' }, maxConcurrent: 1 });
+    ctx.runner.start();
+    ctx.sessions.insert({ id: 'brain:p1', projectId: 'p1', title: 'P1', kind: 'brain', busy: 1 });
+    ctx.events.emit('task.done', 'p1/first');
+    ctx.events.emit('task.done', 'p2/second');
+    ctx.runner.flush();
+    expect(ctx.sent).toHaveLength(1);
+    expect(ctx.sent[0]).toContain('task.done (p2/second)');
+  });
+
+  it('applies per-project limits while allowing another project to run', () => {
+    const ctx = setup('suggest', { projectSettings: { limited: '{"brain":{"maxTurnsPerHour":1}}', free: '{}' }, maxConcurrent: 1 });
+    ctx.runner.start();
+    const old = new Date(Date.now() - 10 * 60_000).toISOString();
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, status, startedAt) VALUES (?, ?, ?, ?, ?, ?)").run('old', 'event', 'old', 'limited', 'done', old);
+    ctx.events.emit('task.done', 'limited/task');
+    ctx.events.emit('task.done', 'free/task');
+    ctx.runner.flush();
+    expect(ctx.sent).toHaveLength(1);
+    expect(ctx.sent[0]).toContain('free/task');
+  });
+
+  it('stops every project when the global token budget is exhausted', () => {
+    const ctx = setup('suggest', { projectSettings: { p1: '{}', p2: '{}' }, dailyTokenBudget: 100 });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, status, inputTokens, outputTokens, startedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run('global-budget', 'event', 'old', 'p1', 'done', 60, 40, today.toISOString());
+    const limited: unknown[] = [];
+    ctx.events.on('brain.limited', (_taskId, payload) => limited.push(payload));
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p1/task');
+    ctx.events.emit('task.done', 'p2/task');
+    ctx.runner.flush();
+    expect(ctx.sent).toHaveLength(0);
+    expect(limited).toContainEqual({ reason: 'budget', scope: 'global' });
+    ctx.runner.stop();
+  });
+
+  it('drops an event after three ordinary failures and reports an incident', () => {
+    const ctx = setup('auto');
+    const incidents: unknown[] = [];
+    ctx.events.on('brain.notify', (_taskId, payload) => incidents.push(payload));
+    ctx.runner.start();
+    ctx.events.emit('task.failed');
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      ctx.runner.flush();
+      ctx.events.emit('chat.error', undefined, { sessionId: 'brain', message: 'temporary failure' });
+    }
+    expect(ctx.runner.getQueuedEvents()).toHaveLength(0);
+    expect(incidents).toContainEqual(expect.objectContaining({ level: 'incident' }));
+    ctx.runner.stop();
+  });
+
+  it('keeps an event after quota failure and emits brain.waiting', () => {
+    const ctx = setup('auto');
+    const waiting: unknown[] = [];
+    ctx.events.on('brain.waiting', (_taskId, payload) => waiting.push(payload));
+    ctx.runner.start();
+    ctx.events.emit('task.failed');
+    ctx.runner.flush();
+    ctx.events.emit('chat.error', undefined, { sessionId: 'brain', message: 'rate limit reached' });
+    expect(ctx.runner.getQueuedEvents()).toHaveLength(1);
+    expect(waiting).toContainEqual({ reason: 'quota' });
+    ctx.runner.stop();
   });
 });

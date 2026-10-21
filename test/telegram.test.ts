@@ -1901,6 +1901,28 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(sendCalls[2].body?.text).toContain('Mọi tài khoản đều đã hết quota');
   });
 
+  it('lọc thông báo thô theo brain mode hiệu lực của từng project', async () => {
+    ctx.projectRepo.insert({ id: 'p1', name: 'P1', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: JSON.stringify({ brain: { mode: 'auto' } }) });
+    ctx.projectRepo.insert({ id: 'p2', name: 'P2', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    const bot = createBot('suggest');
+
+    bot.handleEvent('task.review_ready', 'p1/task', { title: 'P1 task' });
+    bot.handleEvent('task.review_ready', 'p2/task', { title: 'P2 task' });
+    await bot.flushQueue(CHAT_ID);
+    let sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(1);
+    expect(sends[0].body?.text).toContain('P2 task');
+
+    ctx.projectRepo.update('p2', { settings: JSON.stringify({ brain: { mode: 'suggest' } }) });
+    config.brain.mode = 'auto';
+    bot.handleEvent('task.failed', 'p1/failed', { title: 'P1 failed' });
+    bot.handleEvent('task.failed', 'p2/failed', { title: 'P2 failed' });
+    await bot.flushQueue(CHAT_ID);
+    sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(2);
+    expect(sends[1].body?.text).toContain('P2 failed');
+  });
+
   it('2. gio yen tinh notifications.quietHours: chi gui level incident, tin khac don lai', async () => {
     config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
     const quietDate = new Date();

@@ -907,6 +907,7 @@ export class ChatService {
           sessionId,
           this.config.port,
           this.config.chat.permissionTimeoutSec,
+          session.projectId,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: '/compact',
@@ -1088,6 +1089,7 @@ export class ChatService {
           sessionId,
           this.config.port,
           this.config.chat.permissionTimeoutSec,
+          session.projectId,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: FORK_SUMMARY_PROMPT,
@@ -1225,7 +1227,7 @@ export class ChatService {
       }
     }
 
-    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec);
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId);
     const supportsPartial = checkClaudePartialSupport(claudeBin);
 
     const session = this.chatSessionRepo.get(turn.sessionId);
@@ -1551,7 +1553,7 @@ export class ChatService {
     const proc = spawnClaude(claudeBin, buildClaudeArgs({ planning: this.config.planning,
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
-      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec),
+      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec, session.projectId),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
       model: execution.model,

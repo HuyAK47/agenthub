@@ -4,6 +4,7 @@ import { EventBus } from './scheduler/index.js';
 import { QuotaMarkRepo, TaskRepo, ProfileRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
 import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
+import { effectiveBrainMode } from './brain/mode.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -17,6 +18,7 @@ export interface NotificationServiceOptions {
   taskRepo?: TaskRepo;
   profileRepo?: ProfileRepo;
   quotaMarkRepo?: QuotaMarkRepo;
+  projectRepo?: { get(id: string): { settings?: string | null } | undefined };
   exec?: NotifyExecFn;
   now?: () => number;
 }
@@ -27,6 +29,7 @@ export class NotificationService {
   private taskRepo?: TaskRepo;
   private profileRepo?: ProfileRepo;
   private quotaMarkRepo?: QuotaMarkRepo;
+  private projectRepo?: NotificationServiceOptions['projectRepo'];
   private execFn?: NotifyExecFn;
   private now: () => number;
   private lastSent = new Map<string, number>();
@@ -40,6 +43,7 @@ export class NotificationService {
     this.taskRepo = opts.taskRepo;
     this.profileRepo = opts.profileRepo;
     this.quotaMarkRepo = opts.quotaMarkRepo;
+    this.projectRepo = opts.projectRepo;
     this.execFn = opts.exec;
     this.now = opts.now || (() => Date.now());
   }
@@ -107,7 +111,9 @@ export class NotificationService {
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
 
     // 1. In brain auto mode: suppress raw task notifications
-    if (this.config.brain?.mode === 'auto') {
+    const taskProjectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
+    const effectiveMode = effectiveBrainMode(taskProjectId, taskProjectId ? this.projectRepo?.get(taskProjectId) : null, this.config.brain);
+    if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
         (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now()));
@@ -230,7 +236,7 @@ export class NotificationService {
 
       case 'quota.exhausted': {
         const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now());
-        if (this.config.brain?.mode === 'auto') {
+        if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
           }

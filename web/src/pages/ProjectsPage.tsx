@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addProjectKnowledge, createProject, deleteProject, deleteProjectKnowledge, getProjectKnowledge, getProjects, updateProject, updateProjectKnowledge } from '../api/client';
-import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin } from 'lucide-react';
+import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin, ChevronDown } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { Project } from '../types/api';
 
@@ -21,8 +22,15 @@ function getProjectHooksString(proj: Project): string {
 export const ProjectsPage: React.FC = () => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
 
   const [showAddForm, setShowAddForm] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      setShowAddForm(true);
+    }
+  }, [searchParams]);
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
   const [defaultBranch, setDefaultBranch] = useState('main');
@@ -198,7 +206,7 @@ export const ProjectsPage: React.FC = () => {
           <h2 className="text-base font-bold">{t('projects.formTitle')}</h2>
 
           {formError && (
-            <div className="p-3 rounded-lg bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] text-xs">
+            <div data-testid="form-error-msg" className="p-3 rounded-lg bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] text-xs">
               {formError}
             </div>
           )}
@@ -209,6 +217,7 @@ export const ProjectsPage: React.FC = () => {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('projects.nameLabel')}
                 </label>
+                <p className="text-xs text-[var(--t-text-3)] mb-1.5">{t('projects.nameHint')}</p>
                 <input
                   type="text"
                   placeholder={t('projects.namePlaceholder')}
@@ -222,6 +231,7 @@ export const ProjectsPage: React.FC = () => {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('projects.pathLabel')}
                 </label>
+                <p className="text-xs text-[var(--t-text-3)] mb-1.5">{t('projects.pathHint')}</p>
                 <input
                   type="text"
                   placeholder={t('projects.pathPlaceholder')}
@@ -235,6 +245,7 @@ export const ProjectsPage: React.FC = () => {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('projects.branchLabel')}
                 </label>
+                <p className="text-xs text-[var(--t-text-3)] mb-1.5">{t('projects.branchHint')}</p>
                 <input
                   type="text"
                   placeholder="main"
@@ -248,6 +259,7 @@ export const ProjectsPage: React.FC = () => {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('projects.maxParallelLabel')}
                 </label>
+                <p className="text-xs text-[var(--t-text-3)] mb-1.5">{t('projects.maxParallelHint')}</p>
                 <input
                   type="number"
                   min={1}
@@ -259,47 +271,59 @@ export const ProjectsPage: React.FC = () => {
               </div>
             </div>
 
-            {/* envTemplate JSON with Validation */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)]">
-                  {t('projects.envLabel')}
-                </label>
-                {envTemplate.trim() && !jsonError && (
-                  <span className="text-xs text-[var(--t-ok)] font-medium flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> {t('projects.validJson')}
-                  </span>
-                )}
+            {/* Advanced Section (collapsible, collapsed by default) */}
+            <details data-testid="advanced-section" className="border border-[var(--t-border)] rounded-lg p-3 group">
+              <summary className="text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] cursor-pointer select-none flex items-center justify-between">
+                <span>{t('projects.advanced')}</span>
+                <ChevronDown className="w-4 h-4 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="mt-4 space-y-4">
+                {/* envTemplate JSON with Validation */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)]">
+                      {t('projects.envLabel')}
+                    </label>
+                    {envTemplate.trim() && !jsonError && (
+                      <span className="text-xs text-[var(--t-ok)] font-medium flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> {t('projects.validJson')}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-[var(--t-text-3)] mb-1.5">{t('projects.envHint')}</p>
+                  <textarea
+                    data-testid="env-template-textarea"
+                    rows={4}
+                    placeholder={'{\n  "PORT": 3000,\n  "DATABASE_URL": "postgres://..."\n}'}
+                    value={envTemplate}
+                    onChange={(e) => handleEnvTemplateChange(e.target.value)}
+                    className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] focus:outline-none focus:ring-2 ${
+                      jsonError
+                        ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
+                        : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
+                    }`}
+                  />
+                  {jsonError && (
+                    <p data-testid="json-error-msg" className="text-xs text-[var(--t-crit)] mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      {jsonError}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">{t('extra.checks')}</label>
+                  <p className="text-xs text-[var(--t-text-3)] mb-1.5">{t('projects.checksHint')}</p>
+                  <textarea rows={3} value={checksJson} onChange={(e) => setChecksJson(e.target.value)} placeholder={'[{"name":"lint","cmd":["npm","run","lint"]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)]" />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">{t('extra.hooks')}</label>
+                  <p className="text-xs text-[var(--t-text-3)] mb-1.5">{t('projects.hooksHint')}</p>
+                  <textarea rows={3} value={hooksText} onChange={(e) => setHooksText(e.target.value)} placeholder={'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)]" />
+                </div>
               </div>
-              <textarea
-                data-testid="env-template-textarea"
-                rows={4}
-                placeholder={'{\n  "PORT": 3000,\n  "DATABASE_URL": "postgres://..."\n}'}
-                value={envTemplate}
-                onChange={(e) => handleEnvTemplateChange(e.target.value)}
-                className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] focus:outline-none focus:ring-2 ${
-                  jsonError
-                    ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
-                    : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
-                }`}
-              />
-              {jsonError && (
-                <p data-testid="json-error-msg" className="text-xs text-[var(--t-crit)] mt-1 flex items-center gap-1">
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  {jsonError}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">{t('extra.hooks')}</label>
-              <textarea rows={3} value={hooksText} onChange={(e) => setHooksText(e.target.value)} placeholder={'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)]" />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">{t('extra.checks')}</label>
-              <textarea rows={3} value={checksJson} onChange={(e) => setChecksJson(e.target.value)} placeholder={'[{"name":"lint","cmd":["npm","run","lint"]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)]" />
-            </div>
+            </details>
 
             <div className="flex justify-end gap-3 pt-2">
               <button
@@ -332,8 +356,55 @@ export const ProjectsPage: React.FC = () => {
             {t('projects.loadError')}
           </div>
         ) : projects.length === 0 ? (
-          <div className="col-span-2 p-8 text-center text-[var(--t-text-3)] text-sm">
-            {t('projects.empty')}
+          <div data-testid="projects-empty-guide" className="col-span-2 bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 shadow-xs space-y-5">
+            <div className="flex items-start gap-4">
+              <div className="p-3 rounded-lg bg-[var(--t-surface-2)] text-[var(--t-accent)] shrink-0">
+                <FolderGit2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-[var(--t-text)]">{t('projects.emptyTitle')}</h3>
+                <p className="text-sm text-[var(--t-text-3)] leading-relaxed">{t('projects.emptyDesc')}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+              <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                  1
+                </div>
+                <p className="text-xs text-[var(--t-text-2)] leading-relaxed">{t('projects.emptyStep1')}</p>
+              </div>
+
+              <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                  2
+                </div>
+                <p className="text-xs text-[var(--t-text-2)] leading-relaxed">{t('projects.emptyStep2')}</p>
+              </div>
+
+              <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                  3
+                </div>
+                <p className="text-xs text-[var(--t-text-2)] leading-relaxed">{t('projects.emptyStep3')}</p>
+              </div>
+            </div>
+
+            {!showAddForm && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetForm();
+                    setShowAddForm(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{t('projects.registerFirstBtn')}</span>
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           projects.map((proj) => (

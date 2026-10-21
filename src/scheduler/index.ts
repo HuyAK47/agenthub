@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getMonitoredDisks, type MonitoredDisk } from '../disk.js';
+import { getMonitoredDisks, getDiskSpaceSync, type MonitoredDisk, type DiskSpace } from '../disk.js';
 import {
   TaskRepo,
   RunRepo,
@@ -17,7 +17,9 @@ import {
   TaskRow,
   ProfileRow,
   KnowledgeRepo,
+  TaskNoteRepo,
 } from '../db/index.js';
+import { projectSettings } from '../projects/settings.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
@@ -42,6 +44,22 @@ import { LoadGuard, LoadSnapshot } from '../load.js';
 import { measureProcessTree } from '../process-tree.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
+
+export function isProjectAccessible(projectPath: string | null | undefined): boolean {
+  if (!projectPath) return false;
+  try {
+    if (!fs.existsSync(projectPath)) return false;
+    const gitDir = path.join(projectPath, '.git');
+    if (fs.existsSync(gitDir)) return true;
+    execFileSync('git', ['-C', projectPath, 'rev-parse', '--git-dir'], {
+      stdio: 'ignore',
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const PROTOCOL_PROMPT = `Đọc \`.agenthub/task.md\` và thực hiện. Đọc thêm AGENTS.md / CLAUDE.md / GEMINI.md của project nếu có. Làm trên nhánh hiện tại, commit nhỏ theo Conventional Commits. KHÔNG dùng subagent / agent con; tự làm tuần tự trong phiên này. Tránh đọc lại file lớn không cần thiết. \`node_modules\` đã được chuẩn bị sẵn, KHÔNG chạy \`npm ci\`/\`npm install\` trừ khi bạn sửa \`package.json\`. KHÔNG chạy test/lệnh ở chế độ nền (background) rồi chờ: luôn chạy trực tiếp (foreground) và bọc \`timeout 300\`; test dùng \`--run\`, không watch. KHÔNG sửa file ngoài phạm vi task. Khi xong tạo \`.agenthub/DONE\` (tóm tắt, kết quả lint/test, việc còn thiếu); nếu bị chặn tạo \`.agenthub/BLOCKED\` (lý do). Chỉ tạo marker ở bước cuối.`;
 
@@ -126,6 +144,10 @@ interface ReviewerRun {
 
 const STALL_NOTE = 'Lượt trước bị kẹt khi chờ tác vụ nền. Chạy lệnh trực tiếp với timeout.';
 
+export interface SchedulerOptions {
+  diskSpace?: (path: string) => DiskSpace;
+}
+
 export class Scheduler {
   private running: Map<string, RunningTask> = new Map(); // taskId -> RunningTask
   /** Bumped by stop(); a start that began before it must not spawn afterwards. */
@@ -139,6 +161,8 @@ export class Scheduler {
   private diskLow = false;
   private dockerDiskLow = false;
   private tasksWaitingForDisk = new Set<string>();
+  private unavailableProjects = new Set<string>();
+  private tasksWaitingForProject = new Set<string>();
   private eventBus: EventBus;
   private quotaService: QuotaService;
   private worktreeService: WorktreeService;
@@ -146,6 +170,7 @@ export class Scheduler {
   private locks: ProfileLockService;
   private checkRunner?: CheckRunner;
   private db?: Database.Database;
+  private taskNoteRepo?: TaskNoteRepo;
   private runMetricsRepo?: RunMetricsRepo;
   private knowledgeRepo?: KnowledgeRepo;
   private reviewRepo?: ReviewRepo;
@@ -159,6 +184,8 @@ export class Scheduler {
   private lastLoadOverloaded = false;
   private notifiedSkippedModels = new Set<string>();
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
+  private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
+  private usageService?: QuotaUsageService;
 
   constructor(
     private config: AgentHubConfig,
@@ -168,12 +195,13 @@ export class Scheduler {
     private projectRepo: ProjectRepo,
     private profileRepo: ProfileRepo,
     private quotaMarkRepo: QuotaMarkRepo,
-    engineOverrides?: Map<string, Engine>,
-    private usageService?: QuotaUsageService,
+    engineOverrides?: Map<string, Engine> | SchedulerOptions,
+    usageServiceOrOptions?: QuotaUsageService | SchedulerOptions,
     locks?: ProfileLockService,
     db?: Database.Database,
     runMetricsRepo?: RunMetricsRepo,
     knowledgeRepo?: KnowledgeRepo,
+    diskReader?: ((p: string) => DiskSpace) | SchedulerOptions,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -183,11 +211,31 @@ export class Scheduler {
     this.db = db;
     this.runMetricsRepo = runMetricsRepo;
     this.knowledgeRepo = knowledgeRepo;
-    if (db) this.checkRunner = new CheckRunner(db);
+    if (db) {
+      this.checkRunner = new CheckRunner(db);
+      this.taskNoteRepo = new TaskNoteRepo(db);
+    }
 
-    if (engineOverrides) {
+    if (engineOverrides && !(engineOverrides instanceof Map) && 'diskSpace' in engineOverrides) {
+      if (engineOverrides.diskSpace) this.diskReader = engineOverrides.diskSpace;
+    } else if (engineOverrides instanceof Map) {
       this.engines = engineOverrides;
-    } else {
+    }
+
+    if (usageServiceOrOptions && 'diskSpace' in usageServiceOrOptions && typeof usageServiceOrOptions.diskSpace === 'function') {
+      this.diskReader = usageServiceOrOptions.diskSpace;
+    } else if (usageServiceOrOptions && 'getForProfile' in usageServiceOrOptions) {
+      this.usageService = usageServiceOrOptions as QuotaUsageService;
+    }
+
+    if (typeof diskReader === 'function') {
+      this.diskReader = diskReader;
+    } else if (diskReader && typeof diskReader === 'object' && diskReader.diskSpace) {
+      this.diskReader = diskReader.diskSpace;
+    }
+
+
+    if (!engineOverrides || !(engineOverrides instanceof Map)) {
       this.engines.set('agy', new AgyEngine());
       const codexPath = CodexEngine.findCodexPath();
       if (codexPath) {
@@ -549,8 +597,10 @@ export class Scheduler {
   }
 
   async recoverCheckingTasks(): Promise<void> {
+    if (this.stopped) return;
     const checkingTasks = this.taskRepo.getByStatus('checking');
     for (const task of checkingTasks) {
+      if (this.stopped) return;
       const runs = this.runRepo.getByTask(task.id);
       const runId = runs[runs.length - 1]?.id || 'recovered';
       await this.runChecksForTask(task.id, runId);
@@ -558,6 +608,7 @@ export class Scheduler {
   }
 
   async runChecksForTask(taskId: string, runId: string): Promise<void> {
+    if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
     if (!task) return;
     this.taskRepo.update(taskId, { status: 'checking' });
@@ -568,6 +619,7 @@ export class Scheduler {
       ? await this.checkRunner.run(task, project, runId)
       : { passed: true, failed: [], results: [] };
 
+    if (this.stopped) return;
     // Check if task status was changed (e.g. cancelled) during checks
     const currentTask = this.taskRepo.get(taskId);
     if (!currentTask || currentTask.status !== 'checking') return;
@@ -717,6 +769,39 @@ export class Scheduler {
       if (!this.hasBusyMatchingProfile(task) || Boolean(this.findModelProfilePair(task))) {
         this.taskRepo.updateStatus(task.id, 'queued');
         this.eventBus.emit('task.queued', task.id, { reason: 'profile_available' });
+      }
+    }
+
+    // 0d. Check unavailable projects and resume project waiters
+    const projectWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'project_unavailable');
+    for (const task of projectWaiters) {
+      this.tasksWaitingForProject.add(task.id);
+    }
+
+    const projectsToCheck = new Set<string>([
+      ...this.unavailableProjects,
+      ...projectWaiters.map((t) => t.projectId),
+    ]);
+
+    for (const projectId of projectsToCheck) {
+      const project = this.projectRepo.get(projectId);
+      if (project && isProjectAccessible(project.path)) {
+        if (this.unavailableProjects.has(projectId)) {
+          this.unavailableProjects.delete(projectId);
+          this.eventBus.emit('project.available', undefined, {
+            projectId: project.id,
+            path: project.path,
+          });
+        }
+        // Wake up tasks for this project whose worktree (if any) is also accessible
+        const tasksForProj = projectWaiters.filter((t) => t.projectId === projectId);
+        for (const task of tasksForProj) {
+          if (!task.worktreePath || fs.existsSync(task.worktreePath)) {
+            this.tasksWaitingForProject.delete(task.id);
+            this.taskRepo.updateStatus(task.id, 'queued');
+            this.eventBus.emit('task.queued', task.id, { reason: 'project_available' });
+          }
+        }
       }
     }
 
@@ -1395,6 +1480,13 @@ export class Scheduler {
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
 
+      const projectAccessible = isProjectAccessible(project.path);
+      const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
+      if (!projectAccessible || !worktreeAccessible) {
+        this.markTaskWaitingForProject(task, project);
+        continue;
+      }
+
       const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
       const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
 
@@ -1545,6 +1637,7 @@ export class Scheduler {
         runId: check.runId || 'unknown',
         runStartedAt: check.runStartedAt || 'unknown',
       }));
+      const project = this.projectRepo.get(task.projectId);
       child = engine.spawn({
         profile,
         model: reviewerModel,
@@ -1556,6 +1649,8 @@ export class Scheduler {
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
         hubHome: this.config.hubHome,
+        project,
+        gitHooks: project ? projectSettings(project).worktree.gitHooks : undefined,
       });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
@@ -1777,6 +1872,23 @@ export class Scheduler {
     this.eventBus.emit('task.queued', task.id, { reason });
   }
 
+  private markTaskWaitingForProject(task: TaskRow, project: { id: string; path: string }): void {
+    this.tasksWaitingForProject.add(task.id);
+    this.taskRepo.updateStatus(task.id, 'waiting_quota', 'project_unavailable');
+    this.eventBus.emit('task.waiting_quota', task.id, {
+      reason: 'project_unavailable',
+      projectId: project.id,
+      path: project.path,
+    });
+    if (!this.unavailableProjects.has(project.id)) {
+      this.unavailableProjects.add(project.id);
+      this.eventBus.emit('project.unavailable', undefined, {
+        projectId: project.id,
+        path: project.path,
+      });
+    }
+  }
+
   private findModelProfilePair(
     task: TaskRow,
   ): { model: string; profileName: string } | null {
@@ -1976,6 +2088,14 @@ export class Scheduler {
       return;
     }
 
+    const projectAccessible = isProjectAccessible(project.path);
+    const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
+    if (!projectAccessible || !worktreeAccessible) {
+      this.locks.release(profile.name, lockFile);
+      this.markTaskWaitingForProject(task, project);
+      return;
+    }
+
     const engineId = getModelEngine(model);
     const engine = this.engines.get(engineId);
     if (!engine) {
@@ -2019,6 +2139,10 @@ export class Scheduler {
         });
       } catch (e) {
         this.locks.release(profile.name, lockFile);
+        if (!isProjectAccessible(project.path)) {
+          this.markTaskWaitingForProject(task, project);
+          return;
+        }
         this.taskRepo.updateStatus(task.id, 'failed');
         this.eventBus.emit('task.failed', task.id, { error: String(e) });
         return;
@@ -2035,18 +2159,29 @@ export class Scheduler {
       // Dependency installation can take minutes. Keep the task out of the
       // queue while it runs, but never let a cache/native-module failure stop
       // the worker from starting with its own install.
-      const hasDependencyLock = (dir: string): boolean =>
-        fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
-      if (hasDependencyLock(worktreePath) || hasDependencyLock(path.join(worktreePath, 'web'))) {
-        try {
-          await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
-        } catch (error) {
-          this.locks.release(profile.name, lockFile);
-          this.taskRepo.update(task.id, { status: 'failed' });
-          this.eventBus.emit('task.failed', task.id, {
-            error: `Failed to prepare node_modules before worker start: ${String(error)}`,
-          });
-          return;
+      if (settings.worktree.install !== 'skip') {
+        const hasDependencyLock = (dir: string): boolean =>
+          fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
+        if (hasDependencyLock(worktreePath) || hasDependencyLock(path.join(worktreePath, 'web'))) {
+          try {
+            await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
+          } catch (error) {
+            this.eventBus.emit('worktree.install_failed', task.id, {
+              error: `Failed to prepare node_modules before worker start: ${String(error)}`,
+            });
+            if (this.taskNoteRepo) {
+              try {
+                this.taskNoteRepo.insert({
+                  projectId: project.id,
+                  taskId: task.id,
+                  kind: 'note',
+                  content: `Lỗi cài phụ thuộc: ${String(error)}`,
+                });
+              } catch {
+                // ignore
+              }
+            }
+          }
         }
       }
 
@@ -2127,6 +2262,8 @@ export class Scheduler {
         lockFile,
         env: { AGENTHUB_TASK_ID: task.id },
         hubHome: this.config.hubHome,
+        project,
+        gitHooks: projectSettings(project).worktree.gitHooks,
       });
 
       const pid = child.pid!;
@@ -2411,8 +2548,12 @@ export class Scheduler {
     }
   }
 
+  getDiskReader(): (p: string) => DiskSpace {
+    return this.diskReader;
+  }
+
   private getMonitoredDisks(): MonitoredDisk[] {
-    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
   }
 
   private getBlockingDisk(): MonitoredDisk | undefined {

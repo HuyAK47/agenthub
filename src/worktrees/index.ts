@@ -70,6 +70,14 @@ export function isDeletableWorktreePath(
   return true;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : shellQuote(value);
+}
+
 export class WorktreeService {
   constructor(
     private config: AgentHubConfig,
@@ -273,8 +281,8 @@ export class WorktreeService {
         .replace(/\{slot\}/g, slotStr)
         .replace(/\{slug\}/g, slug)
         .replace(/\{slug_underscored\}/g, slugUnderscored)
-        .replace(/\{worktree\}/g, worktreePath)
-        .replace(/\{project\}/g, project);
+        .replace(/\{worktree\}/g, shellWord(worktreePath))
+        .replace(/\{project\}/g, shellWord(project));
 
       const startTime = Date.now();
       try {
@@ -283,6 +291,11 @@ export class WorktreeService {
           timeout: 60000,
           encoding: 'utf-8',
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            AGENTHUB_WORKTREE: worktreePath,
+            AGENTHUB_PROJECT_PATH: projectPath || '',
+          },
         });
         const durationMs = Date.now() - startTime;
         eventBus?.emit('worktree.hook', taskId, {
