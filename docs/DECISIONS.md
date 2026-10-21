@@ -61,9 +61,15 @@
   3. Cung cấp tọa độ tâm `(x, y)` cho từng nút và các điểm bẻ góc `points` cho từng cạnh, giúp render SVG vector sắc nét, dễ dàng điều khiển pan/zoom và tùy biến CSS.
 - **Hệ quả**: Bổ sung `dagre` vào dependencies của ứng dụng web, đảm bảo render sơ đồ DAG nhanh chóng, mượt mà và không phát sinh lỗi nạp async trong môi trường kiểm thử Vitest/jsdom.
 
+## DEC-006: Từ chối thao tác ghi ngoài roots của bộ não
+
+- **Bối cảnh**: Bộ não dự án chỉ được phép thay đổi repo dự án và worktree của chính dự án; các đường dẫn reference chỉ phục vụ đọc. Bộ não hệ thống giữ các roots chung của daemon.
+- **Quyết định**: `BrainPolicy` trả về `deny` cho Write/Edit ngoài roots được phép, bao gồm cả thao tác ghi vào reference và ghi sang dự án khác. Các thao tác đọc trong reference vẫn được phép.
+- **Lý do**: Từ chối rõ ràng an toàn hơn việc trả về `null` để chờ người dùng phê duyệt một thay đổi ngoài phạm vi phiên; phiên bộ não không được tự ý mở rộng phạm vi tác động.
 
 
-## DEC-006: Ngoại lệ hẹp cho PLAN 2.1 — đọc `access_token` của agy để lấy ảnh đại diện
+
+## DEC-007: Ngoại lệ hẹp cho PLAN 2.1 — đọc `access_token` của agy để lấy ảnh đại diện
 
 - **Bối cảnh**: PLAN 2.1 cấm đọc nội dung file `antigravity-oauth-token`. Hồ sơ đăng nhập bằng refresh token lấy được ảnh Google lúc nhập, còn hồ sơ đăng nhập qua terminal thì không có cách nào khác để lấy ảnh. Người dùng đã đồng ý mở ngoại lệ (2026-10-21).
 - **Quyết định**: Cho phép `readAgyAccessToken()` (`src/profiles/agyToken.ts`) đọc file token, với giới hạn:

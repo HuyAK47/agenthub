@@ -217,6 +217,48 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(body.stale).toBe(true);
   });
 
+  it('GET /api/brain returns project brains with effective mode and usage', async () => {
+    ctx.projectRepo.insert({
+      id: 'p1',
+      name: 'Project One',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+      settings: JSON.stringify({ brain: { mode: 'auto' } }),
+    });
+    ctx.projectRepo.insert({
+      id: 'p2',
+      name: 'Project Two',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    const now = new Date().toISOString();
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, status, inputTokens, outputTokens, startedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run('p1-turn', 'event', 'p1', 'p1', 'done', 5, 7, now);
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, status, inputTokens, outputTokens, startedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run('p2-turn', 'event', 'p2', 'p2', 'done', 3, 4, now);
+
+    ctx.brainRunner.start();
+    ctx.scheduler.getEventBus().emit('task.done', 'p1/task');
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/brain',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.brains).toEqual(expect.arrayContaining([
+      expect.objectContaining({ projectId: null, projectName: 'Hệ thống', mode: config.brain.mode, queued: false, tokensToday: 0 }),
+      expect.objectContaining({ projectId: 'p1', projectName: 'Project One', mode: 'auto', queued: true, tokensToday: 12 }),
+      expect.objectContaining({ projectId: 'p2', projectName: 'Project Two', mode: config.brain.mode, queued: false, tokensToday: 7 }),
+    ]));
+    ctx.brainRunner.stop();
+  });
+
   it('GET /api/status includes brain object', async () => {
     ctx.brainRepo.upsert('talking', 'Trao đổi về kiến trúc mới', null);
 
@@ -232,5 +274,134 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(status.brain.activity).toBe('talking');
     expect(status.brain.detail).toBe('Trao đổi về kiến trúc mới');
     expect(status.brain.stale).toBe(false);
+  });
+
+  it('GET and POST /api/brain/digest return structured digest data', async () => {
+    ctx.projectRepo.insert({
+      id: 'p1',
+      name: 'Project 1',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    ctx.taskRepo.insert({ id: 'p1/done-1', projectId: 'p1', slug: 'done-1', title: 'Task xong', status: 'done' });
+
+    // GET /api/brain/digest
+    const getRes = await server.inject({
+      method: 'GET',
+      url: '/api/brain/digest',
+      headers: authHeaders(),
+    });
+    expect(getRes.statusCode).toBe(200);
+    const getData = JSON.parse(getRes.body);
+    expect(getData.tasks).toBeDefined();
+    expect(getData.tasks.done).toBe(1);
+    expect(getData.text).toContain('TÓM TẮT HỆ THỐNG AGENTHUB');
+
+    // POST /api/brain/digest
+    const postRes = await server.inject({
+      method: 'POST',
+      url: '/api/brain/digest',
+      headers: authHeaders(),
+    });
+    expect(postRes.statusCode).toBe(200);
+    const postData = JSON.parse(postRes.body);
+    expect(postData.tasks.done).toBe(1);
+  });
+
+  it('GET and POST /api/brain/decisions manage pending decisions', async () => {
+    const tracker = ctx.telegramService.getDecisionTracker();
+    tracker.recordDecision('dec-api-1', 'Xác nhận xóa tài nguyên tạm?', [123]);
+
+    // GET /api/brain/decisions
+    const getRes = await server.inject({
+      method: 'GET',
+      url: '/api/brain/decisions',
+      headers: authHeaders(),
+    });
+    expect(getRes.statusCode).toBe(200);
+    const list = JSON.parse(getRes.body);
+    expect(list.decisions).toHaveLength(1);
+    expect(list.decisions[0].id).toBe('dec-api-1');
+
+    const getOrCreateSpy = vi.spyOn(ctx.chatService, 'getOrCreateSession');
+    const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({
+      userMessageId: 'u-1',
+      assistantMessageId: 'a-1',
+    });
+
+    // POST /api/brain/decisions/:id/answer
+    const ansRes = await server.inject({
+      method: 'POST',
+      url: '/api/brain/decisions/dec-api-1/answer',
+      headers: authHeaders(),
+      payload: { answer: 'agree' },
+    });
+    expect(ansRes.statusCode).toBe(200);
+    const ansData = JSON.parse(ansRes.body);
+    expect(ansData.ok).toBe(true);
+    expect(ansData.decision.answered).toBe(true);
+    expect(ansData.decision.answer).toBe('agree');
+    expect(getOrCreateSpy).toHaveBeenCalledWith('brain', { title: 'Bộ não', kind: 'brain' });
+    expect(sendSpy).toHaveBeenCalledWith(
+      'brain',
+      'Người dùng trả lời quyết định dec-api-1 («Xác nhận xóa tài nguyên tạm?»): Đồng ý',
+    );
+
+    // Answering again should fail with 404 "Quyết định đã hết hạn hoặc đã trả lời"
+    const ansResAgain = await server.inject({
+      method: 'POST',
+      url: '/api/brain/decisions/dec-api-1/answer',
+      headers: authHeaders(),
+      payload: { answer: 'reject' },
+    });
+    expect(ansResAgain.statusCode).toBe(404);
+    expect(JSON.parse(ansResAgain.body).message).toContain('Quyết định đã hết hạn hoặc đã trả lời');
+
+    // Answering non-existent should fail with 404 "Quyết định đã hết hạn hoặc đã trả lời"
+    const ansResNonExistent = await server.inject({
+      method: 'POST',
+      url: '/api/brain/decisions/non-existent-id/answer',
+      headers: authHeaders(),
+      payload: { answer: 'agree' },
+    });
+    expect(ansResNonExistent.statusCode).toBe(404);
+    expect(JSON.parse(ansResNonExistent.body).message).toContain('Quyết định đã hết hạn hoặc đã trả lời');
+
+    // Check again, pending decisions should now be 0
+    const getRes2 = await server.inject({
+      method: 'GET',
+      url: '/api/brain/decisions',
+      headers: authHeaders(),
+    });
+    const list2 = JSON.parse(getRes2.body);
+    expect(list2.decisions).toHaveLength(0);
+  });
+
+  it('forwards a dashboard decision to the related project brain', async () => {
+    ctx.projectRepo.insert({
+      id: 'p1',
+      name: 'Project 1',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    const tracker = ctx.telegramService.getDecisionTracker();
+    tracker.recordDecision('dec-api-project', 'Duyệt task?', [], Date.now(), 'p1/task-1');
+    const getOrCreateSpy = vi.spyOn(ctx.chatService, 'getOrCreateSession');
+    const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({ userMessageId: 'u-2', assistantMessageId: 'a-2' });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/brain/decisions/dec-api-project/answer',
+      headers: authHeaders(),
+      payload: { answer: 'reject' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getOrCreateSpy).toHaveBeenCalledWith('brain:p1', { title: 'Bộ não · p1', kind: 'brain', projectId: 'p1' });
+    expect(sendSpy).toHaveBeenCalledWith('brain:p1', expect.stringContaining('Không'));
   });
 });

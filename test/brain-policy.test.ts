@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BrainPolicy } from '../src/brain/policy.js';
+import { BrainPolicy, projectBrainPolicy } from '../src/brain/policy.js';
 
 describe('BrainPolicy', () => {
   const dirs: string[] = [];
@@ -106,6 +106,20 @@ describe('BrainPolicy', () => {
     expect(policy.decide({ toolName: 'Bash', input: { command: 'custom-tool', cwd: root } })?.action).toBe('allow');
   });
 
+  it('allows reads in references but denies writes there and outside the project', () => {
+    const { root } = make();
+    const reference = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-reference-'));
+    const otherProject = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-other-'));
+    dirs.push(reference, otherProject);
+    fs.writeFileSync(path.join(reference, 'notes.md'), 'reference');
+    const policy = new BrainPolicy({ roots: [root], readOnlyRoots: [reference] });
+
+    expect(policy.decide({ toolName: 'Read', input: { file_path: path.join(reference, 'notes.md'), cwd: root } })?.action).toBe('allow');
+    expect(policy.decide({ toolName: 'Grep', input: { path: reference, cwd: root } })?.action).toBe('allow');
+    expect(policy.decide({ toolName: 'Write', input: { file_path: path.join(reference, 'notes.md'), cwd: root } })?.action).toBe('deny');
+    expect(policy.decide({ toolName: 'Edit', input: { file_path: path.join(otherProject, 'file.ts'), cwd: root } })?.action).toBe('deny');
+  });
+
   it('requires approval for merge-affecting MCP tools in suggest mode', () => {
     const { root, policy } = make();
     const suggest = new BrainPolicy({ roots: [root], mode: 'suggest' });
@@ -113,5 +127,20 @@ describe('BrainPolicy', () => {
       expect(suggest.decide({ toolName, input: {} })).toBeNull();
     }
     expect(policy.decide({ toolName: 'mcp__agenthub__hub_review', input: {} })?.action).toBe('allow');
+  });
+
+  it('gives a project brain the project\'s own mode, not the global one', () => {
+    const { root } = make();
+    const project = (mode: string) => ({ id: 'p1', path: root, settings: JSON.stringify({ brain: { mode } }) });
+    const review = { toolName: 'mcp__agenthub__hub_review', input: {} };
+    const suggestGlobal = { worktreesDir: path.join(root, 'wt'), brain: { mode: 'suggest' as const, policy: [] } };
+    const autoGlobal = { worktreesDir: path.join(root, 'wt'), brain: { mode: 'auto' as const, policy: [] } };
+    // Project set to auto while the global brain is suggest: merge-affecting tools are allowed.
+    expect(projectBrainPolicy(project('auto'), suggestGlobal).decide(review)?.action).toBe('allow');
+    // Project set to suggest while the global brain is auto: they need the user's approval.
+    expect(projectBrainPolicy(project('suggest'), autoGlobal).decide(review)).toBeNull();
+    // inherit follows the global mode.
+    expect(projectBrainPolicy(project('inherit'), suggestGlobal).decide(review)).toBeNull();
+    expect(projectBrainPolicy(project('inherit'), autoGlobal).decide(review)?.action).toBe('allow');
   });
 });

@@ -327,7 +327,7 @@ describe('Antigravity Token Import from Cockpit', () => {
     expect(ctx.profileRepo.get('g6')).toMatchObject({ email: 'new@example.com', avatarUrl: null });
   });
 
-  describe('syncAgyAvatarFromToken (DEC-006)', () => {
+  describe('syncAgyAvatarFromToken (DEC-007)', () => {
     const picture = 'https://lh3.googleusercontent.com/a/terminal';
     function setupProfile(expiry: string) {
       ctx.service.createProfile({ name: 'term', engine: 'agy', accountType: 'personal' });

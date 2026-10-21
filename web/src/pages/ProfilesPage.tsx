@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -100,6 +100,7 @@ function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return
 
 export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
+  const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [activeLogin, setActiveLogin] = useState<{ name: string; engine: Provider; sessionId: string } | null>(null);
@@ -113,11 +114,21 @@ export const ProfilesPage: React.FC = () => {
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const toastSeq = useRef(0);
+  const scrolledHash = useRef<string | null>(null);
   const {
     data: profiles = [],
     isLoading,
     error,
   } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles, refetchInterval: 5000 });
+
+  useEffect(() => {
+    if (!hash || isLoading || profiles.length === 0 || scrolledHash.current === hash) return;
+    const target = document.getElementById(decodeURIComponent(hash.slice(1)));
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      scrolledHash.current = hash;
+    }
+  }, [hash, isLoading, profiles]);
   const { data: systemConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig });
   const { data: status } = useQuery({
     queryKey: ['status'],
@@ -265,8 +276,8 @@ export const ProfilesPage: React.FC = () => {
                 ) : (
                   <div className="grid gap-4 xl:grid-cols-2">
                     {grouped.map((profile) => (
+                      <div key={profile.name} id={`profile-${profile.name}`}>
                       <ProfileCard
-                        key={profile.name}
                         profile={profile}
                         run={runningByProfile.get(profile.name)}
                         menu={menu}
@@ -283,6 +294,7 @@ export const ProfilesPage: React.FC = () => {
                         onRefresh={(silent) => void runRefresh(profile, silent)}
                         onQuotaRemoved={(family) => toast(t('profiles.removeQuotaSuccess', { family, name: profile.name }))}
                       />
+                      </div>
                     ))}
                   </div>
                 )}

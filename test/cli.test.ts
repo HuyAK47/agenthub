@@ -51,7 +51,7 @@ describe('AgentHub CLI and Installation', () => {
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/#token=[a-f0-9]{64}$/);
   });
 
-  it('cmdOpen invokes execFile("xdg-open", [url]) when browser is enabled', async () => {
+  it('cmdOpen invokes the platform browser command when browser is enabled', async () => {
     const config = loadConfig();
     getOrCreateToken(config.tokenPath);
 
@@ -63,19 +63,24 @@ describe('AgentHub CLI and Installation', () => {
     };
 
     const url = await cmdOpen(config, [], mockOpen);
-    expect(calledCmd).toBe('xdg-open');
+    expect(calledCmd).toBe(process.platform === 'darwin' ? 'open' : 'xdg-open');
     expect(calledArgs).toEqual([url]);
 
     const cliSource = fs.readFileSync(path.resolve(findProjectRoot(), 'src', 'cli.ts'), 'utf-8');
-    expect(cliSource).not.toMatch(/exec\s*\(\s*`xdg-open/);
-    expect(cliSource).toMatch(/execFile\s*\(\s*['"]xdg-open['"]\s*,\s*\[url\]/);
+    expect(cliSource).not.toMatch(/exec\s*\(\s*`(?:xdg-open|open)/);
   });
 
-  it('cmdInstallService --print outputs systemd unit content without writing files', async () => {
+  it('cmdInstallService --print outputs the platform service content without writing files', async () => {
     const output = await cmdInstallService(['--print']);
     const root = findProjectRoot();
     const expectedCliPath = path.resolve(root, 'dist', 'cli.js');
 
+    if (process.platform === 'darwin') {
+      expect(output).toContain('<plist');
+      expect(output).toContain('dev.agenthub');
+      expect(output).toContain('LaunchAgents');
+      return;
+    }
     expect(output).toContain('[Unit]');
     expect(output).toContain('Description=AgentHub Daemon');
     expect(output).toContain(`ExecStart=${process.execPath} ${expectedCliPath} daemon`);
@@ -128,39 +133,49 @@ describe('AgentHub CLI and Installation', () => {
   });
 
   it('cmdBrain updates brain status directly in DB when daemon is offline', async () => {
-    const config = loadConfig();
-    config.port = 65534;
-    const { cmdBrain, BrainRepo } = await import('../src/brain.js');
-    const { openDatabase } = await import('../src/db/index.js');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-cli-brain-'));
+    try {
+      const config = loadConfig(tmp);
+      config.port = 65534;
+      const { cmdBrain, BrainRepo } = await import('../src/brain.js');
+      const { openDatabase } = await import('../src/db/index.js');
 
-    const result = await cmdBrain(config, [
-      'planning',
-      'Lập kế hoạch task 2',
-      '--task',
-      'proj/t-2',
-    ]);
+      const result = await cmdBrain(config, [
+        'planning',
+        'Lập kế hoạch task 2',
+        '--task',
+        'proj/t-2',
+      ]);
 
-    expect(result.activity).toBe('planning');
-    expect(result.detail).toBe('Lập kế hoạch task 2');
-    expect(result.taskId).toBe('proj/t-2');
+      expect(result.activity).toBe('planning');
+      expect(result.detail).toBe('Lập kế hoạch task 2');
+      expect(result.taskId).toBe('proj/t-2');
 
-    const db = openDatabase(config.dbPath);
-    const repo = new BrainRepo(db);
-    const row = repo.get();
-    db.close();
+      const db = openDatabase(config.dbPath);
+      const repo = new BrainRepo(db);
+      const row = repo.get();
+      db.close();
 
-    expect(row).toBeDefined();
-    expect(row?.activity).toBe('planning');
-    expect(row?.detail).toBe('Lập kế hoạch task 2');
-    expect(row?.taskId).toBe('proj/t-2');
+      expect(row).toBeDefined();
+      expect(row?.activity).toBe('planning');
+      expect(row?.detail).toBe('Lập kế hoạch task 2');
+      expect(row?.taskId).toBe('proj/t-2');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it('cmdBrain validates arguments and activity enum', async () => {
-    const config = loadConfig();
-    const { cmdBrain } = await import('../src/brain.js');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-cli-brain-val-'));
+    try {
+      const config = loadConfig(tmp);
+      const { cmdBrain } = await import('../src/brain.js');
 
-    await expect(cmdBrain(config, [])).rejects.toThrow('Thiếu tham số');
-    await expect(cmdBrain(config, ['invalid_act', 'detail'])).rejects.toThrow();
-    await expect(cmdBrain(config, ['idle', 'a'.repeat(301)])).rejects.toThrow('300');
+      await expect(cmdBrain(config, [])).rejects.toThrow('Thiếu tham số');
+      await expect(cmdBrain(config, ['invalid_act', 'detail'])).rejects.toThrow();
+      await expect(cmdBrain(config, ['idle', 'a'.repeat(301)])).rejects.toThrow('300');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

@@ -7,12 +7,14 @@ import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
 import { QuotaService } from '../src/quota/index.js';
+import type { DiskSpace } from '../src/disk.js';
 
 describe('Task waitReason (lý do chờ)', () => {
   let tmpDir: string;
   let config: ReturnType<typeof loadConfig>;
   let ctx: ReturnType<typeof createContext>;
   let fakeEngine: FakeEngine;
+  let fakeDiskReader: (p: string) => DiskSpace;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-wait-reason-test-'));
@@ -25,10 +27,13 @@ describe('Task waitReason (lý do chờ)', () => {
     config = loadConfig(tmpDir);
     config.disk.minFreeGB = 5;
 
+    // Default: plenty of disk — individual tests override as needed
+    fakeDiskReader = (_p: string) => ({ freeGB: 100, totalGB: 200 });
+
     fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
     const engines = new Map<string, Engine>([['agy', fakeEngine]]);
 
-    ctx = createContext(config, engines);
+    ctx = createContext(config, engines, (p) => fakeDiskReader(p));
     ctx.scheduler.stop();
 
     const projectPath = path.join(tmpDir, 'repo');
@@ -80,15 +85,9 @@ describe('Task waitReason (lý do chờ)', () => {
       enabled: 1,
     });
 
-    // Mock disk below threshold (3GB < 5GB)
+    // Inject disk reader: below threshold (3GB < 5GB)
     let mockFreeGB = 3;
-    vi.spyOn(fs, 'statfs').mockImplementation((_target: unknown, cb: unknown) => {
-      (cb as (err: unknown, stats: unknown) => void)(null, {
-        bsize: 1024 * 1024,
-        bavail: mockFreeGB * 1024,
-        blocks: 100 * 1024,
-      });
-    });
+    fakeDiskReader = (_p: string) => ({ freeGB: mockFreeGB, totalGB: 100 });
 
     ctx.taskRepo.insert({
       id: 'proj/t-disk',

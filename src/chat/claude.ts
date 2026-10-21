@@ -45,7 +45,7 @@ export interface HubSnapshotInput {
   projects: Array<{ id: string; name: string; path: string; defaultBranch: string }>;
   tasks: Array<{ id: string; projectId: string; title: string; status: string }>;
   runs?: Array<{ taskId: string; model: string; outcome: string | null }>;
-  profiles: Array<{ name: string; engine: string; email: string | null; authState?: string | null }>;
+  profiles: Array<{ name: string; engine: string; email: string | null; authState?: string | null; enabled?: boolean | number }>;
   quotaUsage: Array<{ profileName: string; grp: string; window: string; remainingPct: number }>;
   quotaMarks: Array<{ profileName: string; family: string; until: number }>;
   currentProject?: { id: string; path: string } | null;
@@ -76,7 +76,7 @@ export function buildHubSnapshot(input: HubSnapshotInput): string {
     });
     return `- ${p.name} · ${p.path} · nhánh ${p.defaultBranch} · task ${counts || '0'}${notable.length ? ` · ${notable.join('; ')}` : ''}`;
   });
-  const profileLines = input.profiles.map((profile) => {
+  const profileLines = input.profiles.filter((profile) => profile.enabled !== false && profile.enabled !== 0).map((profile) => {
     const usage = input.quotaUsage.filter((row) => row.profileName === profile.name && row.window === '5h')
       .map((row) => `${row.grp}:${row.remainingPct}%`).join(', ');
     const marks = input.quotaMarks.filter((mark) => mark.profileName === profile.name && mark.until > snapshotEpoch)
@@ -139,6 +139,10 @@ export function findClaudeBin(configuredBin?: string): string | null {
       return configuredBin;
     }
   }
+
+  // Explicit override (also lets tests point at a fake CLI independent of what this machine has).
+  const envBin = process.env.AGENTHUB_CLAUDE_BIN;
+  if (envBin && fs.existsSync(envBin)) return envBin;
 
   const managedBin = path.join(process.env.AGENTHUB_TOOLS_DIR || '', 'node_modules', '.bin', 'claude');
   if (process.env.AGENTHUB_TOOLS_DIR && fs.existsSync(managedBin)) return managedBin;
@@ -247,7 +251,7 @@ export function chatMcpConfigPath(hubHome?: string, sessionId?: string): string 
   return path.join(targetHome, `chat-mcp${suffix}.json`);
 }
 
-export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number): string {
+export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number, projectId?: string | null): string {
   const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
   const mcpConfigFile = chatMcpConfigPath(targetHome, sessionId);
 
@@ -266,6 +270,7 @@ export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?:
         args: [cliPath, 'mcp'],
         env: {
           ...(sessionId ? { AGENTHUB_CHAT_SESSION_ID: sessionId } : {}),
+          ...(projectId ? { AGENTHUB_MCP_PROJECT: projectId } : {}),
           AGENTHUB_PORT: String(port || process.env.AGENTHUB_PORT || 7700),
           AGENTHUB_PERMISSION_TIMEOUT_SEC: String(permissionTimeoutSec || process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC || 600),
         },

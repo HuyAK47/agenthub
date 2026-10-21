@@ -1,5 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { BrainConfig } from '../config.js';
+import { projectSettings } from '../projects/settings.js';
+import { effectiveBrainModeFromSettings } from './mode.js';
 
 export type BrainPolicyAction = 'allow' | 'deny';
 export interface BrainPolicyDecision {
@@ -15,6 +18,7 @@ export interface BrainPolicyRequest {
 
 export interface BrainPolicyOptions {
   roots: string[];
+  readOnlyRoots?: string[];
   extraPatterns?: RegExp[];
   mode?: 'suggest' | 'auto';
 }
@@ -194,9 +198,11 @@ function allowedCommand(command: string, roots: string[], cwd: string): boolean 
 
 export class BrainPolicy {
   private roots: string[];
+  private readOnlyRoots: string[];
   private mode: 'suggest' | 'auto';
   constructor(options: BrainPolicyOptions) {
     this.roots = options.roots.filter((root) => Boolean(realPath(root)));
+    this.readOnlyRoots = (options.readOnlyRoots || []).filter((root) => Boolean(realPath(root)));
     this.extraPatterns = options.extraPatterns || [];
     this.mode = options.mode || 'auto';
   }
@@ -221,19 +227,48 @@ export class BrainPolicy {
     if (toolName === 'Bash' && DENY_COMMAND.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Lệnh thuộc danh sách luôn từ chối' };
     }
+    const touchesReadOnly = paths.some((value) => this.readOnlyRoots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(process.cwd(), value), root)));
+    if (touchesReadOnly && !READ_TOOLS.has(toolName)) {
+      return { action: 'deny', reason: 'policy:deny', message: 'Policy chỉ cho phép đọc trong references của project' };
+    }
     if (this.extraPatterns.some((pattern) => pattern.test(command || JSON.stringify(input)))) {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'Khớp brain.policy' };
     }
     const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
-    if (!this.roots.some((root) => within(cwd, root))) return null;
     if (READ_TOOLS.has(toolName)) {
-      return paths.length === 0 || paths.every((value) => safePath(value, this.roots, cwd))
+      return paths.length === 0 || paths.every((value) => safePath(value, [...this.roots, ...this.readOnlyRoots], cwd))
         ? { action: 'allow', reason: 'policy:auto_allow', message: 'Đọc trong phạm vi project/worktree' }
         : null;
     }
+    if (toolName === 'Write' || toolName === 'Edit') {
+      if (!paths.every((value) => safePath(value, this.roots, cwd))) {
+        return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối ghi ngoài phạm vi project/worktree' };
+      }
+    }
+    if (!this.roots.some((root) => within(cwd, root))) return null;
     if (toolName === 'Bash' && allowedCommand(command, this.roots, cwd)) {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'Lệnh Bash an toàn trong phạm vi project/worktree' };
     }
     return null;
   }
+}
+
+/**
+ * Policy for a project's brain session: it may work in the project repo and that project's
+ * worktrees, only read the project's references, and acts in the project's own effective mode
+ * (a project set to `auto` gets auto permissions even when the global brain is `suggest`).
+ */
+export function projectBrainPolicy(
+  project: { id: string; path: string; settings?: string | null },
+  config: { worktreesDir: string; brain: Pick<BrainConfig, 'mode' | 'policy'> },
+): BrainPolicy {
+  const settings = projectSettings(project);
+  return new BrainPolicy({
+    roots: [project.path, path.join(config.worktreesDir, project.id)],
+    readOnlyRoots: settings.references.map((reference) => reference.path),
+    extraPatterns: config.brain.policy.flatMap((pattern) => {
+      try { return [new RegExp(pattern)]; } catch { return []; }
+    }),
+    mode: effectiveBrainModeFromSettings(settings, config.brain) === 'auto' ? 'auto' : 'suggest',
+  });
 }

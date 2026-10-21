@@ -202,7 +202,7 @@ export async function fetchAgyGoogleUserInfoDetailed(
 export type AgyAccessTokenSkip = 'no_token_file' | 'unreadable' | 'no_access_token' | 'expired';
 
 /**
- * Ngoại lệ DEC-006: chỉ lấy access_token còn hạn để gọi Google userinfo.
+ * Ngoại lệ DEC-007: chỉ lấy access_token còn hạn để gọi Google userinfo.
  * Không đọc refresh_token, không ghi lại file, không log token.
  */
 export function inspectAgyAccessToken(

@@ -111,20 +111,57 @@ describe('Profile import from ~/.agy-homes', () => {
     const profiles = profileRepo.getAll();
     const names = profiles.map(p => p.name);
 
-    // Should have chinh + g1 + g2 + g3 (no .state)
-    expect(names).toContain('chinh');
+    // Should have agy-default + g1 + g2 + g3 (no .state)
+    expect(names).toContain('agy-default');
     expect(names).toContain('g1');
     expect(names).toContain('g2');
     expect(names).toContain('g3');
     expect(names).not.toContain('.state');
 
     // Check emails were read
-    const chinh = profileRepo.get('chinh')!;
-    expect(chinh.email).toBe('fake-default@example.com');
+    const defaultProfile = profileRepo.get('agy-default')!;
+    expect(defaultProfile.email).toBe('fake-default@example.com');
     const g1 = profileRepo.get('g1')!;
     expect(g1.email).toBe('g1@example.com');
     const g2 = profileRepo.get('g2')!;
     expect(g2.email).toBe('g2@example.com');
+  });
+
+  it('does not create the default keyring profile when agy is unavailable', () => {
+    const previous = {
+      agyBin: process.env.AGENTHUB_AGY_BIN,
+      toolsDir: process.env.AGENTHUB_TOOLS_DIR,
+      home: process.env.HOME,
+    };
+    process.env.AGENTHUB_AGY_BIN = path.join(tmpDir, 'missing-agy');
+    process.env.AGENTHUB_TOOLS_DIR = path.join(tmpDir, 'missing-tools');
+    process.env.HOME = tmpDir;
+    try {
+      profileService.registerAll();
+      expect(profileRepo.getAll()).not.toContainEqual(expect.objectContaining({ kind: 'keyring', engine: 'agy' }));
+    } finally {
+      if (previous.agyBin === undefined) delete process.env.AGENTHUB_AGY_BIN;
+      else process.env.AGENTHUB_AGY_BIN = previous.agyBin;
+      if (previous.toolsDir === undefined) delete process.env.AGENTHUB_TOOLS_DIR;
+      else process.env.AGENTHUB_TOOLS_DIR = previous.toolsDir;
+      if (previous.home === undefined) delete process.env.HOME;
+      else process.env.HOME = previous.home;
+    }
+  });
+
+  it('uses claude-default for a newly discovered system Claude profile', () => {
+    const claudeBin = path.join(tmpDir, 'claude');
+    fs.writeFileSync(claudeBin, '#!/bin/sh\n', { mode: 0o755 });
+    const previous = process.env.AGENTHUB_CLAUDE_BIN;
+    process.env.AGENTHUB_CLAUDE_BIN = claudeBin;
+    try {
+      profileService.registerAll();
+      expect(profileRepo.get('claude-default')).toEqual(expect.objectContaining({ engine: 'claude', kind: 'system' }));
+      expect(profileRepo.get('claude-may')).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.AGENTHUB_CLAUDE_BIN;
+      else process.env.AGENTHUB_CLAUDE_BIN = previous;
+    }
   });
 
   it('imports quota marks from .state/*.exhausted', () => {

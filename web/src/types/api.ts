@@ -85,6 +85,16 @@ export interface ProjectMerge {
 export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
 export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
 
+export interface IntegrationStatus {
+  path: string;
+  branch: string;
+  exists: boolean;
+  currentBranch: string | null;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -96,7 +106,19 @@ export interface Project {
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
   review?: ProjectReview | string | null;
+  /** Always present in API responses (defaults filled in by the server). */
+  settings?: ProjectSettings;
+  integrationStatus?: IntegrationStatus | null;
   createdAt?: string;
+}
+
+/** Mirrors src/projects/settings.ts. */
+export interface ProjectSettings {
+  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
+  integration: { enabled: boolean; branch?: string; baseRef?: string };
+  references: Array<{ name: string; path: string; inject: boolean }>;
+  notifications: { telegramContent: 'full' | 'minimal' };
 }
 
 export interface KnowledgeEntry {
@@ -131,7 +153,7 @@ export interface Review {
   createdAt: string;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
 
 export interface Task {
   id: string; // project~slug or project/slug
@@ -295,6 +317,18 @@ export interface BrainStatus {
   source?: 'manual' | 'transcript';
   sessions?: BrainSession[];
   state?: 'working' | 'waiting' | 'inactive';
+  brains?: ProjectBrain[];
+}
+
+export interface ProjectBrain {
+  projectId: string | null;
+  projectName: string;
+  mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  sessionId: string;
+  state: 'idle' | 'running' | 'waiting' | 'error';
+  queued: boolean;
+  lastTurnAt: string | null;
+  tokensToday: number;
 }
 
 export interface BrainSession {
@@ -508,7 +542,13 @@ export interface SystemConfig {
   chat?: ChatConfig;
   reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
-    fallback: Array<
+    mode?: 'off' | 'suggest' | 'auto';
+    maxConcurrent?: number;
+    digest?: {
+      enabled: boolean;
+      time: string;
+    };
+    fallback?: Array<
       | { type: 'profile'; profile?: string }
       | { type: 'model'; model: string }
       | { type: 'apiKey'; dailyCapUSD: number }
@@ -518,6 +558,11 @@ export interface SystemConfig {
   };
   notifications?: {
     desktop: boolean;
+    quietHours?: {
+      enabled: boolean;
+      start: string;
+      end: string;
+    };
   };
   load?: {
     enabled: boolean;
@@ -629,6 +674,7 @@ export interface CreateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: ProjectSettings;
 }
 
 export interface UpdateProjectInput {
@@ -640,6 +686,7 @@ export interface UpdateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: Partial<ProjectSettings>;
 }
 
 export interface CreateProfileInput {

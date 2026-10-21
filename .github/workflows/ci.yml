@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -17,8 +18,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Web deps are needed by build:web, test:web and the packaging test (npm run package).
+      - run: npm --prefix web ci
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test -- --run
+      - run: npm run test:web
       - run: npm run build
       - run: npm run build:web

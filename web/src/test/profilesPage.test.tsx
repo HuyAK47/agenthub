@@ -50,6 +50,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
   ];
 
   beforeEach(() => {
+    window.history.replaceState({}, '', '/profiles');
     queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -70,6 +71,36 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    const prototype = HTMLElement.prototype as { scrollIntoView?: unknown };
+    delete prototype.scrollIntoView;
+  });
+
+  it('scrolls to the profile named by the URL hash after profiles load', async () => {
+    window.history.replaceState({}, '', '/profiles#profile-g1');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+
+    renderPage();
+    await screen.findByText('g1');
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+  });
+
+  it('does not scroll again when profile data is refreshed', async () => {
+    window.history.replaceState({}, '', '/profiles#profile-g1');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+
+    renderPage();
+    await screen.findByText('g1');
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    queryClient.setQueryData(['profiles'], mockProfiles.map((profile) => ({ ...profile })));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
   function renderPage() {

@@ -5,8 +5,11 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { AgentHubConfig } from './config.js';
 import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
+import { effectiveBrainMode } from './brain/mode.js';
 import { readExistingToken, getTokenPath } from './auth.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
+import { generateDigest, forwardDecisionToBrain, DigestData } from './brain/digest.js';
+import { AppService, HttpError } from './services/index.js';
 
 export const BRAIN_ACTIVITIES = [
   'planning',
@@ -246,12 +249,47 @@ function isWithin(child: string, root: string): boolean {
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
+export function buildBrainDigest(appService: AppService): DigestData {
+  return (
+    appService.telegramBotService?.buildCurrentDigest() ??
+    generateDigest({
+      taskRepo: appService.taskRepo,
+      projectRepo: appService.projectRepo,
+      profileRepo: appService.profileRepo,
+      quotaMarkRepo: appService.quotaMarkRepo,
+      eventRepo: appService.eventRepo,
+      decisionTracker: appService.telegramBotService?.getDecisionTracker(),
+      port: appService.config.port,
+    })
+  );
+}
+
 export function registerBrainRoutes(
   fastify: FastifyInstance,
   brainService: BrainService,
+  appService?: AppService,
 ): void {
   fastify.get('/api/brain', async () => {
-    return brainService.getStatus();
+    const status = brainService.getStatus();
+    if (!appService) return status;
+    const sessions = appService.chatService?.chatSessionRepo;
+    const projects = appService.projectRepo.getAll();
+    const brains = [null, ...projects.map((project) => project.id)].map((projectId) => {
+      const project = projectId ? appService.projectRepo.get(projectId) : undefined;
+      const session = sessions?.get(projectId ? `brain:${projectId}` : 'brain');
+      const usage = appService.brainRunner?.getUsage(projectId);
+      return {
+        projectId,
+        projectName: project?.name || 'Hệ thống',
+        mode: effectiveBrainMode(projectId, project, appService.config.brain),
+        sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
+        state: session?.state || 'idle',
+        queued: usage?.queued || false,
+        lastTurnAt: usage?.lastTurnAt || session?.lastMessageAt || null,
+        tokensToday: usage?.tokensToday || 0,
+      };
+    });
+    return { ...status, brains };
   });
 
   fastify.put('/api/brain', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -259,6 +297,61 @@ export function registerBrainRoutes(
     return reply.status(200).send(result);
   });
   fastify.post('/api/brain/notify', async (req: FastifyRequest) => brainService.notify(req.body));
+
+  fastify.get('/api/brain/digest', async () => {
+    if (!appService) {
+      throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
+    }
+    return buildBrainDigest(appService);
+  });
+
+  fastify.post('/api/brain/digest', async () => {
+    if (!appService) {
+      throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
+    }
+    const digest = buildBrainDigest(appService);
+    appService.scheduler.getEventBus().emit('brain.digest', undefined, digest);
+    if (appService.telegramBotService) {
+      appService.telegramBotService.broadcastMessage(digest.text, {
+        inline_keyboard: [[{ text: '🌐 Xem dashboard', url: appService.telegramBotService.getDashboardUrl() }]],
+      });
+    }
+    return digest;
+  });
+
+  fastify.get('/api/brain/decisions', async () => {
+    const tracker = appService?.telegramBotService?.getDecisionTracker();
+    const decisions = tracker ? tracker.getPendingDecisions() : [];
+    return { decisions };
+  });
+
+  fastify.post('/api/brain/decisions/:id/answer', async (req: FastifyRequest) => {
+    const tracker = appService?.telegramBotService?.getDecisionTracker();
+    const { id } = req.params as { id: string };
+    const body = req.body as { answer?: 'agree' | 'reject' } | undefined;
+    const answer = body?.answer;
+    if (!answer || (answer !== 'agree' && answer !== 'reject')) {
+      throw new HttpError(400, 'bad_request', 'answer must be agree or reject');
+    }
+    const d = tracker?.getDecision(id);
+    if (!d || d.answered) {
+      throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
+    }
+    const updated = tracker?.answerDecision(id, answer);
+    if (!updated) {
+      throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
+    }
+    if (appService?.chatService) {
+      forwardDecisionToBrain(appService.chatService, id, updated.text, answer, updated.taskId);
+    }
+    appService?.scheduler.getEventBus().emit('decision.answered', undefined, {
+      decisionId: id,
+      action: answer,
+      answer,
+      text: updated.text,
+    });
+    return { ok: true, decision: updated };
+  });
 }
 
 export async function cmdBrain(

@@ -524,9 +524,20 @@ export const MIGRATIONS: string[] = [
   `
   DELETE FROM claude_scan_state WHERE eligible = 0;
   `,
-  // Migration 41: profile avatar URL (e.g. Google user picture)
+  // Migration 41: per-project settings (JSON, see src/projects/settings.ts) and per-project brain turns.
   `
-  ALTER TABLE profiles ADD COLUMN avatarUrl TEXT;
+  ALTER TABLE projects ADD COLUMN settings TEXT;
+  ALTER TABLE brain_turns ADD COLUMN projectId TEXT;
+  CREATE INDEX IF NOT EXISTS idx_brain_turns_project ON brain_turns(projectId, startedAt);
+  `,
+  // Migration 42: allow 'project_unavailable' waitReason for unmounted drives
+  `
+  ALTER TABLE tasks ADD COLUMN waitReason_old TEXT;
+  UPDATE tasks SET waitReason_old = waitReason;
+  ALTER TABLE tasks DROP COLUMN waitReason;
+  ALTER TABLE tasks ADD COLUMN waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk', 'quota', 'parallel', 'profile_busy', 'project_unavailable'));
+  UPDATE tasks SET waitReason = waitReason_old;
+  ALTER TABLE tasks DROP COLUMN waitReason_old;
   `,
 ];
 
@@ -546,7 +557,8 @@ export function openDatabase(dbPath: string): Database.Database {
     }
   })();
 
-  const currentVersion = versionRow ? parseInt(versionRow.value, 10) : -1;
+  let currentVersion = versionRow ? parseInt(versionRow.value, 10) : -1;
+  currentVersion = repairForkAvatarMigration(db, currentVersion);
 
   for (let i = currentVersion + 1; i < MIGRATIONS.length; i++) {
     db.exec(MIGRATIONS[i]);
@@ -554,8 +566,32 @@ export function openDatabase(dbPath: string): Database.Database {
       String(i),
     );
   }
+  ensureProfileAvatarColumn(db);
 
   return db;
+}
+
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  return (db.prepare('SELECT name FROM pragma_table_info(?)').all(table) as Array<{ name: string }>)
+    .some((row) => row.name === column);
+}
+
+/**
+ * Bản fork từng dùng migration 41 cho profiles.avatarUrl, trùng số với migration 41 của upstream
+ * (projects.settings). DB đã chạy bản fork có schema_version = 41 nhưng thiếu cột của upstream:
+ * lùi về 40 để migration 41 thật được chạy. Cột avatarUrl do ensureProfileAvatarColumn lo.
+ */
+function repairForkAvatarMigration(db: Database.Database, currentVersion: number): number {
+  if (currentVersion !== 41 || hasColumn(db, 'projects', 'settings') || !hasColumn(db, 'profiles', 'avatarUrl')) {
+    return currentVersion;
+  }
+  db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run('40');
+  return 40;
+}
+
+/** Cột avatarUrl nằm ngoài danh sách MIGRATIONS để không giành số migration với upstream. */
+function ensureProfileAvatarColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'profiles', 'avatarUrl')) db.exec('ALTER TABLE profiles ADD COLUMN avatarUrl TEXT');
 }
 
 // Repository helpers
@@ -575,6 +611,17 @@ export interface ProjectRow {
   merge?: string | null;
   reviewChain?: string | null;
   review?: string | null;
+  /** JSON ProjectSettings; read through projectSettings() in src/projects/settings.ts. */
+  settings?: string | null;
+  integrationStatus?: {
+    path: string;
+    branch: string;
+    exists: boolean;
+    currentBranch: string | null;
+    dirty: boolean;
+    ahead: number;
+    behind: number;
+  } | null;
   createdAt: string;
 }
 
@@ -615,7 +662,7 @@ export interface QuotaUsageRow {
   fetchedAt: number;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
 
 export interface TaskRow {
   id: string;
@@ -699,17 +746,18 @@ export class ProjectRepo {
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'> & {
       checks?: string | null;
       hooks?: string | null;
       merge?: string | null;
       reviewChain?: string | null;
       review?: string | null;
+      settings?: string | null;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -723,12 +771,13 @@ export class ProjectRepo {
         row.merge || null,
         row.reviewChain || null,
         row.review || null,
+        row.settings || null,
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -1082,7 +1131,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
@@ -1445,8 +1494,11 @@ export class ChatSessionRepo {
       );
   }
 
-  getByKind(kind: 'chat' | 'brain'): ChatSessionRow | undefined {
-    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+  getByKind(kind: 'chat' | 'brain', projectId?: string | null): ChatSessionRow | undefined {
+    if (projectId === undefined) {
+      return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+    }
+    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
   }
 
   updateKind(id: string, kind: 'chat' | 'brain'): void {
@@ -1559,14 +1611,15 @@ export interface BrainTurnRow {
   startedAt: string;
   finishedAt: string | null;
   error: string | null;
+  projectId: string | null;
 }
 
 export class BrainTurnRepo {
   constructor(private db: Database.Database) {}
 
-  insert(row: { id: string; trigger: string; input: string; status?: BrainTurnRow['status'] }): BrainTurnRow {
-    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, status) VALUES (?, ?, ?, ?)')
-      .run(row.id, row.trigger, row.input, row.status || 'running');
+  insert(row: { id: string; trigger: string; input: string; projectId?: string | null; status?: BrainTurnRow['status'] }): BrainTurnRow {
+    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, projectId, status) VALUES (?, ?, ?, ?, ?)')
+      .run(row.id, row.trigger, row.input, row.projectId || null, row.status || 'running');
     return this.get(row.id)!;
   }
 
@@ -1574,18 +1627,36 @@ export class BrainTurnRepo {
     return this.db.prepare('SELECT * FROM brain_turns WHERE id = ?').get(id) as BrainTurnRow | undefined;
   }
 
+  latest(projectId?: string | null): BrainTurnRow | undefined {
+    const query = projectId === undefined
+      ? 'SELECT * FROM brain_turns ORDER BY startedAt DESC LIMIT 1'
+      : 'SELECT * FROM brain_turns WHERE projectId IS ? ORDER BY startedAt DESC LIMIT 1';
+    return (projectId === undefined ? this.db.prepare(query).get() : this.db.prepare(query).get(projectId)) as BrainTurnRow | undefined;
+  }
+
   finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {
     this.db.prepare(`UPDATE brain_turns SET status = ?, summary = ?, inputTokens = ?, outputTokens = ?, error = ?, finishedAt = datetime('now') WHERE id = ?`)
       .run(fields.status, fields.summary || null, fields.inputTokens || 0, fields.outputTokens || 0, fields.error || null, id);
   }
 
-  countSince(epochMs: number): number {
-    return (this.db.prepare("SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch')").get(Math.floor(epochMs / 1000)) as { count: number }).count;
+  countSince(epochMs: number, projectId?: string | null): number {
+    const query = projectId === undefined
+      ? "SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch')"
+      : "SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch') AND projectId IS ?";
+    const row = projectId === undefined
+      ? this.db.prepare(query).get(Math.floor(epochMs / 1000))
+      : this.db.prepare(query).get(Math.floor(epochMs / 1000), projectId);
+    return (row as { count: number }).count;
   }
 
-  tokensSince(isoDate: string): number {
-    const row = this.db.prepare('SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ?').get(isoDate) as { total: number };
-    return row.total;
+  tokensSince(isoDate: string, projectId?: string | null): number {
+    const query = projectId === undefined
+      ? 'SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ?'
+      : 'SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ? AND projectId IS ?';
+    const row = projectId === undefined
+      ? this.db.prepare(query).get(isoDate)
+      : this.db.prepare(query).get(isoDate, projectId);
+    return (row as { total: number }).total;
   }
 }
 

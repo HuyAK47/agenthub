@@ -22,7 +22,7 @@ import {
 import { PermissionBroker } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
-import { isProfileLoggedIn } from '../profiles/index.js';
+import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
 import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage, ClaudeQuotaSignal } from './parse.js';
 import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
 import {
@@ -146,7 +146,7 @@ export class ChatService {
       projects: this.projectRepo.getAll().map(({ id, name, path: projectPath, defaultBranch }) => ({ id, name, path: projectPath, defaultBranch })),
       tasks: this.taskRepo?.getAll().map(({ id, projectId, title, status }) => ({ id, projectId, title, status })) || [],
       runs: this.runRepo?.getRunning().map(({ taskId, model, outcome }) => ({ taskId, model, outcome })) || [],
-      profiles: this.profileRepo?.getAll().map(({ name, engine, email, authState }) => ({ name, engine, email, authState })) || [],
+      profiles: this.profileRepo?.getAll().filter((profile) => Boolean(profile.enabled)).map(({ name, engine, email, authState, enabled }) => ({ name, engine, email, authState, enabled })) || [],
       quotaUsage: this.quotaUsageRepo?.getAll() || [],
       quotaMarks: this.quotaMarkRepo?.getAll() || [],
       currentProject: project ? { id: project.id, path: project.path } : null,
@@ -460,7 +460,11 @@ export class ChatService {
       mode,
       model,
       busy: 0,
-      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+      profileName: body.profileName ?? resolveClaudeProfile(
+        this.profileRepo || { getAll: () => [] },
+        this.config.chat.claudeProfile,
+        this.config.chat.claudeProfileExplicit,
+      ),
       kind: body.kind,
     });
 
@@ -489,7 +493,11 @@ export class ChatService {
       mode,
       model,
       busy: 0,
-      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+      profileName: body.profileName ?? resolveClaudeProfile(
+        this.profileRepo || { getAll: () => [] },
+        this.config.chat.claudeProfile,
+        this.config.chat.claudeProfileExplicit,
+      ),
       kind: body.kind,
     });
     return this.chatSessionRepo.get(id)!;
@@ -899,6 +907,7 @@ export class ChatService {
           sessionId,
           this.config.port,
           this.config.chat.permissionTimeoutSec,
+          session.projectId,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: '/compact',
@@ -1080,6 +1089,7 @@ export class ChatService {
           sessionId,
           this.config.port,
           this.config.chat.permissionTimeoutSec,
+          session.projectId,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: FORK_SUMMARY_PROMPT,
@@ -1217,7 +1227,7 @@ export class ChatService {
       }
     }
 
-    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec);
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId);
     const supportsPartial = checkClaudePartialSupport(claudeBin);
 
     const session = this.chatSessionRepo.get(turn.sessionId);
@@ -1543,7 +1553,7 @@ export class ChatService {
     const proc = spawnClaude(claudeBin, buildClaudeArgs({ planning: this.config.planning,
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
-      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec),
+      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec, session.projectId),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
       model: execution.model,

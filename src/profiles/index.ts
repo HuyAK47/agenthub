@@ -6,9 +6,21 @@ import { AgentHubConfig, saveConfig } from '../config.js';
 import { CodexEngine } from '../engines/index.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { accountKey } from './account.js';
+import { findAgyPath } from '../doctor.js';
 
 export { accountKey, sameAccount } from './account.js';
 export { exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, readAgyAccessToken, inspectAgyAccessToken, getAgyGoogleClientId, getAgyGoogleClientSecret, GOOGLE_TOKEN_ENDPOINT } from './agyToken.js';
+
+/** Resolve the system Claude profile while keeping existing installations compatible. */
+export function resolveClaudeProfile(
+  profileRepo: Pick<ProfileRepo, 'getAll'>,
+  configuredProfile: string | undefined,
+  configuredExplicitly = false,
+): string {
+  if (configuredExplicitly && configuredProfile) return configuredProfile;
+  const existing = profileRepo.getAll().find((profile) => profile.engine === 'claude' && profile.kind === 'system');
+  return existing?.name || configuredProfile || 'claude-default';
+}
 
 // Symlinks to create in isolated HOME per PLAN 2.1
 const SYMLINK_TARGETS = [
@@ -36,7 +48,7 @@ export class ProfileService {
 
   /**
    * Register all profiles on startup:
-   * - "chinh" (keyring, agy engine)
+   * - "agy-default" (keyring, agy engine) when agy is installed
    * - "codex" if Codex CLI found
    * - All subdirectories in ~/.agy-homes/ (except .state)
    */
@@ -47,11 +59,11 @@ export class ProfileService {
       // Persist the migration choice so subsequent daemon starts are stable.
       saveConfig(this.config.hubHome, { multiplePerProvider: true });
     }
-    // Register keyring agy profile if none exists (handles renamed "chinh" -> "g0")
+    // Preserve existing keyring profiles, including the legacy "chinh" name.
     const hasKeyring = this.profileRepo.getAll(true).some((p) => p.kind === 'keyring' && p.engine === 'agy');
-    if (!hasKeyring) {
+    if (!hasKeyring && findAgyPath()) {
       this.profileRepo.upsert({
-        name: 'chinh',
+        name: 'agy-default',
         engine: 'agy',
         kind: 'keyring',
         home: os.homedir(),
@@ -74,10 +86,12 @@ export class ProfileService {
     }
 
     // The system Claude profile uses the existing ~/.claude account and is
-    // only exposed when Claude Code is installed on this machine.
+    // only exposed when Claude Code is installed on this machine. Preserve
+    // the legacy name when it exists; new installations use the default name.
     if (findClaudeBin(this.config.chat.claudeBin)) {
+      const existing = this.profileRepo.getAll().find((p) => p.engine === 'claude' && p.kind === 'system');
       this.profileRepo.upsert({
-        name: 'claude-may',
+        name: existing?.name || 'claude-default',
         engine: 'claude',
         kind: 'system',
         home: os.homedir(),

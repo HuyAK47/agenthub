@@ -1776,6 +1776,563 @@ describe('Telegram gửi lỗi mạng không làm sập daemon', () => {
   });
 });
 
+describe('Brain Notifications & Digest (b-brain-notify)', () => {
+  let tmpDir: string;
+  let ctx: TestContext;
+  let config: ReturnType<typeof loadConfig>;
+  let recordedCalls: Array<{ url: string; body?: Record<string, unknown> }>;
+  let fakeFetch: typeof fetch;
+  const CHAT_ID = 998877;
+  let currentTime = 1_000_000;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-notify-test-'));
+    process.env.AGENTHUB_HOME = tmpDir;
+    process.env.AGENTHUB_AGY_HOMES = path.join(tmpDir, 'agy-homes');
+    fs.mkdirSync(process.env.AGENTHUB_AGY_HOMES, { recursive: true });
+    config = loadConfig(tmpDir);
+    config.telegram.enabled = true;
+    config.telegram.allowedChatIds = [CHAT_ID];
+    config.port = 4321;
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
+    ctx = createContext(config, engines);
+    ctx.scheduler.stop();
+    currentTime = new Date('2026-10-21T10:00:00Z').getTime();
+
+    recordedCalls = [];
+    fakeFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      let bodyObj: Record<string, unknown> | undefined;
+      if (init?.body && typeof init.body === 'string') {
+        try {
+          bodyObj = JSON.parse(init.body);
+        } catch {
+          // ignore
+        }
+      }
+      recordedCalls.push({ url: urlStr, body: bodyObj });
+
+      if (urlStr.includes('/getMe')) {
+        return new Response(JSON.stringify({ ok: true, result: { id: 123456, is_bot: true, first_name: 'AgentHubBot', username: 'agenthub_bot' } }));
+      }
+      if (urlStr.includes('/sendMessage')) {
+        return new Response(JSON.stringify({ ok: true, result: { message_id: recordedCalls.length, chat: { id: CHAT_ID } } }));
+      }
+      if (urlStr.includes('/editMessageText')) {
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 123, chat: { id: CHAT_ID } } }));
+      }
+      if (urlStr.includes('/answerCallbackQuery')) {
+        return new Response(JSON.stringify({ ok: true, result: true }));
+      }
+      return new Response(JSON.stringify({ ok: true, result: {} }));
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    closeContext(ctx);
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    delete process.env.AGENTHUB_HOME;
+    delete process.env.AGENTHUB_AGY_HOMES;
+  });
+
+  function createBot(brainMode: 'off' | 'suggest' | 'auto' = 'suggest') {
+    config.brain.mode = brainMode;
+    return new TelegramBotService({
+      config,
+      service: ctx.service,
+      eventBus: ctx.scheduler.getEventBus(),
+      taskRepo: ctx.taskRepo,
+      projectRepo: ctx.projectRepo,
+      profileRepo: ctx.profileRepo,
+      quotaMarkRepo: ctx.quotaMarkRepo,
+      fetch: fakeFetch,
+      now: () => currentTime,
+      sleep: async () => {},
+      sleepFn: async () => {},
+      tokenOverride: 'test-token',
+      chatService: ctx.chatService,
+    });
+  }
+
+  it('1. khi brain.mode = auto: chan cac thong bao tho theo tung task, chi gui hub_notify va su co he thong', async () => {
+    const bot = createBot('auto');
+
+    // Emit raw task events: should all be suppressed
+    bot.handleEvent('task.review_ready', 'p/t-1', { title: 'T1' });
+    bot.handleEvent('task.failed', 'p/t-2', { title: 'T2' });
+    bot.handleEvent('task.blocked', 'p/t-3', { title: 'T3' });
+    bot.handleEvent('batch.created', undefined, { taskCount: 2 });
+    // Single profile quota exhausted when other profiles exist -> suppressed
+    ctx.profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: tmpDir, email: null, enabled: 1 });
+    ctx.profileRepo.upsert({ name: 'p2', engine: 'agy', kind: 'isolated', home: tmpDir, email: null, enabled: 1 });
+    ctx.quotaMarkRepo.mark('p1', 'gemini', Math.floor(currentTime / 1000) + 3600);
+    bot.handleEvent('quota.exhausted', undefined, { profile: 'p1', family: 'gemini' });
+
+    await bot.flushQueue(CHAT_ID);
+    let sendCalls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sendCalls).toHaveLength(0);
+
+    // Allowed: brain.notify
+    bot.handleEvent('brain.notify', undefined, { text: 'Bộ não đã hoàn tất lượt chạy', level: 'info' });
+    await bot.flushQueue(CHAT_ID);
+    sendCalls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0].body?.text).toContain('Bộ não đã hoàn tất lượt chạy');
+
+    // Allowed: disk.low
+    bot.handleEvent('disk.low', undefined, { freeGB: 1, minFreeGB: 3 });
+    await bot.flushQueue(CHAT_ID);
+    sendCalls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sendCalls).toHaveLength(2);
+    expect(sendCalls[1].body?.text).toContain('Ổ đĩa thấp');
+
+    // Allowed: moi tai khoan het quota
+    ctx.quotaMarkRepo.mark('p2', 'gemini', Math.floor(currentTime / 1000) + 3600);
+    bot.handleEvent('quota.exhausted', undefined, { profile: 'p2', family: 'gemini' });
+    await bot.flushQueue(CHAT_ID);
+    sendCalls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sendCalls).toHaveLength(3);
+    expect(sendCalls[2].body?.text).toContain('Mọi tài khoản đều đã hết quota');
+  });
+
+  it('lọc thông báo thô theo brain mode hiệu lực của từng project', async () => {
+    ctx.projectRepo.insert({ id: 'p1', name: 'P1', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: JSON.stringify({ brain: { mode: 'auto' } }) });
+    ctx.projectRepo.insert({ id: 'p2', name: 'P2', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    const bot = createBot('suggest');
+
+    bot.handleEvent('task.review_ready', 'p1/task', { title: 'P1 task' });
+    bot.handleEvent('task.review_ready', 'p2/task', { title: 'P2 task' });
+    await bot.flushQueue(CHAT_ID);
+    let sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(1);
+    expect(sends[0].body?.text).toContain('P2 task');
+
+    ctx.projectRepo.update('p2', { settings: JSON.stringify({ brain: { mode: 'suggest' } }) });
+    config.brain.mode = 'auto';
+    bot.handleEvent('task.failed', 'p1/failed', { title: 'P1 failed' });
+    bot.handleEvent('task.failed', 'p2/failed', { title: 'P2 failed' });
+    await bot.flushQueue(CHAT_ID);
+    sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(2);
+    expect(sends[1].body?.text).toContain('P2 failed');
+  });
+
+  it('2. gio yen tinh notifications.quietHours: chi gui level incident, tin khac don lai', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const quietDate = new Date();
+    quietDate.setHours(23, 45, 0, 0);
+    currentTime = quietDate.getTime(); // inside quiet hours
+
+    const bot = createBot('suggest');
+
+    // Info and normal events are deferred
+    bot.handleEvent('brain.notify', undefined, { text: 'Tin thuong', level: 'info' });
+    bot.handleEvent('task.review_ready', 'p/t-1', { title: 'Review ready' });
+    await bot.flushQueue(CHAT_ID);
+    expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+    expect(bot.getQuietHoursQueue().length).toBeGreaterThanOrEqual(1);
+
+    // Incident event is sent immediately
+    bot.handleEvent('brain.notify', undefined, { text: 'Su co nghiem trong', level: 'incident' });
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(1);
+    expect(sends[0].body?.text).toContain('Su co nghiem trong');
+  });
+
+  it('3. tin decision luon co nut (Dong y / Khong / Xem dashboard) va phan hoi callback', async () => {
+    const bot = createBot('suggest');
+
+    bot.handleEvent('brain.notify', undefined, {
+      decisionId: 'dec-123',
+      text: 'Bạn có đồng ý merge đợt task này không?',
+      level: 'decision',
+    });
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(1);
+    const msg = sends[0].body;
+    expect(msg?.text).toContain('Bạn có đồng ý merge đợt task này không?');
+
+    const markup = msg?.reply_markup as { inline_keyboard: InlineKeyboardButton[][] };
+    expect(markup).toBeDefined();
+    expect(markup.inline_keyboard[0][0].text).toContain('Đồng ý');
+    expect(markup.inline_keyboard[0][0].callback_data).toBe('decision:agree:dec-123');
+    expect(markup.inline_keyboard[0][1].text).toContain('Không');
+    expect(markup.inline_keyboard[0][1].callback_data).toBe('decision:reject:dec-123');
+    expect(markup.inline_keyboard[1][0].text).toContain('Xem dashboard');
+
+    const getOrCreateSpy = vi.spyOn(ctx.chatService, 'getOrCreateSession');
+    const sendSpy = vi.spyOn(ctx.chatService, 'sendMessage').mockReturnValue({
+      userMessageId: 'u-1',
+      assistantMessageId: 'a-1',
+    });
+
+    // Click Đồng ý
+    await bot.handleUpdate({
+      update_id: 1,
+      callback_query: {
+        id: 'cb-1',
+        from: { id: CHAT_ID },
+        message: { message_id: 10, chat: { id: CHAT_ID }, text: msg?.text as string },
+        data: 'decision:agree:dec-123',
+      },
+    });
+
+    const edits = recordedCalls.filter((c) => c.url.includes('/editMessageText'));
+    expect(edits.length).toBeGreaterThan(0);
+    expect(edits[0].body?.text).toContain('Đã phản hồi: Đồng ý');
+
+    // getOrCreateSession called with kind: 'brain'
+    expect(getOrCreateSpy).toHaveBeenCalledWith('brain', { title: 'Bộ não', kind: 'brain' });
+
+    // Message sent to brain session
+    expect(sendSpy).toHaveBeenCalledWith(
+      'brain',
+      'Người dùng trả lời quyết định dec-123 («Bạn có đồng ý merge đợt task này không?»): Đồng ý',
+    );
+
+    // Tracker marks decision as answered
+    const decision = bot.getDecisionTracker().getDecision('dec-123');
+    expect(decision?.answered).toBe(true);
+    expect(decision?.answer).toBe('agree');
+
+    // Click again: should report expired or already answered
+    await bot.handleUpdate({
+      update_id: 2,
+      callback_query: {
+        id: 'cb-2',
+        from: { id: CHAT_ID },
+        message: { message_id: 10, chat: { id: CHAT_ID }, text: msg?.text as string },
+        data: 'decision:agree:dec-123',
+      },
+    });
+    const ansCalls = recordedCalls.filter((c) => c.url.includes('/answerCallbackQuery'));
+    const lastAns = ansCalls.at(-1);
+    expect(lastAns?.body?.text).toContain('Quyết định đã hết hạn hoặc đã trả lời');
+
+    // Click non-existent decision
+    await bot.handleUpdate({
+      update_id: 3,
+      callback_query: {
+        id: 'cb-3',
+        from: { id: CHAT_ID },
+        message: { message_id: 10, chat: { id: CHAT_ID }, text: msg?.text as string },
+        data: 'decision:agree:non-existent',
+      },
+    });
+    const lastAnsNonExistent = recordedCalls.filter((c) => c.url.includes('/answerCallbackQuery')).at(-1);
+    expect(lastAnsNonExistent?.body?.text).toContain('Quyết định đã hết hạn hoặc đã trả lời');
+  });
+
+  it('4. nhac lai tin decision sau 2 gio neu chua tra loi (toi da 2 lan)', async () => {
+    const bot = createBot('suggest');
+
+    bot.handleEvent('brain.notify', undefined, {
+      decisionId: 'dec-remind',
+      text: 'Xác nhận xóa tài khoản cũ?',
+      level: 'decision',
+    });
+    await bot.flushQueue(CHAT_ID);
+    expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
+
+    // 1 hour later: no reminder
+    currentTime += 1 * 60 * 60 * 1000;
+    await bot.checkDecisionReminders();
+    await bot.flushQueue(CHAT_ID);
+    expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
+
+    // 2 hours later (total 2h from start): Reminder 1 sent
+    currentTime += 1 * 60 * 60 * 1000;
+    await bot.checkDecisionReminders();
+    await bot.flushQueue(CHAT_ID);
+    let sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(2);
+    expect(sends[1].body?.text).toContain('Nhắc lại quyết định (lần 1/2)');
+
+    // Another 2 hours later: Reminder 2 sent
+    currentTime += 2 * 60 * 60 * 1000;
+    await bot.checkDecisionReminders();
+    await bot.flushQueue(CHAT_ID);
+    sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(3);
+    expect(sends[2].body?.text).toContain('Nhắc lại quyết định (lần 2/2)');
+
+    // Another 2 hours later: No reminder 3 (max 2 times)
+    currentTime += 2 * 60 * 60 * 1000;
+    await bot.checkDecisionReminders();
+    await bot.flushQueue(CHAT_ID);
+    sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(3);
+  });
+
+  it('5. lenh /digest hien thi tom tat day du so lieu va quota', async () => {
+    const bot = createBot('suggest');
+
+    ctx.projectRepo.insert({
+      id: 'p',
+      name: 'Project P',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    ctx.taskRepo.insert({ id: 'p/done-1', projectId: 'p', slug: 'done-1', title: 'Task xong', status: 'done' });
+    ctx.taskRepo.insert({ id: 'p/run-1', projectId: 'p', slug: 'run-1', title: 'Task chay', status: 'running' });
+    ctx.taskRepo.insert({ id: 'p/fail-1', projectId: 'p', slug: 'fail-1', title: 'Task loi', status: 'failed' });
+    ctx.profileRepo.upsert({ name: 'agy-1', engine: 'agy', kind: 'isolated', home: tmpDir, email: null, enabled: 1 });
+
+    await bot.handleUpdate({
+      update_id: 2,
+      message: { message_id: 20, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/digest' },
+    });
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends.length).toBeGreaterThan(0);
+    const text = sends.at(-1)?.body?.text as string;
+    expect(text).toContain('TÓM TẮT HỆ THỐNG AGENTHUB');
+    expect(text).toContain('Hoàn thành: <b>1</b>');
+    expect(text).toContain('Đang chạy: <b>1</b>');
+    expect(text).toContain('Lỗi: <b>1</b>');
+    expect(text).toContain('Quota tài khoản:');
+  });
+
+  it('6. checkScheduledDigest phat tin luc 18:00', async () => {
+    config.brain.digest = { enabled: true, time: '18:00' };
+    const digestDate = new Date();
+    digestDate.setHours(18, 0, 0, 0);
+    currentTime = digestDate.getTime();
+
+    const bot = createBot('suggest');
+    const triggered = await bot.checkScheduledDigest();
+    expect(triggered).toBe(true);
+
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends.length).toBeGreaterThan(0);
+    expect(sends[0].body?.text).toContain('TÓM TẮT HỆ THỐNG AGENTHUB');
+
+    // Running again in the same day doesn't double-trigger
+    const secondTrigger = await bot.checkScheduledDigest();
+    expect(secondTrigger).toBe(false);
+  });
+
+  it('7. checkScheduledDigest van gui khi bo lo dung phut (vi du chay luc 18:05)', async () => {
+    config.brain.digest = { enabled: true, time: '18:00' };
+    const digestDate = new Date();
+    digestDate.setHours(18, 5, 0, 0); // 18:05 instead of exact 18:00
+    currentTime = digestDate.getTime();
+
+    const bot = createBot('suggest');
+    const triggered = await bot.checkScheduledDigest();
+    expect(triggered).toBe(true);
+
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends.length).toBeGreaterThan(0);
+    expect(sends[0].body?.text).toContain('TÓM TẮT HỆ THỐNG AGENTHUB');
+
+    // Running again in the same day doesn't double-trigger
+    const secondTrigger = await bot.checkScheduledDigest();
+    expect(secondTrigger).toBe(false);
+  });
+
+  it('8. khong gui nhac nho decision trong gio yen tinh', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const nightDate = new Date();
+    nightDate.setHours(23, 0, 0, 0);
+    currentTime = nightDate.getTime();
+
+    const bot = createBot('suggest');
+    // Pre-record a decision that was created 3 hours ago
+    const tracker = bot.getDecisionTracker();
+    tracker.recordDecision('dec-night', 'Quyết định đêm', [CHAT_ID], currentTime - 3 * 3600 * 1000);
+
+    // Should be due for reminder, but since it's quiet hours, checkDecisionReminders should suppress
+    await bot.checkDecisionReminders();
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('9. decision trong gio yen tinh duoc ghi nhan vao tracker va gui kem nut trong tom tat sang', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const nightDate = new Date();
+    nightDate.setHours(23, 30, 0, 0);
+    currentTime = nightDate.getTime();
+
+    const bot = createBot('suggest');
+    bot.handleEvent('brain.notify', undefined, {
+      decisionId: 'dec-in-night',
+      text: 'Xác nhận migrate database?',
+      level: 'decision',
+    });
+    await bot.flushQueue(CHAT_ID);
+
+    // In quiet hours: no message sent immediately
+    expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+    // Decision IS recorded in tracker
+    const dec = bot.getDecisionTracker().getDecision('dec-in-night');
+    expect(dec).toBeDefined();
+    expect(dec?.text).toBe('Xác nhận migrate database?');
+    expect(dec?.answered).toBe(false);
+
+    // Advance time to 07:00 (quiet hours ended)
+    const morningDate = new Date();
+    morningDate.setHours(7, 0, 0, 0);
+    currentTime = morningDate.getTime();
+
+    const triggered = await bot.checkMorningSummary();
+    expect(triggered).toBe(true);
+
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends.length).toBeGreaterThan(0);
+    const morningMsg = sends[0].body;
+    expect(morningMsg?.text).toContain('TÓM TẮT BUỔI SÁNG AGENTHUB');
+    expect(morningMsg?.text).toContain('Xác nhận migrate database?');
+
+    const markup = morningMsg?.reply_markup as { inline_keyboard: InlineKeyboardButton[][] };
+    expect(markup).toBeDefined();
+    expect(markup.inline_keyboard[0][0].text).toContain('Đồng ý');
+    expect(markup.inline_keyboard[0][0].callback_data).toBe('decision:agree:dec-in-night');
+    expect(markup.inline_keyboard[0][1].text).toContain('Không');
+    expect(markup.inline_keyboard[0][1].callback_data).toBe('decision:reject:dec-in-night');
+
+    // Queue is cleared after morning summary
+    expect(bot.getQuietHoursQueue()).toHaveLength(0);
+
+    // Running again today does not re-send
+    const again = await bot.checkMorningSummary();
+    expect(again).toBe(false);
+  });
+
+  it('10. hang doi quietHoursQueue bi gioi han toi da 200 muc', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const nightDate = new Date();
+    nightDate.setHours(23, 0, 0, 0);
+    currentTime = nightDate.getTime();
+
+    const bot = createBot('suggest');
+    for (let i = 1; i <= 250; i++) {
+      bot.handleEvent('brain.notify', undefined, {
+        text: `Thông báo thứ ${i}`,
+        level: 'info',
+      });
+    }
+
+    const queue = bot.getQuietHoursQueue();
+    expect(queue.length).toBe(200);
+    expect(queue[0].text).toContain('Thông báo thứ 51');
+    expect(queue[199].text).toContain('Thông báo thứ 250');
+  });
+
+  it('11. restart gia lap (tao service moi voi now = 15:00) khong gui tom tat sang hoac digest', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    config.brain.digest = { enabled: true, time: '18:00' };
+
+    const restartDate = new Date();
+    restartDate.setHours(15, 0, 0, 0);
+    currentTime = restartDate.getTime();
+
+    // Create a new bot instance at 15:00 (simulating hub restart)
+    const bot = createBot('suggest');
+
+    // Add a pending decision created just now
+    bot.getDecisionTracker().recordDecision('dec-1', 'Cần quyết định việc X', [CHAT_ID], currentTime);
+
+    const morningTriggered = await bot.checkMorningSummary();
+    expect(morningTriggered).toBe(false);
+
+    const digestTriggered = await bot.checkScheduledDigest();
+    expect(digestTriggered).toBe(false);
+
+    await bot.periodicCheck();
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('12. restart gia lap (tao service moi voi now = 19:30) khong gui tom tat sang hoac digest', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    config.brain.digest = { enabled: true, time: '18:00' };
+
+    const restartDate = new Date();
+    restartDate.setHours(19, 30, 0, 0);
+    currentTime = restartDate.getTime();
+
+    // Create a new bot instance at 19:30 (simulating hub restart after 18:00 window)
+    const bot = createBot('suggest');
+
+    const morningTriggered = await bot.checkMorningSummary();
+    expect(morningTriggered).toBe(false);
+
+    const digestTriggered = await bot.checkScheduledDigest();
+    expect(digestTriggered).toBe(false);
+
+    await bot.periodicCheck();
+    await bot.flushQueue(CHAT_ID);
+
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('13. tom tat sang khong gui khi hang doi rong va khong co decision', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+
+    // Set time to 07:15 (inside the 2h window after quietHours.end)
+    const morningDate = new Date();
+    morningDate.setHours(7, 15, 0, 0);
+    currentTime = morningDate.getTime();
+
+    const bot = createBot('suggest');
+    // Ensure queue and decisionTracker are empty
+    expect(bot.getQuietHoursQueue()).toHaveLength(0);
+    expect(bot.getDecisionTracker().getPending()).toHaveLength(0);
+
+    const triggered = await bot.checkMorningSummary();
+    expect(triggered).toBe(false);
+
+    await bot.flushQueue(CHAT_ID);
+    const sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(0);
+  });
+
+  it('14. nut khi co nhieu quyet dinh trong tom tat sang hien short text cho ca nut Khong (❌ <short>)', async () => {
+    config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
+    const morningDate = new Date();
+    morningDate.setHours(7, 0, 0, 0);
+    currentTime = morningDate.getTime();
+
+    const bot = createBot('suggest');
+    const tracker = bot.getDecisionTracker();
+    tracker.recordDecision('dec-1', 'Đồng ý cập nhật cấu hình hệ thống?', [CHAT_ID], currentTime);
+    tracker.recordDecision('dec-2', 'Chạy lệnh di chuyển database lớn?', [CHAT_ID], currentTime);
+
+    const summary = bot.buildMorningSummary();
+    expect(summary.keyboard).toHaveLength(3); // 2 rows of decisions + 1 row for dashboard
+    // Row 1
+    expect(summary.keyboard[0][0].text).toBe('✅ Đồng ý cập nhật c...');
+    expect(summary.keyboard[0][1].text).toBe('❌ Đồng ý cập nhật c...');
+    expect(summary.keyboard[0][1].callback_data).toBe('decision:reject:dec-1');
+    // Row 2
+    expect(summary.keyboard[1][0].text).toBe('✅ Chạy lệnh di chuy...');
+    expect(summary.keyboard[1][1].text).toBe('❌ Chạy lệnh di chuy...');
+    expect(summary.keyboard[1][1].callback_data).toBe('decision:reject:dec-2');
+  });
+});
+
 describe('Menu lệnh Telegram', () => {
   it('mọi lệnh trong menu đều có xử lý thật và mô tả hợp lệ', async () => {
     const { TELEGRAM_BOT_COMMANDS } = await import('../src/telegram.js');
