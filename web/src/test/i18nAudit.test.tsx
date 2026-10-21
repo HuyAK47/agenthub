@@ -14,6 +14,7 @@ import { ProjectsPage } from '../pages/ProjectsPage';
 import { CreateTaskPage } from '../pages/CreateTaskPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { ChatPage } from '../pages/ChatPage';
+import { PlansPage } from '../pages/PlansPage';
 
 import * as client from '../api/client';
 import * as chatApi from '../api/chat';
@@ -375,6 +376,102 @@ describe('i18n Audit & Parity', () => {
       });
 
       assertNoVietnameseText(container, 'ChatPage');
+    });
+
+    it('8. PlansPage renders in en without Vietnamese characters', async () => {
+      vi.spyOn(client, 'getProjects').mockResolvedValue([
+        { id: 'proj1', name: 'Project 1', path: '/home/user/proj1', defaultBranch: 'main', maxParallel: 2 },
+      ]);
+      vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        planning: { requireApproval: false, approvalMinTasks: 0 },
+      } as any);
+
+      const { container } = render(
+        <LocaleProvider initialLocale="en">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter initialEntries={['/plans']}>
+                <PlansPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Plan review')).toBeInTheDocument();
+      });
+
+      assertNoVietnameseText(container, 'PlansPage');
+    });
+
+    it('9. PlansPage with active batch renders in en without Vietnamese characters', async () => {
+      vi.spyOn(client, 'getProjects').mockResolvedValue([
+        { id: 'proj1', name: 'Project 1', path: '/home/user/proj1', defaultBranch: 'main', maxParallel: 2 },
+      ]);
+      vi.spyOn(client, 'getBatches').mockResolvedValue([
+        {
+          id: 'b-1',
+          projectId: 'proj1',
+          title: 'Sprint 1 Plan',
+          goal: 'Core architecture and dependencies',
+          status: 'draft',
+          createdBy: 'claude',
+          createdAt: '2026-10-20T10:00:00Z',
+          tasks: [],
+        },
+      ]);
+      vi.spyOn(client, 'getBatch').mockResolvedValue({
+        id: 'b-1',
+        projectId: 'proj1',
+        title: 'Sprint 1 Plan',
+        goal: 'Core architecture and dependencies',
+        status: 'draft',
+        createdBy: 'claude',
+        createdAt: '2026-10-20T10:00:00Z',
+        tasks: [
+          {
+            id: 'proj1~task-1',
+            projectId: 'proj1',
+            slug: 'task-1',
+            title: 'Setup routing',
+            body: 'Implement routes',
+            level: 'easy',
+            status: 'draft',
+            modelChain: ['gemini-3.8-flash-high'],
+            dependsOn: [],
+            attempt: 0,
+            resume: 0,
+            createdAt: '2026-10-20T10:00:00Z',
+            updatedAt: '2026-10-20T10:00:00Z',
+            batchId: 'b-1',
+          },
+        ],
+      });
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        planning: { requireApproval: true },
+      } as any);
+
+      const { container } = render(
+        <LocaleProvider initialLocale="en">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter initialEntries={['/plans/b-1']}>
+                <Routes>
+                  <Route path="/plans/:batchId" element={<PlansPage />} />
+                </Routes>
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Sprint 1 Plan').length).toBeGreaterThan(0);
+      });
+
+      assertNoVietnameseText(container, 'PlansPage with active batch');
     });
   });
 });

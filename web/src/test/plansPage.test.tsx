@@ -85,6 +85,9 @@ describe('PlansPage', () => {
     });
 
     vi.spyOn(client, 'getProjects').mockResolvedValue([mockProject]);
+    vi.spyOn(client, 'getConfig').mockResolvedValue({
+      planning: { requireApproval: false, approvalMinTasks: 0 },
+    } as any);
     vi.spyOn(client, 'getBatches').mockResolvedValue([mockBatch1, mockBatch2]);
     vi.spyOn(client, 'getBatch').mockImplementation(async (id: string) => {
       if (id === 'b-1') return mockBatch1;
@@ -265,5 +268,62 @@ describe('PlansPage', () => {
     await waitFor(() => {
       expect(discardSpy).toHaveBeenCalledWith('b-1');
     });
+  });
+
+  it('8. Trạng thái trống hiện đúng khối giải thích và câu cài đặt khi requireApproval = false và approvalMinTasks = 0', async () => {
+    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    vi.spyOn(client, 'getConfig').mockResolvedValue({
+      planning: { requireApproval: false, approvalMinTasks: 0 },
+    } as any);
+
+    renderPlansPage('/plans');
+
+    expect(await screen.findByTestId('plans-empty-state')).toBeInTheDocument();
+    expect(screen.getByText('Đợt nháp xuất hiện khi nào:')).toBeInTheDocument();
+    expect(screen.getByText(/Lệnh \/plan trên Telegram \/ chat, hoặc khi cài đặt yêu cầu duyệt/)).toBeInTheDocument();
+    expect(screen.getByText('Cài đặt hiện tại:')).toBeInTheDocument();
+    expect(screen.getByText('Hiện Claude giao việc ngay, không cần duyệt')).toBeInTheDocument();
+    expect(screen.getByTestId('link-to-settings-planning')).toHaveAttribute('href', '/settings');
+  });
+
+  it('9. Trạng thái trống hiện đúng câu khi cài đặt theo số task (approvalMinTasks > 0)', async () => {
+    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    vi.spyOn(client, 'getConfig').mockResolvedValue({
+      planning: { requireApproval: false, approvalMinTasks: 4 },
+    } as any);
+
+    renderPlansPage('/plans');
+
+    expect(await screen.findByTestId('plans-empty-state')).toBeInTheDocument();
+    expect(screen.getByText('Kế hoạch từ 4 task cần duyệt')).toBeInTheDocument();
+  });
+
+  it('10. Trạng thái trống hiện đúng câu khi cài đặt duyệt mọi task (requireApproval = true)', async () => {
+    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    vi.spyOn(client, 'getConfig').mockResolvedValue({
+      planning: { requireApproval: true, approvalMinTasks: 0 },
+    } as any);
+
+    renderPlansPage('/plans');
+
+    expect(await screen.findByTestId('plans-empty-state')).toBeInTheDocument();
+    expect(screen.getByText('Mọi task cần duyệt')).toBeInTheDocument();
+  });
+
+  it('11. Khung bên phải khi chưa chọn đợt hiển thị 3 bước ngắn (Chọn đợt → Sửa/bỏ task → Giao cả đợt)', async () => {
+    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    renderPlansPage('/plans');
+
+    expect(await screen.findByTestId('plans-no-batch-selected')).toBeInTheDocument();
+    expect(screen.getByText('Chọn đợt')).toBeInTheDocument();
+    expect(screen.getByText('Sửa/bỏ task')).toBeInTheDocument();
+    expect(screen.getByText('Giao cả đợt')).toBeInTheDocument();
+  });
+
+  it('12. Hiển thị tiêu đề trang "Duyệt kế hoạch" và phụ đề hướng dẫn', async () => {
+    renderPlansPage('/plans/b-1');
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Duyệt kế hoạch');
+    expect(screen.getByText(/Claude gom các task đề xuất thành từng đợt nháp/)).toBeInTheDocument();
   });
 });

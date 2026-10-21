@@ -190,6 +190,8 @@ export function connectSSE(queryClient: QueryClient): () => void {
           queryClient.invalidateQueries({ queryKey: ['brain'] });
         } else if (type.startsWith('chat.')) {
           queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+        } else if (type.startsWith('batch.')) {
+          queryClient.invalidateQueries({ queryKey: ['batches'] });
         }
       } catch (err) {
         console.error('Lỗi phân tích SSE event:', err);
