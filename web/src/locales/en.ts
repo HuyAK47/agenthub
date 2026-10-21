@@ -354,6 +354,7 @@ export const en: typeof vi = {
     sessionEnded: 'Login session ended.',
     wsError: 'WebSocket terminal connection error.',
     doneAndClose: 'Done & Close',
+    authMethod: 'Authentication Method',
     tabTerminalLogin: 'Terminal Login',
     tabImportCockpit: 'Import from Cockpit Token',
     cockpitImportDesc: 'Paste the account list exported from Cockpit tools (JSON format with email and refresh_token).',

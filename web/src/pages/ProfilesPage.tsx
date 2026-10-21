@@ -662,11 +662,11 @@ function AddProfileModal({
   onCreated: (name: string, engine: Provider) => void;
 }) {
   const { t } = useLocale();
-  const [tab, setTab] = useState<'terminal' | 'cockpit'>('terminal');
+  const [engine, setEngine] = useState<Provider>('agy');
+  const [method, setMethod] = useState<'terminal' | 'cockpit'>('terminal');
 
   // Terminal state
   const [name, setName] = useState('');
-  const [engine, setEngine] = useState<Provider>('agy');
   const [accountType, setAccountType] = useState<'personal' | 'team' | 'api'>('personal');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -728,184 +728,206 @@ function AddProfileModal({
     <Modal
       title={t('profiles.addBtn')}
       onClose={onClose}
-      maxWidth={tab === 'cockpit' ? 'max-w-xl' : 'max-w-md'}
+      maxWidth="max-w-lg"
     >
-      <div className="mb-4 flex border-b border-[var(--t-border)]">
-        <button
-          type="button"
-          onClick={() => { setTab('terminal'); setError(''); }}
-          className={`flex-1 pb-2.5 text-center text-sm font-medium transition-colors border-b-2 ${
-            tab === 'terminal'
-              ? 'border-[var(--t-accent)] text-[var(--t-accent)] font-semibold'
-              : 'border-transparent text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
-          }`}
-        >
-          {t('profiles.tabTerminalLogin')}
-        </button>
-        <button
-          type="button"
-          onClick={() => { setTab('cockpit'); setCockpitError(''); }}
-          className={`flex-1 pb-2.5 text-center text-sm font-medium transition-colors border-b-2 ${
-            tab === 'cockpit'
-              ? 'border-[var(--t-accent)] text-[var(--t-accent)] font-semibold'
-              : 'border-transparent text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
-          }`}
-        >
-          {t('profiles.tabImportCockpit')}
-        </button>
-      </div>
+      <div className="space-y-4">
+        <label className="block text-sm">
+          {t('profiles.provider')}
+          <select
+            value={engine}
+            onChange={(e) => {
+              const next = e.target.value as Provider;
+              setEngine(next);
+              if (next !== 'agy') {
+                setMethod('terminal');
+              }
+            }}
+            className="field mt-1"
+          >
+            <option value="agy">Antigravity (Gemini)</option>
+            <option value="codex">Codex (OpenAI)</option>
+            <option value="claude">Claude</option>
+          </select>
+        </label>
 
-      {tab === 'terminal' ? (
-        <form onSubmit={handleCreateTerminal} className="space-y-4">
-          <p className="text-sm text-[var(--t-text-3)]">
-            {t('profiles.addDescription')}
-          </p>
-          {error && (
-            <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
-              {error}
-            </p>
-          )}
-          <label className="block text-sm">
-            {t('profiles.accountName')}
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t('profiles.accountNamePlaceholder')}
-              className="field mt-1"
-            />
-          </label>
-          <label className="block text-sm">
-            {t('profiles.provider')}
-            <select
-              value={engine}
-              onChange={(e) => setEngine(e.target.value as Provider)}
-              className="field mt-1"
-            >
-              <option value="agy">Antigravity (Gemini)</option>
-              <option value="codex">Codex (OpenAI)</option>
-              <option value="claude">Claude</option>
-            </select>
-          </label>
-          <label className="block text-sm">
-            {t('profiles.accountType')}
-            <select
-              value={accountType}
-              onChange={(e) => setAccountType(e.target.value as typeof accountType)}
-              className="field mt-1"
-            >
-              <option value="personal">{t('profiles.personal')}</option>
-              <option value="team">{t('profiles.team')}</option>
-              <option value="api">{t('profiles.api')}</option>
-            </select>
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="button-secondary">
-              {t('common.cancel')}
-            </button>
-            <button type="submit" disabled={loading} className="button-primary">
-              {loading ? 'Đang tạo…' : t('profiles.createAndGuide')}
-            </button>
+        {engine === 'agy' && (
+          <div>
+            <span className="block text-xs font-medium text-[var(--t-text-3)] mb-1.5">
+              {t('profiles.authMethod')}
+            </span>
+            <div className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--t-border)] p-1 bg-[var(--t-surface-2)]">
+              <button
+                type="button"
+                onClick={() => {
+                  setMethod('terminal');
+                  setCockpitError('');
+                }}
+                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                  method === 'terminal'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text-1)] shadow-sm font-semibold'
+                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
+                }`}
+              >
+                {t('profiles.tabTerminalLogin')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMethod('cockpit');
+                  setError('');
+                }}
+                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                  method === 'cockpit'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text-1)] shadow-sm font-semibold'
+                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text-1)]'
+                }`}
+              >
+                {t('profiles.tabImportCockpit')}
+              </button>
+            </div>
           </div>
-        </form>
-      ) : (
-        <div className="space-y-4">
-          {cockpitResult ? (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-[var(--t-border)] p-3 bg-[var(--t-surface-2)]">
-                <p className="text-sm font-medium">
-                  {t('profiles.importResultTitle', {
-                    success: cockpitResult.successCount,
-                    total: cockpitResult.total,
-                  })}
-                </p>
-              </div>
-              <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-                {cockpitResult.results.map((res, i) => (
-                  <div
-                    key={i}
-                    className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs ${
-                      res.status === 'ok'
-                        ? 'border-[var(--t-ok)]/30 bg-[var(--t-ok)]/10 text-[var(--t-text-1)]'
-                        : 'border-[var(--t-crit)]/30 bg-[var(--t-crit)]/10 text-[var(--t-crit)]'
-                    }`}
-                  >
-                    <span className="mt-0.5 font-bold">
-                      {res.status === 'ok' ? '✓' : '✗'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold">{res.name}</span>
-                        {res.email && (
-                          <span className="text-[var(--t-text-3)] truncate">({res.email})</span>
+        )}
+
+        {engine !== 'agy' || method === 'terminal' ? (
+          <form onSubmit={handleCreateTerminal} className="space-y-4">
+            <p className="text-xs text-[var(--t-text-3)]">
+              {t('profiles.addDescription')}
+            </p>
+            {error && (
+              <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
+                {error}
+              </p>
+            )}
+            <label className="block text-sm">
+              {t('profiles.accountName')}
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t('profiles.accountNamePlaceholder')}
+                className="field mt-1"
+              />
+            </label>
+            <label className="block text-sm">
+              {t('profiles.accountType')}
+              <select
+                value={accountType}
+                onChange={(e) => setAccountType(e.target.value as typeof accountType)}
+                className="field mt-1"
+              >
+                <option value="personal">{t('profiles.personal')}</option>
+                <option value="team">{t('profiles.team')}</option>
+                <option value="api">{t('profiles.api')}</option>
+              </select>
+            </label>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="button-secondary">
+                {t('common.cancel')}
+              </button>
+              <button type="submit" disabled={loading} className="button-primary">
+                {loading ? 'Đang tạo…' : t('profiles.createAndGuide')}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="space-y-4">
+            {cockpitResult ? (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-[var(--t-border)] p-3 bg-[var(--t-surface-2)]">
+                  <p className="text-sm font-medium">
+                    {t('profiles.importResultTitle', {
+                      success: cockpitResult.successCount,
+                      total: cockpitResult.total,
+                    })}
+                  </p>
+                </div>
+                <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                  {cockpitResult.results.map((res, i) => (
+                    <div
+                      key={i}
+                      className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs ${
+                        res.status === 'ok'
+                          ? 'border-[var(--t-ok)]/30 bg-[var(--t-ok)]/10 text-[var(--t-text-1)]'
+                          : 'border-[var(--t-crit)]/30 bg-[var(--t-crit)]/10 text-[var(--t-crit)]'
+                      }`}
+                    >
+                      <span className="mt-0.5 font-bold">
+                        {res.status === 'ok' ? '✓' : '✗'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">{res.name}</span>
+                          {res.email && (
+                            <span className="text-[var(--t-text-3)] truncate">({res.email})</span>
+                          )}
+                        </div>
+                        {res.message && (
+                          <p className="mt-0.5 opacity-90">{res.message}</p>
                         )}
                       </div>
-                      {res.message && (
-                        <p className="mt-0.5 opacity-90">{res.message}</p>
-                      )}
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="button-primary"
+                  >
+                    {t('profiles.doneAndClose')}
+                  </button>
+                </div>
               </div>
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="button-primary"
-                >
-                  {t('profiles.doneAndClose')}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <form onSubmit={handleImportCockpit} className="space-y-4">
-              <p className="text-sm text-[var(--t-text-3)]">
-                {t('profiles.cockpitImportDesc')}
-              </p>
-              {cockpitError && (
-                <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
-                  {cockpitError}
+            ) : (
+              <form onSubmit={handleImportCockpit} className="space-y-4">
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('profiles.cockpitImportDesc')}
                 </p>
-              )}
-              <label className="block text-sm">
-                JSON Token
-                <textarea
-                  autoFocus
-                  value={cockpitJson}
-                  onChange={(e) => setCockpitJson(e.target.value)}
-                  placeholder={t('profiles.cockpitJsonPlaceholder')}
-                  rows={6}
-                  className="field mt-1 font-mono text-xs leading-relaxed"
-                />
-              </label>
-              <label className="block text-sm">
-                {t('profiles.accountType')}
-                <select
-                  value={cockpitAccountType}
-                  onChange={(e) => setCockpitAccountType(e.target.value as typeof cockpitAccountType)}
-                  className="field mt-1"
-                >
-                  <option value="personal">{t('profiles.personal')}</option>
-                  <option value="team">{t('profiles.team')}</option>
-                  <option value="api">{t('profiles.api')}</option>
-                </select>
-              </label>
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={onClose} className="button-secondary">
-                  {t('common.cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={cockpitLoading}
-                  className="button-primary"
-                >
-                  {cockpitLoading ? t('profiles.importingTokens') : t('profiles.importTokensBtn')}
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
+                {cockpitError && (
+                  <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
+                    {cockpitError}
+                  </p>
+                )}
+                <label className="block text-sm">
+                  JSON Token
+                  <textarea
+                    autoFocus
+                    value={cockpitJson}
+                    onChange={(e) => setCockpitJson(e.target.value)}
+                    placeholder={t('profiles.cockpitJsonPlaceholder')}
+                    rows={6}
+                    className="field mt-1 font-mono text-xs leading-relaxed"
+                  />
+                </label>
+                <label className="block text-sm">
+                  {t('profiles.accountType')}
+                  <select
+                    value={cockpitAccountType}
+                    onChange={(e) => setCockpitAccountType(e.target.value as typeof cockpitAccountType)}
+                    className="field mt-1"
+                  >
+                    <option value="personal">{t('profiles.personal')}</option>
+                    <option value="team">{t('profiles.team')}</option>
+                    <option value="api">{t('profiles.api')}</option>
+                  </select>
+                </label>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button type="button" onClick={onClose} className="button-secondary">
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={cockpitLoading}
+                    className="button-primary"
+                  >
+                    {cockpitLoading ? t('profiles.importingTokens') : t('profiles.importTokensBtn')}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+      </div>
     </Modal>
   );
 }

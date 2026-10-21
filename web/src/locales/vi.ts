@@ -353,6 +353,7 @@ export const vi = {
     sessionEnded: 'Phiên đăng nhập đã kết thúc.',
     wsError: 'Lỗi kết nối WebSocket terminal.',
     doneAndClose: 'Hoàn tất & Đóng',
+    authMethod: 'Phương thức xác thực',
     tabTerminalLogin: 'Đăng nhập Terminal',
     tabImportCockpit: 'Nhập từ Cockpit Token',
     cockpitImportDesc: 'Dán danh sách tài khoản export từ Cockpit tools (định dạng JSON chứa email và refresh_token).',
