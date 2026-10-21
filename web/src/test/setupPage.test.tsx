@@ -66,6 +66,7 @@ describe('SetupPage', () => {
     });
 
     vi.spyOn(client, 'getSetupStatus').mockResolvedValue(mockSetupStatus);
+    vi.spyOn(client, 'getProjects').mockResolvedValue([]);
     vi.spyOn(client, 'installSetupTool').mockResolvedValue({ jobId: 'job-123' });
     vi.spyOn(client, 'installSetupMcp').mockResolvedValue({} as any);
     vi.spyOn(client, 'completeSetup').mockResolvedValue({} as any);
@@ -98,9 +99,9 @@ describe('SetupPage', () => {
   it('1. Hiển thị tiến độ sẵn sàng x/y ở đầu trang', async () => {
     renderPage();
 
-    // 4 ready (node, git, claude, service) out of 7 total checks
-    expect(await screen.findByText('4/7')).toBeInTheDocument();
-    expect(screen.getByText('4/7 mục đã sẵn sàng')).toBeInTheDocument();
+    // 4 ready (node, git, claude, service) out of 8 total checks
+    expect(await screen.findByText('4/8')).toBeInTheDocument();
+    expect(screen.getByText('4/8 mục đã sẵn sàng')).toBeInTheDocument();
   });
 
   it('2. Hiển thị trạng thái đạt và cần làm cho từng mục kiểm tra', async () => {
@@ -115,6 +116,7 @@ describe('SetupPage', () => {
     expect(screen.getByText('Antigravity CLI')).toBeInTheDocument();
     expect(screen.getByText('Service nền')).toBeInTheDocument();
     expect(screen.getByText('Đăng ký MCP với Claude Code')).toBeInTheDocument();
+    expect(screen.getByText('Thêm dự án đầu tiên')).toBeInTheDocument();
 
     // Status badges for completed items (node, git, claude, service)
     const doneBadges = screen.getAllByTestId('status-badge-done');
@@ -269,8 +271,39 @@ describe('SetupPage', () => {
 
     expect(await screen.findByText('Get started with AgentHub')).toBeInTheDocument();
     expect(screen.getByText('Readiness progress')).toBeInTheDocument();
-    expect(screen.getByText('4/7 items ready')).toBeInTheDocument();
+    expect(screen.getByText('4/8 items ready')).toBeInTheDocument();
+    expect(screen.getByText('Add first project')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Complete/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Skip for now/ })).toBeInTheDocument();
+  });
+
+  it('10. Bước thêm dự án: chưa đạt khi 0 project (hiện nút dẫn tới /projects?new=1), đạt khi có >=1 project', async () => {
+    // 0 project initially
+    const { unmount } = renderPage();
+
+    expect(await screen.findByText('Thêm dự án đầu tiên')).toBeInTheDocument();
+    const addProjBtn = screen.getByRole('link', { name: /Thêm dự án/i });
+    expect(addProjBtn).toBeInTheDocument();
+    expect(addProjBtn).toHaveAttribute('href', '/projects?new=1');
+
+    unmount();
+
+    // Re-render with >= 1 project
+    queryClient.clear();
+    vi.spyOn(client, 'getProjects').mockResolvedValue([
+      {
+        id: 'p1',
+        name: 'Project One',
+        path: '/path/p1',
+        defaultBranch: 'main',
+        maxParallel: 2,
+        envTemplate: null,
+        checks: null,
+      },
+    ]);
+
+    renderPage();
+    expect(await screen.findByText('5/8')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Thêm dự án/i })).not.toBeInTheDocument();
   });
 });

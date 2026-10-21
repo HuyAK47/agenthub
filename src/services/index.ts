@@ -1057,9 +1057,56 @@ export class AppService {
       throw new HttpError(409, 'conflict', `Project ID "${id}" đã tồn tại`);
     }
 
+    if (!path.isAbsolute(parsed.path)) {
+      throw new HttpError(400, 'bad_request', `Đường dẫn repo phải là đường dẫn tuyệt đối: ${parsed.path}`);
+    }
+
     const resolvedPath = path.resolve(parsed.path);
     if (!fs.existsSync(resolvedPath)) {
       throw new HttpError(400, 'bad_request', `Thư mục repo không tồn tại: ${resolvedPath}`);
+    }
+
+    let isGitRepo = false;
+    if (fs.existsSync(path.join(resolvedPath, '.git'))) {
+      isGitRepo = true;
+    } else {
+      try {
+        const topLevel = execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--show-toplevel'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (topLevel) {
+          isGitRepo = true;
+        }
+      } catch {
+        isGitRepo = false;
+      }
+    }
+    if (!isGitRepo) {
+      throw new HttpError(400, 'bad_request', `Thư mục không phải là git repository: ${resolvedPath}`);
+    }
+
+    let branchExists = false;
+    try {
+      execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--verify', parsed.defaultBranch], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      branchExists = true;
+    } catch {
+      try {
+        const headBranch = execFileSync('git', ['-C', resolvedPath, 'symbolic-ref', '--short', 'HEAD'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (headBranch === parsed.defaultBranch) {
+          branchExists = true;
+        }
+      } catch {
+        branchExists = false;
+      }
+    }
+    if (!branchExists) {
+      throw new HttpError(400, 'bad_request', `Nhánh mặc định "${parsed.defaultBranch}" không tồn tại trong repository`);
     }
 
     this.projectRepo.insert({

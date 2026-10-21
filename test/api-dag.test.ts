@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { computeTaskGraph, filterTasksForGraph } from '../src/services/dag.js';
 import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
@@ -161,6 +162,20 @@ describe('GET /api/tasks/graph API endpoint', () => {
     // Seed test project
     const p1Path = path.join(tmpDir, 'p1');
     fs.mkdirSync(p1Path, { recursive: true });
+    execFileSync('git', ['init'], { cwd: p1Path });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: p1Path });
+    fs.writeFileSync(path.join(p1Path, 'README.md'), '# p1\n');
+    execFileSync('git', ['add', '.'], { cwd: p1Path });
+    execFileSync('git', ['commit', '-m', 'chore: init', '--allow-empty'], {
+      cwd: p1Path,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    });
     ctx.service.createProject({
       name: 'Project 1',
       path: p1Path,

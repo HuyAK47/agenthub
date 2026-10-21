@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,7 +65,11 @@ describe('project settings through the service', () => {
     const engines = new Map<string, Engine>([['agy', new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'))]]);
     ctx = createContext(config, engines);
     ctx.scheduler.stop();
-    fs.mkdirSync(path.join(tmpDir, 'repo'));
+    // createProject requires a real git repo whose default branch exists.
+    const repo = path.join(tmpDir, 'repo');
+    fs.mkdirSync(repo);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo });
   });
 
   afterEach(() => {
