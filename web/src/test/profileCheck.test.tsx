@@ -16,7 +16,7 @@ describe('ProfilesPage - Nút Check, SSE profile.check, 409 và timeout', () => 
       name: 'g1',
       engine: 'agy',
       kind: 'isolated',
-      email: 'g1@gmail.com',
+      email: 'g1@example.com',
       loggedIn: true,
       enabled: 1,
     },

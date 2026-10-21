@@ -368,7 +368,7 @@ export const en: typeof vi = {
     nameLabel: 'Project Name *',
     namePlaceholder: 'e.g. XFarm, AgentHub',
     pathLabel: 'Git Repo Path *',
-    pathPlaceholder: 'e.g. /home/ducanh/projects/xfarm',
+    pathPlaceholder: 'e.g. /home/user/projects/xfarm',
     branchLabel: 'Default Branch',
     maxParallelLabel: 'Max Parallel Workers',
     envLabel: 'Environment Variables Template (envTemplate - JSON format)',

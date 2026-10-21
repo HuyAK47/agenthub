@@ -222,7 +222,7 @@ describe('Claude session privacy and quota handling', () => {
   it('never opens or records transcripts of Claude projects the hub does not manage', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
     const transcriptDir = path.join(root, 'projects'); const projectDir = path.join(root, 'project'); fs.mkdirSync(projectDir);
-    const companyDir = path.join(transcriptDir, encodeProjectDir('/media/vault/ProjectCty-SOAR')); fs.mkdirSync(companyDir, { recursive: true });
+    const companyDir = path.join(transcriptDir, encodeProjectDir('/media/vault/unmanaged-project')); fs.mkdirSync(companyDir, { recursive: true });
     // Similar prefix but a different project: must not match by name prefix alone.
     const siblingDir = path.join(transcriptDir, `${encodeProjectDir(projectDir)}x`); fs.mkdirSync(siblingDir);
     const db = openDatabase(path.join(root, 'hub.db'));
@@ -243,7 +243,7 @@ describe('Claude session privacy and quota handling', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
     const db = openDatabase(path.join(root, 'hub.db'));
     const insert = db.prepare('INSERT INTO claude_scan_state (path,inode,size,offset,mtime,turnId,turnTasks,eligible) VALUES (?,?,?,?,?,?,?,?)');
-    insert.run('/x/-media-ProjectCty/a.jsonl', 1, 1, 1, 1, 't', '[]', 0);
+    insert.run('/x/-media-other-project/a.jsonl', 1, 1, 1, 1, 't', '[]', 0);
     insert.run('/x/-home-me-project/b.jsonl', 2, 1, 1, 1, 't', '[]', 1);
     db.exec(MIGRATIONS[MIGRATIONS.length - 1]);
     expect(db.prepare('SELECT path FROM claude_scan_state').all()).toEqual([{ path: '/x/-home-me-project/b.jsonl' }]);

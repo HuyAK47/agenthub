@@ -13,7 +13,7 @@ describe('ProjectsPage', () => {
   const mockProject: Project = {
     id: 'proj-1',
     name: 'XFarm',
-    path: '/home/ducanh/projects/xfarm',
+    path: '/home/user/projects/xfarm',
     defaultBranch: 'main',
     maxParallel: 3,
     envTemplate: null,
@@ -49,7 +49,7 @@ describe('ProjectsPage', () => {
     const createSpy = vi.spyOn(client, 'createProject').mockResolvedValue({
       id: 'proj-2',
       name: 'AgentHub',
-      path: '/home/ducanh/projects/agenthub',
+      path: '/home/user/projects/agenthub',
       defaultBranch: 'main',
       maxParallel: 3,
       envTemplate: null,
@@ -72,8 +72,8 @@ describe('ProjectsPage', () => {
     fireEvent.change(screen.getByPlaceholderText('vd: XFarm, AgentHub'), {
       target: { value: 'AgentHub' },
     });
-    fireEvent.change(screen.getByPlaceholderText('vd: /home/ducanh/projects/xfarm'), {
-      target: { value: '/home/ducanh/projects/agenthub' },
+    fireEvent.change(screen.getByPlaceholderText('vd: /home/user/projects/xfarm'), {
+      target: { value: '/home/user/projects/agenthub' },
     });
 
     // Submit form
@@ -86,7 +86,7 @@ describe('ProjectsPage', () => {
     expect(createSpy).toHaveBeenCalledWith(
       {
         name: 'AgentHub',
-        path: '/home/ducanh/projects/agenthub',
+        path: '/home/user/projects/agenthub',
         defaultBranch: 'main',
         maxParallel: 3,
         envTemplate: null,
@@ -150,7 +150,7 @@ describe('ProjectsPage', () => {
     fireEvent.change(screen.getByPlaceholderText('vd: XFarm, AgentHub'), {
       target: { value: 'HighConcurrency' },
     });
-    fireEvent.change(screen.getByPlaceholderText('vd: /home/ducanh/projects/xfarm'), {
+    fireEvent.change(screen.getByPlaceholderText('vd: /home/user/projects/xfarm'), {
       target: { value: '/path/parallel' },
     });
 
