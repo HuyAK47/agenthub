@@ -340,4 +340,68 @@ describe('ProjectsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Lưu cài đặt' }));
     await waitFor(() => expect(updateSpy).toHaveBeenCalledWith('proj-1', { settings: { brain: { mode: 'external' } } }));
   });
+
+  it('12. Lưu settings lỗi 400 thì hiện message và xoá thông báo khi sửa form hoặc lưu thành công', async () => {
+    const error: any = new Error('Tên nhánh tích hợp trùng với nhánh mặc định: main');
+    error.status = 400;
+    const updateSpy = vi.spyOn(client, 'updateProject').mockRejectedValue(error);
+
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+
+    const modeSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(modeSelect, { target: { value: 'auto' } });
+
+    const saveBtn = screen.getByRole('button', { name: 'Lưu cài đặt' });
+    fireEvent.click(saveBtn);
+
+    const errorMsg = await screen.findByTestId('settings-error-msg');
+    expect(errorMsg).toBeInTheDocument();
+    expect(errorMsg).toHaveTextContent('Tên nhánh tích hợp trùng với nhánh mặc định: main');
+
+    // Sửa form thì thông báo lỗi biến mất
+    fireEvent.change(modeSelect, { target: { value: 'suggest' } });
+    expect(screen.queryByTestId('settings-error-msg')).not.toBeInTheDocument();
+
+    // Submit lại và lỗi lại hiện
+    fireEvent.click(saveBtn);
+    expect(await screen.findByTestId('settings-error-msg')).toHaveTextContent('Tên nhánh tích hợp trùng với nhánh mặc định: main');
+
+    // Lưu thành công thì xoá thông báo lỗi
+    updateSpy.mockResolvedValueOnce(mockProject);
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(screen.queryByTestId('settings-error-msg')).not.toBeInTheDocument());
+  });
+
+  it('13. Nhập "abc" vào ngân sách token thì payload không chứa NaN', async () => {
+    const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue(mockProject);
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+
+    const tokenBudgetInput = screen.getByLabelText(/Ngân sách token\/ngày/i);
+    fireEvent.change(tokenBudgetInput, { target: { value: 'abc' } });
+
+    // Thay đổi mode để section brain được gửi
+    const modeSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(modeSelect, { target: { value: 'suggest' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu cài đặt' }));
+
+    await waitFor(() => expect(updateSpy).toHaveBeenCalled());
+    const payload = updateSpy.mock.calls[0][1];
+    expect(payload.settings?.brain?.dailyTokenBudget).toBeUndefined();
+    expect(Number.isNaN(payload.settings?.brain?.dailyTokenBudget)).toBe(false);
+    expect(JSON.stringify(payload)).not.toContain('NaN');
+
+    // Nhập số nguyên dương hợp lệ thì được cập nhật
+    fireEvent.change(tokenBudgetInput, { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu cài đặt' }));
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenLastCalledWith('proj-1', {
+        settings: { brain: { mode: 'suggest', dailyTokenBudget: 5000 } },
+      });
+    });
+  });
 });
