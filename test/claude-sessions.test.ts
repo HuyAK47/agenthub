@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openDatabase } from '../src/db/index.js';
-import { ClaudeSessionScanner, isClaudeQuotaLimited } from '../src/claude-sessions/scanner.js';
+import { BrainRepo, BrainService } from '../src/brain.js';
+import { EventRepo, openDatabase } from '../src/db/index.js';
+import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
+import { ClaudeSessionScanner, isClaudeQuotaLimited, redactTranscriptText } from '../src/claude-sessions/scanner.js';
 import { ClaudeFailoverState } from '../src/chat/failover.js';
 import { attributeTurn, taskRefsFromToolInput } from '../src/claude-sessions/attribution.js';
 
@@ -128,6 +130,63 @@ describe('Claude session privacy and quota handling', () => {
     expect(isClaudeQuotaLimited('allowed_overage')).toBe(false);
     expect(isClaudeQuotaLimited('')).toBe(false);
     expect(isClaudeQuotaLimited(undefined)).toBe(false);
+  });
+
+  it('redacts transcript metadata without hiding ordinary file paths', () => {
+    const text = redactTranscriptText('Contact dev.user+test@example.com; token=abc123456789; sk-abcdefghijklmnopqrstuvwxyz; /home/user/project/src/file.ts', 200);
+    expect(text).toContain('[email]');
+    expect(text).toContain('[secret]');
+    expect(text).toContain('/home/user/project/src/file.ts');
+    expect(text).not.toContain('example.com');
+    expect(text).not.toContain('abc123456789');
+    expect(text).not.toContain('sk-abcdefghijklmnopqrstuvwxyz');
+  });
+
+  it('derives working, waiting, and inactive states from transcript fixture events', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-brain-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects'); const projectDir = path.join(root, 'project');
+    fs.mkdirSync(path.join(transcriptDir, 'encoded'), { recursive: true }); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
+    const now = Date.now();
+    const write = (id: string, timestamp: string, content: unknown) => {
+      fs.writeFileSync(path.join(transcriptDir, 'encoded', `${id}.jsonl`), `${JSON.stringify({
+        type: 'assistant', sessionId: id, cwd: projectDir, timestamp,
+        message: { id: `${id}-message`, model: 'claude-sonnet', usage: { input_tokens: 10, output_tokens: 5 }, content },
+      })}\n`);
+    };
+    write('working', new Date(now).toISOString(), [{ type: 'tool_use', name: 'Bash', input: { command: 'git status --short' } }]);
+    write('waiting', new Date(now - 6 * 60_000).toISOString(), [{ type: 'text', text: 'Done, please review.' }]);
+    write('inactive', new Date(now - 11 * 60_000).toISOString(), [{ type: 'text', text: 'Old response.' }]);
+    await new ClaudeSessionScanner(db, { dir: transcriptDir }).scan();
+    const status = new BrainService(new BrainRepo(db), new EventRepo(db), undefined, new ClaudeSessionRepo(db), db).getStatus(now);
+    expect(status.state).toBe('working');
+    expect(status.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: 'working', state: 'working', lastTool: { name: 'Bash', summary: 'Bash: git status --short' } }),
+      expect.objectContaining({ sessionId: 'waiting', state: 'waiting' }),
+    ]));
+    expect(status.sessions.some((session) => session.sessionId === 'inactive')).toBe(false);
+    db.close();
+  });
+
+  it('preserves manual brain status while it is fresh and never overwrites cwd with an empty scan value', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-manual-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
+    const sessionRepo = new ClaudeSessionRepo(db);
+    sessionRepo.upsert({ sessionId: 'manual-session', cwd: projectDir, lastAt: new Date().toISOString(), lastEventKind: 'tool_use' });
+    const scanner = new ClaudeSessionScanner(db, { dir: path.join(root, 'projects') });
+    const file = path.join(transcriptDir, 'manual-session.jsonl');
+    fs.writeFileSync(file, `${JSON.stringify({ type: 'user', sessionId: 'manual-session', cwd: projectDir, timestamp: new Date().toISOString(), message: { content: 'continue' } })}\n`);
+    await scanner.scan();
+    expect(db.prepare('SELECT cwd FROM claude_sessions WHERE sessionId=?').get('manual-session')).toEqual({ cwd: projectDir });
+    const brain = new BrainService(new BrainRepo(db), new EventRepo(db), undefined, sessionRepo, db);
+    const now = Date.now();
+    new BrainRepo(db).upsert('talking', 'Manual update', null, new Date(now - 60_000).toISOString());
+    expect(brain.getStatus(now)).toMatchObject({ source: 'manual', activity: 'talking', detail: 'Manual update' });
+    db.close();
   });
 
   it('persists rate_limit_info events from stream-json transcripts', async () => {
