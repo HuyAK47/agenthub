@@ -32,7 +32,7 @@ import { BulletinService } from '../bulletin.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, inspectAgyAccessToken } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
-import { QuotaUsageService } from '../quota/usage.js';
+import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
@@ -766,7 +766,36 @@ export class AppService {
     return this.claudeSessionRepo.setAutoResume(id, enabled);
   }
   async rescanClaudeSessions() { await this.claudeScanner?.scan(); return { ok: true }; }
-  getClaudeQuota() { const quota = this.claudeSessionRepo?.quota() || { status: null, resetsAt: null, rateLimitType: null, observedAt: null }; return { ...quota, limited: isClaudeQuotaLimited(quota.status || undefined) }; }
+  getClaudeQuota() {
+    const quota = this.claudeSessionRepo?.quota() || { status: null, resetsAt: null, rateLimitType: null, observedAt: null };
+    const profiles = (this.claudeSessionRepo?.quotaProfiles() || []).map((row) => ({
+      profileName: row.profileName, status: row.status, resetsAt: row.resetsAt, rateLimitType: row.rateLimitType,
+      observedAt: row.observedAt, limited: isClaudeQuotaLimited(row.status || undefined), source: 'transcript',
+    }));
+    const usageByProfile = new Map<string, ReturnType<typeof this.usageService.getAll>>();
+    for (const row of this.usageService.getAll()) {
+      if (!row.grp.startsWith('Claude')) continue;
+      const rows = usageByProfile.get(row.profileName) || [];
+      rows.push(row);
+      usageByProfile.set(row.profileName, rows);
+    }
+    for (const [profileName, rows] of usageByProfile) {
+      const latestUsageAt = Math.max(...rows.map((row) => row.fetchedAt));
+      const usageObservedAt = new Date(latestUsageAt * 1000).toISOString();
+      const current = profiles.find((item) => item.profileName === profileName);
+      if (!current || !current.observedAt || latestUsageAt * 1000 >= Date.parse(current.observedAt)) {
+        const available = hasClaudeQuotaAvailable(rows);
+        const resetAt = Math.min(...rows.filter((row) => row.grp.startsWith('Claude')).map((row) => row.resetAt));
+        const next = { profileName, status: available ? 'allowed' : 'rejected', resetsAt: Number.isFinite(resetAt) ? resetAt : null, rateLimitType: null, observedAt: usageObservedAt, limited: !available, source: '/usage' };
+        if (current) Object.assign(current, next);
+        else profiles.push(next);
+      }
+    }
+    for (const profile of this.profileRepo.getAll().filter((item) => item.engine === 'claude' && !profiles.some((row) => row.profileName === item.name))) {
+      profiles.push({ profileName: profile.name, status: null, resetsAt: null, rateLimitType: null, observedAt: new Date().toISOString(), limited: false, source: 'chưa quan sát' });
+    }
+    return { ...quota, limited: isClaudeQuotaLimited(quota.status || undefined), profiles };
+  }
   getClaudeFailover() { return this.chatService?.getClaudeFailover() || { active: false, until: null, reason: null, activatedAt: null, evidence: null, lastActivityAt: null }; }
   clearClaudeFailover() {
     if (!this.chatService) throw new HttpError(500, 'internal_error', 'ChatService chưa sẵn sàng');

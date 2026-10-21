@@ -350,6 +350,7 @@ export interface ClaudeQuota {
   rateLimitType: string | null;
   observedAt: string | null;
   limited?: boolean;
+  profiles?: Array<{ profileName: string; status: string | null; resetsAt: number | null; rateLimitType: string | null; observedAt: string; limited: boolean; source: string }>;
 }
 
 export interface TaskNote {
@@ -587,7 +588,7 @@ export interface ChatSession {
   title: string;
   mode: ChatMode;
   busy: boolean;
-  state?: 'idle' | 'running' | 'waiting_permission' | 'error';
+  state?: 'idle' | 'running' | 'waiting_permission' | 'waiting_limit' | 'error';
   model?: string;
   profileName?: string | null;
   updatedAt: string;

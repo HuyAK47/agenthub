@@ -634,6 +634,7 @@ export const vi = {
     saveName: 'Lưu tên',
     newNameAria: 'Tên mới của phiên',
     retryLastTurn: 'Thử lại lượt gần nhất',
+    retryLimit: 'Thử lại ngay',
     permissionTitle: 'Claude cần quyền: {tool}',
     permissionAria: 'Yêu cầu cấp quyền công cụ',
     allow: 'Cho phép',
