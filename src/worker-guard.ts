@@ -23,6 +23,9 @@ function isHubShimPath(hubHome: string, candidate: string): boolean {
 
   const resolved = path.resolve(candidate);
   if (roots.some(root => isWithin(root, resolved))) return true;
+  if (resolved.includes(`${path.sep}shims${path.sep}worker`) || resolved.includes(`${path.sep}shims${path.sep}service`)) {
+    return true;
+  }
 
   try {
     const real = fs.realpathSync(candidate);
