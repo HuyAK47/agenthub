@@ -42,8 +42,9 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
-import { BrainPolicy } from './brain/policy.js';
+import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
+import { type DiskSpace } from './disk.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -80,7 +81,29 @@ export interface DaemonContext {
   brainRunner: BrainRunner;
 }
 
-export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>): DaemonContext {
+export interface CreateContextOptions {
+  diskSpace?: (path: string) => DiskSpace;
+}
+
+export function createContext(
+  config: AgentHubConfig,
+  engineOverrides?: Map<string, Engine> | CreateContextOptions,
+  diskReader?: ((p: string) => DiskSpace) | CreateContextOptions,
+): DaemonContext {
+  let enginesOverride: Map<string, Engine> | undefined;
+  let diskFn: ((p: string) => DiskSpace) | undefined;
+
+  if (engineOverrides instanceof Map) {
+    enginesOverride = engineOverrides;
+  } else if (engineOverrides && typeof engineOverrides === 'object') {
+    diskFn = engineOverrides.diskSpace;
+  }
+
+  if (typeof diskReader === 'function') {
+    diskFn = diskReader;
+  } else if (diskReader && typeof diskReader === 'object') {
+    diskFn = diskReader.diskSpace;
+  }
   const db = openDatabase(config.dbPath);
   const projectRepo = new ProjectRepo(db);
   const profileRepo = new ProfileRepo(db);
@@ -100,7 +123,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
   chatPermissionRepo.expirePending();
-  const brainPolicy = new BrainPolicy({
+  const systemBrainPolicy = new BrainPolicy({
     roots: [process.cwd(), config.hubHome, config.worktreesDir],
     extraPatterns: config.brain.policy.flatMap((pattern) => {
       try { return [new RegExp(pattern)]; } catch { return []; }
@@ -110,7 +133,13 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
-  }, brainPolicy, chatSessionRepo);
+  }, (sessionId) => {
+    const session = chatSessionRepo.get(sessionId);
+    if (!session?.projectId) return systemBrainPolicy;
+    const project = projectRepo.get(session.projectId);
+    if (!project) return systemBrainPolicy;
+    return projectBrainPolicy(project, config);
+  }, chatSessionRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,
@@ -134,8 +163,8 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   );
 
   const engines = new Map<string, Engine>();
-  if (engineOverrides) {
-    for (const [k, v] of engineOverrides) engines.set(k, v);
+  if (enginesOverride) {
+    for (const [k, v] of enginesOverride) engines.set(k, v);
   } else if (process.env.AGENTHUB_FAKE_ENGINE === '1') {
     const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const fakeScript =
@@ -168,6 +197,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     db,
     runMetricsRepo,
     knowledgeRepo,
+    diskFn ? { diskSpace: diskFn } : undefined,
   );
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
     profileService.registerAll();
@@ -201,6 +231,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     chatSessionRepo,
     profileRepo,
     turnRepo: brainTurnRepo,
+    projectRepo,
   });
 
   const bulletinService = new BulletinService({
@@ -236,6 +267,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     knowledgeRepo,
     taskBatchRepo,
     setupManager,
+    brainRunner,
   );
 
   const notifier = new NotificationService({
@@ -244,6 +276,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     taskRepo,
     profileRepo,
     quotaMarkRepo,
+    projectRepo,
   });
 
   const telegramService = new TelegramBotService({

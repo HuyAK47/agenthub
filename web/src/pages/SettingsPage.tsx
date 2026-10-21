@@ -26,6 +26,7 @@ export const SettingsPage: React.FC = () => {
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
+  const [brainMaxConcurrent, setBrainMaxConcurrent] = useState<number>(2);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState<boolean>(false);
   const [quietHoursStart, setQuietHoursStart] = useState<string>('22:00');
   const [quietHoursEnd, setQuietHoursEnd] = useState<string>('07:00');
@@ -84,6 +85,7 @@ export const SettingsPage: React.FC = () => {
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
       setBrainMode(config.brain?.mode ?? 'suggest');
+      setBrainMaxConcurrent(config.brain?.maxConcurrent ?? 2);
       setQuietHoursEnabled(Boolean(config.notifications?.quietHours?.enabled));
       setQuietHoursStart(config.notifications?.quietHours?.start || '22:00');
       setQuietHoursEnd(config.notifications?.quietHours?.end || '07:00');
@@ -167,6 +169,7 @@ export const SettingsPage: React.FC = () => {
       },
       brain: {
         mode: brainMode,
+        maxConcurrent: Number(brainMaxConcurrent) || 2,
         digest: {
           enabled: digestEnabled,
           time: digestTime.trim() || '18:00',
@@ -579,6 +582,10 @@ export const SettingsPage: React.FC = () => {
                   </label>
                 ))}
               </div>
+              <label className="flex items-center gap-3 text-xs text-[var(--t-text)]">
+                <span>{t('settings.brainMaxConcurrent')}</span>
+                <input data-testid="brain-max-concurrent" type="number" min={1} max={20} value={brainMaxConcurrent} onChange={(e) => setBrainMaxConcurrent(parseInt(e.target.value, 10) || 1)} className="w-24 rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2" />
+              </label>
             </div>
 
             <div className="py-2 border-b border-[var(--t-border)] space-y-3">

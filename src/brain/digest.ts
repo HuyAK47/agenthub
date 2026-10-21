@@ -13,6 +13,7 @@ export interface PendingDecision {
   answeredAt?: number;
   remindersCount: number;
   lastReminderAt: number;
+  taskId?: string | null;
 }
 
 export class DecisionTracker {
@@ -23,6 +24,7 @@ export class DecisionTracker {
     text: string,
     chatIds: number[] = [],
     createdAt = Date.now(),
+    taskId?: string | null,
   ): PendingDecision {
     const existing = this.decisions.get(id);
     if (existing) return existing;
@@ -36,6 +38,7 @@ export class DecisionTracker {
       answered: false,
       remindersCount: 0,
       lastReminderAt: createdAt,
+      taskId: taskId || null,
     };
     this.decisions.set(id, decision);
     return decision;
@@ -102,20 +105,25 @@ export class DecisionTracker {
 }
 
 /**
- * Forwards an answered decision to the resident Claude brain session ('brain').
+ * Forwards an answered decision to the resident Claude brain session for the related project.
  */
 export function forwardDecisionToBrain(
   chatService: Pick<ChatService, 'getOrCreateSession' | 'sendMessage'> | undefined,
   decisionId: string,
   text: string,
   answer: 'agree' | 'reject',
+  taskId?: string | null,
 ): void {
   if (!chatService) return;
   const label = answer === 'agree' ? 'Đồng ý' : 'Không';
   const brainMsg = `Người dùng trả lời quyết định ${decisionId} («${text}»): ${label}`;
   try {
-    chatService.getOrCreateSession('brain', { title: 'Bộ não', kind: 'brain' });
-    chatService.sendMessage('brain', brainMsg);
+    const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : null;
+    const sessionId = projectId ? `brain:${projectId}` : 'brain';
+    chatService.getOrCreateSession(sessionId, projectId
+      ? { title: `Bộ não · ${projectId}`, kind: 'brain', projectId }
+      : { title: 'Bộ não', kind: 'brain' });
+    chatService.sendMessage(sessionId, brainMsg);
   } catch {
     // ignore if brain session cannot receive (e.g. busy)
   }

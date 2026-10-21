@@ -82,6 +82,16 @@ export interface ProjectMerge {
 export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
 export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
 
+export interface IntegrationStatus {
+  path: string;
+  branch: string;
+  exists: boolean;
+  currentBranch: string | null;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -95,6 +105,7 @@ export interface Project {
   review?: ProjectReview | string | null;
   /** Always present in API responses (defaults filled in by the server). */
   settings?: ProjectSettings;
+  integrationStatus?: IntegrationStatus | null;
   createdAt?: string;
 }
 
@@ -303,6 +314,18 @@ export interface BrainStatus {
   source?: 'manual' | 'transcript';
   sessions?: BrainSession[];
   state?: 'working' | 'waiting' | 'inactive';
+  brains?: ProjectBrain[];
+}
+
+export interface ProjectBrain {
+  projectId: string | null;
+  projectName: string;
+  mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  sessionId: string;
+  state: 'idle' | 'running' | 'waiting' | 'error';
+  queued: boolean;
+  lastTurnAt: string | null;
+  tokensToday: number;
 }
 
 export interface BrainSession {
@@ -517,6 +540,7 @@ export interface SystemConfig {
   reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
+    maxConcurrent?: number;
     digest?: {
       enabled: boolean;
       time: string;
@@ -647,6 +671,7 @@ export interface CreateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: ProjectSettings;
 }
 
 export interface UpdateProjectInput {
@@ -658,6 +683,7 @@ export interface UpdateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: Partial<ProjectSettings>;
 }
 
 export interface CreateProfileInput {

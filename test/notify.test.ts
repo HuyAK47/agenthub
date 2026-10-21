@@ -354,6 +354,26 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
+  it('filters raw notifications by each project brain mode', () => {
+    projectRepo.insert({ id: 'p1', name: 'P1', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: JSON.stringify({ brain: { mode: 'auto' } }) });
+    projectRepo.insert({ id: 'p2', name: 'P2', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    const notifier = new NotificationService({ eventBus, config, taskRepo, profileRepo, quotaMarkRepo, projectRepo, exec: fakeExec });
+    notifier.start();
+
+    eventBus.emit('task.review_ready', 'p1/task', { title: 'P1 task' });
+    eventBus.emit('task.review_ready', 'p2/task', { title: 'P2 task' });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toContain('P2 task');
+
+    projectRepo.update('p2', { settings: JSON.stringify({ brain: { mode: 'suggest' } }) });
+    config.brain.mode = 'auto';
+    eventBus.emit('task.failed', 'p1/failed', { title: 'P1 failed' });
+    eventBus.emit('task.failed', 'p2/failed', { title: 'P2 failed' });
+    expect(execCalls).toHaveLength(2);
+    expect(execCalls[1].args.at(-1)).toContain('P2 failed');
+    notifier.stop();
+  });
+
   it('during quiet hours, defers non-incident notifications and sends only incidents', () => {
     config.notifications.quietHours = {
       enabled: true,

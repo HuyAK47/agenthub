@@ -53,6 +53,7 @@ export interface BrainConfig {
   claudeProfileExplicit?: boolean;
   model: string;
   mode: 'off' | 'suggest' | 'auto';
+  maxConcurrent: number;
   maxTurnsPerHour: number;
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
@@ -500,6 +501,7 @@ export function updateConfigInMemory(
     if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
+    if (patch.brain.maxConcurrent !== undefined) config.brain.maxConcurrent = patch.brain.maxConcurrent;
     if (patch.brain.digest) {
       config.brain.digest = {
         ...config.brain.digest,
@@ -833,6 +835,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
       mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
+      maxConcurrent: typeof brainRaw.maxConcurrent === 'number' && brainRaw.maxConcurrent > 0
+        ? Math.floor(brainRaw.maxConcurrent)
+        : 2,
       maxTurnsPerHour: typeof brainRaw.maxTurnsPerHour === 'number' && brainRaw.maxTurnsPerHour > 0
         ? Math.floor(brainRaw.maxTurnsPerHour)
         : 20,
