@@ -112,7 +112,7 @@ export class AgyEngine implements Engine {
       '0',
     ];
 
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
+    const env: Record<string, string> = { ...process.env as Record<string, string>, BROWSER: '/bin/false' };
 
     // Set up environment based on profile kind
     if (opts.profile.kind === 'isolated' && opts.profile.home) {

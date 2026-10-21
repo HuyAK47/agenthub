@@ -416,7 +416,10 @@ export function isProfileLoggedIn(profile: ProfileRow): boolean {
     }
     return fs.existsSync(path.join(profile.home || os.homedir(), '.codex', 'auth.json'));
   }
-  if (profile.kind === 'keyring') return true;
+  if (profile.kind === 'keyring') {
+    if (profile.authState === 'not_logged_in') return false;
+    return Boolean(profile.email) || profile.authState === 'ok';
+  }
   if (profile.engine === 'claude') {
     const home = profile.home || os.homedir();
     const accountFile = path.join(home, '.claude.json');

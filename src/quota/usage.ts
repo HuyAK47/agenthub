@@ -53,7 +53,7 @@ export async function fetchUsage(profile: ProfileRow, agyPath = process.env.AGEN
 }
 
 async function runUsage(profile: ProfileRow, agyPath: string): Promise<UsageCheckResult> {
-  const env = { ...process.env } as Record<string, string>;
+  const env = { ...process.env, BROWSER: '/bin/false' } as Record<string, string>;
   if (profile.kind === 'isolated' && profile.home) {
     env.HOME = profile.home;
     env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';

@@ -224,5 +224,19 @@ https://accounts.google.com/signin/continue?sarp=1&
       expect(result.authState).toBe('ok');
       expect(result.verifyUrl).toBeNull();
     });
+
+    it('không coi hồ sơ keyring là logged in nếu chưa có email và authState là not_logged_in hoặc null', () => {
+      const p1 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: 'not_logged_in' as const };
+      expect(isProfileLoggedIn(p1)).toBe(false);
+
+      const p2 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: null };
+      expect(isProfileLoggedIn(p2)).toBe(false);
+
+      const p3 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: 'chinh@example.com', enabled: 1, authState: null };
+      expect(isProfileLoggedIn(p3)).toBe(true);
+
+      const p4 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: 'ok' as const };
+      expect(isProfileLoggedIn(p4)).toBe(true);
+    });
   });
 });
