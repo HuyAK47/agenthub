@@ -46,6 +46,34 @@ function deployEventBus(events: Array<{ type: string; payload: unknown }>) {
 }
 
 describe('DeployService', () => {
+  it('restartHub uses launchctl kickstart on Darwin', () => {
+    const f = setup();
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const originalPlatform = process.platform;
+    const originalLaunchctl = process.env.AGENTHUB_LAUNCHCTL;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' });
+    process.env.AGENTHUB_LAUNCHCTL = '/fake/launchctl';
+    try {
+      const service = new DeployService(
+        { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: {} } as never,
+        {} as never,
+        deployEventBus(f.events) as never,
+        0,
+        undefined,
+        undefined,
+        (command, args) => { calls.push({ command, args }); return undefined; },
+      );
+      (service as unknown as { restartHub: (status: unknown) => void }).restartHub({ projectId: 'demo', commit: 'abc', logPath: '/tmp/deploy.log' });
+
+      expect(calls).toEqual([{ command: '/fake/launchctl', args: ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] }]);
+      expect(fs.existsSync(path.join(f.root, 'deploy-restart.json'))).toBe(true);
+    } finally {
+      Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
+      if (originalLaunchctl === undefined) delete process.env.AGENTHUB_LAUNCHCTL;
+      else process.env.AGENTHUB_LAUNCHCTL = originalLaunchctl;
+    }
+  });
+
   it('runs configured argv steps in order, logs them, and emits success', async () => {
     const f = setup();
     const calls: string[] = [];
