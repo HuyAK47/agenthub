@@ -217,6 +217,48 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(body.stale).toBe(true);
   });
 
+  it('GET /api/brain returns project brains with effective mode and usage', async () => {
+    ctx.projectRepo.insert({
+      id: 'p1',
+      name: 'Project One',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+      settings: JSON.stringify({ brain: { mode: 'auto' } }),
+    });
+    ctx.projectRepo.insert({
+      id: 'p2',
+      name: 'Project Two',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    const now = new Date().toISOString();
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, status, inputTokens, outputTokens, startedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run('p1-turn', 'event', 'p1', 'p1', 'done', 5, 7, now);
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, status, inputTokens, outputTokens, startedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run('p2-turn', 'event', 'p2', 'p2', 'done', 3, 4, now);
+
+    ctx.brainRunner.start();
+    ctx.scheduler.getEventBus().emit('task.done', 'p1/task');
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/brain',
+      headers: authHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.brains).toEqual(expect.arrayContaining([
+      expect.objectContaining({ projectId: null, projectName: 'Hệ thống', mode: config.brain.mode, queued: false, tokensToday: 0 }),
+      expect.objectContaining({ projectId: 'p1', projectName: 'Project One', mode: 'auto', queued: true, tokensToday: 12 }),
+      expect.objectContaining({ projectId: 'p2', projectName: 'Project Two', mode: config.brain.mode, queued: false, tokensToday: 7 }),
+    ]));
+    ctx.brainRunner.stop();
+  });
+
   it('GET /api/status includes brain object', async () => {
     ctx.brainRepo.upsert('talking', 'Trao đổi về kiến trúc mới', null);
 

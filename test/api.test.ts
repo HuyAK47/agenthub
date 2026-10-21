@@ -616,6 +616,39 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect(fs.existsSync(worktreeDir)).toBe(false);
   });
 
+  it('rejects a concurrent merge review and does not create a merge-fix task', async () => {
+    const repoPath = path.join(tmpDir, 'race-repo');
+    initGitRepo(repoPath);
+    execFileSync('git', ['checkout', '-b', 'feature-race'], { cwd: repoPath });
+    fs.writeFileSync(path.join(repoPath, 'feature.txt'), 'feature\n');
+    execFileSync('git', ['add', '.'], { cwd: repoPath });
+    execFileSync('git', ['commit', '-m', 'feat: race branch'], {
+      cwd: repoPath,
+      env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.com' },
+    });
+    execFileSync('git', ['checkout', 'main'], { cwd: repoPath });
+    ctx.projectRepo.insert({
+      id: 'race',
+      name: 'Race',
+      path: repoPath,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+      merge: JSON.stringify({ enabled: true, worktrees: { main: repoPath }, checks: [] }),
+    });
+    ctx.taskRepo.insert({ id: 'race/task', projectId: 'race', slug: 'task', title: 'Race task', branch: 'feature-race', baseRef: 'main', status: 'review' });
+
+    const results = await Promise.allSettled([
+      server.inject({ method: 'POST', url: '/api/tasks/race~task/review', headers: authHeaders(), payload: { verdict: 'approved', merge: true } }),
+      server.inject({ method: 'POST', url: '/api/tasks/race~task/review', headers: authHeaders(), payload: { verdict: 'approved', merge: true } }),
+    ]);
+    const responses = results.map((result) => result.status === 'fulfilled' ? result.value : null).filter(Boolean);
+    expect(responses.filter((response) => response?.statusCode === 200)).toHaveLength(1);
+    expect(responses.filter((response) => response?.statusCode === 409)).toHaveLength(1);
+    expect(responses.find((response) => response?.statusCode === 409)?.body).toContain('Task đang được duyệt');
+    expect(ctx.taskRepo.getAll().filter((task) => task.slug.endsWith('-fix-merge'))).toHaveLength(0);
+  });
+
   // --- Task Log Tail API ---
   it('GET /api/tasks/:id/log reads log tail up to 512KB', async () => {
     ctx.projectRepo.insert({
