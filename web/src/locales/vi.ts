@@ -190,6 +190,10 @@ export const vi = {
     actions: 'Thao tác',
     noOtherTasksForDeps: 'Không có task nào khác để phụ thuộc',
     taskBodyPlaceholder: 'Chi tiết yêu cầu markdown...',
+    justNow: 'vừa xong',
+    minutesAgo: '{count} phút trước',
+    hoursAgo: '{count} giờ trước',
+    daysAgo: '{count} ngày trước',
   },
   createTask: {
     title: 'Tạo task mới',

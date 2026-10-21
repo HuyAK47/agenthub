@@ -32,7 +32,6 @@ import {
   Sparkles,
   ArrowRight,
 } from 'lucide-react';
-import { formatTimeAgo } from '../lib/time';
 
 const toArray = (val: string | string[] | null | undefined): string[] => {
   if (!val) return [];
@@ -58,7 +57,7 @@ const BatchStatusBadge: React.FC<{ status: BatchStatus }> = ({ status }) => {
 };
 
 export const PlansPage: React.FC = () => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const navigate = useNavigate();
   const { batchId } = useParams<{ batchId?: string }>();
   const queryClient = useQueryClient();
@@ -110,6 +109,22 @@ export const PlansPage: React.FC = () => {
     }
     return t('plans.settingNone');
   }, [isRequireAll, minTasks, t]);
+
+  const formatBatchTime = (value: string | number) => {
+    try {
+      const ts =
+        typeof value === 'number'
+          ? value
+          : Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
+      const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+      if (diffSec < 60) return t('plans.justNow');
+      if (diffSec < 3600) return t('plans.minutesAgo', { count: Math.floor(diffSec / 60) });
+      if (diffSec < 86400) return t('plans.hoursAgo', { count: Math.floor(diffSec / 3600) });
+      return t('plans.daysAgo', { count: Math.floor(diffSec / 86400) });
+    } catch {
+      return String(value);
+    }
+  };
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -449,7 +464,7 @@ export const PlansPage: React.FC = () => {
                         {t('plans.tasksCount', { count: batch.tasks?.length ?? 0 })}
                       </span>
                       <span>•</span>
-                      <span>{formatTimeAgo(batch.createdAt)}</span>
+                      <span>{formatBatchTime(batch.createdAt)}</span>
                     </div>
                   </div>
                 );
@@ -538,7 +553,9 @@ export const PlansPage: React.FC = () => {
                       <span>•</span>
                       <span className="inline-flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5" />
-                        {new Date(currentBatch.createdAt).toLocaleString()}
+                        {new Date(currentBatch.createdAt).toLocaleString(
+                          locale === 'vi' ? 'vi-VN' : 'en-US'
+                        )}
                       </span>
                     </div>
                   </div>

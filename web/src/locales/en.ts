@@ -192,6 +192,10 @@ export const en: typeof vi = {
     actions: 'Actions',
     noOtherTasksForDeps: 'No other tasks to depend on',
     taskBodyPlaceholder: 'Markdown prompt details...',
+    justNow: 'just now',
+    minutesAgo: '{count} minutes ago',
+    hoursAgo: '{count} hours ago',
+    daysAgo: '{count} days ago',
   },
   createTask: {
     title: 'Create New Task',
