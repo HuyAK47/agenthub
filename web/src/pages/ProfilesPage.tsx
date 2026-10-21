@@ -726,7 +726,7 @@ function ProfileCard({
             )}
             {checking ? t('profiles.checkingBtn') : t('profiles.checkBtn')}
           </button>
-          {canTokenLogin && !logged && (
+          {canTokenLogin && (
             <button
               type="button"
               onClick={() => onTokenLogin(profile)}
