@@ -1331,6 +1331,11 @@ export class AppService {
         const account = this.coreProfileService.readClaudeAccount(profile.home || os.homedir());
         if (!isProfileLoggedIn(profile)) {
           message = 'Chưa đăng nhập Claude';
+          // Drop an email left by an earlier wrong check (it used to report the Codex/ChatGPT login).
+          if (profile.email) {
+            this.profileRepo.upsert({ ...profile, email: null });
+            email = undefined;
+          }
           this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
         } else {
           ok = true;
