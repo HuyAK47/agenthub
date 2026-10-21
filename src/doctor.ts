@@ -674,9 +674,9 @@ export interface CheckPermissionsDeps {
 }
 
 export async function checkPermissions(deps?: CheckPermissionsDeps): Promise<DoctorCheckItem> {
-  const config = loadConfig();
-  const hubHome = deps?.hubHome ?? config.hubHome;
-  const tokenPath = deps?.tokenPath ?? config.tokenPath;
+  const config = deps?.hubHome && deps?.tokenPath ? undefined : loadConfig();
+  const hubHome = deps?.hubHome ?? config!.hubHome;
+  const tokenPath = deps?.tokenPath ?? config!.tokenPath;
   const statFn = deps?.statSync ?? fs.statSync;
   const existsFn = deps?.existsSync ?? fs.existsSync;
 
