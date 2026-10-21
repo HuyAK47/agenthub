@@ -316,6 +316,7 @@ export interface BrainStatus {
   sessions?: BrainSession[];
   state?: 'working' | 'waiting' | 'inactive';
   brains?: ProjectBrain[];
+  assistants?: AssistantStatus[];
 }
 
 export interface ProjectBrain {
@@ -327,6 +328,14 @@ export interface ProjectBrain {
   queued: boolean;
   lastTurnAt: string | null;
   tokensToday: number;
+}
+
+export interface AssistantStatus {
+  projectId: string | null;
+  projectName: string;
+  sessionId: string;
+  state: 'idle' | 'running' | 'waiting_permission' | 'waiting_limit' | 'error';
+  busy: boolean;
 }
 
 export interface BrainSession {
@@ -595,6 +604,7 @@ export interface ChatSession {
   outputTokens?: number;
   contextTokens?: number;
   createdAt?: string;
+  kind?: 'chat' | 'brain' | 'assistant';
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
