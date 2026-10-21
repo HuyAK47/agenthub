@@ -49,6 +49,17 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(args).toContain(snapshot);
   });
 
+  it('does not include disabled profiles in the brain snapshot', () => {
+    const snapshot = buildHubSnapshot({
+      projects: [], tasks: [], profiles: [
+        { name: 'active', engine: 'agy', email: null, enabled: 1 },
+        { name: 'disabled', engine: 'agy', email: null, enabled: 0 },
+      ], quotaUsage: [], quotaMarks: [], capturedAt: '2026-10-16T00:00:00.000Z',
+    });
+    expect(snapshot).toContain('active');
+    expect(snapshot).not.toContain('disabled');
+  });
+
   it('builds a private MCP config scoped to the chat session', () => {
     const hubHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-'));
     try {

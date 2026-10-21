@@ -566,7 +566,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ? [...chatRaw.models]
       : ['opus', 'sonnet', 'haiku'],
     permissionTimeoutSec: typeof chatRaw.permissionTimeoutSec === 'number' ? chatRaw.permissionTimeoutSec : 600,
-    claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-may',
+    claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-default',
     autoCompactPercent: typeof chatRaw.autoCompactPercent === 'number' ? chatRaw.autoCompactPercent : 85,
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
@@ -713,7 +713,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : [],
       claudeProfile: typeof brainRaw.claudeProfile === 'string' && brainRaw.claudeProfile.trim()
         ? brainRaw.claudeProfile.trim()
-        : chat.claudeProfile || 'claude-may',
+        : chat.claudeProfile || 'claude-default',
       model: typeof brainRaw.model === 'string' && brainRaw.model
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),

@@ -74,10 +74,12 @@ export class ProfileService {
     }
 
     // The system Claude profile uses the existing ~/.claude account and is
-    // only exposed when Claude Code is installed on this machine.
+    // only exposed when Claude Code is installed on this machine. Preserve
+    // the legacy name when it exists; new installations use the default name.
     if (findClaudeBin(this.config.chat.claudeBin)) {
+      const existing = this.profileRepo.getAll().find((p) => p.engine === 'claude' && p.kind === 'system');
       this.profileRepo.upsert({
-        name: 'claude-may',
+        name: existing?.name || 'claude-default',
         engine: 'claude',
         kind: 'system',
         home: os.homedir(),

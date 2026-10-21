@@ -146,7 +146,7 @@ export class ChatService {
       projects: this.projectRepo.getAll().map(({ id, name, path: projectPath, defaultBranch }) => ({ id, name, path: projectPath, defaultBranch })),
       tasks: this.taskRepo?.getAll().map(({ id, projectId, title, status }) => ({ id, projectId, title, status })) || [],
       runs: this.runRepo?.getRunning().map(({ taskId, model, outcome }) => ({ taskId, model, outcome })) || [],
-      profiles: this.profileRepo?.getAll().map(({ name, engine, email, authState }) => ({ name, engine, email, authState })) || [],
+      profiles: this.profileRepo?.getAll().filter((profile) => Boolean(profile.enabled)).map(({ name, engine, email, authState, enabled }) => ({ name, engine, email, authState, enabled })) || [],
       quotaUsage: this.quotaUsageRepo?.getAll() || [],
       quotaMarks: this.quotaMarkRepo?.getAll() || [],
       currentProject: project ? { id: project.id, path: project.path } : null,
@@ -460,7 +460,7 @@ export class ChatService {
       mode,
       model,
       busy: 0,
-      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-default',
       kind: body.kind,
     });
 
@@ -489,7 +489,7 @@ export class ChatService {
       mode,
       model,
       busy: 0,
-      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-may',
+      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-default',
       kind: body.kind,
     });
     return this.chatSessionRepo.get(id)!;

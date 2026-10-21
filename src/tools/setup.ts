@@ -9,6 +9,7 @@ import { findClaudeBin } from '../chat/claude.js';
 const execFileAsync = promisify(execFile);
 export type SetupTool = 'claude' | 'codex' | 'agy';
 type EventSink = { emit(type: string, taskId?: string, payload?: unknown): boolean };
+type InstallSuccessHandler = (tool: SetupTool) => void;
 
 export interface SetupToolStatus {
   id: SetupTool;
@@ -22,7 +23,7 @@ export interface SetupToolStatus {
 
 export class SetupManager {
   private installing = new Set<SetupTool>();
-  constructor(private config: AgentHubConfig, private events?: EventSink) {}
+  constructor(private config: AgentHubConfig, private events?: EventSink, private onInstallSuccess?: InstallSuccessHandler) {}
 
   private binary(tool: SetupTool): string | null {
     if (tool === 'claude') return findClaudeBin(this.config.chat.claudeBin);
@@ -76,6 +77,13 @@ export class SetupManager {
     const timer = setTimeout(() => child.kill('SIGTERM'), 10 * 60 * 1000);
     child.on('close', (code, signal) => {
       clearTimeout(timer); log.end(); this.installing.delete(id);
+      if (code === 0) {
+        try {
+          this.onInstallSuccess?.(id);
+        } catch (error) {
+          emit('setup.install_refresh_error', { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       emit('setup.install_done', { ok: code === 0, code, signal, logPath });
     });
     return { jobId };

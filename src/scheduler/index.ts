@@ -221,6 +221,12 @@ export class Scheduler {
     return this.eventBus;
   }
 
+  refreshEngines(): void {
+    if (this.engines.has('codex')) return;
+    const codexPath = CodexEngine.findCodexPath();
+    if (codexPath) this.engines.set('codex', new CodexEngine(codexPath));
+  }
+
   getRunning(): Map<string, RunningTask> {
     for (const runningTask of this.running.values()) this.refreshActivity(runningTask);
     return this.running;
