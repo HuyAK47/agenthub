@@ -213,7 +213,7 @@ export class Scheduler {
       this.engines.set('agy', new AgyEngine());
       const codexPath = CodexEngine.findCodexPath();
       if (codexPath) {
-        this.engines.set('codex', new CodexEngine(codexPath));
+        this.engines.set('codex', new CodexEngine(codexPath, this.config.workers?.codexSandbox || 'off'));
       }
     }
 
@@ -248,7 +248,7 @@ export class Scheduler {
   refreshEngines(): void {
     if (this.engines.has('codex')) return;
     const codexPath = CodexEngine.findCodexPath();
-    if (codexPath) this.engines.set('codex', new CodexEngine(codexPath));
+    if (codexPath) this.engines.set('codex', new CodexEngine(codexPath, this.config.workers?.codexSandbox || 'off'));
   }
 
   getRunning(): Map<string, RunningTask> {
@@ -2211,6 +2211,7 @@ export class Scheduler {
         hubHome: this.config.hubHome,
         project,
         gitHooks: projectSettings(project).worktree.gitHooks,
+        codexSandbox: this.config.workers?.codexSandbox || 'off',
       });
 
       const pid = child.pid!;

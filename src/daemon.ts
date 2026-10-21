@@ -150,7 +150,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     engines.set('agy', new AgyEngine());
     const codexPath = CodexEngine.findCodexPath();
     if (codexPath) {
-      engines.set('codex', new CodexEngine(codexPath));
+      engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
   }
 

@@ -20,6 +20,7 @@ export interface SpawnOpts {
   hubHome?: string;
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null };
+  codexSandbox?: 'off' | 'workspace-write';
 }
 
 export interface QuotaDetection {
@@ -202,9 +203,11 @@ export class CodexEngine implements Engine {
   id = 'codex' as const;
 
   private codexPath: string | null;
+  private codexSandbox: 'off' | 'workspace-write';
 
-  constructor(codexPath?: string) {
+  constructor(codexPath?: string, codexSandbox: 'off' | 'workspace-write' = 'off') {
     this.codexPath = codexPath || null;
+    this.codexSandbox = codexSandbox;
   }
 
   static findCodexPath(): string | null {
@@ -258,8 +261,11 @@ export class CodexEngine implements Engine {
       opts.cwd,
       opts.prompt,
     ];
+    const sandboxMode = opts.codexSandbox ?? this.codexSandbox;
     if (opts.readOnly) {
       args.splice(2, 0, '--sandbox', 'read-only');
+    } else if (sandboxMode === 'workspace-write') {
+      args.splice(2, 0, '--sandbox', 'workspace-write');
     } else {
       args.splice(2, 0, '--dangerously-bypass-approvals-and-sandbox');
     }
