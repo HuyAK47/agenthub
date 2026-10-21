@@ -128,6 +128,12 @@ export async function createServer(
     const { tool } = req.params as { tool: string };
     return reply.status(202).send(await service.installSetupTool(tool));
   });
+  fastify.get('/api/setup/log/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    const logPath = service.getSetupLogPath(tool);
+    if (!logPath) throw new HttpError(404, 'not_found', 'Setup log không tồn tại');
+    return reply.type('text/plain; charset=utf-8').send(fs.createReadStream(logPath));
+  });
   fastify.post('/api/setup/complete', async () => service.completeSetup(false));
   fastify.post('/api/setup/skip', async () => service.completeSetup(true));
   fastify.post('/api/setup/mcp', async () => {

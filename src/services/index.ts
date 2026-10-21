@@ -332,7 +332,11 @@ export const UpdateConfigSchema = z.object({
     waitingMinutes: z.number().positive().optional(),
   }).optional(),
   autoFixOnFail: z.boolean().optional(),
-  tools: z.object({ installers: z.record(z.object({ package: z.string().optional(), command: z.array(z.string()).optional(), versionArgs: z.array(z.string()).optional(), docsUrl: z.string().url().optional() })) }).optional(),
+  tools: z.object({ installers: z.record(z.object({
+    package: z.string().regex(/^(@[a-z0-9-~][a-z0-9._~]*\/[a-z0-9-~][a-z0-9._~]*|[a-z0-9-~][a-z0-9._~]*)(@[\w.^~<>=*-]+)?$/).refine((value) => !value.startsWith('-'), 'Tên package npm không hợp lệ').optional(),
+    versionArgs: z.array(z.string()).optional(),
+    docsUrl: z.string().url().optional(),
+  })) }).optional(),
   chat: z
     .object({
       claudeBin: z.string().optional(),
@@ -697,6 +701,7 @@ export class AppService {
     return { node: { version: process.versions.node, ok: Number(process.versions.node.split('.')[0]) >= 22 }, git: { version: gitVersion, installed: Boolean(gitVersion) }, tools, profiles, mcpRegistered, serviceRunning: true, ...this.setupManager.getSetupState() };
   }
   installSetupTool(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.install(tool); }
+  getSetupLogPath(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.getLogPath(tool); }
   completeSetup(skip = false) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.complete(skip); }
 
   listClaudeSessions(activeWithinMin = 5) {

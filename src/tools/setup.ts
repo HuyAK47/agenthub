@@ -86,6 +86,12 @@ export class SetupManager {
     return { setupCompletedAt: typeof raw.setupCompletedAt === 'string' ? raw.setupCompletedAt : undefined, setupSkippedAt: typeof raw.setupSkippedAt === 'string' ? raw.setupSkippedAt : undefined };
   }
 
+  getLogPath(tool: string): string | null {
+    if (!['claude', 'codex', 'agy'].includes(tool)) return null;
+    const logPath = path.join(this.config.hubHome, 'logs', `setup-${tool}.log`);
+    return fs.existsSync(logPath) ? logPath : null;
+  }
+
   complete(skip = false): { setupCompletedAt?: string; setupSkippedAt?: string } {
     const key = skip ? 'setupSkippedAt' : 'setupCompletedAt';
     const value = new Date().toISOString();

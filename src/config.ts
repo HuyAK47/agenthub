@@ -135,6 +135,8 @@ export interface ToolsConfig {
   };
 }
 
+export type ToolInstallerPatch = Pick<ToolInstaller, 'package' | 'versionArgs' | 'docsUrl'>;
+
 export const DEFAULT_UPDATES_CONFIG: UpdatesConfig = {
   check: true,
   repo: 'ducanh19020217/agenthub',
@@ -228,7 +230,7 @@ export function saveConfig(
     context?: Partial<ContextConfig>;
     planning?: Partial<PlanningConfig>;
     updates?: Partial<UpdatesConfig>;
-    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstaller>> }>;
+    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstallerPatch>> }>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -342,7 +344,7 @@ export function updateConfigInMemory(
     context?: Partial<ContextConfig>;
     planning?: Partial<PlanningConfig>;
     updates?: Partial<UpdatesConfig>;
-    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstaller>> }>;
+    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstallerPatch>> }>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -472,7 +474,15 @@ export function updateConfigInMemory(
     config.updates = { ...config.updates, ...patch.updates };
   }
   if (patch.tools?.installers) {
-    config.tools.installers = { ...config.tools.installers, ...patch.tools.installers };
+    for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
+      if (!value) continue;
+      config.tools.installers[name] = {
+        ...config.tools.installers[name],
+        ...(value.package !== undefined ? { package: value.package } : {}),
+        ...(value.versionArgs !== undefined ? { versionArgs: [...value.versionArgs] } : {}),
+        ...(value.docsUrl !== undefined ? { docsUrl: value.docsUrl } : {}),
+      };
+    }
   }
 }
 
