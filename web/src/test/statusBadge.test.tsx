@@ -53,6 +53,11 @@ describe('StatusBadge Component', () => {
     expect(screen.getByTestId('status-badge-waiting_quota').getAttribute('data-wait-reason')).toBe('profile_busy');
     expect(screen.getByTestId('status-badge-waiting_quota').style.backgroundColor).toContain('var(--wait-profile_busy-bg)');
 
+    rerender(<StatusBadge status="waiting_quota" waitReason="project_unavailable" />);
+    expect(screen.getByText('Dự án không truy cập được (ổ chưa mount?)')).toBeInTheDocument();
+    expect(screen.getByTestId('status-badge-waiting_quota').getAttribute('data-wait-reason')).toBe('project_unavailable');
+    expect(screen.getByTestId('status-badge-waiting_quota').style.backgroundColor).toContain('var(--wait-project_unavailable-bg)');
+
     rerender(<StatusBadge status="queued" waitReason="parallel" />);
     expect(screen.getByText('Chờ slot song song')).toBeInTheDocument();
     expect(screen.getByTestId('status-badge-queued').style.backgroundColor).toContain('var(--wait-parallel-bg)');

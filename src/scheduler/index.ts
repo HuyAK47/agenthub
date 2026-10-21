@@ -43,6 +43,22 @@ import { measureProcessTree } from '../process-tree.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
+export function isProjectAccessible(projectPath: string | null | undefined): boolean {
+  if (!projectPath) return false;
+  try {
+    if (!fs.existsSync(projectPath)) return false;
+    const gitDir = path.join(projectPath, '.git');
+    if (fs.existsSync(gitDir)) return true;
+    execFileSync('git', ['-C', projectPath, 'rev-parse', '--git-dir'], {
+      stdio: 'ignore',
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const PROTOCOL_PROMPT = `Đọc \`.agenthub/task.md\` và thực hiện. Đọc thêm AGENTS.md / CLAUDE.md / GEMINI.md của project nếu có. Làm trên nhánh hiện tại, commit nhỏ theo Conventional Commits. KHÔNG dùng subagent / agent con; tự làm tuần tự trong phiên này. Tránh đọc lại file lớn không cần thiết. \`node_modules\` đã được chuẩn bị sẵn, KHÔNG chạy \`npm ci\`/\`npm install\` trừ khi bạn sửa \`package.json\`. KHÔNG chạy test/lệnh ở chế độ nền (background) rồi chờ: luôn chạy trực tiếp (foreground) và bọc \`timeout 300\`; test dùng \`--run\`, không watch. KHÔNG sửa file ngoài phạm vi task. Khi xong tạo \`.agenthub/DONE\` (tóm tắt, kết quả lint/test, việc còn thiếu); nếu bị chặn tạo \`.agenthub/BLOCKED\` (lý do). Chỉ tạo marker ở bước cuối.`;
 
 export class EventBus extends EventEmitter {
@@ -139,6 +155,8 @@ export class Scheduler {
   private diskLow = false;
   private dockerDiskLow = false;
   private tasksWaitingForDisk = new Set<string>();
+  private unavailableProjects = new Set<string>();
+  private tasksWaitingForProject = new Set<string>();
   private eventBus: EventBus;
   private quotaService: QuotaService;
   private worktreeService: WorktreeService;
@@ -721,6 +739,39 @@ export class Scheduler {
       if (!this.hasBusyMatchingProfile(task) || Boolean(this.findModelProfilePair(task))) {
         this.taskRepo.updateStatus(task.id, 'queued');
         this.eventBus.emit('task.queued', task.id, { reason: 'profile_available' });
+      }
+    }
+
+    // 0d. Check unavailable projects and resume project waiters
+    const projectWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'project_unavailable');
+    for (const task of projectWaiters) {
+      this.tasksWaitingForProject.add(task.id);
+    }
+
+    const projectsToCheck = new Set<string>([
+      ...this.unavailableProjects,
+      ...projectWaiters.map((t) => t.projectId),
+    ]);
+
+    for (const projectId of projectsToCheck) {
+      const project = this.projectRepo.get(projectId);
+      if (project && isProjectAccessible(project.path)) {
+        if (this.unavailableProjects.has(projectId)) {
+          this.unavailableProjects.delete(projectId);
+          this.eventBus.emit('project.available', undefined, {
+            projectId: project.id,
+            path: project.path,
+          });
+        }
+        // Wake up tasks for this project whose worktree (if any) is also accessible
+        const tasksForProj = projectWaiters.filter((t) => t.projectId === projectId);
+        for (const task of tasksForProj) {
+          if (!task.worktreePath || fs.existsSync(task.worktreePath)) {
+            this.tasksWaitingForProject.delete(task.id);
+            this.taskRepo.updateStatus(task.id, 'queued');
+            this.eventBus.emit('task.queued', task.id, { reason: 'project_available' });
+          }
+        }
       }
     }
 
@@ -1399,6 +1450,13 @@ export class Scheduler {
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
 
+      const projectAccessible = isProjectAccessible(project.path);
+      const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
+      if (!projectAccessible || !worktreeAccessible) {
+        this.markTaskWaitingForProject(task, project);
+        continue;
+      }
+
       const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
       const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
 
@@ -1784,6 +1842,23 @@ export class Scheduler {
     this.eventBus.emit('task.queued', task.id, { reason });
   }
 
+  private markTaskWaitingForProject(task: TaskRow, project: { id: string; path: string }): void {
+    this.tasksWaitingForProject.add(task.id);
+    this.taskRepo.updateStatus(task.id, 'waiting_quota', 'project_unavailable');
+    this.eventBus.emit('task.waiting_quota', task.id, {
+      reason: 'project_unavailable',
+      projectId: project.id,
+      path: project.path,
+    });
+    if (!this.unavailableProjects.has(project.id)) {
+      this.unavailableProjects.add(project.id);
+      this.eventBus.emit('project.unavailable', undefined, {
+        projectId: project.id,
+        path: project.path,
+      });
+    }
+  }
+
   private findModelProfilePair(
     task: TaskRow,
   ): { model: string; profileName: string } | null {
@@ -1970,6 +2045,14 @@ export class Scheduler {
       return;
     }
 
+    const projectAccessible = isProjectAccessible(project.path);
+    const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
+    if (!projectAccessible || !worktreeAccessible) {
+      this.locks.release(profile.name, lockFile);
+      this.markTaskWaitingForProject(task, project);
+      return;
+    }
+
     const engineId = getModelEngine(model);
     const engine = this.engines.get(engineId);
     if (!engine) {
@@ -2002,6 +2085,10 @@ export class Scheduler {
         });
       } catch (e) {
         this.locks.release(profile.name, lockFile);
+        if (!isProjectAccessible(project.path)) {
+          this.markTaskWaitingForProject(task, project);
+          return;
+        }
         this.taskRepo.updateStatus(task.id, 'failed');
         this.eventBus.emit('task.failed', task.id, { error: String(e) });
         return;
