@@ -384,15 +384,20 @@ export class TelegramBotService {
 
   /** Register the "/" command menu with Telegram; best effort, never blocks or throws. */
   private async registerCommands(): Promise<void> {
-    if (!this.token) return;
-    try {
-      await this.fetchFn(`https://api.telegram.org/bot${this.token}/setMyCommands`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
-      });
-    } catch (error) {
-      console.error(`[telegram] setMyCommands failed: ${redactTelegramToken(error, this.token)}`);
+    // Network to Telegram can be flaky right after boot: retry a few times.
+    for (let attempt = 1; attempt <= 5 && this.running && this.token; attempt += 1) {
+      try {
+        const res = await this.fetchFn(`https://api.telegram.org/bot${this.token}/setMyCommands`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ commands: TELEGRAM_BOT_COMMANDS }),
+        });
+        if (res.ok) return;
+        console.error(`[telegram] setMyCommands failed with status ${res.status}`);
+      } catch (error) {
+        console.error(`[telegram] setMyCommands failed: ${redactTelegramToken(error, this.token)}`);
+      }
+      await this.sleepFn(30_000 * attempt);
     }
   }
 
