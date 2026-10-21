@@ -97,4 +97,44 @@ describe('database migrations', () => {
     ]);
     db.close();
   });
+
+  it('migration 42 retains existing waitReason values when updating schema', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-migration-waitreason-test-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'hub.db');
+    const oldDb = new Database(dbPath);
+    for (let version = 0; version <= 41; version += 1) {
+      oldDb.exec(MIGRATIONS[version]);
+      oldDb.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(version));
+      if (version === 0) {
+        oldDb.prepare('INSERT INTO projects (id, name, path) VALUES (?, ?, ?)').run('p', 'Project', dir);
+      }
+    }
+
+    // Insert tasks with different waitReasons prior to migration 42
+    oldDb.prepare('INSERT INTO tasks (id, projectId, slug, title, status, waitReason) VALUES (?, ?, ?, ?, ?, ?)').run('t1', 'p', 't1', 'Task 1', 'waiting_quota', 'quota');
+    oldDb.prepare('INSERT INTO tasks (id, projectId, slug, title, status, waitReason) VALUES (?, ?, ?, ?, ?, ?)').run('t2', 'p', 't2', 'Task 2', 'waiting_quota', 'disk');
+    oldDb.prepare('INSERT INTO tasks (id, projectId, slug, title, status, waitReason) VALUES (?, ?, ?, ?, ?, ?)').run('t3', 'p', 't3', 'Task 3', 'waiting_quota', 'parallel');
+    oldDb.prepare('INSERT INTO tasks (id, projectId, slug, title, status, waitReason) VALUES (?, ?, ?, ?, ?, ?)').run('t4', 'p', 't4', 'Task 4', 'waiting_quota', 'profile_busy');
+    oldDb.prepare('INSERT INTO tasks (id, projectId, slug, title, status, waitReason) VALUES (?, ?, ?, ?, ?, ?)').run('t5', 'p', 't5', 'Task 5', 'queued', null);
+    oldDb.close();
+
+    const db = openDatabase(dbPath);
+    expect(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").pluck().get()).toBe(String(MIGRATIONS.length - 1));
+
+    const rows = db.prepare('SELECT id, waitReason FROM tasks ORDER BY id').all() as { id: string; waitReason: string | null }[];
+    expect(rows).toEqual([
+      { id: 't1', waitReason: 'quota' },
+      { id: 't2', waitReason: 'disk' },
+      { id: 't3', waitReason: 'parallel' },
+      { id: 't4', waitReason: 'profile_busy' },
+      { id: 't5', waitReason: null },
+    ]);
+
+    // Also verify 'project_unavailable' is allowed now
+    db.prepare("UPDATE tasks SET waitReason = 'project_unavailable' WHERE id = 't5'").run();
+    expect(db.prepare("SELECT waitReason FROM tasks WHERE id = 't5'").pluck().get()).toBe('project_unavailable');
+
+    db.close();
+  });
 });
