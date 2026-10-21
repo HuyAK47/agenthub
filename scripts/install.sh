@@ -226,18 +226,43 @@ install_from_release() {
 
   _release_root="$AGENTHUB_DIR"
   _release_dir="$_release_root/$RELEASE_VERSION"
+  _release_stage="$_release_root/.${RELEASE_VERSION}.tmp.$$"
   mkdir -p "$_release_root"
+  rm -rf "$_release_stage"
+  mkdir -p "$_release_stage"
+  trap 'rm -rf "$_tmp" "$_release_stage"' EXIT HUP INT TERM
+  tar -xzf "$_tmp/$_archive" -C "$_release_stage"
+  if [ -d "$_release_stage/node_modules" ]; then
+    echo "✓ Gói đã có sẵn node_modules production; bỏ qua npm ci."
+  else
+    echo "==> Gói không có node_modules; kiểm tra compiler để build native..."
+    case "$_os" in
+      Linux*)
+        if ! command -v python3 >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1; then
+          echo "Lỗi: thiếu compiler native. Cài bằng: sudo apt install python3 make g++" >&2
+          return 1
+        fi
+        ;;
+      Darwin*)
+        if ! command -v xcode-select >/dev/null 2>&1 || ! xcode-select -p >/dev/null 2>&1; then
+          echo "Lỗi: thiếu Xcode Command Line Tools. Cài bằng: xcode-select --install" >&2
+          return 1
+        fi
+        ;;
+    esac
+    echo "==> Cài dependencies native theo máy..."
+    (cd "$_release_stage" && npm ci --omit=dev)
+  fi
+  # Run setup before switching the live pointers, without attempting a service install.
+  (cd "$_release_stage" && AGENTHUB_WORKER=1 ./bin/agenthub setup --no-browser)
+
   if [ -e "$_release_dir" ] || [ -L "$_release_dir" ]; then rm -rf "$_release_dir"; fi
-  mkdir -p "$_release_dir"
-  tar -xzf "$_tmp/$_archive" -C "$_release_dir"
-  printf 'mode=release\nversion=%s\ndate=%s\n' "$RELEASE_VERSION" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$_release_root/.agenthub-app"
+  mv "$_release_stage" "$_release_dir"
   ln -sfn "$RELEASE_VERSION" "$_release_root/current"
-  echo "==> Cài dependencies native theo máy..."
-  (cd "$_release_root/current" && npm ci --omit=dev)
   "$_release_root/current/bin/agenthub" link
   "$_release_root/current/bin/agenthub" install-service
-  "$_release_root/current/bin/agenthub" setup --no-browser
   "$_release_root/current/bin/agenthub" open --no-browser
+  printf 'mode=release\nversion=%s\ndate=%s\n' "$RELEASE_VERSION" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$_release_root/.agenthub-app"
 
   _kept=0
   for _old in $(find "$_release_root" -mindepth 1 -maxdepth 1 -type d -print | sort -V -r); do
@@ -255,7 +280,7 @@ if [ "$FROM_RELEASE" = "1" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     echo "[dry-run] tải release v${RELEASE_VERSION:-latest} từ $(release_repo_path)"
     echo "[dry-run] kiểm tra SHA256, giải nén vào $AGENTHUB_DIR/<version>, cập nhật symlink current"
-    echo "[dry-run] npm ci --omit=dev && agenthub link && agenthub install-service"
+    echo "[dry-run] dùng node_modules production trong archive (hoặc npm ci --omit=dev nếu thiếu)"
     echo "[dry-run] agenthub setup --no-browser"
     exit 0
   fi

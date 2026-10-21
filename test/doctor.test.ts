@@ -129,7 +129,7 @@ describe('Doctor checks', () => {
       });
       expect(res.status).toBe('error');
       expect(res.message).toContain('không tìm thấy Codex CLI');
-      expect(res.suggestion).toContain('PLAN 2.2');
+      expect(res.suggestion).toContain('/setup');
     });
 
     it('returns error when both agy and codex are missing', async () => {

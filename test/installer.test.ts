@@ -190,4 +190,25 @@ describe('safe installer and updater commands', () => {
     expect(calls).toContain('git fetch --tags origin');
     expect(fs.readFileSync(log, 'utf8')).toContain('--user restart agenthub');
   });
+
+  it('skips service installation when systemctl is unavailable', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-no-systemd-'));
+    const previous = process.env.AGENTHUB_SYSTEMCTL;
+    process.env.AGENTHUB_SYSTEMCTL = path.join(home, 'missing-systemctl');
+    try {
+      const result = linuxPlatform.installService({
+        nodePath: process.execPath,
+        cliPath: path.join(home, 'dist', 'cli.js'),
+        currentPath: '/tmp/bin',
+        homeDir: home,
+        print: false,
+      });
+      expect(result.skipped).toBe(true);
+      expect(result.message).toContain('chạy thủ công: agenthub daemon');
+      expect(fs.existsSync(result.file)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.AGENTHUB_SYSTEMCTL;
+      else process.env.AGENTHUB_SYSTEMCTL = previous;
+    }
+  });
 });

@@ -1132,7 +1132,7 @@ export class AppService {
     }
 
     const logDir =
-      profile.name === 'chinh'
+      profile.kind === 'keyring'
         ? this.config.defaultLogDir
         : path.join(
             profile.home || path.join(this.config.agyHomesDir, profile.name),

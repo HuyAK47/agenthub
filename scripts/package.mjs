@@ -36,14 +36,16 @@ try {
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: root, stdio: 'inherit' });
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:web'], { cwd: root, stdio: 'inherit' });
   for (const item of required) copy(item);
+  // Release archives are self-contained and build native modules on the release runner.
+  execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--omit=dev', '--prefix', staging], { stdio: 'inherit' });
   fs.mkdirSync(outputDir, { recursive: true });
   const archivePath = path.join(outputDir, archiveName);
   if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
 
   execFileSync('tar', ['-czf', archivePath, '-C', staging, '.'], { stdio: 'inherit' });
   const listing = execFileSync('tar', ['-tzf', archivePath], { encoding: 'utf8' });
-  if (listing.split('\n').some((entry) => entry.includes('node_modules'))) {
-    throw new Error('Refusing to publish an archive containing node_modules');
+  if (!listing.split('\n').some((entry) => entry === './node_modules/' || entry.startsWith('./node_modules/'))) {
+    throw new Error('Release archive is missing production node_modules');
   }
 
   const digest = createHash('sha256').update(fs.readFileSync(archivePath)).digest('hex');
