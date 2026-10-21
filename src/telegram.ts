@@ -27,6 +27,34 @@ export function isProjectMergeEnabled(project?: ProjectRow | null): boolean {
   }
 }
 
+export function slugify(title: string): string {
+  const withoutDiacritics = title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+
+  const kebab = withoutDiacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50)
+    .replace(/-+$/, '');
+
+  return kebab || 'task';
+}
+
+export function generateTaskSlug(title: string, projectId: string, taskRepo: TaskRepo): string {
+  const baseSlug = slugify(title);
+  let slug = baseSlug;
+  let counter = 2;
+  while (taskRepo.get(`${projectId}/${slug}`)) {
+    slug = `${baseSlug}-${counter}`;
+    counter += 1;
+  }
+  return slug;
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: {

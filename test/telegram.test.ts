@@ -12,6 +12,8 @@ import {
   readTelegramToken,
   isProjectMergeEnabled,
   redactTelegramToken,
+  slugify,
+  generateTaskSlug,
 } from '../src/telegram.js';
 
 interface RecordedFetchCall {
@@ -1072,6 +1074,48 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(json.enabled).toBe(true);
       expect(json.hasToken).toBe(true);
       expect(json.notify).toBeDefined();
+    });
+  });
+
+  describe('8. Slug generation and collision handling', () => {
+    it('slugify removes Vietnamese accents, converts to kebab-case, and handles fallback', () => {
+      expect(slugify('Tạo task từ Telegram')).toBe('tao-task-tu-telegram');
+      expect(slugify('Đăng nhập & xác thực 100%!')).toBe('dang-nhap-xac-thuc-100');
+      expect(slugify('???')).toBe('task');
+    });
+
+    it('generateTaskSlug appends incremental counter when slug already exists', () => {
+      ctx.projectRepo.insert({
+        id: 'proj-1',
+        name: 'Test Project',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 2,
+      });
+
+      ctx.taskRepo.insert({
+        id: 'proj-1/sua-loi-dang-nhap',
+        projectId: 'proj-1',
+        slug: 'sua-loi-dang-nhap',
+        title: 'Sửa lỗi đăng nhập',
+        level: 'easy',
+        status: 'queued',
+      });
+
+      const nextSlug = generateTaskSlug('Sửa lỗi đăng nhập', 'proj-1', ctx.taskRepo);
+      expect(nextSlug).toBe('sua-loi-dang-nhap-2');
+
+      ctx.taskRepo.insert({
+        id: 'proj-1/sua-loi-dang-nhap-2',
+        projectId: 'proj-1',
+        slug: 'sua-loi-dang-nhap-2',
+        title: 'Sửa lỗi đăng nhập 2',
+        level: 'easy',
+        status: 'queued',
+      });
+
+      const thirdSlug = generateTaskSlug('Sửa lỗi đăng nhập', 'proj-1', ctx.taskRepo);
+      expect(thirdSlug).toBe('sua-loi-dang-nhap-3');
     });
   });
 });
