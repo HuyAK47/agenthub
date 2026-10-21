@@ -46,16 +46,8 @@ function safePath(value: unknown, roots: string[], base = roots[0]): boolean {
   return roots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(base, value), root));
 }
 
-function words(command: string): string[] | undefined {
-  const result: string[] = [];
-  const re = /(?:[^\s"']|"[^"]*"|'[^']*')+/g;
-  const matches = command.match(re);
-  if (!matches) return undefined;
-  for (const match of matches) result.push(match.replace(/^(['"])(.*)\1$/, '$2'));
-  return result;
-}
-
 function splitShell(command: string): string[] | undefined {
+  if (/\r|\n|\$\(|<\(|>\(|`|\$\{/u.test(command)) return undefined;
   const parts: string[] = [];
   let start = 0;
   let quote = '';
@@ -67,9 +59,9 @@ function splitShell(command: string): string[] | undefined {
       continue;
     }
     if (char === '"' || char === "'") { quote = char; continue; }
-    if (char === '$' && command[i + 1] === '(') { depth += 1; i += 1; continue; }
+    if (char === '$' && command[i + 1] === '(') return undefined;
     if (char === ')' && depth > 0) { depth -= 1; continue; }
-    if (char === '`' && depth === 0) { return undefined; }
+    if (char === '&' && (command[i - 1] === '>' || command[i + 1] === '>')) continue;
     if (depth === 0 && (char === ';' || char === '|' || char === '&')) {
       if ((char === '|' || char === '&') && command[i + 1] === char) i += 1;
       else if (char === '&') return undefined;
@@ -82,26 +74,117 @@ function splitShell(command: string): string[] | undefined {
   return parts;
 }
 
+function shellWords(command: string): { words: string[]; redirects: string[] } | undefined {
+  const wordsResult: string[] = [];
+  const redirects: string[] = [];
+  let word = '';
+  let quote = '';
+  let escaped = false;
+  let hadWhitespace = true;
+  const flush = () => {
+    if (word) wordsResult.push(word);
+    word = '';
+  };
+  const readWord = (start: number): { value: string; end: number } | undefined => {
+    let value = '';
+    let currentQuote = '';
+    let escapedWord = false;
+    let i = start;
+    for (; i < command.length; i += 1) {
+      const char = command[i];
+      if (escapedWord) { value += char; escapedWord = false; continue; }
+      if (char === '\\' && !currentQuote) { escapedWord = true; continue; }
+      if (currentQuote) {
+        if (char === currentQuote) currentQuote = '';
+        else value += char;
+        continue;
+      }
+      if (char === '"' || char === "'") { currentQuote = char; continue; }
+      if (/\s/u.test(char) || char === '>' || char === '<' || (char === '&' && command[i + 1] === '>')) break;
+      value += char;
+    }
+    if (currentQuote || escapedWord) return undefined;
+    return { value, end: i };
+  };
+
+  for (let i = 0; i < command.length;) {
+    const char = command[i];
+    if (quote) {
+      if (escaped) { word += char; escaped = false; }
+      else if (char === '\\' && quote === '"') escaped = true;
+      else if (char === quote) quote = '';
+      else word += char;
+      i += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") { quote = char; hadWhitespace = false; i += 1; continue; }
+    if (/\s/u.test(char)) { flush(); hadWhitespace = true; i += 1; continue; }
+    const redirectStart = (char === '&' && command[i + 1] === '>') || char === '>' || char === '<';
+    if (redirectStart) {
+      const fdOnly = /^\d+$/u.test(word) && !hadWhitespace;
+      if (fdOnly) word = '';
+      else flush();
+      const operator = char === '&' ? '&>' : command.slice(i, i + 2) === '>>' || command.slice(i, i + 2) === '>|' ? command.slice(i, i + 2) : char;
+      i += operator.length;
+      while (i < command.length && /\s/u.test(command[i])) i += 1;
+      if (command[i] === '&') {
+        i += 1;
+        while (i < command.length && /\d/u.test(command[i])) i += 1;
+        continue;
+      }
+      const target = readWord(i);
+      if (!target || !target.value) return undefined;
+      redirects.push(target.value);
+      i = target.end;
+      hadWhitespace = false;
+      continue;
+    }
+    const target = readWord(i);
+    if (!target || !target.value) return undefined;
+    word += target.value;
+    i = target.end;
+    hadWhitespace = false;
+  }
+  if (quote || escaped) return undefined;
+  flush();
+  return { words: wordsResult, redirects };
+}
+
+function allowedGit(args: string[]): boolean {
+  if (args.length === 0 || !GIT_COMMANDS.has(args[0])) return false;
+  const subcommand = args[0];
+  const options = args.slice(1);
+  if (options.some((arg) => /^(?:--output(?:=|$)|-o(?:$|[^-]))/u.test(arg))) return false;
+  if (subcommand === 'branch') {
+    if (options.some((arg) => /^(?:-D|-d|-M|-m|-C|-c|-f|--delete|--move|--copy|--force|--set-upstream-to)/u.test(arg))) return false;
+    let expectsValue = false;
+    for (const option of options) {
+      if (expectsValue) { expectsValue = false; continue; }
+      if (option === '--contains') { expectsValue = true; continue; }
+      if (!['-a', '-r', '-v', '--list', '--show-current'].includes(option)) return false;
+    }
+    return !expectsValue;
+  }
+  return !options.includes('--hard');
+}
+
 function allowedCommand(command: string, roots: string[], cwd: string): boolean {
   const parts = splitShell(command);
   if (!parts || parts.some((part) => !part.trim())) return false;
   return parts.every((part) => {
-    const tokens = words(part.trim());
-    if (!tokens || tokens.length === 0) return false;
-    const redirect = tokens.findIndex((token) => /^(?:>>?|<<?)$/.test(token) || /^(?:>>?|<<?)/.test(token));
-    if (redirect >= 0) {
-      const target = tokens[redirect].replace(/^(?:>>?|<<?)/, '') || tokens[redirect + 1];
-      if (!safePath(target, roots, cwd)) return false;
-    }
-    const executable = path.basename(tokens[0]);
-    const args = tokens.slice(1).filter((token) => !/^(?:>>?|<<?)$/.test(token));
-    if (executable === 'git') return args.length > 0 && GIT_COMMANDS.has(args[0]) && !args.includes('--hard');
+    if (/^(?:eval|exec|source|\.)\b/u.test(part.trim())) return false;
+    const parsed = shellWords(part.trim());
+    if (!parsed || parsed.words.length === 0 || parsed.redirects.some((target) => !safePath(target, roots, cwd))) return false;
+    const executable = path.basename(parsed.words[0]);
+    const args = parsed.words.slice(1);
+    if (executable === 'git') return allowedGit(args);
     if (executable === 'npm' || executable === 'pnpm') {
-      if (executable === 'npm' && args[0] === 'run') return ['test', 'lint', 'typecheck', 'build', 'build:web'].includes(args[1]);
-      return ['test', 'lint', 'typecheck', 'build'].includes(args[0]);
+      const script = args[0] === 'run' ? args[1] : args[0];
+      return ['test', 'lint', 'typecheck', 'build', 'build:web'].includes(script || '');
     }
-    if (executable === 'npx') return args[0] === 'vitest' && args[1] === 'run';
+    if (executable === 'npx') return (args[0] === 'vitest' && args[1] === 'run') || (args[0] === 'tsc' && args[1] === '--noEmit');
     if (executable === 'cat' || executable === 'head' || executable === 'tail' || executable === 'wc' || executable === 'ls') {
+      if (executable === 'tail' && args.some((arg) => arg === '-f' || arg === '--follow' || arg.startsWith('--follow='))) return false;
       return args.filter((arg) => !arg.startsWith('-') && !/^\d+$/.test(arg)).every((arg) => safePath(arg, roots, cwd));
     }
     return false;
@@ -123,6 +206,7 @@ export class BrainPolicy {
     if (SECRET_PATH.test(paths.join(' ')) || SECRET_PATH.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Policy từ chối truy cập token/credential' };
     }
+    if (toolName === 'Bash' && /\r|\n|\$\(|<\(|>\(|`|\$\{/u.test(command)) return null;
     if (toolName.startsWith('mcp__agenthub__')) {
       return { action: 'allow', reason: 'policy:auto_allow', message: 'MCP AgentHub được policy tự cho phép' };
     }

