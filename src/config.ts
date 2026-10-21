@@ -493,8 +493,9 @@ export function updateConfigInMemory(
     }
     if (patch.notifications.quietHours) {
       config.notifications.quietHours = {
-        ...config.notifications.quietHours,
-        ...patch.notifications.quietHours,
+        enabled: patch.notifications.quietHours.enabled ?? config.notifications.quietHours?.enabled ?? DEFAULT_QUIET_HOURS_CONFIG.enabled,
+        start: patch.notifications.quietHours.start ?? config.notifications.quietHours?.start ?? DEFAULT_QUIET_HOURS_CONFIG.start,
+        end: patch.notifications.quietHours.end ?? config.notifications.quietHours?.end ?? DEFAULT_QUIET_HOURS_CONFIG.end,
       };
     }
   }
