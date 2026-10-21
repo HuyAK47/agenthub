@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { BrainConfig } from '../config.js';
-import { BrainTurnRepo, ChatSessionRepo, ProfileRepo } from '../db/index.js';
+import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, TaskRepo } from '../db/index.js';
 import { resolveClaudeProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
@@ -17,6 +17,7 @@ export interface BrainRunnerOptions {
   chatService: Pick<ChatService, 'getOrCreateSession' | 'sendMessage'>;
   chatSessionRepo: ChatSessionRepo;
   profileRepo?: Pick<ProfileRepo, 'getAll'>;
+  taskRepo?: Pick<TaskRepo, 'get'>;
   turnRepo: BrainTurnRepo;
   projectRepo?: { get(id: string): { id: string; name: string; path: string; settings?: string | null } | undefined };
   debounceMs?: number;
@@ -170,6 +171,10 @@ export class BrainRunner {
     }
     if (type === 'chat.done' || type === 'chat.error') { this.finishChatEvent(type, data); return; }
     if (!this.started || !EVENT_TYPES.has(type)) return;
+    if (SYSTEM_EVENTS.has(type) && (type === 'quota.exhausted' || type === 'claude.quota_exhausted') && this.opts.taskRepo) {
+      const affectedTask = taskId ? this.opts.taskRepo.get(taskId) : undefined;
+      if (!affectedTask || (affectedTask.status !== 'running' && affectedTask.status !== 'queued')) return;
+    }
     const candidate = typeof data.projectId === 'string' ? data.projectId : taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : null;
     const projectId = SYSTEM_EVENTS.has(type) ? null : (candidate && this.opts.projectRepo?.get(candidate) ? candidate : null);
     if (this.mode(projectId) === 'off' || this.mode(projectId) === 'external') return;
@@ -210,7 +215,15 @@ export class BrainRunner {
   private formatEvents(events: BrainQueuedEvent[], mode: EffectiveBrainMode, projectId: string | null): string {
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
     const context = project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
-    const lines = events.slice(0, 30).map((event) => `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${event.payload ? ` ${JSON.stringify(event.payload).slice(0, 500)}` : ''}`);
+    const seenQuota = new Set<string>();
+    const lines = events.filter((event) => {
+      if (event.type !== 'quota.exhausted' && event.type !== 'claude.quota_exhausted') return true;
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
+      const key = `${event.type}:${String(payload.profile ?? '')}:${String(payload.family ?? '')}`;
+      if (seenQuota.has(key)) return false;
+      seenQuota.add(key);
+      return true;
+    }).slice(0, 30).map((event) => `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${event.payload ? ` ${JSON.stringify(event.payload).slice(0, 500)}` : ''}`);
     return `${context}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
   }
 

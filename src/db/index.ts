@@ -983,7 +983,12 @@ export class QuotaMarkRepo {
       .all(now) as QuotaMarkRow[];
   }
 
-  mark(profileName: string, family: string, until: number, reason?: string): void {
+  mark(profileName: string, family: string, until: number, reason?: string): boolean {
+    const now = Math.floor(Date.now() / 1000);
+    const previous = this.db
+      .prepare('SELECT until FROM quota_marks WHERE profileName = ? AND family = ?')
+      .get(profileName, family) as { until: number } | undefined;
+    const shouldEmit = !previous || previous.until <= now || until - previous.until > 10 * 60;
     this.db
       .prepare(
         `INSERT INTO quota_marks (profileName, family, until, reason)
@@ -991,6 +996,7 @@ export class QuotaMarkRepo {
          ON CONFLICT(profileName, family) DO UPDATE SET until=excluded.until, reason=excluded.reason`,
       )
       .run(profileName, family, until, reason || null);
+    return shouldEmit;
   }
 
   clear(profileName: string, family: string): void {

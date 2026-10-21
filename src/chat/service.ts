@@ -108,6 +108,7 @@ export class ChatService {
   private snapshotEventAt = new Map<string, number>();
   private retryTimers = new Map<string, NodeJS.Timeout>();
   private earlyRetryAt = new Map<string, number>();
+  private lastClaudeQuotaEventUntil?: number;
 
   constructor(
     public config: AgentHubConfig,
@@ -234,10 +235,13 @@ export class ChatService {
     const snapshot = this.failoverState.snapshot().active
       ? this.failoverState.advance('claude_usage_limit')
       : this.failoverState.activate(result.resetSeconds || this.config.reviewer.failoverSec, 'claude_usage_limit');
-    this.eventBus.emit('claude.quota_exhausted', undefined, {
-      until: snapshot.until,
-      reason: snapshot.reason,
-    });
+    if (snapshot.until === null || this.lastClaudeQuotaEventUntil === undefined || snapshot.until - this.lastClaudeQuotaEventUntil > 10 * 60) {
+      if (snapshot.until !== null) this.lastClaudeQuotaEventUntil = snapshot.until;
+      this.eventBus.emit('claude.quota_exhausted', undefined, {
+        until: snapshot.until,
+        reason: snapshot.reason,
+      });
+    }
     this.eventBus.emit('claude.fallback_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });
     this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until, step: snapshot.step });
     return result;

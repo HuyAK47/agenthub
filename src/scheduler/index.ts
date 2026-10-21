@@ -1457,8 +1457,9 @@ export class Scheduler {
           this.runRepo.finish(rt.runId, 'quota', Math.floor(Date.now() / 1000) + resetSeconds);
 
           // Mark quota for profile and same-email profiles
-          this.quotaService.mark(rt.profileName, family, resetSeconds, `quota exhausted on ${rt.model}`);
-          this.eventBus.emit('quota.exhausted', taskId, { profile: rt.profileName, family });
+          if (this.quotaService.mark(rt.profileName, family, resetSeconds, `quota exhausted on ${rt.model}`)) {
+            this.eventBus.emit('quota.exhausted', taskId, { profile: rt.profileName, family });
+          }
 
           // Try to find another profile/model
           const attempt = (task.attempt || 0) + 1;
