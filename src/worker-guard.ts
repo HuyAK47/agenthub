@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { projectSettings } from './projects/settings.js';
+import { execFileSync } from 'node:child_process';
 
 export const WORKER_SERVICE_MESSAGE = 'AgentHub: worker không được điều khiển service của hub';
 export const WORKER_BLOCKED_COMMANDS = ['ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman'] as const;
@@ -167,6 +168,21 @@ export interface WorkerEnvOptions {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null } | null;
   guards?: boolean;
+  cwd?: string;
+}
+
+const HUB_GIT_NAME = 'AgentHub';
+const HUB_GIT_EMAIL = 'agenthub@localhost';
+
+function hasGitIdentity(cwd: string | undefined, env: NodeJS.ProcessEnv): boolean {
+  if (env.GIT_AUTHOR_NAME && env.GIT_AUTHOR_EMAIL && env.GIT_COMMITTER_NAME && env.GIT_COMMITTER_EMAIL) return true;
+  try {
+    const name = execFileSync('git', ['config', '--get', 'user.name'], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+    const email = execFileSync('git', ['config', '--get', 'user.email'], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+    return Boolean(name && email);
+  } catch {
+    return false;
+  }
 }
 
 export function workerEnvironment(
@@ -175,6 +191,12 @@ export function workerEnvironment(
   options?: WorkerEnvOptions | { settings?: string | null } | null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
+  if (!hasGitIdentity(options && 'cwd' in options ? options.cwd : undefined, env)) {
+    env.GIT_AUTHOR_NAME ??= HUB_GIT_NAME;
+    env.GIT_AUTHOR_EMAIL ??= HUB_GIT_EMAIL;
+    env.GIT_COMMITTER_NAME ??= HUB_GIT_NAME;
+    env.GIT_COMMITTER_EMAIL ??= HUB_GIT_EMAIL;
+  }
   const serviceDir = path.join(hubHome, 'shims', 'service');
   const workerDir = path.join(hubHome, 'shims', 'worker');
   const guards = !options || !('guards' in options) || options.guards !== false;

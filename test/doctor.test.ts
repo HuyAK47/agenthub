@@ -256,8 +256,13 @@ describe('Doctor checks', () => {
         .mockReturnValueOnce({ status: 0, stdout: 'systemd 245\n', stderr: '' })
         .mockReturnValueOnce({ status: 0, stdout: 'active\n', stderr: '' });
       const res = await checkSystemd({ exec: mockExec });
-      expect(res.status).toBe('ok');
-      expect(res.message).toContain('đang hoạt động (active)');
+      if (process.platform === 'darwin') {
+        expect(res.status).toBe('skip');
+        expect(res.message).toContain('LaunchAgent');
+      } else {
+        expect(res.status).toBe('ok');
+        expect(res.message).toContain('đang hoạt động (active)');
+      }
     });
 
     it('returns error with suggestion when service is inactive', async () => {
@@ -265,9 +270,14 @@ describe('Doctor checks', () => {
         .mockReturnValueOnce({ status: 0, stdout: 'systemd 245\n', stderr: '' })
         .mockReturnValueOnce({ status: 3, stdout: 'inactive\n', stderr: '' });
       const res = await checkSystemd({ exec: mockExec });
-      expect(res.status).toBe('error');
-      expect(res.message).toContain('không hoạt động (inactive)');
-      expect(res.suggestion).toContain('agenthub install-service');
+      if (process.platform === 'darwin') {
+        expect(res.status).toBe('skip');
+        expect(res.message).toContain('LaunchAgent');
+      } else {
+        expect(res.status).toBe('error');
+        expect(res.message).toContain('không hoạt động (inactive)');
+        expect(res.suggestion).toContain('agenthub install-service');
+      }
     });
   });
 
@@ -503,19 +513,19 @@ describe('Doctor checks', () => {
       });
 
       expect(report.ok).toBe(true);
-      expect(report.summary.total).toBe(8);
-      expect(report.summary.passed).toBe(8);
+      expect(report.summary.total).toBe(10);
+      expect(report.summary.passed).toBe(10);
       expect(report.summary.failed).toBe(0);
 
       const text = formatDoctorText(report);
       expect(text).toContain('=== AgentHub Doctor ===');
-      expect(text).toContain('Tất cả 8/8 mục kiểm tra đều đạt!');
+      expect(text).toContain('Tất cả 10/10 mục kiểm tra đều đạt!');
 
       const json = formatDoctorJson(report);
       const parsed = JSON.parse(json);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary.passed).toBe(8);
-      expect(parsed.checks.length).toBe(8);
+      expect(parsed.summary.passed).toBe(10);
+      expect(parsed.checks.length).toBe(10);
     });
 
     it('formats error suggestions in text output when issues exist', async () => {
@@ -641,7 +651,7 @@ describe('Doctor checks', () => {
       const jsonOutput = consoleSpy.mock.calls[0][0];
       const parsed = JSON.parse(jsonOutput);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary.passed).toBe(8);
+      expect(parsed.summary.passed).toBe(10);
       consoleSpy.mockRestore();
     });
   });

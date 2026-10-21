@@ -446,3 +446,22 @@ Additional Documentation:
 - [Operational Guide (docs/USAGE.md)](../USAGE.md)
 - [System Architecture & Plan (docs/PLAN.md)](../PLAN.md)
 - [Project Overview & README (README.md)](../../README.md)
+
+## 14. Post-merge self-deploy
+
+Deploy steps are trusted configuration in `~/.agenthub/config.json` only; they are not accepted through the API/MCP. Example for the AgentHub repository:
+
+```json
+{
+  "deploy": {
+    "agenthub": {
+      "steps": [["npm", "run", "build"], ["npm", "run", "build:web"], ["node", "scripts/install-web.mjs"]],
+      "timeoutSec": 900,
+      "restartHub": true,
+      "push": { "remote": "origin", "from": "integration", "to": "main", "ffOnly": true }
+    }
+  }
+}
+```
+
+Each step runs as argv in the integration worktree and is logged under `~/.agenthub/logs/deploy/<project>/<time>.log`. Push is disabled by default and is fast-forward-only when enabled. Rerun from the Projects page or `/deploy <project>` in Telegram; `/deploy` without an argument shows the latest status.

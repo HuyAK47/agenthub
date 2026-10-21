@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { addProjectKnowledge, createProject, deleteProject, deleteProjectKnowledge, getProjectKnowledge, getProjects, updateProject, updateProjectKnowledge } from '../api/client';
+import { addProjectKnowledge, createProject, deleteProject, deleteProjectKnowledge, getProjectKnowledge, getProjects, rerunProjectDeploy, updateProject, updateProjectKnowledge } from '../api/client';
 import { FolderGit2, Plus, Trash2, CheckCircle2, AlertCircle, Code, BookOpen, Pin, ChevronDown, Settings2 } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { Project } from '../types/api';
@@ -129,6 +129,11 @@ export const ProjectsPage: React.FC = () => {
 
   const updateReviewMutation = useMutation({
     mutationFn: ({ id, review }: { id: string; review: string }) => updateProject(id, { review: review.trim() ? JSON.parse(review) : null }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+  });
+
+  const deployMutation = useMutation({
+    mutationFn: rerunProjectDeploy,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
   });
 
@@ -501,6 +506,8 @@ export const ProjectsPage: React.FC = () => {
                   <span className="font-mono font-medium">{proj.maxParallel}</span>
                 </div>
               </div>
+
+              {proj.afterMerge && <button type="button" onClick={() => deployMutation.mutate(proj.id)} disabled={deployMutation.isPending} className="px-3 py-1.5 rounded bg-[var(--t-accent)] text-white text-xs disabled:opacity-50">{deployMutation.isPending ? 'Đang deploy…' : 'Deploy lại'}</button>}
 
               <button type="button" onClick={() => setKnowledgeProject(knowledgeProject === proj.id ? null : proj.id)} className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)]">
                 <BookOpen className="w-3.5 h-3.5" /> Kiến thức

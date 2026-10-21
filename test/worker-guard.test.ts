@@ -300,4 +300,42 @@ describe('worker service guard', () => {
 
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it('adds the AgentHub git identity only when the repository has none', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-worker-identity-'));
+    const repo = path.join(root, 'repo');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(home);
+    execFileSync('git', ['init'], { cwd: repo });
+
+    const cleanEnv = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' };
+    delete cleanEnv.GIT_AUTHOR_NAME;
+    delete cleanEnv.GIT_AUTHOR_EMAIL;
+    delete cleanEnv.GIT_COMMITTER_NAME;
+    delete cleanEnv.GIT_COMMITTER_EMAIL;
+    const fallback = workerEnvironment(path.join(root, 'hub'), cleanEnv, { cwd: repo });
+    expect(fallback.GIT_AUTHOR_NAME).toBe('AgentHub');
+    expect(fallback.GIT_AUTHOR_EMAIL).toBe('agenthub@localhost');
+    expect(fallback.GIT_COMMITTER_NAME).toBe('AgentHub');
+    expect(fallback.GIT_COMMITTER_EMAIL).toBe('agenthub@localhost');
+
+    const explicit = workerEnvironment(path.join(root, 'hub-explicit'), {
+      ...cleanEnv,
+      GIT_AUTHOR_NAME: 'Existing Author',
+    }, { cwd: repo });
+    expect(explicit.GIT_AUTHOR_NAME).toBe('Existing Author');
+    expect(explicit.GIT_AUTHOR_EMAIL).toBe('agenthub@localhost');
+    expect(explicit.GIT_COMMITTER_NAME).toBe('AgentHub');
+    expect(explicit.GIT_COMMITTER_EMAIL).toBe('agenthub@localhost');
+
+    execFileSync('git', ['config', 'user.name', 'Configured User'], { cwd: repo, env: cleanEnv });
+    execFileSync('git', ['config', 'user.email', 'configured@example.com'], { cwd: repo, env: cleanEnv });
+    const configured = workerEnvironment(path.join(root, 'hub-configured'), cleanEnv, { cwd: repo });
+    expect(configured.GIT_AUTHOR_NAME).toBeUndefined();
+    expect(configured.GIT_AUTHOR_EMAIL).toBeUndefined();
+    expect(configured.GIT_COMMITTER_NAME).toBeUndefined();
+    expect(configured.GIT_COMMITTER_EMAIL).toBeUndefined();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });
