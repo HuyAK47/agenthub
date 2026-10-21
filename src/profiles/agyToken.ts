@@ -158,11 +158,20 @@ export interface GoogleUserInfo {
 
 /**
  * Lấy thông tin tài khoản Google (bao gồm picture / avatar) từ Google OAuth userinfo endpoint.
+ * `status` cho biết vì sao thất bại (mã HTTP, hoặc 0 khi lỗi mạng) để báo cho người dùng.
  */
 export async function fetchAgyGoogleUserInfo(
   accessToken: string,
   options?: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<GoogleUserInfo | null> {
+  const result = await fetchAgyGoogleUserInfoDetailed(accessToken, options);
+  return result.info;
+}
+
+export async function fetchAgyGoogleUserInfoDetailed(
+  accessToken: string,
+  options?: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<{ info: GoogleUserInfo | null; status: number }> {
   const timeoutMs = options?.timeoutMs ?? 8_000;
   const signal = options?.signal ?? AbortSignal.timeout(timeoutMs);
 
@@ -174,32 +183,46 @@ export async function fetchAgyGoogleUserInfo(
       },
       signal,
     });
-    if (!response.ok) return null;
+    if (!response.ok) return { info: null, status: response.status };
     const data = (await response.json()) as Record<string, unknown>;
     return {
-      sub: typeof data.sub === 'string' ? data.sub : undefined,
-      email: typeof data.email === 'string' ? data.email : undefined,
-      name: typeof data.name === 'string' ? data.name : undefined,
-      picture: typeof data.picture === 'string' ? data.picture : undefined,
+      status: response.status,
+      info: {
+        sub: typeof data.sub === 'string' ? data.sub : undefined,
+        email: typeof data.email === 'string' ? data.email : undefined,
+        name: typeof data.name === 'string' ? data.name : undefined,
+        picture: typeof data.picture === 'string' ? data.picture : undefined,
+      },
     };
   } catch {
-    return null;
+    return { info: null, status: 0 };
   }
 }
+
+export type AgyAccessTokenSkip = 'no_token_file' | 'unreadable' | 'no_access_token' | 'expired';
 
 /**
  * Ngoại lệ DEC-006: chỉ lấy access_token còn hạn để gọi Google userinfo.
  * Không đọc refresh_token, không ghi lại file, không log token.
  */
-export function readAgyAccessToken(profileHome: string): string | null {
+export function inspectAgyAccessToken(profileHome: string): { accessToken: string } | { skip: AgyAccessTokenSkip } {
   const tokenFile = path.join(profileHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+  if (!fs.existsSync(tokenFile)) return { skip: 'no_token_file' };
+  let raw: Record<string, unknown>;
   try {
-    const raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8')) as Record<string, unknown>;
-    const accessToken = typeof raw.access_token === 'string' ? raw.access_token : '';
-    const expiry = typeof raw.expiry === 'string' ? Date.parse(raw.expiry) : NaN;
-    if (!accessToken || !(expiry > Date.now() + 60_000)) return null;
-    return accessToken;
+    raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8')) as Record<string, unknown>;
   } catch {
-    return null;
+    return { skip: 'unreadable' };
   }
+  const accessToken = typeof raw.access_token === 'string' ? raw.access_token : '';
+  if (!accessToken) return { skip: 'no_access_token' };
+  // Không có expiry thì cứ thử; Google sẽ trả 401 nếu token đã hết hạn.
+  const expiry = typeof raw.expiry === 'string' ? Date.parse(raw.expiry) : NaN;
+  if (Number.isFinite(expiry) && expiry <= Date.now() + 60_000) return { skip: 'expired' };
+  return { accessToken };
+}
+
+export function readAgyAccessToken(profileHome: string): string | null {
+  const result = inspectAgyAccessToken(profileHome);
+  return 'accessToken' in result ? result.accessToken : null;
 }

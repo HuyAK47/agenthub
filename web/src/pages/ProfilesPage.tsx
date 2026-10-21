@@ -109,8 +109,10 @@ export const ProfilesPage: React.FC = () => {
   const [deleting, setDeleting] = useState<Profile | null>(null);
   const [tokenLogin, setTokenLogin] = useState<Profile | null>(null);
   const [checking, setChecking] = useState<Record<string, boolean>>({});
+  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const toastSeq = useRef(0);
   const {
     data: profiles = [],
     isLoading,
@@ -124,7 +126,7 @@ export const ProfilesPage: React.FC = () => {
   });
   const runningByProfile = new Map((status?.running || []).map((run) => [run.profileName, run]));
   const toast = (text: string, isError = false) => {
-    const id = Date.now();
+    const id = ++toastSeq.current;
     setToasts((old) => [...old, { id, text, error: isError }]);
     setTimeout(() => setToasts((old) => old.filter((item) => item.id !== id)), 6000);
   };
@@ -151,6 +153,30 @@ export const ProfilesPage: React.FC = () => {
       setActiveLogin({ name, engine, sessionId: (await loginProfile(name)).sessionId });
     } catch (err: any) {
       toast(err?.message || 'Không thể mở trình đăng nhập', true);
+    }
+  };
+  const runRefresh = async (profile: Profile, silent = false) => {
+    setRefreshing((old) => ({ ...old, [profile.name]: true }));
+    try {
+      const updated = await refreshProfileUsage(profile.name);
+      if (silent) return;
+      const avatarNote = updated?.avatarMessage ? ` · ${updated.avatarMessage}` : '';
+      toast(`✓ ${t('profiles.refreshDone', { name: profile.label || profile.name })}${avatarNote}`);
+    } catch (err: any) {
+      toast(err?.message || t('profiles.refreshFailed'), true);
+    } finally {
+      setRefreshing((old) => ({ ...old, [profile.name]: false }));
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+    }
+  };
+  const runToggle = async (profile: Profile, enabled: boolean) => {
+    try {
+      await updateProfile(profile.name, { enabled });
+      toast(t(enabled ? 'profiles.toggledOn' : 'profiles.toggledOff', { name: profile.label || profile.name }));
+    } catch (err: any) {
+      toast(err?.message || t('profiles.toggleFailed'), true);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
     }
   };
   const runCheck = async (name: string) => {
@@ -246,22 +272,15 @@ export const ProfilesPage: React.FC = () => {
                         menu={menu}
                         setMenu={setMenu}
                         checking={Boolean(checking[profile.name])}
+                        refreshing={Boolean(refreshing[profile.name])}
                         onLogin={runLogin}
                         onTokenLogin={setTokenLogin}
                         onCheck={runCheck}
                         onEdit={setEditing}
                         onRename={setRenaming}
                         onDelete={setDeleting}
-                        onToggle={(enabled) =>
-                          updateProfile(profile.name, { enabled }).then(() =>
-                            queryClient.invalidateQueries({ queryKey: ['profiles'] }),
-                          )
-                        }
-                        onRefresh={() =>
-                          refreshProfileUsage(profile.name).then(() =>
-                            queryClient.invalidateQueries({ queryKey: ['profiles'] }),
-                          )
-                        }
+                        onToggle={(enabled) => void runToggle(profile, enabled)}
+                        onRefresh={(silent) => void runRefresh(profile, silent)}
                         onQuotaRemoved={(family) => toast(t('profiles.removeQuotaSuccess', { family, name: profile.name }))}
                       />
                     ))}
@@ -281,10 +300,17 @@ export const ProfilesPage: React.FC = () => {
           }}
           onCreated={async (name, engine) => {
             setShowAdd(false);
+            toast(t('profiles.createdProfile', { name }));
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
             await runLogin(name, engine);
           }}
-          onImported={() => queryClient.invalidateQueries({ queryKey: ['profiles'] })}
+          onImported={(result) => {
+            toast(
+              t('profiles.importDone', { success: result.successCount, total: result.total }),
+              result.successCount === 0,
+            );
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+          }}
         />
       )}
       {editing && (
@@ -292,6 +318,7 @@ export const ProfilesPage: React.FC = () => {
           profile={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
+            toast(t('profiles.savedProfile', { name: editing.name }));
             setEditing(null);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
@@ -301,7 +328,8 @@ export const ProfilesPage: React.FC = () => {
         <RenameModal
           profile={renaming}
           onClose={() => setRenaming(null)}
-          onSaved={() => {
+          onSaved={(newName) => {
+            toast(t('profiles.renamedProfile', { from: renaming.name, to: newName }));
             setRenaming(null);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
@@ -312,6 +340,7 @@ export const ProfilesPage: React.FC = () => {
           profile={deleting}
           onClose={() => setDeleting(null)}
           onDeleted={() => {
+            toast(t('profiles.deletedProfile', { name: deleting.name }));
             setDeleting(null);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
@@ -402,6 +431,7 @@ function ProfileCard({
   menu,
   setMenu,
   checking,
+  refreshing,
   onLogin,
   onTokenLogin,
   onCheck,
@@ -417,6 +447,7 @@ function ProfileCard({
   menu: string | null;
   setMenu: (name: string | null) => void;
   checking: boolean;
+  refreshing: boolean;
   onLogin: (name: string, engine: Provider) => void;
   onTokenLogin: (profile: Profile) => void;
   onCheck: (name: string) => void;
@@ -424,7 +455,8 @@ function ProfileCard({
   onRename: (profile: Profile) => void;
   onDelete: (profile: Profile) => void;
   onToggle: (enabled: boolean) => void;
-  onRefresh: () => void;
+  /** silent: tải lại ngầm sau thao tác khác (đã có thông báo riêng). */
+  onRefresh: (silent?: boolean) => void;
   onQuotaRemoved: (family: string) => void;
 }) {
   const { t } = useLocale();
@@ -580,12 +612,12 @@ function ProfileCard({
           <span className="text-[var(--t-text-3)]">{usageText(profile)}</span>
         </div>
         <div className="mt-2">
-          <QuotaUsage usage={profile.usage} onRefresh={onRefresh} />
+          <QuotaUsage usage={profile.usage} onRefresh={() => onRefresh()} refreshing={refreshing} />
         </div>
         {activeMarks.map((mark) => (
           <div key={mark.family} data-testid={`quota-mark-${mark.family}`} title={mark.reason || undefined} className="mt-2 flex items-center justify-between rounded border border-[var(--t-warn)] px-2 py-1 text-xs text-[var(--t-warn)]">
             <span>{t('profiles.quotaLocked', { family: mark.family, time: formatHHMM(mark.until) })}</span>
-            <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
+            <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(true); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
           </div>
         ))}
       </div>
@@ -636,7 +668,7 @@ function ProfileCard({
                             method: 'PATCH',
                             body: JSON.stringify({ enabled: nextVal }),
                           }).then(() => {
-                            onRefresh();
+                            onRefresh(true);
                           });
                         }}
                         className="rounded border-[var(--t-border)]"
@@ -753,7 +785,7 @@ function AddProfileModal({
 }: {
   onClose: () => void;
   onCreated: (name: string, engine: Provider) => void;
-  onImported: () => void;
+  onImported: (result: ImportTokensResult) => void;
 }) {
   const { t } = useLocale();
   const [engine, setEngine] = useState<Provider>('agy');
@@ -813,7 +845,7 @@ function AddProfileModal({
       setCockpitResult(result);
       // Không giữ refresh token trong state khi đã nhập xong; giữ lại để sửa nếu có mục lỗi.
       if (result.failedCount === 0) setCockpitJson('');
-      onImported();
+      onImported(result);
     } catch (err: any) {
       setCockpitError(err?.message || t('profiles.importFailed'));
     } finally {
@@ -1197,7 +1229,7 @@ function RenameModal({
 }: {
   profile: Profile;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (newName: string) => void;
 }) {
   const [name, setName] = useState(profile.name);
   const [error, setError] = useState('');
@@ -1209,7 +1241,7 @@ function RenameModal({
           e.preventDefault();
           try {
             await renameProfile(profile.name, name.trim());
-            onSaved();
+            onSaved(name.trim());
           } catch (err: any) {
             setError(err?.message || 'Không thể đổi tên');
           }

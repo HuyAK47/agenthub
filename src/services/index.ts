@@ -26,7 +26,7 @@ import {
   TaskBatchRow,
 } from '../db/index.js';
 import { BulletinService } from '../bulletin.js';
-import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, readAgyAccessToken } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, inspectAgyAccessToken } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { QuotaUsageService } from '../quota/usage.js';
@@ -1114,20 +1114,47 @@ export class AppService {
 
   private emailCheckCache = new Map<string, number>();
 
-  /** Lấy ảnh Google cho hồ sơ agy đăng nhập qua terminal (ngoại lệ DEC-006); chỉ gọi từ thao tác của người dùng. */
-  async syncAgyAvatarFromToken(name: string): Promise<string | null> {
+  /**
+   * Lấy ảnh Google cho hồ sơ agy đăng nhập qua terminal (ngoại lệ DEC-006); chỉ gọi từ thao tác của người dùng.
+   * `message` giải thích kết quả để hiện thông báo, không bao giờ chứa token.
+   */
+  async syncAgyAvatarFromToken(name: string): Promise<{ avatarUrl: string | null; message: string }> {
     const profile = this.profileRepo.get(name);
-    if (!profile || profile.engine !== 'agy' || profile.kind !== 'isolated' || !profile.home) return null;
-    const accessToken = readAgyAccessToken(profile.home);
-    if (!accessToken) return null;
-    const info = await fetchAgyGoogleUserInfo(accessToken);
-    if (!info?.picture) return null;
-    if (info.email && profile.email && info.email.toLowerCase() !== profile.email.toLowerCase()) return null;
+    if (!profile || profile.engine !== 'agy') return { avatarUrl: null, message: 'Không phải hồ sơ Antigravity' };
+    if (profile.kind !== 'isolated' || !profile.home) {
+      return { avatarUrl: profile.avatarUrl ?? null, message: 'Hồ sơ dùng keyring nên không lấy được ảnh đại diện' };
+    }
+    const token = inspectAgyAccessToken(profile.home);
+    if ('skip' in token) {
+      const reasons: Record<typeof token.skip, string> = {
+        no_token_file: 'Chưa có file token của agy, hãy đăng nhập trước',
+        unreadable: 'File token của agy không đúng định dạng JSON',
+        no_access_token: 'File token của agy không có access_token',
+        expired: 'Access token đã hết hạn; chạy một task hoặc bấm Check để agy làm mới rồi thử lại',
+      };
+      return { avatarUrl: profile.avatarUrl ?? null, message: reasons[token.skip] };
+    }
+    const { info, status } = await fetchAgyGoogleUserInfoDetailed(token.accessToken);
+    if (!info) {
+      const message = status === 0
+        ? 'Không kết nối được tới Google'
+        : status === 401
+          ? 'Google báo access token không hợp lệ hoặc đã hết hạn (HTTP 401)'
+          : status === 403
+            ? 'Token của agy không có quyền đọc ảnh hồ sơ Google (HTTP 403)'
+            : `Google trả lỗi HTTP ${status}`;
+      return { avatarUrl: profile.avatarUrl ?? null, message };
+    }
+    if (!info.picture) return { avatarUrl: profile.avatarUrl ?? null, message: 'Google không trả về ảnh đại diện (token thiếu quyền profile hoặc tài khoản chưa đặt ảnh)' };
+    if (info.email && profile.email && info.email.toLowerCase() !== profile.email.toLowerCase()) {
+      return { avatarUrl: profile.avatarUrl ?? null, message: `Token thuộc tài khoản khác (${info.email}), bỏ qua ảnh` };
+    }
     if (info.picture !== profile.avatarUrl) {
       this.profileRepo.updateAvatarUrl(name, info.picture);
       this.scheduler.getEventBus().emit('profile.updated', undefined, { name, avatarUrl: info.picture });
+      return { avatarUrl: info.picture, message: 'Đã cập nhật ảnh đại diện' };
     }
-    return info.picture;
+    return { avatarUrl: info.picture, message: 'Ảnh đại diện đã là mới nhất' };
   }
 
   refreshProfileEmail(name: string): string | null {
@@ -1622,7 +1649,6 @@ export class AppService {
         }
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
-        if (ok) await this.syncAgyAvatarFromToken(profile.name).catch(() => null);
       } else if (profile.engine === 'claude') {
         // Claude profiles: login state comes from the Claude config dir, not from the Codex CLI.
         const account = this.coreProfileService.readClaudeAccount(profile.home || os.homedir());
@@ -1739,8 +1765,11 @@ export class AppService {
     else if (profile.engine === 'claude') await this.usageService.collectClaude(profile, true);
     else await this.usageService.collect(profile);
     this.refreshProfileEmail(profile.name);
-    if (profile.engine === 'agy') await this.syncAgyAvatarFromToken(profile.name).catch(() => null);
-    return this.listProfiles().find((p) => p.name === name);
+    const avatar = profile.engine === 'agy'
+      ? await this.syncAgyAvatarFromToken(profile.name).catch(() => ({ avatarUrl: null, message: 'Không lấy được ảnh đại diện' }))
+      : null;
+    const refreshed = this.listProfiles().find((p) => p.name === name);
+    return refreshed && avatar ? { ...refreshed, avatarMessage: avatar.message } : refreshed;
   }
 
   updateProfile(name: string, raw: unknown): ProfileRow {

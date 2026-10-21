@@ -305,6 +305,21 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(toast).toHaveTextContent(/Đã gỡ khóa quota/i);
   });
 
+  it('9b. Nút Làm mới hiển thị thông báo kèm kết quả lấy ảnh đại diện', async () => {
+    vi.mocked(client.refreshProfileUsage).mockResolvedValue({ ...mockProfiles[0], avatarMessage: 'Đã cập nhật ảnh đại diện' });
+    renderPage();
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+
+    const card = screen.getByTestId('profile-card-g1');
+    const refreshBtn = Array.from(card.querySelectorAll('button')).find((b) => /Làm mới/.test(b.textContent || ''))!;
+    await act(async () => {
+      fireEvent.click(refreshBtn);
+    });
+
+    expect(client.refreshProfileUsage).toHaveBeenCalledWith('g1');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Đã làm mới g1 · Đã cập nhật ảnh đại diện/);
+  });
+
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
     const profilesWithExpired: Profile[] = [
       {

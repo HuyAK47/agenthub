@@ -348,7 +348,7 @@ describe('Antigravity Token Import from Cockpit', () => {
       const before = fs.readFileSync(tokenFile, 'utf8');
       mockUserInfo('term@example.com');
 
-      expect(await ctx.service.syncAgyAvatarFromToken('term')).toBe(picture);
+      expect(await ctx.service.syncAgyAvatarFromToken('term')).toMatchObject({ avatarUrl: picture, message: 'Đã cập nhật ảnh đại diện' });
       expect(ctx.profileRepo.get('term')?.avatarUrl).toBe(picture);
       expect(fs.readFileSync(tokenFile, 'utf8')).toBe(before);
       expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toContain('/oauth2/v3/userinfo');
@@ -362,13 +362,23 @@ describe('Antigravity Token Import from Cockpit', () => {
       const profile = await ctx.service.refreshUsage('term');
 
       expect(profile?.avatarUrl).toBe(picture);
+      expect(profile?.avatarMessage).toBe('Đã cập nhật ảnh đại diện');
+    });
+
+    it('explains why no avatar was fetched', async () => {
+      setupProfile(new Date(Date.now() + 3_600_000).toISOString());
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403 } as unknown as Response);
+      expect((await ctx.service.syncAgyAvatarFromToken('term')).message).toMatch(/HTTP 403/);
+
+      fs.rmSync(path.join(agyHomesDir, 'term', '.gemini', 'antigravity-cli', 'antigravity-oauth-token'));
+      expect((await ctx.service.syncAgyAvatarFromToken('term')).message).toMatch(/Chưa có file token/);
     });
 
     it('does not refresh an expired token', async () => {
       setupProfile(new Date(Date.now() - 1000).toISOString());
       mockUserInfo('term@example.com');
 
-      expect(await ctx.service.syncAgyAvatarFromToken('term')).toBeNull();
+      expect((await ctx.service.syncAgyAvatarFromToken('term')).message).toMatch(/hết hạn/);
       expect(globalThis.fetch).not.toHaveBeenCalled();
       expect(readAgyAccessToken(path.join(agyHomesDir, 'term'))).toBeNull();
     });
@@ -377,7 +387,7 @@ describe('Antigravity Token Import from Cockpit', () => {
       setupProfile(new Date(Date.now() + 3_600_000).toISOString());
       mockUserInfo('someone-else@example.com');
 
-      expect(await ctx.service.syncAgyAvatarFromToken('term')).toBeNull();
+      expect((await ctx.service.syncAgyAvatarFromToken('term')).message).toMatch(/tài khoản khác/);
       expect(ctx.profileRepo.get('term')?.avatarUrl ?? null).toBeNull();
     });
   });
