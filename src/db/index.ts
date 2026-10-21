@@ -479,6 +479,13 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE tasks ADD COLUMN batchId TEXT;
   CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batchId);
   `,
+  // Migration 35: per-task lookup indexes (savings and task detail did a full scan per task)
+  `
+  CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(taskId);
+  CREATE INDEX IF NOT EXISTS idx_reviews_task ON reviews(taskId);
+  CREATE INDEX IF NOT EXISTS idx_run_metrics_task ON run_metrics(taskId);
+  CREATE INDEX IF NOT EXISTS idx_claude_task_usage_task ON claude_task_usage(taskId);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
