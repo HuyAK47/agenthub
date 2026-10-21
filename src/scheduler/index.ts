@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getMonitoredDisks, type MonitoredDisk } from '../disk.js';
+import { getMonitoredDisks, getDiskSpaceSync, type MonitoredDisk, type DiskSpace } from '../disk.js';
 import {
   TaskRepo,
   RunRepo,
@@ -157,6 +157,7 @@ export class Scheduler {
   private lastLoadOverloaded = false;
   private notifiedSkippedModels = new Set<string>();
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
+  private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
 
   constructor(
     private config: AgentHubConfig,
@@ -172,6 +173,7 @@ export class Scheduler {
     db?: Database.Database,
     runMetricsRepo?: RunMetricsRepo,
     knowledgeRepo?: KnowledgeRepo,
+    diskReader?: (p: string) => DiskSpace,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -181,6 +183,7 @@ export class Scheduler {
     this.db = db;
     this.runMetricsRepo = runMetricsRepo;
     this.knowledgeRepo = knowledgeRepo;
+    if (diskReader) this.diskReader = diskReader;
     if (db) this.checkRunner = new CheckRunner(db);
 
     if (engineOverrides) {
@@ -2378,7 +2381,7 @@ export class Scheduler {
   }
 
   private getMonitoredDisks(): MonitoredDisk[] {
-    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
   }
 
   private getBlockingDisk(): MonitoredDisk | undefined {

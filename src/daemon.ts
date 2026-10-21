@@ -44,6 +44,7 @@ import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
 import { BrainPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
+import { type DiskSpace } from './disk.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -80,7 +81,7 @@ export interface DaemonContext {
   brainRunner: BrainRunner;
 }
 
-export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>): DaemonContext {
+export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>, diskReader?: (p: string) => DiskSpace): DaemonContext {
   const db = openDatabase(config.dbPath);
   const projectRepo = new ProjectRepo(db);
   const profileRepo = new ProfileRepo(db);
@@ -168,6 +169,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     db,
     runMetricsRepo,
     knowledgeRepo,
+    diskReader,
   );
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
     profileService.registerAll();
