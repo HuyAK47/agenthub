@@ -45,6 +45,11 @@ export const UpdateBrainSchema = z.object({
   taskId: z.string().nullable().optional(),
 });
 
+export const BrainNotifySchema = z.object({
+  text: z.string().min(1).max(4000),
+  level: z.enum(['info', 'decision', 'incident']).default('info'),
+});
+
 export type UpdateBrainInput = z.infer<typeof UpdateBrainSchema>;
 
 export function parseDbTimestamp(ts: string): number {
@@ -170,6 +175,14 @@ export class BrainService {
       stale: false,
     };
   }
+
+  notify(input: unknown): { text: string; level: 'info' | 'decision' | 'incident' } {
+    const parsed = BrainNotifySchema.parse(input);
+    const eventBus = this.getEventBus?.();
+    if (eventBus) eventBus.emit('brain.notify', undefined, parsed);
+    else this.eventRepo.insert('brain.notify', undefined, parsed);
+    return parsed;
+  }
 }
 
 export function registerBrainRoutes(
@@ -184,6 +197,7 @@ export function registerBrainRoutes(
     const result = brainService.updateStatus(req.body);
     return reply.status(200).send(result);
   });
+  fastify.post('/api/brain/notify', async (req: FastifyRequest) => brainService.notify(req.body));
 }
 
 export async function cmdBrain(

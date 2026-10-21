@@ -84,6 +84,7 @@ export interface TelegramServiceOptions {
   execFile?: GitDiffFn;
   tokenOverride?: string;
   chatService?: ChatService;
+  brainSession?: boolean;
 }
 
 interface PendingChatState {
@@ -145,6 +146,7 @@ export class TelegramBotService {
   private sleepFn: (ms: number) => Promise<void>;
   private execFileFn: GitDiffFn;
   private chatService?: ChatService;
+  private brainSession: boolean;
 
   private token: string | null = null;
   private running = false;
@@ -185,6 +187,7 @@ export class TelegramBotService {
     this.sleepFn = opts.sleep || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
     this.chatService = opts.chatService;
+    this.brainSession = opts.brainSession === true;
 
     if (opts.tokenOverride) {
       this.token = opts.tokenOverride;
@@ -588,13 +591,35 @@ export class TelegramBotService {
         await this.sendMessage(chatId, '▶️ Đã tiếp tục giao task mới.');
         break;
 
+      case '/brain':
+        await this.handleBrainCommand(chatId, argStr);
+        break;
+
       default:
         await this.sendMessage(chatId, `Lệnh không hợp lệ: ${cmd}. Gõ /help để xem hướng dẫn.`);
         break;
     }
   }
 
+  private async handleBrainCommand(chatId: number, argStr: string): Promise<void> {
+    const current = this.config.brain;
+    const parts = argStr.split(/\s+/).filter(Boolean);
+    if (parts[0] !== 'mode') {
+      await this.sendMessage(chatId, `🧠 Bộ não: <b>${current.mode}</b> · model <b>${current.model}</b> · tối đa ${current.maxTurnsPerHour} lượt/giờ`);
+      return;
+    }
+    const mode = parts[1];
+    if (mode !== 'off' && mode !== 'suggest' && mode !== 'auto') {
+      await this.sendMessage(chatId, 'Cú pháp: /brain mode off|suggest|auto');
+      return;
+    }
+    this.config.brain.mode = mode;
+    saveConfig(this.config.hubHome, { brain: { mode } });
+    await this.sendMessage(chatId, `🧠 Đã chuyển bộ não sang chế độ <b>${mode}</b>.`);
+  }
+
   private sessionIdForChat(chatId: number): string {
+    if (this.brainSession && this.config.brain?.mode && this.config.brain.mode !== 'off') return 'brain';
     const existing = this.chatSessions.get(chatId);
     if (existing) return existing;
     const sessionId = `telegram:${chatId}`;
@@ -611,7 +636,10 @@ export class TelegramBotService {
     const sessionId = this.sessionIdForChat(chatId);
     let initial: unknown;
     try {
-      this.chatService.getOrCreateSession(sessionId, { title: 'Cuộc trò chuyện Telegram' });
+      this.chatService.getOrCreateSession(sessionId, {
+        title: sessionId === 'brain' ? 'Bộ não' : 'Cuộc trò chuyện Telegram',
+        kind: sessionId === 'brain' ? 'brain' : 'chat',
+      });
       initial = await this.sendMessage(chatId, '⏳ Đang xử lý…');
       const messageId = this.telegramMessageId(initial);
       if (messageId === null) throw new Error('Telegram không trả về message_id');
@@ -1230,6 +1258,12 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     switch (type) {
+      case 'brain.notify': {
+        const level = p.level === 'incident' ? '🚨' : p.level === 'decision' ? '📌' : 'ℹ️';
+        const text = typeof p.text === 'string' ? p.text : '';
+        if (text) this.broadcastMessage(`${level} <b>Bộ não</b>\n${this.escapeHtml(text)}`);
+        break;
+      }
       case 'batch.created': {
         const count = typeof p.taskCount === 'number' ? p.taskCount : 0;
         const who = typeof p.createdBy === 'string' && p.createdBy ? p.createdBy : 'Claude';

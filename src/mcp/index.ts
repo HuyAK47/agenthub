@@ -334,6 +334,24 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 
   // 2. hub_projects
   server.tool(
+    'hub_notify',
+    'Bộ não nhắn thông báo cho người dùng qua Telegram và dashboard',
+    {
+      text: z.string().min(1).max(4000),
+      level: z.enum(['info', 'decision', 'incident']).default('info'),
+    },
+    async (args) => {
+      try {
+        const res = await callApi<{ text: string; level: string }>('POST', '/api/brain/notify', args);
+        return { content: [{ type: 'text', text: `✓ Đã gửi thông báo (${res.level})` }] };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // 2. hub_projects
+  server.tool(
     'hub_projects',
     'Xem danh sách các project đã đăng ký trong AgentHub',
     {},
