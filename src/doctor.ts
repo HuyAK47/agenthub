@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { AgentHubConfig, loadConfig } from './config.js';
 import { createContext } from './daemon.js';
 import { CodexEngine } from './engines/index.js';
+import { findClaudeBin } from './chat/claude.js';
 import { getPlatform } from './platform/index.js';
 
 export type CheckStatus = 'ok' | 'error' | 'skip' | 'warn';
@@ -425,13 +426,17 @@ export async function checkSystemd(deps?: CheckSystemdDeps): Promise<DoctorCheck
 export interface CheckMcpDeps {
   exec?: SyncExecFn;
   timeoutMs?: number;
+  claudeBin?: string;
 }
 
 export async function checkMcp(deps?: CheckMcpDeps): Promise<DoctorCheckItem> {
   const exec = deps?.exec ?? defaultExecSync;
   const timeoutMs = deps?.timeoutMs ?? 10000;
 
-  const res = exec('claude', ['mcp', 'list'], { timeout: timeoutMs });
+  // Claude Code is often only installed inside the VS Code extension (not on PATH); use the
+  // same lookup as the chat so doctor does not report it as missing.
+  const claudeBin = deps?.claudeBin ?? (deps?.exec ? 'claude' : findClaudeBin() || 'claude');
+  const res = exec(claudeBin, ['mcp', 'list'], { timeout: timeoutMs });
 
   if (res.error) {
     if ((res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {

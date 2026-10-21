@@ -1,3 +1,4 @@
+import { sameAccount } from './profiles/account.js';
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -290,17 +291,13 @@ export class SavingsService {
   /**
    * Calculates the number of overlapping concurrent runs on the same account (same profile or same email).
    */
-  getConcurrentRunsCount(targetRun: RunRow): number {
-    // Find all runs in the system for this profile/email
+  getConcurrentRunsCount(targetRun: RunRow, allRuns?: RunRow[]): number {
+    // Runs on profiles that share the same provider account (engine + email) compete for quota.
     const targetProfile = this.profileRepo.get(targetRun.profileName);
-    const sameAccountProfiles = new Set<string>();
-    sameAccountProfiles.add(targetRun.profileName);
-
-    if (targetProfile?.email) {
+    const sameAccountProfiles = new Set<string>([targetRun.profileName]);
+    if (targetProfile) {
       for (const p of this.profileRepo.getAll()) {
-        if (p.email === targetProfile.email) {
-          sameAccountProfiles.add(p.name);
-        }
+        if (sameAccount(p, targetProfile)) sameAccountProfiles.add(p.name);
       }
     }
 
@@ -308,32 +305,28 @@ export class SavingsService {
     const tEnd = targetRun.endedAt ? Date.parse(targetRun.endedAt) : Date.now();
     if (!tStart) return 1;
 
-    // Check all tasks
+    // Callers computing many runs pass the run list once; loading it per run was O(runs x tasks).
+    const runs = allRuns ?? this.taskRepo.getAll().flatMap((t) => this.runRepo.getByTask(t.id));
     let concurrent = 1;
-    const allTasks = this.taskRepo.getAll();
-    for (const t of allTasks) {
-      const runs = this.runRepo.getByTask(t.id);
-      for (const r of runs) {
-        if (r.id === targetRun.id) continue;
-        if (!sameAccountProfiles.has(r.profileName)) continue;
-        const rStart = r.startedAt ? Date.parse(r.startedAt) : 0;
-        const rEnd = r.endedAt ? Date.parse(r.endedAt) : Date.now();
-        if (!rStart) continue;
-
-        // Overlap condition: rStart <= tEnd && tStart <= rEnd
-        if (rStart <= tEnd && tStart <= rEnd) {
-          concurrent++;
-        }
-      }
+    for (const r of runs) {
+      if (r.id === targetRun.id) continue;
+      if (!sameAccountProfiles.has(r.profileName)) continue;
+      const rStart = r.startedAt ? Date.parse(r.startedAt) : 0;
+      const rEnd = r.endedAt ? Date.parse(r.endedAt) : Date.now();
+      if (!rStart) continue;
+      // Overlap condition: rStart <= tEnd && tStart <= rEnd
+      if (rStart <= tEnd && tStart <= rEnd) concurrent++;
     }
-
     return concurrent;
   }
+
 
   /**
    * Generates the savings report, optionally filtered by project and date.
    */
   getSavings(query?: { project?: string; since?: string }): SavingsReport {
+    // One pass over all runs for concurrency estimates (avoids re-reading every run per run).
+    const allRunsForConcurrency = this.taskRepo.getAll().flatMap((t) => this.runRepo.getByTask(t.id));
     let tasks = this.taskRepo.getAll();
     if (query?.project) {
       tasks = tasks.filter((t) => t.projectId === query.project);
@@ -415,7 +408,7 @@ export class SavingsService {
           const family = getModelFamily(model);
           const bucketTokens =
             family === 'gemini' ? bucketTokensGemini : bucketTokensClaude;
-          const concurrent = this.getConcurrentRunsCount(run);
+          const concurrent = this.getConcurrentRunsCount(run, allRunsForConcurrency);
           const agyCalc = calculateAgyTokens({
             usageBefore: metrics?.usageBefore ?? null,
             usageAfter: metrics?.usageAfter ?? null,

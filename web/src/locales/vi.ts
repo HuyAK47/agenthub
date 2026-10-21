@@ -391,7 +391,7 @@ export const vi = {
     languageSectionDesc: 'Lựa chọn ngôn ngữ cho toàn bộ giao diện dashboard.',
     infoChain: 'Hệ thống sẽ thử lần lượt các model theo thứ tự từ trên xuống dưới. Khi gặp lỗi Quota (429/RESOURCE_EXHAUSTED), Scheduler sẽ tự động chuyển sang model tiếp theo trong chuỗi.',
     hardChainLabel: 'Chuỗi model mặc định cho task "Hard" (mỗi dòng một model) *',
-    hardChainHint: 'Mặc định: claude-opus-4-6-thinking, codex:gpt-5.6-luna, gemini-3.8-flash-high',
+    hardChainHint: 'Mặc định: codex:gpt-5.6-luna, gemini-3.8-flash-high',
     hardChainRequired: 'Chuỗi model Hard phải có ít nhất 1 model',
     easyChainLabel: 'Chuỗi model mặc định cho task "Easy" (mỗi dòng một model) *',
     easyChainHint: 'Mặc định: gemini-3.8-flash-medium, codex:gpt-5.6-luna',

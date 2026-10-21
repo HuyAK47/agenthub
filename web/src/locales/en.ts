@@ -392,7 +392,7 @@ export const en: typeof vi = {
     languageSectionDesc: 'Select the interface language for the dashboard.',
     infoChain: 'The system will try models sequentially from top to bottom. Upon Quota error (429/RESOURCE_EXHAUSTED), Scheduler will automatically switch to the next model in the chain.',
     hardChainLabel: 'Default model chain for "Hard" tasks (one per line) *',
-    hardChainHint: 'Default: claude-opus-4-6-thinking, codex:gpt-5.6-luna, gemini-3.8-flash-high',
+    hardChainHint: 'Default: codex:gpt-5.6-luna, gemini-3.8-flash-high',
     hardChainRequired: 'Hard model chain must have at least 1 model',
     easyChainLabel: 'Default model chain for "Easy" tasks (one per line) *',
     easyChainHint: 'Default: gemini-3.8-flash-medium, codex:gpt-5.6-luna',
