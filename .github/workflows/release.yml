@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: ubuntu-22.04-arm
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Tag must match package.json version
+        run: test "${GITHUB_REF_NAME}" = "v$(node -p "require('./package.json').version")"
+      - run: npm ci
+      - run: npm --prefix web ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}-${{ runner.arch }}
+          path: release/*
+
+  smoke:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-ubuntu-*
+          merge-multiple: true
+          path: release
+      - run: chmod +x scripts/smoke-install.sh
+      - run: scripts/smoke-install.sh "$(find release -name 'agenthub-*-linux-x64.tar.gz' -print -quit)"
+
+  publish:
+    needs: [package, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # install.sh matches bare file names in SHA256SUMS, so hash from inside release/.
+          (cd release && sha256sum *.tar.gz > SHA256SUMS)
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/* --clobber
+          else
+            # Tags like v1.0.0-rc.1 are test builds: publish them as pre-releases.
+            case "${GITHUB_REF_NAME}" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
+            gh release create "${GITHUB_REF_NAME}" release/* --generate-notes $PRE
+          fi

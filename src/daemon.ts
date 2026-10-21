@@ -13,7 +13,13 @@ import {
   QuotaUsageRepo,
   ChatSessionRepo,
   ChatMessageRepo,
+  ChatPermissionRepo,
+  ChatRetryRepo,
   RunMetricsRepo,
+  TaskNoteRepo,
+  KnowledgeRepo,
+  TaskBatchRepo,
+  BrainTurnRepo,
 } from './db/index.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
@@ -29,6 +35,16 @@ import { SavingsService } from './savings.js';
 import { ClaudeFailoverState } from './chat/failover.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { ClaudeSessionScanner } from './claude-sessions/scanner.js';
+import { BulletinService } from './bulletin.js';
+import { TelegramBotService } from './telegram.js';
+import { PermissionBroker } from './chat/permissions.js';
+import { findClaudeBin } from './chat/claude.js';
+import { stopProcessGroups } from './priority.js';
+import fs from 'node:fs';
+import { SetupManager } from './tools/setup.js';
+import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
+import { BrainRunner } from './brain/runner.js';
+import { type DiskSpace } from './disk.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -41,8 +57,13 @@ export interface DaemonContext {
   runMetricsRepo: RunMetricsRepo;
   reviewRepo: ReviewRepo;
   eventRepo: EventRepo;
+  taskNoteRepo: TaskNoteRepo;
+  knowledgeRepo: KnowledgeRepo;
   chatSessionRepo: ChatSessionRepo;
   chatMessageRepo: ChatMessageRepo;
+  chatPermissionRepo: ChatPermissionRepo;
+  chatRetryRepo: ChatRetryRepo;
+  permissionBroker: PermissionBroker;
   profileService: ProfileService;
   scheduler: Scheduler;
   service: AppService;
@@ -51,12 +72,38 @@ export interface DaemonContext {
   brainRepo: BrainRepo;
   brainService: BrainService;
   notifier: NotificationService;
+  bulletinService: BulletinService;
   savingsService: SavingsService;
   claudeSessionRepo: ClaudeSessionRepo;
   claudeScanner: ClaudeSessionScanner;
+  usageRepo: QuotaUsageRepo;
+  telegramService: TelegramBotService;
+  brainRunner: BrainRunner;
 }
 
-export function createContext(config: AgentHubConfig, engineOverrides?: Map<string, Engine>): DaemonContext {
+export interface CreateContextOptions {
+  diskSpace?: (path: string) => DiskSpace;
+}
+
+export function createContext(
+  config: AgentHubConfig,
+  engineOverrides?: Map<string, Engine> | CreateContextOptions,
+  diskReader?: ((p: string) => DiskSpace) | CreateContextOptions,
+): DaemonContext {
+  let enginesOverride: Map<string, Engine> | undefined;
+  let diskFn: ((p: string) => DiskSpace) | undefined;
+
+  if (engineOverrides instanceof Map) {
+    enginesOverride = engineOverrides;
+  } else if (engineOverrides && typeof engineOverrides === 'object') {
+    diskFn = engineOverrides.diskSpace;
+  }
+
+  if (typeof diskReader === 'function') {
+    diskFn = diskReader;
+  } else if (diskReader && typeof diskReader === 'object') {
+    diskFn = diskReader.diskSpace;
+  }
   const db = openDatabase(config.dbPath);
   const projectRepo = new ProjectRepo(db);
   const profileRepo = new ProfileRepo(db);
@@ -66,12 +113,39 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const runMetricsRepo = new RunMetricsRepo(db);
   const reviewRepo = new ReviewRepo(db);
   const eventRepo = new EventRepo(db);
+  const taskNoteRepo = new TaskNoteRepo(db);
+  const knowledgeRepo = new KnowledgeRepo(db);
+  const taskBatchRepo = new TaskBatchRepo(db);
   const usageRepo = new QuotaUsageRepo(db);
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
+  const chatPermissionRepo = new ChatPermissionRepo(db);
+  const chatRetryRepo = new ChatRetryRepo(db);
+  const brainTurnRepo = new BrainTurnRepo(db);
+  chatPermissionRepo.expirePending();
+  const systemBrainPolicy = new BrainPolicy({
+    roots: [process.cwd(), config.hubHome, config.worktreesDir],
+    extraPatterns: config.brain.policy.flatMap((pattern) => {
+      try { return [new RegExp(pattern)]; } catch { return []; }
+    }),
+    mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
+  });
+  const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
+    eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
+    scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
+  }, (sessionId) => {
+    const session = chatSessionRepo.get(sessionId);
+    if (!session?.projectId) return systemBrainPolicy;
+    const project = projectRepo.get(session.projectId);
+    if (!project) return systemBrainPolicy;
+    return projectBrainPolicy(project, config);
+  }, chatSessionRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
-  const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'));
-  const claudeScanner = new ClaudeSessionScanner(db, { ...config.claudeSessions, hubHome: config.hubHome, worktreesDir: config.worktreesDir, failoverState });
+  const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
+    steps: config.brain.fallback,
+    apiKeyPath: path.join(config.hubHome, 'secrets', 'anthropic.key'),
+  });
+  const claudeScanner = new ClaudeSessionScanner(db, { ...config.claudeSessions, hubHome: config.hubHome, worktreesDir: config.worktreesDir, failoverState, autoResume: { ...config.claudeSessions.autoResume, claudeBin: config.chat.claudeBin, profileName: config.chat.claudeProfile || null } });
   usageRepo.deleteForEngine('codex');
 
   const profileService = new ProfileService(config, profileRepo, quotaMarkRepo);
@@ -89,8 +163,8 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   );
 
   const engines = new Map<string, Engine>();
-  if (engineOverrides) {
-    for (const [k, v] of engineOverrides) engines.set(k, v);
+  if (enginesOverride) {
+    for (const [k, v] of enginesOverride) engines.set(k, v);
   } else if (process.env.AGENTHUB_FAKE_ENGINE === '1') {
     const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const fakeScript =
@@ -122,15 +196,24 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     locks,
     db,
     runMetricsRepo,
+    knowledgeRepo,
+    diskFn ? { diskSpace: diskFn } : undefined,
   );
+  const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
+    profileService.registerAll();
+    scheduler.refreshEngines();
+    scheduler.getEventBus().emit('profile.updated', undefined, { source: 'setup', tool });
+  });
   scheduler.configureReviewer(reviewRepo, failoverState);
+  claudeScanner.setEventBus(scheduler.getEventBus());
 
   const brainRepo = new BrainRepo(db);
-  const brainService = new BrainService(brainRepo, eventRepo, () => scheduler.getEventBus());
+  const brainService = new BrainService(brainRepo, eventRepo, () => scheduler.getEventBus(), claudeSessionRepo, db);
   const chatService = new ChatService(
     config,
     chatSessionRepo,
     chatMessageRepo,
+    permissionBroker,
     projectRepo,
     scheduler.getEventBus(),
     taskRepo,
@@ -139,8 +222,26 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     quotaMarkRepo,
     usageRepo,
     eventRepo,
-    { failoverState },
+    { failoverState, retryRepo: chatRetryRepo },
   );
+  const brainRunner = new BrainRunner({
+    config: config.brain,
+    eventBus: scheduler.getEventBus(),
+    chatService,
+    chatSessionRepo,
+    profileRepo,
+    turnRepo: brainTurnRepo,
+    projectRepo,
+  });
+
+  const bulletinService = new BulletinService({
+    config,
+    taskRepo,
+    projectRepo,
+    taskNoteRepo,
+    eventBus: scheduler.getEventBus(),
+  });
+  scheduler.configureBulletinService(bulletinService);
 
   const service = new AppService(
     config,
@@ -160,14 +261,36 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    taskNoteRepo,
+    bulletinService,
+    undefined,
+    knowledgeRepo,
+    taskBatchRepo,
+    setupManager,
+    brainRunner,
   );
 
   const notifier = new NotificationService({
     eventBus: scheduler.getEventBus(),
     config,
     taskRepo,
+    profileRepo,
     quotaMarkRepo,
+    projectRepo,
   });
+
+  const telegramService = new TelegramBotService({
+    config,
+    service,
+    eventBus: scheduler.getEventBus(),
+    taskRepo,
+    projectRepo,
+    profileRepo,
+    quotaMarkRepo,
+    chatService,
+    brainSession: true,
+  });
+  service.setTelegramBotService(telegramService);
 
   return {
     config,
@@ -180,8 +303,13 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     runMetricsRepo,
     reviewRepo,
     eventRepo,
+    taskNoteRepo,
+    knowledgeRepo,
     chatSessionRepo,
     chatMessageRepo,
+    chatPermissionRepo,
+    chatRetryRepo,
+    permissionBroker,
     profileService,
     scheduler,
     service,
@@ -190,15 +318,34 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     brainRepo,
     brainService,
     notifier,
+    bulletinService,
     savingsService,
     claudeSessionRepo,
     claudeScanner,
+    usageRepo,
+    telegramService,
+    brainRunner,
   };
 }
 
 export function closeContext(ctx: DaemonContext): void {
   try {
+    ctx.brainRunner?.stop();
+  } catch {
+    // ignore
+  }
+  try {
     ctx.notifier?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.bulletinService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    stopProcessGroups('SIGTERM');
   } catch {
     // ignore
   }
@@ -214,6 +361,11 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.claudeScanner?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    void ctx.telegramService?.stop();
   } catch {
     // ignore
   }
@@ -236,6 +388,13 @@ export async function startDaemon(
 
   // Register profiles on startup
   ctx.profileService.registerAll();
+  // Claude /usage opens the real Claude Code CLI; never do that from the test suite.
+  if (!process.env.VITEST) {
+    ctx.usageService.configureClaude({
+      bin: () => findClaudeBin(ctx.config.chat.claudeBin),
+      cwd: path.join(ctx.config.hubHome, 'claude-usage-cwd'),
+    });
+  }
   ctx.usageService.start();
 
   // Start scheduler
@@ -244,6 +403,13 @@ export async function startDaemon(
   // Start notification service and claude transcript scanner
   ctx.notifier.start();
   ctx.claudeScanner.start();
+  ctx.bulletinService.start();
+  ctx.brainRunner.start();
+
+  // Start Telegram bot if enabled
+  if (config.telegram?.enabled) {
+    ctx.telegramService.start();
+  }
 
   // Start Fastify HTTP server with security and API endpoints
   const fastify = await createServer(ctx.service, config);
@@ -263,7 +429,7 @@ export async function startDaemon(
     if (isShuttingDown) return;
     isShuttingDown = true;
     process.removeListener('SIGINT', shutdown);
-    process.removeListener('SIGTERM', shutdown);
+    process.removeListener('SIGTERM', onTerm);
 
     const startTime = Date.now();
     console.log('Shutting down...');
@@ -288,8 +454,22 @@ export async function startDaemon(
     }
   };
 
+  const onTerm = () => {
+    const workersRunning = ctx.scheduler.getRunning().size > 0 || ctx.scheduler.getReviewerStatus().running.length > 0;
+    let parentIsServiceManager = false;
+    try {
+      parentIsServiceManager = /^(?:systemd|launchd)$/i.test(fs.readFileSync(`/proc/${process.ppid}/comm`, 'utf8').trim());
+    } catch { /* platform does not expose the parent name */ }
+    if (workersRunning && !parentIsServiceManager) ctx.eventRepo.insert('daemon.stop_requested', undefined, { senderPid: process.ppid || null });
+    void shutdown();
+  };
+
+  // Last line of defence: log stray async errors instead of taking the whole hub down.
+  process.on('unhandledRejection', (reason) => {
+    console.error('[daemon] unhandled rejection:', reason instanceof Error ? reason.stack || reason.message : reason);
+  });
   process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGTERM', onTerm);
 
   return { fastify, ctx, shutdown };
 }

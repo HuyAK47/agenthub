@@ -1,14 +1,50 @@
-import { apiFetch } from './client';
+import { apiFetch, getToken } from './client';
 import {
   ChatMessage,
   ChatSession,
   CreateChatSessionInput,
   SendMessageResponse,
   UpdateChatSessionInput,
+  ChatPermissionRequest,
 } from '../types/api';
+
+export interface GetChatMessagesResponse {
+  messages: ChatMessage[];
+  hasMore: boolean;
+}
+
+export type ChatMessagesResult = ChatMessage[] & { hasMore?: boolean };
+
+export function normalizeMessagesResponse(
+  raw: GetChatMessagesResponse | ChatMessage[] | ChatMessagesResult | null | undefined,
+): { messages: ChatMessage[]; hasMore: boolean } {
+  if (!raw) return { messages: [], hasMore: false };
+  if (Array.isArray(raw)) {
+    return { messages: raw, hasMore: Boolean((raw as any).hasMore) };
+  }
+  return {
+    messages: Array.isArray(raw.messages) ? raw.messages : [],
+    hasMore: Boolean(raw.hasMore),
+  };
+}
 
 export async function getChatSessions(): Promise<ChatSession[]> {
   return apiFetch<ChatSession[]>('/api/chat/sessions');
+}
+
+export async function decideChatPermission(
+  id: string,
+  decision: 'allow' | 'deny' | 'allow_always',
+  message?: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/chat/permissions/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, message }),
+  });
+}
+
+export async function getChatPermissions(sessionId: string): Promise<ChatPermissionRequest[]> {
+  return apiFetch<ChatPermissionRequest[]>(`/api/chat/permissions?sessionId=${encodeURIComponent(sessionId)}`);
 }
 
 export async function createChatSession(
@@ -38,10 +74,30 @@ export async function deleteChatSession(id: string): Promise<{ ok: boolean }> {
 
 export async function getChatMessages(
   sessionId: string,
-): Promise<ChatMessage[]> {
-  return apiFetch<ChatMessage[]>(
-    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+  options?: { limit?: number; before?: string },
+): Promise<ChatMessagesResult> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.before) params.set('before', options.before);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await apiFetch<ChatMessage[] | { messages: ChatMessage[]; hasMore?: boolean }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages${qs}`,
   );
+  const messages: ChatMessage[] = Array.isArray(res) ? res : res?.messages ?? [];
+  return Object.assign(messages, {
+    hasMore: Array.isArray(res) ? false : Boolean(res?.hasMore),
+  });
+}
+
+export async function exportChatSession(sessionId: string): Promise<string> {
+  const token = getToken();
+  const res = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/export`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    throw new Error('Không thể xuất phiên trò chuyện');
+  }
+  return res.text();
 }
 
 export async function sendChatMessage(
@@ -68,6 +124,30 @@ export async function cancelChatSession(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/cancel`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function stopChatSession(sessionId: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' },
+  );
+}
+
+export async function compactChatSession(sessionId: string): Promise<{ ok: boolean; contextTokens?: number }> {
+  return apiFetch<{ ok: boolean; contextTokens?: number }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/compact`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function forkSummaryChatSession(sessionId: string): Promise<{ id: string; sessionId?: string }> {
+  return apiFetch<{ id: string; sessionId?: string }>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/fork-summary`,
     {
       method: 'POST',
     },

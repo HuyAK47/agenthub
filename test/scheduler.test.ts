@@ -115,6 +115,27 @@ describe('Quota mark propagation to same-email profiles', () => {
   });
 });
 
+describe('Claude profiles are never worker scheduler profiles', () => {
+  beforeEach(setupTestEnv);
+  afterEach(teardownTestEnv);
+
+  it('does not select an engine=claude profile for the default worker chain', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    profileRepo.upsert({ name: 'claude-may', engine: 'claude', kind: 'system', home: os.homedir(), email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/t1', projectId: 'test-project', slug: 't1', title: 'Task 1', status: 'queued' });
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]));
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/t1')).toHaveLength(0);
+    expect(taskRepo.get('test-project/t1')?.status).toBe('waiting_quota');
+    scheduler.stop();
+  });
+});
+
 describe('Task dependencies', () => {
   beforeEach(setupTestEnv);
   afterEach(teardownTestEnv);
@@ -358,6 +379,7 @@ describe('Scheduler regression fixes', () => {
     process.env.FAKE_MODE = 'slow';
     const scheduler = makeScheduler();
     scheduler.tick();
+    await vi.waitFor(() => expect(taskRepo.get('test-project/a')!.status).toBe('running'));
     scheduler.stop();
     expect(taskRepo.get('test-project/a')!.status).toBe('running');
     expect(runRepo.getByTask('test-project/a')[0].outcome).toBeNull();
@@ -1217,6 +1239,58 @@ describe('Crash recovery on startup', () => {
 
     scheduler.stop();
   });
+
+  it('recovers a newer DONE marker as done and restarts checks', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'DONE'), 'done');
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/done', projectId: 'test-project', slug: 'done', title: 'Done', status: 'running', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-done', taskId: 'test-project/done', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+    db.prepare("UPDATE runs SET startedAt = datetime('now', '-1 minute') WHERE id = 'run-done'").run();
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map(), undefined, undefined, db);
+    scheduler.start();
+    expect(runRepo.get('run-done')?.outcome).toBe('done');
+    expect(taskRepo.get('test-project/done')?.status).toBe('checking');
+    await vi.waitFor(() => expect(taskRepo.get('test-project/done')?.status).toBe('review'));
+    scheduler.stop();
+  });
+
+  it('recovers a newer BLOCKED marker without marking the run crashed', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'BLOCKED'), 'blocked');
+    taskRepo.insert({ id: 'test-project/blocked', projectId: 'test-project', slug: 'blocked', title: 'Blocked', status: 'running', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-blocked', taskId: 'test-project/blocked', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+    db.prepare("UPDATE runs SET startedAt = datetime('now', '-1 minute') WHERE id = 'run-blocked'").run();
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map());
+    scheduler.start();
+    expect(runRepo.get('run-blocked')).toMatchObject({ outcome: 'done' });
+    expect(taskRepo.get('test-project/blocked')?.status).toBe('blocked');
+    scheduler.stop();
+  });
+
+  it('re-queues progress after a dead worker without increasing attempt', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    execFileSync('git', ['checkout', '-b', 'agenthub/progress'], { cwd: projectPath });
+    fs.writeFileSync(path.join(projectPath, 'progress.txt'), 'progress');
+    execFileSync('git', ['add', '.'], { cwd: projectPath });
+    execFileSync('git', ['commit', '-m', 'progress'], { cwd: projectPath, env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
+    taskRepo.insert({ id: 'test-project/progress', projectId: 'test-project', slug: 'progress', title: 'Progress', status: 'running', branch: 'agenthub/progress', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-progress', taskId: 'test-project/progress', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+    db.prepare("UPDATE runs SET startedAt = datetime('now', '-1 minute') WHERE id = 'run-progress'").run();
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map());
+    scheduler.start();
+    expect(runRepo.get('run-progress')).toMatchObject({ outcome: 'crashed', reason: 'resume_after_progress' });
+    expect(taskRepo.get('test-project/progress')).toMatchObject({ status: 'queued', resume: 1, attempt: 0 });
+    scheduler.stop();
+  });
 });
 
 describe('Worktree creation', () => {
@@ -1394,6 +1468,34 @@ describe('Env file generation', () => {
     expect(runs.length).toBe(1);
     expect(runs[0].model).toBe('gemini-3.8-flash-high');
 
+    scheduler.stop();
+  });
+
+  it('skips unknown models, emits task.model_skipped, and fails when none are usable', () => {
+    const projectPath = path.join(tmpDir, 'repo-model-skip');
+    createTestProject(projectPath);
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    taskRepo.insert({
+      id: 'test-project/skip-known', projectId: 'test-project', slug: 'skip-known', title: 'Skip unknown',
+      level: 'easy', status: 'queued', modelChain: JSON.stringify(['made-up-model', 'gemini-3.8-flash-medium']),
+    });
+    taskRepo.insert({
+      id: 'test-project/skip-all', projectId: 'test-project', slug: 'skip-all', title: 'No usable model',
+      level: 'easy', status: 'queued', modelChain: JSON.stringify(['made-up-model']),
+    });
+    const skipped: unknown[] = [];
+    eventRepo.getRecent(100);
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]));
+
+    scheduler.getEventBus().on('task.model_skipped', (_taskId, payload) => skipped.push(payload));
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/skip-known')[0]?.model).toBe('gemini-3.8-flash-medium');
+    expect(taskRepo.get('test-project/skip-all')?.status).toBe('failed');
+    expect(skipped).toHaveLength(2);
+    expect(eventRepo.getRecent(100).some((event) => event.type === 'task.failed' && event.taskId === 'test-project/skip-all')).toBe(true);
     scheduler.stop();
   });
 
@@ -1691,3 +1793,35 @@ describe('Profile selection: email load spreading and remaining quota priority',
   });
 });
 
+
+describe('Run metrics after a normal worker exit', () => {
+  beforeEach(setupTestEnv);
+  afterEach(teardownTestEnv);
+
+  it('records Codex token usage before handing the DONE marker to recovery', async () => {
+    const { RunMetricsRepo } = await import('../src/db/index.js');
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    profileRepo.upsert({ name: 'codex', engine: 'codex', kind: 'codex', home: tmpDir, email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/tok', projectId: 'test-project', slug: 'tok', title: 'Tokens', status: 'queued', modelChain: JSON.stringify(['codex:gpt-test']) });
+
+    class CodexFake extends FakeEngine { id = 'codex' as unknown as 'agy'; }
+    const fake = new CodexFake(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const metrics = new RunMetricsRepo(db);
+    const prevMode = process.env.FAKE_MODE;
+    process.env.FAKE_MODE = 'done-tokens';
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['codex', fake as unknown as Engine]]), undefined, undefined, undefined, metrics);
+    try {
+      scheduler.tick();
+      await vi.waitFor(() => {
+        const run = runRepo.getByTask('test-project/tok')[0];
+        expect(run).toBeDefined();
+        expect(metrics.get(run.id)?.tokensUsed).toBe(1234);
+      }, { timeout: 20000 });
+    } finally {
+      scheduler.stop();
+      if (prevMode === undefined) delete process.env.FAKE_MODE; else process.env.FAKE_MODE = prevMode;
+    }
+  }, 30000);
+});

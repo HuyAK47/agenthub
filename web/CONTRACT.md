@@ -1,6 +1,6 @@
 # Bảng đối chiếu Hợp đồng Web Client và API thật (AgentHub Contract)
 
-Tài liệu này ghi nhận kết quả rà soát, đối chiếu và đồng bộ giữa Web Frontend (`web/`) và Backend API thật (`/home/ducanh/Desktop/AgentHub-wt/a1-api-mcp/`).
+Tài liệu này ghi nhận kết quả rà soát, đối chiếu và đồng bộ giữa Web Frontend (`web/`) và Backend API thật (`/home/user/Desktop/AgentHub-wt/a1-api-mcp/`).
 
 ---
 

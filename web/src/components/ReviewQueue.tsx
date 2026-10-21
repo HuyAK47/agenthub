@@ -114,6 +114,15 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
                     </span>
                     <span>{task.id}</span>
                   </div>
+                  {task.reviewChain && task.reviewChain.length > 0 ? (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {task.reviewChain.map((step, index) => (
+                        <span key={`${step.reviewer}-${index}`} className={`rounded-full px-1.5 py-0.5 border text-[10px] ${index < (task.reviewStep ?? 0) ? 'border-[var(--t-ok)] text-[var(--t-ok)]' : index === (task.reviewStep ?? 0) ? 'border-[var(--t-accent)] text-[var(--t-accent)]' : 'border-[var(--t-border)] text-[var(--t-text-3)]'}`}>
+                          {step.reviewer}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="self-end sm:self-center shrink-0">

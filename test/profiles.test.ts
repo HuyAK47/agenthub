@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { loadConfig } from '../src/config.js';
 import { openDatabase, ProfileRepo, QuotaMarkRepo } from '../src/db/index.js';
-import { ProfileService } from '../src/profiles/index.js';
+import { ProfileService, isProfileLoggedIn } from '../src/profiles/index.js';
 import { parseAuthState } from '../src/profiles/auth.js';
 
 let tmpDir: string;
@@ -36,6 +36,48 @@ describe('Profile import from ~/.agy-homes', () => {
     profileService = new ProfileService(config, profileRepo, quotaMarkRepo);
   });
 
+  it('reads Claude oauthAccount metadata and login state without accepting legacy files', () => {
+    const home = path.join(config.hubHome, 'claude-homes', 'alice');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+      oauthAccount: {
+        emailAddress: 'alice@example.com',
+        billingType: 'max',
+        organizationName: 'Example Org',
+        userRateLimitTier: 'tier-2',
+      },
+    }));
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'config.json'), JSON.stringify({ email: 'wrong@example.com' }));
+
+    expect(profileService.readClaudeAccount(home)).toEqual({ email: 'alice@example.com', plan: 'max' });
+    profileRepo.upsert({ name: 'alice', engine: 'claude', kind: 'isolated', home, email: null, enabled: 1 });
+    expect(isProfileLoggedIn(profileRepo.get('alice')!)).toBe(true);
+  });
+
+  it('considers Claude credentials existence logged in even before oauthAccount metadata', () => {
+    const home = path.join(config.hubHome, 'claude-homes', 'credentials');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, '.credentials.json'), 'do not read this');
+    profileRepo.upsert({ name: 'credentials', engine: 'claude', kind: 'isolated', home, email: null, enabled: 1 });
+    expect(isProfileLoggedIn(profileRepo.get('credentials')!)).toBe(true);
+  });
+
+  it('refuses to delete Claude homes outside the managed root, including symlinks', () => {
+    const homesRoot = path.join(config.hubHome, 'claude-homes');
+    fs.mkdirSync(homesRoot, { recursive: true });
+    const outside = path.join(tmpDir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'keep');
+    const linked = path.join(homesRoot, 'linked');
+    fs.symlinkSync(outside, linked);
+    profileRepo.upsert({ name: 'linked', engine: 'claude', kind: 'isolated', home: linked, email: null, enabled: 1 });
+
+    expect(() => profileService.deleteProfile('linked')).toThrow(/ngoài claude-homes/);
+    expect(fs.existsSync(path.join(outside, 'keep.txt'))).toBe(true);
+    expect(profileRepo.get('linked')).toBeTruthy();
+  });
+
   afterEach(() => {
     db.close();
     try {
@@ -57,7 +99,7 @@ describe('Profile import from ~/.agy-homes', () => {
       fs.mkdirSync(logDir, { recursive: true });
       fs.writeFileSync(
         path.join(logDir, '2024-01-01.log'),
-        `Starting...\nauthenticated successfully as ${name}@gmail.com\nDone.`,
+        `Starting...\nauthenticated successfully as ${name}@example.com\nDone.`,
       );
     }
 
@@ -69,20 +111,69 @@ describe('Profile import from ~/.agy-homes', () => {
     const profiles = profileRepo.getAll();
     const names = profiles.map(p => p.name);
 
-    // Should have chinh + g1 + g2 + g3 (no .state)
-    expect(names).toContain('chinh');
+    // Should have agy-default + g1 + g2 + g3 (no .state)
+    expect(names).toContain('agy-default');
     expect(names).toContain('g1');
     expect(names).toContain('g2');
     expect(names).toContain('g3');
     expect(names).not.toContain('.state');
 
     // Check emails were read
-    const chinh = profileRepo.get('chinh')!;
-    expect(chinh.email).toBe('fake-default@example.com');
+    const defaultProfile = profileRepo.get('agy-default')!;
+    expect(defaultProfile.email).toBe('fake-default@example.com');
     const g1 = profileRepo.get('g1')!;
-    expect(g1.email).toBe('g1@gmail.com');
+    expect(g1.email).toBe('g1@example.com');
     const g2 = profileRepo.get('g2')!;
-    expect(g2.email).toBe('g2@gmail.com');
+    expect(g2.email).toBe('g2@example.com');
+  });
+
+  it('keeps a deleted keyring profile deleted on the next start and never touches its home', () => {
+    profileRepo.upsert({ name: 'chinh', engine: 'agy', kind: 'keyring', home: tmpDir, email: null, enabled: 1 });
+    fs.writeFileSync(path.join(tmpDir, 'keep.txt'), 'x');
+
+    profileService.deleteProfile('chinh', true);
+    profileService.registerAll();
+
+    expect(profileRepo.get('chinh')?.deletedAt).toBeTruthy();
+    expect(profileRepo.getAll().filter((p) => p.kind === 'keyring')).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, 'keep.txt'))).toBe(true);
+  });
+
+  it('does not create the default keyring profile when agy is unavailable', () => {
+    const previous = {
+      agyBin: process.env.AGENTHUB_AGY_BIN,
+      toolsDir: process.env.AGENTHUB_TOOLS_DIR,
+      home: process.env.HOME,
+    };
+    process.env.AGENTHUB_AGY_BIN = path.join(tmpDir, 'missing-agy');
+    process.env.AGENTHUB_TOOLS_DIR = path.join(tmpDir, 'missing-tools');
+    process.env.HOME = tmpDir;
+    try {
+      profileService.registerAll();
+      expect(profileRepo.getAll()).not.toContainEqual(expect.objectContaining({ kind: 'keyring', engine: 'agy' }));
+    } finally {
+      if (previous.agyBin === undefined) delete process.env.AGENTHUB_AGY_BIN;
+      else process.env.AGENTHUB_AGY_BIN = previous.agyBin;
+      if (previous.toolsDir === undefined) delete process.env.AGENTHUB_TOOLS_DIR;
+      else process.env.AGENTHUB_TOOLS_DIR = previous.toolsDir;
+      if (previous.home === undefined) delete process.env.HOME;
+      else process.env.HOME = previous.home;
+    }
+  });
+
+  it('uses claude-default for a newly discovered system Claude profile', () => {
+    const claudeBin = path.join(tmpDir, 'claude');
+    fs.writeFileSync(claudeBin, '#!/bin/sh\n', { mode: 0o755 });
+    const previous = process.env.AGENTHUB_CLAUDE_BIN;
+    process.env.AGENTHUB_CLAUDE_BIN = claudeBin;
+    try {
+      profileService.registerAll();
+      expect(profileRepo.get('claude-default')).toEqual(expect.objectContaining({ engine: 'claude', kind: 'system' }));
+      expect(profileRepo.get('claude-may')).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.AGENTHUB_CLAUDE_BIN;
+      else process.env.AGENTHUB_CLAUDE_BIN = previous;
+    }
   });
 
   it('imports quota marks from .state/*.exhausted', () => {
@@ -91,7 +182,7 @@ describe('Profile import from ~/.agy-homes', () => {
     fs.mkdirSync(profileDir, { recursive: true });
     const logDir = path.join(profileDir, '.gemini', 'antigravity-cli', 'log');
     fs.mkdirSync(logDir, { recursive: true });
-    fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as g1@gmail.com\n');
+    fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as g1@example.com\n');
 
     // Create .state with quota marks
     const stateDir = path.join(agyHomesDir, '.state');
@@ -125,14 +216,14 @@ describe('Profile import from ~/.agy-homes', () => {
       fs.mkdirSync(profileDir, { recursive: true });
       const logDir = path.join(profileDir, '.gemini', 'antigravity-cli', 'log');
       fs.mkdirSync(logDir, { recursive: true });
-      fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as same@gmail.com\n');
+      fs.writeFileSync(path.join(logDir, 'latest.log'), 'authenticated successfully as same@example.com\n');
     }
 
     profileService.registerAll();
 
     const dupes = profileService.getDuplicateEmails();
     expect(dupes.size).toBeGreaterThanOrEqual(1);
-    const sameEmailProfiles = dupes.get('same@gmail.com');
+    const sameEmailProfiles = dupes.get('agy:same@example.com');
     expect(sameEmailProfiles).toBeTruthy();
     expect(sameEmailProfiles!.length).toBeGreaterThanOrEqual(2);
   });
@@ -181,6 +272,20 @@ https://accounts.google.com/signin/continue?sarp=1&
       const result = parseAuthState(output, true);
       expect(result.authState).toBe('ok');
       expect(result.verifyUrl).toBeNull();
+    });
+
+    it('không coi hồ sơ keyring là logged in nếu chưa có email và authState là not_logged_in hoặc null', () => {
+      const p1 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: 'not_logged_in' as const };
+      expect(isProfileLoggedIn(p1)).toBe(false);
+
+      const p2 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: null };
+      expect(isProfileLoggedIn(p2)).toBe(false);
+
+      const p3 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: 'chinh@example.com', enabled: 1, authState: null };
+      expect(isProfileLoggedIn(p3)).toBe(true);
+
+      const p4 = { name: 'chinh', engine: 'agy' as const, kind: 'keyring' as const, home: tmpDir, email: null, enabled: 1, authState: 'ok' as const };
+      expect(isProfileLoggedIn(p4)).toBe(true);
     });
   });
 });

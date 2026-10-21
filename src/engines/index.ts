@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ProfileRow } from '../db/index.js';
 import { LIMITED_TEST_ENV, lowPriority } from '../priority.js';
+import { workerEnvironment } from '../worker-guard.js';
 
 export interface SpawnOpts {
   profile: ProfileRow;
@@ -15,6 +16,10 @@ export interface SpawnOpts {
   lockFile?: string;
   outputPath?: string;
   readOnly?: boolean;
+  env?: Record<string, string>;
+  hubHome?: string;
+  gitHooks?: 'run' | 'skip';
+  project?: { settings?: string | null };
 }
 
 export interface QuotaDetection {
@@ -79,7 +84,7 @@ export function lastNLines(text: string, n: number): string {
 
 // Transient error regex per PLAN 2.1
 const TRANSIENT_ERROR_RE =
-  /UNAVAILABLE \(code 503\)|code 50[0-4]|DEADLINE_EXCEEDED|ECONNRESET|ETIMEDOUT|service is currently unavailable|Eligibility check failed|model is at capacity|overloaded/i;
+  /UNAVAILABLE \(code 503\)|code 50[0-4]|DEADLINE_EXCEEDED|ECONNRESET|ETIMEDOUT|service is currently unavailable|Eligibility check failed|model is at capacity|overloaded|TLS handshake timeout|network issue connecting|"retryable":true/i;
 
 export class AgyEngine implements Engine {
   id = 'agy' as const;
@@ -109,12 +114,16 @@ export class AgyEngine implements Engine {
       '0',
     ];
 
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
+    const env: Record<string, string> = { ...process.env as Record<string, string>, BROWSER: '/bin/false' };
 
     // Set up environment based on profile kind
     if (opts.profile.kind === 'isolated' && opts.profile.home) {
       env.HOME = opts.profile.home;
       env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
+    }
+
+    if (opts.env) {
+      Object.assign(env, opts.env);
     }
 
     // Ensure log directory exists
@@ -130,6 +139,14 @@ export class AgyEngine implements Engine {
     }
 
     Object.assign(env, LIMITED_TEST_ENV);
+    Object.assign(
+      env,
+      workerEnvironment(
+        opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+        env,
+        { gitHooks: opts.gitHooks, project: opts.project },
+      ),
+    );
     const [agyExe, agyArgs] = lowPriority(this.agyPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, agyExe, ...agyArgs] : agyArgs;
     const executable = opts.lockFile ? 'flock' : agyExe;
@@ -170,7 +187,9 @@ export class AgyEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Authentication required|authentication timed out|not signed in/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {
@@ -190,6 +209,8 @@ export class CodexEngine implements Engine {
 
   static findCodexPath(): string | null {
     try {
+      const managed = process.env.AGENTHUB_TOOLS_DIR ? path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'codex') : null;
+      if (managed && fs.existsSync(managed)) return managed;
       const homeDir = os.homedir();
       const base = path.join(homeDir, '.vscode', 'extensions');
       if (!fs.existsSync(base)) return null;
@@ -197,8 +218,14 @@ export class CodexEngine implements Engine {
       if (entries.length === 0) return null;
       entries.sort();
       const latest = entries[entries.length - 1];
-      const codexBin = path.join(base, latest, 'bin', 'linux-x86_64', 'codex');
-      return fs.existsSync(codexBin) ? codexBin : null;
+      const targets = process.platform === 'darwin'
+        ? ['darwin-arm64', 'darwin-x64', 'macos-arm64', 'macos-x64']
+        : process.platform === 'win32' ? ['win32-x64'] : ['linux-x86_64'];
+      for (const target of targets) {
+        const codexBin = path.join(base, latest, 'bin', target, 'codex');
+        if (fs.existsSync(codexBin)) return codexBin;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -248,12 +275,28 @@ export class CodexEngine implements Engine {
       try { fs.mkdirSync(path.dirname(opts.lockFile), { recursive: true }); } catch { /* ignore */ }
     }
 
+    const env: Record<string, string> = { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV };
+    if (opts.profile.kind === 'isolated' && opts.profile.home) {
+      env.CODEX_HOME = opts.profile.home;
+    }
+    if (opts.env) {
+      Object.assign(env, opts.env);
+    }
+    Object.assign(
+      env,
+      workerEnvironment(
+        opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+        env,
+        { gitHooks: opts.gitHooks, project: opts.project },
+      ),
+    );
+
     const [codexExe, codexArgs] = lowPriority(codexPath, args);
     const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;
     const executable = opts.lockFile ? 'flock' : codexExe;
     const child = spawn(executable, command, {
       cwd: opts.cwd,
-      env: { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV },
+      env,
       detached: true,
       stdio: ['ignore', logFd, logFd],
     });
@@ -281,7 +324,9 @@ export class CodexEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Not logged in|\b401\b/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {
@@ -323,6 +368,7 @@ export class FakeEngine implements Engine {
       FAKE_MODEL: opts.model,
       FAKE_PROFILE: opts.profile.name,
       FAKE_OUTPUT_PATH: opts.outputPath || '',
+      ...(opts.env || {}),
     };
 
     const command = process.env.FAKE_MODE === 'reviewer-error' ? '/definitely-missing-agenthub-fixture' : process.execPath;
@@ -373,7 +419,9 @@ export class FakeEngine implements Engine {
 
   detectAuthError(logTail: string): AuthDetection {
     const tail = lastNLines(logTail, 8);
-    return { expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401/i.test(tail) };
+    return {
+      expired: /UNAUTHENTICATED|code 401|"error_code"\s*:\s*401|Not logged in|\b401\b/i.test(tail),
+    };
   }
 
   detectTransientError(logTail: string): boolean {

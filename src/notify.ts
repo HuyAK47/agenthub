@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
 import { AgentHubConfig } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { QuotaMarkRepo, TaskRepo } from './db/index.js';
+import { QuotaMarkRepo, TaskRepo, ProfileRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
+import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
+import { effectiveBrainMode } from './brain/mode.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -14,7 +16,9 @@ export interface NotificationServiceOptions {
   eventBus: EventBus;
   config: AgentHubConfig;
   taskRepo?: TaskRepo;
+  profileRepo?: ProfileRepo;
   quotaMarkRepo?: QuotaMarkRepo;
+  projectRepo?: { get(id: string): { settings?: string | null } | undefined };
   exec?: NotifyExecFn;
   now?: () => number;
 }
@@ -23,19 +27,57 @@ export class NotificationService {
   private eventBus: EventBus;
   private config: AgentHubConfig;
   private taskRepo?: TaskRepo;
+  private profileRepo?: ProfileRepo;
   private quotaMarkRepo?: QuotaMarkRepo;
+  private projectRepo?: NotificationServiceOptions['projectRepo'];
   private execFn?: NotifyExecFn;
   private now: () => number;
   private lastSent = new Map<string, number>();
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
+  private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
+  private checkTimer?: NodeJS.Timeout;
 
   constructor(opts: NotificationServiceOptions) {
     this.eventBus = opts.eventBus;
     this.config = opts.config;
     this.taskRepo = opts.taskRepo;
+    this.profileRepo = opts.profileRepo;
     this.quotaMarkRepo = opts.quotaMarkRepo;
+    this.projectRepo = opts.projectRepo;
     this.execFn = opts.exec;
     this.now = opts.now || (() => Date.now());
+  }
+
+  getQuietHoursQueue(): Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> {
+    return [...this.quietHoursQueue];
+  }
+
+  flushQuietHoursQueue(): Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> {
+    const queue = [...this.quietHoursQueue];
+    this.quietHoursQueue = [];
+    return queue;
+  }
+
+  checkQuietHoursEnd(nowMs = this.now()): boolean {
+    const qh = this.config.notifications?.quietHours;
+    if (!qh || !qh.enabled) return false;
+
+    const d = new Date(nowMs);
+    const inQuiet = isQuietHours(qh, d);
+    if (inQuiet) return false;
+
+    if (this.quietHoursQueue.length === 0) return false;
+
+    // Only flush/notify within ~2 hours window after quietHours.end
+    const minsSinceEnd = getMinutesSinceTime(qh.end || '07:00', d);
+    if (minsSinceEnd < 0 || minsSinceEnd > 120) {
+      return false;
+    }
+
+    const count = this.quietHoursQueue.length;
+    this.quietHoursQueue = [];
+    this.notify(`AgentHub: ${count} thông báo trong đêm`, 'normal');
+    return true;
   }
 
   start(): void {
@@ -44,12 +86,20 @@ export class NotificationService {
       this.handleEvent(type, taskId, payload);
     };
     this.eventBus.on('*', this.boundHandler);
+    this.checkTimer = setInterval(() => {
+      this.checkQuietHoursEnd();
+    }, 60_000);
+    this.checkTimer.unref?.();
   }
 
   stop(): void {
     if (this.boundHandler) {
       this.eventBus.off('*', this.boundHandler);
       this.boundHandler = null;
+    }
+    if (this.checkTimer) {
+      clearInterval(this.checkTimer);
+      this.checkTimer = undefined;
     }
   }
 
@@ -60,7 +110,65 @@ export class NotificationService {
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
 
+    // 1. In brain auto mode: suppress raw task notifications
+    const taskProjectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
+    const effectiveMode = effectiveBrainMode(taskProjectId, taskProjectId ? this.projectRepo?.get(taskProjectId) : null, this.config.brain);
+    if (effectiveMode === 'auto') {
+      const allExhausted =
+        type === 'quota.exhausted' &&
+        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now()));
+
+      const isSystemEvent =
+        type === 'brain.notify' ||
+        type === 'disk.low' ||
+        type === 'disk.docker_low' ||
+        type === 'claude.quota_exhausted' ||
+        type === 'hub.restart_failed' ||
+        type === 'system.error' ||
+        allExhausted;
+
+      if (!isSystemEvent) {
+        return;
+      }
+    }
+
+    // 2. Quiet hours: only send level 'incident'
+    const now = this.now();
+    this.checkQuietHoursEnd(now);
+
+    if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
+      const isIncident = isSystemIncident(type, payload, this.profileRepo, this.quotaMarkRepo, now);
+      if (!isIncident) {
+        if (this.quietHoursQueue.length >= 200) {
+          this.quietHoursQueue.shift();
+        }
+        this.quietHoursQueue.push({ type, taskId, payload, timestamp: now });
+        return;
+      }
+    }
+
     switch (type) {
+      case 'brain.notify': {
+        const text = typeof p.text === 'string' ? p.text : '';
+        if (!text) break;
+        if (p.level === 'incident') {
+          this.notify(`🚨 Sự cố AgentHub: ${text}`, 'critical');
+        } else if (p.level === 'decision') {
+          this.notify(`📌 Cần quyết định: ${text}`, 'normal');
+        } else {
+          this.notify(`ℹ️ AgentHub: ${text}`, 'normal');
+        }
+        break;
+      }
+
+      case 'batch.created': {
+        const count = typeof p.taskCount === 'number' ? p.taskCount : 0;
+        const who = typeof p.createdBy === 'string' && p.createdBy ? p.createdBy : 'Claude';
+        const label = who.toLowerCase() === 'claude' ? 'Claude' : who;
+        this.notify(`${label} đề xuất ${count} task, chờ bạn duyệt`, 'normal');
+        break;
+      }
+
       case 'task.review_ready': {
         const title = this.resolveTaskTitle(taskId, p);
         let msg = `AgentHub: ${title} chờ review`;
@@ -80,6 +188,23 @@ export class NotificationService {
       case 'task.blocked': {
         const title = this.resolveTaskTitle(taskId, p);
         this.notify(`AgentHub: ${title} bị chặn`, 'normal');
+        break;
+      }
+
+      case 'task.paused':
+      case 'load.task_paused': {
+        const title = this.resolveTaskTitle(taskId, p);
+        const msg = p.reason === 'load'
+          ? `Tạm dừng task ${title} do quá tải hệ thống`
+          : `Tạm dừng task ${title}`;
+        this.notify(msg, 'normal');
+        break;
+      }
+
+      case 'task.resumed':
+      case 'load.task_resumed': {
+        const title = this.resolveTaskTitle(taskId, p);
+        this.notify(`Tiếp tục task ${title}`, 'normal');
         break;
       }
 
@@ -110,19 +235,60 @@ export class NotificationService {
       }
 
       case 'quota.exhausted': {
+        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now());
+        if (effectiveMode === 'auto') {
+          if (isAllExhausted) {
+            this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
+          }
+          break;
+        }
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
         const family = (p.family || p.model || '') as string;
         const resetTimeStr = this.resolveResetTime(p, name, family);
-        const msg = resetTimeStr
+        const msg = isAllExhausted
+          ? 'AgentHub: Mọi tài khoản đều đã hết quota'
+          : resetTimeStr
           ? `Hồ sơ ${name} hết quota ${family} tới ${resetTimeStr}`
           : `Hồ sơ ${name} hết quota ${family}`;
-        this.notify(msg, 'normal');
+        this.notify(msg, isAllExhausted ? 'critical' : 'normal');
+        break;
+      }
+
+      case 'claude.fallback_changed': {
+        const step = p.step && typeof p.step === 'object' ? p.step as Record<string, unknown> : null;
+        const label = step?.type === 'model' ? `model ${String(step.model)}`
+          : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
+          : step?.type === 'apiKey' ? 'API key'
+          : step?.type === 'engine' ? `engine ${String(step.engine)}`
+          : step?.type === 'wait' ? 'chờ reset' : 'cấu hình chính';
+        this.notify(`Claude fallback: đang dùng ${label}`, 'normal');
+        break;
+      }
+
+      case 'claude.auto_resumed': {
+        if (p.started === true) {
+          this.notify('Claude đã tự tiếp tục phiên sau khi hết giới hạn', 'normal');
+        } else if (p.ok === false) {
+          this.notify('Claude tự tiếp tục nhưng phiên đã lỗi', 'critical');
+        }
         break;
       }
 
       case 'profile.auth_expired': {
         const name = typeof p.name === 'string' ? p.name : 'tài khoản';
-        this.notify(`Tài khoản ${name} cần đăng nhập lại`, 'normal');
+        this.notify(`Hồ sơ ${name} cần đăng nhập lại`, 'normal');
+        break;
+      }
+
+      case 'task.overlap': {
+        const file = (p.file || p.filename || '') as string;
+        const otherTaskId = (p.otherTaskId || '') as string;
+        const taskTitle = this.resolveTaskTitle(taskId, p);
+        const otherTitle = this.resolveTaskTitle(otherTaskId);
+        const msg = file
+          ? `AgentHub: Trùng file ${file} giữa ${taskTitle} và ${otherTitle}`
+          : `AgentHub: Trùng sửa file giữa ${taskTitle} và ${otherTitle}`;
+        this.notify(msg, 'normal');
         break;
       }
     }

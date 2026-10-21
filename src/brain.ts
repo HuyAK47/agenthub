@@ -1,10 +1,15 @@
 import Database from 'better-sqlite3';
+import path from 'node:path';
 import { z } from 'zod';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { AgentHubConfig } from './config.js';
 import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
+import { effectiveBrainMode } from './brain/mode.js';
 import { readExistingToken, getTokenPath } from './auth.js';
+import { ClaudeSessionRepo } from './claude-sessions/repo.js';
+import { generateDigest, forwardDecisionToBrain, DigestData } from './brain/digest.js';
+import { AppService, HttpError } from './services/index.js';
 
 export const BRAIN_ACTIVITIES = [
   'planning',
@@ -33,6 +38,23 @@ export interface BrainStatus {
   taskId?: string | null;
   updatedAt: string;
   stale: boolean;
+  source: 'manual' | 'transcript';
+  sessions: BrainSession[];
+  state: 'working' | 'waiting' | 'inactive';
+}
+
+export interface BrainSession {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  lastActivityAt: string;
+  lastUserRequest: string | null;
+  lastTool: { name: string; summary: string } | null;
+  state: 'working' | 'waiting' | 'inactive';
+  tokens5h: number | null;
+  link: string;
+  /** Hub chat / brain session: its answers already reach the user through the hub or Telegram. */
+  isHubChat: boolean;
 }
 
 export const UpdateBrainSchema = z.object({
@@ -43,6 +65,11 @@ export const UpdateBrainSchema = z.object({
   }),
   detail: z.string().max(300, { message: 'detail tối đa 300 ký tự' }),
   taskId: z.string().nullable().optional(),
+});
+
+export const BrainNotifySchema = z.object({
+  text: z.string().min(1).max(4000),
+  level: z.enum(['info', 'decision', 'incident']).default('info'),
 });
 
 export type UpdateBrainInput = z.infer<typeof UpdateBrainSchema>;
@@ -103,10 +130,13 @@ export class BrainService {
     private brainRepo: BrainRepo,
     private eventRepo: EventRepo,
     private getEventBus?: () => EventBus | undefined,
+    private claudeSessionRepo?: ClaudeSessionRepo,
+    private db?: Database.Database,
   ) {}
 
   getStatus(now = Date.now()): BrainStatus {
     const row = this.brainRepo.get();
+    const sessions = this.getSessions(now);
     if (!row) {
       const defaultTs = new Date().toISOString();
       return {
@@ -115,17 +145,48 @@ export class BrainService {
         taskId: null,
         updatedAt: defaultTs,
         stale: false,
+        source: sessions.length ? 'transcript' : 'manual',
+        sessions,
+        state: sessions.some((s) => s.state === 'working') ? 'working' : sessions.some((s) => s.state === 'waiting') ? 'waiting' : 'inactive',
       };
     }
 
-    const stale = isBrainStale(row.updatedAt, now);
+    const hasManualValue = row.activity !== 'idle' || row.detail !== '' || row.taskId !== null
+      || this.eventRepo.getRecent(1000).some((event) => event.type === 'brain.status');
+    const manualFresh = hasManualValue && !isBrainStale(row.updatedAt, now);
+    if (!manualFresh && sessions.length === 0) {
+      return { activity: row.activity, detail: row.detail, taskId: row.taskId || null, updatedAt: row.updatedAt, stale: true, source: 'manual', sessions, state: 'inactive' };
+    }
+    const activeSession = sessions.find((session) => session.state !== 'inactive');
+    const stale = manualFresh ? false : !activeSession;
     return {
-      activity: row.activity,
-      detail: row.detail,
-      taskId: row.taskId || null,
-      updatedAt: row.updatedAt,
+      activity: manualFresh ? row.activity : activeSession?.state === 'working' ? 'planning' : activeSession?.state === 'waiting' ? 'waiting' : 'idle',
+      detail: manualFresh ? row.detail : activeSession ? `${activeSession.title} · ${activeSession.state === 'waiting' ? 'chờ bạn trả lời' : 'đang làm'}` : 'Claude không hoạt động',
+      taskId: manualFresh ? row.taskId || null : null,
+      updatedAt: manualFresh ? row.updatedAt : sessions[0]?.lastActivityAt || row.updatedAt,
       stale,
+      source: manualFresh ? 'manual' : 'transcript',
+      sessions,
+      state: manualFresh ? row.activity === 'waiting' ? 'waiting' : row.activity === 'idle' ? 'inactive' : 'working' : activeSession?.state || 'inactive',
     };
+  }
+
+  private getSessions(now: number): BrainSession[] {
+    if (!this.claudeSessionRepo) return [];
+    const projects = (this.db?.prepare('SELECT path FROM projects').all() as Array<{ path: string }> | undefined) || [];
+    const rows = this.claudeSessionRepo.list().filter((row) => row.lastAt && now - Date.parse(row.lastAt) <= 10 * 60_000 && projects.some((p) => isWithin(row.cwd, p.path)));
+    return rows.sort((a, b) => Date.parse(b.lastAt || '') - Date.parse(a.lastAt || '')).slice(0, 3).map((row) => ({
+      sessionId: row.sessionId,
+      title: row.title || row.sessionId,
+      cwd: row.cwd,
+      lastActivityAt: row.lastAt!,
+      lastUserRequest: row.lastUserRequest,
+      lastTool: row.lastToolName ? { name: row.lastToolName, summary: row.lastToolSummary || '' } : null,
+      state: row.lastEventKind === 'assistant_text' ? 'waiting' : 'working',
+      tokens5h: row.fiveHourTokens,
+      isHubChat: row.isHubChat === 1,
+      link: `/claude-sessions/${encodeURIComponent(row.sessionId)}`,
+    }));
   }
 
   updateStatus(input: unknown): BrainStatus {
@@ -168,21 +229,128 @@ export class BrainService {
       taskId: updated.taskId,
       updatedAt: updated.updatedAt,
       stale: false,
+      source: 'manual',
+      sessions: this.getSessions(Date.now()),
+      state: parsed.activity === 'waiting' ? 'waiting' : parsed.activity === 'idle' ? 'inactive' : 'working',
     };
   }
+
+  notify(input: unknown): { text: string; level: 'info' | 'decision' | 'incident' } {
+    const parsed = BrainNotifySchema.parse(input);
+    const eventBus = this.getEventBus?.();
+    if (eventBus) eventBus.emit('brain.notify', undefined, parsed);
+    else this.eventRepo.insert('brain.notify', undefined, parsed);
+    return parsed;
+  }
+}
+
+function isWithin(child: string, root: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(child));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+export function buildBrainDigest(appService: AppService): DigestData {
+  return (
+    appService.telegramBotService?.buildCurrentDigest() ??
+    generateDigest({
+      taskRepo: appService.taskRepo,
+      projectRepo: appService.projectRepo,
+      profileRepo: appService.profileRepo,
+      quotaMarkRepo: appService.quotaMarkRepo,
+      eventRepo: appService.eventRepo,
+      decisionTracker: appService.telegramBotService?.getDecisionTracker(),
+      port: appService.config.port,
+    })
+  );
 }
 
 export function registerBrainRoutes(
   fastify: FastifyInstance,
   brainService: BrainService,
+  appService?: AppService,
 ): void {
   fastify.get('/api/brain', async () => {
-    return brainService.getStatus();
+    const status = brainService.getStatus();
+    if (!appService) return status;
+    const sessions = appService.chatService?.chatSessionRepo;
+    const projects = appService.projectRepo.getAll();
+    const brains = [null, ...projects.map((project) => project.id)].map((projectId) => {
+      const project = projectId ? appService.projectRepo.get(projectId) : undefined;
+      const session = sessions?.get(projectId ? `brain:${projectId}` : 'brain');
+      const usage = appService.brainRunner?.getUsage(projectId);
+      return {
+        projectId,
+        projectName: project?.name || 'Hệ thống',
+        mode: effectiveBrainMode(projectId, project, appService.config.brain),
+        sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
+        state: session?.state || 'idle',
+        queued: usage?.queued || false,
+        lastTurnAt: usage?.lastTurnAt || session?.lastMessageAt || null,
+        tokensToday: usage?.tokensToday || 0,
+      };
+    });
+    return { ...status, brains };
   });
 
   fastify.put('/api/brain', async (req: FastifyRequest, reply: FastifyReply) => {
     const result = brainService.updateStatus(req.body);
     return reply.status(200).send(result);
+  });
+  fastify.post('/api/brain/notify', async (req: FastifyRequest) => brainService.notify(req.body));
+
+  fastify.get('/api/brain/digest', async () => {
+    if (!appService) {
+      throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
+    }
+    return buildBrainDigest(appService);
+  });
+
+  fastify.post('/api/brain/digest', async () => {
+    if (!appService) {
+      throw new HttpError(503, 'unavailable', 'AppService chưa sẵn sàng');
+    }
+    const digest = buildBrainDigest(appService);
+    appService.scheduler.getEventBus().emit('brain.digest', undefined, digest);
+    if (appService.telegramBotService) {
+      appService.telegramBotService.broadcastMessage(digest.text, {
+        inline_keyboard: [[{ text: '🌐 Xem dashboard', url: appService.telegramBotService.getDashboardUrl() }]],
+      });
+    }
+    return digest;
+  });
+
+  fastify.get('/api/brain/decisions', async () => {
+    const tracker = appService?.telegramBotService?.getDecisionTracker();
+    const decisions = tracker ? tracker.getPendingDecisions() : [];
+    return { decisions };
+  });
+
+  fastify.post('/api/brain/decisions/:id/answer', async (req: FastifyRequest) => {
+    const tracker = appService?.telegramBotService?.getDecisionTracker();
+    const { id } = req.params as { id: string };
+    const body = req.body as { answer?: 'agree' | 'reject' } | undefined;
+    const answer = body?.answer;
+    if (!answer || (answer !== 'agree' && answer !== 'reject')) {
+      throw new HttpError(400, 'bad_request', 'answer must be agree or reject');
+    }
+    const d = tracker?.getDecision(id);
+    if (!d || d.answered) {
+      throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
+    }
+    const updated = tracker?.answerDecision(id, answer);
+    if (!updated) {
+      throw new HttpError(404, 'not_found', 'Quyết định đã hết hạn hoặc đã trả lời');
+    }
+    if (appService?.chatService) {
+      forwardDecisionToBrain(appService.chatService, id, updated.text, answer, updated.taskId);
+    }
+    appService?.scheduler.getEventBus().emit('decision.answered', undefined, {
+      decisionId: id,
+      action: answer,
+      answer,
+      text: updated.text,
+    });
+    return { ok: true, decision: updated };
   });
 }
 

@@ -121,6 +121,8 @@ export interface McpServerOptions {
   token?: string;
   baseUrl?: string;
   tokenPath?: string;
+  chatSessionId?: string;
+  projectId?: string;
 }
 
 export function createMcpServer(options?: McpServerOptions): McpServer {
@@ -148,13 +150,26 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     return token;
   };
 
-  async function callApi<T>(method: string, apiPath: string, body?: unknown): Promise<T> {
+  const scopedProject = (): string | undefined => options?.projectId || process.env.AGENTHUB_MCP_PROJECT || undefined;
+  const assertProject = (projectId: string | undefined, action: string): void => {
+    const scope = scopedProject();
+    if (scope && projectId !== scope) throw new Error(`${action} chỉ được phép trong project "${scope}"`);
+  };
+  const assertTaskId = (id: string, action: string): void => {
+    const scope = scopedProject();
+    if (!scope) return;
+    const taskId = id.replace('~', '/');
+    if (!taskId.startsWith(`${scope}/`)) throw new Error(`${action} chỉ được phép trong project "${scope}"`);
+  };
+
+  async function callApi<T>(method: string, apiPath: string, body?: unknown, timeoutMs?: number): Promise<T> {
     const token = getToken();
     const port = getPort();
     const url = `${getBaseUrl()}${apiPath}`;
 
     let res: Response;
     try {
+      const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
       res = await fetch(url, {
         method,
         headers: {
@@ -163,6 +178,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
       });
     } catch (err: unknown) {
       const errorObj = err as { code?: string; cause?: { code?: string }; message?: string } | undefined;
@@ -193,6 +209,28 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       return text as unknown as T;
     }
   }
+
+  server.tool(
+    'permission_prompt',
+    'Yêu cầu người dùng duyệt một lần chạy công cụ trong chat safe mode',
+    {
+      tool_name: z.string(),
+      input: z.record(z.unknown()),
+    },
+    async (args) => {
+      try {
+        const sessionId = options?.chatSessionId || process.env.AGENTHUB_CHAT_SESSION_ID;
+        if (!sessionId) return { content: [{ type: 'text', text: JSON.stringify({ behavior: 'deny', message: 'Thiếu phiên chat' }) }] };
+        const result = await callApi<{ behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown>; message?: string }>(
+          'POST', '/api/chat/permissions', { sessionId, tool_name: args.tool_name, input: args.input },
+          (Number(process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC) || 600) * 1000 + 30_000,
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      } catch (err: unknown) {
+        return { content: [{ type: 'text', text: JSON.stringify({ behavior: 'deny', message: err instanceof Error ? err.message : String(err) }) }] };
+      }
+    },
+  );
 
   // 1. hub_status
   server.tool(
@@ -309,6 +347,24 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 
   // 2. hub_projects
   server.tool(
+    'hub_notify',
+    'Bộ não nhắn thông báo cho người dùng qua Telegram và dashboard',
+    {
+      text: z.string().min(1).max(4000),
+      level: z.enum(['info', 'decision', 'incident']).default('info'),
+    },
+    async (args) => {
+      try {
+        const res = await callApi<{ text: string; level: string }>('POST', '/api/brain/notify', args);
+        return { content: [{ type: 'text', text: `✓ Đã gửi thông báo (${res.level})` }] };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // 2. hub_projects
+  server.tool(
     'hub_projects',
     'Xem danh sách các project đã đăng ký trong AgentHub',
     {},
@@ -324,11 +380,12 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           }>
         >('GET', '/api/projects');
 
-        if (projects.length === 0) {
+        const visibleProjects = scopedProject() ? projects.filter((project) => project.id === scopedProject()) : projects;
+        if (visibleProjects.length === 0) {
           return { content: [{ type: 'text', text: 'Chưa có project nào được đăng ký.' }] };
         }
-        const lines = [`Projects (${projects.length}):`];
-        for (const p of projects) {
+        const lines = [`Projects (${visibleProjects.length}):`];
+        for (const p of visibleProjects) {
           lines.push(
             `- ${p.id} (${p.name}): ${p.path} (defaultBranch: ${p.defaultBranch || 'main'}, maxParallel: ${p.maxParallel})`,
           );
@@ -353,6 +410,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        if (scopedProject()) throw new Error(`hub_register_project không được phép từ brain của project "${scopedProject()}"`);
         let envTemplateObj: unknown = undefined;
         if (args.envTemplate) {
           try {
@@ -373,6 +431,41 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
             { type: 'text', text: `✓ Đã đăng ký project "${res.name}" (id: ${res.id}) tại ${res.path}` },
           ],
         };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  server.tool(
+    'hub_knowledge',
+    'Quản lý sổ kiến thức của project (list/add/update/delete)',
+    {
+      action: z.enum(['list', 'add', 'update', 'delete']),
+      project: z.string().min(1),
+      id: z.number().int().positive().optional(),
+      content: z.string().min(1).optional(),
+      taskId: z.string().optional(),
+      pinned: z.boolean().optional(),
+    },
+    async (args) => {
+      try {
+        const base = `/api/projects/${encodeURIComponent(args.project)}/knowledge`;
+        if (args.action === 'list') {
+          const entries = await callApi<Array<{ id: number; taskId: string; content: string; pinned: number }>>('GET', base);
+          return { content: [{ type: 'text', text: entries.length ? entries.map((e) => `- [${e.pinned ? 'ghim' : 'mới'}] #${e.id} (${e.taskId}): ${e.content}`).join('\n') : 'Sổ kiến thức đang trống.' }] };
+        }
+        if (!args.id && args.action !== 'add') throw new Error('id là bắt buộc');
+        if (args.action === 'add') {
+          const entry = await callApi<{ id: number }>('POST', base, { content: args.content, taskId: args.taskId, pinned: args.pinned });
+          return { content: [{ type: 'text', text: `✓ Đã thêm mục kiến thức #${entry.id}.` }] };
+        }
+        if (args.action === 'update') {
+          await callApi('PATCH', `${base}/${args.id}`, { content: args.content, pinned: args.pinned });
+          return { content: [{ type: 'text', text: `✓ Đã cập nhật mục kiến thức #${args.id}.` }] };
+        }
+        await callApi('DELETE', `${base}/${args.id}`);
+        return { content: [{ type: 'text', text: `✓ Đã xoá mục kiến thức #${args.id}.` }] };
       } catch (err: unknown) {
         return handleError(err);
       }
@@ -449,7 +542,8 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
-        const res = await callApi<{ id: string; status: string; title: string }>('POST', '/api/tasks', args);
+        assertProject(args.project, 'Tạo task');
+        const res = await callApi<{ id: string; status: string; title: string }>('POST', '/api/tasks', { ...args, fromClaude: true });
         try {
           await callApi('PUT', '/api/brain', {
             activity: 'dispatching',
@@ -483,11 +577,143 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Cập nhật task');
         const { id, ...payload } = args;
         const routeId = toRouteId(id);
         const res = await callApi<{ id: string; status: string; title: string }>('PATCH', `/api/tasks/${routeId}`, payload);
         return {
           content: [{ type: 'text', text: `✓ Đã cập nhật task "${res.id}" [${res.status}]: ${res.title}` }],
+        };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // hub_create_batch
+  server.tool(
+    'hub_create_batch',
+    'Tạo đợt task mới (batch) với mọi task ở trạng thái draft chờ duyệt. Dùng cho kế hoạch >= 3 task.',
+    {
+      project: z.string().describe('ID của project'),
+      title: z.string().describe('Tiêu đề của đợt lên kế hoạch'),
+      goal: z.string().optional().describe('Mục tiêu tổng quát của đợt'),
+      tasks: z
+        .array(
+          z.object({
+            slug: z.string().describe('Slug định danh task'),
+            title: z.string().describe('Tiêu đề task'),
+            body: z.string().optional().describe('Đề bài task dạng markdown'),
+            level: z.enum(['easy', 'hard']).optional().describe('Độ khó của task (easy hoặc hard)'),
+            modelChain: z.array(z.string()).optional().describe('Chuỗi model chỉ định'),
+            dependsOn: z.array(z.string()).optional().describe('Danh sách ID hoặc slug task phụ thuộc trong cùng đợt'),
+          }),
+        )
+        .min(1)
+        .describe('Danh sách task trong đợt'),
+    },
+    async (args) => {
+      try {
+        assertProject(args.project, 'Tạo batch');
+        const res = await callApi<{
+          id: string;
+          projectId: string;
+          title: string;
+          goal?: string;
+          status: string;
+          tasks: Array<{ id: string; slug: string; title: string; status: string; dependsOn: string | string[] }>;
+        }>('POST', '/api/batches', { ...args, createdBy: 'claude' });
+
+        const taskLines = res.tasks
+          .map((t) => `  - ${t.id} [${t.status}]: ${t.title}`)
+          .join('\n');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✓ Đã tạo đợt "${res.id}" [${res.status}]: "${res.title}" gồm ${res.tasks.length} task (chờ duyệt):\n${taskLines}`,
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // hub_batch
+  server.tool(
+    'hub_batch',
+    'Xem thông tin chi tiết và danh sách task của một đợt (batch)',
+    {
+      id: z.string().describe('ID của đợt (batchId)'),
+    },
+    async (args) => {
+      try {
+        const res = await callApi<{
+          id: string;
+          projectId: string;
+          title: string;
+          goal?: string | null;
+          status: string;
+          createdBy?: string | null;
+          createdAt: string;
+          tasks: Array<{ id: string; slug: string; title: string; status: string; level: string; dependsOn: string | string[] }>;
+        }>('GET', `/api/batches/${encodeURIComponent(args.id)}`);
+
+        const goalStr = res.goal ? `\nMục tiêu: ${res.goal}` : '';
+        const taskLines = res.tasks.length
+          ? res.tasks
+              .map((t) => {
+                const deps = Array.isArray(t.dependsOn)
+                  ? t.dependsOn.join(', ')
+                  : typeof t.dependsOn === 'string'
+                  ? t.dependsOn
+                  : '';
+                return `  - ${t.id} [${t.status}] (${t.level})${deps ? ` phụ thuộc: [${deps}]` : ''}: ${t.title}`;
+              })
+              .join('\n')
+          : '  (chưa có task)';
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Đợt: ${res.title} (${res.id}) [${res.status}] · Project: ${res.projectId}${goalStr}\nDanh sách task (${res.tasks.length}):\n${taskLines}`,
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return handleError(err);
+      }
+    },
+  );
+
+  // hub_dispatch_batch
+  server.tool(
+    'hub_dispatch_batch',
+    'Giao cả đợt task (chuyển mọi draft sang queued sau khi kiểm tra không có vòng phụ thuộc)',
+    {
+      id: z.string().describe('ID của đợt (batchId)'),
+    },
+    async (args) => {
+      try {
+        const scope = scopedProject();
+        const batch = await callApi<{ projectId: string }>('GET', `/api/batches/${encodeURIComponent(args.id)}`);
+        if (scope && batch.projectId !== scope) throw new Error(`Giao batch chỉ được phép trong project "${scope}"`);
+        const res = await callApi<{
+          ok: boolean;
+          batchId: string;
+          dispatchedCount: number;
+        }>('POST', `/api/batches/${encodeURIComponent(args.id)}/dispatch`);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✓ Đã giao đợt "${res.batchId}": ${res.dispatchedCount} task đã được chuyển sang hàng đợi (queued)`,
+            },
+          ],
         };
       } catch (err: unknown) {
         return handleError(err);
@@ -507,6 +733,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       try {
         const params = new URLSearchParams();
         if (args.project) params.set('project', args.project);
+        else if (scopedProject()) params.set('project', scopedProject()!);
         if (args.status) params.set('status', args.status);
         const query = params.toString() ? `?${params.toString()}` : '';
         const tasks = await callApi<
@@ -545,6 +772,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Xem task');
         const routeId = toRouteId(args.id);
         const data = await callApi<{
           task: {
@@ -650,6 +878,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Đọc log task');
         const routeId = toRouteId(args.id);
         const params = new URLSearchParams();
         if (args.tail) params.set('tail', String(args.tail));
@@ -677,6 +906,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Duyệt task');
         const routeId = toRouteId(args.id);
         await callApi('POST', `/api/tasks/${routeId}/review`, {
           verdict: args.verdict,
@@ -715,6 +945,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Retry task');
         const routeId = toRouteId(args.id);
         await callApi('POST', `/api/tasks/${routeId}/retry`, { note: args.note });
         return {
@@ -735,6 +966,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        assertTaskId(args.id, 'Huỷ task');
         const routeId = toRouteId(args.id);
         await callApi('POST', `/api/tasks/${routeId}/cancel`);
         return {
@@ -790,12 +1022,19 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 
         // 1. Check if any target task is ALREADY in an actionable/terminal status
         const terminalStatuses = new Set(['review', 'blocked', 'failed', 'waiting_quota', 'done']);
+        const isWaitable = (task: Record<string, unknown>): boolean => {
+          if (String(task.status) !== 'review') return terminalStatuses.has(String(task.status));
+          const chain = Array.isArray(task.reviewChain) ? task.reviewChain as Array<{ mode?: string }> : [];
+          if (chain.length === 0) return true;
+          const step = Number(task.reviewStep ?? 0);
+          return step >= chain.length || chain[step]?.mode === 'final';
+        };
         if (targetIds && targetIds.length > 0) {
           for (const id of targetIds) {
             try {
               const data = await callApi<Record<string, unknown>>('GET', `/api/tasks/${toRouteId(id)}`);
               const t = (data.task || data) as Record<string, unknown>;
-              if (t && terminalStatuses.has(String(t.status))) {
+              if (t && isWaitable(t)) {
                 return {
                   content: [{
                     type: 'text',

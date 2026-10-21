@@ -18,6 +18,25 @@ export interface WorktreeHookContext {
   eventBus?: { emit: (type: string, taskId?: string, payload?: unknown) => boolean };
 }
 
+export interface DependencyContext {
+  id: string;
+  title: string;
+  projectId?: string;
+  projectName?: string;
+  repoPath?: string;
+  isCrossProject?: boolean;
+  doneContent?: string;
+  review?: string;
+  diffStat?: string;
+}
+
+export interface KnowledgeContext {
+  content: string;
+  taskId: string;
+  pinned: number;
+  createdAt: string;
+}
+
 function resolveReal(target: string): string {
   const resolved = path.resolve(target);
   try {
@@ -49,6 +68,14 @@ export function isDeletableWorktreePath(
     if (resolved === prot || prot.startsWith(resolved + path.sep)) return false;
   }
   return true;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : shellQuote(value);
 }
 
 export class WorktreeService {
@@ -254,8 +281,8 @@ export class WorktreeService {
         .replace(/\{slot\}/g, slotStr)
         .replace(/\{slug\}/g, slug)
         .replace(/\{slug_underscored\}/g, slugUnderscored)
-        .replace(/\{worktree\}/g, worktreePath)
-        .replace(/\{project\}/g, project);
+        .replace(/\{worktree\}/g, shellWord(worktreePath))
+        .replace(/\{project\}/g, shellWord(project));
 
       const startTime = Date.now();
       try {
@@ -264,6 +291,11 @@ export class WorktreeService {
           timeout: 60000,
           encoding: 'utf-8',
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            AGENTHUB_WORKTREE: worktreePath,
+            AGENTHUB_PROJECT_PATH: projectPath || '',
+          },
         });
         const durationMs = Date.now() - startTime;
         eventBus?.emit('worktree.hook', taskId, {
@@ -347,13 +379,48 @@ export class WorktreeService {
   /**
    * Write the task.md file (protocol + body) into the worktree
    */
-  writeTaskFile(worktreePath: string, body: string, resume: boolean, feedback?: string): void {
+  writeTaskFile(
+    worktreePath: string,
+    body: string,
+    resume: boolean,
+    feedback?: string,
+    dependencies: DependencyContext[] = [],
+    depsMaxChars = 16000,
+    knowledge: KnowledgeContext[] = [],
+    knowledgeMaxChars = 12000,
+  ): void {
     const agentHubDir = path.join(worktreePath, '.agenthub');
     if (!fs.existsSync(agentHubDir)) {
       fs.mkdirSync(agentHubDir, { recursive: true });
     }
 
+    const knowledgePath = path.join(agentHubDir, 'context', 'knowledge.md');
+    if (knowledge.length > 0) {
+      fs.mkdirSync(path.dirname(knowledgePath), { recursive: true });
+      fs.writeFileSync(knowledgePath, this.buildKnowledgeContext(knowledge, knowledgeMaxChars), 'utf-8');
+    } else if (fs.existsSync(knowledgePath)) {
+      fs.rmSync(knowledgePath, { force: true });
+    }
+
     let content = body;
+
+    const contextPath = path.join(agentHubDir, 'context', 'deps.md');
+    const contextPrompt = 'Đọc `.agenthub/context/deps.md` trước khi bắt đầu.';
+    if (dependencies.length > 0) {
+      const contextContent = this.buildDependencyContext(dependencies, depsMaxChars);
+      fs.mkdirSync(path.dirname(contextPath), { recursive: true });
+      fs.writeFileSync(contextPath, contextContent, 'utf-8');
+      if (!content.startsWith(contextPrompt)) {
+        content = `${contextPrompt}\n\n${content}`;
+      }
+    } else {
+      if (fs.existsSync(contextPath)) {
+        fs.rmSync(contextPath, { force: true });
+      }
+      if (content.startsWith(`${contextPrompt}\n\n`)) {
+        content = content.slice(`${contextPrompt}\n\n`.length);
+      }
+    }
 
     if (feedback) {
       content += '\n\n## Feedback review\n\n' + feedback;
@@ -366,6 +433,47 @@ export class WorktreeService {
     const blockedPath = path.join(agentHubDir, 'BLOCKED');
     if (fs.existsSync(donePath)) fs.unlinkSync(donePath);
     if (fs.existsSync(blockedPath)) fs.unlinkSync(blockedPath);
+  }
+
+  private buildDependencyContext(dependencies: DependencyContext[], maxChars: number): string {
+    const limit = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : 16000;
+    const sections = dependencies.map((dependency) => {
+      const done = (dependency.doneContent || '').slice(0, 4000);
+      const diff = (dependency.diffStat || '').split('\n').slice(0, 60).join('\n');
+      const lines = [
+        `## ${dependency.title} (${dependency.id})`,
+      ];
+      if (dependency.isCrossProject) {
+        lines.push('');
+        lines.push(`- Dự án: ${dependency.projectName ? `${dependency.projectName} (${dependency.projectId})` : (dependency.projectId || '')}`);
+        lines.push(`- Repo: ${dependency.repoPath || '(không xác định)'}`);
+      }
+      lines.push(
+        '',
+        '### DONE',
+        done || '(không có DONE)',
+        '',
+        '### Review cuối',
+        dependency.review || '(chưa có review approved)',
+        '',
+        '### Diff stat',
+        diff || '(không lấy được diff stat)',
+      );
+      return lines.join('\n');
+    });
+    const full = sections.join('\n\n');
+    if (full.length <= limit) return full;
+
+    const note = '\n\n[Đã cắt bớt context dependency vì vượt giới hạn cấu hình.]';
+    const available = Math.max(0, limit - note.length);
+    return full.slice(0, available) + note.slice(0, limit);
+  }
+
+  private buildKnowledgeContext(entries: KnowledgeContext[], maxChars: number): string {
+    const limit = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : 12000;
+    const full = ['# Sổ kiến thức dự án', '', ...entries.map((entry) => `- ${entry.content} _(task: ${entry.taskId})`)].join('\n');
+    if (full.length <= limit) return full;
+    return full.slice(0, limit);
   }
 
   /**

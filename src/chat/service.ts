@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ChildProcess } from 'node:child_process';
@@ -15,16 +16,21 @@ import {
   QuotaUsageRepo,
   EventRepo,
   ChatSessionRow,
+  ChatRetryRepo,
+  ChatRetryRow,
 } from '../db/index.js';
+import { PermissionBroker } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
-import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser } from './parse.js';
-import { ClaudeFailoverState } from './failover.js';
+import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
+import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage, ClaudeQuotaSignal } from './parse.js';
+import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
 import {
   findClaudeBin,
   checkClaudePartialSupport,
   checkClaudeStreamJsonSupport,
   ensureChatMcpConfig,
+  chatMcpConfigPath,
   buildClaudeArgs,
   spawnClaude,
   killProcessGroup,
@@ -32,6 +38,7 @@ import {
   streamJsonMessage,
   buildHubSnapshot,
   readHubSnapshotFiles,
+  FORK_SUMMARY_PROMPT,
 } from './claude.js';
 
 async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
@@ -54,6 +61,7 @@ export interface QueuedTurn {
   mode: 'safe' | 'full';
   claudeSessionId: string | null;
   model: string;
+  profileName: string | null;
 }
 
 export interface RunningTurn {
@@ -64,6 +72,13 @@ export interface RunningTurn {
   cancelled: boolean;
   persistent?: boolean;
   cancelTimer?: NodeJS.Timeout;
+  idleTimer?: NodeJS.Timeout;
+  waitingPermission?: boolean;
+  pendingToolUse?: boolean;
+  isCompact?: boolean;
+  isForkSummary?: boolean;
+  accumulatedText?: string;
+  onFinish?: (err?: Error, result?: { contextTokens?: number; summary?: string }) => void;
 }
 
 interface PersistentProcess {
@@ -74,7 +89,10 @@ interface PersistentProcess {
   idleTimer?: NodeJS.Timeout;
   lastUsedAt: number;
   model: string;
+  profileName: string | null;
   stderrOutput: string;
+  lastAssistantUsage?: AssistantUsage;
+  limitResetSeconds?: number;
 }
 
 export class ChatService {
@@ -84,11 +102,13 @@ export class ChatService {
   private persistentProcesses = new Map<string, PersistentProcess>();
   private snapshotAt = new Map<string, number>();
   private snapshotEventAt = new Map<string, number>();
+  private retryTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     public config: AgentHubConfig,
     public chatSessionRepo: ChatSessionRepo,
     public chatMessageRepo: ChatMessageRepo,
+    public permissionBroker: PermissionBroker,
     public projectRepo: ProjectRepo,
     public eventBus: EventBus,
     public taskRepo?: TaskRepo,
@@ -97,7 +117,7 @@ export class ChatService {
     public quotaMarkRepo?: QuotaMarkRepo,
     public quotaUsageRepo?: QuotaUsageRepo,
     public eventRepo?: EventRepo,
-    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState },
+    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo },
   ) {
     if (options?.claudeBin) {
       this.claudeBinOverride = options.claudeBin;
@@ -105,9 +125,12 @@ export class ChatService {
     this.failoverState = options?.failoverState || new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'));
     // Daemon khởi động lại thì reset busy=0 cho mọi phiên
     this.chatSessionRepo.resetAllBusy();
+    this.retryRepo = options?.retryRepo;
+    for (const retry of this.retryRepo?.getPending() || []) this.armRetry(retry);
   }
 
   private failoverState: ClaudeFailoverState;
+  private retryRepo?: ChatRetryRepo;
 
   private hubSnapshot(session: ChatSessionRow, refresh = false): string {
     const project = session.projectId ? this.projectRepo.get(session.projectId) : undefined;
@@ -123,7 +146,7 @@ export class ChatService {
       projects: this.projectRepo.getAll().map(({ id, name, path: projectPath, defaultBranch }) => ({ id, name, path: projectPath, defaultBranch })),
       tasks: this.taskRepo?.getAll().map(({ id, projectId, title, status }) => ({ id, projectId, title, status })) || [],
       runs: this.runRepo?.getRunning().map(({ taskId, model, outcome }) => ({ taskId, model, outcome })) || [],
-      profiles: this.profileRepo?.getAll().map(({ name, engine, email, authState }) => ({ name, engine, email, authState })) || [],
+      profiles: this.profileRepo?.getAll().filter((profile) => Boolean(profile.enabled)).map(({ name, engine, email, authState, enabled }) => ({ name, engine, email, authState, enabled })) || [],
       quotaUsage: this.quotaUsageRepo?.getAll() || [],
       quotaMarks: this.quotaMarkRepo?.getAll() || [],
       currentProject: project ? { id: project.id, path: project.path } : null,
@@ -143,15 +166,166 @@ export class ChatService {
     return this.failoverState.snapshot();
   }
 
-  private recordClaudeQuota(streamText: string, stderr: string, exitCode?: number | null): void {
+  getClaudeApiKeyStatus(): { configured: boolean } {
+    return { configured: this.failoverState.snapshot().apiKeyConfigured };
+  }
+
+  setClaudeApiKey(value: string): void {
+    this.failoverState.setApiKey(value);
+  }
+
+  configureFailoverSteps(steps: ClaudeFallbackStep[]): void {
+    this.failoverState.configureSteps(steps);
+  }
+
+  listPermissions(sessionId?: string) {
+    return this.permissionBroker.listPending(sessionId).map((row) => ({
+      ...row,
+      input: JSON.parse(row.input) as Record<string, unknown>,
+    }));
+  }
+
+  decidePermission(id: string, decision: 'allow' | 'deny' | 'allow_always', message?: string): { ok: boolean } {
+    if (!this.permissionBroker.resolve(id, decision, message)) {
+      throw new HttpError(404, 'not_found', 'Yêu cầu cấp quyền không tồn tại hoặc đã được xử lý');
+    }
+    const request = this.permissionBroker.get(id);
+    if (request) {
+      this.emitEvent('chat.permission_resolved', {
+        id,
+        sessionId: request.sessionId,
+        messageId: request.messageId,
+        decision,
+        message: message || null,
+      });
+      this.chatSessionRepo.updateState(request.sessionId, 'running');
+    }
+    return { ok: true };
+  }
+
+  async requestPermission(input: { sessionId: string; messageId?: string | null; toolName: string; input: Record<string, unknown>; kind?: 'brain' | 'user' }) {
+    const running = this.runningTurns.get(input.sessionId);
+    if (running) {
+      running.waitingPermission = true;
+      this.pauseTurnWatchdog(running);
+    }
+    this.setSessionState(input.sessionId, 'waiting_permission');
+    const result = await this.permissionBroker.request(input);
+    if (running && this.runningTurns.get(input.sessionId) === running && !running.cancelled) {
+      running.waitingPermission = false;
+      this.resetTurnWatchdog(running);
+    }
+    const latest = this.permissionBroker.getLatest(input.sessionId, input.messageId, input.toolName);
+    if (latest) this.emitEvent('chat.permission_resolved', { id: latest.id, sessionId: input.sessionId, decision: latest.status });
+    if (this.chatSessionRepo.get(input.sessionId)?.state === 'waiting_permission') {
+      this.setSessionState(input.sessionId, 'running');
+    }
+    return result;
+  }
+
+  private recordClaudeQuota(streamText: string, stderr: string, exitCode?: number | null): ClaudeQuotaSignal {
     const result = detectClaudeQuota({ streamText, stderr, exitCode });
-    if (!result.exhausted) return;
-    const snapshot = this.failoverState.activate(result.resetSeconds || this.config.reviewer.failoverSec, 'claude_usage_limit');
+    if (!result.exhausted) return result;
+    const snapshot = this.failoverState.snapshot().active
+      ? this.failoverState.advance('claude_usage_limit')
+      : this.failoverState.activate(result.resetSeconds || this.config.reviewer.failoverSec, 'claude_usage_limit');
     this.eventBus.emit('claude.quota_exhausted', undefined, {
       until: snapshot.until,
       reason: snapshot.reason,
     });
-    this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until });
+    this.eventBus.emit('claude.fallback_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });
+    this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until, step: snapshot.step });
+    return result;
+  }
+
+  private shouldRetryLimit(): boolean {
+    const snapshot = this.failoverState.snapshot();
+    return !snapshot.active || snapshot.step?.type === 'wait';
+  }
+
+  private scheduleLimitRetry(turn: QueuedTurn, resetSeconds?: number, message?: string): boolean {
+    if (!this.retryRepo || !this.shouldRetryLimit()) return false;
+    const existing = this.retryRepo.get(turn.messageId);
+    const attempts = existing?.attempts || 0;
+    if (attempts >= 6) {
+      this.retryRepo.markFailed(turn.messageId);
+      return false;
+    }
+    const resetAt = Math.floor(Date.now() / 1000) + (resetSeconds || 5 * 3600);
+    if (existing) this.retryRepo.defer(turn.messageId, resetAt);
+    else this.retryRepo.insert({ sessionId: turn.sessionId, messageId: turn.messageId, text: turn.text, resetAt });
+    this.chatSessionRepo.setWaitingLimit(turn.sessionId, resetAt);
+    this.emitEvent('chat.error', { sessionId: turn.sessionId, messageId: turn.messageId, message: message || 'Claude đã chạm giới hạn sử dụng', pendingRetry: true, resetAt });
+    this.emitEvent('chat.limit_waiting', { sessionId: turn.sessionId, messageId: turn.messageId, resetAt, attempts });
+    this.armRetry(this.retryRepo.get(turn.messageId)!);
+    return true;
+  }
+
+  private armRetry(retry: ChatRetryRow): void {
+    const old = this.retryTimers.get(retry.messageId);
+    if (old) clearTimeout(old);
+    const delay = Math.max(0, retry.resetAt * 1000 + 60_000 - Date.now());
+    const timer = setTimeout(() => this.runRetry(retry.messageId), delay);
+    timer.unref?.();
+    this.retryTimers.set(retry.messageId, timer);
+  }
+
+  private runRetry(messageId: string): void {
+    const retry = this.retryRepo?.get(messageId);
+    if (!retry || retry.status !== 'pending') return;
+    if (retry.attempts >= 6) { this.retryRepo?.markFailed(messageId); return; }
+    this.retryRepo?.markSent(messageId);
+    this.chatSessionRepo.clearWaitingLimit(retry.sessionId);
+    const session = this.chatSessionRepo.get(retry.sessionId);
+    if (!session) return;
+    this.queue.push({ sessionId: retry.sessionId, messageId: retry.messageId, text: retry.text, projectId: session.projectId, mode: session.mode, claudeSessionId: session.claudeSessionId, model: session.model, profileName: session.profileName });
+    this.chatSessionRepo.setBusy(retry.sessionId, 1);
+    this.setSessionState(retry.sessionId, 'running');
+    this.processQueue();
+  }
+
+  cancelLimitRetry(sessionId: string): { ok: boolean } {
+    const retry = this.retryRepo?.getPending().find((item) => item.sessionId === sessionId);
+    if (!retry) return { ok: false };
+    const timer = this.retryTimers.get(retry.messageId); if (timer) clearTimeout(timer);
+    this.retryTimers.delete(retry.messageId);
+    this.retryRepo?.markCancelled(retry.messageId);
+    this.chatSessionRepo.clearWaitingLimit(sessionId);
+    this.emitEvent('chat.limit_cancelled', { sessionId, messageId: retry.messageId });
+    return { ok: true };
+  }
+
+  retryLimitNow(sessionId: string): { ok: boolean } {
+    const retry = this.retryRepo?.getPending().find((item) => item.sessionId === sessionId);
+    if (!retry) return { ok: false };
+    this.retryRepo?.defer(retry.messageId, Math.floor(Date.now() / 1000) - 1);
+    this.runRetry(retry.messageId);
+    return { ok: true };
+  }
+
+  private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string>; pausedUntil?: number } {
+    const snapshot = this.failoverState.snapshot();
+    const step = snapshot.active ? snapshot.step : null;
+    if (!step) return { model: turn.model, profileName: turn.profileName };
+    if (step.type === 'wait') return { model: turn.model, profileName: turn.profileName, pausedUntil: snapshot.until || undefined };
+    if (step.type === 'model') return { model: step.model, profileName: turn.profileName };
+    if (step.type === 'profile') {
+      const selected = step.profile
+        ? this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude' && profile.name === step.profile && profile.name !== turn.profileName && isProfileLoggedIn(profile))?.name
+        : this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude' && profile.name !== turn.profileName && isProfileLoggedIn(profile))?.name;
+      if (selected) return { model: turn.model, profileName: selected };
+      const next = this.failoverState.advance('profile_unavailable');
+      this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt });
+      return this.failoverExecution(turn);
+    }
+    if (step.type === 'apiKey') {
+      const key = this.failoverState.getApiKey();
+      if (key && snapshot.dailyCostUSD < step.dailyCapUSD) return { model: turn.model, profileName: turn.profileName, env: { ANTHROPIC_API_KEY: key } };
+      const next = this.failoverState.advance(key ? 'daily_cap_reached' : 'api_key_unconfigured');
+      this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt, dailyCostUSD: next.dailyCostUSD });
+      return this.failoverExecution(turn);
+    }
+    return { model: turn.model, profileName: turn.profileName };
   }
 
   setClaudeBinOverride(bin?: string): void {
@@ -175,13 +349,22 @@ export class ChatService {
     this.queue = [];
   }
 
-  listSessions(): Array<{
+  listSessions(options?: { search?: string; archived?: string | number | boolean }): Array<{
     id: string;
     projectId: string | null;
     title: string | null;
     mode: 'safe' | 'full';
     model: string;
+    profileName: string | null;
     busy: number;
+    state: ChatSessionRow['state'];
+    pinned: number;
+    archived: number;
+    lastMessageAt: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    contextTokens: number;
+    createdAt: string;
     updatedAt: string;
     lastMessage?: {
       id: string;
@@ -190,7 +373,18 @@ export class ChatService {
       createdAt: string;
     };
   }> {
-    const sessions = this.chatSessionRepo.getAll();
+    const search = options?.search?.trim();
+    const archivedParam = options?.archived;
+    const archivedFilter: number | null =
+      archivedParam === 'all'
+        ? null
+        : archivedParam === '1' || archivedParam === 1 || archivedParam === true
+        ? 1
+        : 0;
+
+    const sessions = search
+      ? this.chatSessionRepo.search(search, { archived: archivedFilter })
+      : this.chatSessionRepo.getAll({ archived: archivedFilter });
     return sessions.map((s) => {
       const last = this.chatMessageRepo.getLastBySession(s.id);
       const res: {
@@ -199,7 +393,16 @@ export class ChatService {
         title: string | null;
         mode: 'safe' | 'full';
         model: string;
+        profileName: string | null;
         busy: number;
+        state: ChatSessionRow['state'];
+        pinned: number;
+        archived: number;
+        lastMessageAt: string | null;
+        inputTokens: number;
+        outputTokens: number;
+        contextTokens: number;
+        createdAt: string;
         updatedAt: string;
         lastMessage?: {
           id: string;
@@ -213,7 +416,16 @@ export class ChatService {
         title: s.title,
         mode: s.mode,
         model: s.model,
+        profileName: s.profileName,
         busy: s.busy,
+        state: s.state || 'idle',
+        pinned: s.pinned ?? 0,
+        archived: s.archived ?? 0,
+        lastMessageAt: s.lastMessageAt ?? last?.createdAt ?? null,
+        inputTokens: s.inputTokens ?? 0,
+        outputTokens: s.outputTokens ?? 0,
+        contextTokens: s.contextTokens ?? 0,
+        createdAt: s.createdAt,
         updatedAt: s.updatedAt,
       };
       if (last) {
@@ -233,15 +445,10 @@ export class ChatService {
     title?: string | null;
     mode?: 'safe' | 'full';
     model?: string;
+    profileName?: string | null;
+    kind?: 'chat' | 'brain';
   }): ChatSessionRow {
-    const mode = body.mode || 'safe';
-    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
-      throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
-    }
-    const model = body.model ?? this.config.chat.model;
-    if (model !== '' && model !== 'sonnet' && model !== 'haiku') {
-      throw new HttpError(400, 'bad_request', 'Model chat phải là mặc định, sonnet hoặc haiku');
-    }
+    const { mode, model } = this.validateSessionOptions(body);
 
     const id = crypto.randomUUID();
     const title = body.title && body.title.trim().length > 0 ? body.title.trim() : 'Cuộc trò chuyện mới';
@@ -253,19 +460,97 @@ export class ChatService {
       mode,
       model,
       busy: 0,
+      profileName: body.profileName ?? resolveClaudeProfile(
+        this.profileRepo || { getAll: () => [] },
+        this.config.chat.claudeProfile,
+        this.config.chat.claudeProfileExplicit,
+      ),
+      kind: body.kind,
     });
 
+    const session = this.chatSessionRepo.get(id)!;
+    if (body.profileName && session.profileName && this.profileRepo && !this.profileRepo.get(session.profileName)) {
+      throw new HttpError(400, 'bad_request', `Hồ sơ Claude "${session.profileName}" không tồn tại`);
+    }
+    return session;
+  }
+
+  getOrCreateSession(id: string, body: {
+    title?: string | null;
+    projectId?: string | null;
+    mode?: 'safe' | 'full';
+    model?: string;
+    profileName?: string | null;
+    kind?: 'chat' | 'brain';
+  }): ChatSessionRow {
+    const existing = this.chatSessionRepo.get(id);
+    if (existing) return existing;
+    const { mode, model } = this.validateSessionOptions(body);
+    this.chatSessionRepo.insert({
+      id,
+      projectId: body.projectId || null,
+      title: body.title || 'Cuộc trò chuyện Telegram',
+      mode,
+      model,
+      busy: 0,
+      profileName: body.profileName ?? resolveClaudeProfile(
+        this.profileRepo || { getAll: () => [] },
+        this.config.chat.claudeProfile,
+        this.config.chat.claudeProfileExplicit,
+      ),
+      kind: body.kind,
+    });
     return this.chatSessionRepo.get(id)!;
   }
 
-  updateSession(id: string, body: { title?: string }): ChatSessionRow {
+  private validateSessionOptions(body: {
+    mode?: 'safe' | 'full';
+    model?: string;
+  }): { mode: 'safe' | 'full'; model: string } {
+    const mode = body.mode || 'safe';
+    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
+      throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
+    }
+    const model = body.model ?? this.config.chat.model;
+    const allowedModels = new Set(['', ...(this.config.chat.models || ['opus', 'sonnet', 'haiku']), this.config.chat.model]);
+    if (!allowedModels.has(model)) {
+      throw new HttpError(400, 'bad_request', 'Model chat phải là mặc định, sonnet hoặc haiku');
+    }
+    return { mode, model };
+  }
+
+  updateSession(
+    id: string,
+    body: {
+      title?: string;
+      pinned?: boolean | number;
+      archived?: boolean | number;
+      model?: string;
+    },
+  ): ChatSessionRow {
     const session = this.chatSessionRepo.get(id);
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${id}" không tồn tại`);
     }
 
+    if (body.model !== undefined) {
+      const { model } = this.validateSessionOptions({ model: body.model });
+      if (session.busy === 1 || this.runningTurns.has(id)) {
+        throw new HttpError(409, 'conflict', 'Hãy đợi lượt chat hiện tại kết thúc trước khi đổi model');
+      }
+      const proc = this.persistentProcesses.get(id);
+      if (proc) this.closePersistentProcess(proc);
+      this.chatSessionRepo.updateModel(id, model);
+    }
+
     if (body.title !== undefined) {
       this.chatSessionRepo.updateTitle(id, body.title);
+    }
+    if (body.pinned !== undefined) {
+      this.chatSessionRepo.updatePinned(id, body.pinned ? 1 : 0);
+    }
+    if (body.archived !== undefined) {
+      this.chatSessionRepo.updateArchived(id, body.archived ? 1 : 0);
     }
 
     return this.chatSessionRepo.get(id)!;
@@ -281,47 +566,121 @@ export class ChatService {
       throw new HttpError(409, 'conflict', 'Không thể xóa phiên đang bận');
     }
 
+    // Close persistent process if any
+    const proc = this.persistentProcesses.get(id);
+    if (proc) {
+      this.closePersistentProcess(proc);
+    }
+
     // Remove from queue if any
     this.queue = this.queue.filter((t) => t.sessionId !== id);
+    this.removeChatMcpConfig(id);
     this.chatSessionRepo.delete(id);
     return { ok: true };
   }
 
   listMessages(
     sessionId: string,
-    limit = 200,
-  ): Array<{
-    id: string;
-    sessionId: string;
-    role: string;
-    content: string;
-    meta: unknown;
-    createdAt: string;
-  }> {
+    optionsOrLimit?: number | { limit?: number; before?: string },
+  ): {
+    messages: Array<{
+      id: string;
+      sessionId: string;
+      role: string;
+      content: string;
+      meta: unknown;
+      createdAt: string;
+    }>;
+    hasMore: boolean;
+  } {
     const session = this.chatSessionRepo.get(sessionId);
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
     }
 
-    const messages = this.chatMessageRepo.getBySession(sessionId, limit);
-    return messages.map((m) => {
-      let parsedMeta: unknown = null;
-      if (m.meta) {
-        try {
-          parsedMeta = JSON.parse(m.meta);
-        } catch {
-          parsedMeta = m.meta;
+    const limit = typeof optionsOrLimit === 'number'
+      ? optionsOrLimit
+      : optionsOrLimit?.limit ?? 50;
+    const before = typeof optionsOrLimit === 'object'
+      ? optionsOrLimit?.before
+      : undefined;
+    const safeLimit = isNaN(limit) || limit <= 0 ? 50 : limit;
+
+    const { messages, hasMore } = this.chatMessageRepo.getPaginated(sessionId, before, safeLimit);
+
+    return {
+      messages: messages.map((m) => {
+        let parsedMeta: unknown = null;
+        if (m.meta) {
+          try {
+            parsedMeta = JSON.parse(m.meta);
+          } catch {
+            parsedMeta = m.meta;
+          }
         }
+        return {
+          id: m.id,
+          sessionId: m.sessionId,
+          role: m.role,
+          content: m.content,
+          meta: parsedMeta,
+          createdAt: m.createdAt,
+        };
+      }),
+      hasMore,
+    };
+  }
+
+  exportSession(sessionId: string): string {
+    const session = this.chatSessionRepo.get(sessionId);
+    if (!session) {
+      throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
+    }
+
+    const messages = this.chatMessageRepo.getBySession(sessionId, 100000);
+    const lines: string[] = [];
+    lines.push(`# ${session.title || 'Cuộc trò chuyện'}\n`);
+    lines.push(`- **ID:** \`${session.id}\``);
+    lines.push(`- **Mode:** \`${session.mode}\``);
+    if (session.model) {
+      lines.push(`- **Model:** \`${session.model}\``);
+    }
+    lines.push(`- **Created:** ${session.createdAt}`);
+    if (session.inputTokens > 0 || session.outputTokens > 0) {
+      lines.push(
+        `- **Tokens:** ${session.inputTokens} input, ${session.outputTokens} output (${session.contextTokens} context)`,
+      );
+    }
+    lines.push('\n---\n');
+
+    for (const msg of messages) {
+      let roleLabel = 'User';
+      if (msg.role === 'assistant') {
+        roleLabel = 'Assistant';
+      } else if (msg.role === 'tool') {
+        let toolName = '';
+        if (msg.meta) {
+          try {
+            const parsed = JSON.parse(msg.meta);
+            if (parsed && typeof parsed.name === 'string') {
+              toolName = `: ${parsed.name}`;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        roleLabel = `Tool${toolName}`;
+      } else if (msg.role === 'error') {
+        roleLabel = 'Error';
+      } else if (msg.role === 'system') {
+        roleLabel = 'System';
       }
-      return {
-        id: m.id,
-        sessionId: m.sessionId,
-        role: m.role,
-        content: m.content,
-        meta: parsedMeta,
-        createdAt: m.createdAt,
-      };
-    });
+
+      lines.push(`### ${roleLabel}\n`);
+      lines.push(`${msg.content}\n`);
+    }
+
+    return lines.join('\n');
   }
 
   sendMessage(
@@ -349,6 +708,19 @@ export class ChatService {
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
 
+    // Auto set title from first user message (cut to 60 chars) if not yet set
+    const isFirstMessage = this.chatMessageRepo.getBySession(sessionId, 1).length === 0;
+    const needsTitle = !session.title || session.title.trim() === '' || session.title === 'Cuộc trò chuyện mới';
+    if (isFirstMessage && needsTitle) {
+      const autoTitle = text.trim().slice(0, 60);
+      if (autoTitle) {
+        this.chatSessionRepo.updateTitle(sessionId, autoTitle);
+        session.title = autoTitle;
+      }
+    }
+
+    this.chatSessionRepo.touchLastMessage(sessionId);
+
     // Store user message
     this.chatMessageRepo.insert({
       id: userMessageId,
@@ -356,9 +728,16 @@ export class ChatService {
       role: 'user',
       content: text,
     });
+    this.emitEvent('chat.message', {
+      sessionId,
+      messageId: userMessageId,
+      role: 'user',
+      content: text,
+    });
 
     // Mark session busy
     this.chatSessionRepo.setBusy(sessionId, 1);
+    this.setSessionState(sessionId, 'running');
 
     // Enqueue turn
     this.enqueueTurn({
@@ -369,6 +748,7 @@ export class ChatService {
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
       model: session.model,
+      profileName: session.profileName,
     });
 
     return { userMessageId, assistantMessageId };
@@ -393,6 +773,7 @@ export class ChatService {
     if (queuedIndex >= 0) {
       this.queue.splice(queuedIndex, 1);
       this.chatSessionRepo.setBusy(sessionId, 0);
+      this.setSessionState(sessionId, 'idle');
       return { ok: true };
     }
 
@@ -408,6 +789,7 @@ export class ChatService {
             if (running.child.pid) killProcessGroup(running.child.pid);
             this.runningTurns.delete(sessionId);
             this.chatSessionRepo.setBusy(sessionId, 0);
+            this.setSessionState(sessionId, 'idle');
             this.emitChatError(sessionId, running.messageId, 'Đã hủy lượt chat');
             const proc = this.persistentProcesses.get(sessionId);
             if (proc) this.closePersistentProcess(proc);
@@ -421,6 +803,7 @@ export class ChatService {
       }
       this.runningTurns.delete(sessionId);
       this.chatSessionRepo.setBusy(sessionId, 0);
+      this.setSessionState(sessionId, 'idle');
       this.emitChatError(sessionId, running.messageId, 'Đã hủy lượt chat');
       setBrainActivity('idle').catch(() => {});
       this.processQueue();
@@ -429,7 +812,366 @@ export class ChatService {
 
     // Session not currently running
     this.chatSessionRepo.setBusy(sessionId, 0);
+    this.setSessionState(sessionId, 'idle');
     return { ok: true };
+  }
+
+  async compactSession(sessionId: string): Promise<{ ok: boolean; contextTokens?: number }> {
+    const session = this.chatSessionRepo.get(sessionId);
+    if (!session) {
+      throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
+    }
+
+    if (session.busy === 1 || this.runningTurns.has(sessionId)) {
+      throw new HttpError(409, 'conflict', 'Phiên đang bận');
+    }
+
+    const claudeBin = findClaudeBin(this.claudeBinOverride || this.config.chat?.claudeBin);
+    if (!claudeBin) {
+      throw new HttpError(500, 'server_error', 'Không tìm thấy lệnh claude trên hệ thống');
+    }
+
+    this.chatSessionRepo.setBusy(sessionId, 1);
+    this.setSessionState(sessionId, 'running');
+
+    return new Promise<{ ok: boolean; contextTokens?: number }>((resolve, reject) => {
+      const isPersistent = checkClaudeStreamJsonSupport(claudeBin);
+
+      if (isPersistent) {
+        const proc = this.ensurePersistentProcess(session, claudeBin);
+        if (!proc) {
+          this.chatSessionRepo.setBusy(sessionId, 0);
+          this.setSessionState(sessionId, 'idle');
+          return reject(new HttpError(503, 'service_unavailable', 'Không thể khởi động tiến trình Claude'));
+        }
+
+        const messageId = crypto.randomUUID();
+        const timeoutTimer = setTimeout(() => {
+          this.timeoutPersistentTurn(proc);
+          reject(new HttpError(504, 'gateway_timeout', 'Lượt nén ngữ cảnh quá thời gian'));
+        }, 5 * 60 * 1000);
+
+        const running: RunningTurn = {
+          sessionId,
+          messageId,
+          child: proc.child,
+          timeoutTimer,
+          cancelled: false,
+          persistent: true,
+          isCompact: true,
+          onFinish: (err, res) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve({ ok: true, contextTokens: res?.contextTokens });
+            }
+          },
+        };
+
+        proc.active = running;
+        proc.lastUsedAt = Date.now();
+        proc.lastAssistantUsage = undefined;
+        this.runningTurns.set(sessionId, running);
+        this.armTurnWatchdog(running);
+
+        try {
+          proc.child.stdin?.write(streamJsonMessage('/compact'));
+        } catch (err) {
+          clearTimeout(timeoutTimer);
+          this.finishPersistentError(
+            proc,
+            {
+              sessionId,
+              messageId,
+              text: '/compact',
+              projectId: null,
+              mode: session.mode,
+              claudeSessionId: session.claudeSessionId,
+              model: session.model,
+              profileName: session.profileName,
+            },
+            err instanceof Error ? err.message : 'Không thể gửi lệnh /compact',
+          );
+          reject(err);
+        }
+      } else {
+        // Non-persistent mode fallback
+        let cwd = os.homedir();
+        if (session.projectId) {
+          const project = this.projectRepo.get(session.projectId);
+          if (project?.path) cwd = project.path;
+        }
+
+        const mcpConfigPath = ensureChatMcpConfig(
+          this.config.hubHome,
+          sessionId,
+          this.config.port,
+          this.config.chat.permissionTimeoutSec,
+          session.projectId,
+        );
+        const args = buildClaudeArgs({ planning: this.config.planning,
+          text: '/compact',
+          claudeSessionId: session.claudeSessionId,
+          mode: session.mode,
+          mcpConfigPath,
+          model: session.model,
+        });
+
+        let child: ChildProcess;
+        try {
+          child = spawnClaude(claudeBin, args, cwd, '/compact', {
+            disableToolSearch: this.config.chat.disableToolSearch,
+            chatSessionId: sessionId,
+            port: this.config.port,
+          });
+        } catch (err: unknown) {
+          this.chatSessionRepo.setBusy(sessionId, 0);
+          this.setSessionState(sessionId, 'idle');
+          return reject(err);
+        }
+
+        const parser = new StreamChunkParser();
+        let lastAssistantUsage: AssistantUsage | undefined;
+        let resultUsage:
+          | {
+              inputTokens: number;
+              outputTokens: number;
+              cacheReadInputTokens?: number;
+              cacheCreationInputTokens?: number;
+            }
+          | undefined = undefined;
+
+        child.stdout?.on('data', (chunk: Buffer) => {
+          for (const ev of parser.feed(chunk)) {
+            if (ev.type === 'assistant_text' && ev.usage) {
+              lastAssistantUsage = ev.usage;
+            } else if (ev.type === 'result') {
+              if (ev.usage) resultUsage = ev.usage;
+            }
+          }
+        });
+
+        child.on('close', (code) => {
+          this.chatSessionRepo.setBusy(sessionId, 0);
+          this.setSessionState(sessionId, 'idle');
+          if (code !== 0) {
+            return reject(new HttpError(500, 'compact_failed', `Claude process exited with code ${code}`));
+          }
+          const finalContextTokens = lastAssistantUsage?.contextTokens ?? resultUsage?.inputTokens ?? 0;
+          if (resultUsage) {
+            this.chatSessionRepo.addUsage(sessionId, {
+              ...resultUsage,
+              contextTokens: finalContextTokens,
+            });
+          }
+          this.chatMessageRepo.insert({
+            id: crypto.randomUUID(),
+            sessionId,
+            role: 'system',
+            content: 'Đã nén ngữ cảnh',
+          });
+          this.emitEvent('chat.compacted', { sessionId, contextTokens: finalContextTokens });
+          resolve({ ok: true, contextTokens: finalContextTokens });
+        });
+      }
+    });
+  }
+
+  async forkSummary(sessionId: string): Promise<{ id: string; sessionId: string }> {
+    const session = this.chatSessionRepo.get(sessionId);
+    if (!session) {
+      throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
+    }
+
+    if (session.busy === 1 || this.runningTurns.has(sessionId)) {
+      throw new HttpError(409, 'conflict', 'Phiên đang bận');
+    }
+
+    const claudeBin = findClaudeBin(this.claudeBinOverride || this.config.chat?.claudeBin);
+    if (!claudeBin) {
+      throw new HttpError(500, 'server_error', 'Không tìm thấy lệnh claude trên hệ thống');
+    }
+
+    this.chatSessionRepo.setBusy(sessionId, 1);
+    this.setSessionState(sessionId, 'running');
+
+    return new Promise<{ id: string; sessionId: string }>((resolve, reject) => {
+      const isPersistent = checkClaudeStreamJsonSupport(claudeBin);
+
+      if (isPersistent) {
+        const proc = this.ensurePersistentProcess(session, claudeBin);
+        if (!proc) {
+          this.chatSessionRepo.setBusy(sessionId, 0);
+          this.setSessionState(sessionId, 'idle');
+          return reject(new HttpError(503, 'service_unavailable', 'Không thể khởi động tiến trình Claude'));
+        }
+
+        const messageId = crypto.randomUUID();
+        const timeoutTimer = setTimeout(() => {
+          this.timeoutPersistentTurn(proc);
+          reject(new HttpError(504, 'gateway_timeout', 'Lượt tóm tắt quá thời gian'));
+        }, 5 * 60 * 1000);
+
+        const running: RunningTurn = {
+          sessionId,
+          messageId,
+          child: proc.child,
+          timeoutTimer,
+          cancelled: false,
+          persistent: true,
+          isForkSummary: true,
+          onFinish: (err, res) => {
+            if (err) {
+              reject(err);
+            } else {
+              try {
+                const summaryText = res?.summary || 'Bản tóm tắt phiên trò chuyện.';
+                const newSession = this.createSession({
+                  projectId: session.projectId,
+                  title: session.title ? `${session.title} (tóm tắt)` : 'Phiên mới (tóm tắt)',
+                  mode: session.mode,
+                  model: session.model,
+                  profileName: (session.profileName && this.profileRepo?.get(session.profileName)) ? session.profileName : undefined,
+                });
+
+                this.chatMessageRepo.insert({
+                  id: crypto.randomUUID(),
+                  sessionId: newSession.id,
+                  role: 'user',
+                  content: summaryText,
+                });
+                this.chatSessionRepo.touchLastMessage(newSession.id);
+
+                resolve({ id: newSession.id, sessionId: newSession.id });
+              } catch (createErr) {
+                reject(createErr);
+              }
+            }
+          },
+        };
+
+        proc.active = running;
+        proc.lastUsedAt = Date.now();
+        proc.lastAssistantUsage = undefined;
+        this.runningTurns.set(sessionId, running);
+        this.armTurnWatchdog(running);
+
+        try {
+          proc.child.stdin?.write(streamJsonMessage(FORK_SUMMARY_PROMPT));
+        } catch (err) {
+          clearTimeout(timeoutTimer);
+          this.finishPersistentError(
+            proc,
+            {
+              sessionId,
+              messageId,
+              text: FORK_SUMMARY_PROMPT,
+              projectId: null,
+              mode: session.mode,
+              claudeSessionId: session.claudeSessionId,
+              model: session.model,
+              profileName: session.profileName,
+            },
+            err instanceof Error ? err.message : 'Không thể gửi lệnh tóm tắt',
+          );
+          reject(err);
+        }
+      } else {
+        // Non-persistent mode fallback
+        let cwd = os.homedir();
+        if (session.projectId) {
+          const project = this.projectRepo.get(session.projectId);
+          if (project?.path) cwd = project.path;
+        }
+
+        const mcpConfigPath = ensureChatMcpConfig(
+          this.config.hubHome,
+          sessionId,
+          this.config.port,
+          this.config.chat.permissionTimeoutSec,
+          session.projectId,
+        );
+        const args = buildClaudeArgs({ planning: this.config.planning,
+          text: FORK_SUMMARY_PROMPT,
+          claudeSessionId: session.claudeSessionId,
+          mode: session.mode,
+          mcpConfigPath,
+          model: session.model,
+        });
+
+        let child: ChildProcess;
+        try {
+          child = spawnClaude(claudeBin, args, cwd, FORK_SUMMARY_PROMPT, {
+            disableToolSearch: this.config.chat.disableToolSearch,
+            chatSessionId: sessionId,
+            port: this.config.port,
+          });
+        } catch (err: unknown) {
+          this.chatSessionRepo.setBusy(sessionId, 0);
+          this.setSessionState(sessionId, 'idle');
+          return reject(err);
+        }
+
+        const parser = new StreamChunkParser();
+        let summaryResult = '';
+
+        child.stdout?.on('data', (chunk: Buffer) => {
+          for (const ev of parser.feed(chunk)) {
+            if (ev.type === 'assistant_text' && ev.text) {
+              summaryResult += ev.text;
+            } else if (ev.type === 'text_delta') {
+              summaryResult += ev.text;
+            } else if (ev.type === 'result' && ev.result) {
+              summaryResult = ev.result;
+            }
+          }
+        });
+
+        child.on('close', (code) => {
+          this.chatSessionRepo.setBusy(sessionId, 0);
+          this.setSessionState(sessionId, 'idle');
+          if (code !== 0) {
+            return reject(new HttpError(500, 'summary_failed', `Claude process exited with code ${code}`));
+          }
+          try {
+            const summaryText = summaryResult || 'Bản tóm tắt phiên trò chuyện.';
+            const newSession = this.createSession({
+              projectId: session.projectId,
+              title: session.title ? `${session.title} (tóm tắt)` : 'Phiên mới (tóm tắt)',
+              mode: session.mode,
+              model: session.model,
+              profileName: (session.profileName && this.profileRepo?.get(session.profileName)) ? session.profileName : undefined,
+            });
+
+            this.chatMessageRepo.insert({
+              id: crypto.randomUUID(),
+              sessionId: newSession.id,
+              role: 'user',
+              content: summaryText,
+            });
+            this.chatSessionRepo.touchLastMessage(newSession.id);
+
+            resolve({ id: newSession.id, sessionId: newSession.id });
+          } catch (createErr) {
+            reject(createErr);
+          }
+        });
+      }
+    });
+  }
+
+  private checkAutoCompact(sessionId: string): void {
+    const autoCompactPercent = this.config.chat?.autoCompactPercent ?? 85;
+    if (autoCompactPercent <= 0) return;
+    const session = this.chatSessionRepo.get(sessionId);
+    if (!session) return;
+    const CLAUDE_CONTEXT_WINDOW = 200_000;
+    const threshold = (autoCompactPercent / 100) * CLAUDE_CONTEXT_WINDOW;
+    if (session.contextTokens >= threshold) {
+      this.compactSession(sessionId).catch(() => {
+        // error logged/handled internally
+      });
+    }
   }
 
   private enqueueTurn(turn: QueuedTurn): void {
@@ -448,9 +1190,16 @@ export class ChatService {
   }
 
   private executeTurn(turn: QueuedTurn): void {
+    const planned = this.failoverExecution(turn);
+    if (planned.pausedUntil) {
+      const delay = Math.max(100, planned.pausedUntil * 1000 - Date.now());
+      setTimeout(() => { this.queue.push(turn); this.processQueue(); }, delay);
+      return;
+    }
     const claudeBin = findClaudeBin(this.claudeBinOverride || this.config.chat?.claudeBin);
     if (!claudeBin) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.setSessionState(turn.sessionId, 'error');
       const errMsg = 'Không tìm thấy lệnh claude trên hệ thống';
       this.chatMessageRepo.insert({
         id: turn.messageId,
@@ -478,17 +1227,19 @@ export class ChatService {
       }
     }
 
-    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome);
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId);
     const supportsPartial = checkClaudePartialSupport(claudeBin);
 
     const session = this.chatSessionRepo.get(turn.sessionId);
-    const args = buildClaudeArgs({
+    const execution = this.failoverExecution(turn);
+    const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
+    const args = buildClaudeArgs({ planning: this.config.planning,
       text: turn.text,
       claudeSessionId: turn.claudeSessionId,
       mode: turn.mode,
       mcpConfigPath,
       supportsPartial,
-      model: turn.model,
+      model: execution.model,
       hubSnapshot: session ? this.hubSnapshot(session) : undefined,
     });
 
@@ -496,9 +1247,10 @@ export class ChatService {
 
     let child: ChildProcess;
     try {
-      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch });
+      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: turn.sessionId, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     } catch (err: unknown) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.setSessionState(turn.sessionId, 'error');
       const errMsg = err instanceof Error ? err.message : 'Lỗi khởi chạy claude';
       this.chatMessageRepo.insert({
         id: turn.messageId,
@@ -522,6 +1274,7 @@ export class ChatService {
         }
         this.runningTurns.delete(turn.sessionId);
         this.chatSessionRepo.setBusy(turn.sessionId, 0);
+        this.setSessionState(turn.sessionId, 'error');
         const timeoutMsg = 'Lượt chat bị quá thời gian (15 phút)';
         this.chatMessageRepo.insert({
           id: turn.messageId,
@@ -543,14 +1296,18 @@ export class ChatService {
       cancelled: false,
     };
     this.runningTurns.set(turn.sessionId, runningTurn);
+    this.armTurnWatchdog(runningTurn);
 
     const parser = new StreamChunkParser();
     let accumulatedText = '';
     let hasStreamedPartials = false;
     let resultHandled = false;
+    let lastAssistantUsage: AssistantUsage | undefined;
+    let limitResetSeconds: number | undefined;
     const startTime = Date.now();
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      this.resetTurnWatchdog(runningTurn);
       const events = parser.feed(chunk);
       for (const ev of events) {
         if (ev.type === 'init') {
@@ -565,11 +1322,19 @@ export class ChatService {
           accumulatedText += ev.text;
           this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
         } else if (ev.type === 'assistant_text') {
-          if (!hasStreamedPartials) {
+          if (ev.usage) {
+            lastAssistantUsage = ev.usage;
+          }
+          if (ev.text && !hasStreamedPartials) {
             accumulatedText += ev.text;
             this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
           }
         } else if (ev.type === 'tool_use') {
+          if (ev.usage) {
+            lastAssistantUsage = ev.usage;
+          }
+          runningTurn.pendingToolUse = true;
+          this.pauseTurnWatchdog(runningTurn);
           this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
           this.chatMessageRepo.insert({
             id: crypto.randomUUID(),
@@ -578,6 +1343,17 @@ export class ChatService {
             content: ev.summary,
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
+        } else if (ev.type === 'permission_request') {
+          runningTurn.waitingPermission = true;
+          this.pauseTurnWatchdog(runningTurn);
+          this.setSessionState(turn.sessionId, 'waiting_permission');
+          this.emitEvent('chat.permission', { sessionId: turn.sessionId, messageId: turn.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
+        } else if (ev.type === 'tool_result') {
+          runningTurn.pendingToolUse = false;
+          runningTurn.waitingPermission = false;
+          this.resetTurnWatchdog(runningTurn);
+        } else if (ev.type === 'rate_limit_info' && /rejected|limited|exhausted/i.test(ev.status)) {
+          limitResetSeconds = ev.resetsAt ? Math.max(1, ev.resetsAt - Math.floor(Date.now() / 1000) + 60) : 5 * 3600;
         } else if (ev.type === 'result') {
           resultHandled = true;
           if (ev.result) accumulatedText += ev.result;
@@ -587,9 +1363,23 @@ export class ChatService {
               this.chatSessionRepo.updateClaudeSessionId(turn.sessionId, ev.sessionId);
             }
           }
+          if (ev.usage) {
+            const contextTokens = lastAssistantUsage?.contextTokens ?? ev.usage.inputTokens;
+            this.chatSessionRepo.addUsage(turn.sessionId, {
+              ...ev.usage,
+              contextTokens,
+            });
+          }
 
           if (ev.isError) {
             const errMsg = ev.result || 'Claude error';
+            const quota = detectClaudeQuota({ streamText: errMsg });
+            if (quota.exhausted && this.scheduleLimitRetry(turn, quota.resetSeconds, errMsg)) continue;
+            if (turn.claudeSessionId && /session|resume|conversation/i.test(errMsg) && /not found|invalid|unknown|exist/i.test(errMsg)) {
+              this.chatSessionRepo.clearClaudeSessionId(turn.sessionId);
+              this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: turn.sessionId, role: 'error', content: 'Đã mở phiên mới, ngữ cảnh cũ không còn' });
+            }
+            this.setSessionState(turn.sessionId, 'error');
             this.chatMessageRepo.insert({
               id: turn.messageId,
               sessionId: turn.sessionId,
@@ -598,6 +1388,14 @@ export class ChatService {
             });
             this.emitChatError(turn.sessionId, turn.messageId, errMsg);
           } else {
+            if (ev.costUsd !== undefined) {
+              const before = this.failoverState.snapshot();
+              const after = this.failoverState.recordCost(ev.costUsd);
+              if (before.step?.type === 'apiKey' && after.step?.type === 'apiKey' && ev.costUsd > 0) {
+                this.eventBus.emit('claude.fallback_changed', undefined, { step: after.step, reason: 'cost_recorded', resetAt: after.resetAt, dailyCostUSD: after.dailyCostUSD });
+              }
+            }
+            this.setSessionState(turn.sessionId, 'idle');
             const finalText = ev.result ?? accumulatedText;
             this.chatMessageRepo.insert({
               id: turn.messageId,
@@ -608,12 +1406,14 @@ export class ChatService {
                 costUsd: ev.costUsd,
                 numTurns: ev.numTurns,
                 durationMs: ev.durationMs,
+                ...(ev.usage ? { usage: ev.usage } : {}),
               }),
             });
             this.emitChatDone(turn.sessionId, turn.messageId, {
               durationMs: ev.durationMs ?? (Date.now() - startTime),
               costUsd: ev.costUsd,
               numTurns: ev.numTurns,
+              usage: ev.usage,
             });
           }
         }
@@ -627,6 +1427,7 @@ export class ChatService {
 
     child.on('close', (code) => {
       clearTimeout(timeoutTimer);
+      if (runningTurn.idleTimer) clearTimeout(runningTurn.idleTimer);
       const flushed = parser.flush();
       for (const ev of flushed) {
         if (ev.type === 'init' && ev.sessionId) {
@@ -639,11 +1440,19 @@ export class ChatService {
           accumulatedText += ev.text;
           this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
         } else if (ev.type === 'assistant_text') {
+          if (ev.usage) {
+            lastAssistantUsage = ev.usage;
+          }
           if (!hasStreamedPartials) {
             accumulatedText += ev.text;
             this.emitChatDelta(turn.sessionId, turn.messageId, ev.text);
           }
         } else if (ev.type === 'tool_use') {
+          if (ev.usage) {
+            lastAssistantUsage = ev.usage;
+          }
+          runningTurn.pendingToolUse = true;
+          this.pauseTurnWatchdog(runningTurn);
           this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
           this.chatMessageRepo.insert({
             id: crypto.randomUUID(),
@@ -652,14 +1461,21 @@ export class ChatService {
             content: ev.summary,
             meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
           });
+        } else if (ev.type === 'tool_result') {
+          runningTurn.pendingToolUse = false;
+          runningTurn.waitingPermission = false;
+          this.resetTurnWatchdog(runningTurn);
         }
       }
 
       const running = this.runningTurns.get(turn.sessionId);
       if (running && !running.cancelled) {
-        this.recordClaudeQuota(accumulatedText, stderrOutput, code);
+        const quota = this.recordClaudeQuota(accumulatedText, stderrOutput, code);
+        if (!quota.exhausted && limitResetSeconds) { quota.exhausted = true; quota.resetSeconds = limitResetSeconds; }
         if (!resultHandled) {
-          if (code !== 0) {
+          if (quota.exhausted && this.scheduleLimitRetry(turn, quota.resetSeconds, stderrOutput.trim())) {
+            // The original user message remains pending until the retry succeeds.
+          } else if (code !== 0) {
             const errMsg = stderrOutput.trim() || `Claude process exited with code ${code}`;
             try {
               this.chatMessageRepo.insert({
@@ -672,20 +1488,12 @@ export class ChatService {
               // ignore db error on shutdown
             }
             this.emitChatError(turn.sessionId, turn.messageId, errMsg);
+            this.setSessionState(turn.sessionId, 'error');
           } else {
-            try {
-              this.chatMessageRepo.insert({
-                id: turn.messageId,
-                sessionId: turn.sessionId,
-                role: 'assistant',
-                content: accumulatedText,
-              });
-            } catch {
-              // ignore db error on shutdown
-            }
-            this.emitChatDone(turn.sessionId, turn.messageId, {
-              durationMs: Date.now() - startTime,
-            });
+            const errMsg = 'Claude process đã dừng trước khi trả về kết quả';
+            try { this.chatMessageRepo.insert({ id: turn.messageId, sessionId: turn.sessionId, role: 'error', content: errMsg }); } catch { /* shutdown */ }
+            this.emitChatError(turn.sessionId, turn.messageId, errMsg);
+            this.setSessionState(turn.sessionId, 'error');
           }
         }
         this.runningTurns.delete(turn.sessionId);
@@ -696,6 +1504,9 @@ export class ChatService {
         }
         setBrainActivity('idle').catch(() => {});
         this.processQueue();
+        if (resultHandled) {
+          this.checkAutoCompact(turn.sessionId);
+        }
       }
     });
   }
@@ -712,7 +1523,9 @@ export class ChatService {
     const running: RunningTurn = { sessionId: turn.sessionId, messageId: turn.messageId, child: proc.child, timeoutTimer, cancelled: false, persistent: true };
     proc.active = running;
     proc.lastUsedAt = Date.now();
+    proc.lastAssistantUsage = undefined;
     this.runningTurns.set(turn.sessionId, running);
+    this.armTurnWatchdog(running);
     setBrainActivity('talking').catch(() => {});
     try {
       const lastSnapshot = this.snapshotAt.get(turn.sessionId) || 0;
@@ -734,16 +1547,19 @@ export class ChatService {
     }
     let cwd = os.homedir();
     if (session.projectId) cwd = this.projectRepo.get(session.projectId)?.path || cwd;
-    const proc = spawnClaude(claudeBin, buildClaudeArgs({
+    const execution = this.failoverExecution({ sessionId: session.id, messageId: '', text: '', projectId: session.projectId, mode: session.mode, claudeSessionId: session.claudeSessionId, model: session.model, profileName: session.profileName });
+    if (execution.pausedUntil) return undefined;
+    const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
+    const proc = spawnClaude(claudeBin, buildClaudeArgs({ planning: this.config.planning,
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
-      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome),
+      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec, session.projectId),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
-      model: session.model,
+      model: execution.model,
       hubSnapshot: this.hubSnapshot(session, (this.snapshotAt.get(session.id) || 0) > 0 && Date.now() - (this.snapshotAt.get(session.id) || 0) > 10 * 60 * 1000),
-    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch });
-    const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, stderrOutput: '' };
+    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: session.id, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
+    const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, profileName: session.profileName, stderrOutput: '' };
     this.persistentProcesses.set(session.id, state);
     proc.stdout?.on('data', (chunk: Buffer) => this.handlePersistentOutput(state, chunk));
     proc.stderr?.on('data', (chunk: Buffer) => { state.stderrOutput += chunk.toString('utf8'); });
@@ -753,16 +1569,41 @@ export class ChatService {
   }
 
   private handlePersistentOutput(proc: PersistentProcess, chunk: Buffer): void {
+    if (proc.active) this.resetTurnWatchdog(proc.active);
     for (const ev of proc.parser.feed(chunk)) {
       if ((ev.type === 'init' || ev.type === 'result') && ev.sessionId && !this.chatSessionRepo.get(proc.sessionId)?.claudeSessionId) {
         this.chatSessionRepo.updateClaudeSessionId(proc.sessionId, ev.sessionId);
       }
       if (ev.type === 'result' && proc.active) this.finishPersistentTurn(proc, ev);
+      else if (ev.type === 'rate_limit_info' && /rejected|limited|exhausted/i.test(ev.status)) proc.limitResetSeconds = ev.resetsAt ? Math.max(1, ev.resetsAt - Math.floor(Date.now() / 1000) + 60) : 5 * 3600;
       else if (ev.type === 'tool_use' && proc.active) {
+        if (ev.usage) proc.lastAssistantUsage = ev.usage;
+        proc.active.pendingToolUse = true;
+        this.pauseTurnWatchdog(proc.active);
         this.emitChatTool(proc.sessionId, proc.active.messageId, ev.name, ev.summary);
         this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }) });
-      } else if ((ev.type === 'text_delta' || ev.type === 'assistant_text') && proc.active) {
-        this.emitChatDelta(proc.sessionId, proc.active.messageId, ev.text);
+      } else if (ev.type === 'permission_request' && proc.active) {
+        proc.active.waitingPermission = true;
+        this.pauseTurnWatchdog(proc.active);
+        this.setSessionState(proc.sessionId, 'waiting_permission');
+        this.emitEvent('chat.permission', { sessionId: proc.sessionId, messageId: proc.active.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
+      } else if (ev.type === 'tool_result' && proc.active) {
+        proc.active.pendingToolUse = false;
+        proc.active.waitingPermission = false;
+        this.resetTurnWatchdog(proc.active);
+      } else if (ev.type === 'assistant_text' && proc.active) {
+        if (ev.usage) proc.lastAssistantUsage = ev.usage;
+        if (ev.text) {
+          proc.active.accumulatedText = (proc.active.accumulatedText || '') + ev.text;
+          if (!proc.active.isCompact && !proc.active.isForkSummary) {
+            this.emitChatDelta(proc.sessionId, proc.active.messageId, ev.text);
+          }
+        }
+      } else if (ev.type === 'text_delta' && proc.active) {
+        proc.active.accumulatedText = (proc.active.accumulatedText || '') + ev.text;
+        if (!proc.active.isCompact && !proc.active.isForkSummary) {
+          this.emitChatDelta(proc.sessionId, proc.active.messageId, ev.text);
+        }
       }
     }
   }
@@ -771,17 +1612,86 @@ export class ChatService {
     const running = proc.active;
     if (!running) return;
     clearTimeout(running.timeoutTimer);
+    if (running.idleTimer) clearTimeout(running.idleTimer);
     if (running.cancelTimer) clearTimeout(running.cancelTimer);
     proc.active = undefined;
     this.runningTurns.delete(proc.sessionId);
-    this.recordClaudeQuota(ev.result || '', proc.stderrOutput, 0);
+    const quota = this.recordClaudeQuota(ev.result || '', proc.stderrOutput, 0);
+    if (!quota.exhausted && proc.limitResetSeconds) { quota.exhausted = true; quota.resetSeconds = proc.limitResetSeconds; }
+    if (ev.costUsd !== undefined) this.failoverState.recordCost(ev.costUsd);
     this.chatSessionRepo.setBusy(proc.sessionId, 0);
+    let contextTokens = 0;
+    if (ev.usage) {
+      contextTokens = proc.lastAssistantUsage?.contextTokens ?? ev.usage.inputTokens;
+      this.chatSessionRepo.addUsage(proc.sessionId, {
+        ...ev.usage,
+        contextTokens,
+      });
+    }
+    proc.lastAssistantUsage = undefined;
+
+    const isCompact = running.isCompact;
+    const isForkSummary = running.isForkSummary;
+    const onFinish = running.onFinish;
+
+    proc.limitResetSeconds = undefined;
     if (ev.isError) {
+      const session = this.chatSessionRepo.get(proc.sessionId);
+      const retryTurn: QueuedTurn = { sessionId: proc.sessionId, messageId: running.messageId, text: this.chatMessageRepo.getBySession(proc.sessionId, 100000).find((message) => message.role === 'user' && message.id !== running.messageId)?.content || '', projectId: session?.projectId || null, mode: session?.mode || 'safe', claudeSessionId: session?.claudeSessionId || null, model: proc.model, profileName: proc.profileName };
+      if (quota.exhausted && retryTurn.text && this.scheduleLimitRetry(retryTurn, quota.resetSeconds, ev.result)) {
+        this.armIdleTimer(proc);
+        setBrainActivity('idle').catch(() => {});
+        this.processQueue();
+        return;
+      }
+      this.setSessionState(proc.sessionId, 'error');
+      if (session?.claudeSessionId && /session|resume|conversation/i.test(ev.result || '') && /not found|invalid|unknown|exist/i.test(ev.result || '')) {
+        this.chatSessionRepo.clearClaudeSessionId(proc.sessionId);
+        this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'error', content: 'Đã mở phiên mới, ngữ cảnh cũ không còn' });
+      }
       this.chatMessageRepo.insert({ id: running.messageId, sessionId: proc.sessionId, role: 'error', content: ev.result || 'Claude error' });
       this.emitChatError(proc.sessionId, running.messageId, ev.result || 'Claude error');
+      if (onFinish) onFinish(new Error(ev.result || 'Claude error'));
+    } else if (isCompact) {
+      this.setSessionState(proc.sessionId, 'idle');
+      this.chatMessageRepo.insert({
+        id: crypto.randomUUID(),
+        sessionId: proc.sessionId,
+        role: 'system',
+        content: 'Đã nén ngữ cảnh',
+      });
+      const updatedSess = this.chatSessionRepo.get(proc.sessionId);
+      const finalContext = updatedSess?.contextTokens ?? contextTokens;
+      this.emitEvent('chat.compacted', {
+        sessionId: proc.sessionId,
+        contextTokens: finalContext,
+      });
+      if (onFinish) onFinish(undefined, { contextTokens: finalContext });
+    } else if (isForkSummary) {
+      this.setSessionState(proc.sessionId, 'idle');
+      const summaryText = ev.result || running.accumulatedText || 'Bản tóm tắt phiên trò chuyện.';
+      if (onFinish) onFinish(undefined, { summary: summaryText });
     } else {
-      this.chatMessageRepo.insert({ id: running.messageId, sessionId: proc.sessionId, role: 'assistant', content: ev.result || '', meta: JSON.stringify({ costUsd: ev.costUsd, durationMs: ev.durationMs, numTurns: ev.numTurns }) });
-      this.emitChatDone(proc.sessionId, running.messageId, { durationMs: ev.durationMs || 0, costUsd: ev.costUsd, numTurns: ev.numTurns });
+      this.setSessionState(proc.sessionId, 'idle');
+      this.chatMessageRepo.insert({
+        id: running.messageId,
+        sessionId: proc.sessionId,
+        role: 'assistant',
+        content: ev.result || '',
+        meta: JSON.stringify({
+          costUsd: ev.costUsd,
+          durationMs: ev.durationMs,
+          numTurns: ev.numTurns,
+          ...(ev.usage ? { usage: ev.usage } : {}),
+        }),
+      });
+      this.emitChatDone(proc.sessionId, running.messageId, {
+        durationMs: ev.durationMs || 0,
+        costUsd: ev.costUsd,
+        numTurns: ev.numTurns,
+        usage: ev.usage,
+      });
+      this.checkAutoCompact(proc.sessionId);
     }
     proc.lastUsedAt = Date.now();
     this.armIdleTimer(proc);
@@ -790,10 +1700,15 @@ export class ChatService {
   }
 
   private finishPersistentError(proc: PersistentProcess, turn: QueuedTurn, message: string): void {
+    if (proc.active?.onFinish) {
+      proc.active.onFinish(new Error(message));
+    }
     if (proc.active) clearTimeout(proc.active.timeoutTimer);
+    if (proc.active?.idleTimer) clearTimeout(proc.active.idleTimer);
     proc.active = undefined;
     this.runningTurns.delete(turn.sessionId);
     this.chatSessionRepo.setBusy(turn.sessionId, 0);
+    this.setSessionState(turn.sessionId, 'error');
     this.chatMessageRepo.insert({ id: turn.messageId, sessionId: turn.sessionId, role: 'error', content: message });
     this.emitChatError(turn.sessionId, turn.messageId, message);
     this.closePersistentProcess(proc);
@@ -805,7 +1720,7 @@ export class ChatService {
     if (!running) return;
     running.cancelled = true;
     if (proc.child.pid) killProcessGroup(proc.child.pid);
-    this.finishPersistentError(proc, { sessionId: proc.sessionId, messageId: running.messageId, text: '', projectId: null, mode: 'safe', claudeSessionId: null, model: proc.model }, 'Lượt chat bị quá thời gian (15 phút)');
+    this.finishPersistentError(proc, { sessionId: proc.sessionId, messageId: running.messageId, text: '', projectId: null, mode: 'safe', claudeSessionId: null, model: proc.model, profileName: proc.profileName }, 'Lượt chat bị quá thời gian (15 phút)');
   }
 
   private armIdleTimer(proc: PersistentProcess): void {
@@ -819,14 +1734,24 @@ export class ChatService {
     if (proc.child.pid) killProcessGroup(proc.child.pid);
   }
 
+  private removeChatMcpConfig(sessionId: string): void {
+    try { fs.rmSync(chatMcpConfigPath(this.config.hubHome, sessionId), { force: true }); } catch { /* best effort */ }
+  }
+
   private handlePersistentClose(proc: PersistentProcess): void {
     if (proc.active) {
       const active = proc.active;
       clearTimeout(active.timeoutTimer);
       this.runningTurns.delete(proc.sessionId);
-      this.recordClaudeQuota('', proc.stderrOutput, null);
+      const quota = this.recordClaudeQuota('', proc.stderrOutput, null);
+      if (!quota.exhausted && proc.limitResetSeconds) { quota.exhausted = true; quota.resetSeconds = proc.limitResetSeconds; }
       this.chatSessionRepo.setBusy(proc.sessionId, 0);
-      if (!active.cancelled) {
+      this.setSessionState(proc.sessionId, 'error');
+      const session = this.chatSessionRepo.get(proc.sessionId);
+      const retryTurn: QueuedTurn = { sessionId: proc.sessionId, messageId: active.messageId, text: this.chatMessageRepo.getBySession(proc.sessionId, 100000).find((message) => message.role === 'user')?.content || '', projectId: session?.projectId || null, mode: session?.mode || 'safe', claudeSessionId: session?.claudeSessionId || null, model: proc.model, profileName: proc.profileName };
+      if (!active.cancelled && quota.exhausted && retryTurn.text && this.scheduleLimitRetry(retryTurn, quota.resetSeconds, proc.stderrOutput.trim())) {
+        this.closePersistentProcess(proc);
+      } else if (!active.cancelled) {
         this.chatMessageRepo.insert({ id: active.messageId, sessionId: proc.sessionId, role: 'error', content: 'Claude process đã dừng' });
         this.emitChatError(proc.sessionId, active.messageId, 'Claude process đã dừng');
       }
@@ -851,7 +1776,12 @@ export class ChatService {
   private emitChatDone(
     sessionId: string,
     messageId: string,
-    data: { durationMs: number; costUsd?: number; numTurns?: number },
+    data: {
+      durationMs: number;
+      costUsd?: number;
+      numTurns?: number;
+      usage?: { inputTokens: number; outputTokens: number };
+    },
   ): void {
     this.emitEvent('chat.done', {
       sessionId,
@@ -859,11 +1789,47 @@ export class ChatService {
       durationMs: data.durationMs,
       ...(data.costUsd !== undefined ? { costUsd: data.costUsd } : {}),
       ...(data.numTurns !== undefined ? { numTurns: data.numTurns } : {}),
+      ...(data.usage !== undefined ? { usage: data.usage } : {}),
     });
   }
 
   private emitChatError(sessionId: string, messageId: string, message: string): void {
     this.emitEvent('chat.error', { sessionId, messageId, message });
+  }
+
+  private setSessionState(sessionId: string, state: ChatSessionRow['state']): void {
+    try { this.chatSessionRepo.updateState(sessionId, state); } catch { return; }
+    this.emitEvent('chat.status', { sessionId, status: state });
+  }
+
+  private armTurnWatchdog(turn: RunningTurn): void {
+    if (turn.waitingPermission || turn.pendingToolUse) return;
+    const timeoutMs = Math.max(1, this.config.chat.idleTimeoutSec || 300) * 1000;
+    turn.idleTimer = setTimeout(() => {
+      if (this.runningTurns.get(turn.sessionId) !== turn || turn.cancelled) return;
+      turn.cancelled = true;
+      if (turn.child.pid) killProcessGroup(turn.child.pid);
+      clearTimeout(turn.timeoutTimer);
+      this.runningTurns.delete(turn.sessionId);
+      this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.setSessionState(turn.sessionId, 'error');
+      const message = `Claude không có output trong ${this.config.chat.idleTimeoutSec || 300} giây; hãy thử lại`;
+      this.chatMessageRepo.insert({ id: turn.messageId, sessionId: turn.sessionId, role: 'error', content: message });
+      this.emitChatError(turn.sessionId, turn.messageId, message);
+      this.processQueue();
+    }, timeoutMs);
+  }
+
+  private resetTurnWatchdog(turn: RunningTurn): void {
+    if (turn.idleTimer) clearTimeout(turn.idleTimer);
+    this.armTurnWatchdog(turn);
+  }
+
+  private pauseTurnWatchdog(turn: RunningTurn): void {
+    if (turn.idleTimer) {
+      clearTimeout(turn.idleTimer);
+      turn.idleTimer = undefined;
+    }
   }
 
   private emitEvent(type: string, payload: unknown): void {
@@ -880,9 +1846,41 @@ export class ChatService {
 }
 
 export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatService): void {
+  // MCP permission-prompt-tool calls this endpoint and waits for the dashboard decision.
+  fastify.post('/api/chat/permissions', async (req: FastifyRequest) => {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+      sessionId?: string; messageId?: string; tool_name?: string; input?: unknown; kind?: 'brain' | 'user';
+    };
+    if (!body.sessionId || !body.tool_name || !body.input || typeof body.input !== 'object') {
+      throw new HttpError(400, 'bad_request', 'Thiếu sessionId, tool_name hoặc input');
+    }
+    return chatService.requestPermission({
+      sessionId: body.sessionId,
+      messageId: body.messageId,
+      toolName: body.tool_name,
+      input: body.input as Record<string, unknown>,
+      kind: body.kind,
+    });
+  });
+
+  fastify.get('/api/chat/permissions', async (req: FastifyRequest) => {
+    const sessionId = (req.query as { sessionId?: string }).sessionId;
+    return chatService.listPermissions(sessionId);
+  });
+
+  fastify.post('/api/chat/permissions/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { decision?: string; message?: string };
+    if (body.decision !== 'allow' && body.decision !== 'deny' && body.decision !== 'allow_always') {
+      throw new HttpError(400, 'bad_request', 'decision phải là allow, deny hoặc allow_always');
+    }
+    return chatService.decidePermission(id, body.decision, body.message);
+  });
+
   // GET /api/chat/sessions
-  fastify.get('/api/chat/sessions', async () => {
-    return chatService.listSessions();
+  fastify.get('/api/chat/sessions', async (req: FastifyRequest) => {
+    const query = req.query as { search?: string; archived?: string };
+    return chatService.listSessions(query);
   });
 
   // POST /api/chat/sessions
@@ -893,6 +1891,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
         title?: string;
         mode?: 'safe' | 'full';
         model?: string;
+        profileName?: string | null;
       },
     );
     return reply.status(201).send(session);
@@ -907,10 +1906,12 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   // PATCH /api/chat/sessions/:id
   fastify.patch('/api/chat/sessions/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return chatService.updateSession(
-      id,
-      (req.body && typeof req.body === 'object' ? req.body : {}) as { title?: string },
-    );
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+      title?: string;
+      pinned?: boolean | number;
+      archived?: boolean | number;
+    };
+    return chatService.updateSession(id, body);
   });
 
   // DELETE /api/chat/sessions/:id
@@ -919,12 +1920,22 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
     return chatService.deleteSession(id);
   });
 
-  // GET /api/chat/sessions/:id/messages?limit=200
+  // GET /api/chat/sessions/:id/messages?before=<messageId>&limit=50
   fastify.get('/api/chat/sessions/:id/messages', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    const query = req.query as { limit?: string };
-    const limit = query?.limit ? parseInt(query.limit, 10) : 200;
-    return chatService.listMessages(id, isNaN(limit) ? 200 : limit);
+    const query = req.query as { limit?: string; before?: string };
+    const limit = query?.limit ? parseInt(query.limit, 10) : 50;
+    return chatService.listMessages(id, {
+      limit: isNaN(limit) ? 50 : limit,
+      before: query?.before,
+    });
+  });
+
+  // GET /api/chat/sessions/:id/export
+  fastify.get('/api/chat/sessions/:id/export', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const markdown = chatService.exportSession(id);
+    return reply.type('text/markdown; charset=utf-8').send(markdown);
   });
 
   // POST /api/chat/sessions/:id/messages
@@ -935,8 +1946,34 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
     return reply.status(202).send(result);
   });
 
+  // POST /api/chat/sessions/:id/compact
+  fastify.post('/api/chat/sessions/:id/compact', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return chatService.compactSession(id);
+  });
+
+  // POST /api/chat/sessions/:id/fork-summary
+  fastify.post('/api/chat/sessions/:id/fork-summary', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const result = await chatService.forkSummary(id);
+    return reply.status(201).send(result);
+  });
+
   // POST /api/chat/sessions/:id/cancel
   fastify.post('/api/chat/sessions/:id/cancel', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return chatService.cancelSession(id);
+  });
+
+  fastify.post('/api/chat/sessions/:id/limit-retry/cancel', async (req: FastifyRequest) => {
+    return chatService.cancelLimitRetry((req.params as { id: string }).id);
+  });
+
+  fastify.post('/api/chat/sessions/:id/limit-retry/now', async (req: FastifyRequest) => {
+    return chatService.retryLimitNow((req.params as { id: string }).id);
+  });
+
+  fastify.post('/api/chat/sessions/:id/stop', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return chatService.cancelSession(id);
   });

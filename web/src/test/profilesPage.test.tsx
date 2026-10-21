@@ -17,7 +17,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
       name: 'g1',
       engine: 'agy',
       kind: 'isolated',
-      email: 'g1@gmail.com',
+      email: 'g1@example.com',
       loggedIn: true,
       enabled: 1,
       quotaMarks: [
@@ -42,7 +42,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
       name: 'g2',
       engine: 'agy',
       kind: 'isolated',
-      email: 'g2@gmail.com',
+      email: 'g2@example.com',
       loggedIn: true,
       enabled: 0,
       quotaMarks: [],
@@ -50,6 +50,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
   ];
 
   beforeEach(() => {
+    window.history.replaceState({}, '', '/profiles');
     queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -70,6 +71,36 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    const prototype = HTMLElement.prototype as { scrollIntoView?: unknown };
+    delete prototype.scrollIntoView;
+  });
+
+  it('scrolls to the profile named by the URL hash after profiles load', async () => {
+    window.history.replaceState({}, '', '/profiles#profile-g1');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+
+    renderPage();
+    await screen.findByText('g1');
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+  });
+
+  it('does not scroll again when profile data is refreshed', async () => {
+    window.history.replaceState({}, '', '/profiles#profile-g1');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+
+    renderPage();
+    await screen.findByText('g1');
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    queryClient.setQueryData(['profiles'], mockProfiles.map((profile) => ({ ...profile })));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
   function renderPage() {
@@ -305,13 +336,52 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(toast).toHaveTextContent(/Đã gỡ khóa quota/i);
   });
 
+  it('9b. Nút Làm mới hiển thị thông báo kèm kết quả lấy ảnh đại diện', async () => {
+    vi.mocked(client.refreshProfileUsage).mockResolvedValue({ ...mockProfiles[0], avatarMessage: 'Đã cập nhật ảnh đại diện' });
+    renderPage();
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+
+    const card = screen.getByTestId('profile-card-g1');
+    const refreshBtn = Array.from(card.querySelectorAll('button')).find((b) => /Làm mới/.test(b.textContent || ''))!;
+    await act(async () => {
+      fireEvent.click(refreshBtn);
+    });
+
+    expect(client.refreshProfileUsage).toHaveBeenCalledWith('g1');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Đã làm mới g1 · Đã cập nhật ảnh đại diện/);
+  });
+
+  it('9c. Dùng token: nhập xong thì thẻ tự chuyển sang đang kiểm tra, không cần bấm Check', async () => {
+    const importSpy = vi.spyOn(client, 'importAgyTokens').mockResolvedValue({
+      success: true, total: 1, successCount: 1, failedCount: 0,
+      results: [{ name: 'g1', email: 'g1@example.com', action: 'updated', status: 'ok', message: 'ok' }],
+    });
+    const checkSpy = vi.spyOn(client, 'checkProfile').mockResolvedValue({ started: true });
+    renderPage();
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+
+    const card = screen.getByTestId('profile-card-g1');
+    fireEvent.click(Array.from(card.querySelectorAll('button')).find((b) => /Dùng token/.test(b.textContent || ''))!);
+    fireEvent.change(screen.getByPlaceholderText('1//...'), { target: { value: '1//rt' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Đăng nhập' }));
+    });
+
+    expect(importSpy).toHaveBeenCalledWith({
+      tokens: [{ name: 'g1', email: 'g1@example.com', refresh_token: '1//rt' }],
+      accountType: undefined,
+    });
+    expect(await screen.findByText(/Đang kiểm tra/)).toBeInTheDocument();
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
     const profilesWithExpired: Profile[] = [
       {
         name: 'g_expired',
         engine: 'agy',
         kind: 'isolated',
-        email: 'expired@gmail.com',
+        email: 'expired@example.com',
         loggedIn: true,
         enabled: 1,
         quotaMarks: [
@@ -352,5 +422,71 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
 
     const removeBtn = screen.getByRole('button', { name: /^Remove$/ });
     expect(removeBtn).toBeInTheDocument();
+  });
+
+  it('12. Claude card: displays limited sessions with auto-resume toggle and detail link', async () => {
+    const claudeProfile: Profile = {
+      name: 'claude-may',
+      engine: 'claude',
+      kind: 'system',
+      email: 'user@example.com',
+      loggedIn: true,
+      enabled: 1,
+      quotaMarks: [],
+      limitedSessions: [
+        {
+          sessionId: 'sess-abc-12345',
+          title: 'Implement feature X',
+          cwd: '/projects/repo-a',
+          limitResetAt: Math.floor(Date.now() / 1000) + 1800,
+          autoResumeEnabled: true,
+        },
+      ],
+    };
+    vi.spyOn(client, 'getProfiles').mockResolvedValue([claudeProfile]);
+    const apiFetchSpy = vi.spyOn(client, 'apiFetch').mockResolvedValue({} as any);
+
+    renderPage();
+
+    expect(await screen.findByText('claude-may')).toBeInTheDocument();
+    expect(screen.getByText('Phiên bị giới hạn')).toBeInTheDocument();
+    expect(screen.getByText('Implement feature X')).toBeInTheDocument();
+    expect(screen.getByText('/projects/repo-a')).toBeInTheDocument();
+
+    const detailLink = screen.getByText('Xem chi tiết →');
+    expect(detailLink).toBeInTheDocument();
+    expect(detailLink.closest('a')).toHaveAttribute('href', '/claude-sessions/sess-abc-12345');
+
+    const toggle = screen.getByRole('checkbox', { name: /Tự tiếp tục khi hết giới hạn/ });
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+    expect(apiFetchSpy).toHaveBeenCalledWith(
+      '/api/claude/sessions/sess-abc-12345/auto-resume',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
+  });
+
+  it('13. Claude card: displays empty state when there are no limited sessions', async () => {
+    const claudeProfile: Profile = {
+      name: 'claude-may',
+      engine: 'claude',
+      kind: 'system',
+      email: 'user@example.com',
+      loggedIn: true,
+      enabled: 1,
+      quotaMarks: [],
+      limitedSessions: [],
+    };
+    vi.spyOn(client, 'getProfiles').mockResolvedValue([claudeProfile]);
+
+    renderPage();
+
+    expect(await screen.findByText('claude-may')).toBeInTheDocument();
+    expect(screen.getByText('Phiên bị giới hạn')).toBeInTheDocument();
+    expect(screen.getByText('Không có phiên nào bị giới hạn')).toBeInTheDocument();
   });
 });

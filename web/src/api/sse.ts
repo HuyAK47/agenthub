@@ -185,11 +185,13 @@ export function connectSSE(queryClient: QueryClient): () => void {
           queryClient.invalidateQueries({ queryKey: ['status'] });
         } else if (type.startsWith('config.')) {
           queryClient.invalidateQueries({ queryKey: ['config'] });
-        } else if (type === 'brain.status') {
+        } else if (type === 'brain.status' || type === 'brain.updated') {
           queryClient.invalidateQueries({ queryKey: ['status'] });
           queryClient.invalidateQueries({ queryKey: ['brain'] });
         } else if (type.startsWith('chat.')) {
           queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+        } else if (type.startsWith('batch.')) {
+          queryClient.invalidateQueries({ queryKey: ['batches'] });
         }
       } catch (err) {
         console.error('Lỗi phân tích SSE event:', err);
@@ -219,10 +221,14 @@ export function connectSSE(queryClient: QueryClient): () => void {
       'quota.exhausted',
       'quota.cleared',
       'config.updated',
+      'brain.status',
+      'brain.updated',
       'chat.delta',
       'chat.tool',
       'chat.done',
       'chat.error',
+      'chat.permission_request',
+      'chat.permission_resolved',
     ];
 
     for (const evtName of SSE_EVENTS) {

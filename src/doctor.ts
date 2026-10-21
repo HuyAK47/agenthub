@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { AgentHubConfig, loadConfig } from './config.js';
 import { createContext } from './daemon.js';
 import { CodexEngine } from './engines/index.js';
+import { findClaudeBin } from './chat/claude.js';
+import { getPlatform } from './platform/index.js';
 
 export type CheckStatus = 'ok' | 'error' | 'skip' | 'warn';
 
@@ -77,8 +79,9 @@ export function findRealUserHome(): string {
 
 export function findAgyPath(customHome?: string, existsFn: (filePath: string) => boolean = (p) => fs.existsSync(p)): string | null {
   const candidates: string[] = [];
+  if (process.env.AGENTHUB_TOOLS_DIR) candidates.push(path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'agy'));
   if (process.env.AGENTHUB_AGY_BIN) {
-    candidates.push(process.env.AGENTHUB_AGY_BIN);
+    return existsFn(process.env.AGENTHUB_AGY_BIN) ? process.env.AGENTHUB_AGY_BIN : null;
   }
   const homes = [customHome, os.homedir(), findRealUserHome()].filter(Boolean) as string[];
   for (const h of homes) {
@@ -98,6 +101,10 @@ export function findCodexPath(customHome?: string, existsFn: (filePath: string) 
     return fromEngine;
   }
   const homes = [customHome, os.homedir(), findRealUserHome()].filter(Boolean) as string[];
+  if (process.env.AGENTHUB_TOOLS_DIR) {
+    const managed = path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'codex');
+    if (existsFn(managed)) return managed;
+  }
   for (const h of homes) {
     const base = path.join(h, '.vscode', 'extensions');
     if (existsFn(base)) {
@@ -106,9 +113,12 @@ export function findCodexPath(customHome?: string, existsFn: (filePath: string) 
         if (entries.length > 0) {
           entries.sort();
           const latest = entries[entries.length - 1];
-          const codexBin = path.join(base, latest, 'bin', 'linux-x86_64', 'codex');
-          if (existsFn(codexBin)) {
-            return codexBin;
+          const targets = process.platform === 'darwin'
+            ? ['darwin-arm64', 'darwin-x64', 'macos-arm64', 'macos-x64']
+            : process.platform === 'win32' ? ['win32-x64'] : ['linux-x86_64'];
+          for (const target of targets) {
+            const codexBin = path.join(base, latest, 'bin', target, 'codex');
+            if (existsFn(codexBin)) return codexBin;
           }
         }
       } catch {
@@ -200,6 +210,7 @@ export interface CheckEnginesDeps {
   codexPath?: string | null;
   homeDir?: string;
   checkFileExists?: (filePath: string) => boolean;
+  port?: number;
 }
 
 export async function checkEngines(deps?: CheckEnginesDeps): Promise<DoctorCheckItem> {
@@ -229,7 +240,8 @@ export async function checkEngines(deps?: CheckEnginesDeps): Promise<DoctorCheck
     suggestions.push(`Cài đặt Antigravity CLI tại ~/.gemini/bin/agy`);
   }
   if (!foundCodex) {
-    suggestions.push(`Cài đặt extension ChatGPT trong VS Code để có Codex CLI theo PLAN 2.2`);
+    const port = deps?.port ?? loadConfig().port ?? 7700;
+    suggestions.push(`Mở http://127.0.0.1:${port}/setup để cài Codex CLI/Claude Code một chạm; xem mục cài agy trong docs/GETTING-STARTED.md`);
   }
 
   let message = '';
@@ -364,6 +376,9 @@ export interface CheckSystemdDeps {
 }
 
 export async function checkSystemd(deps?: CheckSystemdDeps): Promise<DoctorCheckItem> {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    return getPlatform().serviceCheck(deps?.exec ?? defaultExecSync, deps?.timeoutMs ?? 5000);
+  }
   const exec = deps?.exec ?? defaultExecSync;
   const timeoutMs = deps?.timeoutMs ?? 5000;
 
@@ -418,13 +433,17 @@ export async function checkSystemd(deps?: CheckSystemdDeps): Promise<DoctorCheck
 export interface CheckMcpDeps {
   exec?: SyncExecFn;
   timeoutMs?: number;
+  claudeBin?: string;
 }
 
 export async function checkMcp(deps?: CheckMcpDeps): Promise<DoctorCheckItem> {
   const exec = deps?.exec ?? defaultExecSync;
   const timeoutMs = deps?.timeoutMs ?? 10000;
 
-  const res = exec('claude', ['mcp', 'list'], { timeout: timeoutMs });
+  // Claude Code is often only installed inside the VS Code extension (not on PATH); use the
+  // same lookup as the chat so doctor does not report it as missing.
+  const claudeBin = deps?.claudeBin ?? (deps?.exec ? 'claude' : findClaudeBin() || 'claude');
+  const res = exec(claudeBin, ['mcp', 'list'], { timeout: timeoutMs });
 
   if (res.error) {
     if ((res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {

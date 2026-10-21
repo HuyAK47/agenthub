@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import {
   cancelTask,
+  createTaskFromError,
   deleteWorktree,
   getTask,
   getTasks,
@@ -15,6 +16,11 @@ import {
   updateTask,
   rerunChecks,
   getStatus,
+  getProjectNotes,
+  createTaskNote,
+  getModelOptions,
+  pauseTask,
+  resumeTask,
 } from '../api/client';
 import { TaskLevel } from '../types/api';
 import { subscribeToRunOutput } from '../api/sse';
@@ -28,6 +34,7 @@ import { CollapsibleList } from '../components/CollapsibleList';
 import {
   ArrowLeft,
   Play,
+  Pause,
   RotateCcw,
   CheckCircle2,
   XCircle,
@@ -42,6 +49,7 @@ import {
   Plus,
   X,
   Edit3,
+  Bell,
 } from 'lucide-react';
 
 const VALID_MODELS = [
@@ -60,8 +68,9 @@ export const TaskDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Active Tab: 'log' | 'body' | 'runs' | 'report'
-  const [activeTab, setActiveTab] = useState<'log' | 'body' | 'runs' | 'report'>('log');
+  // Active Tab: 'log' | 'body' | 'runs' | 'report' | 'bulletin'
+  const [activeTab, setActiveTab] = useState<'log' | 'body' | 'runs' | 'report' | 'bulletin'>('log');
+  const [newNoteText, setNewNoteText] = useState('');
 
   // Modals
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -70,6 +79,9 @@ export const TaskDetailPage: React.FC = () => {
   const [showChangesModal, setShowChangesModal] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [capture, setCapture] = useState<{ excerpt: string; checkName?: string } | null>(null);
+  const [captureTitle, setCaptureTitle] = useState('');
+  const [captureSlug, setCaptureSlug] = useState('');
 
   // Edit Task Modal
   const [showEditModal, setShowEditModal] = useState(false);
@@ -78,6 +90,7 @@ export const TaskDetailPage: React.FC = () => {
   const [selectedDeps, setSelectedDeps] = useState<string[]>([]);
   const [selectedModelToAdd, setSelectedModelToAdd] = useState(VALID_MODELS[0]);
   const [editError, setEditError] = useState<string | null>(null);
+  const [retryWithDifferentModel, setRetryWithDifferentModel] = useState(false);
 
   // Live log state
   const [liveLog, setLiveLog] = useState<string>('');
@@ -96,6 +109,21 @@ export const TaskDetailPage: React.FC = () => {
     queryFn: getStatus,
     enabled: task?.status === 'waiting_quota' && task?.waitReason === 'disk',
     refetchInterval: 10_000,
+  });
+
+  const { data: projectNotes = [], refetch: refetchNotes } = useQuery({
+    queryKey: ['projectNotes', task?.projectId],
+    queryFn: () => (task?.projectId ? getProjectNotes(task.projectId) : Promise.resolve([])),
+    enabled: Boolean(task?.projectId),
+    refetchInterval: 5000,
+  });
+
+  const sendNoteMutation = useMutation({
+    mutationFn: (content: string) => createTaskNote(task!.id, { content }),
+    onSuccess: () => {
+      setNewNoteText('');
+      refetchNotes();
+    },
   });
 
   // Fetch initial log
@@ -168,6 +196,24 @@ export const TaskDetailPage: React.FC = () => {
     },
   });
 
+  const pauseMutation = useMutation({
+    mutationFn: () => pauseTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task', id] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: () => resumeTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task', id] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
+
   const retryMutation = useMutation({
     mutationFn: () => retryTask(id, { note: retryNote }),
     onSuccess: () => {
@@ -209,11 +255,37 @@ export const TaskDetailPage: React.FC = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['task', id] }),
   });
 
+  const captureMutation = useMutation({
+    mutationFn: () => createTaskFromError({ sourceTaskId: task?.id || id, excerpt: capture?.excerpt || '', checkName: capture?.checkName, slug: captureSlug, title: captureTitle, level: 'easy' }),
+    onSuccess: (created) => { setCapture(null); queryClient.invalidateQueries({ queryKey: ['tasks'] }); navigate(`/tasks/${encodeURIComponent(created.id.replace('/', '~'))}`); },
+  });
+
+  // Text currently selected inside the live log; drives the "create fix task" button.
+  const [logSelection, setLogSelection] = useState('');
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      const inLog = !!sel && !!sel.anchorNode && !!logContainerRef.current?.contains(sel.anchorNode);
+      setLogSelection(inLog ? sel.toString().trim() : '');
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
+  const openCapture = (excerpt: string, checkName?: string) => {
+    const first = excerpt.split(/\r?\n/).find((line) => line.trim())?.trim() || 'fix-error';
+    setCapture({ excerpt, checkName });
+    setCaptureTitle(`${checkName || 'Lỗi'}: ${first.slice(0, 80)}`);
+    setCaptureSlug(`${task?.slug || 'task'}-fix-${Date.now().toString(36)}`.replace(/[^a-zA-Z0-9_-]/g, '-'));
+  };
+
   const { data: projectTasks = [] } = useQuery({
     queryKey: ['tasks', { project: task?.projectId }],
     queryFn: () => getTasks({ project: task?.projectId }),
     enabled: showEditModal && !!task?.projectId,
   });
+  const { data: modelOptions } = useQuery({ queryKey: ['model-options'], queryFn: getModelOptions });
+  const modelSuggestions = modelOptions?.suggestions?.length ? modelOptions.suggestions : VALID_MODELS;
 
   const editMutation = useMutation({
     mutationFn: (data: { modelChain: string[]; dependsOn: string[]; level: TaskLevel }) => updateTask(id, data),
@@ -221,6 +293,10 @@ export const TaskDetailPage: React.FC = () => {
       setShowEditModal(false);
       queryClient.invalidateQueries({ queryKey: ['task', id] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      if (retryWithDifferentModel) {
+        setRetryWithDifferentModel(false);
+        retryMutation.mutate();
+      }
     },
     onError: (err: any) => {
       setEditError(err.message || t('taskDetail.updateError'));
@@ -258,7 +334,7 @@ export const TaskDetailPage: React.FC = () => {
     setModelChain(initialChain);
     setSelectedDeps(initialDeps);
     setEditLevel(task.level || 'easy');
-    setSelectedModelToAdd(VALID_MODELS[0]);
+    setSelectedModelToAdd(modelSuggestions[0] || VALID_MODELS[0]);
     setEditError(null);
     setShowEditModal(true);
   };
@@ -347,6 +423,21 @@ export const TaskDetailPage: React.FC = () => {
           {task.reviewerEscalationReason ? ` (${task.reviewerEscalationReason})` : ''}.
         </div>
       ) : null}
+      {task.reviewChain && task.reviewChain.length > 0 ? (
+        <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] px-4 py-3 text-xs">
+          <div className="font-semibold mb-2">Review chain</div>
+          <div className="flex flex-wrap items-center gap-2">
+            {task.reviewChain.map((step, index) => (
+              <React.Fragment key={`${step.reviewer}-${index}`}>
+                {index > 0 ? <span className="text-[var(--t-text-3)]">→</span> : null}
+                <span className={`rounded-full px-2 py-1 border ${index < (task.reviewStep ?? 0) ? 'border-[var(--t-ok)] text-[var(--t-ok)]' : index === (task.reviewStep ?? 0) ? 'border-[var(--t-accent)] text-[var(--t-accent)]' : 'border-[var(--t-border)] text-[var(--t-text-3)]'}`}>
+                  {step.reviewer} · {step.mode}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[var(--t-border)]">
         <div className="flex items-start gap-3">
@@ -373,7 +464,23 @@ export const TaskDetailPage: React.FC = () => {
                 diskMinFreeGB={hubStatus?.disk?.minFreeGB}
                 size="sm"
               />
-              {task.status === 'running' && <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />}
+              {task.status === 'running' && (task.paused || task.currentRun?.paused) && (
+                <span
+                  data-testid="task-paused-badge"
+                  className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold border ${
+                    (task.pauseReason === 'load' || task.currentRun?.pauseReason === 'load')
+                      ? 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]'
+                      : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] border-[var(--t-border)]'
+                  }`}
+                >
+                  {(task.pauseReason === 'load' || task.currentRun?.pauseReason === 'load')
+                    ? t('status.pausedOverload')
+                    : t('status.paused')}
+                </span>
+              )}
+              {task.status === 'running' && !task.paused && !task.currentRun?.paused && (
+                <SilentRunIndicator lastActivityAt={task.currentRun?.lastActivityAt} />
+              )}
               {task.status === 'running' && task.currentRun?.noCommitMinutes != null && task.currentRun.noCommitMinutes > 0 && (
                 <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]">
                   {t('extra.noCommit', { minutes: task.currentRun.noCommitMinutes })}
@@ -382,6 +489,11 @@ export const TaskDetailPage: React.FC = () => {
               {task.status === 'running' && task.currentRun?.isLooping && (
                 <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]">
                   {t('extra.looping')}
+                </span>
+              )}
+              {task.status === 'running' && (task.currentRun?.rss || task.currentRun?.cpu !== undefined) && (
+                <span className="text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] font-mono text-[var(--t-text-3)]">
+                  {task.currentRun?.rss ? `${(task.currentRun.rss / (1024 * 1024)).toFixed(0)} MB` : '0 MB'} · {(task.currentRun?.cpu ?? 0).toFixed(1)}% CPU
                 </span>
               )}
               <span className="text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] font-mono text-[var(--t-text-3)]">
@@ -419,6 +531,31 @@ export const TaskDetailPage: React.FC = () => {
             </button>
           )}
 
+          {/* Pause / Resume (if running) */}
+          {task.status === 'running' && (
+            (task.paused || task.currentRun?.paused) ? (
+              <button
+                type="button"
+                onClick={() => resumeMutation.mutate()}
+                disabled={resumeMutation.isPending}
+                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_25%,transparent)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Play className="w-4 h-4" />
+                <span>{t('taskDetail.btnResume')}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => pauseMutation.mutate()}
+                disabled={pauseMutation.isPending}
+                className="px-3.5 py-1.5 rounded-lg border border-[var(--t-border)] hover:bg-[var(--t-surface-2)] text-[var(--t-text)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Pause className="w-4 h-4" />
+                <span>{t('taskDetail.btnPause')}</span>
+              </button>
+            )
+          )}
+
           {/* Cancel (if running or queued) */}
           {(task.status === 'running' || task.status === 'checking' || task.status === 'queued') && (
             <button
@@ -433,14 +570,14 @@ export const TaskDetailPage: React.FC = () => {
 
           {/* Retry (if failed or blocked) */}
           {(task.status === 'failed' || task.status === 'blocked') && (
-            <button
-              type="button"
-              onClick={() => setShowRetryModal(true)}
-              className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>{t('taskDetail.btnRetry')}</span>
-            </button>
+            <>
+              <button type="button" onClick={() => setShowRetryModal(true)} className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer">
+                <RotateCcw className="w-4 h-4" /><span>{t('taskDetail.btnRetry')}</span>
+              </button>
+              <button type="button" onClick={() => { setRetryWithDifferentModel(true); openEditModal(); }} className="px-3.5 py-1.5 rounded-lg border border-[var(--t-accent)] text-[var(--t-accent)] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer">
+                <RotateCcw className="w-4 h-4" /><span>{t('taskDetail.retryWithModel')}</span>
+              </button>
+            </>
           )}
 
           {/* Review actions (if review) */}
@@ -505,7 +642,18 @@ export const TaskDetailPage: React.FC = () => {
         </div>
       </div>
 
-      <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} />
+      {task.modelWarnings?.length ? (
+        <div className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_12%,transparent)] px-4 py-3 text-sm text-[var(--t-text)]">
+          <strong>{t('taskDetail.modelWarningTitle')}</strong>
+          <ul className="mt-1 list-disc pl-5">
+            {task.modelWarnings.map((model) => <li key={model}>{t('taskDetail.modelWarningItem', { model })}</li>)}
+          </ul>
+        </div>
+      ) : null}
+
+      <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} onCreateTask={(check) => openCapture(check.outputTail, check.name)} />
+
+      {(task.sourceRef || (task.derivedTasks && task.derivedTasks.length > 0)) && <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 text-sm space-y-2"><h2 className="font-semibold">Liên kết task</h2>{task.sourceRef && <p>Sinh từ: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(task.sourceRef!.taskId.replace('/', '~'))}`)}>{task.sourceRef.taskId}</button></p>}{task.derivedTasks?.map((derived) => <p key={derived.id}>Đã sinh task: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(derived.id.replace('/', '~'))}`)}>{derived.id}</button></p>)}</section>}
 
       {/* Tabs */}
       <div className="flex border-b border-[var(--t-border)] space-x-6 text-sm font-medium">
@@ -560,6 +708,19 @@ export const TaskDetailPage: React.FC = () => {
           <GitCommit className="w-4 h-4" />
           <span>{t('taskDetail.tabReport')}</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('bulletin')}
+          className={`pb-3 flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'bulletin'
+              ? 'border-[var(--t-accent)] text-[var(--t-accent)] font-semibold'
+              : 'border-transparent text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+          }`}
+        >
+          <Bell className="w-4 h-4" />
+          <span>{t('taskDetail.tabBulletin')}</span>
+        </button>
       </div>
 
       {/* Tab Contents */}
@@ -572,6 +733,10 @@ export const TaskDetailPage: React.FC = () => {
             className="w-full h-[520px] bg-[#0b0d12] text-[#e6e8ee] font-mono text-xs p-4 rounded-xl overflow-y-auto border border-[#1f2430] shadow-inner whitespace-pre-wrap leading-relaxed select-text"
           >
             {liveLog ? liveLog : <span className="text-[#8b93a7]">{t('taskDetail.noLog')}</span>}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button type="button" disabled={!logSelection} title={t('extra.captureFromSelectionTip')} onClick={() => { if (logSelection) openCapture(logSelection, 'log'); }} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">{t('extra.captureFromSelection')}</button>
+            <span className="text-xs text-[var(--t-text-3)]">{logSelection ? t('extra.captureSelectedChars', { count: logSelection.length }) : t('extra.captureFromSelectionHint')}</span>
           </div>
 
           {!autoScroll && (
@@ -680,6 +845,116 @@ export const TaskDetailPage: React.FC = () => {
               </ul>
             ) : (
               <p className="text-xs text-[var(--t-text-3)] italic">{t('taskDetail.noCommits')}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 5. Bulletin tab */}
+      {activeTab === 'bulletin' && (
+        <div data-testid="task-bulletin-tab" className="space-y-6">
+          {/* Overlaps section */}
+          <div className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-3">
+            <h3 className="text-sm font-semibold text-[var(--t-text)] flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-[var(--t-warn)]" />
+              <span>{t('taskDetail.bulletinOverlapsTitle')}</span>
+            </h3>
+            {projectNotes.filter(
+              (n) =>
+                n.kind === 'overlap' &&
+                (n.taskId === task.id ||
+                  n.content.includes(task.id) ||
+                  n.content.includes(task.slug)),
+            ).length > 0 ? (
+              <div className="space-y-2">
+                {projectNotes
+                  .filter(
+                    (n) =>
+                      n.kind === 'overlap' &&
+                      (n.taskId === task.id ||
+                        n.content.includes(task.id) ||
+                        n.content.includes(task.slug)),
+                  )
+                  .map((ov) => (
+                    <div
+                      key={ov.id}
+                      className="p-3 rounded-lg border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] text-xs flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-2 text-[var(--t-text)]">
+                        <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] border border-[var(--t-border)]">
+                          {ov.taskId}
+                        </span>
+                        <span className="font-medium">{ov.content}</span>
+                      </div>
+                      <span className="text-[var(--t-text-3)] text-[10px] shrink-0 font-mono">
+                        {ov.createdAt}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--t-text-3)] italic">
+                {t('taskDetail.bulletinNoOverlaps')}
+              </p>
+            )}
+          </div>
+
+          {/* Project notes section */}
+          <div className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-4">
+            <h3 className="text-sm font-semibold text-[var(--t-text)] flex items-center gap-2">
+              <FileText className="w-4 h-4 text-[var(--t-accent)]" />
+              <span>{t('taskDetail.bulletinNotesTitle')}</span>
+            </h3>
+
+            {/* Input to send note */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const text = newNoteText.trim();
+                if (!text || sendNoteMutation.isPending) return;
+                sendNoteMutation.mutate(text);
+              }}
+              className="flex gap-2"
+            >
+              <input
+                type="text"
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                placeholder={t('taskDetail.bulletinAddNotePlaceholder')}
+                className="flex-1 px-3 py-2 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-[var(--t-text)] focus:outline-none focus:border-[var(--t-accent)]"
+              />
+              <button
+                type="submit"
+                disabled={!newNoteText.trim() || sendNoteMutation.isPending}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-[var(--t-accent)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {sendNoteMutation.isPending ? t('taskDetail.bulletinSendingBtn') : t('taskDetail.bulletinSendBtn')}
+              </button>
+            </form>
+
+            {projectNotes.filter((n) => n.kind === 'note').length > 0 ? (
+              <div className="space-y-2">
+                {projectNotes
+                  .filter((n) => n.kind === 'note')
+                  .map((note) => (
+                    <div
+                      key={note.id}
+                      className="p-3 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between text-[11px] text-[var(--t-text-3)]">
+                        <span className="font-semibold text-[var(--t-text)]">
+                          {note.taskId}
+                        </span>
+                        <span className="font-mono text-[10px]">{note.createdAt}</span>
+                      </div>
+                      <p className="text-[var(--t-text)]">{note.content}</p>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--t-text-3)] italic">
+                {t('taskDetail.bulletinNoNotes')}
+              </p>
             )}
           </div>
         </div>
@@ -807,6 +1082,20 @@ export const TaskDetailPage: React.FC = () => {
       )}
 
       {/* Edit Task Modal */}
+      {capture && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <form onSubmit={(event) => { event.preventDefault(); captureMutation.mutate(); }} className="w-full max-w-2xl bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4">
+            <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
+            <p className="text-xs text-[var(--t-text-3)]">{t('extra.captureDesc')}</p>
+            <label className="block text-xs font-semibold">{t('extra.captureFieldTitle')}<input value={captureTitle} onChange={(e) => setCaptureTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
+            <label className="block text-xs font-semibold">Slug<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
+            <pre className="max-h-48 overflow-auto rounded-lg bg-[#0b0d12] text-[#e6e8ee] p-3 text-xs whitespace-pre-wrap">{capture.excerpt}</pre>
+            {captureMutation.error && <p className="text-sm text-[var(--t-crit)]">{(captureMutation.error as Error).message}</p>}
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">{t('extra.cancel')}</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white cursor-pointer disabled:opacity-50">{t('extra.captureSubmit')}</button></div>
+          </form>
+        </div>
+      )}
+
       {showEditModal && (
         <div data-testid="edit-task-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl max-h-[90vh] overflow-y-auto">
@@ -843,7 +1132,7 @@ export const TaskDetailPage: React.FC = () => {
                     onChange={(e) => setSelectedModelToAdd(e.target.value)}
                     className="flex-1 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2.5 py-1.5 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
                   >
-                    {VALID_MODELS.map((m) => (
+                    {modelSuggestions.map((m) => (
                       <option key={m} value={m}>
                         {m}
                       </option>

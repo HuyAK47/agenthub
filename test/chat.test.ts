@@ -7,7 +7,7 @@ import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
-import { BRAIN_PROMPT, buildClaudeArgs, buildHubSnapshot, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
+import { buildBrainPrompt, buildClaudeArgs, buildHubSnapshot, clearPartialSupportCache, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
 import { parseStreamJsonLine, formatToolSummary, StreamChunkParser } from '../src/chat/parse.js';
 
 let tmpDir: string;
@@ -45,8 +45,36 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(snapshot).toContain('p/t Running task (running, gemini-3.8-flash-high)');
     expect(snapshot.length).toBeLessThanOrEqual(9000);
     const args = buildClaudeArgs({ mcpConfigPath: '/tmp/mcp.json', hubSnapshot: snapshot });
-    expect(args).toContain(BRAIN_PROMPT);
+    expect(args).toContain(buildBrainPrompt());
     expect(args).toContain(snapshot);
+  });
+
+  it('does not include disabled profiles in the brain snapshot', () => {
+    const snapshot = buildHubSnapshot({
+      projects: [], tasks: [], profiles: [
+        { name: 'active', engine: 'agy', email: null, enabled: 1 },
+        { name: 'disabled', engine: 'agy', email: null, enabled: 0 },
+      ], quotaUsage: [], quotaMarks: [], capturedAt: '2026-10-16T00:00:00.000Z',
+    });
+    expect(snapshot).toContain('active');
+    expect(snapshot).not.toContain('disabled');
+  });
+
+  it('builds a private MCP config scoped to the chat session', () => {
+    const hubHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-'));
+    try {
+      const configPath = ensureChatMcpConfig(hubHome, 'session/one', 7792, 12);
+      expect(path.basename(configPath)).toBe('chat-mcp-session_one.json');
+      expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { mcpServers: { agenthub: { env: Record<string, string> } } };
+      expect(config.mcpServers.agenthub.env).toEqual({
+        AGENTHUB_CHAT_SESSION_ID: 'session/one',
+        AGENTHUB_PORT: '7792',
+        AGENTHUB_PERMISSION_TIMEOUT_SEC: '12',
+      });
+    } finally {
+      fs.rmSync(hubHome, { recursive: true, force: true });
+    }
   });
 
   it('prefers configured Claude binary and otherwise safely falls back to PATH', () => {
@@ -124,6 +152,9 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     delete process.env.AGENTHUB_AGY_BIN;
     delete process.env.AGENTHUB_CLAUDE_BIN;
     delete process.env.FAKE_CLAUDE_LOG;
+    delete process.env.FAKE_CLAUDE_STREAM_JSON;
+    clearPartialSupportCache();
+    delete process.env.FAKE_QUOTA_ONCE_FILE;
   });
 
   it('unit test: parse.ts handles all stream-json line types and ignores invalid lines', () => {
@@ -199,6 +230,87 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
         numTurns: 3,
         isError: false,
         result: 'Done text',
+      },
+    ]);
+
+    // 2b. assistant with usage and prompt caching
+    const assistantWithUsage = parseStreamJsonLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'Cached answer' }],
+          usage: {
+            input_tokens: 20,
+            output_tokens: 15,
+            cache_read_input_tokens: 300,
+            cache_creation_input_tokens: 100,
+          },
+        },
+      }),
+    );
+    expect(assistantWithUsage).toEqual([
+      {
+        type: 'assistant_text',
+        text: 'Cached answer',
+        usage: {
+          inputTokens: 20,
+          outputTokens: 15,
+          cacheReadInputTokens: 300,
+          cacheCreationInputTokens: 100,
+          contextTokens: 420,
+        },
+      },
+    ]);
+
+    // 5b. result with usage
+    const resultWithUsage = parseStreamJsonLine(
+      JSON.stringify({
+        type: 'result',
+        session_id: 'sess-usage',
+        is_error: false,
+        usage: {
+          input_tokens: 150,
+          output_tokens: 35,
+        },
+      }),
+    );
+    expect(resultWithUsage).toEqual([
+      {
+        type: 'result',
+        sessionId: 'sess-usage',
+        isError: false,
+        usage: {
+          inputTokens: 150,
+          outputTokens: 35,
+        },
+      },
+    ]);
+
+    // 5c. result with cache fields sums 3 types of input tokens
+    const resultWithCache = parseStreamJsonLine(
+      JSON.stringify({
+        type: 'result',
+        session_id: 'sess-cache',
+        is_error: false,
+        usage: {
+          input_tokens: 50,
+          cache_read_input_tokens: 400,
+          cache_creation_input_tokens: 150,
+          output_tokens: 30,
+        },
+      }),
+    );
+    expect(resultWithCache).toEqual([
+      {
+        type: 'result',
+        sessionId: 'sess-cache',
+        isError: false,
+        usage: {
+          inputTokens: 600, // 50 + 400 + 150
+          outputTokens: 30,
+          cacheReadInputTokens: 400,
+          cacheCreationInputTokens: 150,
+        },
       },
     ]);
 
@@ -301,6 +413,29 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(JSON.parse(delRes.body).ok).toBe(true);
   });
 
+  it('uses an existing legacy Claude system profile when no profile is configured', async () => {
+    ctx.profileRepo.upsert({
+      name: 'claude-may',
+      engine: 'claude',
+      kind: 'system',
+      home: os.homedir(),
+      email: null,
+      enabled: 1,
+    });
+    config.chat.claudeProfileExplicit = false;
+    config.brain.claudeProfileExplicit = false;
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Legacy Claude' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(JSON.parse(response.body).profileName).toBe('claude-may');
+  });
+
   it('full streaming flow: POST message -> chat.delta -> chat.done, saves claudeSessionId and uses --resume', async () => {
     // 1. Create a session
     const createRes = await server.inject({
@@ -353,7 +488,8 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       headers: authHeaders(),
     });
     expect(msgRes.statusCode).toBe(200);
-    const messages = JSON.parse(msgRes.body);
+    const { messages, hasMore } = JSON.parse(msgRes.body);
+    expect(hasMore).toBe(false);
     expect(messages).toHaveLength(2);
     expect(messages[0].role).toBe('user');
     expect(messages[0].content).toBe('Xin chào Claude!');
@@ -431,7 +567,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(safeArgs).toContain('default');
     expect(safeArgs).toContain('--allowedTools');
     expect(safeArgs).toContain('--append-system-prompt');
-    expect(safeArgs).toContain(BRAIN_PROMPT);
+    expect(safeArgs).toContain(buildBrainPrompt());
     expect(safeArgs).toContain('--mcp-config');
     expect(JSON.parse(logLines[0]).env.ENABLE_TOOL_SEARCH).toBe('false');
   });
@@ -586,7 +722,7 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       url: `/api/chat/sessions/${session.id}/messages`,
       headers: authHeaders(),
     });
-    const messages = JSON.parse(msgRes.body);
+    const { messages } = JSON.parse(msgRes.body);
     const toolMsg = messages.find((m: { role: string }) => m.role === 'tool');
     expect(toolMsg).toBeDefined();
     expect(toolMsg.content).toBe('Read docs/PLAN.md');
@@ -644,6 +780,117 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     }, { timeout: 10_000 });
     expect(errorEvent?.message).toBe('Rate limit exceeded');
   });
+
+  it('reports a crashed Claude process instead of leaving the spinner running', async () => {
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'crash' } });
+    await vi.waitFor(() => expect(errors.length).toBe(1), { timeout: 5000 });
+    expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('error');
+    expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
+  });
+
+  it('watchdogs a Claude process that produces no output', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    let error: Record<string, unknown> | null = null;
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { error = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'idle' } });
+    await vi.waitFor(() => expect(error).not.toBeNull(), { timeout: 5000 });
+    expect(error?.message).toContain('không có output');
+  });
+
+  it('publishes waiting_permission and supports stopping a safe-mode turn', async () => {
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders(), payload: { mode: 'safe' } });
+    const session = JSON.parse(createRes.body);
+    let permission: Record<string, unknown> | null = null;
+    ctx.scheduler.getEventBus().on('chat.permission', (_taskId, payload) => { permission = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'permission' } });
+    await vi.waitFor(() => expect(permission).not.toBeNull(), { timeout: 5000 });
+    expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_permission');
+    const stop = await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+    expect(stop.statusCode).toBe(200);
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0), { timeout: 5000 });
+  });
+
+  it('does not fire the idle watchdog while waiting for permission', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders(), payload: { mode: 'safe' } });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'permission' } });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(errors).toHaveLength(0);
+    expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_permission');
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+  });
+
+  it('does not fire the idle watchdog while a tool result is pending', async () => {
+    config.chat.idleTimeoutSec = 1;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    const errors: unknown[] = [];
+    let toolSeen = false;
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => errors.push(payload));
+    ctx.scheduler.getEventBus().on('chat.tool', () => { toolSeen = true; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'tool-wait' } });
+    await vi.waitFor(() => expect(toolSeen).toBe(true), { timeout: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(errors).toHaveLength(0);
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/stop`, headers: authHeaders() });
+  });
+
+  it('handles usage-limit errors and starts a new session when resume is invalid', async () => {
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body);
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'hello' } });
+    await vi.waitFor(() => {
+      const s = ctx.chatSessionRepo.get(session.id);
+      expect(s?.claudeSessionId).toBe('sess-default-123');
+      expect(s?.busy).toBe(0);
+    }, { timeout: 15000 });
+    let error: Record<string, unknown> | null = null;
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { error = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'resume-fail' } });
+    await vi.waitFor(() => {
+      expect(error).not.toBeNull();
+      expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
+    }, { timeout: 15000 });
+    expect(ctx.chatSessionRepo.get(session.id)?.claudeSessionId).toBeNull();
+    const messages = ctx.chatMessageRepo.getBySession(session.id);
+    expect(messages.some((message) => message.content === 'Đã mở phiên mới, ngữ cảnh cũ không còn')).toBe(true);
+
+    let quotaError: Record<string, unknown> | null = null;
+    const quotaRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const quotaSession = JSON.parse(quotaRes.body);
+    ctx.scheduler.getEventBus().on('chat.error', (_taskId, payload) => { quotaError = payload as Record<string, unknown>; });
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${quotaSession.id}/messages`, headers: authHeaders(), payload: { text: 'quota' } });
+    await vi.waitFor(() => {
+      expect(quotaError).not.toBeNull();
+      expect(ctx.chatSessionRepo.get(quotaSession.id)?.busy).toBe(0);
+    }, { timeout: 15000 });
+    expect(quotaError?.message).toContain('Usage limit');
+  }, 60000);
+
+  it('persists a Claude limit retry and can send it immediately after the limit clears', async () => {
+    const marker = path.join(tmpDir, 'quota-once');
+    process.env.FAKE_QUOTA_ONCE_FILE = marker;
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body) as { id: string };
+    await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/messages`, headers: authHeaders(), payload: { text: 'quota-once' } });
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('waiting_limit'), { timeout: 15000 });
+    const pending = ctx.chatRetryRepo.getPending().find((retry) => retry.sessionId === session.id);
+    expect(pending).toMatchObject({ sessionId: session.id, status: 'pending' });
+    expect((await server.inject({ method: 'POST', url: `/api/chat/sessions/${session.id}/limit-retry/now`, headers: authHeaders() })).statusCode).toBe(200);
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get(session.id)?.state).toBe('idle'), { timeout: 15000 });
+    expect(ctx.chatRetryRepo.getPending()).toHaveLength(0);
+    expect(ctx.chatRetryRepo.get(pending!.messageId)?.status).toBe('sent');
+    expect(ctx.chatMessageRepo.getBySession(session.id).some((message) => message.role === 'assistant')).toBe(true);
+  }, 60000);
 
   it('validates text bounds: rejects empty or > 20000 characters (400)', async () => {
     const createRes = await server.inject({
@@ -745,5 +992,740 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
       url: `/api/chat/sessions/${s2.id}/cancel`,
       headers: authHeaders(),
     });
+  });
+
+  it('supports cursor pagination for messages with default limit 50 and hasMore flag', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Pagination Test' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    // Insert 60 messages directly via repo to test pagination
+    for (let i = 1; i <= 60; i++) {
+      const msgId = `msg-${String(i).padStart(3, '0')}`;
+      ctx.chatMessageRepo.insert({
+        id: msgId,
+        sessionId: session.id,
+        role: i % 2 === 1 ? 'user' : 'assistant',
+        content: `Tin nhắn số ${i}`,
+      });
+    }
+
+    // 1. Default request (no before, default limit = 50)
+    // Should return 50 newest messages (messages 11 to 60) and hasMore = true
+    const p1Res = await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+    });
+    expect(p1Res.statusCode).toBe(200);
+    const p1 = JSON.parse(p1Res.body);
+    expect(p1.hasMore).toBe(true);
+    expect(p1.messages).toHaveLength(50);
+    expect(p1.messages[0].id).toBe('msg-011');
+    expect(p1.messages[49].id).toBe('msg-060');
+
+    // 2. Fetch older messages with before = msg-011 and default limit 50
+    // Should return remaining 10 messages (messages 1 to 10) and hasMore = false
+    const p2Res = await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${session.id}/messages?before=msg-011`,
+      headers: authHeaders(),
+    });
+    expect(p2Res.statusCode).toBe(200);
+    const p2 = JSON.parse(p2Res.body);
+    expect(p2.hasMore).toBe(false);
+    expect(p2.messages).toHaveLength(10);
+    expect(p2.messages[0].id).toBe('msg-001');
+    expect(p2.messages[9].id).toBe('msg-010');
+
+    // 3. Custom limit: ?limit=5
+    const p3Res = await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${session.id}/messages?limit=5`,
+      headers: authHeaders(),
+    });
+    expect(p3Res.statusCode).toBe(200);
+    const p3 = JSON.parse(p3Res.body);
+    expect(p3.hasMore).toBe(true);
+    expect(p3.messages).toHaveLength(5);
+    expect(p3.messages[0].id).toBe('msg-056');
+    expect(p3.messages[4].id).toBe('msg-060');
+
+    // 4. Invalid before messageId
+    const p4Res = await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${session.id}/messages?before=non-existent-id`,
+      headers: authHeaders(),
+    });
+    expect(p4Res.statusCode).toBe(200);
+    const p4 = JSON.parse(p4Res.body);
+    expect(p4.hasMore).toBe(false);
+    expect(p4.messages).toHaveLength(0);
+  });
+
+  it('searches sessions by title and message content with pinned priority', async () => {
+    // Create 3 sessions
+    const s1Res = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Docker containerization guide' },
+    });
+    const s1 = JSON.parse(s1Res.body);
+
+    const s2Res = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'General discussion' },
+    });
+    const s2 = JSON.parse(s2Res.body);
+
+    const s3Res = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Kubernetes orchestration' },
+    });
+    const s3 = JSON.parse(s3Res.body);
+
+    // Add message with unique keyword to s2
+    ctx.chatMessageRepo.insert({
+      id: crypto.randomUUID(),
+      sessionId: s2.id,
+      role: 'user',
+      content: 'Tối ưu hóa thuật toán Dijkstra',
+    });
+
+    // 1. Search by title
+    const searchTitleRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=Docker',
+      headers: authHeaders(),
+    });
+    expect(searchTitleRes.statusCode).toBe(200);
+    const titleMatches = JSON.parse(searchTitleRes.body);
+    expect(titleMatches.some((s: { id: string }) => s.id === s1.id)).toBe(true);
+    expect(titleMatches.some((s: { id: string }) => s.id === s2.id)).toBe(false);
+    expect(titleMatches.some((s: { id: string }) => s.id === s3.id)).toBe(false);
+
+    // 2. Search by message content
+    const searchContentRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=Dijkstra',
+      headers: authHeaders(),
+    });
+    expect(searchContentRes.statusCode).toBe(200);
+    const contentMatches = JSON.parse(searchContentRes.body);
+    expect(contentMatches.some((s: { id: string }) => s.id === s2.id)).toBe(true);
+    expect(contentMatches.some((s: { id: string }) => s.id === s1.id)).toBe(false);
+
+    // 3. Search with no matches
+    const noMatchRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=khong_the_tim_thay_9999',
+      headers: authHeaders(),
+    });
+    expect(noMatchRes.statusCode).toBe(200);
+    expect(JSON.parse(noMatchRes.body)).toHaveLength(0);
+
+    // 4. Pin s2 and verify pinned priority
+    await server.inject({
+      method: 'PATCH',
+      url: `/api/chat/sessions/${s2.id}`,
+      headers: authHeaders(),
+      payload: { pinned: true },
+    });
+
+    const allSessionsRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+    });
+    const allSessions = JSON.parse(allSessionsRes.body);
+    expect(allSessions[0].id).toBe(s2.id);
+    expect(allSessions[0].pinned).toBe(1);
+
+    // 5. Escaping special LIKE characters: %, _, \
+    const sPctRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Success rate 100% completed' },
+    });
+    const sPct = JSON.parse(sPctRes.body);
+
+    const sUnderRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'variable_name_convention' },
+    });
+    const sUnder = JSON.parse(sUnderRes.body);
+
+    const sSlashRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'c:\\windows\\system32' },
+    });
+    const sSlash = JSON.parse(sSlashRes.body);
+
+    // Searching for '%' should only match the literal '%', not all sessions
+    const searchPctRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=%',
+      headers: authHeaders(),
+    });
+    const pctMatches = JSON.parse(searchPctRes.body);
+    expect(pctMatches.some((s: { id: string }) => s.id === sPct.id)).toBe(true);
+    expect(pctMatches.some((s: { id: string }) => s.id === s1.id)).toBe(false);
+
+    // Searching for '_' should only match the literal '_', not all sessions with single chars
+    const searchUnderRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=_name_',
+      headers: authHeaders(),
+    });
+    const underMatches = JSON.parse(searchUnderRes.body);
+    expect(underMatches.some((s: { id: string }) => s.id === sUnder.id)).toBe(true);
+    expect(underMatches.some((s: { id: string }) => s.id === s1.id)).toBe(false);
+
+    // Searching for '\' should match literal '\'
+    const searchSlashRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=\\windows\\',
+      headers: authHeaders(),
+    });
+    const slashMatches = JSON.parse(searchSlashRes.body);
+    expect(slashMatches.some((s: { id: string }) => s.id === sSlash.id)).toBe(true);
+
+    // 6. Archived sessions are hidden by default, shown with ?archived=1
+    await server.inject({
+      method: 'PATCH',
+      url: `/api/chat/sessions/${s1.id}`,
+      headers: authHeaders(),
+      payload: { archived: true },
+    });
+
+    const searchHiddenRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=Docker',
+      headers: authHeaders(),
+    });
+    expect(JSON.parse(searchHiddenRes.body)).toHaveLength(0);
+
+    const searchArchivedRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?search=Docker&archived=1',
+      headers: authHeaders(),
+    });
+    const archivedMatches = JSON.parse(searchArchivedRes.body);
+    expect(archivedMatches.some((s: { id: string }) => s.id === s1.id)).toBe(true);
+
+    const allUnarchivedRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+    });
+    expect(JSON.parse(allUnarchivedRes.body).some((s: { id: string }) => s.id === s1.id)).toBe(false);
+
+    const allArchivedRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions?archived=1',
+      headers: authHeaders(),
+    });
+    expect(JSON.parse(allArchivedRes.body).some((s: { id: string }) => s.id === s1.id)).toBe(true);
+  });
+
+  it('exports session to Markdown format', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Phiên export mẫu' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    ctx.chatMessageRepo.insert({
+      id: crypto.randomUUID(),
+      sessionId: session.id,
+      role: 'user',
+      content: 'Chào Claude, hãy viết test.',
+    });
+    ctx.chatMessageRepo.insert({
+      id: crypto.randomUUID(),
+      sessionId: session.id,
+      role: 'tool',
+      content: 'Read src/chat/service.ts',
+      meta: JSON.stringify({ name: 'Read', input: { path: 'src/chat/service.ts' } }),
+    });
+    ctx.chatMessageRepo.insert({
+      id: crypto.randomUUID(),
+      sessionId: session.id,
+      role: 'assistant',
+      content: 'Đây là các bài test hoàn chỉnh.',
+    });
+
+    // 1. Export existing session
+    const expRes = await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${session.id}/export`,
+      headers: authHeaders(),
+    });
+    expect(expRes.statusCode).toBe(200);
+    expect(expRes.headers['content-type']).toContain('text/markdown');
+    const md = expRes.body;
+    expect(md).toContain('# Phiên export mẫu');
+    expect(md).toContain(`- **ID:** \`${session.id}\``);
+    expect(md).toContain('### User');
+    expect(md).toContain('Chào Claude, hãy viết test.');
+    expect(md).toContain('### Tool: Read');
+    expect(md).toContain('Read src/chat/service.ts');
+    expect(md).toContain('### Assistant');
+    expect(md).toContain('Đây là các bài test hoàn chỉnh.');
+
+    // 2. Export non-existent session -> 404
+    const notFoundRes = await server.inject({
+      method: 'GET',
+      url: '/api/chat/sessions/non-existent-session-id/export',
+      headers: authHeaders(),
+    });
+    expect(notFoundRes.statusCode).toBe(404);
+  });
+
+  it('accumulates tokens from stream-json result.usage into session and sets contextTokens', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Token accumulation session' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    let firstDone = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      firstDone = true;
+    });
+
+    // Turn 1: request with usage:150:40
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Turn 1 usage:150:40' },
+    });
+
+    await vi.waitFor(() => {
+      expect(firstDone).toBe(true);
+      expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
+    }, { timeout: 10_000 });
+
+    let sessRow = ctx.chatSessionRepo.get(session.id);
+    expect(sessRow?.inputTokens).toBe(150);
+    expect(sessRow?.outputTokens).toBe(40);
+    expect(sessRow?.contextTokens).toBe(150);
+
+    // Turn 2: request with usage:220:60
+    let secondDone = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      secondDone = true;
+    });
+
+    const res2 = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Turn 2 usage:220:60' },
+    });
+    expect(res2.statusCode).toBe(202);
+
+    await vi.waitFor(() => {
+      expect(secondDone).toBe(true);
+    }, { timeout: 10_000 });
+
+    sessRow = ctx.chatSessionRepo.get(session.id);
+    // Accumulated: 150 + 220 = 370 input, 40 + 60 = 100 output
+    expect(sessRow?.inputTokens).toBe(370);
+    expect(sessRow?.outputTokens).toBe(100);
+    // contextTokens should be the input tokens of the latest turn (220)
+    expect(sessRow?.contextTokens).toBe(220);
+  });
+
+  it('accumulates tokens with prompt caching: contextTokens is from the final assistant message (including cache_read and cache_creation), while inputTokens is total input from result.usage', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Prompt cache session' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    let done = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      done = true;
+    });
+
+    // Send a message with tool execution where fake-claude emits multiple assistant messages with cache usage
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Please use a tool with caching' },
+    });
+
+    await vi.waitFor(() => {
+      expect(done).toBe(true);
+    }, { timeout: 10_000 });
+
+    const sessRow = ctx.chatSessionRepo.get(session.id);
+    // In fake-claude tool branch:
+    // Assistant 1 (tool): input 100, cache_read 500, cache_creation 200 (context = 800)
+    // Assistant 2 (final assistant in turn): input 120, cache_read 700, cache_creation 100 (context = 920)
+    // Result: input 220, cache_read 1200, cache_creation 300 (total input = 1720), output 50
+    expect(sessRow?.contextTokens).toBe(920); // 120 + 700 + 100 from FINAL assistant event
+    expect(sessRow?.inputTokens).toBe(1720); // 220 + 1200 + 300 from result.usage
+    expect(sessRow?.outputTokens).toBe(50);
+  });
+
+  it('creates database index on chat_messages(sessionId, createdAt) for pagination query', () => {
+    const indices = ctx.db
+      .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chat_messages'")
+      .all() as Array<{ name: string; sql: string }>;
+    const createdIndex = indices.find((idx) => idx.name === 'idx_chat_messages_session_created');
+    expect(createdIndex).toBeDefined();
+    expect(createdIndex?.sql).toContain('sessionId');
+    expect(createdIndex?.sql).toContain('createdAt');
+  });
+
+  it('automatically sets session title from first user message up to 60 characters', async () => {
+    // 1. Session created without title
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: {},
+    });
+    const session = JSON.parse(sRes.body);
+
+    const longMessage = 'Xây dựng một hệ thống phân tán chịu lỗi cao với kiến trúc vi dịch vụ và message queue Apache Kafka';
+    // longMessage is 100 chars, first 60 chars:
+    const expectedTitle = longMessage.slice(0, 60);
+
+    let done = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      done = true;
+    });
+
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: longMessage },
+    });
+
+    await vi.waitFor(() => {
+      expect(done).toBe(true);
+      expect(ctx.chatSessionRepo.get(session.id)?.busy).toBe(0);
+    }, { timeout: 10_000 });
+
+    const sessRow = ctx.chatSessionRepo.get(session.id);
+    expect(sessRow?.title).toBe(expectedTitle);
+    expect(sessRow?.title?.length).toBe(60);
+
+    // 2. Second message should NOT overwrite the auto-generated title
+    let secondDone = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      secondDone = true;
+    });
+
+    const res2 = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Tin nhắn thứ 2 ngắn gọn' },
+    });
+    expect(res2.statusCode).toBe(202);
+
+    await vi.waitFor(() => {
+      expect(secondDone).toBe(true);
+    }, { timeout: 10_000 });
+
+    const sessRow2 = ctx.chatSessionRepo.get(session.id);
+    expect(sessRow2?.title).toBe(expectedTitle);
+
+    // 3. Session created with explicit title should NOT be overwritten
+    const explicitRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Tiêu đề cố định không đổi' },
+    });
+    const explicitSession = JSON.parse(explicitRes.body);
+
+    let explicitDone = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      explicitDone = true;
+    });
+
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${explicitSession.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'Tin nhắn đầu tiên của phiên có tiêu đề sẵn' },
+    });
+
+    await vi.waitFor(() => {
+      expect(explicitDone).toBe(true);
+    }, { timeout: 10_000 });
+
+    const explicitRow = ctx.chatSessionRepo.get(explicitSession.id);
+    expect(explicitRow?.title).toBe('Tiêu đề cố định không đổi');
+  });
+
+  it('supports PATCH for title, pinned, and archived, and DELETE cleans up session and messages', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Initial Title' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    // 1. PATCH title, pinned, archived
+    const patchRes1 = await server.inject({
+      method: 'PATCH',
+      url: `/api/chat/sessions/${session.id}`,
+      headers: authHeaders(),
+      payload: { title: 'Updated Title', pinned: true, archived: true },
+    });
+    expect(patchRes1.statusCode).toBe(200);
+    const patched1 = JSON.parse(patchRes1.body);
+    expect(patched1.title).toBe('Updated Title');
+    expect(patched1.pinned).toBe(1);
+    expect(patched1.archived).toBe(1);
+
+    // 2. PATCH unpin and unarchive
+    const patchRes2 = await server.inject({
+      method: 'PATCH',
+      url: `/api/chat/sessions/${session.id}`,
+      headers: authHeaders(),
+      payload: { pinned: false, archived: false },
+    });
+    expect(patchRes2.statusCode).toBe(200);
+    const patched2 = JSON.parse(patchRes2.body);
+    expect(patched2.pinned).toBe(0);
+    expect(patched2.archived).toBe(0);
+
+    // 3. DELETE removes session and messages
+    ctx.chatMessageRepo.insert({
+      id: crypto.randomUUID(),
+      sessionId: session.id,
+      role: 'user',
+      content: 'Will be deleted',
+    });
+
+    const delRes = await server.inject({
+      method: 'DELETE',
+      url: `/api/chat/sessions/${session.id}`,
+      headers: authHeaders(),
+    });
+    expect(delRes.statusCode).toBe(200);
+    expect(JSON.parse(delRes.body).ok).toBe(true);
+
+    expect(ctx.chatSessionRepo.get(session.id)).toBeUndefined();
+    expect(ctx.chatMessageRepo.getBySession(session.id)).toHaveLength(0);
+  });
+
+  it('POST /api/chat/sessions/:id/compact sends /compact, updates contextTokens, and inserts system message', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Test Compact' },
+    });
+    const session = JSON.parse(sRes.body);
+    ctx.chatSessionRepo.addUsage(session.id, { inputTokens: 0, outputTokens: 0, contextTokens: 50000 });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/compact`,
+      headers: authHeaders(),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(true);
+    expect(body.contextTokens).toBe(15000);
+
+    const updated = ctx.chatSessionRepo.get(session.id);
+    expect(updated?.contextTokens).toBe(15000);
+    expect(updated?.busy).toBe(0);
+
+    const messages = ctx.chatMessageRepo.getBySession(session.id);
+    const systemMsg = messages.find((m) => m.role === 'system');
+    expect(systemMsg).toBeDefined();
+    expect(systemMsg?.content).toBe('Đã nén ngữ cảnh');
+
+    // 404 on unknown session
+    const notFoundRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions/unknown-sess-123/compact',
+      headers: authHeaders(),
+    });
+    expect(notFoundRes.statusCode).toBe(404);
+  });
+
+  it('POST /api/chat/sessions/:id/fork-summary requests summary and creates a new session with summary as first message', async () => {
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Dự án Alpha' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/fork-summary`,
+      headers: authHeaders(),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.id).toBeDefined();
+    expect(body.sessionId).toBe(body.id);
+
+    const forkedSession = ctx.chatSessionRepo.get(body.id);
+    expect(forkedSession).toBeDefined();
+    expect(forkedSession?.title).toBe('Dự án Alpha (tóm tắt)');
+
+    const messages = ctx.chatMessageRepo.getBySession(body.id);
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].content).toContain('Đây là bản tóm tắt nội dung phiên trước.');
+
+    // 404 on unknown session
+    const notFoundRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions/unknown-sess-123/fork-summary',
+      headers: authHeaders(),
+    });
+    expect(notFoundRes.statusCode).toBe(404);
+  });
+
+  it('supports compact and fork-summary via persistent stream-json process and emits chat.compacted event', async () => {
+    process.env.FAKE_CLAUDE_STREAM_JSON = '1';
+    clearPartialSupportCache();
+
+    let compactedEvent: { sessionId?: string; contextTokens?: number } | null = null;
+    ctx.scheduler.getEventBus().on('chat.compacted', (_tid, payload) => {
+      compactedEvent = payload as { sessionId?: string; contextTokens?: number };
+    });
+
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Stream Session' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    // Compact
+    const cRes = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/compact`,
+      headers: authHeaders(),
+    });
+    expect(cRes.statusCode).toBe(200);
+    expect(JSON.parse(cRes.body).ok).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(compactedEvent).toBeDefined();
+      expect(compactedEvent?.sessionId).toBe(session.id);
+      expect(compactedEvent?.contextTokens).toBe(15000);
+    });
+
+    // Fork summary
+    const fRes = await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/fork-summary`,
+      headers: authHeaders(),
+    });
+    expect(fRes.statusCode).toBe(201);
+    const forked = JSON.parse(fRes.body);
+    expect(forked.id).toBeDefined();
+    expect(ctx.chatSessionRepo.get(forked.id)?.title).toBe('Stream Session (tóm tắt)');
+  });
+
+  it('auto-compacts when contextTokens exceeds (autoCompactPercent / 100) * 200_000 threshold', async () => {
+    let compacted = false;
+    ctx.scheduler.getEventBus().on('chat.compacted', () => {
+      compacted = true;
+    });
+
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Auto Compact Session' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    // Send high-context prompt that generates 180,000 tokens (threshold is 85% of 200,000 = 170,000)
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'high-context load' },
+    });
+
+    await vi.waitFor(() => {
+      expect(compacted).toBe(true);
+      const messages = ctx.chatMessageRepo.getBySession(session.id);
+      const systemMsg = messages.find((m) => m.role === 'system');
+      expect(systemMsg).toBeDefined();
+      expect(systemMsg?.content).toBe('Đã nén ngữ cảnh');
+    }, { timeout: 10_000 });
+  });
+
+  it('respects autoCompactPercent=0 to disable auto-compacting', async () => {
+    ctx.service.updateConfig({ chat: { autoCompactPercent: 0 } });
+
+    let compacted = false;
+    ctx.scheduler.getEventBus().on('chat.compacted', () => {
+      compacted = true;
+    });
+
+    let done = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => {
+      done = true;
+    });
+
+    const sRes = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Disabled Auto Compact' },
+    });
+    const session = JSON.parse(sRes.body);
+
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'high-context load' },
+    });
+
+    await vi.waitFor(() => {
+      expect(done).toBe(true);
+    }, { timeout: 10_000 });
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(compacted).toBe(false);
+    const messages = ctx.chatMessageRepo.getBySession(session.id);
+    expect(messages.find((m) => m.role === 'system')).toBeUndefined();
   });
 });

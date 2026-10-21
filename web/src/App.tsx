@@ -1,5 +1,5 @@
 import React, { useEffect, Suspense, lazy } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from './context/ThemeContext';
 import { LocaleProvider } from './context/LocaleContext';
@@ -8,6 +8,9 @@ import { Layout } from './components/Layout';
 import { SavingsPage } from './pages/SavingsPage';
 import { connectSSE } from './api/sse';
 import { ClaudeSessionsPage } from './pages/ClaudeSessionsPage';
+import { SetupPage } from './pages/SetupPage';
+import { useQuery } from '@tanstack/react-query';
+import { getSetupStatus } from './api/client';
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
 const TasksPage = lazy(() => import('./pages/TasksPage').then((m) => ({ default: m.TasksPage })));
@@ -16,6 +19,7 @@ const TaskDetailPage = lazy(() => import('./pages/TaskDetailPage').then((m) => (
 const ProfilesPage = lazy(() => import('./pages/ProfilesPage').then((m) => ({ default: m.ProfilesPage })));
 const ChatPage = lazy(() => import('./pages/ChatPage').then((m) => ({ default: m.ChatPage })));
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
+const PlansPage = lazy(() => import('./pages/PlansPage').then((m) => ({ default: m.PlansPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 const queryClient = new QueryClient({
@@ -26,6 +30,17 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+const SetupRedirect: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { data } = useQuery({ queryKey: ['setup-status'], queryFn: getSetupStatus, staleTime: 10_000 });
+  useEffect(() => {
+    if (location.pathname !== '/' || !data || data.setupCompletedAt || data.setupSkippedAt) return;
+    if (data.tools.some((tool) => !tool.installed) || data.profiles.some((profile) => !profile.loggedIn)) navigate('/setup', { replace: true });
+  }, [data, location.pathname, navigate]);
+  return null;
+};
 
 export const App: React.FC = () => {
   useEffect(() => {
@@ -42,6 +57,7 @@ export const App: React.FC = () => {
         <LocaleProvider>
           <AuthGate>
           <BrowserRouter>
+            <SetupRedirect />
             <Suspense
               fallback={
                 <div className="flex items-center justify-center p-12">
@@ -52,10 +68,13 @@ export const App: React.FC = () => {
               <Routes>
                 <Route path="/" element={<Layout />}>
                   <Route index element={<DashboardPage />} />
+                  <Route path="setup" element={<SetupPage />} />
                   <Route path="chat" element={<ChatPage />} />
                   <Route path="chat/:sessionId" element={<ChatPage />} />
                   <Route path="claude-sessions" element={<ClaudeSessionsPage />} />
                   <Route path="claude-sessions/:sessionId" element={<ClaudeSessionsPage />} />
+                  <Route path="plans" element={<PlansPage />} />
+                  <Route path="plans/:batchId" element={<PlansPage />} />
                   <Route path="tasks" element={<TasksPage />} />
                   <Route path="tasks/new" element={<CreateTaskPage />} />
                   <Route path="tasks/:id" element={<TaskDetailPage />} />

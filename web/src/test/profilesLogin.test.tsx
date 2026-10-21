@@ -55,7 +55,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
         name: 'g1',
         engine: 'agy',
         kind: 'isolated',
-        email: 'old.expired@gmail.com',
+        email: 'old.expired@example.com',
         loggedIn: false,
         enabled: 1,
       },
@@ -73,10 +73,10 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
 
     expect(await screen.findByText('Chưa đăng nhập')).toBeInTheDocument();
     expect(screen.getByText('Đăng nhập ngay')).toBeInTheDocument();
-    expect(screen.queryByText('old.expired@gmail.com')).not.toBeInTheDocument();
+    expect(screen.queryByText('old.expired@example.com')).not.toBeInTheDocument();
   });
 
-  it('nút Đăng nhập chỉ hiện với hồ sơ agy isolated', async () => {
+  it('nút Đăng nhập hiện với hồ sơ agy isolated và codex, không với keyring', async () => {
     const mockProfiles: Profile[] = [
       {
         name: 'g-iso',
@@ -116,13 +116,13 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
 
     await screen.findByText('g-iso');
 
-    // Button "Đăng nhập ngay" (inline) only for g-iso
+    // Inline "Đăng nhập ngay" for g-iso and codex-iso (codex uses device-auth login)
     const loginNowBtns = screen.getAllByText('Đăng nhập ngay');
-    expect(loginNowBtns).toHaveLength(1);
+    expect(loginNowBtns).toHaveLength(2);
 
-    // Button "Đăng nhập" (in Action column) only for g-iso
+    // Action-column "Đăng nhập": not for the keyring profile (uses the machine's own login)
     const actionLoginBtns = screen.getAllByRole('button', { name: /^Đăng nhập$/ });
-    expect(actionLoginBtns).toHaveLength(1);
+    expect(actionLoginBtns).toHaveLength(2);
   });
 
   it('giữ hành vi cũ nếu loggedIn không có trong response (server cũ)', async () => {
@@ -131,7 +131,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
         name: 'legacy-logged-in',
         engine: 'agy',
         kind: 'keyring',
-        email: 'legacy@gmail.com',
+        email: 'legacy@example.com',
         // loggedIn undefined
         enabled: 1,
       },
@@ -155,7 +155,7 @@ describe('ProfilesPage - Trạng thái đăng nhập và hiển thị email/code
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText('legacy@gmail.com')).toBeInTheDocument();
+    expect(await screen.findByText('legacy@example.com')).toBeInTheDocument();
     expect(screen.getByText('Chưa đăng nhập')).toBeInTheDocument();
   });
 

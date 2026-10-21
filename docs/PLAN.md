@@ -284,4 +284,4 @@ agenthub task list|show|log <id>
 - Phải chạy được `npm run lint`, `npm run typecheck`, `npm test` và `npm run build`.
 - Dùng **npm**, không dùng pnpm, để ít phụ thuộc.
 - Test scheduler và engine dùng **engine giả** (fake engine): một script node nhận prompt, ghi log, rồi tạo DONE/BLOCKED hoặc in lỗi quota tùy theo biến env. **Không gọi agy/codex thật trong test.**
-- Không có đường dẫn cứng `/home/ducanh`: dùng `os.homedir()`.
+- Không có đường dẫn cứng `/home/user`: dùng `os.homedir()`.

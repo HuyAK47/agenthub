@@ -229,4 +229,71 @@ describe('Worktree Cleanup Hooks', () => {
 
     ctx.db.close();
   });
+
+  it('đường dẫn có dấu cách: tạo worktree thành công và hook nhận đúng biến môi trường + shell-quoted placeholder', () => {
+    const spaceRepoDir = path.join(tmpDir, 'repo with spaces');
+    const spaceWorktreesDir = path.join(tmpDir, 'worktrees with spaces');
+    fs.mkdirSync(spaceRepoDir, { recursive: true });
+    fs.mkdirSync(spaceWorktreesDir, { recursive: true });
+
+    execFileSync('git', ['init'], { cwd: spaceRepoDir });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: spaceRepoDir });
+    fs.writeFileSync(path.join(spaceRepoDir, 'README.md'), '# Space Repo');
+    execFileSync('git', ['add', '.'], { cwd: spaceRepoDir });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: spaceRepoDir,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@test.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@test.com',
+      },
+    });
+
+    const spaceService = new WorktreeService(
+      { worktreesDir: spaceWorktreesDir, hubHome: tmpDir } as unknown as AgentHubConfig,
+      { emit: () => true },
+    );
+
+    // 1. Create worktree in path containing spaces
+    const slug = 'task-space';
+    const createdPath = spaceService.create({
+      projectPath: spaceRepoDir,
+      projectId: 'proj space',
+      slug,
+      branch: 'agenthub/task-space',
+      baseRef: 'main',
+    });
+
+    expect(createdPath).toContain('worktrees with spaces');
+    expect(fs.existsSync(createdPath)).toBe(true);
+
+    // 2. Run hook with {worktree}, {project}, $AGENTHUB_WORKTREE, $AGENTHUB_PROJECT_PATH
+    const outEnvFile = path.join(spaceRepoDir, 'out-env.txt');
+    const outPlaceholderFile = path.join(spaceRepoDir, 'out-placeholder.txt');
+
+    const hookCmd1 = `printf "%s\\n" "$AGENTHUB_WORKTREE" > "${outEnvFile}"`;
+    const hookCmd2 = `printf "%s\\n" {worktree} > "${outPlaceholderFile}"`;
+
+    const removed = spaceService.remove(spaceRepoDir, createdPath, {
+      slot: 1,
+      slug,
+      projectId: 'proj space',
+      hooks: {
+        onWorktreeRemoved: [hookCmd1, hookCmd2],
+      },
+    });
+
+    expect(removed).toBe(true);
+    expect(fs.existsSync(createdPath)).toBe(false);
+
+    // Verify AGENTHUB_WORKTREE has exact path
+    expect(fs.existsSync(outEnvFile)).toBe(true);
+    expect(fs.readFileSync(outEnvFile, 'utf8').trim()).toBe(createdPath);
+
+    // Verify {worktree} expanded as a single shell word
+    expect(fs.existsSync(outPlaceholderFile)).toBe(true);
+    expect(fs.readFileSync(outPlaceholderFile, 'utf8').trim()).toBe(createdPath);
+  });
 });

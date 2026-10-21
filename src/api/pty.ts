@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -5,6 +6,9 @@ import pty from 'node-pty';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket } from 'ws';
 import { AppService, HttpError } from '../services/index.js';
+import { findClaudeBin } from '../chat/claude.js';
+import { CodexEngine } from '../engines/index.js';
+import { accountKey, isProfileLoggedIn } from '../profiles/index.js';
 
 interface PtySession {
   id: string;
@@ -13,16 +17,66 @@ interface PtySession {
   sockets: Set<WebSocket>;
   timer: NodeJS.Timeout;
   recentBuffer: string;
+  loginMenuAnswered?: boolean;
+  /** agy đã đăng nhập thì vào thẳng chat; hub phải tự gửi /login để lấy link mới. */
+  agyRelogin?: 'waiting_prompt' | 'login_sent';
+}
+
+// eslint-disable-next-line no-control-regex -- strips terminal escape sequences
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>]/g;
+
+/**
+ * Newer agy versions ask for a login method before printing the OAuth link.
+ * Return true when the menu is on screen so the hub can pick "Google OAuth".
+ */
+/** agy đã vào màn hình chat (hồ sơ còn phiên đăng nhập). */
+export function isAgyChatPrompt(buffer: string): boolean {
+  return /\? for shortcuts/i.test(buffer.replace(ANSI_RE, ''));
+}
+
+/** agy đã in link OAuth hoặc ô nhập mã xác thực. */
+export function hasAgyLoginLink(buffer: string): boolean {
+  return /accounts\.google\.com|authorization code/i.test(buffer.replace(ANSI_RE, ''));
+}
+
+export function isAgyLoginMenu(buffer: string): boolean {
+  return /Select login method/i.test(buffer.replace(ANSI_RE, '')) && /Google OAuth/i.test(buffer.replace(ANSI_RE, ''));
+}
+
+// Lệnh mà agy/claude/codex có thể gọi để tự mở trình duyệt.
+const BROWSER_OPENERS = [
+  'xdg-open', 'x-www-browser', 'www-browser', 'sensible-browser', 'gio', 'gnome-open', 'kde-open', 'kde-open5',
+  'exo-open', 'gvfs-open', 'firefox', 'google-chrome', 'chromium', 'chromium-browser',
+];
+
+/**
+ * Không cho CLI tự mở tab đăng nhập: wizard trên web đã hiện link để người dùng tự mở.
+ * Các lệnh mở trình duyệt được thay bằng script không làm gì (exit 0) đặt đầu PATH,
+ * để CLI vẫn coi là mở thành công và tiếp tục chờ mã xác thực.
+ * Đặt AGENTHUB_LOGIN_OPEN_BROWSER=1 để bật lại hành vi cũ.
+ */
+export function applyNoBrowserEnv(env: Record<string, string>, hubHome: string): void {
+  if (process.env.AGENTHUB_LOGIN_OPEN_BROWSER === '1') return;
+  const shimDir = path.join(hubHome, 'no-browser-bin');
+  fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+  for (const name of BROWSER_OPENERS) {
+    const file = path.join(shimDir, name);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  }
+  env.BROWSER = path.join(shimDir, 'xdg-open');
+  env.PATH = env.PATH ? `${shimDir}${path.delimiter}${env.PATH}` : shimDir;
 }
 
 export class PtyManager {
   private sessions = new Map<string, PtySession>(); // sessionId -> PtySession
   private profileToSession = new Map<string, string>(); // profileName -> sessionId
   private emailRefreshTimers = new Set<NodeJS.Timeout>();
+  private stopped = false;
 
   constructor(private service: AppService) {}
 
   createSession(profileName: string): string {
+    this.stopped = false;
     let profile = this.service.profileRepo.get(profileName);
     if (!profile) {
       // Create isolated profile if not yet created
@@ -39,19 +93,33 @@ export class PtyManager {
     const home = profile.home || path.join(this.service.config.agyHomesDir, profile.name);
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-    if (profile.kind === 'isolated') {
+    if (profile.engine === 'claude' && profile.kind !== 'system' && profile.home) {
+      env.CLAUDE_CONFIG_DIR = profile.home;
+    } else if (profile.kind === 'isolated') {
       env.HOME = home;
       env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
     }
+    applyNoBrowserEnv(env, this.service.config.hubHome);
 
-    // agy binary path (can be overridden by AGENTHUB_AGY_BIN for tests)
-    const agyBin = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+    let args: string[] = [];
+    let command: string | null | undefined;
+    if (profile.engine === 'claude') {
+      command = findClaudeBin(this.service.config.chat.claudeBin) || process.env.AGENTHUB_CLAUDE_BIN;
+    } else if (profile.engine === 'codex') {
+      // Device-code login works from the dashboard: the CLI prints a URL and a one-time code.
+      command = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
+      args = ['login', '--device-auth'];
+      if (profile.kind === 'isolated' && profile.home) env.CODEX_HOME = profile.home;
+    } else {
+      command = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+    }
+    if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
 
-    const ptyProcess = pty.spawn(agyBin, [], {
+    const ptyProcess = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
-      cwd: home,
+      cwd: fs.existsSync(home) ? home : os.homedir(),
       env,
     });
 
@@ -67,11 +135,40 @@ export class PtyManager {
       sockets: new Set(),
       timer,
       recentBuffer: '',
+      agyRelogin: profile.engine === 'agy' ? 'waiting_prompt' : undefined,
+    };
+    // Gõ lệnh slash rồi mới Enter, để ô gợi ý lệnh của agy kịp lọc đúng lệnh.
+    const typeCommand = (command: string) => {
+      try { ptyProcess.write(command); } catch { return; }
+      setTimeout(() => {
+        try { ptyProcess.write('\r'); } catch { /* process may have exited */ }
+      }, 200);
     };
 
     ptyProcess.onData((data: string) => {
       // Keep last 16KB for new connections
       session.recentBuffer = (session.recentBuffer + data).slice(-16384);
+      if (profile.engine === 'agy' && !session.loginMenuAnswered && isAgyLoginMenu(session.recentBuffer)) {
+        session.loginMenuAnswered = true;
+        // Option 1 (Google OAuth) is preselected; Enter confirms it.
+        setTimeout(() => {
+          try { ptyProcess.write('\r'); } catch { /* process may have exited */ }
+        }, 300);
+      }
+      // Đã có menu/link đăng nhập ngay từ đầu (hồ sơ mới): chat xuất hiện sau đó là do đăng nhập xong.
+      if (session.agyRelogin === 'waiting_prompt' && (session.loginMenuAnswered || hasAgyLoginLink(session.recentBuffer))) {
+        session.agyRelogin = undefined;
+      }
+      if (session.agyRelogin === 'waiting_prompt' && isAgyChatPrompt(session.recentBuffer)) {
+        session.agyRelogin = 'login_sent';
+        setTimeout(() => typeCommand('/login'), 500);
+        // Nếu /login không mở được menu hay link (agy đòi đăng xuất trước) thì /logout rồi /login lại.
+        setTimeout(() => {
+          if (!this.sessions.has(sessionId) || session.loginMenuAnswered || hasAgyLoginLink(session.recentBuffer)) return;
+          typeCommand('/logout');
+          setTimeout(() => typeCommand('/login'), 2_000);
+        }, 6_000);
+      }
       for (const socket of session.sockets) {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(data);
@@ -86,16 +183,23 @@ export class PtyManager {
     this.sessions.set(sessionId, session);
     this.profileToSession.set(profileName, sessionId);
 
+    if (profile.engine === 'claude') {
+      setTimeout(() => {
+        try { ptyProcess.write('/login\r'); } catch { /* process may have exited */ }
+      }, 250);
+    }
+
     return sessionId;
   }
 
   stop(): void {
+    this.stopped = true;
     for (const timer of this.emailRefreshTimers) {
       clearTimeout(timer);
     }
     this.emailRefreshTimers.clear();
     for (const sessionId of [...this.sessions.keys()]) {
-      this.closeSession(sessionId);
+      this.closeSession(sessionId, 1001, 'Going Away');
     }
   }
 
@@ -104,17 +208,24 @@ export class PtyManager {
   }
 
   private scheduleEmailRefresh(profileName: string): void {
+    if (this.stopped) return;
+    const profile = this.service.profileRepo.get(profileName);
+    if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
+      this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);
+    }
     this.service.refreshProfileEmail(profileName);
 
     const timer = setTimeout(() => {
       this.emailRefreshTimers.delete(timer);
       this.service.refreshProfileEmail(profileName);
+      // Đăng nhập agy qua terminal xong thì lấy luôn ảnh Google (DEC-007), không đợi bấm Làm mới.
+      if (profile?.engine === 'agy') void this.service.syncAgyAvatarFromToken(profileName).catch(() => null);
     }, 2000);
     timer.unref?.();
     this.emailRefreshTimers.add(timer);
   }
 
-  closeSession(sessionId: string): void {
+  closeSession(sessionId: string, closeCode = 1000, closeReason = 'Session closed'): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -127,7 +238,7 @@ export class PtyManager {
 
     for (const socket of session.sockets) {
       try {
-        socket.close(1000, 'Session closed');
+        socket.close(closeCode, closeReason);
       } catch {
         // ignore
       }
@@ -160,7 +271,7 @@ export class PtyManager {
 
     const profile = this.service.profileRepo.get(profileName);
     const dupes = this.service.coreProfileService.getDuplicateEmails();
-    const duplicateWarning = profile?.email ? dupes.has(profile.email) : false;
+    const duplicateWarning = profile ? dupes.has(accountKey(profile) || '') : false;
 
     this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
       name: profileName,

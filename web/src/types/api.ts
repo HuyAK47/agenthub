@@ -12,9 +12,10 @@ export type TaskStatus =
 
 export type TaskLevel = 'easy' | 'hard';
 
-export type EngineType = 'agy' | 'codex';
+export type EngineType = 'agy' | 'codex' | 'claude';
 
-export type ProfileKind = 'keyring' | 'isolated' | 'codex';
+export type ProfileKind = 'keyring' | 'isolated' | 'codex' | 'system';
+export type ProfileAccountType = 'personal' | 'team' | 'api';
 
 export interface QuotaMark {
   profileName: string;
@@ -22,12 +23,27 @@ export interface QuotaMark {
   until: number; // epoch seconds
   reason?: string;
 }
-export interface QuotaUsageItem { grp: string; window: '5h' | 'week'; remainingPct: number; resetAt: number; fetchedAt: number; }
+export interface QuotaUsageItem {
+  grp: string;
+  window: '5h' | 'week';
+  remainingPct: number;
+  resetAt: number;
+  fetchedAt: number;
+}
+
+export interface ClaudeLimitedSession {
+  sessionId: string;
+  title: string | null;
+  cwd: string;
+  limitResetAt: number;
+  autoResumeEnabled: boolean;
+}
 
 export interface Profile {
   name: string;
   engine: EngineType;
   kind: ProfileKind;
+  accountType?: ProfileAccountType;
   home?: string;
   email?: string | null;
   loggedIn?: boolean;
@@ -39,11 +55,21 @@ export interface Profile {
   duplicateWarning?: boolean;
   duplicateEmailWith?: string[];
   usage?: QuotaUsageItem[];
+  claudeTokens?: { today: number; week: number };
+  limitedSessions?: ClaudeLimitedSession[];
   slotsUsed?: number;
   slotsTotal?: number;
   authState?: 'ok' | 'not_logged_in' | 'needs_verification' | 'error' | null;
   authMessage?: string | null;
   verifyUrl?: string | null;
+  claudePlan?: string;
+  label?: string | null;
+  notes?: string | null;
+  priority?: number;
+  avatarUrl?: string | null;
+  /** Chỉ có trong phản hồi của nút Làm mới: kết quả lấy ảnh đại diện. */
+  avatarMessage?: string;
+  currentTask?: { id?: string; title?: string } | null;
 }
 
 export interface ProjectHooks {
@@ -56,6 +82,18 @@ export interface ProjectMerge {
   checks: string[];
   timeoutSec: number;
 }
+export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
+export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
+
+export interface IntegrationStatus {
+  path: string;
+  branch: string;
+  exists: boolean;
+  currentBranch: string | null;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
 
 export interface Project {
   id: string;
@@ -67,7 +105,29 @@ export interface Project {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
+  review?: ProjectReview | string | null;
+  /** Always present in API responses (defaults filled in by the server). */
+  settings?: ProjectSettings;
+  integrationStatus?: IntegrationStatus | null;
   createdAt?: string;
+}
+
+/** Mirrors src/projects/settings.ts. */
+export interface ProjectSettings {
+  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
+  integration: { enabled: boolean; branch?: string; baseRef?: string };
+  references: Array<{ name: string; path: string; inject: boolean }>;
+  notifications: { telegramContent: 'full' | 'minimal' };
+}
+
+export interface KnowledgeEntry {
+  id: number;
+  projectId: string;
+  taskId: string;
+  content: string;
+  createdAt: string;
+  pinned: number;
 }
 
 export interface Run {
@@ -93,7 +153,7 @@ export interface Review {
   createdAt: string;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
 
 export interface Task {
   id: string; // project~slug or project/slug
@@ -108,6 +168,7 @@ export interface Task {
   worktreePath?: string | null;
   status: TaskStatus;
   waitReason?: WaitReason;
+  modelWarnings?: string[];
   dependsOn: string | string[];
   attempt: number;
   resume: number;
@@ -118,6 +179,8 @@ export interface Task {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  reviewStep?: number;
+  reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
   currentRun?: {
@@ -128,8 +191,51 @@ export interface Task {
     noCommitMinutes?: number | null;
     isLooping?: boolean;
     loopingCommand?: string | null;
+    model?: string;
+    profileName?: string;
+    paused?: boolean;
+    pauseReason?: 'manual' | 'load' | null;
+    rss?: number;
+    cpu?: number;
   } | null;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
   checks?: CheckResult[];
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
+  batchId?: string | null;
+}
+
+export type BatchStatus = 'draft' | 'dispatched' | 'discarded';
+
+export interface TaskBatch {
+  id: string;
+  projectId: string;
+  title: string;
+  goal: string | null;
+  status: BatchStatus;
+  createdBy: string | null;
+  createdAt: string;
+  tasks?: Task[];
+}
+
+export interface CreateBatchInput {
+  project: string;
+  title: string;
+  goal?: string;
+  tasks: Array<{
+    slug: string;
+    title: string;
+    body?: string;
+    level?: TaskLevel;
+    modelChain?: string[];
+    dependsOn?: string[];
+  }>;
+  createdBy?: string;
 }
 
 export interface CheckResult {
@@ -141,12 +247,21 @@ export interface CheckResult {
 }
 
 export interface TaskDetail extends Task {
+  reviewChain?: ReviewChainStep[];
+  reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
   doneContent?: string | null;
   blockedContent?: string | null;
   commits?: string[] | null;
   gitCommits?: string[] | null;
+  sourceRef?: {
+    taskId: string;
+    runId?: string | null;
+    checkName?: string | null;
+    excerptHash: string;
+  } | null;
+  derivedTasks?: Task[];
 }
 
 export interface EventItem {
@@ -177,6 +292,10 @@ export interface RunningWorker {
   slug?: string;
   title?: string;
   worktreePath?: string | null;
+  rss?: number;
+  cpu?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
 }
 
 export type BrainActivity =
@@ -195,6 +314,33 @@ export interface BrainStatus {
   taskId?: string | null;
   updatedAt: string;
   stale: boolean;
+  source?: 'manual' | 'transcript';
+  sessions?: BrainSession[];
+  state?: 'working' | 'waiting' | 'inactive';
+  brains?: ProjectBrain[];
+}
+
+export interface ProjectBrain {
+  projectId: string | null;
+  projectName: string;
+  mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  sessionId: string;
+  state: 'idle' | 'running' | 'waiting' | 'error';
+  queued: boolean;
+  lastTurnAt: string | null;
+  tokensToday: number;
+}
+
+export interface BrainSession {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  lastActivityAt: string;
+  lastUserRequest: string | null;
+  lastTool: { name: string; summary: string } | null;
+  state: 'working' | 'waiting' | 'inactive';
+  tokens5h: number | null;
+  link: string;
 }
 
 export interface ClaudeQuota {
@@ -205,10 +351,20 @@ export interface ClaudeQuota {
   limited?: boolean;
 }
 
+export interface TaskNote {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: 'note' | 'overlap';
+  content: string;
+  createdAt: string;
+}
+
 export interface HubStatus {
   tasks: Record<string, number>;
   profiles?: Profile[];
   running: RunningWorker[];
+  overlaps?: TaskNote[];
   brain?: BrainStatus;
   disk?: {
     freeGB: number;
@@ -230,11 +386,23 @@ export interface HubStatus {
     overloaded: boolean;
     recoveringSince: number | null;
   };
+  telegram?: {
+    enabled: boolean;
+    allowedChatsCount?: number;
+    hasToken?: boolean;
+  };
   // Backwards compatibility aliases
   tasksByStatus?: Record<TaskStatus, number>;
   runningWorkers?: RunningWorker[];
   recentEvents?: EventItem[];
   tasksByProject?: Record<string, Record<string, number>>;
+}
+
+export interface TelegramPairingResponse {
+  code: string;
+  expiresInSec: number;
+  enabled: boolean;
+  allowedChatIds: number[];
 }
 
 export interface OrphanProcess {
@@ -313,11 +481,12 @@ export interface DayMetric {
   runs: number;
   durationMs: number;
   tokens: number;
+  claudeTokens?: number;
 }
 
 export interface DailyProfileSummary {
   name: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   enabled: boolean;
   isIdle: boolean;
   idleReason?: string;
@@ -330,7 +499,7 @@ export interface DailyProfileSummary {
 
 export interface DailyUsageDayProfile extends DayMetric {
   profileName: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   isIdle: boolean;
   quota: ProfileQuotaInfo;
 }
@@ -341,6 +510,7 @@ export interface DailyUsageDay {
   totalRuns: number;
   totalDurationMs: number;
   totalTokens: number;
+  claudeTokens?: number;
   profiles: DailyUsageDayProfile[];
 }
 
@@ -356,6 +526,8 @@ export interface SystemConfig {
   modelChainHard: string[];
   modelChainEasy: string[];
   defaultTimeout: number;
+  multiplePerProvider?: boolean;
+  planning?: { requireApproval?: boolean; approvalMinTasks?: number };
   slotsPerAgyProfile?: number;
   slotsPerCodexProfile?: number;
   watchdog?: { stallMinutes: number; waitingMinutes: number };
@@ -368,8 +540,29 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
+  reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
+  brain?: {
+    mode?: 'off' | 'suggest' | 'auto';
+    maxConcurrent?: number;
+    digest?: {
+      enabled: boolean;
+      time: string;
+    };
+    fallback?: Array<
+      | { type: 'profile'; profile?: string }
+      | { type: 'model'; model: string }
+      | { type: 'apiKey'; dailyCapUSD: number }
+      | { type: 'engine'; engine: 'codex' }
+      | { type: 'wait' }
+    >;
+  };
   notifications?: {
     desktop: boolean;
+    quietHours?: {
+      enabled: boolean;
+      start: string;
+      end: string;
+    };
   };
   load?: {
     enabled: boolean;
@@ -380,6 +573,11 @@ export interface SystemConfig {
   };
 }
 
+export interface ModelOptions {
+  suggestions: string[];
+  configured: string[];
+}
+
 export type ChatMode = 'safe' | 'full';
 
 export interface ChatSession {
@@ -388,12 +586,20 @@ export interface ChatSession {
   title: string;
   mode: ChatMode;
   busy: boolean;
+  state?: 'idle' | 'running' | 'waiting_permission' | 'error';
   model?: string;
+  profileName?: string | null;
   updatedAt: string;
   lastMessage?: string | null;
+  pinned?: boolean | number;
+  archived?: boolean | number;
+  inputTokens?: number;
+  outputTokens?: number;
+  contextTokens?: number;
+  createdAt?: string;
 }
 
-export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error';
+export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
 
 export interface ChatMessageMeta {
   name?: string;
@@ -402,6 +608,18 @@ export interface ChatMessageMeta {
   costUsd?: number;
   numTurns?: number;
   error?: string;
+  retryText?: string;
+}
+
+export interface ChatPermissionRequest {
+  id: string;
+  sessionId: string;
+  messageId?: string | null;
+  toolName: string;
+  input: Record<string, unknown>;
+  status: 'pending' | 'allow' | 'deny' | 'allow_always';
+  message?: string | null;
+  createdAt: string;
 }
 
 export interface ChatMessage {
@@ -417,10 +635,14 @@ export interface CreateChatSessionInput {
   title?: string;
   mode?: ChatMode;
   model?: string;
+  profileName?: string | null;
 }
 
 export interface UpdateChatSessionInput {
-  title: string;
+  title?: string;
+  pinned?: boolean | number;
+  archived?: boolean | number;
+  model?: string;
 }
 
 export interface SendMessageResponse {
@@ -436,7 +658,10 @@ export interface ChatConfig {
   claudeVersion?: string | null;
   maxConcurrent?: number;
   idleTimeoutSec?: number;
-  model?: '' | 'sonnet' | 'haiku';
+  model?: string;
+  models?: string[];
+  claudeProfile?: string;
+  autoCompactPercent?: number;
 }
 
 export interface CreateProjectInput {
@@ -448,6 +673,8 @@ export interface CreateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
+  settings?: ProjectSettings;
 }
 
 export interface UpdateProjectInput {
@@ -458,10 +685,14 @@ export interface UpdateProjectInput {
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
+  review?: ProjectReview | null;
+  settings?: Partial<ProjectSettings>;
 }
 
 export interface CreateProfileInput {
   name: string;
+  engine?: 'agy' | 'codex' | 'claude';
+  accountType?: ProfileAccountType;
 }
 
 export interface VersionResponse {
@@ -497,6 +728,18 @@ export interface CreateTaskInput {
   start?: boolean;
 }
 
+export interface CaptureTaskInput {
+  sourceTaskId: string;
+  runId?: string;
+  checkName?: string;
+  excerpt: string;
+  slug: string;
+  title?: string;
+  body?: string;
+  level: TaskLevel;
+  start?: boolean;
+}
+
 export interface ReviewTaskInput {
   verdict: 'approved' | 'changes_requested';
   feedback?: string;
@@ -514,4 +757,35 @@ export interface UpdateTaskInput {
   title?: string;
   body?: string;
   appendBody?: string;
+}
+
+export interface TaskGraphNode {
+  id: string;
+  projectId: string;
+  slug: string;
+  title: string;
+  status: TaskStatus;
+  level: TaskLevel;
+  modelChain?: string[];
+  currentRun?: {
+    model?: string;
+    profileName?: string;
+  } | null;
+  blockedCount: number;
+  isCritical: boolean;
+  isMaxBlocker: boolean;
+}
+
+export interface TaskGraphEdge {
+  from: string;
+  to: string;
+  isCritical: boolean;
+}
+
+export interface TaskGraphResponse {
+  nodes: TaskGraphNode[];
+  edges: TaskGraphEdge[];
+  criticalPath: string[];
+  maxBlockingTaskId: string | null;
+  maxBlockedCount: number;
 }

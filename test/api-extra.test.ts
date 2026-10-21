@@ -339,6 +339,31 @@ describe('AgentHub API Extra Endpoints', () => {
       expect(updated2.checks).toBeNull();
     });
 
+    it('PATCH /api/projects/:id keeps fields that are not sent', async () => {
+      const repoPath = path.join(tmpDir, 'repo-patch-partial');
+      initGitRepo(repoPath);
+      const checks = [{ name: 'lint', cmd: ['npm', 'run', 'lint'] }];
+      ctx.projectRepo.insert({
+        id: 'proj-partial',
+        name: 'Project Partial',
+        path: repoPath,
+        defaultBranch: 'main',
+        maxParallel: 2,
+        checks: JSON.stringify(checks),
+      });
+
+      const res = await server.inject({
+        method: 'PATCH',
+        url: '/api/projects/proj-partial',
+        headers: authHeaders(),
+        payload: { maxParallel: 5 },
+      });
+      expect(res.statusCode).toBe(200);
+      const updated = JSON.parse(res.body);
+      expect(updated.maxParallel).toBe(5);
+      expect(JSON.parse(updated.checks!)).toEqual(checks);
+    });
+
     it('PATCH /api/projects/:id rejects invalid checks schema', async () => {
       const repoPath = path.join(tmpDir, 'repo-patch-invalid');
       initGitRepo(repoPath);

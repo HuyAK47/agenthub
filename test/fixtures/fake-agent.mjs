@@ -7,10 +7,12 @@
  * - quota: prints quota error to stdout
  * - crash: exits with code 1
  * - slow: waits 60 seconds then creates DONE
+ * - sleep-loop: runs until killed (or until orphan-guard exits it)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import './orphan-guard.mjs';
 
 const mode = process.env.FAKE_MODE || 'done';
 const cwd = process.env.FAKE_CWD || process.cwd();
@@ -60,6 +62,11 @@ async function run() {
     return;
   }
   switch (mode) {
+    case 'done-tokens':
+      // Codex prints its token usage at the end of the run.
+      console.log('tokens used');
+      console.log('1.234');
+    // falls through
     case 'done':
       console.log('Fake agent: completing task...');
       fs.writeFileSync(
@@ -109,6 +116,18 @@ async function run() {
         'Task completed (slowly).',
       );
       break;
+
+    case 'sleep-loop': {
+      console.log('Fake agent: sleep loop...');
+      let running = true;
+      while (running) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        if (process.env.STOP_SLEEP === '1') {
+          running = false;
+        }
+      }
+      break;
+    }
 
     case 'transient':
       console.log('Fake agent: transient error...');

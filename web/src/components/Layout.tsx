@@ -1,25 +1,54 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { QueryClientContext, useQuery } from '@tanstack/react-query';
 import { useTheme } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
 import { VersionBanner } from './VersionBanner';
 import { subscribeConnectionState } from '../api/sse';
+import { getBatches } from '../api/client';
 import {
   Activity,
   CheckSquare,
   Users,
   FolderGit2,
   Settings,
+    Wrench,
   Sun,
   Moon,
   Monitor,
   Bot,
   MessageSquare,
-  TerminalSquare,
   TrendingUp,
+  Layers,
   Wifi,
   WifiOff,
 } from 'lucide-react';
+
+const PlansBadgeInner: React.FC = () => {
+  const { data: batches = [] } = useQuery({
+    queryKey: ['batches', 'draft-count'],
+    queryFn: () => getBatches({ status: 'draft' }),
+    staleTime: 5000,
+  });
+
+  const draftCount = batches.length;
+  if (draftCount <= 0) return null;
+
+  return (
+    <span
+      data-testid="plans-sidebar-badge"
+      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/30 leading-none"
+    >
+      {draftCount}
+    </span>
+  );
+};
+
+const PlansBadge: React.FC = () => {
+  const client = React.useContext(QueryClientContext);
+  if (!client) return null;
+  return <PlansBadgeInner />;
+};
 
 export const Layout: React.FC = () => {
   const { mode, setMode } = useTheme();
@@ -52,18 +81,20 @@ export const Layout: React.FC = () => {
   const navItems = [
     { to: '/', label: t('common.dashboard'), icon: Activity },
     { to: '/chat', label: 'Chat', icon: MessageSquare },
-    { to: '/claude-sessions', label: t('extra.claudeSessions'), icon: TerminalSquare },
+    { to: '/plans', label: t('common.plans'), icon: Layers },
     { to: '/tasks', label: 'Task', icon: CheckSquare },
     { to: '/savings', label: t('extra.pageSavings'), icon: TrendingUp },
     { to: '/profiles', label: t('common.profiles'), icon: Users },
     { to: '/projects', label: t('common.projects'), icon: FolderGit2 },
     { to: '/settings', label: t('common.settings'), icon: Settings },
+    { to: '/setup', label: t('setup.navLabel'), icon: Wrench },
   ];
 
   const getPageTitle = (pathname: string): string => {
     if (pathname === '/') return t('common.dashboard');
     if (pathname.startsWith('/chat')) return 'Chat';
     if (pathname.startsWith('/claude-sessions')) return t('extra.claudeSessions');
+    if (pathname.startsWith('/plans')) return t('extra.pagePlans');
     if (pathname === '/tasks/new') return t('extra.pageTaskCreate');
     if (pathname.startsWith('/tasks/')) return t('extra.pageTaskDetail');
     if (pathname.startsWith('/tasks')) return t('common.tasks');
@@ -71,6 +102,7 @@ export const Layout: React.FC = () => {
     if (pathname.startsWith('/projects')) return t('common.projects');
     if (pathname.startsWith('/savings')) return t('extra.pageSavings');
     if (pathname.startsWith('/settings')) return t('common.settings');
+    if (pathname.startsWith('/setup')) return t('setup.navLabel');
     return t('extra.pageAgentHub');
   };
 
@@ -129,6 +161,7 @@ export const Layout: React.FC = () => {
               >
                 <Icon size={18} className="shrink-0" />
                 <span className="truncate max-[1100px]:hidden">{item.label}</span>
+                {item.to === '/plans' && <PlansBadge />}
               </NavLink>
             );
           })}

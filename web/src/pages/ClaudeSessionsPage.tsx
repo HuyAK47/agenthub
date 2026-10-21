@@ -8,10 +8,11 @@ import { formatNumber } from '../utils/format';
 import { CollapsibleList } from '../components/CollapsibleList';
 
 type TaskUsage = { taskId: string; effectiveTokens: number };
-type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[] };
+type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[]; limitResetAt?: number | null; autoResumeEnabled?: number };
 type Turn = { ts: string; turnId: string; effectiveTokens: number; input: number; output: number; tasks: TaskUsage[] };
 type SessionDetail = Session & { turns: Turn[] };
 const formatTokens = (value: number, locale: string) => formatNumber(value, { locale });
+const formatTaskId = (id: string, outsideLabel: string) => (id === '_general' ? outsideLabel : id);
 
 const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
   const { t, locale } = useLocale();
@@ -35,8 +36,11 @@ const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
               <tr className="border-t border-[var(--t-border)]" key={session.sessionId}>
                 <td className="py-3 min-w-[260px]">
                   <Link className="hover:text-[var(--t-accent)]" to={`/claude-sessions/${encodeURIComponent(session.sessionId)}`}>
-                    <span className={`inline-block w-2 h-2 rounded-full mr-2 ${session.active ? 'bg-[var(--t-ok)]' : 'bg-[var(--t-text-3)]'}`} />
-                    {session.title || session.sessionId}
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full mr-2 ${session.active ? 'bg-[var(--t-ok)]' : 'bg-[var(--t-text-3)]'}`}
+                      title={session.active ? t('claudeSessions.active') : ''}
+                    />
+                    {session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId)}
                   </Link>
                   <div className="text-xs text-[var(--t-text-3)] truncate max-w-[320px]">{session.cwd}</div>
                 </td>
@@ -44,7 +48,11 @@ const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
                 <td>{session.messages}</td>
                 <td>{formatTokens(session.effectiveTokens, locale)}</td>
                 <td className="max-w-[220px]">
-                  {session.topTasks.map((task) => `${task.taskId} (${formatTokens(task.effectiveTokens, locale)})`).join(', ') || '_general'}
+                  {session.topTasks.length > 0
+                    ? session.topTasks
+                        .map((task) => `${formatTaskId(task.taskId, t('claudeSessions.outsideTask'))} (${formatTokens(task.effectiveTokens, locale)})`)
+                        .join(', ')
+                    : t('claudeSessions.outsideTask')}
                 </td>
                 <td>{session.lastAt ? new Date(session.lastAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US') : ''}</td>
               </tr>
@@ -76,8 +84,36 @@ const SessionDetail: React.FC<{ data: SessionDetail; sessionId: string }> = ({ d
     <div className="space-y-4 max-w-6xl mx-auto">
       <Link className="text-[var(--t-accent)] text-sm" to="/claude-sessions">← {t('extra.claudeSessions')}</Link>
       <Card>
-        <h1 className="text-xl font-semibold">{data.title || sessionId}</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-semibold">{data.title || (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId)}</h1>
+          {data.active && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              {t('claudeSessions.active')}
+            </span>
+          )}
+        </div>
         <p className="text-sm text-[var(--t-text-3)] mt-1 break-all">{data.cwd} · {data.model || t('extra.unknown')}</p>
+        <label className="flex items-center gap-2 mt-4 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={data.autoResumeEnabled === 1}
+            onChange={(event) => {
+              void apiFetch(`/api/claude/sessions/${encodeURIComponent(sessionId)}/auto-resume`, {
+                method: 'PATCH',
+                body: JSON.stringify({ enabled: event.target.checked }),
+              });
+            }}
+          />
+          {t('claudeSessions.autoResumeLimit')}
+        </label>
+        {data.limitResetAt ? (
+          <p className="text-sm text-[var(--t-warn)] mt-2">
+            {t('claudeSessions.rateLimit5h', {
+              time: new Date(data.limitResetAt * 1000 + 60_000).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US'),
+            })}
+          </p>
+        ) : null}
         <h2 className="font-semibold mt-6 mb-2">{t('extra.tokensOverTime')}</h2>
         <TurnChart turns={data.turns} label={t('extra.tokensOverTime')} />
         <div className="overflow-x-auto">
@@ -94,7 +130,13 @@ const SessionDetail: React.FC<{ data: SessionDetail; sessionId: string }> = ({ d
                 <tr className="border-t border-[var(--t-border)]" key={`${turn.turnId}-${turn.ts}`}>
                   <td className="py-2">{new Date(turn.ts).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US')}</td>
                   <td>{formatTokens(turn.effectiveTokens, locale)}</td>
-                  <td>{turn.tasks.map((task) => `${task.taskId} (${formatTokens(task.effectiveTokens, locale)})`).join(', ') || '_general'}</td>
+                  <td>
+                    {turn.tasks.length > 0
+                      ? turn.tasks
+                          .map((task) => `${formatTaskId(task.taskId, t('claudeSessions.outsideTask'))} (${formatTokens(task.effectiveTokens, locale)})`)
+                          .join(', ')
+                      : t('claudeSessions.outsideTask')}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -116,9 +158,17 @@ export const ClaudeSessionsPage: React.FC = () => {
   if (sessionId && detail.data) return <SessionDetail data={detail.data} sessionId={sessionId} />;
   return (
     <div className="space-y-4 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">{t('extra.claudeSessions')}</h1>
-        <button type="button" onClick={() => rescan.mutate()} disabled={rescan.isPending} className="rounded-lg bg-[var(--t-accent)] text-white px-3 py-2 text-sm disabled:opacity-50">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">{t('extra.claudeSessions')}</h1>
+          <p className="text-xs text-[var(--t-text-3)] mt-0.5">{t('claudeSessions.scopeNote')}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => rescan.mutate()}
+          disabled={rescan.isPending}
+          className="rounded-lg bg-[var(--t-accent)] text-white px-3 py-2 text-sm disabled:opacity-50 self-start sm:self-auto cursor-pointer"
+        >
           {rescan.isPending ? '…' : t('extra.rescan')}
         </button>
       </div>

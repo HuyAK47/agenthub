@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, AgentHubConfig } from './config.js';
 import { createContext, closeContext, startDaemon } from './daemon.js';
 import { runMcpServer } from './mcp/index.js';
-import { getOrCreateToken, getTokenPath } from './auth.js';
+import { getOrCreateToken, getTokenPath, readExistingToken } from './auth.js';
 import { spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -16,6 +16,13 @@ import { cmdBrain } from './brain.js';
 import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
+import { findClaudeBin } from './chat/claude.js';
+import { getPlatform } from './platform/index.js';
+import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
+
+export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
+import { assertWorkerMayControlHub } from './worker-guard.js';
+import { SetupManager } from './tools/setup.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -46,12 +53,8 @@ export async function cmdOpen(
   const noBrowser = extraArgs.includes('--no-browser') || process.env.AGENTHUB_NO_BROWSER === '1';
   if (!noBrowser) {
     try {
-      if (openFn) {
-        openFn('xdg-open', [url]);
-      } else {
-        const { execFile } = await import('node:child_process');
-        execFile('xdg-open', [url], () => {});
-      }
+      // Linux implementation delegates to execFile('xdg-open', [url]); macOS uses open.
+      getPlatform().openBrowser(url, openFn);
     } catch {
       // Ignore in headless environments
     }
@@ -59,46 +62,29 @@ export async function cmdOpen(
   return url;
 }
 
-export async function cmdInstallService(extraArgs: string[]): Promise<string> {
+export async function cmdInstallService(extraArgs: string[], projectRootOverride?: string): Promise<string> {
   const isPrint = extraArgs.includes('--print');
-  const projectRoot = findProjectRoot();
+  const projectRoot = projectRootOverride || findProjectRoot();
   const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
   const nodePath = process.execPath;
   const currentPath = process.env.PATH || '';
 
-  const serviceContent = `[Unit]
-Description=AgentHub Daemon
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${nodePath} ${cliPath} daemon
-Restart=on-failure
-Environment=PATH=${currentPath}
-
-[Install]
-WantedBy=default.target
-`;
-
-  const serviceDir = path.join(os.homedir(), '.config', 'systemd', 'user');
-  const serviceFile = path.join(serviceDir, 'agenthub.service');
+  const result = getPlatform().installService({ nodePath, cliPath, currentPath, homeDir: os.homedir(), print: isPrint });
 
   if (isPrint) {
-    const output = `File: ${serviceFile}\n\n${serviceContent}\nCác lệnh kích hoạt:\n  systemctl --user daemon-reload\n  systemctl --user enable --now agenthub`;
+    const output = `File: ${result.file}\n\n${result.content}\nCác lệnh kích hoạt:\n  ${result.activate}`;
     console.log(output);
     return output;
   }
 
-  fs.mkdirSync(serviceDir, { recursive: true });
-  fs.writeFileSync(serviceFile, serviceContent, 'utf-8');
-  console.log(`✓ Đã tạo service file tại ${serviceFile}`);
+  if (result.skipped) {
+    console.log(`! ${result.message || 'Không có service nền tảng'}`);
+    return result.content;
+  }
 
-  const { execSync } = await import('node:child_process');
-  execSync('systemctl --user daemon-reload && systemctl --user enable --now agenthub', {
-    stdio: 'inherit',
-  });
-  console.log('✓ Đã bật và khởi chạy service agenthub');
-  return serviceContent;
+  console.log(`✓ Đã tạo service file tại ${result.file}`);
+  console.log(`✓ Đã bật và khởi chạy service agenthub (${result.activate})`);
+  return result.content;
 }
 
 export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
@@ -123,7 +109,7 @@ export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
 export async function cmdLink(): Promise<string> {
   const projectRoot = findProjectRoot();
   const wrapperPath = path.resolve(projectRoot, 'bin', 'agenthub');
-  const targetDir = path.join(os.homedir(), '.local', 'bin');
+  const targetDir = process.env.AGENTHUB_LINK_DIR || path.join(os.homedir(), '.local', 'bin');
   const targetPath = path.join(targetDir, 'agenthub');
 
   fs.mkdirSync(targetDir, { recursive: true });
@@ -158,8 +144,66 @@ export async function cmdDoctor(
   return report;
 }
 
+export async function cmdRollback(extraArgs: string[] = [], projectRootOverride?: string): Promise<string> {
+  const currentRoot = projectRootOverride || findProjectRoot();
+  const appRoot = path.dirname(currentRoot);
+  const currentLink = path.join(appRoot, 'current');
+  if (!fs.existsSync(currentLink) || !fs.lstatSync(currentLink).isSymbolicLink()) {
+    throw new Error(`Không tìm thấy layout release tại ${appRoot}.`);
+  }
+  const candidates = fs.readdirSync(appRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== 'node_modules' && /^\d+\.\d+\.\d+(?:[-+.].*)?$/.test(entry.name))
+    .filter((entry) => fs.existsSync(path.join(appRoot, entry.name, 'package.json')))
+    .map((entry) => entry.name)
+    .sort((a, b) => compareSemver(b, a));
+  const requested = extraArgs[0]?.replace(/^v/, '');
+  const target = requested && candidates.includes(requested)
+    ? requested
+    : candidates.find((version) => version !== path.basename(currentRoot));
+  if (!target) throw new Error('Không có bản release cũ để rollback.');
+  if (requested && !candidates.includes(requested)) throw new Error(`Không tìm thấy release v${requested}.`);
+
+  fs.unlinkSync(currentLink);
+  fs.symlinkSync(target, currentLink);
+  await cmdInstallService([], path.join(appRoot, target));
+  console.log(`✓ Đã rollback AgentHub về v${target}`);
+  return target;
+}
+
+export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = []): Promise<void> {
+  console.log('==> Thiết lập AgentHub lần đầu');
+  const setup = new SetupManager(config);
+  const installArg = extraArgs.find((arg) => arg.startsWith('--install='))?.slice('--install='.length) || (extraArgs.includes('--install') ? extraArgs[extraArgs.indexOf('--install') + 1] : undefined);
+  const installRequested = installArg?.split(',').filter(Boolean) || [];
+  const yes = extraArgs.includes('--yes');
+  for (const tool of await setup.status()) console.log(`  ${tool.installed ? '✓' : '!'} ${tool.id}: ${tool.installed ? `${tool.version || 'đã tìm thấy'} (${tool.path})` : tool.manual ? `cài thủ công — ${tool.docsUrl || 'xem hướng dẫn'}` : 'chưa tìm thấy'}`);
+  if (installRequested.length > 0 && !yes) {
+    throw new Error('Cần xác nhận cài đặt; dùng `agenthub setup --install=claude,codex --yes`');
+  }
+  for (const tool of installRequested) {
+    const status = (await setup.status()).find((item) => item.id === tool);
+    if (status?.installed) { console.log(`✓ ${tool} đã có sẵn`); continue; }
+    const { jobId } = await setup.install(tool);
+    console.log(`✓ Đã khởi chạy bộ cài ${tool} (${jobId})`);
+  }
+
+  const tokenPath = config.tokenPath || getTokenPath();
+  getOrCreateToken(tokenPath);
+  console.log(`✓ Đã chuẩn bị token tại ${tokenPath}`);
+  if (process.env.AGENTHUB_WORKER === '1') {
+    console.log('! Bỏ qua cài service trong worker/test mode');
+  } else {
+    await cmdInstallService([]);
+  }
+  await cmdOpen(config, extraArgs.includes('--no-browser') ? ['--no-browser'] : []);
+  console.log('Tiếp theo: mở trang Profiles để đăng nhập worker, rồi chạy `agenthub mcp-install` để kết nối Claude Code.');
+}
+
 async function main() {
   const config = loadConfig();
+  if (command === 'install-service' || command === 'uninstall' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
+    assertWorkerMayControlHub(command === 'daemon' ? 'daemon stop' : command);
+  }
 
   switch (command) {
     case 'daemon':
@@ -174,8 +218,30 @@ async function main() {
       await cmdOpen(config, args.slice(1));
       break;
 
+    case 'setup':
+      await cmdSetup(config, args.slice(1));
+      break;
+
+    case 'rollback':
+      await cmdRollback(args.slice(1));
+      break;
+
+    case 'update':
+      await cmdUpdate(config, args.slice(1));
+      break;
+
+    case 'version':
+    case '-v':
+    case '--version':
+      await cmdVersion(config, args.slice(1));
+      break;
+
     case 'install-service':
       await cmdInstallService(args.slice(1));
+      break;
+
+    case 'uninstall-service':
+      await cmdUninstallService(args.slice(1));
       break;
 
     case 'mcp-install':
@@ -231,6 +297,12 @@ async function main() {
     case 'claude-failover':
       await cmdClaudeFailover(config, args.slice(1));
       break;
+    case 'note':
+      await cmdNote(config, args.slice(1));
+      break;
+    case 'notes':
+      await cmdNotes(config, args.slice(1));
+      break;
 
     default:
       console.log(`AgentHub - Quản lý worker AI
@@ -239,14 +311,19 @@ Cách dùng:
   agenthub daemon                     Chạy daemon AgentHub
   agenthub mcp                        Chạy MCP server (stdio transport)
   agenthub open                       Mở giao diện web trong trình duyệt
-  agenthub install-service [--print]  Cài đặt systemd user service
+  agenthub setup [--no-browser]       Thiết lập lần đầu, service và dashboard
+  agenthub rollback [version]         Quay lại bản release trước đó
+  agenthub update                     Cập nhật AgentHub lên phiên bản mới nhất
+  agenthub version [--check]          Xem phiên bản và kiểm tra cập nhật mới
+  agenthub install-service [--print]  Cài đặt systemd/LaunchAgent user service
+  agenthub uninstall-service          Gỡ bỏ service chạy nền của AgentHub
   agenthub mcp-install [--print]      Đăng ký MCP server với Claude Code
   agenthub link                       Tạo symlink vào ~/.local/bin/agenthub
   agenthub doctor [--json]            Kiểm tra môi trường và cấu hình hệ thống
   agenthub status                     Xem trạng thái
   agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
   agenthub usage                      Xem usage quota các hồ sơ
-  agenthub profile list|check|login   Quản lý hồ sơ
+  agenthub profile list|check|login|add|import-tokens|rename|remove   Quản lý hồ sơ
   agenthub project add <name> <path>  Thêm project
   agenthub task add|list|show|log     Quản lý task
   agenthub review <id> --approve [--merge]  Duyệt task, có thể merge vào base worktree
@@ -255,6 +332,8 @@ Cách dùng:
   agenthub savings backfill-lines [--project x] Tính lại số dòng cho các task có nhánh còn tồn tại
   agenthub claude-sessions --summary  Tóm tắt phiên Claude và chi phí 24 giờ qua
   agenthub claude-failover [status|clear] Xem hoặc tắt failover Claude
+  agenthub note "<nội dung>"          Gửi ghi chú từ task đang chạy
+  agenthub notes [--since <id>]       Xem ghi chú của các task đang chạy cùng project
 `);
   }
 }
@@ -451,7 +530,7 @@ export async function cmdClean(
   return { tasks, removed, freedBytes };
 }
 
-async function cmdProfile(
+export async function cmdProfile(
   config: ReturnType<typeof loadConfig>,
   sub: string | undefined,
   extraArgs: string[],
@@ -460,6 +539,59 @@ async function cmdProfile(
   ctx.profileService.registerAll();
 
   switch (sub) {
+    case 'add': {
+      const name = extraArgs[0];
+      const engineArg = extraArgs.find((arg) => arg.startsWith('--engine='))?.split('=')[1]
+        || (extraArgs.includes('--engine') ? extraArgs[extraArgs.indexOf('--engine') + 1] : 'agy');
+      if (!name || (engineArg !== 'agy' && engineArg !== 'claude' && engineArg !== 'codex')) {
+        console.error('Cách dùng: agenthub profile add <name> [--engine agy|claude|codex]');
+        process.exitCode = 1;
+        break;
+      }
+      if (ctx.profileRepo.get(name)) {
+        console.error(`Hồ sơ "${name}" đã tồn tại`);
+        process.exitCode = 1;
+        break;
+      }
+      ctx.profileService.createProfile(name, engineArg as 'agy' | 'claude' | 'codex');
+      console.log(`✓ Đã tạo hồ sơ ${engineArg}: ${name}`);
+      break;
+    }
+    case 'rename': {
+      const oldName = extraArgs[0];
+      const newName = extraArgs[1];
+      if (!oldName || !newName) {
+        console.error('Cách dùng: agenthub profile rename <tên-cũ> <tên-mới>');
+        process.exitCode = 1;
+        break;
+      }
+      try {
+        ctx.service.renameProfile(oldName, { newName });
+        console.log(`✓ Đã đổi tên hồ sơ: ${oldName} → ${newName}`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+      break;
+    }
+    case 'remove':
+    case 'delete': {
+      const name = extraArgs.find((arg) => !arg.startsWith('--'));
+      const purgeHome = extraArgs.includes('--purge-home') || extraArgs.includes('--purgeHome=1') || extraArgs.includes('--purge');
+      if (!name) {
+        console.error('Cách dùng: agenthub profile remove <tên> [--purge-home]');
+        process.exitCode = 1;
+        break;
+      }
+      try {
+        ctx.service.deleteProfile(name, purgeHome);
+        console.log(`✓ Đã xoá hồ sơ: ${name}`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+      break;
+    }
     case 'list': {
       const profiles = ctx.profileRepo.getAll();
       const quotaMarks = ctx.quotaMarkRepo.getActive();
@@ -507,7 +639,7 @@ async function cmdProfile(
         });
         await new Promise<void>((resolve) => child.once('close', () => resolve()));
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').trim() : '';
-        const logDir = p.name === 'chinh'
+        const logDir = p.kind === 'keyring'
           ? config.defaultLogDir
           : path.join(p.home || os.homedir(), '.gemini', 'antigravity-cli', 'log');
         const email = ctx.profileService.readEmailFromLog(logDir);
@@ -530,11 +662,19 @@ async function cmdProfile(
         profile = ctx.profileRepo.get(name)!;
       }
 
-      // Run agy interactively with profile's environment
-      const agyPath = path.join(os.homedir(), '.gemini', 'bin', 'agy');
+      const executable = profile.engine === 'claude'
+        ? findClaudeBin(config.chat.claudeBin)
+        : (process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
+      if (!executable) {
+        console.error(`Không tìm thấy lệnh ${profile.engine}`);
+        process.exitCode = 1;
+        break;
+      }
       const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 
-      if (profile.kind === 'isolated' && profile.home) {
+      if (profile.engine === 'claude' && profile.kind !== 'system' && profile.home) {
+        env.CLAUDE_CONFIG_DIR = profile.home;
+      } else if (profile.kind === 'isolated' && profile.home) {
         env.HOME = profile.home;
         env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/agy-no-keyring';
       }
@@ -543,30 +683,94 @@ async function cmdProfile(
       console.log('Chọn "Sử dụng tài khoản khác" nếu muốn dùng tài khoản Google khác.');
       console.log('Sau khi đăng nhập xong, gõ /exit hoặc Ctrl+C để thoát.\n');
 
-      spawnSync(agyPath, [], {
+      const child = spawnSync(executable, [], {
         env,
-        stdio: 'inherit',
+        stdio: profile.engine === 'claude' ? ['pipe', 'inherit', 'inherit'] : 'inherit',
+        input: profile.engine === 'claude' ? '/login\n' : undefined,
       });
+      if (profile.engine === 'claude' && child.error) {
+        console.error(`Không thể chạy claude: ${child.error.message}`);
+        process.exitCode = 1;
+      }
 
       // Re-read email
-      const logDir = path.join(
-        profile.home || os.homedir(),
-        '.gemini',
-        'antigravity-cli',
-        'log',
-      );
-      const email = ctx.profileService.readEmailFromLog(logDir);
+      const claudeAccount = profile.engine === 'claude'
+        ? ctx.profileService.readClaudeAccount(profile.home || os.homedir())
+        : null;
+      const email = profile.engine === 'claude'
+        ? claudeAccount?.email
+        : ctx.profileService.readEmailFromLog(path.join(profile.home || os.homedir(), '.gemini', 'antigravity-cli', 'log'));
       if (email) {
         ctx.profileRepo.upsert({ ...profile, email });
         console.log(`\n✓ Đã đăng nhập: ${email}`);
+        if (claudeAccount?.plan) console.log(`  Gói: ${claudeAccount.plan}`);
       } else {
         console.log('\n⚠ Không tìm thấy email trong log.');
       }
       break;
     }
 
+    case 'import-tokens': {
+      const sourceArg = extraArgs[0];
+      const accountTypeArg = extraArgs.find((arg) => arg.startsWith('--account-type='))?.split('=')[1]
+        || (extraArgs.includes('--account-type') ? extraArgs[extraArgs.indexOf('--account-type') + 1] : 'personal');
+
+      if (!sourceArg) {
+        console.error('Cách dùng: agenthub profile import-tokens <đường_dẫn_file_json | chuỗi_json> [--account-type personal|team|api]');
+        process.exitCode = 1;
+        break;
+      }
+
+      let payloadRaw: unknown;
+      if (fs.existsSync(sourceArg)) {
+        try {
+          payloadRaw = JSON.parse(fs.readFileSync(sourceArg, 'utf8'));
+        } catch {
+          console.error(`Lỗi: Không thể phân tích cú pháp JSON từ file "${sourceArg}"`);
+          process.exitCode = 1;
+          break;
+        }
+      } else {
+        try {
+          payloadRaw = JSON.parse(sourceArg);
+        } catch {
+          console.error('Lỗi: Tham số không phải đường dẫn file tồn tại và cũng không phải chuỗi JSON hợp lệ');
+          process.exitCode = 1;
+          break;
+        }
+      }
+
+      console.log('Đang kiểm tra và nhập tài khoản Antigravity từ Cockpit token...');
+      try {
+        const result = await ctx.service.importAgyTokens({
+          tokens: payloadRaw,
+          accountType: accountTypeArg,
+        }, { verify: false });
+
+        console.log(`\nKết quả xử lý (${result.total} mục):`);
+        for (const item of result.results) {
+          if (item.status === 'ok') {
+            console.log(`  ✓ ${item.name} (${item.email}): ${item.message}`);
+          } else {
+            console.log(`  ✗ ${item.name || 'n/a'} (${item.email || 'n/a'}): ${item.message}`);
+          }
+        }
+        console.log(`\nTổng kết: ${result.successCount} thành công, ${result.failedCount} thất bại.`);
+        if (result.successCount > 0) {
+          console.log('Kiểm tra lại với agy: agenthub profile check <tên>');
+        }
+        if (result.failedCount > 0 && result.successCount === 0) {
+          process.exitCode = 1;
+        }
+      } catch (err) {
+        console.error('Lỗi khi nhập tokens:', err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+      break;
+    }
+
     default:
-      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>');
+      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>|add <tên>|import-tokens <file|json>|rename <cũ> <mới>|remove <tên>');
   }
 
   ctx.db.close();
@@ -874,6 +1078,138 @@ export async function cmdSavings(
     process.exitCode = 1;
   } finally {
     closeContext(ctx);
+  }
+}
+
+export async function cmdNote(
+  config: AgentHubConfig,
+  extraArgs: string[],
+): Promise<void> {
+  const content = extraArgs.join(' ').trim();
+  if (!content) {
+    console.error('Cách dùng: agenthub note "<nội dung>"');
+    process.exit(1);
+  }
+
+  const taskId = process.env.AGENTHUB_TASK_ID;
+  if (!taskId) {
+    console.error('Lỗi: Biến môi trường AGENTHUB_TASK_ID không được thiết lập.');
+    process.exit(1);
+  }
+
+  const port = config.port || 7700;
+  const token = readExistingToken(config.tokenPath || getTokenPath());
+  if (!token) {
+    console.error('Lỗi: Không tìm thấy token xác thực.');
+    process.exit(1);
+  }
+
+  const normalizedId = taskId.replace(/\//g, '~');
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/${encodeURIComponent(normalizedId)}/notes`, {
+      method: 'POST',
+      headers: {
+        Host: `127.0.0.1:${port}`,
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ content, kind: 'note' }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`Lỗi từ daemon API (${res.status}): ${err}`);
+      process.exit(1);
+    }
+
+    const data = (await res.json()) as { id: number; content: string; taskId: string };
+    console.log(`✓ Đã thêm ghi chú cho task ${data.taskId} (#${data.id})`);
+  } catch (err) {
+    console.error(`Không thể kết nối tới AgentHub daemon tại http://127.0.0.1:${port}:`, (err as Error).message);
+    process.exit(1);
+  }
+}
+
+export async function cmdNotes(
+  config: AgentHubConfig,
+  extraArgs: string[],
+): Promise<void> {
+  let projectId = getArg(extraArgs, '--project');
+  if (!projectId && process.env.AGENTHUB_TASK_ID) {
+    const taskId = process.env.AGENTHUB_TASK_ID;
+    projectId = taskId.includes('/') ? taskId.split('/')[0] : taskId;
+  }
+
+  if (!projectId) {
+    const ctx = createContext(config);
+    const projects = ctx.projectRepo.getAll();
+    const cwd = process.cwd();
+    const matched = projects.find(
+      (p) => cwd === p.path || cwd.startsWith(p.path + path.sep) || cwd.includes(p.id),
+    );
+    ctx.db.close();
+    if (matched) {
+      projectId = matched.id;
+    }
+  }
+
+  if (!projectId) {
+    console.error('Lỗi: Không xác định được project (AGENTHUB_TASK_ID chưa được thiết lập và không có --project).');
+    process.exit(1);
+  }
+
+  const since = getArg(extraArgs, '--since');
+  const port = config.port || 7700;
+  const token = readExistingToken(config.tokenPath || getTokenPath());
+  if (!token) {
+    console.error('Lỗi: Không tìm thấy token xác thực.');
+    process.exit(1);
+  }
+
+  const queryParams = new URLSearchParams();
+  queryParams.set('runningOnly', 'true');
+  if (since) {
+    queryParams.set('since', since);
+  }
+
+  try {
+    const res = await fetch(
+      `http://127.0.0.1:${port}/api/projects/${encodeURIComponent(projectId)}/notes?${queryParams.toString()}`,
+      {
+        headers: {
+          Host: `127.0.0.1:${port}`,
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`Lỗi từ daemon API (${res.status}): ${err}`);
+      process.exit(1);
+    }
+
+    const notes = (await res.json()) as Array<{
+      id: number;
+      taskId: string;
+      kind: 'note' | 'overlap';
+      content: string;
+      createdAt: string;
+    }>;
+
+    if (notes.length === 0) {
+      console.log('Không có ghi chú nào.');
+      return;
+    }
+
+    console.log(`=== Bảng tin project ${projectId} ===\n`);
+    for (const note of notes) {
+      const tag = note.kind === 'overlap' ? '[TRÙNG FILE] ' : '';
+      console.log(`[#${note.id}] ${note.createdAt} [${note.taskId}] ${tag}${note.content}`);
+    }
+  } catch (err) {
+    console.error(`Không thể kết nối tới AgentHub daemon tại http://127.0.0.1:${port}:`, (err as Error).message);
+    process.exit(1);
   }
 }
 

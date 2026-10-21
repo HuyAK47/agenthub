@@ -123,12 +123,67 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.get('/api/setup/status', async () => service.getSetupStatus());
+  fastify.post('/api/setup/install/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    return reply.status(202).send(await service.installSetupTool(tool));
+  });
+  fastify.get('/api/setup/log/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    const logPath = service.getSetupLogPath(tool);
+    if (!logPath) throw new HttpError(404, 'not_found', 'Setup log không tồn tại');
+    return reply.type('text/plain; charset=utf-8').send(fs.createReadStream(logPath));
+  });
+  fastify.post('/api/setup/complete', async () => service.completeSetup(false));
+  fastify.post('/api/setup/skip', async () => service.completeSetup(true));
+  fastify.post('/api/setup/mcp', async () => {
+    const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const cliPath = path.join(projectRoot, 'dist', 'cli.js');
+    const { execFile } = await import('node:child_process');
+    return new Promise((resolve, reject) => {
+      execFile('claude', ['mcp', 'add', '--scope', 'user', 'agenthub', '--', process.execPath, cliPath, 'mcp'], { timeout: 60_000 }, (error, stdout, stderr) => {
+        if (error) return reject(new HttpError(500, 'mcp_install_failed', stderr || error.message));
+        resolve({ ok: true, output: `${stdout}${stderr}` });
+      });
+    });
+  });
+
+  fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
+  fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+
+  // --- Telegram API ---
+  fastify.get('/api/telegram/pairing-code', async (req) => {
+    const query = req.query as { refresh?: string } | undefined;
+    const refresh = query?.refresh === '1' || query?.refresh === 'true';
+    return service.getTelegramPairingCode(refresh);
+  });
+  fastify.post('/api/telegram/pairing-code/refresh', async () => {
+    return service.getTelegramPairingCode(true);
+  });
+  fastify.post('/api/telegram/pair-code', async () => service.getTelegramPairingCode(true));
+  fastify.put('/api/telegram/token', async (req) => {
+    const body = req.body as { token?: unknown; botToken?: unknown };
+    const token = typeof body?.token === 'string' ? body.token : body?.botToken;
+    if (typeof token !== 'string') throw new HttpError(400, 'bad_request', 'token phải là chuỗi');
+    return service.saveTelegramToken(token);
+  });
+  fastify.post('/api/telegram/test', async () => service.testTelegram());
+  fastify.delete('/api/telegram/chats/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const chatId = Number(id);
+    if (!Number.isSafeInteger(chatId)) throw new HttpError(400, 'bad_request', 'chat id không hợp lệ');
+    return service.removeTelegramChat(chatId);
+  });
+  fastify.get('/api/telegram/status', async () => {
+    return service.getTelegramStatus();
+  });
+
   fastify.get('/api/system/orphans', async () => service.getOrphans());
   fastify.post('/api/system/orphans/reap', async () => service.reapOrphans());
 
   // --- Brain API ---
   if (service.brainService) {
-    registerBrainRoutes(fastify, service.brainService);
+    registerBrainRoutes(fastify, service.brainService, service);
   }
 
   // --- Projects API ---
@@ -156,6 +211,44 @@ export async function createServer(
     return service.deleteProject(id);
   });
 
+  fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.listKnowledge(id);
+  });
+
+  fastify.post('/api/projects/:id/knowledge', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    return reply.status(201).send(service.addKnowledge(id, req.body));
+  });
+
+  fastify.patch('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { id?: number };
+    return service.updateKnowledge(id, String(body.id), body);
+  });
+
+  fastify.delete('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { id?: number };
+    return service.deleteKnowledge(id, String(body.id));
+  });
+
+  fastify.patch('/api/projects/:id/knowledge/:entryId', async (req: FastifyRequest) => {
+    const { id, entryId } = req.params as { id: string; entryId: string };
+    return service.updateKnowledge(id, entryId, req.body);
+  });
+
+  fastify.delete('/api/projects/:id/knowledge/:entryId', async (req: FastifyRequest) => {
+    const { id, entryId } = req.params as { id: string; entryId: string };
+    return service.deleteKnowledge(id, entryId);
+  });
+
+  fastify.get('/api/projects/:id/notes', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { since?: string; runningOnly?: string; taskId?: string };
+    return service.getProjectNotes(id, query);
+  });
+
   // --- Profiles API ---
   fastify.get('/api/profiles', async () => {
     return service.listProfiles();
@@ -166,9 +259,26 @@ export async function createServer(
     return service.refreshUsage(name);
   });
 
+  fastify.delete('/api/profiles/:name', async (req: FastifyRequest) => {
+    const { name } = req.params as { name: string };
+    const query = req.query as { purgeHome?: string | boolean };
+    const purgeHome = query?.purgeHome === '1' || query?.purgeHome === 'true' || query?.purgeHome === true;
+    return service.deleteProfile(name, purgeHome);
+  });
+
+  fastify.post('/api/profiles/:name/rename', async (req: FastifyRequest) => {
+    const { name } = req.params as { name: string };
+    return service.renameProfile(name, req.body);
+  });
+
   fastify.post('/api/profiles', async (req: FastifyRequest, reply: FastifyReply) => {
     const profile = service.createProfile(req.body);
     return reply.status(201).send(profile);
+  });
+
+  fastify.post('/api/profiles/import-tokens', async (req: FastifyRequest, reply: FastifyReply) => {
+    const result = await service.importAgyTokens(req.body);
+    return reply.status(200).send(result);
   });
 
   fastify.post('/api/profiles/:name/check', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -203,8 +313,18 @@ export async function createServer(
     return service.listTasks(query);
   });
 
+  fastify.get('/api/tasks/graph', async (req: FastifyRequest) => {
+    const query = req.query as { project?: string; includeDone?: string };
+    return service.getTasksGraph(query);
+  });
+
   fastify.post('/api/tasks', async (req: FastifyRequest, reply: FastifyReply) => {
     const task = service.createTask(req.body);
+    return reply.status(201).send(task);
+  });
+
+  fastify.post('/api/tasks/from-error', async (req: FastifyRequest, reply: FastifyReply) => {
+    const task = service.captureTask(req.body);
     return reply.status(201).send(task);
   });
 
@@ -226,6 +346,16 @@ export async function createServer(
   fastify.post('/api/tasks/:id/cancel', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.cancelTask(id);
+  });
+
+  fastify.post('/api/tasks/:id/pause', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.pauseTask(id);
+  });
+
+  fastify.post('/api/tasks/:id/resume', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.resumeTask(id);
   });
 
   fastify.post('/api/tasks/:id/review', async (req: FastifyRequest) => {
@@ -260,6 +390,59 @@ export async function createServer(
     return service.rerunChecks(id);
   });
 
+  fastify.post('/api/tasks/:id/notes', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const note = service.createTaskNote(id, req.body);
+    return reply.status(201).send(note);
+  });
+
+  fastify.get('/api/tasks/:id/notes', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getTaskNotes(id);
+  });
+
+  fastify.delete('/api/tasks/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.deleteTask(id);
+  });
+
+  // --- Batches API ---
+  fastify.get('/api/batches', async (req: FastifyRequest) => {
+    const query = req.query as { project?: string; status?: string };
+    return service.listBatches(query);
+  });
+
+  fastify.get('/api/batches/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getBatch(id);
+  });
+
+  fastify.post('/api/batches', async (req: FastifyRequest, reply: FastifyReply) => {
+    const batch = service.createBatch(req.body);
+    return reply.status(201).send(batch);
+  });
+
+  fastify.post('/api/batches/:id/dispatch', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.dispatchBatch(id);
+  });
+
+  fastify.post('/api/batches/:id/discard', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.discardBatch(id);
+  });
+
+  fastify.post('/api/batches/:id/tasks', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const task = service.addTaskToBatch(id, req.body);
+    return reply.status(201).send(task);
+  });
+
+  fastify.delete('/api/batches/:id/tasks/:taskId', async (req: FastifyRequest) => {
+    const { id, taskId } = req.params as { id: string; taskId: string };
+    return service.removeTaskFromBatch(id, taskId);
+  });
+
   // --- Config API ---
   fastify.get('/api/config', async () => {
     return service.getConfig();
@@ -268,6 +451,7 @@ export async function createServer(
   fastify.put('/api/config', async (req: FastifyRequest) => {
     return service.updateConfig(req.body);
   });
+  fastify.get('/api/models', async () => service.getModelOptions());
 
   // --- Savings API ---
   fastify.get('/api/savings', async (req: FastifyRequest) => {
@@ -282,12 +466,29 @@ export async function createServer(
     return service.getDailyUsage(Number.isNaN(days) ? 7 : days);
   });
 
-  fastify.get('/api/claude/sessions', async (req: FastifyRequest) => service.listClaudeSessions(Number((req.query as { activeWithinMin?: string }).activeWithinMin || 5)));
-  fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => service.getClaudeSession((req.params as { id: string }).id));
+  fastify.get('/api/claude/sessions', async (req: FastifyRequest) => {
+    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
+    return service.listClaudeSessions(raw ? Number(raw) : undefined);
+  });
+  fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => {
+    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
+    return service.getClaudeSession((req.params as { id: string }).id, raw ? Number(raw) : undefined);
+  });
+  fastify.patch('/api/claude/sessions/:id/auto-resume', async (req: FastifyRequest) => {
+    const body = req.body as { enabled?: unknown };
+    if (typeof body?.enabled !== 'boolean') throw new HttpError(400, 'bad_request', 'enabled phải là boolean');
+    return service.setClaudeAutoResume((req.params as { id: string }).id, body.enabled);
+  });
   fastify.post('/api/claude/sessions/rescan', async () => service.rescanClaudeSessions());
   fastify.get('/api/claude/quota', async () => service.getClaudeQuota());
   fastify.get('/api/claude/failover', async () => service.getClaudeFailover());
   fastify.post('/api/claude/failover/clear', async () => service.clearClaudeFailover());
+  fastify.get('/api/claude/api-key', async () => service.getClaudeApiKeyStatus());
+  fastify.put('/api/claude/api-key', async (req: FastifyRequest) => {
+    const body = req.body as { apiKey?: unknown };
+    if (typeof body?.apiKey !== 'string') throw new HttpError(400, 'bad_request', 'apiKey là bắt buộc');
+    return service.setClaudeApiKey(body.apiKey);
+  });
   fastify.get('/api/claude/usage/today', async () => service.getClaudeToday());
 
   // --- SSE Route ---

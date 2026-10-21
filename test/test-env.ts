@@ -19,3 +19,7 @@ if (!process.env.AGENTHUB_DEFAULT_LOG_DIR) {
 if (!process.env.AGENTHUB_AGY_BIN) {
   process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-login.mjs');
 }
+
+// Fake agents/CLIs spawned by tests exit on their own once this test process is gone
+// (see test/fixtures/orphan-guard.mjs).
+process.env.AGENTHUB_TEST_OWNER_PID = String(process.pid);

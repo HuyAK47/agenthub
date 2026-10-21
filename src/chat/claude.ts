@@ -4,14 +4,48 @@ import os from 'node:os';
 import { execFileSync, execSync, spawn, ChildProcess } from 'node:child_process';
 import { findProjectRoot } from '../cli.js';
 
+function loadBrainPlaybook(): string {
+  const candidates = [
+    path.resolve(path.dirname(new URL('.', import.meta.url).pathname), '../../docs/BRAIN-PLAYBOOK.md'),
+    path.resolve(process.env.AGENTHUB_INSTALL_DIR || '', 'docs/BRAIN-PLAYBOOK.md'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf8');
+    } catch {
+      // Continue to the embedded fallback below.
+    }
+  }
+  return 'BRAIN-PLAYBOOK không có sẵn; chỉ điều phối qua MCP, review trước merge và hỏi người dùng khi có rủi ro.';
+}
+
 export const BRAIN_PROMPT =
-  'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. Với yêu cầu lớn (lên kế hoạch hoặc chia nhiều task): đề xuất kế hoạch ngắn và chờ người dùng xác nhận trước khi tạo task. Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task, sau đó review.';
+  'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_create_batch, mcp__agenthub__hub_batch, mcp__agenthub__hub_dispatch_batch, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. {{PLANNING_RULE}}Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task hoặc hub_create_batch, sau đó review.' + `\n\nSỔ TAY BRAIN-PLAYBOOK:\n${loadBrainPlaybook()}`;
+
+/** Planning rule follows the user's approval setting (Settings → Kế hoạch). */
+export function planningRule(planning?: { requireApproval?: boolean; approvalMinTasks?: number }): string {
+  if (planning?.requireApproval) {
+    return 'Mọi task bạn tạo đều là nháp chờ người dùng duyệt: dùng hub_create_batch cho kế hoạch và báo người dùng bấm "Giao cả đợt". ';
+  }
+  const min = planning?.approvalMinTasks ?? 0;
+  if (min > 0) {
+    return `Kế hoạch từ ${min} task trở lên: dùng hub_create_batch (đợt nháp) và chờ người dùng duyệt, trừ khi họ bảo giao ngay; kế hoạch nhỏ hơn thì giao thẳng (hub_create_task với start=true). `;
+  }
+  return 'Người dùng không cần duyệt kế hoạch: giao thẳng các task (hub_create_task với start=true hoặc hub_create_batch rồi hub_dispatch_batch ngay), sau đó báo ngắn gọn đã giao những gì. ';
+}
+
+export function buildBrainPrompt(planning?: { requireApproval?: boolean; approvalMinTasks?: number }): string {
+  return BRAIN_PROMPT.replace('{{PLANNING_RULE}}', planningRule(planning));
+}
+
+export const FORK_SUMMARY_PROMPT =
+  'Tóm tắt toàn bộ ngữ cảnh và các quyết định quan trọng của phiên trò chuyện này để tiếp tục trong phiên mới.';
 
 export interface HubSnapshotInput {
   projects: Array<{ id: string; name: string; path: string; defaultBranch: string }>;
   tasks: Array<{ id: string; projectId: string; title: string; status: string }>;
   runs?: Array<{ taskId: string; model: string; outcome: string | null }>;
-  profiles: Array<{ name: string; engine: string; email: string | null; authState?: string | null }>;
+  profiles: Array<{ name: string; engine: string; email: string | null; authState?: string | null; enabled?: boolean | number }>;
   quotaUsage: Array<{ profileName: string; grp: string; window: string; remainingPct: number }>;
   quotaMarks: Array<{ profileName: string; family: string; until: number }>;
   currentProject?: { id: string; path: string } | null;
@@ -42,7 +76,7 @@ export function buildHubSnapshot(input: HubSnapshotInput): string {
     });
     return `- ${p.name} · ${p.path} · nhánh ${p.defaultBranch} · task ${counts || '0'}${notable.length ? ` · ${notable.join('; ')}` : ''}`;
   });
-  const profileLines = input.profiles.map((profile) => {
+  const profileLines = input.profiles.filter((profile) => profile.enabled !== false && profile.enabled !== 0).map((profile) => {
     const usage = input.quotaUsage.filter((row) => row.profileName === profile.name && row.window === '5h')
       .map((row) => `${row.grp}:${row.remainingPct}%`).join(', ');
     const marks = input.quotaMarks.filter((mark) => mark.profileName === profile.name && mark.until > snapshotEpoch)
@@ -105,6 +139,13 @@ export function findClaudeBin(configuredBin?: string): string | null {
       return configuredBin;
     }
   }
+
+  // Explicit override (also lets tests point at a fake CLI independent of what this machine has).
+  const envBin = process.env.AGENTHUB_CLAUDE_BIN;
+  if (envBin && fs.existsSync(envBin)) return envBin;
+
+  const managedBin = path.join(process.env.AGENTHUB_TOOLS_DIR || '', 'node_modules', '.bin', 'claude');
+  if (process.env.AGENTHUB_TOOLS_DIR && fs.existsSync(managedBin)) return managedBin;
 
   // 2. Latest VS Code Claude Code native binary.
   const extensionsDir = path.join(os.homedir(), '.vscode', 'extensions');
@@ -204,9 +245,15 @@ export function checkClaudeStreamJsonSupport(claudeBin: string): boolean {
   }
 }
 
-export function ensureChatMcpConfig(hubHome?: string): string {
+export function chatMcpConfigPath(hubHome?: string, sessionId?: string): string {
   const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
-  const mcpConfigFile = path.join(targetHome, 'chat-mcp.json');
+  const suffix = sessionId ? `-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+  return path.join(targetHome, `chat-mcp${suffix}.json`);
+}
+
+export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number, projectId?: string | null): string {
+  const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
+  const mcpConfigFile = chatMcpConfigPath(targetHome, sessionId);
 
   if (!fs.existsSync(targetHome)) {
     fs.mkdirSync(targetHome, { recursive: true, mode: 0o700 });
@@ -221,11 +268,18 @@ export function ensureChatMcpConfig(hubHome?: string): string {
       agenthub: {
         command: nodePath,
         args: [cliPath, 'mcp'],
+        env: {
+          ...(sessionId ? { AGENTHUB_CHAT_SESSION_ID: sessionId } : {}),
+          ...(projectId ? { AGENTHUB_MCP_PROJECT: projectId } : {}),
+          AGENTHUB_PORT: String(port || process.env.AGENTHUB_PORT || 7700),
+          AGENTHUB_PERMISSION_TIMEOUT_SEC: String(permissionTimeoutSec || process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC || 600),
+        },
       },
     },
   };
 
-  fs.writeFileSync(mcpConfigFile, JSON.stringify(content, null, 2), 'utf-8');
+  fs.writeFileSync(mcpConfigFile, JSON.stringify(content, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  fs.chmodSync(mcpConfigFile, 0o600);
   return mcpConfigFile;
 }
 
@@ -238,6 +292,7 @@ export interface BuildClaudeArgsOptions {
   persistent?: boolean;
   model?: string | null;
   hubSnapshot?: string;
+  planning?: { requireApproval?: boolean; approvalMinTasks?: number };
 }
 
 export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
@@ -260,7 +315,7 @@ export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
 
   if (opts.model) args.push('--model', opts.model);
 
-  args.push('--append-system-prompt', BRAIN_PROMPT);
+  args.push('--append-system-prompt', buildBrainPrompt(opts.planning));
   if (opts.hubSnapshot) args.push('--append-system-prompt', opts.hubSnapshot);
   args.push('--mcp-config', opts.mcpConfigPath);
 
@@ -270,6 +325,8 @@ export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
     args.push(
       '--permission-mode',
       'default',
+      '--permission-prompt-tool',
+      'mcp__agenthub__permission_prompt',
       '--allowedTools',
       'Read,Grep,Glob,LS,mcp__agenthub,Bash(git status:*),Bash(git log:*),Bash(npm test:*),Bash(npm run lint:*),Bash(npm run typecheck:*)',
     );
@@ -283,14 +340,18 @@ export function spawnClaude(
   args: string[],
   cwd: string,
   stdinText?: string,
-  options: { disableToolSearch?: boolean } = {},
+  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number; claudeConfigDir?: string; env?: Record<string, string> } = {},
 ): ChildProcess {
   const child = spawn(claudeBin, args, {
     cwd,
     detached: true,
     env: {
       ...process.env,
+      ...(options.claudeConfigDir ? { CLAUDE_CONFIG_DIR: options.claudeConfigDir } : {}),
       ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
+      ...(options.chatSessionId ? { AGENTHUB_CHAT_SESSION_ID: options.chatSessionId } : {}),
+      ...(options.port ? { AGENTHUB_PORT: String(options.port) } : {}),
+      ...(options.env || {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

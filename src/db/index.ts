@@ -288,6 +288,257 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE projects ADD COLUMN merge TEXT;
   `,
+  // Migration 19: explicit chat lifecycle state
+  `
+  ALTER TABLE chat_sessions ADD COLUMN state TEXT NOT NULL DEFAULT 'idle'
+    CHECK(state IN ('idle','running','waiting_permission','error'));
+  `,
+  // Migration 20: Claude Code profiles and chat account selection
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE profiles_new (
+    name TEXT PRIMARY KEY,
+    engine TEXT NOT NULL CHECK(engine IN ('agy', 'codex', 'claude')),
+    kind TEXT NOT NULL CHECK(kind IN ('keyring', 'isolated', 'codex', 'system')),
+    home TEXT,
+    email TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    authState TEXT CHECK(authState IS NULL OR authState IN ('ok', 'not_logged_in', 'needs_verification', 'error')),
+    authMessage TEXT,
+    verifyUrl TEXT
+  );
+  INSERT INTO profiles_new (name, engine, kind, home, email, enabled, createdAt, authState, authMessage, verifyUrl)
+    SELECT name, engine, kind, home, email, enabled, createdAt, authState, authMessage, verifyUrl FROM profiles;
+  DROP TABLE profiles;
+  ALTER TABLE profiles_new RENAME TO profiles;
+  PRAGMA foreign_keys = ON;
+  ALTER TABLE chat_sessions ADD COLUMN profileName TEXT;
+  `,
+  // Migration 21: chat permission requests
+  `
+  CREATE TABLE IF NOT EXISTS chat_permissions (
+    id TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    messageId TEXT,
+    toolName TEXT NOT NULL,
+    input TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','allow','deny','allow_always')),
+    message TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    resolvedAt TEXT,
+    FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS chat_permissions_pending_idx ON chat_permissions(sessionId, status, createdAt);
+  `,
+  // Migration 22: chat session metadata, token tracking, and message indexing
+  `
+  ALTER TABLE chat_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN lastMessageAt TEXT;
+  ALTER TABLE chat_sessions ADD COLUMN inputTokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN outputTokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE chat_sessions ADD COLUMN contextTokens INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
+  UPDATE chat_sessions SET lastMessageAt = (SELECT MAX(createdAt) FROM chat_messages WHERE sessionId = chat_sessions.id);
+  `,
+  // Migration 23: soft-deleted profiles (hidden and never scheduled; run history keeps the name)
+  `
+  ALTER TABLE profiles ADD COLUMN deletedAt TEXT;
+  `,
+  // Migration 24: task notes and overlaps
+  `
+  CREATE TABLE IF NOT EXISTS task_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projectId TEXT NOT NULL,
+    taskId TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('note', 'overlap')),
+    content TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (projectId) REFERENCES projects(id),
+    FOREIGN KEY (taskId) REFERENCES tasks(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_notes_project ON task_notes(projectId, id);
+  CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(taskId, id);
+  `,
+  // Migration 25: persist dependency context before worktrees are cleaned up
+  `
+  ALTER TABLE tasks ADD COLUMN doneReport TEXT;
+  ALTER TABLE tasks ADD COLUMN diffStat TEXT;
+  `,
+  // Migration 26: task provenance for captured errors
+  `ALTER TABLE tasks ADD COLUMN sourceRef TEXT;`,
+  // Migration 27: project knowledge entries
+  `
+  CREATE TABLE IF NOT EXISTS knowledge_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projectId TEXT NOT NULL,
+    taskId TEXT NOT NULL,
+    content TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    pinned INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (projectId) REFERENCES projects(id),
+    CHECK (length(taskId) > 0)
+  );
+  CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_entries(projectId, pinned DESC, createdAt DESC);
+  `,
+  // Migration 28: profile management (label, notes, priority)
+  `
+  ALTER TABLE profiles ADD COLUMN label TEXT;
+  ALTER TABLE profiles ADD COLUMN notes TEXT;
+  ALTER TABLE profiles ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+  `,
+  // Migration 29: provider account type and legacy multiple-profile policy
+  `
+  ALTER TABLE profiles ADD COLUMN accountType TEXT NOT NULL DEFAULT 'personal'
+    CHECK(accountType IN ('personal', 'team', 'api'));
+  INSERT OR REPLACE INTO meta (key, value)
+    SELECT 'multiple_per_provider_legacy', 'true'
+    WHERE EXISTS (
+      SELECT 1 FROM profiles
+      WHERE accountType = 'personal' AND deletedAt IS NULL
+      GROUP BY engine HAVING COUNT(*) > 1
+    );
+  `,
+  // Migration 30: per-project multi-step review chains
+  `
+  ALTER TABLE projects ADD COLUMN reviewChain TEXT;
+  ALTER TABLE tasks ADD COLUMN reviewStep INTEGER NOT NULL DEFAULT 0;
+  `,
+  // Migration 31: review settings (chain and gate round limit)
+  `ALTER TABLE projects ADD COLUMN review TEXT;`,
+  // Migration 32: allow system role in chat_messages
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE chat_messages_new (
+    id TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','error','system')),
+    content TEXT NOT NULL,
+    meta TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+  );
+  INSERT INTO chat_messages_new (id, sessionId, role, content, meta, createdAt)
+    SELECT id, sessionId, role, content, meta, createdAt FROM chat_messages;
+  DROP TABLE chat_messages;
+  ALTER TABLE chat_messages_new RENAME TO chat_messages;
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
+  PRAGMA foreign_keys = ON;
+  `,
+  // Migration 33: durable Claude chat retries and session auto-resume metadata
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE chat_sessions_new (
+    id TEXT PRIMARY KEY, projectId TEXT, claudeSessionId TEXT, title TEXT,
+    mode TEXT NOT NULL DEFAULT 'safe' CHECK(mode IN ('safe','full')),
+    busy INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    model TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'idle' CHECK(state IN ('idle','running','waiting_permission','waiting_limit','error')),
+    profileName TEXT, pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+    lastMessageAt TEXT, inputTokens INTEGER NOT NULL DEFAULT 0, outputTokens INTEGER NOT NULL DEFAULT 0,
+    contextTokens INTEGER NOT NULL DEFAULT 0, waitingLimitResetAt INTEGER,
+    FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  INSERT INTO chat_sessions_new (id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens)
+    SELECT id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens FROM chat_sessions;
+  DROP TABLE chat_sessions;
+  ALTER TABLE chat_sessions_new RENAME TO chat_sessions;
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE IF NOT EXISTS chat_retries (
+    sessionId TEXT NOT NULL,
+    messageId TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    resetAt INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN ('pending','sent','cancelled','failed')),
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (sessionId) REFERENCES chat_sessions(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_retries_pending ON chat_retries(status, resetAt);
+  ALTER TABLE claude_sessions ADD COLUMN limitResetAt INTEGER;
+  ALTER TABLE claude_sessions ADD COLUMN limitHitAt TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN autoResumeEnabled INTEGER NOT NULL DEFAULT 0;
+  `,
+  // Migration 34: task batches and batchId for tasks
+  `
+  CREATE TABLE IF NOT EXISTS task_batches (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    title TEXT NOT NULL,
+    goal TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'dispatched', 'discarded')),
+    createdBy TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_batches_project ON task_batches(projectId, createdAt DESC);
+  ALTER TABLE tasks ADD COLUMN batchId TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batchId);
+  `,
+  // Migration 35: per-task lookup indexes (savings and task detail did a full scan per task)
+  `
+  CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(taskId);
+  CREATE INDEX IF NOT EXISTS idx_reviews_task ON reviews(taskId);
+  CREATE INDEX IF NOT EXISTS idx_run_metrics_task ON run_metrics(taskId);
+  CREATE INDEX IF NOT EXISTS idx_claude_task_usage_task ON claude_task_usage(taskId);
+  `,
+  // Migration 36: auditable permission decision reasons
+  `
+  ALTER TABLE chat_permissions ADD COLUMN reason TEXT;
+  `,
+  // Migration 37: safe Claude transcript activity metadata for brain status
+  `
+  ALTER TABLE claude_sessions ADD COLUMN lastUserRequest TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolName TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastToolSummary TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN lastEventKind TEXT;
+  ALTER TABLE claude_sessions ADD COLUMN fiveHourTokens REAL;
+  `,
+  // Migration 38: distinguish the resident brain chat from ordinary chats
+  `
+  ALTER TABLE chat_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'
+    CHECK(kind IN ('chat','brain'));
+  `,
+  // Migration 39: durable resident brain turn accounting
+  `
+  CREATE TABLE IF NOT EXISTS brain_turns (
+    id TEXT PRIMARY KEY,
+    trigger TEXT NOT NULL,
+    input TEXT NOT NULL,
+    summary TEXT,
+    status TEXT NOT NULL CHECK(status IN ('running','done','quota','failed','limited')),
+    inputTokens INTEGER NOT NULL DEFAULT 0,
+    outputTokens INTEGER NOT NULL DEFAULT 0,
+    startedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    finishedAt TEXT,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_brain_turns_started ON brain_turns(startedAt);
+  `,
+  // Migration 40: forget transcript paths of Claude projects the hub does not manage (privacy).
+  // The scanner used to record every transcript path on the machine; folder names reveal project names.
+  `
+  DELETE FROM claude_scan_state WHERE eligible = 0;
+  `,
+  // Migration 41: per-project settings (JSON, see src/projects/settings.ts) and per-project brain turns.
+  `
+  ALTER TABLE projects ADD COLUMN settings TEXT;
+  ALTER TABLE brain_turns ADD COLUMN projectId TEXT;
+  CREATE INDEX IF NOT EXISTS idx_brain_turns_project ON brain_turns(projectId, startedAt);
+  `,
+  // Migration 42: allow 'project_unavailable' waitReason for unmounted drives
+  `
+  ALTER TABLE tasks ADD COLUMN waitReason_old TEXT;
+  UPDATE tasks SET waitReason_old = waitReason;
+  ALTER TABLE tasks DROP COLUMN waitReason;
+  ALTER TABLE tasks ADD COLUMN waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk', 'quota', 'parallel', 'profile_busy', 'project_unavailable'));
+  UPDATE tasks SET waitReason = waitReason_old;
+  ALTER TABLE tasks DROP COLUMN waitReason_old;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -306,7 +557,8 @@ export function openDatabase(dbPath: string): Database.Database {
     }
   })();
 
-  const currentVersion = versionRow ? parseInt(versionRow.value, 10) : -1;
+  let currentVersion = versionRow ? parseInt(versionRow.value, 10) : -1;
+  currentVersion = repairForkAvatarMigration(db, currentVersion);
 
   for (let i = currentVersion + 1; i < MIGRATIONS.length; i++) {
     db.exec(MIGRATIONS[i]);
@@ -314,8 +566,32 @@ export function openDatabase(dbPath: string): Database.Database {
       String(i),
     );
   }
+  ensureProfileAvatarColumn(db);
 
   return db;
+}
+
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  return (db.prepare('SELECT name FROM pragma_table_info(?)').all(table) as Array<{ name: string }>)
+    .some((row) => row.name === column);
+}
+
+/**
+ * Bản fork từng dùng migration 41 cho profiles.avatarUrl, trùng số với migration 41 của upstream
+ * (projects.settings). DB đã chạy bản fork có schema_version = 41 nhưng thiếu cột của upstream:
+ * lùi về 40 để migration 41 thật được chạy. Cột avatarUrl do ensureProfileAvatarColumn lo.
+ */
+function repairForkAvatarMigration(db: Database.Database, currentVersion: number): number {
+  if (currentVersion !== 41 || hasColumn(db, 'projects', 'settings') || !hasColumn(db, 'profiles', 'avatarUrl')) {
+    return currentVersion;
+  }
+  db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run('40');
+  return 40;
+}
+
+/** Cột avatarUrl nằm ngoài danh sách MIGRATIONS để không giành số migration với upstream. */
+function ensureProfileAvatarColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'profiles', 'avatarUrl')) db.exec('ALTER TABLE profiles ADD COLUMN avatarUrl TEXT');
 }
 
 // Repository helpers
@@ -333,6 +609,19 @@ export interface ProjectRow {
   checks: string | null;
   hooks: string | null;
   merge?: string | null;
+  reviewChain?: string | null;
+  review?: string | null;
+  /** JSON ProjectSettings; read through projectSettings() in src/projects/settings.ts. */
+  settings?: string | null;
+  integrationStatus?: {
+    path: string;
+    branch: string;
+    exists: boolean;
+    currentBranch: string | null;
+    dirty: boolean;
+    ahead: number;
+    behind: number;
+  } | null;
   createdAt: string;
 }
 
@@ -340,8 +629,8 @@ export type ProfileAuthState = 'ok' | 'not_logged_in' | 'needs_verification' | '
 
 export interface ProfileRow {
   name: string;
-  engine: string;
-  kind: string;
+  engine: 'agy' | 'codex' | 'claude';
+  kind: 'keyring' | 'isolated' | 'codex' | 'system';
   home: string | null;
   email: string | null;
   enabled: number;
@@ -349,6 +638,12 @@ export interface ProfileRow {
   authState?: ProfileAuthState | null;
   authMessage?: string | null;
   verifyUrl?: string | null;
+  label?: string | null;
+  notes?: string | null;
+  priority?: number;
+  accountType?: 'personal' | 'team' | 'api';
+  avatarUrl?: string | null;
+  deletedAt?: string | null;
 }
 
 export interface QuotaMarkRow {
@@ -367,7 +662,7 @@ export interface QuotaUsageRow {
   fetchedAt: number;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
 
 export interface TaskRow {
   id: string;
@@ -380,6 +675,7 @@ export interface TaskRow {
   baseRef: string | null;
   branch: string | null;
   worktreePath: string | null;
+  sourceRef?: string | null;
   status: string;
   waitReason?: WaitReason;
   dependsOn: string;
@@ -392,9 +688,25 @@ export interface TaskRow {
   reviewerEscalated?: number;
   reviewerEscalatedAt?: string | null;
   reviewerEscalationReason?: string | null;
+  reviewStep?: number;
+  doneReport?: string | null;
+  diffStat?: string | null;
   slot: number | null;
+  batchId?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type BatchStatus = 'draft' | 'dispatched' | 'discarded';
+
+export interface TaskBatchRow {
+  id: string;
+  projectId: string;
+  title: string;
+  goal: string | null;
+  status: BatchStatus;
+  createdBy: string | null;
+  createdAt: string;
 }
 
 export interface RunRow {
@@ -434,15 +746,18 @@ export class ProjectRepo {
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'> & {
       checks?: string | null;
       hooks?: string | null;
       merge?: string | null;
+      reviewChain?: string | null;
+      review?: string | null;
+      settings?: string | null;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -454,16 +769,21 @@ export class ProjectRepo {
         row.checks || null,
         row.hooks || null,
         row.merge || null,
+        row.reviewChain || null,
+        row.review || null,
+        row.settings || null,
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
     for (const [key, value] of Object.entries(fields)) {
+      // A partial update must not clear columns the caller did not send.
+      if (value === undefined) continue;
       sets.push(`${key} = ?`);
       values.push(value);
     }
@@ -480,8 +800,11 @@ export class ProjectRepo {
 export class ProfileRepo {
   constructor(private db: Database.Database) {}
 
-  getAll(): ProfileRow[] {
-    return this.db.prepare('SELECT * FROM profiles ORDER BY name').all() as ProfileRow[];
+  getAll(includeDeleted = false): ProfileRow[] {
+    if (includeDeleted) {
+      return this.db.prepare('SELECT * FROM profiles ORDER BY name').all() as ProfileRow[];
+    }
+    return this.db.prepare('SELECT * FROM profiles WHERE deletedAt IS NULL ORDER BY name').all() as ProfileRow[];
   }
 
   get(name: string): ProfileRow | undefined {
@@ -493,17 +816,22 @@ export class ProfileRepo {
   upsert(row: Omit<ProfileRow, 'createdAt'>): void {
     this.db
       .prepare(
-        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO profiles (name, engine, kind, home, email, enabled, authState, authMessage, verifyUrl, label, notes, priority, deletedAt, accountType, avatarUrl)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            engine=excluded.engine,
            kind=excluded.kind,
            home=excluded.home,
            email=excluded.email,
-           enabled=excluded.enabled,
            authState=COALESCE(excluded.authState, profiles.authState),
            authMessage=COALESCE(excluded.authMessage, profiles.authMessage),
-           verifyUrl=COALESCE(excluded.verifyUrl, profiles.verifyUrl)`,
+           verifyUrl=COALESCE(excluded.verifyUrl, profiles.verifyUrl),
+           label=COALESCE(excluded.label, profiles.label),
+           notes=COALESCE(excluded.notes, profiles.notes),
+           priority=COALESCE(excluded.priority, profiles.priority),
+           accountType=COALESCE(excluded.accountType, profiles.accountType),
+           avatarUrl=COALESCE(excluded.avatarUrl, profiles.avatarUrl),
+           deletedAt=COALESCE(excluded.deletedAt, profiles.deletedAt)`,
       )
       .run(
         row.name,
@@ -515,7 +843,33 @@ export class ProfileRepo {
         row.authState ?? null,
         row.authMessage ?? null,
         row.verifyUrl ?? null,
+        row.label ?? null,
+        row.notes ?? null,
+        row.priority ?? 0,
+        row.deletedAt ?? null,
+        row.accountType ?? 'personal',
+        row.avatarUrl ?? null,
       );
+  }
+
+  updateAvatarUrl(name: string, avatarUrl: string | null): void {
+    this.db.prepare('UPDATE profiles SET avatarUrl = ? WHERE name = ?').run(avatarUrl, name);
+  }
+
+  update(
+    name: string,
+    fields: Partial<Pick<ProfileRow, 'label' | 'notes' | 'priority' | 'enabled'>>,
+  ): void {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      sets.push(`${key} = ?`);
+      values.push(value);
+    }
+    if (sets.length === 0) return;
+    values.push(name);
+    this.db.prepare(`UPDATE profiles SET ${sets.join(', ')} WHERE name = ?`).run(...values);
   }
 
   updateAuthState(
@@ -529,14 +883,60 @@ export class ProfileRepo {
       .run(authState, authMessage, verifyUrl, name);
   }
 
+  softDelete(name: string): void {
+    this.db.prepare('DELETE FROM quota_marks WHERE profileName = ?').run(name);
+    this.db.prepare('DELETE FROM quota_usage WHERE profileName = ?').run(name);
+    this.db.prepare("UPDATE profiles SET deletedAt = datetime('now'), enabled = 0 WHERE name = ?").run(name);
+  }
+
+  delete(name: string): void {
+    this.db.prepare('DELETE FROM quota_marks WHERE profileName = ?').run(name);
+    this.db.prepare('DELETE FROM quota_usage WHERE profileName = ?').run(name);
+    this.db.prepare('DELETE FROM profiles WHERE name = ?').run(name);
+  }
+
+  rename(oldName: string, newName: string, newHome?: string): void {
+    this.db.pragma('foreign_keys = OFF');
+    try {
+      this.db.transaction(() => {
+        if (newHome !== undefined) {
+          this.db.prepare('UPDATE profiles SET name = ?, home = ? WHERE name = ?').run(newName, newHome, oldName);
+        } else {
+          this.db.prepare('UPDATE profiles SET name = ? WHERE name = ?').run(newName, oldName);
+        }
+        this.db.prepare('UPDATE quota_marks SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE quota_usage SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE runs SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE run_metrics SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+        this.db.prepare('UPDATE chat_sessions SET profileName = ? WHERE profileName = ?').run(newName, oldName);
+      })();
+    } finally {
+      this.db.pragma('foreign_keys = ON');
+    }
+  }
+
+  restore(name: string): void {
+    this.db.prepare('UPDATE profiles SET deletedAt = NULL, enabled = 1 WHERE name = ?').run(name);
+  }
+
+  isDeleted(name: string): boolean {
+    const row = this.db.prepare('SELECT deletedAt FROM profiles WHERE name = ?').get(name) as { deletedAt: string | null } | undefined;
+    return !!row?.deletedAt;
+  }
+
   updateEnabled(name: string, enabled: number): void {
     this.db.prepare('UPDATE profiles SET enabled = ? WHERE name = ?').run(enabled, name);
   }
 
   getEnabled(): ProfileRow[] {
     return this.db
-      .prepare('SELECT * FROM profiles WHERE enabled = 1 ORDER BY name')
+      .prepare('SELECT * FROM profiles WHERE enabled = 1 AND deletedAt IS NULL ORDER BY name')
       .all() as ProfileRow[];
+  }
+
+  hasMetaFlag(key: string): boolean {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value?: string } | undefined;
+    return row?.value === 'true';
   }
 }
 
@@ -633,8 +1033,16 @@ export class TaskRepo {
       .all(status) as TaskRow[];
   }
 
+  getByBatch(batchId: string): TaskRow[] {
+    return this.db.prepare('SELECT * FROM tasks WHERE batchId = ? ORDER BY createdAt').all(batchId) as TaskRow[];
+  }
+
   get(id: string): TaskRow | undefined {
     return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
+  }
+
+  getDerivedFrom(sourceTaskId: string): TaskRow[] {
+    return this.db.prepare("SELECT * FROM tasks WHERE json_extract(sourceRef, '$.taskId') = ? ORDER BY createdAt").all(sourceTaskId) as TaskRow[];
   }
 
   insert(row: {
@@ -651,12 +1059,17 @@ export class TaskRepo {
     status?: string;
     waitReason?: WaitReason;
     worktreePath?: string | null;
+    doneReport?: string | null;
+    diffStat?: string | null;
+    sourceRef?: string | null;
+    batchId?: string | null;
+    skipDeps?: boolean;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -672,14 +1085,26 @@ export class TaskRepo {
         row.status || 'draft',
         row.waitReason || null,
         row.worktreePath || null,
+        row.doneReport || null,
+        row.diffStat || null,
+        row.sourceRef || null,
+        row.batchId || null,
       );
 
     // Populate task_deps
-    if (row.dependsOn && row.dependsOn.length > 0) {
+    if (!row.skipDeps && row.dependsOn && row.dependsOn.length > 0) {
       const stmt = this.db.prepare('INSERT INTO task_deps (taskId, dependsOnId) VALUES (?, ?)');
       for (const dep of row.dependsOn) {
         stmt.run(row.id, dep);
       }
+    }
+  }
+
+  populateDeps(taskId: string, dependsOn: string[]): void {
+    if (!dependsOn || dependsOn.length === 0) return;
+    const stmt = this.db.prepare('INSERT INTO task_deps (taskId, dependsOnId) VALUES (?, ?)');
+    for (const dep of dependsOn) {
+      stmt.run(taskId, dep);
     }
   }
 
@@ -695,9 +1120,18 @@ export class TaskRepo {
     }
   }
 
+  delete(id: string): void {
+    this.db.prepare('DELETE FROM task_deps WHERE taskId = ? OR dependsOnId = ?').run(id, id);
+    this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  }
+
+  setBatchId(id: string, batchId: string | null): void {
+    this.db.prepare("UPDATE tasks SET batchId = ?, updatedAt = datetime('now') WHERE id = ?").run(batchId, id);
+  }
+
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'title' | 'level' | 'modelChain' | 'dependsOn'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
@@ -736,6 +1170,86 @@ export class TaskRepo {
   }
 }
 
+export class TaskBatchRepo {
+  constructor(private db: Database.Database) {}
+
+  create(row: {
+    id: string;
+    projectId: string;
+    title: string;
+    goal?: string | null;
+    status?: BatchStatus;
+    createdBy?: string | null;
+  }): void {
+    this.db
+      .prepare(
+        'INSERT INTO task_batches (id, projectId, title, goal, status, createdBy) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        row.id,
+        row.projectId,
+        row.title,
+        row.goal || null,
+        row.status || 'draft',
+        row.createdBy || null,
+      );
+  }
+
+  get(id: string): TaskBatchRow | undefined {
+    return this.db.prepare('SELECT * FROM task_batches WHERE id = ?').get(id) as TaskBatchRow | undefined;
+  }
+
+  list(projectId?: string, status?: string): TaskBatchRow[] {
+    let query = 'SELECT * FROM task_batches';
+    const params: unknown[] = [];
+    const conditions: string[] = [];
+    if (projectId && projectId !== 'all') {
+      conditions.push('projectId = ?');
+      params.push(projectId);
+    }
+    if (status && status !== 'all') {
+      conditions.push('status = ?');
+      params.push(status);
+    }
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+    query += ' ORDER BY createdAt DESC';
+    return this.db.prepare(query).all(...params) as TaskBatchRow[];
+  }
+
+  updateStatus(id: string, status: BatchStatus): void {
+    this.db.prepare('UPDATE task_batches SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  update(
+    id: string,
+    fields: Partial<{ title: string; goal: string | null; status: BatchStatus }>,
+  ): void {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (fields.title !== undefined) {
+      sets.push('title = ?');
+      params.push(fields.title);
+    }
+    if (fields.goal !== undefined) {
+      sets.push('goal = ?');
+      params.push(fields.goal);
+    }
+    if (fields.status !== undefined) {
+      sets.push('status = ?');
+      params.push(fields.status);
+    }
+    if (sets.length > 0) {
+      this.db.prepare(`UPDATE task_batches SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+    }
+  }
+
+  delete(id: string): void {
+    this.db.prepare('DELETE FROM task_batches WHERE id = ?').run(id);
+  }
+}
+
 export class RunRepo {
   constructor(private db: Database.Database) {}
 
@@ -748,6 +1262,12 @@ export class RunRepo {
   getRunning(): RunRow[] {
     return this.db
       .prepare('SELECT * FROM runs WHERE outcome IS NULL')
+      .all() as RunRow[];
+  }
+
+  getShutdownRuns(): RunRow[] {
+    return this.db
+      .prepare("SELECT * FROM runs WHERE outcome = 'crashed' AND reason = 'daemon_shutdown'")
       .all() as RunRow[];
   }
 
@@ -847,7 +1367,28 @@ export interface ChatSessionRow {
   title: string | null;
   mode: 'safe' | 'full';
   model: string;
+  profileName: string | null;
   busy: number;
+  state: 'idle' | 'running' | 'waiting_permission' | 'waiting_limit' | 'error';
+  waitingLimitResetAt?: number | null;
+  pinned: number;
+  archived: number;
+  lastMessageAt: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  contextTokens: number;
+  createdAt: string;
+  updatedAt: string;
+  kind: 'chat' | 'brain';
+}
+
+export interface ChatRetryRow {
+  sessionId: string;
+  messageId: string;
+  text: string;
+  resetAt: number;
+  attempts: number;
+  status: 'pending' | 'sent' | 'cancelled' | 'failed';
   createdAt: string;
   updatedAt: string;
 }
@@ -855,7 +1396,7 @@ export interface ChatSessionRow {
 export interface ChatMessageRow {
   id: string;
   sessionId: string;
-  role: 'user' | 'assistant' | 'tool' | 'error';
+  role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
   content: string;
   meta: string | null;
   createdAt: string;
@@ -864,10 +1405,44 @@ export interface ChatMessageRow {
 export class ChatSessionRepo {
   constructor(private db: Database.Database) {}
 
-  getAll(): ChatSessionRow[] {
+  getAll(options?: { archived?: number | null }): ChatSessionRow[] {
+    const archived = options?.archived !== undefined ? options.archived : 0;
+    if (archived === null) {
+      return this.db
+        .prepare('SELECT * FROM chat_sessions ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
+        .all() as ChatSessionRow[];
+    }
     return this.db
-      .prepare('SELECT * FROM chat_sessions ORDER BY updatedAt DESC, createdAt DESC')
-      .all() as ChatSessionRow[];
+      .prepare('SELECT * FROM chat_sessions WHERE archived = ? ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
+      .all(archived) as ChatSessionRow[];
+  }
+
+  search(query: string, options?: { archived?: number | null }): ChatSessionRow[] {
+    const trimmed = query.trim();
+    const archived = options?.archived !== undefined ? options.archived : 0;
+    if (!trimmed) {
+      return this.getAll(options);
+    }
+    const escaped = trimmed.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const pattern = `%${escaped}%`;
+    if (archived === null) {
+      return this.db
+        .prepare(
+          `SELECT DISTINCT s.* FROM chat_sessions s
+           LEFT JOIN chat_messages m ON m.sessionId = s.id
+           WHERE (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
+           ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
+        )
+        .all(pattern, pattern) as ChatSessionRow[];
+    }
+    return this.db
+      .prepare(
+        `SELECT DISTINCT s.* FROM chat_sessions s
+         LEFT JOIN chat_messages m ON m.sessionId = s.id
+         WHERE s.archived = ? AND (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
+         ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
+      )
+      .all(archived, pattern, pattern) as ChatSessionRow[];
   }
 
   get(id: string): ChatSessionRow | undefined {
@@ -883,12 +1458,21 @@ export class ChatSessionRepo {
     title?: string | null;
     mode?: 'safe' | 'full';
     model?: string;
+    profileName?: string | null;
     busy?: number;
+    state?: ChatSessionRow['state'];
+    pinned?: number;
+    archived?: number;
+    lastMessageAt?: string | null;
+    inputTokens?: number;
+    outputTokens?: number;
+    contextTokens?: number;
+    kind?: 'chat' | 'brain';
   }): void {
     this.db
       .prepare(
-        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO chat_sessions (id, projectId, claudeSessionId, title, mode, busy, model, profileName, state, pinned, archived, lastMessageAt, inputTokens, outputTokens, contextTokens, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         row.id,
@@ -898,7 +1482,31 @@ export class ChatSessionRepo {
         row.mode || 'safe',
         row.busy ?? 0,
         row.model || '',
+        row.profileName || null,
+        row.state || 'idle',
+        row.pinned ?? 0,
+        row.archived ?? 0,
+        row.lastMessageAt || null,
+        row.inputTokens ?? 0,
+        row.outputTokens ?? 0,
+        row.contextTokens ?? 0,
+        row.kind || 'chat',
       );
+  }
+
+  getByKind(kind: 'chat' | 'brain', projectId?: string | null): ChatSessionRow | undefined {
+    if (projectId === undefined) {
+      return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+    }
+    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
+  }
+
+  updateKind(id: string, kind: 'chat' | 'brain'): void {
+    this.db.prepare("UPDATE chat_sessions SET kind = ?, updatedAt = datetime('now') WHERE id = ?").run(kind, id);
+  }
+
+  updateProfileName(id: string, profileName: string | null): void {
+    this.db.prepare("UPDATE chat_sessions SET profileName = ?, updatedAt = datetime('now') WHERE id = ?").run(profileName, id);
   }
 
   updateModel(id: string, model: string): void {
@@ -909,6 +1517,43 @@ export class ChatSessionRepo {
     this.db
       .prepare("UPDATE chat_sessions SET title = ?, updatedAt = datetime('now') WHERE id = ?")
       .run(title, id);
+  }
+
+  updatePinned(id: string, pinned: number): void {
+    this.db
+      .prepare("UPDATE chat_sessions SET pinned = ?, updatedAt = datetime('now') WHERE id = ?")
+      .run(pinned ? 1 : 0, id);
+  }
+
+  updateArchived(id: string, archived: number): void {
+    this.db
+      .prepare("UPDATE chat_sessions SET archived = ?, updatedAt = datetime('now') WHERE id = ?")
+      .run(archived ? 1 : 0, id);
+  }
+
+  touchLastMessage(id: string, timestamp?: string): void {
+    this.db
+      .prepare(
+        "UPDATE chat_sessions SET lastMessageAt = COALESCE(?, datetime('now')), updatedAt = datetime('now') WHERE id = ?"
+      )
+      .run(timestamp || null, id);
+  }
+
+  addUsage(
+    id: string,
+    usage: { inputTokens: number; outputTokens: number; contextTokens?: number },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE chat_sessions
+         SET inputTokens = inputTokens + ?,
+             outputTokens = outputTokens + ?,
+             contextTokens = COALESCE(?, contextTokens),
+             lastMessageAt = datetime('now'),
+             updatedAt = datetime('now')
+         WHERE id = ?`
+      )
+      .run(usage.inputTokens ?? 0, usage.outputTokens ?? 0, usage.contextTokens ?? null, id);
   }
 
   updateClaudeSessionId(id: string, claudeSessionId: string): void {
@@ -923,6 +1568,14 @@ export class ChatSessionRepo {
       .run(busy, id);
   }
 
+  updateState(id: string, state: ChatSessionRow['state']): void {
+    this.db.prepare("UPDATE chat_sessions SET state = ?, updatedAt = datetime('now') WHERE id = ?").run(state, id);
+  }
+
+  clearClaudeSessionId(id: string): void {
+    this.db.prepare("UPDATE chat_sessions SET claudeSessionId = NULL, updatedAt = datetime('now') WHERE id = ?").run(id);
+  }
+
   touchUpdatedAt(id: string): void {
     this.db
       .prepare("UPDATE chat_sessions SET updatedAt = datetime('now') WHERE id = ?")
@@ -930,12 +1583,150 @@ export class ChatSessionRepo {
   }
 
   resetAllBusy(): void {
-    this.db.prepare('UPDATE chat_sessions SET busy = 0 WHERE busy != 0').run();
+    this.db.prepare("UPDATE chat_sessions SET busy = 0, state = 'idle' WHERE (busy != 0 OR state != 'idle') AND state != 'waiting_limit'").run();
+  }
+
+  setWaitingLimit(id: string, resetAt: number | null): void {
+    this.db.prepare("UPDATE chat_sessions SET waitingLimitResetAt = ?, busy = 0, state = 'waiting_limit', updatedAt = datetime('now') WHERE id = ?").run(resetAt, id);
+  }
+
+  clearWaitingLimit(id: string): void {
+    this.db.prepare("UPDATE chat_sessions SET waitingLimitResetAt = NULL, state = 'idle', updatedAt = datetime('now') WHERE id = ?").run(id);
   }
 
   delete(id: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE sessionId = ?').run(id);
     this.db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
+  }
+}
+
+export interface BrainTurnRow {
+  id: string;
+  trigger: string;
+  input: string;
+  summary: string | null;
+  status: 'running' | 'done' | 'quota' | 'failed' | 'limited';
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+  projectId: string | null;
+}
+
+export class BrainTurnRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: { id: string; trigger: string; input: string; projectId?: string | null; status?: BrainTurnRow['status'] }): BrainTurnRow {
+    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, projectId, status) VALUES (?, ?, ?, ?, ?)')
+      .run(row.id, row.trigger, row.input, row.projectId || null, row.status || 'running');
+    return this.get(row.id)!;
+  }
+
+  get(id: string): BrainTurnRow | undefined {
+    return this.db.prepare('SELECT * FROM brain_turns WHERE id = ?').get(id) as BrainTurnRow | undefined;
+  }
+
+  latest(projectId?: string | null): BrainTurnRow | undefined {
+    const query = projectId === undefined
+      ? 'SELECT * FROM brain_turns ORDER BY startedAt DESC LIMIT 1'
+      : 'SELECT * FROM brain_turns WHERE projectId IS ? ORDER BY startedAt DESC LIMIT 1';
+    return (projectId === undefined ? this.db.prepare(query).get() : this.db.prepare(query).get(projectId)) as BrainTurnRow | undefined;
+  }
+
+  finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {
+    this.db.prepare(`UPDATE brain_turns SET status = ?, summary = ?, inputTokens = ?, outputTokens = ?, error = ?, finishedAt = datetime('now') WHERE id = ?`)
+      .run(fields.status, fields.summary || null, fields.inputTokens || 0, fields.outputTokens || 0, fields.error || null, id);
+  }
+
+  countSince(epochMs: number, projectId?: string | null): number {
+    const query = projectId === undefined
+      ? "SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch')"
+      : "SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch') AND projectId IS ?";
+    const row = projectId === undefined
+      ? this.db.prepare(query).get(Math.floor(epochMs / 1000))
+      : this.db.prepare(query).get(Math.floor(epochMs / 1000), projectId);
+    return (row as { count: number }).count;
+  }
+
+  tokensSince(isoDate: string, projectId?: string | null): number {
+    const query = projectId === undefined
+      ? 'SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ?'
+      : 'SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ? AND projectId IS ?';
+    const row = projectId === undefined
+      ? this.db.prepare(query).get(isoDate)
+      : this.db.prepare(query).get(isoDate, projectId);
+    return (row as { total: number }).total;
+  }
+}
+
+export class ChatRetryRepo {
+  constructor(private db: Database.Database) {}
+
+  getPending(): ChatRetryRow[] {
+    return this.db.prepare("SELECT * FROM chat_retries WHERE status = 'pending' ORDER BY resetAt, createdAt").all() as ChatRetryRow[];
+  }
+
+  get(messageId: string): ChatRetryRow | undefined {
+    return this.db.prepare('SELECT * FROM chat_retries WHERE messageId = ?').get(messageId) as ChatRetryRow | undefined;
+  }
+
+  insert(row: Pick<ChatRetryRow, 'sessionId' | 'messageId' | 'text' | 'resetAt'>): void {
+    this.db.prepare(`INSERT INTO chat_retries (sessionId,messageId,text,resetAt,attempts,status) VALUES (?,?,?,?,0,'pending') ON CONFLICT(messageId) DO UPDATE SET text=excluded.text,resetAt=excluded.resetAt,status='pending',updatedAt=datetime('now')`).run(row.sessionId, row.messageId, row.text, row.resetAt);
+  }
+
+  markSent(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='sent', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
+  markCancelled(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='cancelled', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
+  markFailed(messageId: string): void { this.db.prepare("UPDATE chat_retries SET status='failed', updatedAt=datetime('now') WHERE messageId=?").run(messageId); }
+  defer(messageId: string, resetAt: number): void { this.db.prepare("UPDATE chat_retries SET attempts=attempts+1, resetAt=?, status='pending', updatedAt=datetime('now') WHERE messageId=?").run(resetAt, messageId); }
+}
+
+export interface ChatPermissionRow {
+  id: string;
+  sessionId: string;
+  messageId: string | null;
+  toolName: string;
+  input: string;
+  status: 'pending' | 'allow' | 'deny' | 'allow_always';
+  message: string | null;
+  reason: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export class ChatPermissionRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: { id: string; sessionId: string; messageId?: string | null; toolName: string; input: string; status?: ChatPermissionRow['status'] }): ChatPermissionRow {
+    this.db.prepare('INSERT INTO chat_permissions (id, sessionId, messageId, toolName, input, status) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.sessionId, row.messageId || null, row.toolName, row.input, row.status || 'pending');
+    return this.get(row.id)!;
+  }
+
+  get(id: string): ChatPermissionRow | undefined {
+    return this.db.prepare('SELECT * FROM chat_permissions WHERE id = ?').get(id) as ChatPermissionRow | undefined;
+  }
+
+  listPending(sessionId?: string): ChatPermissionRow[] {
+    return (sessionId
+      ? this.db.prepare("SELECT * FROM chat_permissions WHERE sessionId = ? AND status = 'pending' ORDER BY createdAt").all(sessionId)
+      : this.db.prepare("SELECT * FROM chat_permissions WHERE status = 'pending' ORDER BY createdAt").all()) as ChatPermissionRow[];
+  }
+
+  expirePending(message = 'AgentHub khởi động lại'): number {
+    const result = this.db.prepare("UPDATE chat_permissions SET status = 'deny', message = ?, resolvedAt = datetime('now') WHERE status = 'pending'").run(message);
+    return result.changes;
+  }
+
+  getLatest(sessionId: string, messageId: string | null | undefined, toolName: string): ChatPermissionRow | undefined {
+    return this.db.prepare('SELECT * FROM chat_permissions WHERE sessionId = ? AND messageId IS ? AND toolName = ? ORDER BY createdAt DESC LIMIT 1')
+      .get(sessionId, messageId || null, toolName) as ChatPermissionRow | undefined;
+  }
+
+  resolve(id: string, status: Exclude<ChatPermissionRow['status'], 'pending'>, message: string | null, reason?: string): ChatPermissionRow | undefined {
+    this.db.prepare("UPDATE chat_permissions SET status = ?, message = ?, reason = ?, resolvedAt = datetime('now') WHERE id = ? AND status = 'pending'")
+      .run(status, message, reason || null, id);
+    return this.get(id);
   }
 }
 
@@ -948,6 +1739,49 @@ export class ChatMessageRepo {
       .all(sessionId, limit) as ChatMessageRow[];
   }
 
+  getPaginated(
+    sessionId: string,
+    before?: string,
+    limit = 50,
+  ): { messages: ChatMessageRow[]; hasMore: boolean } {
+    const safeLimit = Math.max(1, limit);
+    let rows: ChatMessageRow[];
+
+    if (before) {
+      const target = this.db
+        .prepare('SELECT rowid, createdAt FROM chat_messages WHERE id = ? AND sessionId = ?')
+        .get(before, sessionId) as { rowid: number; createdAt: string } | undefined;
+
+      if (!target) {
+        return { messages: [], hasMore: false };
+      }
+
+      rows = this.db
+        .prepare(
+          `SELECT * FROM chat_messages
+           WHERE sessionId = ? AND (createdAt < ? OR (createdAt = ? AND rowid < ?))
+           ORDER BY createdAt DESC, rowid DESC
+           LIMIT ?`
+        )
+        .all(sessionId, target.createdAt, target.createdAt, target.rowid, safeLimit + 1) as ChatMessageRow[];
+    } else {
+      rows = this.db
+        .prepare(
+          `SELECT * FROM chat_messages
+           WHERE sessionId = ?
+           ORDER BY createdAt DESC, rowid DESC
+           LIMIT ?`
+        )
+        .all(sessionId, safeLimit + 1) as ChatMessageRow[];
+    }
+
+    const hasMore = rows.length > safeLimit;
+    const paginated = hasMore ? rows.slice(0, safeLimit) : rows;
+    paginated.reverse();
+
+    return { messages: paginated, hasMore };
+  }
+
   getLastBySession(sessionId: string): ChatMessageRow | undefined {
     return this.db
       .prepare('SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY createdAt DESC, rowid DESC LIMIT 1')
@@ -957,7 +1791,7 @@ export class ChatMessageRepo {
   insert(row: {
     id: string;
     sessionId: string;
-    role: 'user' | 'assistant' | 'tool' | 'error';
+    role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
     content: string;
     meta?: string | null;
   }): void {
@@ -972,7 +1806,7 @@ export class ChatMessageRepo {
   upsert(row: {
     id: string;
     sessionId: string;
-    role: 'user' | 'assistant' | 'tool' | 'error';
+    role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
     content: string;
     meta?: string | null;
   }): void {
@@ -1081,4 +1915,124 @@ export class RunMetricsRepo {
       .run(taskId, keepRunId);
   }
 }
+
+export type TaskNoteKind = 'note' | 'overlap';
+
+export interface TaskNoteRow {
+  id: number;
+  projectId: string;
+  taskId: string;
+  kind: TaskNoteKind;
+  content: string;
+  createdAt: string;
+}
+
+export interface KnowledgeEntryRow {
+  id: number;
+  projectId: string;
+  taskId: string;
+  content: string;
+  createdAt: string;
+  pinned: number;
+}
+
+export class KnowledgeRepo {
+  constructor(private db: Database.Database) {}
+
+  getByProject(projectId: string): KnowledgeEntryRow[] {
+    return this.db
+      .prepare('SELECT * FROM knowledge_entries WHERE projectId = ? ORDER BY pinned DESC, createdAt DESC, id DESC')
+      .all(projectId) as KnowledgeEntryRow[];
+  }
+
+  get(id: number): KnowledgeEntryRow | undefined {
+    return this.db.prepare('SELECT * FROM knowledge_entries WHERE id = ?').get(id) as KnowledgeEntryRow | undefined;
+  }
+
+  insert(row: { projectId: string; taskId: string; content: string; pinned?: boolean }): KnowledgeEntryRow {
+    const result = this.db
+      .prepare('INSERT INTO knowledge_entries (projectId, taskId, content, pinned) VALUES (?, ?, ?, ?)')
+      .run(row.projectId, row.taskId, row.content, row.pinned ? 1 : 0);
+    return this.get(result.lastInsertRowid as number)!;
+  }
+
+  update(id: number, fields: { content?: string; pinned?: boolean }): KnowledgeEntryRow | undefined {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (fields.content !== undefined) { sets.push('content = ?'); values.push(fields.content); }
+    if (fields.pinned !== undefined) { sets.push('pinned = ?'); values.push(fields.pinned ? 1 : 0); }
+    if (sets.length > 0) {
+      values.push(id);
+      this.db.prepare(`UPDATE knowledge_entries SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    }
+    return this.get(id);
+  }
+
+  delete(id: number): void {
+    this.db.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id);
+  }
+}
+
+export class TaskNoteRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: {
+    projectId: string;
+    taskId: string;
+    kind: TaskNoteKind;
+    content: string;
+  }): TaskNoteRow {
+    const info = this.db
+      .prepare(
+        'INSERT INTO task_notes (projectId, taskId, kind, content) VALUES (?, ?, ?, ?)',
+      )
+      .run(row.projectId, row.taskId, row.kind, row.content);
+    return this.get(info.lastInsertRowid as number)!;
+  }
+
+  get(id: number): TaskNoteRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE id = ?')
+      .get(id) as TaskNoteRow | undefined;
+  }
+
+  getByProject(projectId: string, sinceId?: number): TaskNoteRow[] {
+    if (sinceId !== undefined && !Number.isNaN(sinceId)) {
+      return this.db
+        .prepare('SELECT * FROM task_notes WHERE projectId = ? AND id > ? ORDER BY id ASC')
+        .all(projectId, sinceId) as TaskNoteRow[];
+    }
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE projectId = ? ORDER BY id ASC')
+      .all(projectId) as TaskNoteRow[];
+  }
+
+  getByTask(taskId: string): TaskNoteRow[] {
+    return this.db
+      .prepare('SELECT * FROM task_notes WHERE taskId = ? ORDER BY id ASC')
+      .all(taskId) as TaskNoteRow[];
+  }
+
+  hasOverlap(taskId: string, otherTaskId: string, file: string): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT id FROM task_notes WHERE taskId = ? AND kind = 'overlap' AND content LIKE ? LIMIT 1",
+      )
+      .get(taskId, `%${file}%${otherTaskId}%`);
+    return Boolean(row);
+  }
+
+  getActiveOverlaps(runningTaskIds: string[]): TaskNoteRow[] {
+    if (runningTaskIds.length === 0) return [];
+    const placeholders = runningTaskIds.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT * FROM task_notes
+         WHERE kind = 'overlap' AND taskId IN (${placeholders})
+         ORDER BY id DESC LIMIT 50`,
+      )
+      .all(...runningTaskIds) as TaskNoteRow[];
+  }
+}
+
 

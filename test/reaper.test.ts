@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import { findProcessesInDir, reap } from '../src/reaper.js';
+import { findProcessesInDir, isOrphanProcess, reap } from '../src/reaper.js';
 import { isDeletableWorktreePath } from '../src/worktrees/index.js';
 
 const children: ChildProcess[] = [];
@@ -32,6 +32,12 @@ afterEach(() => {
 });
 
 describe('reaper', () => {
+  it('treats newly started processes adopted by init or systemd as orphans', () => {
+    expect(isOrphanProcess({ ppid: 1, parentName: 'node' })).toBe(true);
+    expect(isOrphanProcess({ ppid: 42, parentName: 'systemd' })).toBe(true);
+    expect(isOrphanProcess({ ppid: 42, parentName: 'vitest' })).toBe(false);
+  });
+
   it('terminates a detached process in a worktree', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-'));
     const worktreesDir = path.join(root, 'worktrees');

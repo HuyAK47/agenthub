@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getMonitoredDisks, type MonitoredDisk } from '../disk.js';
+import { getMonitoredDisks, getDiskSpaceSync, type MonitoredDisk, type DiskSpace } from '../disk.js';
 import {
   TaskRepo,
   RunRepo,
@@ -16,13 +16,17 @@ import {
   RunMetricsRepo,
   TaskRow,
   ProfileRow,
+  KnowledgeRepo,
+  TaskNoteRepo,
 } from '../db/index.js';
+import { projectSettings } from '../projects/settings.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
-import { getModelFamily, getModelEngine, QuotaService } from '../quota/index.js';
-import { WorktreeService } from '../worktrees/index.js';
+import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
+import { DependencyContext, WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
+import { sameAccount } from '../profiles/account.js';
 import { QuotaUsageService } from '../quota/usage.js';
 import { CheckRunner, getCheckResults } from '../checks.js';
 import { parseDbTime } from '../db/time.js';
@@ -31,11 +35,30 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
+import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
-import { listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
+import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
+import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
+import { measureProcessTree } from '../process-tree.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
+
+export function isProjectAccessible(projectPath: string | null | undefined): boolean {
+  if (!projectPath) return false;
+  try {
+    if (!fs.existsSync(projectPath)) return false;
+    const gitDir = path.join(projectPath, '.git');
+    if (fs.existsSync(gitDir)) return true;
+    execFileSync('git', ['-C', projectPath, 'rev-parse', '--git-dir'], {
+      stdio: 'ignore',
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const PROTOCOL_PROMPT = `Đọc \`.agenthub/task.md\` và thực hiện. Đọc thêm AGENTS.md / CLAUDE.md / GEMINI.md của project nếu có. Làm trên nhánh hiện tại, commit nhỏ theo Conventional Commits. KHÔNG dùng subagent / agent con; tự làm tuần tự trong phiên này. Tránh đọc lại file lớn không cần thiết. \`node_modules\` đã được chuẩn bị sẵn, KHÔNG chạy \`npm ci\`/\`npm install\` trừ khi bạn sửa \`package.json\`. KHÔNG chạy test/lệnh ở chế độ nền (background) rồi chờ: luôn chạy trực tiếp (foreground) và bọc \`timeout 300\`; test dùng \`--run\`, không watch. KHÔNG sửa file ngoài phạm vi task. Khi xong tạo \`.agenthub/DONE\` (tóm tắt, kết quả lint/test, việc còn thiếu); nếu bị chặn tạo \`.agenthub/BLOCKED\` (lý do). Chỉ tạo marker ở bước cuối.`;
 
@@ -89,6 +112,14 @@ interface RunningTask {
   loopingCommand?: string;
   commandOccurrences?: Array<{ command: string; timestamp: number }>;
   lastLogOffset?: number;
+  // Resource metrics & Pause/Resume
+  rss?: number;
+  cpu?: number;
+  lastTicks?: number;
+  lastTicksAt?: number;
+  paused?: boolean;
+  pauseReason?: 'manual' | 'load' | null;
+  pausedAt?: number | null;
 }
 
 interface StartingTask {
@@ -112,8 +143,14 @@ interface ReviewerRun {
 
 const STALL_NOTE = 'Lượt trước bị kẹt khi chờ tác vụ nền. Chạy lệnh trực tiếp với timeout.';
 
+export interface SchedulerOptions {
+  diskSpace?: (path: string) => DiskSpace;
+}
+
 export class Scheduler {
   private running: Map<string, RunningTask> = new Map(); // taskId -> RunningTask
+  /** Bumped by stop(); a start that began before it must not spawn afterwards. */
+  private stopGeneration = 0;
   // Reservations made synchronously before startTask reaches its first await.
   // This closes the dispatch race where several queued tasks are started in one tick.
   private starting: Map<string, StartingTask> = new Map();
@@ -123,6 +160,8 @@ export class Scheduler {
   private diskLow = false;
   private dockerDiskLow = false;
   private tasksWaitingForDisk = new Set<string>();
+  private unavailableProjects = new Set<string>();
+  private tasksWaitingForProject = new Set<string>();
   private eventBus: EventBus;
   private quotaService: QuotaService;
   private worktreeService: WorktreeService;
@@ -130,15 +169,22 @@ export class Scheduler {
   private locks: ProfileLockService;
   private checkRunner?: CheckRunner;
   private db?: Database.Database;
+  private taskNoteRepo?: TaskNoteRepo;
   private runMetricsRepo?: RunMetricsRepo;
+  private knowledgeRepo?: KnowledgeRepo;
   private reviewRepo?: ReviewRepo;
   private failoverState?: ClaudeFailoverState;
+  private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
+  private notifiedSkippedModels = new Set<string>();
+  private resourceTimer: ReturnType<typeof setInterval> | null = null;
+  private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
+  private usageService?: QuotaUsageService;
 
   constructor(
     private config: AgentHubConfig,
@@ -148,11 +194,13 @@ export class Scheduler {
     private projectRepo: ProjectRepo,
     private profileRepo: ProfileRepo,
     private quotaMarkRepo: QuotaMarkRepo,
-    engineOverrides?: Map<string, Engine>,
-    private usageService?: QuotaUsageService,
+    engineOverrides?: Map<string, Engine> | SchedulerOptions,
+    usageServiceOrOptions?: QuotaUsageService | SchedulerOptions,
     locks?: ProfileLockService,
     db?: Database.Database,
     runMetricsRepo?: RunMetricsRepo,
+    knowledgeRepo?: KnowledgeRepo,
+    diskReader?: ((p: string) => DiskSpace) | SchedulerOptions,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -161,11 +209,32 @@ export class Scheduler {
     this.locks = locks || new ProfileLockService(path.join(config.agyHomesDir, '.state'), config.slotsPerAgyProfile, config.slotsPerCodexProfile);
     this.db = db;
     this.runMetricsRepo = runMetricsRepo;
-    if (db) this.checkRunner = new CheckRunner(db);
+    this.knowledgeRepo = knowledgeRepo;
+    if (db) {
+      this.checkRunner = new CheckRunner(db);
+      this.taskNoteRepo = new TaskNoteRepo(db);
+    }
 
-    if (engineOverrides) {
+    if (engineOverrides && !(engineOverrides instanceof Map) && 'diskSpace' in engineOverrides) {
+      if (engineOverrides.diskSpace) this.diskReader = engineOverrides.diskSpace;
+    } else if (engineOverrides instanceof Map) {
       this.engines = engineOverrides;
-    } else {
+    }
+
+    if (usageServiceOrOptions && 'diskSpace' in usageServiceOrOptions && typeof usageServiceOrOptions.diskSpace === 'function') {
+      this.diskReader = usageServiceOrOptions.diskSpace;
+    } else if (usageServiceOrOptions && 'getForProfile' in usageServiceOrOptions) {
+      this.usageService = usageServiceOrOptions as QuotaUsageService;
+    }
+
+    if (typeof diskReader === 'function') {
+      this.diskReader = diskReader;
+    } else if (diskReader && typeof diskReader === 'object' && diskReader.diskSpace) {
+      this.diskReader = diskReader.diskSpace;
+    }
+
+
+    if (!engineOverrides || !(engineOverrides instanceof Map)) {
       this.engines.set('agy', new AgyEngine());
       const codexPath = CodexEngine.findCodexPath();
       if (codexPath) {
@@ -188,6 +257,10 @@ export class Scheduler {
     this.failoverState = failoverState;
   }
 
+  configureBulletinService(bulletinService: { updateBulletinForTask: (task: TaskRow) => void }): void {
+    this.bulletinService = bulletinService;
+  }
+
   getReviewerStatus(): { active: boolean; running: string[]; waiting: number } {
     const active = this.failoverState?.snapshot().active === true;
     return { active, running: [...this.reviewerRuns.keys()], waiting: active ? Math.max(0, this.taskRepo.getByStatus('review').length - this.reviewerRuns.size) : 0 };
@@ -195,6 +268,12 @@ export class Scheduler {
 
   getEventBus(): EventBus {
     return this.eventBus;
+  }
+
+  refreshEngines(): void {
+    if (this.engines.has('codex')) return;
+    const codexPath = CodexEngine.findCodexPath();
+    if (codexPath) this.engines.set('codex', new CodexEngine(codexPath));
   }
 
   getRunning(): Map<string, RunningTask> {
@@ -210,6 +289,98 @@ export class Scheduler {
     return this.loadGuard.getStatus();
   }
 
+  private paused = false;
+
+  pause(): void {
+    this.paused = true;
+    this.eventBus.emit('scheduler.paused', undefined, { paused: true });
+  }
+
+  resume(): void {
+    this.paused = false;
+    this.eventBus.emit('scheduler.resumed', undefined, { paused: false });
+    this.triggerTick();
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  pauseTask(taskId: string, reason: 'manual' | 'load' = 'manual'): boolean {
+    const rt = this.running.get(taskId);
+    if (!rt) return false;
+    if (rt.paused) return true;
+
+    try {
+      process.kill(-rt.pid, 'SIGSTOP');
+    } catch {
+      try {
+        process.kill(rt.pid, 'SIGSTOP');
+      } catch {
+        // process may have exited
+      }
+    }
+
+    rt.paused = true;
+    rt.pauseReason = reason;
+    rt.pausedAt = Date.now();
+
+    this.eventBus.emit('task.paused', taskId, { reason, runId: rt.runId });
+    return true;
+  }
+
+  resumeTask(taskId: string): boolean {
+    const rt = this.running.get(taskId);
+    if (!rt) return false;
+    if (!rt.paused) return true;
+
+    try {
+      process.kill(-rt.pid, 'SIGCONT');
+    } catch {
+      try {
+        process.kill(rt.pid, 'SIGCONT');
+      } catch {
+        // process may have exited
+      }
+    }
+
+    if (rt.pausedAt) {
+      const pausedDuration = Date.now() - rt.pausedAt;
+      rt.timeoutAt += pausedDuration;
+    }
+
+    rt.paused = false;
+    rt.pauseReason = null;
+    rt.pausedAt = null;
+    rt.lastActivityAt = Date.now();
+    rt.lastOutputAt = Date.now();
+    if (rt.lastCommitCheckAt) {
+      rt.lastCommitCheckAt = Date.now();
+    }
+
+    this.eventBus.emit('task.resumed', taskId, { runId: rt.runId });
+    return true;
+  }
+
+  measureTaskResources(rt: RunningTask): void {
+    const task = this.taskRepo.get(rt.taskId);
+    const prev = rt.lastTicks !== undefined && rt.lastTicksAt !== undefined
+      ? { ticks: rt.lastTicks, time: rt.lastTicksAt }
+      : undefined;
+
+    const metrics = measureProcessTree(rt.pid, task?.worktreePath, prev);
+    rt.rss = metrics.rss;
+    rt.cpu = metrics.cpu;
+    rt.lastTicks = metrics.totalTicks;
+    rt.lastTicksAt = metrics.measuredAt;
+  }
+
+  measureAllRunningTaskResources(): void {
+    for (const rt of this.running.values()) {
+      this.measureTaskResources(rt);
+    }
+  }
+
   start(): void {
     this.stopped = false;
     // The orphan pass is periodic; do not scan and potentially reap processes
@@ -221,6 +392,10 @@ export class Scheduler {
 
     // Start the scheduler loop (every 2 seconds)
     this.timer = setInterval(() => this.tick(), 2000);
+    // Measure task resources every 15s
+    this.measureAllRunningTaskResources();
+    this.resourceTimer = setInterval(() => this.measureAllRunningTaskResources(), 15000);
+    this.resourceTimer.unref();
     // Also run immediately
     this.tick();
   }
@@ -230,8 +405,30 @@ export class Scheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    if (this.resourceTimer) {
+      clearInterval(this.resourceTimer);
+      this.resourceTimer = null;
+    }
+
+    // Requirement 4: Khi daemon tắt/khởi động lại: mọi task đang paused phải được SIGCONT trước (không để tiến trình đứng mãi).
+    for (const rt of this.running.values()) {
+      if (rt.paused) {
+        try {
+          process.kill(-rt.pid, 'SIGCONT');
+        } catch {
+          try {
+            process.kill(rt.pid, 'SIGCONT');
+          } catch {
+            // ignore
+          }
+        }
+        rt.paused = false;
+        rt.pauseReason = null;
+      }
+    }
 
     this.stopped = true;
+    this.stopGeneration += 1;
     this.starting.clear();
 
     for (const run of this.reviewerRuns.values()) {
@@ -258,6 +455,15 @@ export class Scheduler {
    * Re-queue their tasks.
    */
   private recoverOnStartup(): void {
+    const shutdownRuns = this.runRepo.getShutdownRuns();
+    for (const run of shutdownRuns) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task && task.status === 'running') {
+        this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
+        this.eventBus.emit('task.queued', run.taskId, { reason: 'daemon_shutdown' });
+      }
+    }
+
     const runningRuns = this.runRepo.getRunning();
     for (const run of runningRuns) {
       if (run.kind === 'reviewer') {
@@ -272,6 +478,7 @@ export class Scheduler {
         continue;
       }
       if (!this.isProcessAlive(run.pid, run.pidStart)) {
+        if (this.recoverFinishedWork(run)) continue;
         this.runRepo.finish(run.id, 'crashed');
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
         this.eventBus.emit('run.crashed', run.taskId, { runId: run.id });
@@ -282,6 +489,17 @@ export class Scheduler {
       const task = this.taskRepo.get(run.taskId);
       const engine = this.engines.get(run.engine);
       if (!task || !engine || !run.pid) continue;
+
+      try {
+        process.kill(-run.pid, 'SIGCONT');
+      } catch {
+        try {
+          process.kill(run.pid, 'SIGCONT');
+        } catch {
+          // ignore
+        }
+      }
+
       const startTime = parseDbTime(run.startedAt);
       const timeoutMs = this.config.defaultTimeout * 1000;
       const timeoutAt = Math.max(startTime + timeoutMs, Date.now() + 30 * 60 * 1000);
@@ -309,6 +527,11 @@ export class Scheduler {
         cachedConversationMtime: 0,
         cachedWorktreeMtime: 0,
         usageBefore: null,
+        rss: 0,
+        cpu: 0,
+        paused: false,
+        pauseReason: null,
+        pausedAt: null,
       });
     }
 
@@ -316,9 +539,67 @@ export class Scheduler {
     void this.recoverCheckingTasks();
   }
 
+  private markerForRun(task: TaskRow, startedAt: number): 'done' | 'blocked' | null {
+    if (!task.worktreePath) return null;
+    for (const [name, marker] of [['done', 'DONE'], ['blocked', 'BLOCKED']] as const) {
+      try {
+        const stat = fs.statSync(path.join(task.worktreePath, '.agenthub', marker));
+        if (stat.mtimeMs > startedAt) return name;
+      } catch { /* marker absent */ }
+    }
+    return null;
+  }
+
+  private hasCommitAfter(task: TaskRow, startedAt: number): boolean {
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return false;
+    try {
+      // The worktree HEAD is authoritative here. During restart the branch ref
+      // may not be visible from the project checkout yet, while the commit is
+      // already present in the worktree the worker was using.
+      const output = execFileSync('git', ['log', '-1', '--format=%ct'], {
+        cwd: task.worktreePath && fs.existsSync(task.worktreePath) ? task.worktreePath : project.path,
+        encoding: 'utf8',
+      }).trim();
+      return Boolean(output) && Number(output) * 1000 > startedAt;
+    } catch {
+      return false;
+    }
+  }
+
+  private recoverFinishedWork(run: { id: string; taskId: string; startedAt: string }): boolean {
+    const task = this.taskRepo.get(run.taskId);
+    if (!task) return false;
+    const parsedStartedAt = parseDbTime(run.startedAt);
+    const startedAt = Number.isNaN(parsedStartedAt) ? 0 : parsedStartedAt;
+    const marker = this.markerForRun(task, startedAt);
+    if (marker === 'done') {
+      this.runRepo.finish(run.id, 'done');
+      this.taskRepo.update(run.taskId, { status: 'checking' });
+      this.eventBus.emit('task.checking', run.taskId, { reason: 'restart_marker' });
+      void this.recoverCheckingTasks();
+      return true;
+    }
+    if (marker === 'blocked') {
+      this.runRepo.finish(run.id, 'done');
+      this.taskRepo.update(run.taskId, { status: 'blocked', transientRetries: 0, notBefore: null });
+      this.eventBus.emit('task.blocked', run.taskId, { reason: 'restart_marker' });
+      return true;
+    }
+    if (this.hasCommitAfter(task, startedAt)) {
+      this.runRepo.finish(run.id, 'crashed', undefined, 'resume_after_progress');
+      this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
+      this.eventBus.emit('task.queued', run.taskId, { reason: 'resume_after_progress' });
+      return true;
+    }
+    return false;
+  }
+
   async recoverCheckingTasks(): Promise<void> {
+    if (this.stopped) return;
     const checkingTasks = this.taskRepo.getByStatus('checking');
     for (const task of checkingTasks) {
+      if (this.stopped) return;
       const runs = this.runRepo.getByTask(task.id);
       const runId = runs[runs.length - 1]?.id || 'recovered';
       await this.runChecksForTask(task.id, runId);
@@ -326,6 +607,7 @@ export class Scheduler {
   }
 
   async runChecksForTask(taskId: string, runId: string): Promise<void> {
+    if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
     if (!task) return;
     this.taskRepo.update(taskId, { status: 'checking' });
@@ -336,6 +618,7 @@ export class Scheduler {
       ? await this.checkRunner.run(task, project, runId)
       : { passed: true, failed: [], results: [] };
 
+    if (this.stopped) return;
     // Check if task status was changed (e.g. cancelled) during checks
     const currentTask = this.taskRepo.get(taskId);
     if (!currentTask || currentTask.status !== 'checking') return;
@@ -355,11 +638,11 @@ export class Scheduler {
       if (currentTask.worktreePath) {
         const donePath = path.join(currentTask.worktreePath, '.agenthub', 'DONE');
         if (fs.existsSync(donePath)) fs.unlinkSync(donePath);
-        this.worktreeService.writeTaskFile(currentTask.worktreePath, newBody, true, feedback);
+        this.writeTaskFiles(currentTask, newBody, true, feedback);
       }
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
     } else {
-      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null });
+      this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
       if (this.runMetricsRepo) {
         await recalculateTaskLines(
           this.taskRepo,
@@ -369,7 +652,11 @@ export class Scheduler {
           taskId,
         );
       }
-      this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
+      if (this.reviewChainForTask(currentTask).length === 0) {
+        this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
+      } else {
+        this.eventBus.emit('review.gate_started', taskId, { step: 0 });
+      }
     }
     if (!this.stopped) this.triggerTick();
   }
@@ -383,6 +670,43 @@ export class Scheduler {
     if (load.overloaded !== this.lastLoadOverloaded) {
       this.lastLoadOverloaded = load.overloaded;
       this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
+    }
+
+    // Auto-pause / resume by load guard
+    if (this.config.load.enabled) {
+      if (this.loadGuard.isAutoPauseTriggered()) {
+        const maxAutoPaused = this.config.load.maxAutoPaused ?? 2;
+        const autoPausedCount = Array.from(this.running.values()).filter((rt) => rt.paused && rt.pauseReason === 'load').length;
+        if (autoPausedCount < maxAutoPaused) {
+          const candidates = Array.from(this.running.values()).filter((rt) => !rt.paused);
+          if (candidates.length > 0) {
+            const policy = this.config.load.pausePolicy || 'recent';
+            if (policy === 'rss') {
+              candidates.sort((a, b) => (b.rss || 0) - (a.rss || 0) || (b.startTime - a.startTime));
+            } else {
+              candidates.sort((a, b) => b.startTime - a.startTime);
+            }
+            const victim = candidates[0];
+            this.pauseTask(victim.taskId, 'load');
+            this.eventBus.emit('load.task_paused', victim.taskId, {
+              reason: 'load',
+              policy,
+              rss: victim.rss,
+              startTime: victim.startTime,
+            });
+          }
+        }
+      } else if (!load.overloaded) {
+        const autoPaused = Array.from(this.running.values())
+          .filter((rt) => rt.paused && rt.pauseReason === 'load')
+          .sort((a, b) => (a.pausedAt || 0) - (b.pausedAt || 0));
+
+        if (autoPaused.length > 0) {
+          const nextToResume = autoPaused[0];
+          this.resumeTask(nextToResume.taskId);
+          this.eventBus.emit('load.task_resumed', nextToResume.taskId, { reason: 'recovered' });
+        }
+      }
     }
     // 0. Check disk space: if sufficient, resume any tasks waiting for disk
     const disks = this.getMonitoredDisks();
@@ -447,6 +771,39 @@ export class Scheduler {
       }
     }
 
+    // 0d. Check unavailable projects and resume project waiters
+    const projectWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'project_unavailable');
+    for (const task of projectWaiters) {
+      this.tasksWaitingForProject.add(task.id);
+    }
+
+    const projectsToCheck = new Set<string>([
+      ...this.unavailableProjects,
+      ...projectWaiters.map((t) => t.projectId),
+    ]);
+
+    for (const projectId of projectsToCheck) {
+      const project = this.projectRepo.get(projectId);
+      if (project && isProjectAccessible(project.path)) {
+        if (this.unavailableProjects.has(projectId)) {
+          this.unavailableProjects.delete(projectId);
+          this.eventBus.emit('project.available', undefined, {
+            projectId: project.id,
+            path: project.path,
+          });
+        }
+        // Wake up tasks for this project whose worktree (if any) is also accessible
+        const tasksForProj = projectWaiters.filter((t) => t.projectId === projectId);
+        for (const task of tasksForProj) {
+          if (!task.worktreePath || fs.existsSync(task.worktreePath)) {
+            this.tasksWaitingForProject.delete(task.id);
+            this.taskRepo.updateStatus(task.id, 'queued');
+            this.eventBus.emit('task.queued', task.id, { reason: 'project_available' });
+          }
+        }
+      }
+    }
+
     // 1. Check quota expiry → move waiting_quota tasks back to queued
     this.checkQuotaExpiry();
 
@@ -469,9 +826,17 @@ export class Scheduler {
 
   /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
   reapOrphans(): void {
-    const tasks = this.taskRepo.getAll();
     const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
     const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    const activeWorktrees = new Set<string>();
+    for (const run of this.running.values()) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task?.worktreePath) activeWorktrees.add(path.resolve(task.worktreePath));
+    }
+    for (const run of this.reviewerRuns.values()) {
+      const task = this.taskRepo.get(run.taskId);
+      if (task?.worktreePath) activeWorktrees.add(path.resolve(task.worktreePath));
+    }
     for (const info of processes) {
       const dir = info.cwd.replace(/ \(deleted\)$/, '');
       if (info.cwd.endsWith(' (deleted)')) {
@@ -479,15 +844,10 @@ export class Scheduler {
         continue;
       }
 
-      const task = tasks.find((candidate) => {
-        if (!candidate.worktreePath) return false;
-        const worktreePath = path.resolve(candidate.worktreePath);
-        const cwd = path.resolve(info.cwd);
-        return cwd === worktreePath || cwd.startsWith(worktreePath + path.sep);
-      });
-      const taskCanBeReaped = task && (task.status === 'done' || task.status === 'cancelled');
-      if (info.startedAt > oldProcessCutoff) continue;
-      if (task && !taskCanBeReaped) continue;
+      const processCwd = path.resolve(info.cwd);
+      const active = [...activeWorktrees].some((worktree) => processCwd === worktree || processCwd.startsWith(worktree + path.sep));
+      if (active) continue;
+      if (info.startedAt > oldProcessCutoff && !isOrphanProcess(info)) continue;
       reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
   }
@@ -524,16 +884,21 @@ export class Scheduler {
     if (this.running.size === 0) return;
     const now = Date.now();
     for (const [taskId, rt] of this.running) {
-      // Check timeout
-      if (now > rt.timeoutAt) {
-        this.killTask(taskId, 'timeout');
-        continue;
-      }
-
       // Check if process is still alive
       if (!this.isProcessAlive(rt.pid, rt.pidStart)) {
         // Process has ended, check results
         void this.handleRunCompletion(taskId, rt);
+        continue;
+      }
+
+      if (rt.paused) {
+        // Paused tasks: do NOT check timeout, stall, or no-commit watch
+        continue;
+      }
+
+      // Check timeout
+      if (now > rt.timeoutAt) {
+        this.killTask(taskId, 'timeout');
         continue;
       }
 
@@ -919,7 +1284,41 @@ export class Scheduler {
       markers = this.worktreeService.checkMarkers(task.worktreePath) as typeof markers;
     }
 
-    // Measure diff stats if moving to review
+    // Persist dependency context while the marker and branch are still available.
+    if (markers.done) {
+      let diffStat: string | null = null;
+      const project = this.projectRepo.get(task.projectId);
+      const baseRef = task.baseRef || project?.defaultBranch || 'main';
+      const branch = task.branch || `agenthub/${task.slug}`;
+      if (project?.path) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: project.path,
+            timeout: 30_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // The branch may not be available yet; the context can still include DONE.
+        }
+      }
+      if (!diffStat && task.worktreePath && fs.existsSync(task.worktreePath)) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: task.worktreePath,
+            timeout: 10_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // ignore
+        }
+      }
+      this.taskRepo.update(taskId, {
+        doneReport: markers.doneContent || task.doneReport,
+        diffStat: diffStat ?? task.diffStat,
+      });
+    }
+
+    // Measure diff stats for run metrics.
     let diffStats = { linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
     if (markers.done) {
       const project = this.projectRepo.get(task.projectId);
@@ -979,6 +1378,12 @@ export class Scheduler {
       });
     }
 
+    // A worker may have exited while the daemon was still alive. Preserve completed work exactly
+    // as startup recovery does — but only after the run's metrics (tokens, lines, duration) are
+    // recorded: returning earlier dropped token usage for every finished run.
+    const persistedRun = this.runRepo.get(rt.runId);
+    if (persistedRun && this.recoverFinishedWork(persistedRun)) return;
+
     if (markers.done) {
       this.runRepo.finish(rt.runId, 'done');
       await this.runChecksForTask(taskId, rt.runId);
@@ -1017,8 +1422,7 @@ export class Scheduler {
           this.runRepo.finish(rt.runId, 'crashed', undefined, 'auth');
           this.markProfileAuthExpired(rt.profileName);
 
-          const attempt = (task.attempt || 0) + 1;
-          this.taskRepo.update(taskId, { status: 'queued', attempt, resume: 1, transientRetries: 0, notBefore: null });
+          this.taskRepo.update(taskId, { status: 'queued', attempt: task.attempt, resume: 1, transientRetries: 0, notBefore: null });
           this.eventBus.emit('task.queued', taskId, { reason: 'auth_retry', profile: rt.profileName });
         } else {
           // Check for transient errors
@@ -1048,6 +1452,9 @@ export class Scheduler {
   }
 
   private scheduleNewTasks(): void {
+    if (this.paused) {
+      return;
+    }
     if (this.skipSchedulingOnce) {
       this.skipSchedulingOnce = false;
       return;
@@ -1059,9 +1466,25 @@ export class Scheduler {
       // Check dependencies
       if (!this.areDependenciesMet(task)) continue;
 
+      if (this.getModelChain(task).length === 0) {
+        this.taskRepo.updateStatus(task.id, 'failed');
+        this.eventBus.emit('task.failed', task.id, {
+          reason: 'no_usable_model',
+          message: 'Model chain không có model hợp lệ thuộc engine đã biết',
+        });
+        continue;
+      }
+
       // Check project parallel limit
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
+
+      const projectAccessible = isProjectAccessible(project.path);
+      const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
+      if (!projectAccessible || !worktreeAccessible) {
+        this.markTaskWaitingForProject(task, project);
+        continue;
+      }
 
       const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
       const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
@@ -1107,36 +1530,92 @@ export class Scheduler {
 
   private scheduleReviews(): void {
     const state = this.failoverState;
-    if (!state || !this.reviewRepo || this.config.reviewer?.enabled === false) return;
-    const snapshot = state.snapshot();
+    if (!this.reviewRepo || this.config.reviewer?.enabled === false) return;
+    const snapshot = state?.snapshot() || { active: false, step: undefined };
     if (this.failoverWasActive && !snapshot.active) {
       this.eventBus.emit('claude.failover_cleared', undefined);
     }
     this.failoverWasActive = snapshot.active;
-    if (!snapshot.active) return;
-
     const codex = this.engines.get('codex');
     if (!codex) return;
     for (const task of this.taskRepo.getByStatus('review')) {
       if (this.reviewerRuns.has(task.id)) continue;
       if (task.reviewerEscalated) continue;
+      const chain = this.reviewChainForTask(task);
+      const step = chain[task.reviewStep ?? 0];
+      if (chain.length > 0 && (!step || step.mode !== 'gate')) {
+        if ((task.reviewStep ?? 0) >= chain.length) {
+          this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true });
+        }
+        continue;
+      }
+      if (chain.length > 0 && step?.reviewer === 'claude') {
+        this.eventBus.emit('review.gate_ready', task.id, { reviewStep: task.reviewStep ?? 0, reviewer: 'claude' });
+        continue;
+      }
+      if (chain.length === 0 && (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex')) continue;
       if (this.getCheckResults(task.id).length === 0) {
         this.escalateReview(task.id, 'missing_autocheck_results', 'Không có kết quả autocheck đã lưu; cần người xác minh trước khi tiếp tục.');
         continue;
       }
-      const profile = this.profileRepo.getEnabled().find((p) => p.engine === 'codex' &&
+      const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex' &&
         !this.quotaService.isExhausted(p.name, 'codex') &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
-      if (!profile || !task.worktreePath) continue;
-      this.startReview(task, profile.name, codex);
+      if (codexProfiles.length === 0 || !task.worktreePath) continue;
+      codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+      const profile = codexProfiles[0];
+      const model = reviewerModel(step || { reviewer: this.config.reviewer?.model || 'codex:gpt-5.6-luna', mode: 'gate' }) || this.config.reviewer?.model || 'codex:gpt-5.6-luna';
+      const workerModel = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1)?.model;
+      if (chain.length > 0 && workerModel === model) {
+        this.advanceReviewStep(task, chain, 'reviewer_same_as_worker');
+        continue;
+      }
+      this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
     }
   }
 
-  private reviewerRunsForProfile(profileName: string): boolean {
+  private reviewChainForTask(task: TaskRow): ReviewChainStep[] {
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return [];
+    if (project.review) {
+      try {
+        const value = JSON.parse(project.review) as { chain?: unknown };
+        return parseReviewChain(JSON.stringify(value.chain || []));
+      } catch {
+        return [];
+      }
+    }
+    return parseReviewChain(project.reviewChain);
+  }
+
+  private reviewMaxRoundsForTask(task: TaskRow): number {
+    const project = this.projectRepo.get(task.projectId);
+    if (project?.review) {
+      try {
+        const value = JSON.parse(project.review) as { maxRounds?: unknown };
+        return typeof value.maxRounds === 'number' && value.maxRounds > 0 ? value.maxRounds : 2;
+      } catch {
+        return 2;
+      }
+    }
+    return this.config.reviewer?.maxChangesRequested || 2;
+  }
+
+  private advanceReviewStep(task: TaskRow, chain: ReviewChainStep[], reason: string): void {
+    const nextStep = (task.reviewStep ?? 0) + 1;
+    this.taskRepo.update(task.id, { reviewStep: nextStep, reviewerChangesRequested: 0 });
+    if (nextStep >= chain.length || chain[nextStep]?.mode === 'final') {
+      this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true, reviewStep: nextStep, reason });
+    } else {
+      this.eventBus.emit('review.gate_completed', task.id, { reviewStep: nextStep, reason });
+    }
+  }
+
+  reviewerRunsForProfile(profileName: string): boolean {
     return [...this.reviewerRuns.values()].some((run) => run.profileName === profileName);
   }
 
-  private startReview(task: TaskRow, profileName: string, engine: Engine): void {
+  private startReview(task: TaskRow, profileName: string, engine: Engine, reviewerModel: string, reviewerActor = 'codex-reviewer'): void {
     const profile = this.profileRepo.get(profileName);
     if (!profile || !task.worktreePath || this.reviewerRuns.has(task.id)) return;
     const lockSlot = this.locks.findFreeSlotSync(profile);
@@ -1147,7 +1626,6 @@ export class Scheduler {
     const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
     const logPath = path.join(logDir, `${runId}.log`);
     const outputPath = path.join(logDir, `${runId}.final.json`);
-    const reviewerModel = this.config.reviewer?.model || 'codex:gpt-5.6-luna';
     this.runRepo.insert({ id: runId, taskId: task.id, engine: 'codex', model: reviewerModel, profileName, logPath, kind: 'reviewer' });
     let child;
     try {
@@ -1158,7 +1636,21 @@ export class Scheduler {
         runId: check.runId || 'unknown',
         runStartedAt: check.runStartedAt || 'unknown',
       }));
-      child = engine.spawn({ profile, model: reviewerModel, cwd: task.worktreePath, prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks), logPath, outputPath, readOnly: true, lockFile });
+      const project = this.projectRepo.get(task.projectId);
+      child = engine.spawn({
+        profile,
+        model: reviewerModel,
+        cwd: task.worktreePath,
+        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks),
+        logPath,
+        outputPath,
+        readOnly: true,
+        lockFile,
+        env: { AGENTHUB_TASK_ID: task.id },
+        hubHome: this.config.hubHome,
+        project,
+        gitHooks: project ? projectSettings(project).worktree.gitHooks : undefined,
+      });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
     } catch (error) {
@@ -1175,7 +1667,7 @@ export class Scheduler {
     this.reviewerRuns.set(task.id, { taskId: task.id, runId, pid: child.pid, profileName, engine, outputPath, lockSlot, lockFile, startedAt: Date.now(), timeout });
     this.locks.invalidate(profileName);
     child.unref();
-    this.eventBus.emit('review.started', task.id, { actor: 'codex-reviewer', model: reviewerModel, profile: profileName, runId });
+    this.eventBus.emit('review.started', task.id, { actor: reviewerActor, model: reviewerModel, profile: profileName, runId });
     child.once('error', () => {
       if (!this.stopped) this.finishReview(task.id, runId, profileName, 'error', null);
     });
@@ -1253,7 +1745,7 @@ export class Scheduler {
     }
     this.runRepo.finish(runId, 'done');
     this.reviewTask(taskId, result.verdict, result.feedback, 'codex-reviewer');
-    this.eventBus.emit('review.completed', taskId, { actor: 'codex-reviewer', verdict: result.verdict, model: this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
+    this.eventBus.emit('review.completed', taskId, { actor: 'codex-reviewer', verdict: result.verdict, model: run?.model || this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
     if (!this.stopped) this.triggerTick();
   }
 
@@ -1298,7 +1790,7 @@ export class Scheduler {
 
     if (targetEmail) {
       for (const p of this.profileRepo.getAll()) {
-        if (p.email === targetEmail) {
+        if (sameAccount(p, profile)) {
           sameEmailProfileNames.add(p.name);
         }
       }
@@ -1351,7 +1843,7 @@ export class Scheduler {
         const group = family === 'gemini' ? 'Gemini Models' : (family === 'claude' || family === 'gpt' ? 'Claude and GPT models' : null);
         if (group) {
           const names = profile.email
-            ? this.profileRepo.getAll().filter((p) => p.email === profile.email).map((p) => p.name)
+            ? this.profileRepo.getAll().filter((p) => sameAccount(p, profile)).map((p) => p.name)
             : [profile.name];
           if (names.length > 0) {
             const placeholders = names.map(() => '?').join(',');
@@ -1379,6 +1871,23 @@ export class Scheduler {
     this.eventBus.emit('task.queued', task.id, { reason });
   }
 
+  private markTaskWaitingForProject(task: TaskRow, project: { id: string; path: string }): void {
+    this.tasksWaitingForProject.add(task.id);
+    this.taskRepo.updateStatus(task.id, 'waiting_quota', 'project_unavailable');
+    this.eventBus.emit('task.waiting_quota', task.id, {
+      reason: 'project_unavailable',
+      projectId: project.id,
+      path: project.path,
+    });
+    if (!this.unavailableProjects.has(project.id)) {
+      this.unavailableProjects.add(project.id);
+      this.eventBus.emit('project.unavailable', undefined, {
+        projectId: project.id,
+        path: project.path,
+      });
+    }
+  }
+
   private findModelProfilePair(
     task: TaskRow,
   ): { model: string; profileName: string } | null {
@@ -1403,6 +1912,7 @@ export class Scheduler {
       const ranked = eligibleProfiles.map((profile, originalIndex) => ({
         profile,
         originalIndex,
+        priority: profile.priority ?? 0,
         emailRuns: this.getEmailRunningCount(profile),
         quotaRemaining: this.getQuotaRemainingPct(profile, family),
       }));
@@ -1413,6 +1923,9 @@ export class Scheduler {
         }
         if (a.quotaRemaining !== b.quotaRemaining) {
           return b.quotaRemaining - a.quotaRemaining;
+        }
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority;
         }
         return a.originalIndex - b.originalIndex;
       });
@@ -1459,7 +1972,7 @@ export class Scheduler {
     const profile = this.profileRepo.get(profileName);
     if (!profile) return;
     const related = profile.email
-      ? this.profileRepo.getAll().filter((candidate) => candidate.email === profile.email)
+      ? this.profileRepo.getAll().filter((candidate) => sameAccount(candidate, profile))
       : [profile];
     for (const candidate of related) {
       this.profileRepo.updateAuthState(candidate.name, 'not_logged_in', 'Phiên đăng nhập hết hạn (401) – cần đăng nhập lại', null);
@@ -1468,12 +1981,78 @@ export class Scheduler {
   }
 
   private getModelChain(task: TaskRow): string[] {
-    if (task.modelChain) {
-      return JSON.parse(task.modelChain) as string[];
-    }
-    return task.level === 'hard'
+    const chain = task.modelChain
+      ? JSON.parse(task.modelChain) as string[]
+      : task.level === 'hard'
       ? this.config.defaultModelChains.hard
       : this.config.defaultModelChains.easy;
+    return chain.filter((model) => {
+      if (isKnownModel(model)) return true;
+      const key = `${task.id}:${model}`;
+      if (!this.notifiedSkippedModels.has(key)) {
+        this.notifiedSkippedModels.add(key);
+        this.eventBus.emit('task.model_skipped', task.id, {
+          model,
+          message: `Bỏ qua model không thuộc engine đã cấu hình: ${model}`,
+        });
+      }
+      return false;
+    });
+  }
+
+  private getDependencyContext(task: TaskRow): DependencyContext[] {
+    let dependencyIds: string[];
+    try {
+      dependencyIds = JSON.parse(task.dependsOn || '[]') as string[];
+    } catch {
+      dependencyIds = [];
+    }
+
+    return dependencyIds.flatMap((dependencyId) => {
+      const dependency = this.taskRepo.get(dependencyId);
+      if (!dependency) return [];
+
+      const donePath = dependency.worktreePath
+        ? path.join(dependency.worktreePath, '.agenthub', 'DONE')
+        : null;
+      const doneContent = dependency.doneReport ?? (donePath && fs.existsSync(donePath)
+        ? fs.readFileSync(donePath, 'utf-8')
+        : undefined);
+      const reviews = this.reviewRepo?.getByTask(dependency.id) || [];
+      const lastReview = reviews[reviews.length - 1];
+      const review = lastReview?.verdict === 'approved'
+        ? `approved${lastReview.feedback ? ` — ${lastReview.feedback}` : ''}`
+        : undefined;
+
+      const isCrossProject = dependency.projectId !== task.projectId;
+      const depProject = this.projectRepo.get(dependency.projectId);
+
+      return [{
+        id: dependency.id,
+        title: dependency.title,
+        projectId: dependency.projectId,
+        projectName: depProject?.name,
+        repoPath: depProject?.path,
+        isCrossProject,
+        doneContent,
+        review,
+        diffStat: dependency.diffStat ?? undefined,
+      }];
+    });
+  }
+
+  private writeTaskFiles(task: TaskRow, body: string, resume: boolean, feedback?: string): void {
+    if (!task.worktreePath) return;
+    this.worktreeService.writeTaskFile(
+      task.worktreePath,
+      body,
+      resume,
+      feedback,
+      this.getDependencyContext(task),
+      this.config.context?.depsMaxChars,
+      this.knowledgeRepo?.getByProject(task.projectId) || [],
+      this.config.context?.knowledgeMaxChars,
+    );
   }
 
   private isProfileBusy(profileName: string): boolean {
@@ -1485,6 +2064,7 @@ export class Scheduler {
   }
 
   async startTask(task: TaskRow, model: string, profileName: string, retryCount = 0): Promise<void> {
+    const stopGeneration = this.stopGeneration;
     const disk = this.getBlockingDisk();
     if (disk) {
       this.tasksWaitingForDisk.add(task.id);
@@ -1504,6 +2084,14 @@ export class Scheduler {
     const project = this.projectRepo.get(task.projectId);
     if (!project) {
       this.locks.release(profile.name, lockFile);
+      return;
+    }
+
+    const projectAccessible = isProjectAccessible(project.path);
+    const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
+    if (!projectAccessible || !worktreeAccessible) {
+      this.locks.release(profile.name, lockFile);
+      this.markTaskWaitingForProject(task, project);
       return;
     }
 
@@ -1528,6 +2116,17 @@ export class Scheduler {
         return;
       }
       const branch = task.branch || `agenthub/${task.slug}`;
+      const settings = projectSettings(project);
+      if (settings.integration?.enabled) {
+        try {
+          ensureIntegrationWorktree(project, this.config.hubHome);
+        } catch (e) {
+          this.locks.release(profile.name, lockFile);
+          this.taskRepo.updateStatus(task.id, 'failed');
+          this.eventBus.emit('task.failed', task.id, { error: String(e) });
+          return;
+        }
+      }
       const baseRef = this.resolveBaseRef(task, project);
       try {
         worktreePath = this.worktreeService.create({
@@ -1539,6 +2138,10 @@ export class Scheduler {
         });
       } catch (e) {
         this.locks.release(profile.name, lockFile);
+        if (!isProjectAccessible(project.path)) {
+          this.markTaskWaitingForProject(task, project);
+          return;
+        }
         this.taskRepo.updateStatus(task.id, 'failed');
         this.eventBus.emit('task.failed', task.id, { error: String(e) });
         return;
@@ -1555,18 +2158,29 @@ export class Scheduler {
       // Dependency installation can take minutes. Keep the task out of the
       // queue while it runs, but never let a cache/native-module failure stop
       // the worker from starting with its own install.
-      const hasDependencyLock = (dir: string): boolean =>
-        fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
-      if (hasDependencyLock(worktreePath) || hasDependencyLock(path.join(worktreePath, 'web'))) {
-        try {
-          await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
-        } catch (error) {
-          this.locks.release(profile.name, lockFile);
-          this.taskRepo.update(task.id, { status: 'failed' });
-          this.eventBus.emit('task.failed', task.id, {
-            error: `Failed to prepare node_modules before worker start: ${String(error)}`,
-          });
-          return;
+      if (settings.worktree.install !== 'skip') {
+        const hasDependencyLock = (dir: string): boolean =>
+          fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
+        if (hasDependencyLock(worktreePath) || hasDependencyLock(path.join(worktreePath, 'web'))) {
+          try {
+            await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
+          } catch (error) {
+            this.eventBus.emit('worktree.install_failed', task.id, {
+              error: `Failed to prepare node_modules before worker start: ${String(error)}`,
+            });
+            if (this.taskNoteRepo) {
+              try {
+                this.taskNoteRepo.insert({
+                  projectId: project.id,
+                  taskId: task.id,
+                  kind: 'note',
+                  content: `Lỗi cài phụ thuộc: ${String(error)}`,
+                });
+              } catch {
+                // ignore
+              }
+            }
+          }
         }
       }
 
@@ -1601,7 +2215,7 @@ export class Scheduler {
       prompt += '\n\nTask đã làm dở – kiểm tra git log/status rồi làm tiếp, không làm lại.';
     }
 
-    this.worktreeService.writeTaskFile(worktreePath, task.body || task.title, !!task.resume);
+    this.writeTaskFiles({ ...task, worktreePath }, task.body || task.title, !!task.resume);
 
     // Create run record
     const runId = crypto.randomUUID();
@@ -1617,6 +2231,14 @@ export class Scheduler {
         const u5h = usages.find((u) => u.window === '5h' && u.grp === grp);
         if (u5h) usageBefore = u5h.remainingPct;
       }
+    }
+
+    // stop() may have run while this start was awaiting (e.g. node_modules setup). Spawning now would
+    // leave a detached worker nobody tracks or kills.
+    if (this.stopGeneration !== stopGeneration) {
+      this.starting.delete(task.id);
+      this.locks.release(profile.name, lockFile);
+      return;
     }
 
     this.runRepo.insert({
@@ -1637,6 +2259,10 @@ export class Scheduler {
         prompt,
         logPath,
         lockFile,
+        env: { AGENTHUB_TASK_ID: task.id },
+        hubHome: this.config.hubHome,
+        project,
+        gitHooks: projectSettings(project).worktree.gitHooks,
       });
 
       const pid = child.pid!;
@@ -1645,6 +2271,10 @@ export class Scheduler {
 
       // Update task status
       this.taskRepo.update(task.id, { status: 'running' });
+
+      if (this.bulletinService) {
+        this.bulletinService.updateBulletinForTask({ ...task, status: 'running', worktreePath });
+      }
 
       // Track the running task
       const rt: RunningTask = {
@@ -1676,8 +2306,14 @@ export class Scheduler {
         lastNoCommitThresholdEmitted: 0,
         commandOccurrences: [],
         lastLogOffset: 0,
+        rss: 0,
+        cpu: 0,
+        paused: false,
+        pauseReason: null,
+        pausedAt: null,
       };
       this.running.set(task.id, rt);
+      this.measureTaskResources(rt);
       this.starting.delete(task.id);
       this.locks.invalidate(profileName);
 
@@ -1703,14 +2339,26 @@ export class Scheduler {
     }
   }
 
-  private resolveBaseRef(task: TaskRow, project: { defaultBranch: string }): string {
+  private resolveBaseRef(task: TaskRow, project: { defaultBranch: string; settings?: string | null }): string {
     if (task.baseRef) return task.baseRef;
 
-    // If task has dependencies, use the last dependency's branch
-    const deps: string[] = JSON.parse(task.dependsOn);
-    if (deps.length > 0) {
-      const lastDep = this.taskRepo.get(deps[deps.length - 1]);
-      if (lastDep?.branch) return lastDep.branch;
+    // Only inherit branch from the nearest dependency in the SAME project
+    let deps: string[] = [];
+    try {
+      deps = JSON.parse(task.dependsOn || '[]');
+    } catch {
+      deps = [];
+    }
+    for (let i = deps.length - 1; i >= 0; i--) {
+      const dep = this.taskRepo.get(deps[i]);
+      if (dep && dep.projectId === task.projectId && dep.branch) {
+        return dep.branch;
+      }
+    }
+
+    const settings = projectSettings(project);
+    if (settings.integration?.enabled) {
+      return settings.integration.branch || 'agenthub/integration';
     }
 
     return project.defaultBranch;
@@ -1735,10 +2383,16 @@ export class Scheduler {
   reviewTask(taskId: string, verdict: 'approved' | 'changes_requested', feedback?: string, by?: string): void {
     const task = this.taskRepo.get(taskId);
     if (!task || task.status !== 'review') return;
+    const chain = this.reviewChainForTask(task);
+    const step = chain[task.reviewStep ?? 0];
 
     if (verdict === 'approved') {
       if (by === 'codex-reviewer' && (!feedback || feedback.trim() === '')) return;
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback: feedback || null, actor: by });
+      if ((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') {
+        this.advanceReviewStep(task, chain, 'approved');
+        return;
+      }
       if (by !== 'codex-reviewer') this.resetReviewerEscalation(taskId);
       this.taskRepo.updateStatus(taskId, 'done');
       if (this.runMetricsRepo) {
@@ -1756,9 +2410,9 @@ export class Scheduler {
         throw new Error('Feedback is required when requesting changes');
       }
       if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback, actor: by });
-      if (by === 'codex-reviewer') {
+      if (((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') || (by === 'codex-reviewer' && chain.length === 0)) {
         const count = (task.reviewerChangesRequested || 0) + 1;
-        const max = this.config.reviewer?.maxChangesRequested || 2;
+        const max = this.reviewMaxRoundsForTask(task);
         if (count > max) {
           this.escalateReview(taskId, 'reviewer_changes_limit', feedback);
           return;
@@ -1774,6 +2428,7 @@ export class Scheduler {
           body: newBody,
           status: 'queued',
           resume: 1,
+          reviewStep: 0,
         });
 
         // Remove markers
@@ -1784,7 +2439,7 @@ export class Scheduler {
         if (fs.existsSync(blockedPath)) fs.unlinkSync(blockedPath);
 
         // Re-write task.md with feedback
-        this.worktreeService.writeTaskFile(task.worktreePath, newBody, true, feedback);
+        this.writeTaskFiles(task, newBody, true, feedback);
       } else {
         this.taskRepo.update(taskId, { status: 'queued', resume: 1 });
       }
@@ -1848,11 +2503,24 @@ export class Scheduler {
     if (!this.stopped) this.triggerTick();
   }
 
-  private killProcessGroup(pid: number): void {
+  private killProcessGroup(pid: number, signal: NodeJS.Signals = 'SIGKILL'): void {
+    if (pid === process.pid) return;
     try {
-      process.kill(-pid, 'SIGKILL');
+      // A paused (SIGSTOP) group cannot act on SIGTERM until it is continued.
+      process.kill(-pid, 'SIGCONT');
     } catch {
-      try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      try { process.kill(pid, 'SIGCONT'); } catch { /* ignore */ }
+    }
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      if (this.isProcessAlive(pid)) {
+        try { process.kill(pid, signal); } catch { /* already dead */ }
+      }
+    }
+    if (signal === 'SIGTERM') {
+      const timer = setTimeout(() => this.killProcessGroup(pid), 10_000);
+      timer.unref();
     }
   }
 
@@ -1879,8 +2547,12 @@ export class Scheduler {
     }
   }
 
+  getDiskReader(): (p: string) => DiskSpace {
+    return this.diskReader;
+  }
+
   private getMonitoredDisks(): MonitoredDisk[] {
-    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test');
+    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
   }
 
   private getBlockingDisk(): MonitoredDisk | undefined {

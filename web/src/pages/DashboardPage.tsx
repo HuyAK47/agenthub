@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans } from '../api/client';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -17,6 +17,8 @@ import {
   Radio,
   Send,
   HardDrive,
+  Play,
+  Pause,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
@@ -25,6 +27,19 @@ import { DailyUsageTable } from '../components/DailyUsageTable';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { QuotaUsage } from '../components/QuotaUsage';
+import { Profile, QuotaUsageItem, ProjectBrain } from '../types/api';
+
+function providerUsage(profiles: Profile[], engine: Profile['engine']): QuotaUsageItem[] {
+  const rows = profiles.filter((profile) => profile.engine === engine).flatMap((profile) => profile.usage || []);
+  const best = new Map<string, QuotaUsageItem>();
+  for (const row of rows) {
+    const key = `${row.grp}:${row.window}`;
+    const previous = best.get(key);
+    if (!previous || row.remainingPct > previous.remainingPct) best.set(key, row);
+  }
+  return [...best.values()].sort((a, b) => a.grp.localeCompare(b.grp) || a.window.localeCompare(b.window));
+}
 
 function RunningDuration({ startedAt }: { startedAt: string }) {
   const [elapsed, setElapsed] = useState('');
@@ -66,10 +81,30 @@ export const DashboardPage: React.FC = () => {
     queryFn: getStatus,
     refetchInterval: 5000,
   });
+  const { data: profiles = [], refetch: refetchProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: getProfiles,
+    refetchInterval: 30_000,
+  });
   const { data: claudeQuota } = useQuery({ queryKey: ['claude-quota'], queryFn: getClaudeQuota, refetchInterval: 30_000 });
+  const { data: brainOverview } = useQuery({ queryKey: ['brain'], queryFn: getBrain, refetchInterval: 5000 });
   const { data: claudeFailover } = useQuery({ queryKey: ['claude-failover'], queryFn: getClaudeFailover, refetchInterval: 5000 });
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
+
+  const queryClient = useQueryClient();
+  const pauseMutation = useMutation({
+    mutationFn: (id: string) => pauseTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
+  const resumeMutation = useMutation({
+    mutationFn: (id: string) => resumeTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
 
   const handleReap = async () => {
     if (isReaping) return;
@@ -241,19 +276,12 @@ export const DashboardPage: React.FC = () => {
 
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} />}
-      {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
-        <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
-        <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
-      </div>}
-      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
-            {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
-            {claudeFailover.evidence && <div className="text-xs text-[var(--text-secondary)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
-          </div>
-          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-white text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
-        </div>
+      {brainOverview?.brains && <div data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+        <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
+        {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
+          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div></div>
+          <div className="flex items-center gap-3 text-xs"><span>{t('dashboard.brainTokens')}: {brain.tokensToday.toLocaleString()}</span><Link to={`/chat/${encodeURIComponent(brain.sessionId)}`} className="text-[var(--t-accent)] hover:underline">{t('dashboard.openBrainChat')}</Link></div>
+        </div>)}
       </div>}
 
       {/* Metric Cards */}
@@ -284,35 +312,222 @@ export const DashboardPage: React.FC = () => {
         })}
       </div>
 
-      <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
-        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">Tiến trình mồ côi</h2>
-            <p className="text-xs text-[var(--text-secondary)]">Các tiến trình còn giữ cwd trong worktree đã dừng.</p>
+      {/* Running workers */}
+      <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
+        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Cpu className="w-5 h-5 text-[var(--t-accent)]" />
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('dashboard.runningWorkers')}</h2>
           </div>
-          <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
-            {isReaping ? 'Đang dọn…' : 'Dọn'} ({orphans.length})
-          </button>
+          <span className="text-xs text-[var(--text-secondary)]">
+            {t('extra.workersExecuting', { count: workers.length })}
+          </span>
         </div>
-        {orphans.length > 0 && (
+
+        {workers.length === 0 ? (
+          <div className="p-8 text-center text-[var(--text-secondary)] text-sm">
+            {t('extra.noWorkers')}
+          </div>
+        ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)]">
-                <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">Task</th></tr>
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] text-xs uppercase font-medium">
+                <tr>
+                  <th className="px-6 py-3">Task</th>
+                  <th className="px-6 py-3">Project</th>
+                  <th className="px-6 py-3">Model</th>
+                  <th className="px-6 py-3">{t('dashboard.thProfile')}</th>
+                  <th className="px-6 py-3">{t('dashboard.thElapsed')}</th>
+                  <th className="px-6 py-3">{t('dashboard.thResources')}</th>
+                  <th className="px-6 py-3 text-right">{t('dashboard.thDetails')}</th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border-subtle)]">
-                {orphans.map((orphan) => <tr key={orphan.pid}>
-                  <td className="px-6 py-3 font-mono">{orphan.pid}</td>
-                  <td className="px-6 py-3 font-mono max-w-sm truncate" title={orphan.cwd}>{orphan.cwd}</td>
-                  <td className="px-6 py-3">{orphan.cpu.toFixed(1)}%</td>
-                  <td className="px-6 py-3">{(orphan.rss / 1024 / 1024).toFixed(1)} MB</td>
-                  <td className="px-6 py-3">{orphan.task?.title || orphan.task?.id || 'Không xác định'}</td>
-                </tr>)}
+                {workers.map((worker) => {
+                  const parts = worker.taskId.includes('/')
+                    ? worker.taskId.split('/')
+                    : worker.taskId.split('~');
+                  const projectId = worker.projectId || parts[0] || 'unknown';
+                  // Requirement 7: if item has title, display title; otherwise taskId
+                  const displayTitle = worker.title ? worker.title : worker.taskId;
+                  const routeId = worker.taskId.replace('/', '~');
+
+                  return (
+                    <tr key={worker.taskId} className="hover:bg-[var(--bg-surface-hover)] transition-colors">
+                      <td className="px-6 py-4">
+                        <Link
+                          to={`/tasks/${encodeURIComponent(routeId)}`}
+                          className="font-medium text-[var(--t-accent)] hover:underline flex items-center gap-1.5"
+                        >
+                          <span>{displayTitle}</span>
+                        </Link>
+                        {worker.title && worker.title !== worker.taskId && (
+                          <div className="text-xs text-[var(--text-muted)] font-mono mt-0.5">{worker.taskId}</div>
+                        )}
+                        {worker.paused && (
+                          <div className="mt-1.5">
+                            <span
+                              data-testid={`worker-paused-${worker.taskId}`}
+                              className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium border ${
+                                worker.pauseReason === 'load'
+                                  ? 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]'
+                                  : 'bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border-[var(--border-subtle)]'
+                              }`}
+                            >
+                              {worker.pauseReason === 'load' ? t('status.pausedOverload') : t('status.paused')}
+                            </span>
+                          </div>
+                        )}
+                        {((worker.noCommitMinutes != null && worker.noCommitMinutes > 0) || worker.isLooping) && (
+                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                            {worker.noCommitMinutes != null && worker.noCommitMinutes > 0 && (
+                              <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]">
+                                {t('extra.noCommit', { minutes: worker.noCommitMinutes })}
+                              </span>
+                            )}
+                            {worker.isLooping && (
+                              <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]">
+                                {t('extra.looping')}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
+                          {projectId}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <ModelBadge model={worker.model} engine={worker.engine} />
+                      </td>
+                      <td className="px-6 py-4 font-medium text-[var(--text-primary)]">{worker.profileName}</td>
+                      <td className="px-6 py-4 text-[var(--text-secondary)]">
+                        <RunningDuration startedAt={worker.startedAt} />
+                      </td>
+                      <td className="px-6 py-4 text-xs text-[var(--text-secondary)] whitespace-nowrap">
+                        <div className="font-mono">
+                          {worker.rss ? `${(worker.rss / (1024 * 1024)).toFixed(0)} MB` : '0 MB'}
+                        </div>
+                        <div className="text-[11px] text-[var(--text-muted)] font-mono">
+                          {(worker.cpu ?? 0).toFixed(1)}% CPU
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-2">
+                          {worker.paused ? (
+                            <button
+                              type="button"
+                              onClick={() => resumeMutation.mutate(worker.taskId)}
+                              disabled={resumeMutation.isPending}
+                              className="px-2.5 py-1 text-xs font-medium rounded-md bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] hover:bg-[color-mix(in_srgb,var(--t-ok)_25%,transparent)] border border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)] inline-flex items-center gap-1 cursor-pointer"
+                              title={t('dashboard.btnResume')}
+                            >
+                              <Play className="w-3 h-3" />
+                              <span>{t('dashboard.btnResume')}</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => pauseMutation.mutate(worker.taskId)}
+                              disabled={pauseMutation.isPending}
+                              className="px-2.5 py-1 text-xs font-medium rounded-md bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] inline-flex items-center gap-1 cursor-pointer"
+                              title={t('dashboard.btnPause')}
+                            >
+                              <Pause className="w-3 h-3" />
+                              <span>{t('dashboard.btnPause')}</span>
+                            </button>
+                          )}
+                          <Link
+                            to={`/tasks/${encodeURIComponent(routeId)}`}
+                            className="text-xs font-medium text-[var(--t-accent)] hover:text-[var(--t-accent)] inline-flex items-center gap-1"
+                          >
+                            {t('common.view')} <ArrowRight className="w-3.5 h-3.5" />
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {/* Review queue */}
+      <ReviewQueue activeTaskId={status.brain?.taskId} />
+
+      {/* Waiting queue */}
+      <WaitingQueue
+        diskFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.freeGB ?? status.disk?.freeGB}
+        diskMinFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.minFreeGB ?? status.disk?.minFreeGB}
+        diskLabel={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.label}
+      />
+
+      {status.overlaps && status.overlaps.length > 0 && (
+        <div
+          data-testid="overlap-warnings"
+          className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4 space-y-2"
+        >
+          <div className="flex items-center gap-2 text-[var(--t-warn)] font-semibold text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{t('dashboard.overlapWarningTitle')}</span>
+          </div>
+          <p className="text-xs text-[var(--text-secondary)]">
+            {t('dashboard.overlapWarningDesc', { count: status.overlaps.length })}
+          </p>
+          <ul className="space-y-1.5 text-xs">
+            {status.overlaps.map((ov) => (
+              <li key={ov.id} className="flex items-center gap-2 text-[var(--text-primary)]">
+                <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-default)]">
+                  {ov.taskId}
+                </span>
+                <span>{ov.content}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
+        {([
+          ['agy', 'Antigravity'],
+          ['codex', 'Codex'],
+          ['claude', 'Claude'],
+        ] as const).map(([engine, label]) => {
+          const engineProfiles = profiles.filter((profile) => profile.engine === engine);
+          return (
+            <div key={engine} className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-xs">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-[var(--text-primary)]">Quota {label}</h2>
+                <span className="text-[11px] text-[var(--text-secondary)]">{engineProfiles.length} hồ sơ</span>
+              </div>
+              <QuotaUsage usage={providerUsage(profiles, engine)} onRefresh={() => { void refetchProfiles(); }} />
+              {engine === 'claude' && engineProfiles.some((profile) => profile.claudeTokens) && (
+                <div className="mt-2 text-xs text-[var(--text-secondary)]">
+                  Token hôm nay: {Math.round(engineProfiles.reduce((sum, profile) => sum + (profile.claudeTokens?.today || 0), 0)).toLocaleString()}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
+        <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
+        <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
+      </div>}
+      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
+            {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">Đang dùng: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? `tài khoản ${claudeFailover.step.profile || 'khác'}` : claudeFailover.step.type === 'apiKey' ? `API key (đã dùng $${claudeFailover.dailyCostUSD.toFixed(2)}/$${claudeFailover.step.dailyCapUSD ?? 0})` : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : 'chờ reset'}</div>}
+            {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
+            {claudeFailover.evidence && <div className="text-xs text-[var(--text-secondary)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
+          </div>
+          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-white text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
+        </div>
+      </div>}
 
       {/* Compact quick chat */}
       <div className="p-4 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-xs transition-colors">
@@ -346,110 +561,35 @@ export const DashboardPage: React.FC = () => {
         </form>
       </div>
 
-      {/* Running workers */}
-      <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
-        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Cpu className="w-5 h-5 text-[var(--t-accent)]" />
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('dashboard.runningWorkers')}</h2>
+      <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
+        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">Tiến trình mồ côi</h2>
+            <p className="text-xs text-[var(--text-secondary)]">Các tiến trình còn giữ cwd trong worktree đã dừng.</p>
           </div>
-          <span className="text-xs text-[var(--text-secondary)]">
-            {t('extra.workersExecuting', { count: workers.length })}
-          </span>
+          <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
+            {isReaping ? 'Đang dọn…' : 'Dọn'} ({orphans.length})
+          </button>
         </div>
-
-        {workers.length === 0 ? (
-          <div className="p-8 text-center text-[var(--text-secondary)] text-sm">
-            {t('extra.noWorkers')}
-          </div>
-        ) : (
+        {orphans.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] text-xs uppercase font-medium">
-                <tr>
-                  <th className="px-6 py-3">Task</th>
-                  <th className="px-6 py-3">Project</th>
-                  <th className="px-6 py-3">Model</th>
-                  <th className="px-6 py-3">{t('dashboard.thProfile')}</th>
-                  <th className="px-6 py-3">{t('dashboard.thElapsed')}</th>
-                  <th className="px-6 py-3 text-right">{t('dashboard.thDetails')}</th>
-                </tr>
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)]">
+                <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">Task</th></tr>
               </thead>
               <tbody className="divide-y divide-[var(--border-subtle)]">
-                {workers.map((worker) => {
-                  const parts = worker.taskId.includes('/')
-                    ? worker.taskId.split('/')
-                    : worker.taskId.split('~');
-                  const projectId = worker.projectId || parts[0] || 'unknown';
-                  // Requirement 7: if item has title, display title; otherwise taskId
-                  const displayTitle = worker.title ? worker.title : worker.taskId;
-                  const routeId = worker.taskId.replace('/', '~');
-
-                  return (
-                    <tr key={worker.taskId} className="hover:bg-[var(--bg-surface-hover)] transition-colors">
-                      <td className="px-6 py-4">
-                        <Link
-                          to={`/tasks/${encodeURIComponent(routeId)}`}
-                          className="font-medium text-[var(--t-accent)] hover:underline flex items-center gap-1.5"
-                        >
-                          <span>{displayTitle}</span>
-                        </Link>
-                        {worker.title && worker.title !== worker.taskId && (
-                          <div className="text-xs text-[var(--text-muted)] font-mono mt-0.5">{worker.taskId}</div>
-                        )}
-                        {((worker.noCommitMinutes != null && worker.noCommitMinutes > 0) || worker.isLooping) && (
-                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                            {worker.noCommitMinutes != null && worker.noCommitMinutes > 0 && (
-                              <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]">
-                                {t('extra.noCommit', { minutes: worker.noCommitMinutes })}
-                              </span>
-                            )}
-                            {worker.isLooping && (
-                              <span className="inline-flex items-center rounded bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]">
-                                {t('extra.looping')}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
-                          {projectId}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <ModelBadge model={worker.model} engine={worker.engine} />
-                      </td>
-                      <td className="px-6 py-4 font-medium text-[var(--text-primary)]">{worker.profileName}</td>
-                      <td className="px-6 py-4 text-[var(--text-secondary)]">
-                        <RunningDuration startedAt={worker.startedAt} />
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <Link
-                          to={`/tasks/${encodeURIComponent(routeId)}`}
-                          className="text-xs font-medium text-[var(--t-accent)] hover:text-[var(--t-accent)] inline-flex items-center gap-1"
-                        >
-                          {t('common.view')} <ArrowRight className="w-3.5 h-3.5" />
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {orphans.map((orphan) => <tr key={orphan.pid}>
+                  <td className="px-6 py-3 font-mono">{orphan.pid}</td>
+                  <td className="px-6 py-3 font-mono max-w-sm truncate" title={orphan.cwd}>{orphan.cwd}</td>
+                  <td className="px-6 py-3">{orphan.cpu.toFixed(1)}%</td>
+                  <td className="px-6 py-3">{(orphan.rss / 1024 / 1024).toFixed(1)} MB</td>
+                  <td className="px-6 py-3">{orphan.task?.title || orphan.task?.id || 'Không xác định'}</td>
+                </tr>)}
               </tbody>
             </table>
           </div>
         )}
       </div>
-
-      {/* Review queue */}
-      <ReviewQueue activeTaskId={status.brain?.taskId} />
-
-      {/* Waiting queue */}
-      <WaitingQueue
-        diskFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.freeGB ?? status.disk?.freeGB}
-        diskMinFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.minFreeGB ?? status.disk?.minFreeGB}
-        diskLabel={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.label}
-      />
 
       {/* Daily Usage Table */}
       <DailyUsageTable />
