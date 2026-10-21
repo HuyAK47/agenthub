@@ -31,7 +31,7 @@ export interface QuietHoursConfig {
 
 export interface NotificationsConfig {
   desktop: boolean;
-  quietHours: QuietHoursConfig;
+  quietHours?: QuietHoursConfig;
 }
 
 export const DEFAULT_QUIET_HOURS_CONFIG: QuietHoursConfig = {
@@ -845,23 +845,27 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
         ? (userConfig.notifications as { desktop: boolean }).desktop
         : true,
-      quietHours: (() => {
-        const raw = (userConfig.notifications as { quietHours?: unknown } | undefined)?.quietHours;
-        if (typeof raw === 'string') {
-          const parts = raw.split('-');
-          if (parts.length === 2) {
-            return { enabled: true, start: parts[0].trim(), end: parts[1].trim() };
+      ...(userConfig.notifications && typeof userConfig.notifications === 'object' && 'quietHours' in userConfig.notifications
+        ? {
+            quietHours: (() => {
+              const raw = (userConfig.notifications as { quietHours?: unknown }).quietHours;
+              if (typeof raw === 'string') {
+                const parts = raw.split('-');
+                if (parts.length === 2) {
+                  return { enabled: true, start: parts[0].trim(), end: parts[1].trim() };
+                }
+              } else if (raw && typeof raw === 'object') {
+                const obj = raw as Record<string, unknown>;
+                return {
+                  enabled: obj.enabled === true,
+                  start: typeof obj.start === 'string' && obj.start.trim() ? obj.start.trim() : DEFAULT_QUIET_HOURS_CONFIG.start,
+                  end: typeof obj.end === 'string' && obj.end.trim() ? obj.end.trim() : DEFAULT_QUIET_HOURS_CONFIG.end,
+                };
+              }
+              return { ...DEFAULT_QUIET_HOURS_CONFIG };
+            })(),
           }
-        } else if (raw && typeof raw === 'object') {
-          const obj = raw as Record<string, unknown>;
-          return {
-            enabled: obj.enabled === true,
-            start: typeof obj.start === 'string' && obj.start.trim() ? obj.start.trim() : DEFAULT_QUIET_HOURS_CONFIG.start,
-            end: typeof obj.end === 'string' && obj.end.trim() ? obj.end.trim() : DEFAULT_QUIET_HOURS_CONFIG.end,
-          };
-        }
-        return { ...DEFAULT_QUIET_HOURS_CONFIG };
-      })(),
+        : {}),
     },
     disk,
     cleanup,
