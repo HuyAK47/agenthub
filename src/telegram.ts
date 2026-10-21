@@ -213,6 +213,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'plan', description: 'Lên kế hoạch: /plan <project> <mục tiêu>' },
   { command: 'drafts', description: 'Task/đợt nháp chờ giao' },
   { command: 'approve', description: 'Duyệt & merge: /approve <id>' },
+  { command: 'deploy', description: 'Chạy deploy gần nhất: /deploy <project>' },
   { command: 'reject', description: 'Trả về: /reject <id> <nhận xét>' },
   { command: 'retry', description: 'Chạy lại task: /retry <id>' },
   { command: 'log', description: 'Xem log cuối của task: /log <id>' },
@@ -1011,6 +1012,10 @@ export class TelegramBotService {
         await this.handleApproveCommand(chatId, argStr);
         break;
 
+      case '/deploy':
+        await this.handleDeployCommand(chatId, argStr);
+        break;
+
       case '/reject':
         await this.handleRejectCommand(chatId, args);
         break;
@@ -1028,6 +1033,27 @@ export class TelegramBotService {
       default:
         await this.sendMessage(chatId, `Lệnh không hợp lệ: ${cmd}. Gõ /help để xem hướng dẫn.`);
         break;
+    }
+  }
+
+  private async handleDeployCommand(chatId: number, argStr: string): Promise<void> {
+    const projectId = argStr.trim();
+    if (!projectId) {
+      const statuses = this.service.getDeployStatuses();
+      await this.sendMessage(chatId, statuses.length
+        ? statuses.map((status) => `${this.escapeHtml(status.projectId)}: ${this.escapeHtml(status.status)}${status.error ? ` — ${this.escapeHtml(status.error)}` : ''}`).join('\n')
+        : 'Chưa có lượt deploy nào. Dùng: /deploy <project>');
+      return;
+    }
+    try {
+      const status = await this.service.rerunDeploy(projectId);
+      await this.sendMessage(chatId, status.status === 'queued' || status.status === 'running'
+        ? `⏳ Deploy ${this.escapeHtml(projectId)} đã vào hàng đợi.`
+        : status.status === 'succeeded' || status.status === 'restarting'
+          ? `✅ Deploy ${this.escapeHtml(projectId)} ${status.status === 'restarting' ? 'đang khởi động lại hub' : 'thành công'}.`
+          : `❌ Deploy ${this.escapeHtml(projectId)} thất bại: ${this.escapeHtml(status.error || status.status)}`);
+    } catch (error) {
+      await this.sendMessage(chatId, `❌ ${this.escapeHtml(error instanceof Error ? error.message : String(error))}`);
     }
   }
 

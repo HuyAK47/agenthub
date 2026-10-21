@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -362,6 +362,41 @@ describe('AgentHub API Extra Endpoints', () => {
       const updated = JSON.parse(res.body);
       expect(updated.maxParallel).toBe(5);
       expect(JSON.parse(updated.checks!)).toEqual(checks);
+    });
+
+    it('does not accept deploy configuration through PATCH and returns a queued deploy immediately', async () => {
+      const repoPath = path.join(tmpDir, 'repo-deploy-api');
+      initGitRepo(repoPath);
+      ctx.projectRepo.insert({
+        id: 'proj-deploy-api',
+        name: 'Project Deploy API',
+        path: repoPath,
+        defaultBranch: 'main',
+        maxParallel: 2,
+      });
+      config.deploy = {
+        'proj-deploy-api': { steps: [['never-run']], timeoutSec: 2, restartHub: false },
+      };
+
+      const patchRes = await server.inject({
+        method: 'PATCH',
+        url: '/api/projects/proj-deploy-api',
+        headers: authHeaders(),
+        payload: { deploy: { steps: [['attacker-command']] }, afterMerge: { steps: [['attacker-command']] } },
+      });
+      expect(patchRes.statusCode).toBe(200);
+      expect(JSON.parse(patchRes.body).afterMerge).toEqual(config.deploy['proj-deploy-api']);
+
+      const rerun = vi.spyOn(ctx.service, 'rerunDeploy');
+      const deployRes = await server.inject({
+        method: 'POST',
+        url: '/api/projects/proj-deploy-api/deploy',
+        headers: authHeaders(),
+      });
+      expect(deployRes.statusCode).toBe(202);
+      expect(JSON.parse(deployRes.body)).toMatchObject({ projectId: 'proj-deploy-api', status: 'queued' });
+      expect(rerun).toHaveBeenCalledWith('proj-deploy-api');
+      rerun.mockRestore();
     });
 
     it('PATCH /api/projects/:id rejects invalid checks schema', async () => {

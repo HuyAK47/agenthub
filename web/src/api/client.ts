@@ -248,6 +248,8 @@ export async function getProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects');
 }
 
+export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+
 export async function createProject(data: CreateProjectInput): Promise<Project> {
   return apiFetch<Project>('/api/projects', {
     method: 'POST',
