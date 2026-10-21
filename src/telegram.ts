@@ -20,6 +20,7 @@ import {
   getMinutesSinceTime,
 } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
+import { projectSettings, mergeProjectSettings } from './projects/settings.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -201,7 +202,8 @@ export function readTelegramToken(tokenPath: string): string | null {
 
 /** Shown by Telegram when the user types "/" (registered with setMyCommands on start). */
 export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string }> = [
-  { command: 'brain', description: 'Bộ não đang làm gì · /brain mode off|suggest|auto' },
+  { command: 'use', description: 'Chọn dự án: /use <dự án> · xem dự án đang chọn: /use' },
+  { command: 'brain', description: 'Bộ não: /brain · /brain mode [dự án] off|suggest|auto|external|inherit' },
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
@@ -271,6 +273,8 @@ export class TelegramBotService {
   private chatReplies = new Map<string, ChatReplyState>();
   private chatSessions = new Map<number, string>();
   private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string }>();
+  /** Per-chat selected project (persisted in config.telegram.chats). */
+  private selectedProject = new Map<number, string>();
 
   constructor(opts: TelegramServiceOptions) {
     this.config = opts.config;
@@ -291,6 +295,13 @@ export class TelegramBotService {
       this.token = opts.tokenOverride;
     } else {
       this.refreshToken();
+    }
+
+    // Restore per-chat project selection from config
+    for (const chat of this.config.telegram?.chats || []) {
+      if (chat.kind === 'chat' && chat.projectId) {
+        this.selectedProject.set(chat.id, chat.projectId);
+      }
     }
   }
 
@@ -922,6 +933,10 @@ export class TelegramBotService {
         await this.sendMessage(chatId, this.renderHelp());
         break;
 
+      case '/use':
+        await this.handleUseCommand(chatId, argStr);
+        break;
+
       case '/status':
         await this.handleStatusCommand(chatId);
         break;
@@ -998,6 +1013,7 @@ export class TelegramBotService {
     const current = this.config.brain;
     const parts = argStr.split(/\s+/).filter(Boolean);
     if (parts[0] !== 'mode') {
+      // /brain with no args: show overview listing per-project brains
       const brain = this.service.getStatus().brain;
       const detailed = brain as (typeof brain & {
         source?: string;
@@ -1013,21 +1029,142 @@ export class TelegramBotService {
         await this.sendMessage(chatId, text);
         return;
       }
+      // Per-project listing
+      const projects = this.projectRepo.getAll();
+      let text = `🧠 Bộ não toàn cục: <b>${current.mode}</b> · model <b>${current.model}</b> · tối đa ${current.maxTurnsPerHour} lượt/giờ`;
       const activity = brain ? ` · trạng thái <b>${this.brainLabel(brain)}</b>` : '';
-      await this.sendMessage(chatId, `🧠 Bộ não: <b>${current.mode}</b> · model <b>${current.model}</b> · tối đa ${current.maxTurnsPerHour} lượt/giờ${activity}`);
+      text += activity;
+      if (projects.length > 0) {
+        text += '\n\n<b>Bộ não từng dự án:</b>';
+        for (const proj of projects) {
+          const ps = projectSettings(proj);
+          const mode = ps.brain.mode === 'inherit' ? `${current.mode} (inherit)` : ps.brain.mode;
+          text += `\n• <code>${this.escapeHtml(proj.id)}</code>: <b>${mode}</b>`;
+        }
+      }
+      await this.sendMessage(chatId, text);
       return;
     }
-    const mode = parts[1];
-    if (mode !== 'off' && mode !== 'suggest' && mode !== 'auto') {
-      await this.sendMessage(chatId, 'Cú pháp: /brain mode off|suggest|auto');
+    // /brain mode [<project>] <mode>
+    const remaining = parts.slice(1);
+    if (remaining.length === 1) {
+      // Global mode: /brain mode <mode>
+      const mode = remaining[0];
+      if (mode !== 'off' && mode !== 'suggest' && mode !== 'auto') {
+        await this.sendMessage(chatId, 'Cú pháp: /brain mode off|suggest|auto\nTheo dự án: /brain mode <dự án> off|suggest|auto|external|inherit');
+        return;
+      }
+      this.config.brain.mode = mode;
+      saveConfig(this.config.hubHome, { brain: { mode } });
+      await this.sendMessage(chatId, `🧠 Đã chuyển bộ não toàn cục sang chế độ <b>${mode}</b>.`);
       return;
     }
-    this.config.brain.mode = mode;
-    saveConfig(this.config.hubHome, { brain: { mode } });
-    await this.sendMessage(chatId, `🧠 Đã chuyển bộ não sang chế độ <b>${mode}</b>.`);
+    if (remaining.length === 2) {
+      // Per-project mode: /brain mode <project> <mode>
+      const projectId = remaining[0];
+      const mode = remaining[1];
+      const validModes = ['off', 'suggest', 'auto', 'external', 'inherit'];
+      if (!validModes.includes(mode)) {
+        await this.sendMessage(chatId, `Chế độ không hợp lệ: ${mode}. Sử dụng: off, suggest, auto, external, inherit`);
+        return;
+      }
+      const project = this.projectRepo.get(projectId);
+      if (!project) {
+        await this.sendMessage(chatId, `❌ Không tìm thấy dự án "${this.escapeHtml(projectId)}".`);
+        return;
+      }
+      const current = projectSettings(project);
+      const updated = mergeProjectSettings(current, { brain: { mode: mode as 'off' | 'suggest' | 'auto' | 'external' | 'inherit' } });
+      this.projectRepo.update(project.id, { settings: JSON.stringify(updated) });
+      await this.sendMessage(chatId, `🧠 Đã chuyển bộ não dự án <b>${this.escapeHtml(projectId)}</b> sang chế độ <b>${mode}</b>.`);
+      return;
+    }
+    await this.sendMessage(chatId, 'Cú pháp: /brain mode off|suggest|auto\nTheo dự án: /brain mode <dự án> off|suggest|auto|external|inherit');
+  }
+
+  private async handleUseCommand(chatId: number, argStr: string): Promise<void> {
+    const trimmed = argStr.trim();
+    if (!trimmed) {
+      // /use with no args: show current selection
+      const current = this.selectedProject.get(chatId);
+      if (current) {
+        const proj = this.projectRepo.get(current);
+        const name = proj?.name ? `${proj.name} (${current})` : current;
+        await this.sendMessage(chatId, `📁 Dự án đang chọn: <b>${this.escapeHtml(name)}</b>\n\nGõ <code>/use &lt;dự án&gt;</code> để đổi, hoặc <code>/use none</code> để bỏ chọn.`);
+      } else {
+        const projects = this.projectRepo.getAll();
+        if (projects.length === 0) {
+          await this.sendMessage(chatId, 'ℹ️ Chưa chọn dự án nào và không có dự án nào trong hệ thống.');
+          return;
+        }
+        const keyboard: InlineKeyboardButton[][] = projects.map((p) => [
+          { text: p.name ? `${p.name} (${p.id})` : p.id, callback_data: `use:select:${p.id}` },
+        ]);
+        await this.sendMessage(chatId, '📁 Chưa chọn dự án nào. Chọn dự án:', { inline_keyboard: keyboard });
+      }
+      return;
+    }
+    if (trimmed === 'none') {
+      this.selectedProject.delete(chatId);
+      this.persistSelectedProject(chatId, undefined);
+      await this.sendMessage(chatId, '📁 Đã bỏ chọn dự án. Tin nhắn sẽ gửi tới bộ não hệ thống.');
+      return;
+    }
+    const project = this.projectRepo.get(trimmed);
+    if (!project) {
+      await this.sendMessage(chatId, `❌ Không tìm thấy dự án "${this.escapeHtml(trimmed)}".`);
+      return;
+    }
+    this.selectedProject.set(chatId, project.id);
+    this.persistSelectedProject(chatId, project.id);
+    const name = project.name ? `${project.name} (${project.id})` : project.id;
+    await this.sendMessage(chatId, `📁 Đã chọn dự án <b>${this.escapeHtml(name)}</b>. Tin nhắn sẽ được gửi tới bộ não dự án này.`);
+  }
+
+  private persistSelectedProject(chatId: number, projectId: string | undefined): void {
+    const chats = (this.config.telegram.chats || []).filter((c) => c.id !== chatId);
+    // Find existing chat entry to preserve name/username
+    const existing = (this.config.telegram.chats || []).find((c) => c.id === chatId);
+    if (projectId) {
+      chats.push({
+        id: chatId,
+        name: existing?.name || `Chat ${chatId}`,
+        ...(existing?.username ? { username: existing.username } : {}),
+        kind: 'chat',
+        projectId,
+      });
+    } else if (existing) {
+      const { projectId: _removed, kind: _removedKind, ...rest } = existing;
+      chats.push(rest);
+    }
+    this.config.telegram.chats = chats;
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+  }
+
+  /** Get the project selected for this chat via /use, if any. */
+  getSelectedProject(chatId: number): string | undefined {
+    return this.selectedProject.get(chatId);
   }
 
   private sessionIdForChat(chatId: number): string {
+    // If a project is selected via /use, route to that project's brain or chat session
+    const selectedProjectId = this.selectedProject.get(chatId);
+    if (selectedProjectId) {
+      const project = this.projectRepo.get(selectedProjectId);
+      const ps = projectSettings(project);
+      const globalMode = this.config.brain;
+      const mode = ps.brain.mode === 'inherit' ? globalMode.mode : ps.brain.mode;
+      if (mode === 'external') {
+        // External mode: use a project-scoped chat session (kind 'chat')
+        const sessionId = `telegram:${chatId}:${selectedProjectId}`;
+        this.chatSessions.set(chatId, sessionId);
+        return sessionId;
+      }
+      if (mode !== 'off') {
+        return `brain:${selectedProjectId}`;
+      }
+    }
     if (this.brainSession && this.config.brain?.mode && this.config.brain.mode !== 'off') return 'brain';
     const existing = this.chatSessions.get(chatId);
     if (existing) return existing;
@@ -1258,6 +1395,22 @@ export class TelegramBotService {
     }
 
     switch (domain) {
+      case 'use': {
+        if (action === 'select') {
+          const projectId = taskIdOrParam;
+          const project = this.projectRepo.get(projectId);
+          if (!project) {
+            await this.answerCallbackQuery(query.id, 'Dự án không tồn tại.');
+            return;
+          }
+          this.selectedProject.set(chatId, project.id);
+          this.persistSelectedProject(chatId, project.id);
+          const name = project.name ? `${project.name} (${project.id})` : project.id;
+          await this.answerCallbackQuery(query.id, `Đã chọn ${project.id}`);
+          await this.sendMessage(chatId, `📁 Đã chọn dự án <b>${this.escapeHtml(name)}</b>. Tin nhắn sẽ được gửi tới bộ não dự án này.`);
+        }
+        break;
+      }
       case 'decision': {
         const decisionId = taskIdOrParam;
         if (action !== 'agree' && action !== 'reject') {
