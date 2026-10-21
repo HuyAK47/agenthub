@@ -55,9 +55,10 @@ const BROWSER_OPENERS = [
  * để CLI vẫn coi là mở thành công và tiếp tục chờ mã xác thực.
  * Đặt AGENTHUB_LOGIN_OPEN_BROWSER=1 để bật lại hành vi cũ.
  */
-export function applyNoBrowserEnv(env: Record<string, string>, hubHome: string): void {
+export function applyNoBrowserEnv(env: Record<string, string>, hubHome?: string): void {
   if (process.env.AGENTHUB_LOGIN_OPEN_BROWSER === '1') return;
-  const shimDir = path.join(hubHome, 'no-browser-bin');
+  const base = hubHome || process.env.AGENTHUB_HOME || path.join(os.tmpdir(), 'agenthub-no-browser');
+  const shimDir = path.join(base, 'no-browser-bin');
   fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
   for (const name of BROWSER_OPENERS) {
     const file = path.join(shimDir, name);
