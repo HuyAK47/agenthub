@@ -756,6 +756,7 @@ export class ChatService {
     this.emitEvent('chat.message', {
       sessionId,
       messageId: userMessageId,
+      assistantMessageId,
       role: 'user',
       content: text,
       ...(opts.fromQueue ? { fromQueue: true } : {}),

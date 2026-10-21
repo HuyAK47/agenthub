@@ -276,7 +276,11 @@ export class TelegramBotService {
   private chatReplies = new Map<string, ChatReplyState>();
   /** Telegram messages waiting for a busy session; each gets the reply of its queued turn. */
   private queuedChatTurns = new Map<string, Array<{ chatId: number; messageId: number }>>();
-  private brainQuestions = new Map<string, number[]>();
+  private brainQuestions = new Map<string, Map<string, {
+    chatId: number;
+    userMessageId?: string;
+    assistantMessageId?: string;
+  }>>();
   private chatSessions = new Map<number, string>();
   private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string }>();
   /** Per-chat selected project (persisted in config.telegram.chats). */
@@ -1382,13 +1386,26 @@ export class TelegramBotService {
     if (!this.chatService) return;
     const data = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId : taskId;
-    if (type === 'brain.question_asked' && typeof data.sourceChatId === 'number' && sessionId) {
-      const questions = this.brainQuestions.get(sessionId) || [];
-      questions.push(data.sourceChatId);
+    if (type === 'brain.question_asked' && typeof data.questionId === 'string' && typeof data.sourceChatId === 'number' && sessionId) {
+      const questions = this.brainQuestions.get(sessionId) || new Map();
+      questions.set(data.questionId, {
+        chatId: data.sourceChatId,
+        ...(typeof data.userMessageId === 'string' ? { userMessageId: data.userMessageId } : {}),
+        ...(typeof data.assistantMessageId === 'string' ? { assistantMessageId: data.assistantMessageId } : {}),
+      });
       this.brainQuestions.set(sessionId, questions);
       return;
     }
     if (!sessionId) return;
+    if (type === 'chat.message' && data.role === 'user' && typeof data.content === 'string' && typeof data.messageId === 'string') {
+      const questionId = data.content.match(/CÂU HỎI TỪ TRỢ LÝ \[([^\]]+)\]/)?.[1];
+      const questions = questionId ? this.brainQuestions.get(sessionId) : undefined;
+      const question = questionId ? questions?.get(questionId) : undefined;
+      if (question) {
+        question.userMessageId = data.messageId;
+        if (typeof data.assistantMessageId === 'string') question.assistantMessageId = data.assistantMessageId;
+      }
+    }
     if (type === 'chat.message' && data.role === 'user' && data.fromQueue === true) {
       const next = this.queuedChatTurns.get(sessionId)?.shift();
       if (next) {
@@ -1401,12 +1418,17 @@ export class TelegramBotService {
     const reply = this.chatReplies.get(sessionId);
     const pending = this.pendingAutoTasks.get(sessionId);
     if (type === 'chat.done') {
-      const questionChat = this.brainQuestions.get(sessionId)?.shift();
-      if (questionChat !== undefined) {
-        if (this.brainQuestions.get(sessionId)?.length === 0) this.brainQuestions.delete(sessionId);
+      const questions = this.brainQuestions.get(sessionId);
+      const questionEntry = typeof data.messageId === 'string'
+        ? [...(questions?.entries() || [])].find(([, question]) => question.assistantMessageId === data.messageId)
+        : undefined;
+      if (questionEntry) {
+        const [questionId, question] = questionEntry;
+        questions?.delete(questionId);
+        if (questions?.size === 0) this.brainQuestions.delete(sessionId);
         try {
           const answer = this.chatService.listMessages(sessionId, 5).messages.filter((m) => m.role === 'assistant').pop()?.content || 'Bộ não đã trả lời.';
-          void this.sendMessage(questionChat, `🧠 <b>Bộ não trả lời</b>\n${this.escapeHtml(answer)}`);
+          void this.sendMessage(question.chatId, `🧠 <b>Bộ não trả lời</b>\n${this.escapeHtml(answer)}`);
         } catch { /* best effort */ }
       }
       this.pendingAutoTasks.delete(sessionId);

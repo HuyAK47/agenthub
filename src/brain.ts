@@ -344,7 +344,13 @@ export function registerBrainRoutes(
     const sourceChatId = body.sourceSessionId ? appService.chatService.getTelegramChat(body.sourceSessionId) : undefined;
     const questionId = crypto.randomUUID();
     const result = appService.chatService.sendMessage(sessionId, `CÂU HỎI TỪ TRỢ LÝ [${questionId}] (cần quyết định): ${body.question.trim()}`, { queueIfBusy: true });
-    appService.scheduler.getEventBus().emit('brain.question_asked', sessionId, { questionId, sourceChatId, projectId: body.projectId || null });
+    appService.scheduler.getEventBus().emit('brain.question_asked', sessionId, {
+      questionId,
+      sourceChatId,
+      userMessageId: result.userMessageId || undefined,
+      assistantMessageId: result.assistantMessageId || undefined,
+      projectId: body.projectId || null,
+    });
     return result;
   });
 
