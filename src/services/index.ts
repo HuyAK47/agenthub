@@ -51,6 +51,7 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
+import { SetupManager } from '../tools/setup.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -331,6 +332,7 @@ export const UpdateConfigSchema = z.object({
     waitingMinutes: z.number().positive().optional(),
   }).optional(),
   autoFixOnFail: z.boolean().optional(),
+  tools: z.object({ installers: z.record(z.object({ package: z.string().optional(), command: z.array(z.string()).optional(), versionArgs: z.array(z.string()).optional(), docsUrl: z.string().url().optional() })) }).optional(),
   chat: z
     .object({
       claudeBin: z.string().optional(),
@@ -681,7 +683,21 @@ export class AppService {
     public telegramBotService?: TelegramBotService,
     public knowledgeRepo?: KnowledgeRepo,
     public taskBatchRepo?: TaskBatchRepo,
+    public setupManager?: SetupManager,
   ) {}
+
+  async getSetupStatus() {
+    if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng');
+    const tools = await this.setupManager.status();
+    const profiles = this.listProfiles();
+    let gitVersion: string | null = null;
+    try { gitVersion = execFileSync('git', ['--version'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { /* optional */ }
+    let mcpRegistered = false;
+    try { mcpRegistered = fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8').includes('agenthub'); } catch { /* optional */ }
+    return { node: { version: process.versions.node, ok: Number(process.versions.node.split('.')[0]) >= 22 }, git: { version: gitVersion, installed: Boolean(gitVersion) }, tools, profiles, mcpRegistered, serviceRunning: true, ...this.setupManager.getSetupState() };
+  }
+  installSetupTool(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.install(tool); }
+  completeSetup(skip = false) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.complete(skip); }
 
   listClaudeSessions(activeWithinMin = 5) {
     if (!this.claudeSessionRepo) return [];
@@ -909,6 +925,7 @@ export class AppService {
         allowedChatsCount: this.config.telegram?.allowedChatIds?.length ?? 0,
         hasToken: Boolean(this.telegramBotService?.hasValidToken()),
       },
+      tools: this.config.tools,
     };
   }
 

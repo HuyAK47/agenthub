@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { AgyEngine } from './engines/index.js';
-import { runDoctor, formatDoctorText, formatDoctorJson, DoctorReport, findAgyPath, findCodexPath } from './doctor.js';
+import { runDoctor, formatDoctorText, formatDoctorJson, DoctorReport } from './doctor.js';
 import { cmdBrain } from './brain.js';
 import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
@@ -22,6 +22,7 @@ import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './upd
 
 export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
 import { assertWorkerMayControlHub } from './worker-guard.js';
+import { SetupManager } from './tools/setup.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -166,13 +167,19 @@ export async function cmdRollback(extraArgs: string[] = [], projectRootOverride?
 
 export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = []): Promise<void> {
   console.log('==> Thiết lập AgentHub lần đầu');
-  const checks = [
-    ['agy', findAgyPath() !== null, 'Cài Antigravity CLI (agy), sau đó đăng nhập trong Profiles.'],
-    ['codex', findCodexPath() !== null, 'Cài Codex CLI, sau đó đăng nhập trong Profiles.'],
-    ['claude', Boolean(findClaudeBin(config.chat.claudeBin)), 'Cài Claude Code để điều phối và dùng MCP.'],
-  ] as const;
-  for (const [name, available, hint] of checks) {
-    console.log(`  ${available ? '✓' : '!'} ${name}: ${available ? 'đã tìm thấy' : `chưa tìm thấy — ${hint}`}`);
+  const setup = new SetupManager(config);
+  const installArg = extraArgs.find((arg) => arg.startsWith('--install='))?.slice('--install='.length) || (extraArgs.includes('--install') ? extraArgs[extraArgs.indexOf('--install') + 1] : undefined);
+  const installRequested = installArg?.split(',').filter(Boolean) || [];
+  const yes = extraArgs.includes('--yes');
+  for (const tool of await setup.status()) console.log(`  ${tool.installed ? '✓' : '!'} ${tool.id}: ${tool.installed ? `${tool.version || 'đã tìm thấy'} (${tool.path})` : tool.manual ? `cài thủ công — ${tool.docsUrl || 'xem hướng dẫn'}` : 'chưa tìm thấy'}`);
+  if (installRequested.length > 0 && !yes) {
+    throw new Error('Cần xác nhận cài đặt; dùng `agenthub setup --install=claude,codex --yes`');
+  }
+  for (const tool of installRequested) {
+    const status = (await setup.status()).find((item) => item.id === tool);
+    if (status?.installed) { console.log(`✓ ${tool} đã có sẵn`); continue; }
+    const { jobId } = await setup.install(tool);
+    console.log(`✓ Đã khởi chạy bộ cài ${tool} (${jobId})`);
   }
 
   const tokenPath = config.tokenPath || getTokenPath();

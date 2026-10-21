@@ -123,6 +123,25 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.get('/api/setup/status', async () => service.getSetupStatus());
+  fastify.post('/api/setup/install/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    return reply.status(202).send(await service.installSetupTool(tool));
+  });
+  fastify.post('/api/setup/complete', async () => service.completeSetup(false));
+  fastify.post('/api/setup/skip', async () => service.completeSetup(true));
+  fastify.post('/api/setup/mcp', async () => {
+    const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const cliPath = path.join(projectRoot, 'dist', 'cli.js');
+    const { execFile } = await import('node:child_process');
+    return new Promise((resolve, reject) => {
+      execFile('claude', ['mcp', 'add', '--scope', 'user', 'agenthub', '--', process.execPath, cliPath, 'mcp'], { timeout: 60_000 }, (error, stdout, stderr) => {
+        if (error) return reject(new HttpError(500, 'mcp_install_failed', stderr || error.message));
+        resolve({ ok: true, output: `${stdout}${stderr}` });
+      });
+    });
+  });
+
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
   fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
 
