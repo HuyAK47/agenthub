@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { parseResetTime, lastNLines, AgyEngine, CodexEngine } from '../src/engines/index.js';
 import { getModelFamily, getModelEngine } from '../src/quota/index.js';
+import { loadConfig } from '../src/config.js';
 
 describe('parseResetTime', () => {
   it('parses "Resets in 4h54m26s" to seconds + 60s buffer', () => {
@@ -124,5 +128,99 @@ describe('lastNLines', () => {
 
   it('returns all lines if fewer than N', () => {
     expect(lastNLines('a\nb', 5)).toBe('a\nb');
+  });
+});
+
+describe('CodexEngine sandbox configuration', () => {
+  it('defaults codexSandbox to off in config and supports workspace-write', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-config-'));
+    try {
+      // Default config
+      const defaultCfg = loadConfig(tmp);
+      expect(defaultCfg.workers.codexSandbox).toBe('off');
+
+      // Config with workspace-write
+      fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ workers: { codexSandbox: 'workspace-write' } }));
+      const customCfg = loadConfig(tmp);
+      expect(customCfg.workers.codexSandbox).toBe('workspace-write');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('passes --sandbox workspace-write when configured and --dangerously-bypass-approvals-and-sandbox when off', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-sandbox-'));
+    try {
+      const dumpScript = path.join(tmp, 'dump-args.mjs');
+      fs.writeFileSync(
+        dumpScript,
+        `#!/usr/bin/env node
+import fs from 'node:fs';
+fs.writeFileSync(process.argv[process.argv.length - 1], JSON.stringify(process.argv));
+process.exit(0);
+`,
+        { mode: 0o755 },
+      );
+
+      const profile = {
+        name: 'test-codex',
+        engine: 'codex',
+        kind: 'default',
+        home: null,
+        email: null,
+        enabled: 1,
+        autoCreated: 0,
+        createdAt: '2026-01-01',
+      };
+
+      const outOff = path.join(tmp, 'args-off.json');
+      const engineOff = new CodexEngine(dumpScript, 'off');
+      const childOff = engineOff.spawn({
+        profile,
+        model: 'codex:gpt-5.6-luna',
+        cwd: tmp,
+        prompt: outOff,
+        logPath: path.join(tmp, 'off.log'),
+        codexSandbox: 'off',
+      });
+      await new Promise<void>((resolve) => childOff.on('exit', () => resolve()));
+      const argsOff: string[] = JSON.parse(fs.readFileSync(outOff, 'utf8'));
+      expect(argsOff).toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(argsOff).not.toContain('--sandbox');
+
+      const outWrite = path.join(tmp, 'args-write.json');
+      const engineWrite = new CodexEngine(dumpScript, 'workspace-write');
+      const childWrite = engineWrite.spawn({
+        profile,
+        model: 'codex:gpt-5.6-luna',
+        cwd: tmp,
+        prompt: outWrite,
+        logPath: path.join(tmp, 'write.log'),
+        codexSandbox: 'workspace-write',
+      });
+      await new Promise<void>((resolve) => childWrite.on('exit', () => resolve()));
+      const argsWrite: string[] = JSON.parse(fs.readFileSync(outWrite, 'utf8'));
+      expect(argsWrite).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(argsWrite).toContain('--sandbox');
+      expect(argsWrite[argsWrite.indexOf('--sandbox') + 1]).toBe('workspace-write');
+
+      // readOnly mode always uses --sandbox read-only
+      const outReadOnly = path.join(tmp, 'args-readonly.json');
+      const childReadOnly = engineWrite.spawn({
+        profile,
+        model: 'codex:gpt-5.6-luna',
+        cwd: tmp,
+        prompt: outReadOnly,
+        logPath: path.join(tmp, 'readonly.log'),
+        readOnly: true,
+        codexSandbox: 'workspace-write',
+      });
+      await new Promise<void>((resolve) => childReadOnly.on('exit', () => resolve()));
+      const argsReadOnly: string[] = JSON.parse(fs.readFileSync(outReadOnly, 'utf8'));
+      expect(argsReadOnly).toContain('--sandbox');
+      expect(argsReadOnly[argsReadOnly.indexOf('--sandbox') + 1]).toBe('read-only');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

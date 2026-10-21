@@ -1193,7 +1193,37 @@ describe('Checking after worker completion', () => {
     scheduler.stop();
   });
 
-  it('logs console.error when runChecksForTask throws during handleRunCompletion if not stopped, and silences if stopped', async () => {
+  it('starts completion handling for every finished task before awaiting any completion', async () => {
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const schedulerInternal = scheduler as unknown as {
+      isProcessAlive: (pid: number | null, pidStart?: number | null) => boolean;
+      running: Map<string, unknown>;
+      checkRunningTasks: () => Promise<void>;
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+    };
+    const firstCompletion = new Promise<void>(() => {});
+    const completionSpy = vi.spyOn(schedulerInternal, 'handleRunCompletion')
+      .mockImplementation((taskId) => taskId === 'test-project/t1' ? firstCompletion : Promise.resolve());
+    vi.spyOn(schedulerInternal, 'isProcessAlive').mockReturnValue(false);
+
+    const runningTask = { pid: 999999, pidStart: null };
+    schedulerInternal.running.set('test-project/t1', runningTask);
+    schedulerInternal.running.set('test-project/t2', runningTask);
+
+    const checkPromise = schedulerInternal.checkRunningTasks();
+    await vi.waitFor(() => {
+      expect(completionSpy).toHaveBeenCalledWith('test-project/t2', runningTask);
+    });
+
+    expect(completionSpy).toHaveBeenCalledTimes(2);
+    scheduler.stop();
+    void checkPromise;
+  });
+
+  it('logs error on completion failure only when not stopped', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);
@@ -1248,31 +1278,44 @@ describe('Checking after worker completion', () => {
       recoverFinishedWork: (run: unknown) => boolean;
       running: Map<string, unknown>;
       checkRunningTasks: () => Promise<void>;
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
     };
 
     vi.spyOn(schedulerInternal, 'isProcessAlive').mockReturnValue(false);
     vi.spyOn(schedulerInternal, 'recoverFinishedWork').mockReturnValue(false);
-    vi.spyOn(scheduler, 'runChecksForTask').mockRejectedValue(new Error('simulated check error'));
+    const completionSpy = vi.spyOn(schedulerInternal, 'handleRunCompletion');
+    const checkSpy = vi.spyOn(scheduler, 'runChecksForTask').mockRejectedValue(new Error('simulated check error'));
 
-    // Case 1: scheduler is running (not stopped) -> console.error is called
-    schedulerInternal.running.set('test-project/t1', fakeRt);
-    await schedulerInternal.checkRunningTasks();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    try {
+      // Case 1: scheduler is running (not stopped) -> console.error is called
+      schedulerInternal.running.set('test-project/t1', fakeRt);
+      await schedulerInternal.checkRunningTasks();
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(
+          '[scheduler] handleRunCompletion failed for test-project/t1:',
+          expect.any(Error),
+        );
+      });
+      await completionSpy.mock.results[0]?.value;
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[scheduler] handleRunCompletion failed for test-project/t1:',
-      expect.any(Error),
-    );
+      // Case 2: scheduler is stopped -> console.error is NOT called
+      errorSpy.mockClear();
+      checkSpy.mockImplementationOnce(async () => {
+        scheduler.stop();
+        throw new Error('simulated check error');
+      });
+      schedulerInternal.running.set('test-project/t1', fakeRt);
+      await schedulerInternal.checkRunningTasks();
+      await vi.waitFor(() => {
+        expect(checkSpy).toHaveBeenCalledTimes(2);
+      });
+      await completionSpy.mock.results[1]?.value;
 
-    // Case 2: scheduler is stopped -> console.error is NOT called
-    errorSpy.mockClear();
-    scheduler.stop();
-    schedulerInternal.running.set('test-project/t1', fakeRt);
-    await schedulerInternal.checkRunningTasks();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(errorSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      scheduler.stop();
+      errorSpy.mockRestore();
+    }
   });
 });
 

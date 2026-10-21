@@ -323,7 +323,7 @@ Cách dùng:
   agenthub status                     Xem trạng thái
   agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
   agenthub usage                      Xem usage quota các hồ sơ
-  agenthub profile list|check|login|add|rename|remove   Quản lý hồ sơ
+  agenthub profile list|check|login|add|import-tokens|rename|remove   Quản lý hồ sơ
   agenthub project add <name> <path>  Thêm project
   agenthub task add|list|show|log     Quản lý task
   agenthub review <id> --approve [--merge]  Duyệt task, có thể merge vào base worktree
@@ -710,8 +710,67 @@ export async function cmdProfile(
       break;
     }
 
+    case 'import-tokens': {
+      const sourceArg = extraArgs[0];
+      const accountTypeArg = extraArgs.find((arg) => arg.startsWith('--account-type='))?.split('=')[1]
+        || (extraArgs.includes('--account-type') ? extraArgs[extraArgs.indexOf('--account-type') + 1] : 'personal');
+
+      if (!sourceArg) {
+        console.error('Cách dùng: agenthub profile import-tokens <đường_dẫn_file_json | chuỗi_json> [--account-type personal|team|api]');
+        process.exitCode = 1;
+        break;
+      }
+
+      let payloadRaw: unknown;
+      if (fs.existsSync(sourceArg)) {
+        try {
+          payloadRaw = JSON.parse(fs.readFileSync(sourceArg, 'utf8'));
+        } catch {
+          console.error(`Lỗi: Không thể phân tích cú pháp JSON từ file "${sourceArg}"`);
+          process.exitCode = 1;
+          break;
+        }
+      } else {
+        try {
+          payloadRaw = JSON.parse(sourceArg);
+        } catch {
+          console.error('Lỗi: Tham số không phải đường dẫn file tồn tại và cũng không phải chuỗi JSON hợp lệ');
+          process.exitCode = 1;
+          break;
+        }
+      }
+
+      console.log('Đang kiểm tra và nhập tài khoản Antigravity từ Cockpit token...');
+      try {
+        const result = await ctx.service.importAgyTokens({
+          tokens: payloadRaw,
+          accountType: accountTypeArg,
+        }, { verify: false });
+
+        console.log(`\nKết quả xử lý (${result.total} mục):`);
+        for (const item of result.results) {
+          if (item.status === 'ok') {
+            console.log(`  ✓ ${item.name} (${item.email}): ${item.message}`);
+          } else {
+            console.log(`  ✗ ${item.name || 'n/a'} (${item.email || 'n/a'}): ${item.message}`);
+          }
+        }
+        console.log(`\nTổng kết: ${result.successCount} thành công, ${result.failedCount} thất bại.`);
+        if (result.successCount > 0) {
+          console.log('Kiểm tra lại với agy: agenthub profile check <tên>');
+        }
+        if (result.failedCount > 0 && result.successCount === 0) {
+          process.exitCode = 1;
+        }
+      } catch (err) {
+        console.error('Lỗi khi nhập tokens:', err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+      break;
+    }
+
     default:
-      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>|add <tên>|rename <cũ> <mới>|remove <tên>');
+      console.log('Cách dùng: agenthub profile list|check [tên]|login <tên>|add <tên>|import-tokens <file|json>|rename <cũ> <mới>|remove <tên>');
   }
 
   ctx.db.close();

@@ -154,7 +154,7 @@ export class DeployService {
         write(`remote push ${definition.push.remote} ${definition.push.from}:refs/heads/${definition.push.to}\n${pushed.output}`);
         if (pushed.code !== 0) throw new Error(`git push thất bại (exit ${pushed.code})`);
       }
-      status.status = definition.restartHub && this.isHubProject(project) ? 'restarting' : 'succeeded';
+      status.status = definition.restartHub && this.isHubProject(project, worktree) ? 'restarting' : 'succeeded';
       status.finishedAt = new Date().toISOString();
       write(status.status === 'restarting' ? 'deploy completed; hub is restarting' : 'deploy succeeded');
       if (status.status === 'restarting') {
@@ -175,8 +175,8 @@ export class DeployService {
     return status;
   }
 
-  private isHubProject(project: ProjectRow): boolean {
-    try { return fs.realpathSync(project.path) === fs.realpathSync(hubPackageRoot); } catch { return false; }
+  private isHubProject(project: ProjectRow, worktree: string): boolean {
+    return isRunningHubCheckout([worktree, project.path], hubPackageRoot);
   }
 
   private resolveWorktree(project: ProjectRow): string | null {
@@ -192,7 +192,7 @@ export class DeployService {
   }
 
   private restartHub(status: DeployStatus): void {
-    const command = process.platform === 'darwin' ? 'launchctl' : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+    const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
     const args = process.platform === 'darwin' ? ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] : ['--user', 'restart', 'agenthub', '--no-block'];
     const statePath = path.join(this.config.hubHome, 'deploy-restart.json');
     fs.writeFileSync(statePath, JSON.stringify({ projectId: status.projectId, commit: status.commit, logPath: status.logPath }));
@@ -227,4 +227,18 @@ export class DeployService {
     if (!this.definition(projectId) || !this.projectRepo.get(projectId)) return { projectId, status: 'skipped' };
     return this.enqueue(projectId);
   }
+}
+
+/**
+ * True when one of the deployed directories is the checkout the hub is running from. The hub usually
+ * runs from the integration worktree it deploys into, not from project.path (the main checkout), so
+ * both are checked.
+ */
+export function isRunningHubCheckout(dirs: Array<string | null | undefined>, hubRoot: string): boolean {
+  let root: string;
+  try { root = fs.realpathSync(hubRoot); } catch { return false; }
+  return dirs.some((dir) => {
+    if (!dir) return false;
+    try { return fs.realpathSync(dir) === root; } catch { return false; }
+  });
 }

@@ -185,7 +185,7 @@ export function createContext(
     engines.set('agy', new AgyEngine());
     const codexPath = CodexEngine.findCodexPath();
     if (codexPath) {
-      engines.set('codex', new CodexEngine(codexPath));
+      engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
   }
 
@@ -205,6 +205,7 @@ export function createContext(
     knowledgeRepo,
     diskFn ? { diskSpace: diskFn } : undefined,
   );
+  usageService.setEventBus(scheduler.getEventBus());
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
     profileService.registerAll();
     scheduler.refreshEngines();
@@ -230,6 +231,12 @@ export function createContext(
     eventRepo,
     { failoverState, retryRepo: chatRetryRepo },
   );
+  scheduler.getEventBus().on('claude.quota_available', (_taskId, payload) => {
+    const data = payload && typeof payload === 'object' ? payload as { profileName?: unknown; observedAt?: unknown } : {};
+    if (typeof data.profileName !== 'string') return;
+    if (typeof data.observedAt === 'string') claudeSessionRepo.markAllowedAfter(data.profileName, data.observedAt);
+    chatService.retryWaitingForProfile(data.profileName);
+  });
   const brainRunner = new BrainRunner({
     config: config.brain,
     eventBus: scheduler.getEventBus(),

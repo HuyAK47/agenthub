@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { isInside, processAncestors, processIds } from './reaper.js';
+import { getPlatform } from './platform/index.js';
 
 export interface ProcessTreeMetrics {
   rss: number; // total RSS in bytes
@@ -7,6 +8,7 @@ export interface ProcessTreeMetrics {
   totalTicks: number;
   measuredAt: number;
   pids: number[];
+  states: Record<number, string>;
 }
 
 export interface PrevTreeMetrics {
@@ -28,8 +30,12 @@ export function measureProcessTree(
   prev?: PrevTreeMetrics,
 ): ProcessTreeMetrics {
   const now = Date.now();
+  if (process.platform === 'darwin') {
+    const measured = getPlatform().measureProcessTree?.(rootPid, worktreePath, prev);
+    if (measured) return measured;
+  }
   if (process.platform !== 'linux' || !fs.existsSync('/proc')) {
-    return { rss: 0, cpu: 0, totalTicks: 0, measuredAt: now, pids: [] };
+    return { rss: 0, cpu: 0, totalTicks: 0, measuredAt: now, pids: [], states: {} };
   }
 
   const excluded = processAncestors();
@@ -147,5 +153,6 @@ export function measureProcessTree(
     totalTicks,
     measuredAt: now,
     pids: Array.from(matchedPids),
+    states: {},
   };
 }
