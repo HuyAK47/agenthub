@@ -390,7 +390,7 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
       const prefix = projLabel ? `[${projLabel}] ` : '';
       decisions.push({
         id: d.id,
-        text: minimal ? `${prefix}1 việc cần quyết định` : d.text,
+        text: minimal ? `${prefix}1 việc cần quyết định` : (prefix ? `${prefix}${d.text}` : d.text),
         createdAt: new Date(d.createdAt).toISOString(),
         remindersCount: d.remindersCount,
       });

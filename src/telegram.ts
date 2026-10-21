@@ -370,22 +370,33 @@ export class TelegramBotService {
 
   /**
    * Add a chat ID to allowedChatIds and persist to config.json.
+   * If the chat was previously configured with a selected project via /use (or kind),
+   * preserve existing projectId and kind unless explicitly overridden.
    */
   addAllowedChatId(chatId: number, chat?: TelegramChat): void {
+    const existing = (this.config.telegram.chats || []).find((item) => item.id === chatId);
+    const resolvedChat: TelegramChat | undefined = chat
+      ? {
+          ...chat,
+          ...(existing?.kind !== undefined && chat.kind === undefined ? { kind: existing.kind } : {}),
+          ...(existing?.projectId !== undefined && chat.projectId === undefined ? { projectId: existing.projectId } : {}),
+        }
+      : undefined;
+
     if (!this.config.telegram.allowedChatIds.includes(chatId)) {
       this.config.telegram.allowedChatIds.push(chatId);
-      if (chat) {
-        this.config.telegram.chats = (this.config.telegram.chats || []).filter((item) => item.id !== chatId);
-        this.config.telegram.chats.push(chat);
-      }
-      updateConfigInMemory(this.config, { telegram: this.config.telegram });
-      saveConfig(this.config.hubHome, { telegram: this.config.telegram });
-    } else if (chat) {
-      this.config.telegram.chats = (this.config.telegram.chats || []).filter((item) => item.id !== chatId);
-      this.config.telegram.chats.push(chat);
-      updateConfigInMemory(this.config, { telegram: this.config.telegram });
-      saveConfig(this.config.hubHome, { telegram: this.config.telegram });
     }
+
+    if (resolvedChat) {
+      this.config.telegram.chats = (this.config.telegram.chats || []).filter((item) => item.id !== chatId);
+      this.config.telegram.chats.push(resolvedChat);
+      if (resolvedChat.projectId) {
+        this.selectedProject.set(chatId, resolvedChat.projectId);
+      }
+    }
+
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
   }
 
   /**
@@ -559,7 +570,7 @@ export class TelegramBotService {
         if (this.isMinimalProject(projId)) {
           return `• ${this.projectPrefix(projId)}1 việc cần quyết định — xem dashboard`;
         }
-        return `• ${this.escapeHtml(dec.text)}`;
+        return `• ${this.projectPrefix(projId)}${this.escapeHtml(dec.text)}`;
       }).join('\n');
 
       if (pendingDecisions.length === 1) {
@@ -1171,12 +1182,15 @@ export class TelegramBotService {
   /**
    * Returns a `[ProjectName]` prefix for a given projectId, for use in notifications.
    * Falls back to `[projectId]` if the project has no name.
+   * Escapes HTML by default for safe interpolation into parse_mode HTML messages.
+   * Pass options.raw = true to keep unescaped label (e.g. for queues that escape later).
    */
-  private projectPrefix(projectId: string | null | undefined): string {
+  private projectPrefix(projectId: string | null | undefined, options?: { raw?: boolean }): string {
     if (!projectId) return '';
     const proj = this.projectRepo.get(projectId);
     const label = proj?.name || projectId;
-    return `[${label}] `;
+    const formatted = options?.raw ? label : this.escapeHtml(label);
+    return `[${formatted}] `;
   }
 
   /**
@@ -3155,7 +3169,7 @@ export class TelegramBotService {
 
   private describeEventForQuietHours(type: string, taskId?: string, p?: Record<string, unknown>): string {
     const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p?.projectId === 'string' ? p.projectId : null;
-    const prefix = this.projectPrefix(projectId);
+    const prefix = this.projectPrefix(projectId, { raw: true });
     const minimal = this.isMinimalProject(projectId);
     switch (type) {
       case 'brain.notify':
