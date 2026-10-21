@@ -20,11 +20,13 @@ export interface ChatConfig {
 
 export interface BrainConfig {
   fallback: ClaudeFallbackStep[];
+  policy: string[];
 }
 
 export interface ClaudeSessionsConfig {
   dir: string;
   maxAgeDays: number;
+  activeWithinMin: number;
   include: string[];
   weights: { cacheCreation: number; cacheRead: number };
   autoResume: { enabled: boolean; prompt: string; allowFullMode: boolean };
@@ -102,11 +104,15 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
 };
 
 export interface PlanningConfig {
+  /** Every task Claude creates starts as a draft that the user must dispatch. */
   requireApproval: boolean;
+  /** Plans with at least this many tasks become a draft batch for the user to approve; 0 = never. */
+  approvalMinTasks: number;
 }
 
 export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   requireApproval: false,
+  approvalMinTasks: 0,
 };
 
 export type DeepPartialSavingsConfig = {
@@ -119,6 +125,23 @@ export interface UpdatesConfig {
   check: boolean;
   repo?: string;
 }
+
+export interface ToolInstaller {
+  package?: string;
+  command?: string[];
+  versionArgs?: string[];
+  docsUrl?: string;
+}
+
+export interface ToolsConfig {
+  installers: {
+    claude: ToolInstaller;
+    codex: ToolInstaller;
+    agy: ToolInstaller;
+  };
+}
+
+export type ToolInstallerPatch = Pick<ToolInstaller, 'package' | 'versionArgs' | 'docsUrl'>;
 
 export const DEFAULT_UPDATES_CONFIG: UpdatesConfig = {
   check: true,
@@ -178,6 +201,7 @@ export interface AgentHubConfig {
   planning: PlanningConfig;
   telegram: TelegramConfig;
   updates: UpdatesConfig;
+  tools: ToolsConfig;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -212,6 +236,7 @@ export function saveConfig(
     context?: Partial<ContextConfig>;
     planning?: Partial<PlanningConfig>;
     updates?: Partial<UpdatesConfig>;
+    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstallerPatch>> }>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -222,6 +247,12 @@ export function saveConfig(
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
+  const managedToolsDir = path.join(hubHome, 'tools');
+  process.env.AGENTHUB_TOOLS_DIR ||= managedToolsDir;
+  const managedBinDir = path.join(managedToolsDir, 'node_modules', '.bin');
+  if (!(process.env.PATH || '').split(path.delimiter).includes(managedBinDir)) {
+    process.env.PATH = `${managedBinDir}${path.delimiter}${process.env.PATH || ''}`;
+  }
   let current: Record<string, unknown> = {};
   if (fs.existsSync(configFilePath)) {
     try {
@@ -256,6 +287,7 @@ export function saveConfig(
           },
         }
       : {}),
+    ...(patch.tools ? { tools: { ...((current.tools as Record<string, unknown>) || {}), ...patch.tools, ...(patch.tools.installers ? { installers: { ...(((current.tools as Record<string, unknown>)?.installers as Record<string, unknown>) || {}), ...patch.tools.installers } } : {}) } } : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
       ? {
           telegram: {
@@ -318,6 +350,7 @@ export function updateConfigInMemory(
     context?: Partial<ContextConfig>;
     planning?: Partial<PlanningConfig>;
     updates?: Partial<UpdatesConfig>;
+    tools?: Partial<{ installers: Partial<Record<'claude' | 'codex' | 'agy', ToolInstallerPatch>> }>;
     telegram?: Partial<{
       enabled?: boolean;
       botTokenFile?: string;
@@ -427,6 +460,9 @@ export function updateConfigInMemory(
     if (patch.planning.requireApproval !== undefined) {
       config.planning.requireApproval = patch.planning.requireApproval;
     }
+    if (patch.planning.approvalMinTasks !== undefined) {
+      config.planning.approvalMinTasks = Math.max(0, Math.floor(patch.planning.approvalMinTasks));
+    }
   }
   if (patch.telegram) {
     config.telegram = {
@@ -446,6 +482,17 @@ export function updateConfigInMemory(
   if (patch.updates) {
     config.updates = { ...config.updates, ...patch.updates };
   }
+  if (patch.tools?.installers) {
+    for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
+      if (!value) continue;
+      config.tools.installers[name] = {
+        ...config.tools.installers[name],
+        ...(value.package !== undefined ? { package: value.package } : {}),
+        ...(value.versionArgs !== undefined ? { versionArgs: [...value.versionArgs] } : {}),
+        ...(value.docsUrl !== undefined ? { docsUrl: value.docsUrl } : {}),
+      };
+    }
+  }
 }
 
 export function loadConfig(overrideHome?: string): AgentHubConfig {
@@ -457,6 +504,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   }
 
   const configFilePath = path.join(hubHome, 'config.json');
+  const managedToolsDir = path.join(hubHome, 'tools');
+  process.env.AGENTHUB_TOOLS_DIR ||= managedToolsDir;
+  const managedBinDir = path.join(managedToolsDir, 'node_modules', '.bin');
+  if (!(process.env.PATH || '').split(path.delimiter).includes(managedBinDir)) {
+    process.env.PATH = `${managedBinDir}${path.delimiter}${process.env.PATH || ''}`;
+  }
   let userConfig: Record<string, unknown> = {};
   if (fs.existsSync(configFilePath)) {
     try {
@@ -576,6 +629,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   const rawPlanning = (userConfig.planning as Record<string, unknown>) || {};
   const planning: PlanningConfig = {
     requireApproval: rawPlanning.requireApproval === true,
+    approvalMinTasks: typeof rawPlanning.approvalMinTasks === 'number' && rawPlanning.approvalMinTasks >= 0
+      ? Math.floor(rawPlanning.approvalMinTasks)
+      : DEFAULT_PLANNING_CONFIG.approvalMinTasks,
   };
   const rawTelegram = (userConfig.telegram as Record<string, unknown>) || {};
   const rawTelegramNotify = (rawTelegram.notify as Record<string, unknown>) || {};
@@ -609,6 +665,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ? rawUpdates.repo.trim()
       : DEFAULT_UPDATES_CONFIG.repo,
   };
+  const rawTools = (userConfig.tools as Record<string, unknown>) || {};
+  const rawInstallers = (rawTools.installers as Record<string, unknown>) || {};
+  const installer = (name: string, fallback: ToolInstaller): ToolInstaller => {
+    const value = rawInstallers[name];
+    return value && typeof value === 'object' ? { ...fallback, ...(value as ToolInstaller) } : fallback;
+  };
 
   return {
     hubHome,
@@ -635,10 +697,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     defaultLogDir,
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
-    brain: { fallback: normalizeFallbackSteps(brainRaw.fallback) },
+    brain: {
+      fallback: normalizeFallbackSteps(brainRaw.fallback),
+      policy: Array.isArray(brainRaw.policy)
+        ? brainRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
+        : [],
+    },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
       maxAgeDays: typeof rawClaudeSessions.maxAgeDays === 'number' ? rawClaudeSessions.maxAgeDays : 14,
+      activeWithinMin: typeof rawClaudeSessions.activeWithinMin === 'number' ? rawClaudeSessions.activeWithinMin : 10,
       include: rawClaudeInclude,
       weights: {
         cacheCreation: typeof rawClaudeWeights.cacheCreation === 'number' ? rawClaudeWeights.cacheCreation : 1.25,
@@ -690,5 +758,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     planning,
     telegram,
     updates,
+    tools: {
+      installers: {
+        claude: installer('claude', { package: '@anthropic-ai/claude-code', versionArgs: ['--version'] }),
+        codex: installer('codex', { package: '@openai/codex', versionArgs: ['--version'] }),
+        agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
+      },
+    },
   };
 }

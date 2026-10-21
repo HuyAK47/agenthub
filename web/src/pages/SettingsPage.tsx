@@ -26,6 +26,9 @@ export const SettingsPage: React.FC = () => {
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [apiKey, setApiKey] = useState('');
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
+  // 'none' | 'large' | 'all': how much of Claude's plan the user must approve
+  const [approvalMode, setApprovalMode] = useState<'none' | 'large' | 'all'>('none');
+  const [approvalMinTasks, setApprovalMinTasks] = useState<number>(5);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -55,6 +58,9 @@ export const SettingsPage: React.FC = () => {
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
       setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);
       setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
+      const minTasks = config.planning?.approvalMinTasks ?? 0;
+      setApprovalMode(config.planning?.requireApproval ? 'all' : minTasks > 0 ? 'large' : 'none');
+      if (minTasks > 0) setApprovalMinTasks(minTasks);
       if (config.savings) {
         if (config.savings.bucketTokens?.gemini !== undefined) {
           setBucketGemini(config.savings.bucketTokens.gemini);
@@ -146,6 +152,10 @@ export const SettingsPage: React.FC = () => {
         claudeOverheadPerTask: Number(claudeOverhead) || 40_000,
       },
       brain: { fallback },
+      planning: {
+        requireApproval: approvalMode === 'all',
+        approvalMinTasks: approvalMode === 'large' ? Math.max(1, Number(approvalMinTasks) || 5) : 0,
+      },
     });
   };
 
@@ -197,6 +207,21 @@ export const SettingsPage: React.FC = () => {
         <div className="p-8 text-center text-[var(--t-crit)] text-sm">{t('settings.loadError')}</div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3 shadow-xs" data-testid="planning-approval">
+            <h2 className="text-sm font-semibold">{t('extra.planningApprovalTitle')}</h2>
+            <p className="text-xs text-[var(--t-text-3)]">{t('extra.planningApprovalHint')}</p>
+            {(['none', 'large', 'all'] as const).map((mode) => (
+              <label key={mode} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" name="approvalMode" value={mode} checked={approvalMode === mode} onChange={() => setApprovalMode(mode)} />
+                <span>{t(mode === 'none' ? 'extra.planningApprovalNone' : mode === 'large' ? 'extra.planningApprovalLarge' : 'extra.planningApprovalAll')}</span>
+                {mode === 'large' && (
+                  <input type="number" min={1} max={100} aria-label={t('extra.planningApprovalMinTasks')} value={approvalMinTasks}
+                    onChange={(e) => setApprovalMinTasks(Number(e.target.value))} disabled={approvalMode !== 'large'}
+                    className="w-16 text-sm rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-0.5" />
+                )}
+              </label>
+            ))}
+          </div>
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             {/* Info notice */}
             <div className="p-4 rounded-lg bg-[var(--t-accent-bg)] border border-[var(--t-accent)] text-[var(--t-accent)] text-xs flex items-start gap-2.5">

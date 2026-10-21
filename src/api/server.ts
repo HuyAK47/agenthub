@@ -123,6 +123,31 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.get('/api/setup/status', async () => service.getSetupStatus());
+  fastify.post('/api/setup/install/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    return reply.status(202).send(await service.installSetupTool(tool));
+  });
+  fastify.get('/api/setup/log/:tool', async (req, reply) => {
+    const { tool } = req.params as { tool: string };
+    const logPath = service.getSetupLogPath(tool);
+    if (!logPath) throw new HttpError(404, 'not_found', 'Setup log không tồn tại');
+    return reply.type('text/plain; charset=utf-8').send(fs.createReadStream(logPath));
+  });
+  fastify.post('/api/setup/complete', async () => service.completeSetup(false));
+  fastify.post('/api/setup/skip', async () => service.completeSetup(true));
+  fastify.post('/api/setup/mcp', async () => {
+    const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const cliPath = path.join(projectRoot, 'dist', 'cli.js');
+    const { execFile } = await import('node:child_process');
+    return new Promise((resolve, reject) => {
+      execFile('claude', ['mcp', 'add', '--scope', 'user', 'agenthub', '--', process.execPath, cliPath, 'mcp'], { timeout: 60_000 }, (error, stdout, stderr) => {
+        if (error) return reject(new HttpError(500, 'mcp_install_failed', stderr || error.message));
+        resolve({ ok: true, output: `${stdout}${stderr}` });
+      });
+    });
+  });
+
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
   fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
 
@@ -436,8 +461,14 @@ export async function createServer(
     return service.getDailyUsage(Number.isNaN(days) ? 7 : days);
   });
 
-  fastify.get('/api/claude/sessions', async (req: FastifyRequest) => service.listClaudeSessions(Number((req.query as { activeWithinMin?: string }).activeWithinMin || 5)));
-  fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => service.getClaudeSession((req.params as { id: string }).id));
+  fastify.get('/api/claude/sessions', async (req: FastifyRequest) => {
+    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
+    return service.listClaudeSessions(raw ? Number(raw) : undefined);
+  });
+  fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => {
+    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
+    return service.getClaudeSession((req.params as { id: string }).id, raw ? Number(raw) : undefined);
+  });
   fastify.patch('/api/claude/sessions/:id/auto-resume', async (req: FastifyRequest) => {
     const body = req.body as { enabled?: unknown };
     if (typeof body?.enabled !== 'boolean') throw new HttpError(400, 'bad_request', 'enabled phải là boolean');

@@ -203,7 +203,7 @@ export class ChatService {
     return { ok: true };
   }
 
-  async requestPermission(input: { sessionId: string; messageId?: string | null; toolName: string; input: Record<string, unknown> }) {
+  async requestPermission(input: { sessionId: string; messageId?: string | null; toolName: string; input: Record<string, unknown>; kind?: 'brain' | 'user' }) {
     const running = this.runningTurns.get(input.sessionId);
     if (running) {
       running.waitingPermission = true;
@@ -890,7 +890,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
         );
-        const args = buildClaudeArgs({
+        const args = buildClaudeArgs({ planning: this.config.planning,
           text: '/compact',
           claudeSessionId: session.claudeSessionId,
           mode: session.mode,
@@ -1071,7 +1071,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
         );
-        const args = buildClaudeArgs({
+        const args = buildClaudeArgs({ planning: this.config.planning,
           text: FORK_SUMMARY_PROMPT,
           claudeSessionId: session.claudeSessionId,
           mode: session.mode,
@@ -1213,7 +1213,7 @@ export class ChatService {
     const session = this.chatSessionRepo.get(turn.sessionId);
     const execution = this.failoverExecution(turn);
     const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
-    const args = buildClaudeArgs({
+    const args = buildClaudeArgs({ planning: this.config.planning,
       text: turn.text,
       claudeSessionId: turn.claudeSessionId,
       mode: turn.mode,
@@ -1530,7 +1530,7 @@ export class ChatService {
     const execution = this.failoverExecution({ sessionId: session.id, messageId: '', text: '', projectId: session.projectId, mode: session.mode, claudeSessionId: session.claudeSessionId, model: session.model, profileName: session.profileName });
     if (execution.pausedUntil) return undefined;
     const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
-    const proc = spawnClaude(claudeBin, buildClaudeArgs({
+    const proc = spawnClaude(claudeBin, buildClaudeArgs({ planning: this.config.planning,
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
       mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec),
@@ -1829,7 +1829,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   // MCP permission-prompt-tool calls this endpoint and waits for the dashboard decision.
   fastify.post('/api/chat/permissions', async (req: FastifyRequest) => {
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
-      sessionId?: string; messageId?: string; tool_name?: string; input?: unknown;
+      sessionId?: string; messageId?: string; tool_name?: string; input?: unknown; kind?: 'brain' | 'user';
     };
     if (!body.sessionId || !body.tool_name || !body.input || typeof body.input !== 'object') {
       throw new HttpError(400, 'bad_request', 'Thiếu sessionId, tool_name hoặc input');
@@ -1839,6 +1839,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
       messageId: body.messageId,
       toolName: body.tool_name,
       input: body.input as Record<string, unknown>,
+      kind: body.kind,
     });
   });
 

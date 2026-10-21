@@ -200,6 +200,8 @@ export class CodexEngine implements Engine {
 
   static findCodexPath(): string | null {
     try {
+      const managed = process.env.AGENTHUB_TOOLS_DIR ? path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'codex') : null;
+      if (managed && fs.existsSync(managed)) return managed;
       const homeDir = os.homedir();
       const base = path.join(homeDir, '.vscode', 'extensions');
       if (!fs.existsSync(base)) return null;

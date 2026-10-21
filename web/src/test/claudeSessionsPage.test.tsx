@@ -42,6 +42,29 @@ describe('ClaudeSessionsPage', () => {
     expect(await screen.findByText('Implement feature')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getByText(/proj~alpha/)).toBeInTheDocument();
+    // Verify privacy scope note
+    expect(screen.getByText('Chỉ hiện phiên thuộc các project của hub')).toBeInTheDocument();
+  });
+
+  it('falls back to shortened sessionId and "Ngoài task" label when title is null and task is _general', async () => {
+    vi.spyOn(client, 'apiFetch').mockResolvedValueOnce([
+      {
+        sessionId: 'c7489ab1-248b-4b47-b844-0a91bdc9082f',
+        cwd: '/work/project',
+        title: null,
+        model: 'claude-sonnet',
+        messages: 1,
+        effectiveTokens: 50,
+        lastAt: '2026-10-16T09:00:00Z',
+        active: false,
+        topTasks: [{ taskId: '_general', effectiveTokens: 50 }],
+      },
+    ]);
+    renderPage();
+    // Shortened sessionId should be displayed
+    expect(await screen.findByText('c7489ab1')).toBeInTheDocument();
+    // '_general' should be translated to "Ngoài task"
+    expect(screen.getByText(/Ngoài task \(50\)/)).toBeInTheDocument();
   });
 
   it('calls the rescan endpoint when Quét lại is clicked', async () => {
@@ -51,10 +74,14 @@ describe('ClaudeSessionsPage', () => {
     await waitFor(() => expect(client.rescanClaudeSessions).toHaveBeenCalledTimes(1));
   });
 
-  it('shows a token chart and turn rows in the detail view', async () => {
+  it('shows a token chart, turn rows, and active badge in the detail view', async () => {
     renderPage('/claude-sessions/session-1');
     expect(await screen.findByRole('img', { name: 'Token theo thời gian' })).toBeInTheDocument();
     expect(screen.getByText('120')).toBeInTheDocument();
     expect(screen.getByText('proj~alpha (120)')).toBeInTheDocument();
+    // Active badge should be visible
+    expect(screen.getByText('Đang hoạt động')).toBeInTheDocument();
+    // Auto-resume toggle label should be visible
+    expect(screen.getByText('Tự tiếp tục khi hết giới hạn')).toBeInTheDocument();
   });
 });

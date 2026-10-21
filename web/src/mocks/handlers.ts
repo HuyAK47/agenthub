@@ -810,6 +810,7 @@ export const handlers = [
         totalRuns: i === 0 ? 4 : 8,
         totalDurationMs: i === 0 ? 240000 : 480000,
         totalTokens: i === 0 ? 90000 : 180000,
+        claudeTokens: i === 0 ? 35000 : 70000,
         profiles: [],
       })),
     });
@@ -881,6 +882,15 @@ export const handlers = [
       profile.quotaMarks = [];
     }
     return HttpResponse.json({ ok: true });
+  }),
+
+  // PATCH /api/claude/sessions/:id/auto-resume
+  http.patch('/api/claude/sessions/:id/auto-resume', async ({ params, request }) => {
+    if (!checkAuth(request)) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const body = (await request.json()) as any;
+    return HttpResponse.json({ sessionId: params.id, autoResumeEnabled: body?.enabled ? 1 : 0 });
   }),
 
   // GET /api/tasks
