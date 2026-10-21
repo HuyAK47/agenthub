@@ -141,7 +141,9 @@ export class BrainService {
       };
     }
 
-    const manualFresh = !isBrainStale(row.updatedAt, now);
+    const hasManualValue = row.activity !== 'idle' || row.detail !== '' || row.taskId !== null
+      || this.eventRepo.getRecent(1000).some((event) => event.type === 'brain.status');
+    const manualFresh = hasManualValue && !isBrainStale(row.updatedAt, now);
     if (!manualFresh && sessions.length === 0) {
       return { activity: row.activity, detail: row.detail, taskId: row.taskId || null, updatedAt: row.updatedAt, stale: true, source: 'manual', sessions, state: 'inactive' };
     }
