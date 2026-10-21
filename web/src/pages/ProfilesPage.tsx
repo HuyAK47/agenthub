@@ -258,8 +258,8 @@ export const ProfilesPage: React.FC = () => {
                 ) : (
                   <div className="grid gap-4 xl:grid-cols-2">
                     {grouped.map((profile) => (
+                      <div key={profile.name} id={`profile-${profile.name}`}>
                       <ProfileCard
-                        key={profile.name}
                         profile={profile}
                         run={runningByProfile.get(profile.name)}
                         menu={menu}
@@ -282,6 +282,7 @@ export const ProfilesPage: React.FC = () => {
                         }
                         onQuotaRemoved={(family) => toast(t('profiles.removeQuotaSuccess', { family, name: profile.name }))}
                       />
+                      </div>
                     ))}
                   </div>
                 )}
