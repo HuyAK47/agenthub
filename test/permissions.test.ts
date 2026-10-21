@@ -91,6 +91,8 @@ describe('PermissionBroker', () => {
     expect(commandPermissionInfo('gh pr checks 12').patterns).toEqual(['command:gh pr checks']);
     expect(commandPermissionInfo('python3 -m pytest -q').patterns).toEqual(['command:python3 -m pytest']);
     expect(commandPermissionInfo('curl https://example.test').patterns).toEqual(['command:curl']);
+    expect(commandPermissionInfo('echo x > /tmp/file').dynamic).toBe(true);
+    expect(commandPermissionInfo('echo x >> ../outside').dynamic).toBe(true);
 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-permission-'));
     db = openDatabase(path.join(dir, 'hub.db'));

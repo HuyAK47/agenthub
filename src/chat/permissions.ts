@@ -37,7 +37,12 @@ function segmentPrefix(segment: string): string | null {
 }
 export interface CommandPermissionInfo { patterns: string[]; dynamic: boolean; dangerous: boolean; exact: string }
 export function commandPermissionInfo(command: string): CommandPermissionInfo {
-  const segments = shellSegments(command); const dynamic = /\$\(|`|<\(|<<-?\s*['"]?\w+|>\s*(?![./~])/.test(command);
+  const segments = shellSegments(command);
+  // A redirect outside the project may mutate arbitrary files. The parser does
+  // not have the session's project root, so treat absolute, home-relative and
+  // parent/current-relative targets conservatively as command-specific.
+  const outsideRedirect = /(?:^|[\s;&|0-9])(?:\d*)>{1,2}\s*(?:\/|~|\.{1,2}(?:\/|$))/.test(command);
+  const dynamic = /\$\(|`|<\(|<<-?\s*['"]?\w+|>\s*(?![./~])/.test(command) || outsideRedirect;
   const dangerous = DANGEROUS.test(command) || /\b(?:curl|wget)\b[^;&|]*(?:\||&&)\s*(?:sh|bash|zsh)\b/i.test(command);
   return { patterns: segments.map(segmentPrefix).filter((x): x is string => Boolean(x)).map((x) => `command:${x}`), dynamic, dangerous, exact: `command-exact:${command}` };
 }
