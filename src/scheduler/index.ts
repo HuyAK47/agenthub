@@ -33,6 +33,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
+import { projectSettings } from '../projects/settings.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
@@ -1911,7 +1912,20 @@ export class Scheduler {
         ? `approved${lastReview.feedback ? ` — ${lastReview.feedback}` : ''}`
         : undefined;
 
-      return [{ id: dependency.id, title: dependency.title, doneContent, review, diffStat: dependency.diffStat ?? undefined }];
+      const isCrossProject = dependency.projectId !== task.projectId;
+      const depProject = this.projectRepo.get(dependency.projectId);
+
+      return [{
+        id: dependency.id,
+        title: dependency.title,
+        projectId: dependency.projectId,
+        projectName: depProject?.name,
+        repoPath: depProject?.path,
+        isCrossProject,
+        doneContent,
+        review,
+        diffStat: dependency.diffStat ?? undefined,
+      }];
     });
   }
 
@@ -2177,14 +2191,26 @@ export class Scheduler {
     }
   }
 
-  private resolveBaseRef(task: TaskRow, project: { defaultBranch: string }): string {
+  private resolveBaseRef(task: TaskRow, project: { defaultBranch: string; settings?: string | null }): string {
     if (task.baseRef) return task.baseRef;
 
-    // If task has dependencies, use the last dependency's branch
-    const deps: string[] = JSON.parse(task.dependsOn);
-    if (deps.length > 0) {
-      const lastDep = this.taskRepo.get(deps[deps.length - 1]);
-      if (lastDep?.branch) return lastDep.branch;
+    // Only inherit branch from the nearest dependency in the SAME project
+    let deps: string[] = [];
+    try {
+      deps = JSON.parse(task.dependsOn || '[]');
+    } catch {
+      deps = [];
+    }
+    for (let i = deps.length - 1; i >= 0; i--) {
+      const dep = this.taskRepo.get(deps[i]);
+      if (dep && dep.projectId === task.projectId && dep.branch) {
+        return dep.branch;
+      }
+    }
+
+    const settings = projectSettings(project);
+    if (settings.integration?.enabled) {
+      return settings.integration.branch || 'agenthub/integration';
     }
 
     return project.defaultBranch;
