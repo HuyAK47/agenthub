@@ -15,6 +15,7 @@ import {
   compactChatSession,
   forkSummaryChatSession,
   normalizeMessagesResponse,
+  retryChatLimitNow,
 } from '../api/chat';
 import { getConfig } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
@@ -49,6 +50,10 @@ export const ChatPage: React.FC = () => {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [isLocalBusy, setIsLocalBusy] = useState(false);
   const [permission, setPermission] = useState<ChatPermissionRequest | null>(null);
+  const retryLimitMutation = useMutation({
+    mutationFn: (id: string) => retryChatLimitNow(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chatSessions'] }),
+  });
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -658,6 +663,9 @@ export const ChatPage: React.FC = () => {
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>{t('common.retry')}</span>
                   </button>
+                )}
+                {sessionState === 'waiting_limit' && (
+                  <button type="button" onClick={() => retryLimitMutation.mutate(activeSession.id)} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-warn)]/15 text-[var(--t-warn)] border border-[var(--t-warn)]/30">{t('extra.retryLimit')}</button>
                 )}
               </>
             )}

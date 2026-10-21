@@ -572,6 +572,7 @@ export const en: typeof vi = {
     saveName: 'Save name',
     newNameAria: 'New session title',
     retryLastTurn: 'Retry last turn',
+    retryLimit: 'Retry now',
     permissionTitle: 'Claude requires permission: {tool}',
     permissionAria: 'Tool permission request',
     allow: 'Allow',
