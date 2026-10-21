@@ -6,6 +6,7 @@ import {
   Check,
   Clock,
   ExternalLink,
+  KeyRound,
   MoreVertical,
   Plus,
   RefreshCw,
@@ -22,6 +23,8 @@ import {
   getProfiles,
   getConfig,
   getStatus,
+  importAgyTokens,
+  ImportTokensResult,
   loginProfile,
   refreshProfileUsage,
   renameProfile,
@@ -100,18 +103,17 @@ export const ProfilesPage: React.FC = () => {
   const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newEngine, setNewEngine] = useState<Provider>('agy');
-  const [newAccountType, setNewAccountType] = useState<'personal' | 'team' | 'api'>('personal');
-  const [addError, setAddError] = useState('');
   const [activeLogin, setActiveLogin] = useState<{ name: string; engine: Provider; sessionId: string } | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [editing, setEditing] = useState<Profile | null>(null);
   const [renaming, setRenaming] = useState<Profile | null>(null);
   const [deleting, setDeleting] = useState<Profile | null>(null);
+  const [tokenLogin, setTokenLogin] = useState<Profile | null>(null);
   const [checking, setChecking] = useState<Record<string, boolean>>({});
+  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const toastSeq = useRef(0);
   const scrolledHash = useRef<string | null>(null);
   const {
     data: profiles = [],
@@ -135,7 +137,7 @@ export const ProfilesPage: React.FC = () => {
   });
   const runningByProfile = new Map((status?.running || []).map((run) => [run.profileName, run]));
   const toast = (text: string, isError = false) => {
-    const id = Date.now();
+    const id = ++toastSeq.current;
     setToasts((old) => [...old, { id, text, error: isError }]);
     setTimeout(() => setToasts((old) => old.filter((item) => item.id !== id)), 6000);
   };
@@ -164,7 +166,33 @@ export const ProfilesPage: React.FC = () => {
       toast(err?.message || 'Không thể mở trình đăng nhập', true);
     }
   };
-  const runCheck = async (name: string) => {
+  const runRefresh = async (profile: Profile, silent = false) => {
+    setRefreshing((old) => ({ ...old, [profile.name]: true }));
+    try {
+      const updated = await refreshProfileUsage(profile.name);
+      if (silent) return;
+      const avatarNote = updated?.avatarMessage ? ` · ${updated.avatarMessage}` : '';
+      toast(`✓ ${t('profiles.refreshDone', { name: profile.label || profile.name })}${avatarNote}`);
+    } catch (err: any) {
+      toast(err?.message || t('profiles.refreshFailed'), true);
+    } finally {
+      setRefreshing((old) => ({ ...old, [profile.name]: false }));
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+    }
+  };
+  const runToggle = async (profile: Profile, enabled: boolean) => {
+    try {
+      await updateProfile(profile.name, { enabled });
+      toast(t(enabled ? 'profiles.toggledOn' : 'profiles.toggledOff', { name: profile.label || profile.name }));
+    } catch (err: any) {
+      toast(err?.message || t('profiles.toggleFailed'), true);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+    }
+  };
+  /** Bật trạng thái đang kiểm tra; sự kiện profile.check (SSE) sẽ tắt nó và hiện kết quả. */
+  const watchCheck = (name: string) => {
+    clearTimeout(checkTimers.current[name]);
     setChecking((old) => ({ ...old, [name]: true }));
     checkTimers.current[name] = setTimeout(
       () => {
@@ -173,31 +201,15 @@ export const ProfilesPage: React.FC = () => {
       },
       75_000,
     );
+  };
+  const runCheck = async (name: string) => {
+    watchCheck(name);
     try {
       await checkProfile(name);
     } catch (err: any) {
       clearTimeout(checkTimers.current[name]);
       setChecking((old) => ({ ...old, [name]: false }));
       toast(err?.status === 409 ? t('profiles.checkAlreadyRunning') : err?.message || 'Kiểm tra thất bại', true);
-    }
-  };
-  const createAndLogin = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!newName.trim()) {
-      setAddError('Vui lòng nhập tên tài khoản');
-      return;
-    }
-    try {
-      const name = newName.trim();
-      await createProfile({ name, engine: newEngine, accountType: newAccountType });
-      setShowAdd(false);
-      setNewName('');
-      setNewAccountType('personal');
-      setAddError('');
-      await runLogin(name, newEngine);
-      queryClient.invalidateQueries({ queryKey: ['profiles'] });
-    } catch (err: any) {
-      setAddError(err?.message || 'Không thể tạo tài khoản');
     }
   };
 
@@ -276,21 +288,15 @@ export const ProfilesPage: React.FC = () => {
                         menu={menu}
                         setMenu={setMenu}
                         checking={Boolean(checking[profile.name])}
+                        refreshing={Boolean(refreshing[profile.name])}
                         onLogin={runLogin}
+                        onTokenLogin={setTokenLogin}
                         onCheck={runCheck}
                         onEdit={setEditing}
                         onRename={setRenaming}
                         onDelete={setDeleting}
-                        onToggle={(enabled) =>
-                          updateProfile(profile.name, { enabled }).then(() =>
-                            queryClient.invalidateQueries({ queryKey: ['profiles'] }),
-                          )
-                        }
-                        onRefresh={() =>
-                          refreshProfileUsage(profile.name).then(() =>
-                            queryClient.invalidateQueries({ queryKey: ['profiles'] }),
-                          )
-                        }
+                        onToggle={(enabled) => void runToggle(profile, enabled)}
+                        onRefresh={(silent) => void runRefresh(profile, silent)}
                         onQuotaRemoved={(family) => toast(t('profiles.removeQuotaSuccess', { family, name: profile.name }))}
                       />
                       </div>
@@ -304,62 +310,34 @@ export const ProfilesPage: React.FC = () => {
       )}
       <DailyUsageTable />
       {showAdd && (
-        <Modal title={t('profiles.addBtn')} onClose={() => setShowAdd(false)}>
-          <form onSubmit={createAndLogin} className="space-y-4">
-            <p className="text-sm text-[var(--t-text-3)]">
-              {t('profiles.addDescription')}
-            </p>
-            {addError && (
-              <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
-                {addError}
-              </p>
-            )}
-            <label className="block text-sm">
-              {t('profiles.accountName')}
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder={t('profiles.accountNamePlaceholder')}
-                className="field mt-1"
-              />
-            </label>
-            <label className="block text-sm">
-              {t('profiles.provider')}
-              <select
-                value={newEngine}
-                onChange={(e) => setNewEngine(e.target.value as Provider)}
-                className="field mt-1"
-              >
-                <option value="agy">Antigravity (Gemini)</option>
-                <option value="codex">Codex (OpenAI)</option>
-                <option value="claude">Claude</option>
-              </select>
-            </label>
-            <label className="block text-sm">
-              {t('profiles.accountType')}
-              <select value={newAccountType} onChange={(e) => setNewAccountType(e.target.value as typeof newAccountType)} className="field mt-1">
-                <option value="personal">{t('profiles.personal')}</option>
-                <option value="team">{t('profiles.team')}</option>
-                <option value="api">{t('profiles.api')}</option>
-              </select>
-            </label>
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setShowAdd(false)} className="button-secondary">
-                {t('common.cancel')}
-              </button>
-              <button type="submit" className="button-primary">
-                {t('profiles.createAndGuide')}
-              </button>
-            </div>
-          </form>
-        </Modal>
+        <AddProfileModal
+          onClose={() => {
+            setShowAdd(false);
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+          }}
+          onCreated={async (name, engine) => {
+            setShowAdd(false);
+            toast(t('profiles.createdProfile', { name }));
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+            await runLogin(name, engine);
+          }}
+          onImported={(result) => {
+            toast(
+              t('profiles.importDone', { success: result.successCount, total: result.total }),
+              result.successCount === 0,
+            );
+            // Backend tự chạy Check bằng agy cho các tài khoản vừa nhập.
+            result.results.filter((item) => item.status === 'ok').forEach((item) => watchCheck(item.name));
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+          }}
+        />
       )}
       {editing && (
         <EditProfileModal
           profile={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
+            toast(t('profiles.savedProfile', { name: editing.name }));
             setEditing(null);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
@@ -369,7 +347,8 @@ export const ProfilesPage: React.FC = () => {
         <RenameModal
           profile={renaming}
           onClose={() => setRenaming(null)}
-          onSaved={() => {
+          onSaved={(newName) => {
+            toast(t('profiles.renamedProfile', { from: renaming.name, to: newName }));
             setRenaming(null);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
@@ -380,7 +359,20 @@ export const ProfilesPage: React.FC = () => {
           profile={deleting}
           onClose={() => setDeleting(null)}
           onDeleted={() => {
+            toast(t('profiles.deletedProfile', { name: deleting.name }));
             setDeleting(null);
+            queryClient.invalidateQueries({ queryKey: ['profiles'] });
+          }}
+        />
+      )}
+      {tokenLogin && (
+        <TokenLoginModal
+          profile={tokenLogin}
+          onClose={() => setTokenLogin(null)}
+          onDone={(email) => {
+            setTokenLogin(null);
+            toast(t('profiles.tokenLoginSuccess', { name: tokenLogin.name, email }));
+            watchCheck(tokenLogin.name);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
         />
@@ -400,13 +392,68 @@ export const ProfilesPage: React.FC = () => {
   );
 };
 
+function getAvatarGradient(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const h1 = Math.abs(hash) % 360;
+  const h2 = (h1 + 45) % 360;
+  return `linear-gradient(135deg, hsl(${h1}, 65%, 45%), hsl(${h2}, 75%, 35%))`;
+}
+
+function ProfileAvatar({ profile }: { profile: Profile }) {
+  const [imgError, setImgError] = useState(false);
+  const avatarUrl = profile.avatarUrl;
+
+  useEffect(() => {
+    setImgError(false);
+  }, [avatarUrl]);
+
+  if (avatarUrl && !imgError) {
+    return (
+      <div className="relative shrink-0">
+        <img
+          src={avatarUrl}
+          alt={profile.label || profile.name}
+          referrerPolicy="no-referrer"
+          onError={() => setImgError(true)}
+          className="h-10 w-10 rounded-xl object-cover shadow-xs ring-1 ring-[var(--t-border)]"
+        />
+      </div>
+    );
+  }
+
+  const displayName = profile.label || profile.email || profile.name;
+  const initial = displayName.trim().charAt(0).toUpperCase();
+
+  if (initial) {
+    return (
+      <div
+        className="flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
+        style={{ background: getAvatarGradient(profile.email || profile.name) }}
+      >
+        <span className="text-base tracking-wider drop-shadow-xs">{initial}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--t-surface-2)] text-[var(--t-accent)] shadow-xs ring-1 ring-[var(--t-border)]">
+      <UserRound className="h-5 w-5" />
+    </div>
+  );
+}
+
 function ProfileCard({
   profile,
   run,
   menu,
   setMenu,
   checking,
+  refreshing,
   onLogin,
+  onTokenLogin,
   onCheck,
   onEdit,
   onRename,
@@ -420,18 +467,23 @@ function ProfileCard({
   menu: string | null;
   setMenu: (name: string | null) => void;
   checking: boolean;
+  refreshing: boolean;
   onLogin: (name: string, engine: Provider) => void;
+  onTokenLogin: (profile: Profile) => void;
   onCheck: (name: string) => void;
   onEdit: (profile: Profile) => void;
   onRename: (profile: Profile) => void;
   onDelete: (profile: Profile) => void;
   onToggle: (enabled: boolean) => void;
-  onRefresh: () => void;
+  /** silent: tải lại ngầm sau thao tác khác (đã có thông báo riêng). */
+  onRefresh: (silent?: boolean) => void;
   onQuotaRemoved: (family: string) => void;
 }) {
   const { t } = useLocale();
   const logged = profile.loggedIn ?? Boolean(profile.email);
   const canLogin = profile.kind !== 'keyring' || profile.engine === 'claude';
+  // Refresh token chỉ ghi được vào HOME riêng của hồ sơ agy isolated.
+  const canTokenLogin = profile.engine === 'agy' && profile.kind === 'isolated';
   const busy = Boolean(profile.busy || profile.isBusy);
   const activeMarks = (profile.quotaMarks || []).filter((mark) => mark.until > Math.floor(Date.now() / 1000));
   return (
@@ -441,9 +493,7 @@ function ProfileCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="rounded-lg bg-[var(--t-surface-2)] p-2 text-[var(--t-accent)]">
-            <UserRound className="h-5 w-5" />
-          </div>
+          <ProfileAvatar profile={profile} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="truncate font-semibold">{profile.label || profile.name}</h3>
@@ -490,6 +540,18 @@ function ProfileCard({
               >
                 {logged ? t('extra.reLogin') : t('profiles.loginNow')}
               </button>
+              {canTokenLogin && (
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setMenu(null);
+                    onTokenLogin(profile);
+                  }}
+                >
+                  {t('profiles.tokenLogin')}
+                </button>
+              )}
               <button
                 type="button"
                 className="menu-item"
@@ -570,12 +632,12 @@ function ProfileCard({
           <span className="text-[var(--t-text-3)]">{usageText(profile)}</span>
         </div>
         <div className="mt-2">
-          <QuotaUsage usage={profile.usage} onRefresh={onRefresh} />
+          <QuotaUsage usage={profile.usage} onRefresh={() => onRefresh()} refreshing={refreshing} />
         </div>
         {activeMarks.map((mark) => (
           <div key={mark.family} data-testid={`quota-mark-${mark.family}`} title={mark.reason || undefined} className="mt-2 flex items-center justify-between rounded border border-[var(--t-warn)] px-2 py-1 text-xs text-[var(--t-warn)]">
             <span>{t('profiles.quotaLocked', { family: mark.family, time: formatHHMM(mark.until) })}</span>
-            <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
+            <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(true); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
           </div>
         ))}
       </div>
@@ -626,7 +688,7 @@ function ProfileCard({
                             method: 'PATCH',
                             body: JSON.stringify({ enabled: nextVal }),
                           }).then(() => {
-                            onRefresh();
+                            onRefresh(true);
                           });
                         }}
                         className="rounded border-[var(--t-border)]"
@@ -684,6 +746,16 @@ function ProfileCard({
             )}
             {checking ? t('profiles.checkingBtn') : t('profiles.checkBtn')}
           </button>
+          {canTokenLogin && (
+            <button
+              type="button"
+              onClick={() => onTokenLogin(profile)}
+              className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2.5 py-1 text-xs"
+            >
+              <KeyRound className="h-3 w-3" />
+              {t('profiles.tokenLoginShort')}
+            </button>
+          )}
           {canLogin && (
             <button
               type="button"
@@ -704,14 +776,16 @@ function Modal({
   title,
   onClose,
   children,
+  maxWidth = 'max-w-md',
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  maxWidth?: string;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl">
+      <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button type="button" onClick={onClose} aria-label="Đóng">
@@ -721,6 +795,381 @@ function Modal({
         {children}
       </div>
     </div>
+  );
+}
+
+function AddProfileModal({
+  onClose,
+  onCreated,
+  onImported,
+}: {
+  onClose: () => void;
+  onCreated: (name: string, engine: Provider) => void;
+  onImported: (result: ImportTokensResult) => void;
+}) {
+  const { t } = useLocale();
+  const [engine, setEngine] = useState<Provider>('agy');
+  const [method, setMethod] = useState<'terminal' | 'cockpit'>('terminal');
+
+  // Terminal state
+  const [name, setName] = useState('');
+  const [accountType, setAccountType] = useState<'personal' | 'team' | 'api'>('personal');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Cockpit token state
+  const [cockpitJson, setCockpitJson] = useState('');
+  const [cockpitAccountType, setCockpitAccountType] = useState<'personal' | 'team' | 'api'>('personal');
+  const [cockpitError, setCockpitError] = useState('');
+  const [cockpitLoading, setCockpitLoading] = useState(false);
+  const [cockpitResult, setCockpitResult] = useState<ImportTokensResult | null>(null);
+
+  const handleCreateTerminal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setError(t('profiles.accountNameRequired'));
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      await createProfile({ name: name.trim(), engine, accountType });
+      onCreated(name.trim(), engine);
+    } catch (err: any) {
+      setError(err?.message || t('profiles.createFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleImportCockpit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cockpitJson.trim()) {
+      setCockpitError(t('profiles.cockpitJsonRequired'));
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cockpitJson);
+    } catch {
+      setCockpitError(t('profiles.invalidJson'));
+      return;
+    }
+    setCockpitLoading(true);
+    setCockpitError('');
+    try {
+      const result = await importAgyTokens({
+        tokens: parsed,
+        accountType: cockpitAccountType,
+      });
+      setCockpitResult(result);
+      // Không giữ refresh token trong state khi đã nhập xong; giữ lại để sửa nếu có mục lỗi.
+      if (result.failedCount === 0) setCockpitJson('');
+      onImported(result);
+    } catch (err: any) {
+      setCockpitError(err?.message || t('profiles.importFailed'));
+    } finally {
+      setCockpitLoading(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={t('profiles.addBtn')}
+      onClose={onClose}
+      maxWidth="max-w-lg"
+    >
+      <div className="space-y-4">
+        <label className="block text-sm">
+          {t('profiles.provider')}
+          <select
+            value={engine}
+            onChange={(e) => {
+              const next = e.target.value as Provider;
+              setEngine(next);
+              if (next !== 'agy') {
+                setMethod('terminal');
+              }
+            }}
+            className="field mt-1"
+          >
+            <option value="agy">Antigravity (Gemini)</option>
+            <option value="codex">Codex (OpenAI)</option>
+            <option value="claude">Claude</option>
+          </select>
+        </label>
+
+        {engine === 'agy' && (
+          <div>
+            <span className="block text-xs font-medium text-[var(--t-text-3)] mb-1.5">
+              {t('profiles.authMethod')}
+            </span>
+            <div className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--t-border)] p-1 bg-[var(--t-surface-2)]">
+              <button
+                type="button"
+                onClick={() => {
+                  setMethod('terminal');
+                  setCockpitError('');
+                }}
+                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                  method === 'terminal'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
+                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+                }`}
+              >
+                {t('profiles.tabTerminalLogin')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMethod('cockpit');
+                  setError('');
+                }}
+                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                  method === 'cockpit'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
+                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+                }`}
+              >
+                {t('profiles.tabImportCockpit')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {engine !== 'agy' || method === 'terminal' ? (
+          <form onSubmit={handleCreateTerminal} className="space-y-4">
+            <p className="text-xs text-[var(--t-text-3)]">
+              {t('profiles.addDescription')}
+            </p>
+            {error && (
+              <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
+                {error}
+              </p>
+            )}
+            <label className="block text-sm">
+              {t('profiles.accountName')}
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t('profiles.accountNamePlaceholder')}
+                className="field mt-1"
+              />
+            </label>
+            <label className="block text-sm">
+              {t('profiles.accountType')}
+              <select
+                value={accountType}
+                onChange={(e) => setAccountType(e.target.value as typeof accountType)}
+                className="field mt-1"
+              >
+                <option value="personal">{t('profiles.personal')}</option>
+                <option value="team">{t('profiles.team')}</option>
+                <option value="api">{t('profiles.api')}</option>
+              </select>
+            </label>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="button-secondary">
+                {t('common.cancel')}
+              </button>
+              <button type="submit" disabled={loading} className="button-primary">
+                {loading ? t('profiles.creating') : t('profiles.createAndGuide')}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="space-y-4">
+            {cockpitResult ? (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-[var(--t-border)] p-3 bg-[var(--t-surface-2)]">
+                  <p className="text-sm font-medium">
+                    {t('profiles.importResultTitle', {
+                      success: cockpitResult.successCount,
+                      total: cockpitResult.total,
+                    })}
+                  </p>
+                </div>
+                <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                  {cockpitResult.results.map((res, i) => (
+                    <div
+                      key={i}
+                      className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs ${
+                        res.status === 'ok'
+                          ? 'border-[var(--t-ok)]/30 bg-[var(--t-ok)]/10 text-[var(--t-text)]'
+                          : 'border-[var(--t-crit)]/30 bg-[var(--t-crit)]/10 text-[var(--t-crit)]'
+                      }`}
+                    >
+                      <span className="mt-0.5 font-bold">
+                        {res.status === 'ok' ? '✓' : '✗'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          {res.name && <span className="font-semibold">{res.name}</span>}
+                          {res.email && (
+                            <span className="text-[var(--t-text-3)] truncate">({res.email})</span>
+                          )}
+                        </div>
+                        {res.message && (
+                          <p className="mt-0.5 opacity-90">{res.message}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  {cockpitResult.failedCount > 0 && (
+                    <button type="button" onClick={() => setCockpitResult(null)} className="button-secondary">
+                      {t('profiles.importBack')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="button-primary"
+                  >
+                    {t('profiles.doneAndClose')}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleImportCockpit} className="space-y-4">
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('profiles.cockpitImportDesc')}
+                </p>
+                {cockpitError && (
+                  <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
+                    {cockpitError}
+                  </p>
+                )}
+                <label className="block text-sm">
+                  {t('profiles.cockpitJsonLabel')}
+                  <textarea
+                    autoFocus
+                    spellCheck={false}
+                    autoComplete="off"
+                    value={cockpitJson}
+                    onChange={(e) => setCockpitJson(e.target.value)}
+                    placeholder={t('profiles.cockpitJsonPlaceholder')}
+                    rows={6}
+                    className="field mt-1 font-mono text-xs leading-relaxed"
+                  />
+                </label>
+                <label className="block text-sm">
+                  {t('profiles.accountType')}
+                  <select
+                    value={cockpitAccountType}
+                    onChange={(e) => setCockpitAccountType(e.target.value as typeof cockpitAccountType)}
+                    className="field mt-1"
+                  >
+                    <option value="personal">{t('profiles.personal')}</option>
+                    <option value="team">{t('profiles.team')}</option>
+                    <option value="api">{t('profiles.api')}</option>
+                  </select>
+                </label>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button type="button" onClick={onClose} className="button-secondary">
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={cockpitLoading}
+                    className="button-primary"
+                  >
+                    {cockpitLoading ? t('profiles.importingTokens') : t('profiles.importTokensBtn')}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+function TokenLoginModal({
+  profile,
+  onClose,
+  onDone,
+}: {
+  profile: Profile;
+  onClose: () => void;
+  onDone: (email: string) => void;
+}) {
+  const { t } = useLocale();
+  const [email, setEmail] = useState(profile.email || '');
+  const [refreshToken, setRefreshToken] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  return (
+    <Modal title={t('profiles.tokenLoginTitle', { name: profile.label || profile.name })} onClose={onClose}>
+      <form
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!email.trim() || !refreshToken.trim()) {
+            setError(t('profiles.tokenLoginRequired'));
+            return;
+          }
+          setLoading(true);
+          setError('');
+          try {
+            const result = await importAgyTokens({
+              tokens: [{ name: profile.name, email: email.trim(), refresh_token: refreshToken.trim() }],
+              accountType: profile.accountType,
+            });
+            const item = result.results[0];
+            if (item?.status === 'ok') {
+              setRefreshToken('');
+              onDone(item.email);
+            } else {
+              setError(item?.message || t('profiles.importFailed'));
+            }
+          } catch (err: any) {
+            setError(err?.message || t('profiles.importFailed'));
+          } finally {
+            setLoading(false);
+          }
+        }}
+      >
+        <p className="text-xs text-[var(--t-text-3)]">{t('profiles.tokenLoginDesc')}</p>
+        {error && (
+          <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">{error}</p>
+        )}
+        <label className="block text-sm">
+          Email
+          <input
+            type="email"
+            autoFocus={!email}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="user@gmail.com"
+            className="field mt-1"
+          />
+        </label>
+        <label className="block text-sm">
+          Refresh token
+          <textarea
+            autoFocus={Boolean(email)}
+            spellCheck={false}
+            autoComplete="off"
+            rows={3}
+            value={refreshToken}
+            onChange={(e) => setRefreshToken(e.target.value)}
+            placeholder="1//..."
+            className="field mt-1 font-mono text-xs"
+          />
+        </label>
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="button-secondary">
+            {t('common.cancel')}
+          </button>
+          <button type="submit" disabled={loading} className="button-primary">
+            {loading ? t('profiles.tokenLoginVerifying') : t('profiles.tokenLoginBtn')}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 function EditProfileModal({
@@ -800,7 +1249,7 @@ function RenameModal({
 }: {
   profile: Profile;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (newName: string) => void;
 }) {
   const [name, setName] = useState(profile.name);
   const [error, setError] = useState('');
@@ -812,7 +1261,7 @@ function RenameModal({
           e.preventDefault();
           try {
             await renameProfile(profile.name, name.trim());
-            onSaved();
+            onSaved(name.trim());
           } catch (err: any) {
             setError(err?.message || 'Không thể đổi tên');
           }
@@ -847,6 +1296,7 @@ function DeleteModal({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useLocale();
   const [typed, setTyped] = useState('');
   const [purge, setPurge] = useState(false);
   const [error, setError] = useState('');
@@ -861,7 +1311,7 @@ function DeleteModal({
             return;
           }
           try {
-            await deleteProfile(profile.name, purge);
+            await deleteProfile(profile.name, purge && profile.kind !== 'keyring');
             onDeleted();
           } catch (err: any) {
             setError(err?.message || 'Không thể xoá hồ sơ');
@@ -879,10 +1329,14 @@ function DeleteModal({
           autoFocus
           placeholder={profile.name}
         />
-        <label className="flex items-start gap-2 text-sm">
-          <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-          Xoá cả thư mục dữ liệu đăng nhập
-        </label>
+        {profile.kind === 'keyring' ? (
+          <p className="rounded bg-[var(--t-warn)]/10 p-2 text-xs text-[var(--t-warn)]">{t('profiles.deleteKeyringNote')}</p>
+        ) : (
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
+            Xoá cả thư mục dữ liệu đăng nhập
+          </label>
+        )}
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>

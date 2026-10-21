@@ -105,6 +105,9 @@ export interface TelegramChat {
   id: number;
   name: string;
   username?: string;
+  /** Optional: associate this chat entry with a project for /use routing. */
+  kind?: 'chat';
+  projectId?: string;
 }
 
 export interface TelegramConfig {
@@ -113,6 +116,20 @@ export interface TelegramConfig {
   allowedChatIds: number[];
   chats: TelegramChat[];
   notify: TelegramNotifyConfig;
+}
+
+export interface DeployPushConfig {
+  remote: string;
+  from: string;
+  to: string;
+  ffOnly: boolean;
+}
+
+export interface DeployProjectConfig {
+  steps: string[][];
+  timeoutSec: number;
+  restartHub: boolean;
+  push?: DeployPushConfig;
 }
 
 export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
@@ -239,6 +256,7 @@ export interface AgentHubConfig {
   telegram: TelegramConfig;
   updates: UpdatesConfig;
   tools: ToolsConfig;
+  deploy: Record<string, DeployProjectConfig>;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -760,6 +778,32 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       : DEFAULT_UPDATES_CONFIG.repo,
   };
   const rawTools = (userConfig.tools as Record<string, unknown>) || {};
+  const rawDeploy = (userConfig.deploy as Record<string, unknown>) || {};
+  const rawProjectsConfig = (userConfig.projects as Record<string, unknown>) || {};
+  for (const [projectId, rawProject] of Object.entries(rawProjectsConfig)) {
+    if (rawProject && typeof rawProject === 'object' && (rawProject as Record<string, unknown>).afterMerge) {
+      rawDeploy[projectId] = (rawProject as Record<string, unknown>).afterMerge;
+    }
+  }
+  const deploy: Record<string, DeployProjectConfig> = {};
+  for (const [projectId, raw] of Object.entries(rawDeploy)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const value = raw as Record<string, unknown>;
+    const steps = Array.isArray(value.steps)
+      ? value.steps.filter((step): step is string[] => Array.isArray(step) && step.length > 0 && step.every((arg) => typeof arg === 'string'))
+      : [];
+    if (steps.length === 0) continue;
+    const pushRaw = value.push as Record<string, unknown> | undefined;
+    const push = pushRaw && typeof pushRaw.remote === 'string' && typeof pushRaw.from === 'string' && typeof pushRaw.to === 'string'
+      ? { remote: pushRaw.remote, from: pushRaw.from, to: pushRaw.to, ffOnly: pushRaw.ffOnly !== false }
+      : undefined;
+    deploy[projectId] = {
+      steps,
+      timeoutSec: typeof value.timeoutSec === 'number' && value.timeoutSec > 0 ? Math.floor(value.timeoutSec) : 900,
+      restartHub: value.restartHub === true,
+      ...(push ? { push } : {}),
+    };
+  }
   const rawInstallers = (rawTools.installers as Record<string, unknown>) || {};
   const installer = (name: string, fallback: ToolInstaller): ToolInstaller => {
     const value = rawInstallers[name];
@@ -912,5 +956,6 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
       },
     },
+    deploy,
   };
 }

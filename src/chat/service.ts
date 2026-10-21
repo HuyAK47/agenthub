@@ -95,8 +95,12 @@ interface PersistentProcess {
   limitResetSeconds?: number;
 }
 
+const MAX_WAITING_USER_MESSAGES = 10;
+
 export class ChatService {
   private queue: QueuedTurn[] = [];
+  /** Messages people sent while the session was busy, delivered in order after the current turn. */
+  private waitingUserMessages = new Map<string, string[]>();
   private runningTurns = new Map<string, RunningTurn>();
   private claudeBinOverride?: string;
   private persistentProcesses = new Map<string, PersistentProcess>();
@@ -701,7 +705,8 @@ export class ChatService {
   sendMessage(
     sessionId: string,
     text: string,
-  ): { userMessageId: string; assistantMessageId: string } {
+    opts: { queueIfBusy?: boolean; fromQueue?: boolean } = {},
+  ): { userMessageId: string; assistantMessageId: string; queued?: boolean; position?: number } {
     if (typeof text !== 'string' || text.trim().length === 0) {
       throw new HttpError(400, 'bad_request', 'Nội dung tin nhắn không được để trống');
     }
@@ -715,6 +720,18 @@ export class ChatService {
     }
 
     if (session.busy === 1 || this.runningTurns.has(sessionId)) {
+      // A person writing to a busy session (typically a brain in the middle of an event turn) is
+      // queued instead of rejected; the message runs as soon as the current turn finishes.
+      if (opts.queueIfBusy) {
+        const waiting = this.waitingUserMessages.get(sessionId) ?? [];
+        if (waiting.length >= MAX_WAITING_USER_MESSAGES) {
+          throw new HttpError(409, 'conflict', 'Phiên đang bận và hàng đợi đã đầy');
+        }
+        waiting.push(text);
+        this.waitingUserMessages.set(sessionId, waiting);
+        this.emitEvent('chat.queued', { sessionId, position: waiting.length });
+        return { userMessageId: '', assistantMessageId: '', queued: true, position: waiting.length };
+      }
       throw new HttpError(409, 'conflict', 'Phiên đang bận');
     }
 
@@ -748,6 +765,7 @@ export class ChatService {
       messageId: userMessageId,
       role: 'user',
       content: text,
+      ...(opts.fromQueue ? { fromQueue: true } : {}),
     });
 
     // Mark session busy
@@ -782,6 +800,8 @@ export class ChatService {
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
     }
+    // Stopping a session also drops messages queued behind the cancelled turn.
+    this.waitingUserMessages.delete(sessionId);
 
     // Check if in queue
     const queuedIndex = this.queue.findIndex((t) => t.sessionId === sessionId);
@@ -1847,6 +1867,31 @@ export class ChatService {
     }
   }
 
+  /** Start the next queued user message of a session once its current turn has finished. */
+  private drainWaitingUserMessages(sessionId: string): void {
+    const waiting = this.waitingUserMessages.get(sessionId);
+    if (!waiting || waiting.length === 0) return;
+    const session = this.chatSessionRepo.get(sessionId);
+    if (!session) {
+      this.waitingUserMessages.delete(sessionId);
+      return;
+    }
+    // The finishing turn may not have released the session yet (busy is cleared right after
+    // chat.done), or another turn slipped in: check again shortly until the session is free.
+    if (session.busy === 1 || this.runningTurns.has(sessionId)) {
+      const timer = setTimeout(() => this.drainWaitingUserMessages(sessionId), 300);
+      timer.unref?.();
+      return;
+    }
+    const text = waiting.shift()!;
+    if (waiting.length === 0) this.waitingUserMessages.delete(sessionId);
+    try {
+      this.sendMessage(sessionId, text, { fromQueue: true });
+    } catch (error) {
+      console.error(`[chat] queued message for ${sessionId} failed:`, error);
+    }
+  }
+
   private emitEvent(type: string, payload: unknown): void {
     if (typeof (this.eventBus as unknown as { emitEphemeral?: (t: string, tid?: string, p?: unknown) => boolean }).emitEphemeral === 'function') {
       (this.eventBus as unknown as { emitEphemeral: (t: string, tid?: string, p?: unknown) => boolean }).emitEphemeral(
@@ -1856,6 +1901,12 @@ export class ChatService {
       );
     } else {
       this.eventBus.emit(type, undefined, payload);
+    }
+    if (type === 'chat.done' || type === 'chat.error') {
+      const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId;
+      if (typeof sessionId === 'string' && this.waitingUserMessages.has(sessionId)) {
+        setImmediate(() => this.drainWaitingUserMessages(sessionId));
+      }
     }
   }
 }
@@ -1957,7 +2008,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   fastify.post('/api/chat/sessions/:id/messages', async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { text?: unknown };
-    const result = chatService.sendMessage(id, body.text as string);
+    const result = chatService.sendMessage(id, body.text as string, { queueIfBusy: true });
     return reply.status(202).send(result);
   });
 

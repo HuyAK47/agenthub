@@ -1192,6 +1192,101 @@ describe('Checking after worker completion', () => {
     expect(eventRepo.getRecent(10).map((event) => event.type)).toContain('task.checking');
     scheduler.stop();
   });
+
+  it('logs error on completion failure only when not stopped', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'DONE'), 'done');
+
+    taskRepo.insert({
+      id: 'test-project/t1',
+      projectId: 'test-project',
+      slug: 't1',
+      title: 'Task 1',
+      status: 'running',
+      worktreePath: projectPath,
+    });
+    runRepo.insert({
+      id: 'run-1',
+      taskId: 'test-project/t1',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+
+    const fakeRt: unknown = {
+      runId: 'run-1',
+      taskId: 'test-project/t1',
+      pid: 999999,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }) },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now(),
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+
+    const schedulerInternal = scheduler as unknown as {
+      isProcessAlive: (pid: number | null, pidStart?: number | null) => boolean;
+      recoverFinishedWork: (run: unknown) => boolean;
+      running: Map<string, unknown>;
+      checkRunningTasks: () => Promise<void>;
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+    };
+
+    vi.spyOn(schedulerInternal, 'isProcessAlive').mockReturnValue(false);
+    vi.spyOn(schedulerInternal, 'recoverFinishedWork').mockReturnValue(false);
+    const completionSpy = vi.spyOn(schedulerInternal, 'handleRunCompletion');
+    const checkSpy = vi.spyOn(scheduler, 'runChecksForTask').mockRejectedValue(new Error('simulated check error'));
+
+    try {
+      // Case 1: scheduler is running (not stopped) -> console.error is called
+      schedulerInternal.running.set('test-project/t1', fakeRt);
+      await schedulerInternal.checkRunningTasks();
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(
+          '[scheduler] handleRunCompletion failed for test-project/t1:',
+          expect.any(Error),
+        );
+      });
+      await completionSpy.mock.results[0]?.value;
+
+      // Case 2: scheduler is stopped -> console.error is NOT called
+      errorSpy.mockClear();
+      checkSpy.mockImplementationOnce(async () => {
+        scheduler.stop();
+        throw new Error('simulated check error');
+      });
+      schedulerInternal.running.set('test-project/t1', fakeRt);
+      await schedulerInternal.checkRunningTasks();
+      await vi.waitFor(() => {
+        expect(checkSpy).toHaveBeenCalledTimes(2);
+      });
+      await completionSpy.mock.results[1]?.value;
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      scheduler.stop();
+      errorSpy.mockRestore();
+    }
+  });
 });
 
 describe('Crash recovery on startup', () => {

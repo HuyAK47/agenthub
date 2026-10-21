@@ -295,12 +295,21 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
 
     const loadGuard = (ctx.scheduler as unknown as { loadGuard: LoadGuard }).loadGuard;
     expect(loadGuard).toBeDefined();
+    vi.spyOn(loadGuard, 'update').mockImplementation(() => ({
+      load1: 0,
+      freeMemGB: 16,
+      overloaded: loadGuard.isOverloaded(),
+      recoveringSince: null,
+      highSince: null,
+      autoPauseTriggered: loadGuard.isAutoPauseTriggered(),
+    }));
 
     // 4.1 Chính sách 'recent': task gần nhất (t3) bị pause trước
     ctx.config.load.enabled = true;
     ctx.config.load.pausePolicy = 'recent';
     ctx.config.load.maxAutoPaused = 1;
     vi.spyOn(loadGuard, 'isAutoPauseTriggered').mockReturnValue(true);
+    vi.spyOn(loadGuard, 'isOverloaded').mockReturnValue(true);
 
     ctx.scheduler.tick();
 

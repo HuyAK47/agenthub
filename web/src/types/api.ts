@@ -66,6 +66,9 @@ export interface Profile {
   label?: string | null;
   notes?: string | null;
   priority?: number;
+  avatarUrl?: string | null;
+  /** Chỉ có trong phản hồi của nút Làm mới: kết quả lấy ảnh đại diện. */
+  avatarMessage?: string;
   currentTask?: { id?: string; title?: string } | null;
 }
 
@@ -107,6 +110,7 @@ export interface Project {
   settings?: ProjectSettings;
   integrationStatus?: IntegrationStatus | null;
   createdAt?: string;
+  afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
 }
 
 /** Mirrors src/projects/settings.ts. */

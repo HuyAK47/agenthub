@@ -248,6 +248,8 @@ export async function getProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects');
 }
 
+export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+
 export async function createProject(data: CreateProjectInput): Promise<Project> {
   return apiFetch<Project>('/api/projects', {
     method: 'POST',
@@ -310,6 +312,30 @@ export async function getProfiles(): Promise<Profile[]> {
 export async function refreshProfileUsage(name: string): Promise<Profile> {
   return apiFetch<Profile>(`/api/profiles/${encodeURIComponent(name)}/usage/refresh`, {
     method: 'POST',
+  });
+}
+
+export interface ImportTokensResult {
+  success: boolean;
+  total: number;
+  successCount: number;
+  failedCount: number;
+  results: Array<{
+    name: string;
+    email: string;
+    action: 'created' | 'updated' | 'skipped';
+    status: 'ok' | 'error';
+    message?: string;
+  }>;
+}
+
+export async function importAgyTokens(data: {
+  tokens: any;
+  accountType?: 'personal' | 'team' | 'api';
+}): Promise<ImportTokensResult> {
+  return apiFetch<ImportTokensResult>('/api/profiles/import-tokens', {
+    method: 'POST',
+    body: JSON.stringify(data),
   });
 }
 

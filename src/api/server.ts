@@ -196,6 +196,16 @@ export async function createServer(
     return service.getProject(id);
   });
 
+  fastify.get('/api/projects/:id/deploy', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getDeployStatus(id);
+  });
+
+  fastify.post('/api/projects/:id/deploy', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    return reply.status(202).send(service.rerunDeploy(id));
+  });
+
   fastify.post('/api/projects', async (req: FastifyRequest, reply: FastifyReply) => {
     const project = service.createProject(req.body);
     return reply.status(201).send(project);
@@ -274,6 +284,11 @@ export async function createServer(
   fastify.post('/api/profiles', async (req: FastifyRequest, reply: FastifyReply) => {
     const profile = service.createProfile(req.body);
     return reply.status(201).send(profile);
+  });
+
+  fastify.post('/api/profiles/import-tokens', async (req: FastifyRequest, reply: FastifyReply) => {
+    const result = await service.importAgyTokens(req.body);
+    return reply.status(200).send(result);
   });
 
   fastify.post('/api/profiles/:name/check', async (req: FastifyRequest, reply: FastifyReply) => {
