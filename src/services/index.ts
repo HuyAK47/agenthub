@@ -1074,7 +1074,7 @@ export class AppService {
     return this.deployService?.getAllStatus() || [];
   }
 
-  async rerunDeploy(id: string) {
+  rerunDeploy(id: string) {
     this.getProject(id);
     if (!this.deployService) throw new HttpError(503, 'unavailable', 'Deploy service chưa sẵn sàng');
     return this.deployService.rerun(id);

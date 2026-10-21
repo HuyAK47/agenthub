@@ -209,6 +209,57 @@ describe('DeployService', () => {
     expect(JSON.parse(fs.readFileSync(path.join(f.root, 'deploy-restart.json'), 'utf8'))).toMatchObject({ projectId: 'demo', commit: 'abc' });
   });
 
+  it('does not restart when restartHub is enabled for a non-hub project', async () => {
+    const f = setup();
+    const restarts: string[][] = [];
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: true } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => ({ code: 0, output: '' }),
+      (command, args) => { restarts.push([command, ...args]); },
+    );
+    await expect(service.run('demo')).resolves.toMatchObject({ status: 'succeeded' });
+    expect(restarts).toHaveLength(0);
+    expect(fs.existsSync(path.join(f.root, 'deploy-restart.json'))).toBe(false);
+  });
+
+  it('reports restart runner errors as incidents and removes the marker', async () => {
+    const f = setup();
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: true } } } as never,
+      { get: () => ({ id: 'demo', path: process.cwd(), defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => ({ code: 0, output: '' }),
+      () => { throw new Error('restart unavailable'); },
+    );
+    await expect(service.run('demo')).resolves.toMatchObject({ status: 'failed', error: 'restart unavailable' });
+    expect(fs.existsSync(path.join(f.root, 'deploy-restart.json'))).toBe(false);
+    expect(f.events).toContainEqual(expect.objectContaining({ type: 'deploy.failed', payload: expect.objectContaining({ level: 'incident', error: 'restart unavailable' }) }));
+  });
+
+  it('reports marker write errors as failed deployments', async () => {
+    const f = setup();
+    fs.mkdirSync(path.join(f.root, 'deploy-restart.json'));
+    const restarts: string[][] = [];
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: true } } } as never,
+      { get: () => ({ id: 'demo', path: process.cwd(), defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => ({ code: 0, output: '' }),
+      (command, args) => { restarts.push([command, ...args]); },
+    );
+    await expect(service.run('demo')).resolves.toMatchObject({ status: 'failed' });
+    expect(restarts).toHaveLength(0);
+    expect(f.events).toContainEqual(expect.objectContaining({ type: 'deploy.failed', payload: expect.objectContaining({ level: 'incident' }) }));
+  });
+
   it('restores and removes a valid restart marker, while ignoring a malformed one', () => {
     const f = setup();
     fs.writeFileSync(path.join(f.root, 'deploy-restart.json'), JSON.stringify({ projectId: 'demo', commit: 'abc' }));

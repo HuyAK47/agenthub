@@ -203,7 +203,7 @@ export async function createServer(
 
   fastify.post('/api/projects/:id/deploy', async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
-    return reply.status(202).send(await service.rerunDeploy(id));
+    return reply.status(202).send(service.rerunDeploy(id));
   });
 
   fastify.post('/api/projects', async (req: FastifyRequest, reply: FastifyReply) => {

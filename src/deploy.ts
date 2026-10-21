@@ -22,7 +22,7 @@ export interface DeployStatus {
 
 type GitRunner = (cwd: string, args: string[]) => Promise<{ code: number; output: string }>;
 type ProcessRunner = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }) => Promise<{ code: number; output: string; timedOut?: boolean }>;
-type RestartRunner = (command: string, args: string[]) => void;
+type RestartRunner = (command: string, args: string[]) => { on?: (event: string, listener: (error: Error) => void) => unknown } | void;
 
 const hubPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -47,6 +47,7 @@ export class DeployService {
     private restartRunner: RestartRunner = (command, args) => {
       const child = spawn(command, args, { detached: true, stdio: 'ignore', env: process.env });
       child.unref();
+      return child;
     },
   ) {}
 
@@ -156,7 +157,12 @@ export class DeployService {
       status.status = definition.restartHub && this.isHubProject(project) ? 'restarting' : 'succeeded';
       status.finishedAt = new Date().toISOString();
       write(status.status === 'restarting' ? 'deploy completed; hub is restarting' : 'deploy succeeded');
-      if (status.status === 'succeeded') this.eventBus.emit('deploy.succeeded', undefined, { projectId, commit, logPath });
+      if (status.status === 'restarting') {
+        this.eventBus.emit('deploy.restarting', undefined, { projectId, commit, logPath });
+        this.restartHub(status);
+      } else {
+        this.eventBus.emit('deploy.succeeded', undefined, { projectId, commit, logPath });
+      }
     } catch (error) {
       status.status = 'failed';
       status.finishedAt = new Date().toISOString();
@@ -165,10 +171,6 @@ export class DeployService {
       this.eventBus.emit('deploy.failed', undefined, { projectId, commit, logPath, error: status.error, level: 'incident' });
     } finally {
       this.latest.set(projectId, { ...status });
-    }
-    if (status.status === 'restarting') {
-      this.eventBus.emit('deploy.restarting', undefined, { projectId, commit, logPath });
-      this.restartHub(projectId, commit, logPath);
     }
     return status;
   }
@@ -189,12 +191,34 @@ export class DeployService {
     } catch { return null; }
   }
 
-  private restartHub(projectId: string, commit: string | undefined, logPath: string): void {
+  private restartHub(status: DeployStatus): void {
     const command = process.platform === 'darwin' ? 'launchctl' : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
     const args = process.platform === 'darwin' ? ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] : ['--user', 'restart', 'agenthub', '--no-block'];
     const statePath = path.join(this.config.hubHome, 'deploy-restart.json');
-    fs.writeFileSync(statePath, JSON.stringify({ projectId, commit, logPath }));
-    this.restartRunner(command, args);
+    fs.writeFileSync(statePath, JSON.stringify({ projectId: status.projectId, commit: status.commit, logPath: status.logPath }));
+    let child;
+    try {
+      child = this.restartRunner(command, args);
+    } catch (error) {
+      try { fs.rmSync(statePath, { force: true }); } catch { /* best effort cleanup */ }
+      throw error;
+    }
+    child?.on?.('error', (error) => this.failRestart(status, error, statePath));
+  }
+
+  private failRestart(status: DeployStatus, error: unknown, statePath: string): void {
+    try { fs.rmSync(statePath, { force: true }); } catch { /* best effort cleanup */ }
+    status.status = 'failed';
+    status.finishedAt = new Date().toISOString();
+    status.error = error instanceof Error ? error.message : String(error);
+    this.latest.set(status.projectId, { ...status });
+    this.eventBus.emit('deploy.failed', undefined, {
+      projectId: status.projectId,
+      commit: status.commit,
+      logPath: status.logPath,
+      error: status.error,
+      level: 'incident',
+    });
   }
 
   getStatus(projectId: string): DeployStatus | null { return this.latest.get(projectId) || null; }
