@@ -8,7 +8,7 @@ import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
-import { applyNoBrowserEnv } from '../src/api/pty.js';
+import { applyNoBrowserEnv, PtyManager } from '../src/api/pty.js';
 
 let tmpDir: string;
 let config: ReturnType<typeof loadConfig>;
@@ -173,5 +173,35 @@ describe('AgentHub PTY Login and WebSocket', () => {
     // Shim chạy được và không làm gì
     expect(execFileSync('xdg-open', ['https://example.com'], { env, encoding: 'utf8' })).toBe('');
     expect(fs.statSync(path.join(shimDir, 'xdg-open')).mode & 0o111).not.toBe(0);
+  });
+
+  describe('re-login of an agy profile that is still signed in', () => {
+    async function runRelogin(needsLogout: boolean): Promise<string[]> {
+      const commandsFile = path.join(tmpDir, `commands-${needsLogout}.txt`);
+      process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-logged-in.mjs');
+      process.env.FAKE_AGY_COMMANDS_FILE = commandsFile;
+      process.env.FAKE_AGY_LOGIN_NEEDS_LOGOUT = needsLogout ? '1' : '0';
+      const manager = new PtyManager(ctx.service);
+      try {
+        const sessionId = manager.createSession(`relogin_${needsLogout}`);
+        const deadline = Date.now() + 12_000;
+        while (Date.now() < deadline && !/accounts\.google\.com/.test(manager.getSession(sessionId)?.recentBuffer || '')) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        return fs.existsSync(commandsFile) ? fs.readFileSync(commandsFile, 'utf8').trim().split('\n') : [];
+      } finally {
+        manager.stop();
+        delete process.env.FAKE_AGY_COMMANDS_FILE;
+        delete process.env.FAKE_AGY_LOGIN_NEEDS_LOGOUT;
+      }
+    }
+
+    it('sends /login so agy prints a fresh login link', async () => {
+      expect(await runRelogin(false)).toEqual(['/login']);
+    });
+
+    it('falls back to /logout then /login when /login alone shows no link', async () => {
+      expect(await runRelogin(true)).toEqual(['/login', '/logout', '/login']);
+    }, 20_000);
   });
 });

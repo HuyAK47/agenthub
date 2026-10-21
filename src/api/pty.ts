@@ -18,6 +18,8 @@ interface PtySession {
   timer: NodeJS.Timeout;
   recentBuffer: string;
   loginMenuAnswered?: boolean;
+  /** agy đã đăng nhập thì vào thẳng chat; hub phải tự gửi /login để lấy link mới. */
+  agyRelogin?: 'waiting_prompt' | 'login_sent';
 }
 
 // eslint-disable-next-line no-control-regex -- strips terminal escape sequences
@@ -27,6 +29,16 @@ const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[
  * Newer agy versions ask for a login method before printing the OAuth link.
  * Return true when the menu is on screen so the hub can pick "Google OAuth".
  */
+/** agy đã vào màn hình chat (hồ sơ còn phiên đăng nhập). */
+export function isAgyChatPrompt(buffer: string): boolean {
+  return /\? for shortcuts/i.test(buffer.replace(ANSI_RE, ''));
+}
+
+/** agy đã in link OAuth hoặc ô nhập mã xác thực. */
+export function hasAgyLoginLink(buffer: string): boolean {
+  return /accounts\.google\.com|authorization code/i.test(buffer.replace(ANSI_RE, ''));
+}
+
 export function isAgyLoginMenu(buffer: string): boolean {
   return /Select login method/i.test(buffer.replace(ANSI_RE, '')) && /Google OAuth/i.test(buffer.replace(ANSI_RE, ''));
 }
@@ -121,6 +133,14 @@ export class PtyManager {
       sockets: new Set(),
       timer,
       recentBuffer: '',
+      agyRelogin: profile.engine === 'agy' ? 'waiting_prompt' : undefined,
+    };
+    // Gõ lệnh slash rồi mới Enter, để ô gợi ý lệnh của agy kịp lọc đúng lệnh.
+    const typeCommand = (command: string) => {
+      try { ptyProcess.write(command); } catch { return; }
+      setTimeout(() => {
+        try { ptyProcess.write('\r'); } catch { /* process may have exited */ }
+      }, 200);
     };
 
     ptyProcess.onData((data: string) => {
@@ -132,6 +152,20 @@ export class PtyManager {
         setTimeout(() => {
           try { ptyProcess.write('\r'); } catch { /* process may have exited */ }
         }, 300);
+      }
+      // Đã có menu/link đăng nhập ngay từ đầu (hồ sơ mới): chat xuất hiện sau đó là do đăng nhập xong.
+      if (session.agyRelogin === 'waiting_prompt' && (session.loginMenuAnswered || hasAgyLoginLink(session.recentBuffer))) {
+        session.agyRelogin = undefined;
+      }
+      if (session.agyRelogin === 'waiting_prompt' && isAgyChatPrompt(session.recentBuffer)) {
+        session.agyRelogin = 'login_sent';
+        setTimeout(() => typeCommand('/login'), 500);
+        // Nếu /login không mở được menu hay link (agy đòi đăng xuất trước) thì /logout rồi /login lại.
+        setTimeout(() => {
+          if (!this.sessions.has(sessionId) || session.loginMenuAnswered || hasAgyLoginLink(session.recentBuffer)) return;
+          typeCommand('/logout');
+          setTimeout(() => typeCommand('/login'), 2_000);
+        }, 6_000);
       }
       for (const socket of session.sockets) {
         if (socket.readyState === WebSocket.OPEN) {
