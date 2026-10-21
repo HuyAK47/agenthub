@@ -60,6 +60,11 @@ async function run() {
     return;
   }
   switch (mode) {
+    case 'done-tokens':
+      // Codex prints its token usage at the end of the run.
+      console.log('tokens used');
+      console.log('1.234');
+    // falls through
     case 'done':
       console.log('Fake agent: completing task...');
       fs.writeFileSync(

@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrainRepo, BrainService } from '../src/brain.js';
-import { EventRepo, openDatabase } from '../src/db/index.js';
+import { EventRepo, MIGRATIONS, openDatabase } from '../src/db/index.js';
 import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
-import { ClaudeSessionScanner, isClaudeProcessOpen, isClaudeQuotaLimited, redactTranscriptText } from '../src/claude-sessions/scanner.js';
+import { ClaudeSessionScanner, encodeProjectDir, isClaudeProcessOpen, isClaudeQuotaLimited, redactTranscriptText } from '../src/claude-sessions/scanner.js';
 import { ClaudeFailoverState } from '../src/chat/failover.js';
 import { attributeTurn, taskRefsFromToolInput } from '../src/claude-sessions/attribution.js';
 
@@ -44,7 +44,7 @@ function addProjectAndTask(db: ReturnType<typeof openDatabase>, projectDir: stri
 describe('Claude session privacy and quota handling', () => {
   it('auto-resumes only a stable stopped session into a real chat session', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
     fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db'));
     db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
@@ -80,7 +80,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('does not auto-resume when transcript cwd is missing', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); fs.mkdirSync(transcriptDir, { recursive: true });
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); fs.mkdirSync(transcriptDir, { recursive: true });
     const db = openDatabase(path.join(root, 'hub.db')); const file = path.join(transcriptDir, 'session.jsonl');
     const hitAt = new Date(Date.now() - 20 * 60_000);
     fs.writeFileSync(file, `${JSON.stringify({ type: 'assistant', sessionId: 'session', timestamp: hitAt.toISOString(), quotaLimits: { status: 'rejected', resetsAt: Math.floor(hitAt.getTime() / 1000) - 60 }, message: { id: 'limited', content: [] } })}\n`);
@@ -95,7 +95,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('deduplicates message ids and reads only appended transcript bytes', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); fs.mkdirSync(transcriptDir, { recursive: true });
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); fs.mkdirSync(transcriptDir, { recursive: true });
     const projectDir = path.join(root, 'project'); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db'));
     db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
@@ -147,12 +147,12 @@ describe('Claude session privacy and quota handling', () => {
   it('derives working, waiting, and inactive states from transcript fixture events', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-brain-')); dirs.push(root);
     const transcriptDir = path.join(root, 'projects'); const projectDir = path.join(root, 'project');
-    fs.mkdirSync(path.join(transcriptDir, 'encoded'), { recursive: true }); fs.mkdirSync(projectDir);
+    fs.mkdirSync(path.join(transcriptDir, encodeProjectDir(path.join(root, 'project'))), { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db'));
     db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
     const now = Date.now();
     const write = (id: string, timestamp: string, content: unknown) => {
-      fs.writeFileSync(path.join(transcriptDir, 'encoded', `${id}.jsonl`), `${JSON.stringify({
+      fs.writeFileSync(path.join(transcriptDir, encodeProjectDir(path.join(root, 'project')), `${id}.jsonl`), `${JSON.stringify({
         type: 'assistant', sessionId: id, cwd: projectDir, timestamp,
         message: { id: `${id}-message`, model: 'claude-sonnet', usage: { input_tokens: 10, output_tokens: 5 }, content },
       })}\n`);
@@ -173,7 +173,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('preserves manual brain status while it is fresh and never overwrites cwd with an empty scan value', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-manual-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
     fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db'));
     db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
@@ -193,7 +193,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('persists rate_limit_info events from stream-json transcripts', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); fs.mkdirSync(transcriptDir, { recursive: true });
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); fs.mkdirSync(transcriptDir, { recursive: true });
     const projectDir = path.join(root, 'project'); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db'));
     db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
@@ -210,37 +210,68 @@ describe('Claude session privacy and quota handling', () => {
 
   it('does not persist an out-of-scope transcript or its title/content', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects'); fs.mkdirSync(transcriptDir); fs.mkdirSync(path.join(transcriptDir, 'encoded'));
+    const transcriptDir = path.join(root, 'projects'); fs.mkdirSync(transcriptDir); fs.mkdirSync(path.join(transcriptDir, encodeProjectDir(path.join(root, 'project'))));
     const db = openDatabase(path.join(root, 'hub.db'));
-    transcript(path.join(transcriptDir, 'encoded'), '/unregistered/project', new Date().toISOString());
+    transcript(path.join(transcriptDir, encodeProjectDir(path.join(root, 'project'))), '/unregistered/project', new Date().toISOString());
     await new ClaudeSessionScanner(db, { dir: transcriptDir, hubHome: path.join(root, 'hub-home'), worktreesDir: path.join(root, 'worktrees') }).scan();
     expect(db.prepare('SELECT COUNT(*) count FROM claude_sessions').get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) count FROM sqlite_master WHERE sql LIKE '%SECRET_TRANSCRIPT_CONTENT%'").get()).toEqual({ count: 0 });
     db.close();
   });
 
+  it('never opens or records transcripts of Claude projects the hub does not manage', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects'); const projectDir = path.join(root, 'project'); fs.mkdirSync(projectDir);
+    const companyDir = path.join(transcriptDir, encodeProjectDir('/media/vault/ProjectCty-SOAR')); fs.mkdirSync(companyDir, { recursive: true });
+    // Similar prefix but a different project: must not match by name prefix alone.
+    const siblingDir = path.join(transcriptDir, `${encodeProjectDir(projectDir)}x`); fs.mkdirSync(siblingDir);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
+    // Even a transcript that later moves into a managed project stays unread when its folder belongs elsewhere.
+    transcript(companyDir, projectDir, new Date().toISOString());
+    transcript(siblingDir, projectDir, new Date().toISOString());
+    const readSpy = vi.spyOn(fs, 'createReadStream');
+    await new ClaudeSessionScanner(db, { dir: transcriptDir }).scan();
+    expect(readSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+    expect(db.prepare('SELECT COUNT(*) count FROM claude_scan_state').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) count FROM claude_sessions').get()).toEqual({ count: 0 });
+    db.close();
+  });
+
+  it('migration forgets previously recorded paths of unmanaged transcripts', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    const insert = db.prepare('INSERT INTO claude_scan_state (path,inode,size,offset,mtime,turnId,turnTasks,eligible) VALUES (?,?,?,?,?,?,?,?)');
+    insert.run('/x/-media-ProjectCty/a.jsonl', 1, 1, 1, 1, 't', '[]', 0);
+    insert.run('/x/-home-me-project/b.jsonl', 2, 1, 1, 1, 't', '[]', 1);
+    db.exec(MIGRATIONS[MIGRATIONS.length - 1]);
+    expect(db.prepare('SELECT path FROM claude_scan_state').all()).toEqual([{ path: '/x/-home-me-project/b.jsonl' }]);
+    db.close();
+  });
+
   it('accepts a registered project and only activates failover for fresh quota observations', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects'); const projectDir = path.join(root, 'project'); fs.mkdirSync(transcriptDir); fs.mkdirSync(projectDir); fs.mkdirSync(path.join(transcriptDir, 'encoded'));
+    const transcriptDir = path.join(root, 'projects'); const projectDir = path.join(root, 'project'); fs.mkdirSync(transcriptDir); fs.mkdirSync(projectDir); fs.mkdirSync(path.join(transcriptDir, encodeProjectDir(path.join(root, 'project'))));
     const db = openDatabase(path.join(root, 'hub.db'));
     db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
     const state = new ClaudeFailoverState(path.join(root, 'failover.json'));
-    transcript(path.join(transcriptDir, 'encoded'), projectDir, new Date(Date.now() - 60 * 60_000).toISOString(), 'rejected');
+    transcript(path.join(transcriptDir, encodeProjectDir(path.join(root, 'project'))), projectDir, new Date(Date.now() - 60 * 60_000).toISOString(), 'rejected');
     await new ClaudeSessionScanner(db, { dir: transcriptDir, failoverState: state }).scan();
     expect(db.prepare('SELECT COUNT(*) count FROM claude_sessions').get()).toEqual({ count: 1 });
     expect(state.snapshot().active).toBe(false);
-    const fresh = path.join(transcriptDir, 'fresh'); fs.mkdirSync(fresh);
+    const fresh = path.join(transcriptDir, encodeProjectDir(path.join(projectDir, 'fresh'))); fs.mkdirSync(fresh);
     transcript(fresh, projectDir, new Date().toISOString(), 'rejected');
     await new ClaudeSessionScanner(db, { dir: transcriptDir, failoverState: state }).scan();
     expect(state.snapshot().active).toBe(true);
-    expect(state.snapshot().evidence?.file).toContain('fresh/session.jsonl');
+    expect(state.snapshot().evidence?.file).toContain('-fresh/session.jsonl');
     expect(state.snapshot().evidence?.line).toBe(1);
     db.close();
   });
 
   it('clears failover when Claude writes a later activity record', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
     fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db'));
     db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
@@ -258,7 +289,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('attributes the complete total of a three-message turn, including after a split scan', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
     fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db')); addProjectAndTask(db, projectDir);
     const now = new Date().toISOString();
@@ -282,7 +313,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('scans 3000 assistant messages in a valid project without quadratic work', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
     fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db')); db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('proj', 'Project', projectDir);
     const now = new Date().toISOString();
@@ -297,8 +328,10 @@ describe('Claude session privacy and quota handling', () => {
 
   it('stores an out-of-scope scan offset and reads only appended bytes later', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); fs.mkdirSync(transcriptDir, { recursive: true });
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); fs.mkdirSync(transcriptDir, { recursive: true });
     const db = openDatabase(path.join(root, 'hub.db')); const file = path.join(transcriptDir, 'outside.jsonl');
+    // The folder belongs to a managed project, but the session's cwd is outside it.
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', path.join(root, 'project'));
     const first = JSON.stringify(assistantEvent('outside', '/not-registered', 'one', new Date().toISOString()));
     fs.writeFileSync(file, `${first}\n`);
     const scanner = new ClaudeSessionScanner(db, { dir: path.join(root, 'projects') });
@@ -315,7 +348,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('sets session title from first user message up to 80 characters when ai-title is missing', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
     fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db')); addProjectAndTask(db, projectDir);
     const file = path.join(transcriptDir, 'sess-title.jsonl');
@@ -334,7 +367,7 @@ describe('Claude session privacy and quota handling', () => {
 
   it('prefers ai-title over first user message', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
-    const transcriptDir = path.join(root, 'projects', 'encoded'); const projectDir = path.join(root, 'project');
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
     fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
     const db = openDatabase(path.join(root, 'hub.db')); addProjectAndTask(db, projectDir);
     const file = path.join(transcriptDir, 'sess-ai.jsonl');

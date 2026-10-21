@@ -519,6 +519,11 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_brain_turns_started ON brain_turns(startedAt);
   `,
+  // Migration 40: forget transcript paths of Claude projects the hub does not manage (privacy).
+  // The scanner used to record every transcript path on the machine; folder names reveal project names.
+  `
+  DELETE FROM claude_scan_state WHERE eligible = 0;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
