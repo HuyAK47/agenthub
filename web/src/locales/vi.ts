@@ -521,7 +521,7 @@ export const vi = {
     hasTokenBadge: 'Token Telegram sẵn sàng',
   },
   extra: {
-    claudeVersion: 'Phiên bản Claude đang dùng', systemBrain: 'Bộ não hệ thống', projectBrains: 'Bộ não theo dự án',
+    claudeVersion: 'Phiên bản Claude đang dùng', systemBrain: 'Bộ não hệ thống', projectBrains: 'Bộ não theo dự án', assistantChats: 'Trợ lý',
     connected: 'Đã kết nối', disconnected: 'Mất kết nối', connectionAria: 'Trạng thái kết nối',
     themeAria: 'Chế độ giao diện', dark: 'Tối', light: 'Sáng', system: 'Hệ thống', default: 'Mặc định',
     sidebarAria: 'Sidebar điều hướng', pageTaskCreate: 'Tạo task mới', pageTaskDetail: 'Chi tiết task',

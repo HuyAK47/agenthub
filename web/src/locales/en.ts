@@ -522,7 +522,7 @@ export const en: typeof vi = {
     hasTokenBadge: 'Telegram token ready',
   },
   extra: {
-    claudeVersion: 'Claude version in use', systemBrain: 'System brain', projectBrains: 'Project brains',
+    claudeVersion: 'Claude version in use', systemBrain: 'System brain', projectBrains: 'Project brains', assistantChats: 'Assistant',
     connected: 'Connected', disconnected: 'Disconnected', connectionAria: 'Connection status', quickPrompts: 'Quick prompts:', claudeAnswering: 'Claude is answering...', chatPlaceholder: 'Type a message... (Enter to send, Shift+Enter for a new line)', stopResponse: 'Stop response', stop: 'Stop', sendMessage: 'Send message', newChat: 'New conversation', noChats: 'No conversations yet. Click the button above to start!', chat: 'Conversation', deleteSession: 'Delete session', busySession: 'Cannot delete a busy session', fullMode: 'Full', safeMode: 'Safe', answering: 'answering…', tool: 'Tool', toolCount: '{count} tool actions', stepsDone: '{count} steps completed', collapse: 'collapse', expand: 'click to expand', newMessages: 'New messages',
     timeout: 'timed out', loginFailed: 'Failed to open login session', error: 'Error', seconds: 'seconds', turns: 'turns',
     project: 'Project', fastest: 'fastest', fiveHours: '5 hours', week: 'Week', minutesAgo: '{count} minutes ago', hoursAgo: '{count} hours ago', quickPromptTasks: 'How are the tasks going?', quickPromptQuota: 'Which account has the most quota left?', quickPromptSplit: 'Split Phase 1 of XFarm into smaller tasks and dispatch them',

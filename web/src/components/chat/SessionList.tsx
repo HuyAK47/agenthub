@@ -273,10 +273,11 @@ export const SessionList: React.FC<SessionListProps> = ({
             const isPinned = Boolean(session.pinned);
             const isArchived = Boolean(session.archived);
 
-            const brainGroup = session.id === 'brain' ? 'system' : session.id.startsWith('brain:') ? 'project' : null;
+            const brainGroup = session.kind === 'assistant' ? 'assistant' : session.id === 'brain' ? 'system' : session.id.startsWith('brain:') ? 'project' : null;
+            const groupLabel = brainGroup === 'assistant' ? t('extra.assistantChats') : brainGroup === 'system' ? t('extra.systemBrain') : t('extra.projectBrains');
             return (
               <React.Fragment key={session.id}>
-                {brainGroup && (filteredSessions.findIndex((item) => (item.id === 'brain' ? 'system' : item.id.startsWith('brain:') ? 'project' : null) === brainGroup) === filteredSessions.indexOf(session)) && <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{brainGroup === 'system' ? t('extra.systemBrain') : t('extra.projectBrains')}</div>}
+                {brainGroup && (filteredSessions.findIndex((item) => (item.kind === 'assistant' ? 'assistant' : item.id === 'brain' ? 'system' : item.id.startsWith('brain:') ? 'project' : null) === brainGroup) === filteredSessions.indexOf(session)) && <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{groupLabel}</div>}
               <div
                 key={session.id}
                 role="button"

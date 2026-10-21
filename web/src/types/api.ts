@@ -328,6 +328,7 @@ export interface ProjectBrain {
   queued: boolean;
   lastTurnAt: string | null;
   tokensToday: number;
+  directives?: Array<{ id: string; text: string; createdAt: string }>;
 }
 
 export interface AssistantStatus {
