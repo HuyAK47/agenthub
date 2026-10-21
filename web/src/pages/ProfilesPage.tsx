@@ -116,6 +116,14 @@ export const ProfilesPage: React.FC = () => {
     isLoading,
     error,
   } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles, refetchInterval: 5000 });
+
+  useEffect(() => {
+    if (isLoading || profiles.length === 0 || !window.location.hash) return;
+    const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [isLoading, profiles]);
   const { data: systemConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig });
   const { data: status } = useQuery({
     queryKey: ['status'],
