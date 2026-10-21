@@ -41,8 +41,7 @@ import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
-import { isClaudeQuotaLimited } from '../claude-sessions/scanner.js';
-import { ClaudeSessionScanner } from '../claude-sessions/scanner.js';
+import { isClaudeProcessOpen, isClaudeQuotaLimited, ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
@@ -51,6 +50,7 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
+import { SetupManager } from '../tools/setup.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -326,11 +326,20 @@ export const UpdateConfigSchema = z.object({
   slotsPerAgyProfile: z.number().int().positive().optional(),
   slotsPerCodexProfile: z.number().int().positive().optional(),
   multiplePerProvider: z.boolean().optional(),
+  planning: z.object({
+    requireApproval: z.boolean().optional(),
+    approvalMinTasks: z.number().int().min(0).max(100).optional(),
+  }).optional(),
   watchdog: z.object({
     stallMinutes: z.number().positive().optional(),
     waitingMinutes: z.number().positive().optional(),
   }).optional(),
   autoFixOnFail: z.boolean().optional(),
+  tools: z.object({ installers: z.record(z.object({
+    package: z.string().regex(/^(@[a-z0-9-~][a-z0-9._~]*\/[a-z0-9-~][a-z0-9._~]*|[a-z0-9-~][a-z0-9._~]*)(@[\w.^~<>=*-]+)?$/).refine((value) => !value.startsWith('-'), 'Tên package npm không hợp lệ').optional(),
+    versionArgs: z.array(z.string()).optional(),
+    docsUrl: z.string().url().optional(),
+  })) }).optional(),
   chat: z
     .object({
       claudeBin: z.string().optional(),
@@ -681,21 +690,50 @@ export class AppService {
     public telegramBotService?: TelegramBotService,
     public knowledgeRepo?: KnowledgeRepo,
     public taskBatchRepo?: TaskBatchRepo,
+    public setupManager?: SetupManager,
   ) {}
 
-  listClaudeSessions(activeWithinMin = 5) {
-    if (!this.claudeSessionRepo) return [];
-    const cutoff = Date.now() - activeWithinMin * 60_000;
-    return this.claudeSessionRepo.list().map((session) => ({ ...session, active: !!session.lastAt && Date.parse(session.lastAt) >= cutoff, topTasks: this.claudeSessionRepo!.topTasks(session.sessionId) }));
+  async getSetupStatus() {
+    if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng');
+    const tools = await this.setupManager.status();
+    const profiles = this.listProfiles();
+    let gitVersion: string | null = null;
+    try { gitVersion = execFileSync('git', ['--version'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { /* optional */ }
+    let mcpRegistered = false;
+    try { mcpRegistered = fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8').includes('agenthub'); } catch { /* optional */ }
+    return { node: { version: process.versions.node, ok: Number(process.versions.node.split('.')[0]) >= 22 }, git: { version: gitVersion, installed: Boolean(gitVersion) }, tools, profiles, mcpRegistered, serviceRunning: true, ...this.setupManager.getSetupState() };
   }
-  getClaudeSession(id: string) {
+  installSetupTool(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.install(tool); }
+  getSetupLogPath(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.getLogPath(tool); }
+  completeSetup(skip = false) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.complete(skip); }
+
+  listClaudeSessions(activeWithinMin?: number) {
+    if (!this.claudeSessionRepo) return [];
+    const min = typeof activeWithinMin === 'number' && !Number.isNaN(activeWithinMin) ? activeWithinMin : (this.config.claudeSessions?.activeWithinMin ?? 10);
+    const cutoff = Date.now() - min * 60_000;
+    return this.claudeSessionRepo.list().map((session) => {
+      const active = (!!session.lastAt && Date.parse(session.lastAt) >= cutoff) || (!!session.cwd && isClaudeProcessOpen(session.cwd));
+      const title = session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId);
+      return {
+        ...session,
+        title,
+        active,
+        topTasks: this.claudeSessionRepo!.topTasks(session.sessionId),
+      };
+    });
+  }
+  getClaudeSession(id: string, activeWithinMin?: number) {
     if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');
     const session = this.claudeSessionRepo.get(id);
     if (!session) throw new HttpError(404, 'not_found', `Claude session "${id}" không tồn tại`);
     const db = this.scheduler.getDatabase();
     if (!db) throw new HttpError(500, 'internal_error', 'Database chưa sẵn sàng');
+    const min = typeof activeWithinMin === 'number' && !Number.isNaN(activeWithinMin) ? activeWithinMin : (this.config.claudeSessions?.activeWithinMin ?? 10);
+    const cutoff = Date.now() - min * 60_000;
+    const active = (!!session.lastAt && Date.parse(session.lastAt) >= cutoff) || (!!session.cwd && isClaudeProcessOpen(session.cwd));
+    const title = session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId);
     const turns = db.prepare(`SELECT turnId, MIN(ts) ts, SUM(input) input, SUM(output) output, SUM(cacheCreation) cacheCreation, SUM(cacheRead) cacheRead, SUM(effective) effectiveTokens FROM claude_usage WHERE sessionId=? GROUP BY turnId ORDER BY ts`).all(id) as Array<{ turnId: string; ts: string; input: number; output: number; cacheCreation: number; cacheRead: number; effectiveTokens: number }>;
-    return { ...session, turns: turns.map((turn) => ({ ...turn, tasks: db.prepare('SELECT taskId,effectiveTokens FROM claude_task_usage WHERE sessionId=? AND turnId=?').all(id, turn.turnId) })) };
+    return { ...session, title, active, turns: turns.map((turn) => ({ ...turn, tasks: db.prepare('SELECT taskId,effectiveTokens FROM claude_task_usage WHERE sessionId=? AND turnId=?').all(id, turn.turnId) })) };
   }
   setClaudeAutoResume(id: string, enabled: boolean) {
     if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');
@@ -733,6 +771,51 @@ export class AppService {
       FROM claude_usage
     `).get(today.toISOString(), week.toISOString()) as { today: number; week: number };
     return { today: row.today, week: row.week };
+  }
+
+  getClaudeProfileLimitedSessions(profile: ProfileRow) {
+    if (!this.claudeSessionRepo) return [];
+    const db = this.scheduler.getDatabase();
+    if (!db) return [];
+
+    const limitedRows = db.prepare(`
+      SELECT sessionId, cwd, title, limitResetAt, autoResumeEnabled
+      FROM claude_sessions
+      WHERE limitResetAt IS NOT NULL
+      ORDER BY limitResetAt ASC
+    `).all() as Array<{ sessionId: string; cwd: string; title: string | null; limitResetAt: number; autoResumeEnabled: number }>;
+
+    if (limitedRows.length === 0) return [];
+
+    const scanRows = db.prepare('SELECT path FROM claude_scan_state').all() as Array<{ path: string }>;
+    const sessionConfigDirs = new Map<string, string>();
+    for (const row of scanRows) {
+      const sid = path.basename(row.path, '.jsonl');
+      const configDir = path.dirname(path.dirname(path.dirname(row.path)));
+      sessionConfigDirs.set(sid, path.resolve(configDir));
+    }
+
+    const defaultClaudeConfigDir = path.resolve(os.homedir(), '.claude');
+    const isSystemProfile = profile.kind === 'system' || !profile.home || path.resolve(profile.home) === path.resolve(os.homedir()) || path.resolve(profile.home) === defaultClaudeConfigDir;
+    const profileHome = profile.home ? path.resolve(profile.home) : null;
+    const profileClaudeDir = profileHome ? path.join(profileHome, '.claude') : null;
+
+    const matched = limitedRows.filter((row) => {
+      const configDir = sessionConfigDirs.get(row.sessionId);
+      if (isSystemProfile) {
+        return !configDir || configDir === defaultClaudeConfigDir;
+      }
+      if (!configDir || !profileHome) return false;
+      return configDir === profileHome || configDir === profileClaudeDir;
+    });
+
+    return matched.map((row) => ({
+      sessionId: row.sessionId,
+      title: row.title || (row.sessionId.length > 8 ? row.sessionId.slice(0, 8) : row.sessionId),
+      cwd: row.cwd,
+      limitResetAt: row.limitResetAt,
+      autoResumeEnabled: row.autoResumeEnabled === 1,
+    }));
   }
 
   // --- Savings ---
@@ -855,7 +938,10 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
+        ...(p.engine === 'claude' ? {
+          claudeTokens: this.getClaudeTokenTotals(),
+          limitedSessions: this.getClaudeProfileLimitedSessions(p),
+        } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
       };
     });
@@ -909,6 +995,7 @@ export class AppService {
         allowedChatsCount: this.config.telegram?.allowedChatIds?.length ?? 0,
         hasToken: Boolean(this.telegramBotService?.hasValidToken()),
       },
+      tools: this.config.tools,
     };
   }
 
@@ -1122,7 +1209,10 @@ export class AppService {
         slotsTotal: slots.slotsTotal,
         busy: slots.busy || isBusy,
         usage: this.usageService.getForProfile(p.name),
-        ...(p.engine === 'claude' ? { claudeTokens: this.getClaudeTokenTotals() } : {}),
+        ...(p.engine === 'claude' ? {
+          claudeTokens: this.getClaudeTokenTotals(),
+          limitedSessions: this.getClaudeProfileLimitedSessions(p),
+        } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
@@ -2616,6 +2706,7 @@ export class AppService {
       defaultTimeout: this.config.defaultTimeout,
       slotsPerAgyProfile: this.config.slotsPerAgyProfile,
       multiplePerProvider: this.config.multiplePerProvider,
+      planning: this.config.planning,
       slotsPerCodexProfile: this.config.slotsPerCodexProfile,
       watchdog: this.config.watchdog,
       autoFixOnFail: this.config.autoFixOnFail,

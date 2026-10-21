@@ -5,7 +5,23 @@ import { execFileSync, execSync, spawn, ChildProcess } from 'node:child_process'
 import { findProjectRoot } from '../cli.js';
 
 export const BRAIN_PROMPT =
-  'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_create_batch, mcp__agenthub__hub_batch, mcp__agenthub__hub_dispatch_batch, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. Với yêu cầu lớn (lên kế hoạch hoặc chia nhiều task): đề xuất kế hoạch ngắn; với kế hoạch ≥ 3 task, dùng batch (hub_create_batch) thay vì giao thẳng, trừ khi người dùng bảo giao ngay. Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task hoặc hub_create_batch, sau đó review.';
+  'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_create_batch, mcp__agenthub__hub_batch, mcp__agenthub__hub_dispatch_batch, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. {{PLANNING_RULE}}Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task hoặc hub_create_batch, sau đó review.';
+
+/** Planning rule follows the user's approval setting (Settings → Kế hoạch). */
+export function planningRule(planning?: { requireApproval?: boolean; approvalMinTasks?: number }): string {
+  if (planning?.requireApproval) {
+    return 'Mọi task bạn tạo đều là nháp chờ người dùng duyệt: dùng hub_create_batch cho kế hoạch và báo người dùng bấm "Giao cả đợt". ';
+  }
+  const min = planning?.approvalMinTasks ?? 0;
+  if (min > 0) {
+    return `Kế hoạch từ ${min} task trở lên: dùng hub_create_batch (đợt nháp) và chờ người dùng duyệt, trừ khi họ bảo giao ngay; kế hoạch nhỏ hơn thì giao thẳng (hub_create_task với start=true). `;
+  }
+  return 'Người dùng không cần duyệt kế hoạch: giao thẳng các task (hub_create_task với start=true hoặc hub_create_batch rồi hub_dispatch_batch ngay), sau đó báo ngắn gọn đã giao những gì. ';
+}
+
+export function buildBrainPrompt(planning?: { requireApproval?: boolean; approvalMinTasks?: number }): string {
+  return BRAIN_PROMPT.replace('{{PLANNING_RULE}}', planningRule(planning));
+}
 
 export const FORK_SUMMARY_PROMPT =
   'Tóm tắt toàn bộ ngữ cảnh và các quyết định quan trọng của phiên trò chuyện này để tiếp tục trong phiên mới.';
@@ -108,6 +124,9 @@ export function findClaudeBin(configuredBin?: string): string | null {
       return configuredBin;
     }
   }
+
+  const managedBin = path.join(process.env.AGENTHUB_TOOLS_DIR || '', 'node_modules', '.bin', 'claude');
+  if (process.env.AGENTHUB_TOOLS_DIR && fs.existsSync(managedBin)) return managedBin;
 
   // 2. Latest VS Code Claude Code native binary.
   const extensionsDir = path.join(os.homedir(), '.vscode', 'extensions');
@@ -253,6 +272,7 @@ export interface BuildClaudeArgsOptions {
   persistent?: boolean;
   model?: string | null;
   hubSnapshot?: string;
+  planning?: { requireApproval?: boolean; approvalMinTasks?: number };
 }
 
 export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
@@ -275,7 +295,7 @@ export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
 
   if (opts.model) args.push('--model', opts.model);
 
-  args.push('--append-system-prompt', BRAIN_PROMPT);
+  args.push('--append-system-prompt', buildBrainPrompt(opts.planning));
   if (opts.hubSnapshot) args.push('--append-system-prompt', opts.hubSnapshot);
   args.push('--mcp-config', opts.mcpConfigPath);
 

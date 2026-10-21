@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Check,
+  Clock,
   ExternalLink,
   MoreVertical,
   Plus,
@@ -12,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  apiFetch,
   checkProfile,
   createProfile,
   deleteProfile,
@@ -564,6 +567,71 @@ function ProfileCard({
           </div>
         ))}
       </div>
+      {profile.engine === 'claude' && (
+        <div className="mt-4 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)]/60 p-3" data-testid={`claude-limited-section-${profile.name}`}>
+          <div className="flex items-center justify-between text-xs font-semibold">
+            <span className="flex items-center gap-1.5 text-[var(--t-warn)]">
+              <Clock className="h-3.5 w-3.5" />
+              {t('profiles.limitedSessions')}
+            </span>
+            <span className="rounded-full bg-[var(--t-warn)]/10 px-2 py-0.5 text-[10px] text-[var(--t-warn)] font-bold">
+              {profile.limitedSessions?.length || 0}
+            </span>
+          </div>
+          {profile.limitedSessions && profile.limitedSessions.length > 0 ? (
+            <div className="mt-2 space-y-2.5">
+              {profile.limitedSessions.map((session) => (
+                <div
+                  key={session.sessionId}
+                  className="rounded-md border border-[var(--t-border)] bg-[var(--t-surface)] p-2.5 text-xs shadow-2xs space-y-1.5"
+                  data-testid={`limited-session-${session.sessionId}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-semibold text-[var(--t-text)] truncate max-w-[220px]" title={session.title || session.sessionId}>
+                      {session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId)}
+                    </span>
+                    <Link
+                      to={`/claude-sessions/${encodeURIComponent(session.sessionId)}`}
+                      className="text-[var(--t-accent)] hover:underline whitespace-nowrap text-[11px]"
+                    >
+                      {t('profiles.viewDetails')} →
+                    </Link>
+                  </div>
+                  <div className="font-mono text-[11px] text-[var(--t-text-3)] truncate" title={session.cwd}>
+                    {session.cwd}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-1.5 text-[11px]">
+                    <span className="text-[var(--t-warn)]">
+                      {t('profiles.resetsAt', { time: formatHHMM(session.limitResetAt) })}
+                    </span>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-[var(--t-text-2)] hover:text-[var(--t-text)]">
+                      <input
+                        type="checkbox"
+                        checked={session.autoResumeEnabled}
+                        onChange={(e) => {
+                          const nextVal = e.target.checked;
+                          void apiFetch(`/api/claude/sessions/${encodeURIComponent(session.sessionId)}/auto-resume`, {
+                            method: 'PATCH',
+                            body: JSON.stringify({ enabled: nextVal }),
+                          }).then(() => {
+                            onRefresh();
+                          });
+                        }}
+                        className="rounded border-[var(--t-border)]"
+                      />
+                      <span>{t('profiles.autoResumeLimit')}</span>
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-[var(--t-text-3)] italic">
+              {t('profiles.noLimitedSessions')}
+            </p>
+          )}
+        </div>
+      )}
       <div className="mt-3 flex items-center gap-2 text-xs text-[var(--t-text-3)]">
         {run ? (
           <>

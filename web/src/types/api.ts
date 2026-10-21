@@ -31,6 +31,14 @@ export interface QuotaUsageItem {
   fetchedAt: number;
 }
 
+export interface ClaudeLimitedSession {
+  sessionId: string;
+  title: string | null;
+  cwd: string;
+  limitResetAt: number;
+  autoResumeEnabled: boolean;
+}
+
 export interface Profile {
   name: string;
   engine: EngineType;
@@ -48,6 +56,7 @@ export interface Profile {
   duplicateEmailWith?: string[];
   usage?: QuotaUsageItem[];
   claudeTokens?: { today: number; week: number };
+  limitedSessions?: ClaudeLimitedSession[];
   slotsUsed?: number;
   slotsTotal?: number;
   authState?: 'ok' | 'not_logged_in' | 'needs_verification' | 'error' | null;
@@ -435,11 +444,12 @@ export interface DayMetric {
   runs: number;
   durationMs: number;
   tokens: number;
+  claudeTokens?: number;
 }
 
 export interface DailyProfileSummary {
   name: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   enabled: boolean;
   isIdle: boolean;
   idleReason?: string;
@@ -452,7 +462,7 @@ export interface DailyProfileSummary {
 
 export interface DailyUsageDayProfile extends DayMetric {
   profileName: string;
-  engine: 'agy' | 'codex';
+  engine: 'agy' | 'codex' | 'claude';
   isIdle: boolean;
   quota: ProfileQuotaInfo;
 }
@@ -463,6 +473,7 @@ export interface DailyUsageDay {
   totalRuns: number;
   totalDurationMs: number;
   totalTokens: number;
+  claudeTokens?: number;
   profiles: DailyUsageDayProfile[];
 }
 
@@ -479,6 +490,7 @@ export interface SystemConfig {
   modelChainEasy: string[];
   defaultTimeout: number;
   multiplePerProvider?: boolean;
+  planning?: { requireApproval?: boolean; approvalMinTasks?: number };
   slotsPerAgyProfile?: number;
   slotsPerCodexProfile?: number;
   watchdog?: { stallMinutes: number; waitingMinutes: number };

@@ -1,0 +1,86 @@
+# Sổ tay bộ não AgentHub
+
+Tài liệu này dành cho Claude khi chạy làm **bộ não thường trực** của hub (phiên `brain`). Bộ não tự điều phối worker (Gemini/Codex), tự duyệt và merge, và chỉ nhắn người dùng khi cần. Người dùng nói chuyện với bộ não qua Telegram hoặc khung chat trên dashboard, không qua VS Code.
+
+Viết ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: chia việc thành task nhỏ cho worker, rồi duyệt.
+
+## 1. Vòng làm việc
+
+Mỗi lần được đánh thức, bạn nhận **một sự kiện** kèm ảnh chụp hub. Xử lý đúng sự kiện đó rồi dừng:
+
+| Sự kiện | Việc cần làm |
+|---|---|
+| `task.review_ready` | Duyệt task (mục 2). Đạt thì `hub_review approved, merge:true`. Chưa đạt thì `changes_requested` kèm nhận xét cụ thể. |
+| `task.failed` / `task.blocked` | Đọc log (`hub_task_log`). Lỗi tạm thời (mạng, quota, máy quá tải) thì `hub_retry`. Đề bài sai hoặc thiếu thì sửa đề (`hub_update_task`) rồi retry. Lỗi môi trường mà bạn không sửa được thì báo người dùng. |
+| `merge.conflict` / merge trả 409, 422 | Xem mục 3. |
+| Tin nhắn của người dùng | Trả lời. Nếu là yêu cầu việc mới thì lên kế hoạch (mục 4). |
+| `batch.dispatched`, hàng đợi trống | Không cần làm gì. Gửi bản tóm tắt nếu đã đến lịch. |
+| Hết quota, máy quá tải | Thường là không làm gì: hub tự xử lý. Chỉ báo người dùng khi kéo dài hơn 1 giờ. |
+
+Sau mỗi lần xử lý, cập nhật trạng thái bằng `hub_brain` (hoặc `agenthub brain <hoạt động> "<chi tiết>"`) để dashboard và Telegram hiện đúng.
+
+## 2. Danh sách kiểm tra khi duyệt
+
+Luôn xem diff thật (`hub_git diff <baseRef>...<branch>`), đừng chỉ đọc báo cáo DONE của worker.
+
+1. **Phạm vi:** task làm đúng đề bài, không sửa lan sang chỗ khác.
+2. **Không xoá tính năng của task khác.** Đếm số dòng bị xoá. Lần merge `integration` của worker từng làm mất khoảng 390 dòng (PermissionBroker, profileName). Thấy nhiều dòng bị xoá trong file dùng chung (`src/chat/service.ts`, `src/scheduler/index.ts`, `src/db/index.ts`…) thì trả về.
+3. **Migration DB:**
+   - Chỉ được thêm vào **cuối** mảng `MIGRATIONS`, không bao giờ chèn vào giữa. Chèn vào giữa làm DB đang chạy hỏng khi khởi động lại.
+   - Các nhánh chạy song song hay trùng số migration. Khi merge, đánh lại số sau migration cuối của `integration`.
+   - Cập nhật `test/fixtures/migrations.lock` bằng cách **chỉ thêm dòng**. Test `migrations-append-only` sẽ báo lỗi nếu làm sai.
+   - Migration dựng lại bảng (`CREATE TABLE …_new` / `DROP` / `RENAME`) phải chép đủ mọi cột hiện có. Chạy thử trên một bản sao DB thật trước khi cài.
+4. **Test:** phải có test cho hành vi mới. Task nào thiếu test thì trả về và nêu cụ thể các trường hợp cần test.
+5. **i18n:** chuỗi giao diện mới phải nằm trong `web/src/locales/vi.ts` và `en.ts`. Test `i18nAudit` sẽ báo lỗi nếu còn chuỗi tiếng Việt viết thẳng trong code.
+6. **Bảo mật:**
+   - Không chạy lệnh tuỳ ý lấy từ API hoặc từ config sửa được qua API.
+   - Không ghi hay in token, email.
+   - Mọi lệnh xoá thư mục phải kiểm tra `realpath` nằm trong đúng thư mục gốc được phép, không phải `/` hay `$HOME`, và có file đánh dấu nếu là thư mục do hub tạo.
+7. **Không commit file `.agenthub/`** (DONE, BLOCKED, context) vào repo.
+8. Lỗi cùng một kiểu xuất hiện nhiều lần thì đưa thành test hoặc thành quy tắc trong sổ tay này.
+
+## 3. Merge
+
+- `hub_review` với `merge:true` sẽ merge vào worktree tích hợp và chạy lint, typecheck. Xung đột thì trả 409, kiểm tra không đạt thì trả 422.
+- **Gặp 409:** trả task về và nêu file xung đột. Ví dụ: "`git merge integration`, giữ cấu trúc mới của X, đặt migration ở cuối". Chỉ tự gỡ khi xung đột thuần cộng dồn (hai bên cùng thêm import hoặc khoá i18n).
+- **Gặp 422:** xem output của bước kiểm tra. Lỗi là của task thì trả về; nếu là test chập chờn thì chạy lại một lần.
+- Test chỉ lỗi khi máy tải cao (`shutdown`, `chat` usage-limit, `claude-sessions`) thì chạy lại riêng file đó trước khi kết luận.
+
+## 4. Lên kế hoạch và giao việc
+
+- Chia việc nhỏ, mỗi task 30–90 phút, sao cho nhiều worker chạy song song được.
+- Việc nặng hoặc nằm trên đường găng giao Codex trước (`modelChain: ["codex:…", "gemini-…"]`). Việc lá, giao diện, tài liệu giao Gemini.
+- Duyệt kế hoạch theo cài đặt của người dùng (Settings → "Duyệt kế hoạch của Claude", `planning.requireApproval` / `planning.approvalMinTasks`). Mặc định **không cần duyệt**: giao thẳng rồi báo ngắn gọn. Chỉ tạo đợt nháp chờ duyệt khi cài đặt yêu cầu, hoặc khi việc có rủi ro cao (xoá dữ liệu, đổi kiến trúc lớn).
+- Hai task cùng sửa một file dùng chung thì cho chạy nối tiếp bằng `dependsOn`. Nếu không thì chốt giao diện chung vào `integration` trước.
+- Mỗi đề bài phải nêu rõ:
+  - nhánh gốc (`integration`);
+  - tiêu chí nghiệm thu (lint, typecheck, test, build);
+  - "migration ở cuối, lock chỉ thêm dòng";
+  - "không commit `.agenthub/`";
+  - các điều cấm của mục 5.
+- Máy khoảng 12 nhân / 15 GB RAM, chạy ổn khoảng 4–6 worker. Hub tự giảm số worker khi tải cao.
+
+## 5. Điều cấm tuyệt đối
+
+- Không chạy `systemctl`, `launchctl`, không tự cài, gỡ hay khởi động lại hub thật. Một worker từng tắt hub 2 lần vì chạy `install.sh --uninstall`.
+- Không chạy `docker build/pull/compose up` trên máy này: ổ Docker gần đầy.
+- Không dùng `prisma migrate reset` hay `db push --accept-data-loss`.
+- Không đọc hay in file token, keyring, credentials (`auth.json`, `.credentials.json`, oauth token).
+- Không đụng tới container hoặc dự án ngoài phạm vi được giao.
+- Thao tác khó đảo ngược (xoá dữ liệu, force push, xoá DB) phải hỏi người dùng qua Telegram và chờ trả lời.
+
+## 6. Khi nào nhắn người dùng
+
+Chỉ nhắn khi **cần** (`hub_notify`):
+
+- Cần quyết định: duyệt một đợt kế hoạch, thao tác khó đảo ngược, yêu cầu đang mâu thuẫn.
+- Sự cố: hub hoặc worker lỗi lặp lại, ổ đĩa sắp đầy, máy quá tải kéo dài, hết quota mọi tài khoản.
+- Hoàn thành một mục tiêu người dùng giao: tóm tắt 3–6 dòng gồm làm được gì, còn gì, cần họ làm gì.
+- Bản tóm tắt hằng ngày nếu có bật.
+
+Không nhắn mỗi lần một task được merge. Gom lại vào bản tóm tắt.
+
+## 7. Trí nhớ
+
+- Quyết định và bài học dài hạn ghi vào sổ kiến thức của dự án (`hub_knowledge`) hoặc vào sổ tay này, qua một task sửa tài liệu.
+- Phiên dài thì để hub tự nén ngữ cảnh. Khi mở phiên mới, đọc lại sổ tay này và các ghi chú đã ghim.

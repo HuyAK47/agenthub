@@ -82,6 +82,9 @@ export class ClaudeSessionScanner {
     let lastEventKind = previous?.lastEventKind || null;
     let fiveHourTokens = previous?.fiveHourTokens ?? null;
     let metadataChanged = false;
+    let firstUserMessage: string | null = null;
+    let aiTitle: string | null = null;
+    let latestCwd = '';
     const records: Array<{ event: ClaudeTranscriptEvent; sessionId: string; turnId: string; tasks: string[]; line: number }> = [];
     const turns = new Map<string, Set<string>>();
     const stream = fs.createReadStream(file, { start, encoding: 'utf8' });
@@ -97,6 +100,7 @@ export class ClaudeSessionScanner {
         try { event = JSON.parse(raw); } catch { offset -= bytes; break; }
         if (!event || typeof event !== 'object') continue;
         if (typeof event.sessionId === 'string') sessionId = event.sessionId;
+        if (typeof event.cwd === 'string' && event.cwd.length > 0) latestCwd = event.cwd;
         if (!eligible && this.isAllowed(event, sessionId)) eligible = true;
         const quota = quotaInfo(event);
         if (eligible && quota) {
@@ -111,8 +115,15 @@ export class ClaudeSessionScanner {
           metadataChanged = true;
         }
         if (!eligible) continue;
-        if (event.type === 'user' && !hasToolResult(event)) { turnId = `${sessionId}:${event.uuid || offset}`; turnTasks = new Set(); }
-        if (event.type === 'ai-title' && typeof event.aiTitle === 'string') repo.upsert({ sessionId, cwd: String(event.cwd || ''), title: event.aiTitle.slice(0, 120) });
+        if (event.type === 'user' && !hasToolResult(event)) {
+          turnId = `${sessionId}:${event.uuid || offset}`;
+          turnTasks = new Set();
+          if (!firstUserMessage) firstUserMessage = extractUserText(event);
+        }
+        if (event.type === 'ai-title' && typeof event.aiTitle === 'string' && event.aiTitle.trim()) {
+          aiTitle = event.aiTitle.trim().slice(0, 120);
+          repo.upsert({ sessionId, cwd: String(event.cwd || latestCwd || ''), title: aiTitle });
+        }
         if (event.type !== 'assistant' || !event.message) continue;
         const toolBlocks = Array.isArray(event.message.content)
           ? event.message.content.filter((block): block is { type: string; input?: unknown } => isRecord(block) && block.type === 'tool_use')
@@ -132,6 +143,8 @@ export class ClaudeSessionScanner {
         turns.set(turnId, new Set(turnTasks));
       }
     } finally { lines.close(); stream.close(); }
+    const existingTitle = repo.get(sessionId)?.title;
+    const titleToSet = aiTitle || existingTitle || firstUserMessage || null;
     if (eligible && records.length) {
       const tx = this.db.transaction(() => {
         for (const record of records) {
@@ -154,10 +167,12 @@ export class ClaudeSessionScanner {
         const totals = this.db.prepare("SELECT COUNT(*) messages, COALESCE(SUM(input),0) input, COALESCE(SUM(output),0) output, COALESCE(SUM(cacheCreation),0) creation, COALESCE(SUM(cacheRead),0) read, COALESCE(SUM(effective),0) effective, MIN(ts) firstAt, MAX(ts) lastAt, COALESCE(SUM(CASE WHEN ts >= datetime('now', '-5 hours') THEN input + output ELSE 0 END),0) fiveHourTokens FROM claude_usage WHERE sessionId=?").get(sessionId) as { messages:number; input:number; output:number; creation:number; read:number; effective:number; firstAt:string|null; lastAt:string|null; fiveHourTokens:number };
         fiveHourTokens = totals.fiveHourTokens;
         const last = records.at(-1)?.event;
-        repo.upsert({ sessionId, cwd: String(last?.cwd || ''), firstAt: totals.firstAt, lastAt: latestActivity || totals.lastAt, model: typeof last?.message?.model === 'string' ? last.message.model : null, messages: totals.messages, inputTokens: totals.input, outputTokens: totals.output, cacheCreationTokens: totals.creation, cacheReadTokens: totals.read, effectiveTokens: totals.effective, isHubChat: this.isHubChat(sessionId) ? 1 : 0, lastUserRequest, lastToolName, lastToolSummary, lastEventKind, fiveHourTokens });
+        repo.upsert({ sessionId, cwd: String(last?.cwd || latestCwd || ''), title: titleToSet, firstAt: totals.firstAt, lastAt: latestActivity || totals.lastAt, model: typeof last?.message?.model === 'string' ? last.message.model : null, messages: totals.messages, inputTokens: totals.input, outputTokens: totals.output, cacheCreationTokens: totals.creation, cacheReadTokens: totals.read, effectiveTokens: totals.effective, isHubChat: this.isHubChat(sessionId) ? 1 : 0, lastUserRequest, lastToolName, lastToolSummary, lastEventKind, fiveHourTokens });
       });
       tx();
       this.updateFailover(file, records);
+    } else if (eligible && titleToSet && !existingTitle) {
+      repo.upsert({ sessionId, cwd: String(latestCwd || ''), title: titleToSet });
     }
     if (eligible && metadataChanged && !records.length) {
       repo.upsert({ sessionId, cwd: '', lastAt: latestActivity, lastUserRequest, lastToolName, lastToolSummary, lastEventKind, fiveHourTokens, isHubChat: this.isHubChat(sessionId) ? 1 : 0 });
@@ -326,16 +341,50 @@ function countNewlines(file: string, end: number): number {
   } catch { return 0; }
 }
 
-export function isClaudeProcessOpen(cwd: string): boolean {
+function extractUserText(event: ClaudeTranscriptEvent): string | null {
+  const content = event.message?.content || event.content;
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    return trimmed.length > 0 ? trimmed.slice(0, 80) : null;
+  }
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (typeof block === 'string') {
+        const trimmed = block.trim();
+        if (trimmed.length > 0) return trimmed.slice(0, 80);
+      }
+      if (isRecord(block) && (block.type === 'text' || !block.type) && typeof block.text === 'string') {
+        const trimmed = block.text.trim();
+        if (trimmed.length > 0) return trimmed.slice(0, 80);
+      }
+    }
+  }
+  return null;
+}
+
+export function isClaudeProcessOpen(cwd: string, procDir = '/proc'): boolean {
+  if (!cwd) return false;
+  let targetCwd: string;
+  try {
+    targetCwd = fs.realpathSync(cwd);
+  } catch {
+    targetCwd = path.resolve(cwd);
+  }
   let entries: string[];
-  try { entries = fs.readdirSync('/proc'); } catch { return false; }
+  try { entries = fs.readdirSync(procDir); } catch { return false; }
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     try {
-      const cmdline = fs.readFileSync(path.join('/proc', entry, 'cmdline'), 'utf8');
+      const cmdline = fs.readFileSync(path.join(procDir, entry, 'cmdline'), 'utf8');
       if (!cmdline.includes('claude')) continue;
-      const processCwd = fs.realpathSync(path.join('/proc', entry, 'cwd'));
-      if (processCwd === fs.realpathSync(cwd)) return true;
+      const cwdLink = path.join(procDir, entry, 'cwd');
+      let processCwd: string;
+      try {
+        processCwd = fs.realpathSync(cwdLink);
+      } catch {
+        processCwd = fs.readlinkSync(cwdLink);
+      }
+      if (processCwd === targetCwd) return true;
     } catch { /* process exited */ }
   }
   return false;
