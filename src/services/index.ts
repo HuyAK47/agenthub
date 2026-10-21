@@ -1326,6 +1326,23 @@ export class AppService {
         }
         const refreshedEmail = this.refreshProfileEmail(profile.name);
         if (refreshedEmail) email = refreshedEmail;
+      } else if (profile.engine === 'claude') {
+        // Claude profiles: login state comes from the Claude config dir, not from the Codex CLI.
+        const account = this.coreProfileService.readClaudeAccount(profile.home || os.homedir());
+        if (!isProfileLoggedIn(profile)) {
+          message = 'Chưa đăng nhập Claude';
+          this.profileRepo.updateAuthState(profile.name, 'not_logged_in', message, null);
+        } else {
+          ok = true;
+          if (account?.email) {
+            email = account.email;
+            if (account.email !== profile.email) this.profileRepo.upsert({ ...profile, email: account.email });
+          }
+          this.profileRepo.updateAuthState(profile.name, 'ok', null, null);
+          const usage = await this.usageService.collectClaude(profile, true);
+          message = account?.plan ? `Đã đăng nhập Claude (${account.plan})` : 'Đã đăng nhập Claude';
+          if (usage.length === 0) message += ' · chưa đọc được quota /usage';
+        }
       } else {
         const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
         if (!codexPath) {
