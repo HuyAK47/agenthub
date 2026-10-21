@@ -412,6 +412,11 @@ export const en: typeof vi = {
     defaultBranchText: 'Default branch: ',
     maxParallelText: 'Max parallel: ',
     invalidChecks: 'Invalid checks: {error}',
+    integrationBranch: 'Integration branch',
+    integrationStatus: 'Integration status',
+    integrationAhead: '{count} commits ahead',
+    integrationBehind: '{count} commits behind',
+    integrationWorktreeCreated: 'Integration worktree created',
   },
   settings: {
     title: 'System Settings',

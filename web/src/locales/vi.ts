@@ -411,6 +411,11 @@ export const vi = {
     defaultBranchText: 'Nhánh mặc định: ',
     maxParallelText: 'Tối đa song song: ',
     invalidChecks: 'Checks không hợp lệ: {error}',
+    integrationBranch: 'Nhánh tích hợp',
+    integrationStatus: 'Trạng thái tích hợp',
+    integrationAhead: '{count} commit phía trước',
+    integrationBehind: '{count} commit phía sau',
+    integrationWorktreeCreated: 'Worktree tích hợp đã tạo',
   },
   settings: {
     title: 'Cài đặt hệ thống',
