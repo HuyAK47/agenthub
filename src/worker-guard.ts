@@ -5,17 +5,44 @@ import { projectSettings } from './projects/settings.js';
 
 export const WORKER_SERVICE_MESSAGE = 'AgentHub: worker không được điều khiển service của hub';
 export const WORKER_BLOCKED_COMMANDS = ['ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman'] as const;
+const OLD_SHIM_NAMES = ['git', 'systemctl', 'launchctl', ...WORKER_BLOCKED_COMMANDS] as const;
 
 function findExecutable(name: string, env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const parts = path.resolve(dir).split(path.sep);
+    if (parts.includes('shims')) continue;
     const candidate = path.resolve(dir, name);
-    if (candidate.includes(`${path.sep}shims${path.sep}`)) continue;
     try {
       const stat = fs.statSync(candidate);
       if (stat.isFile() && (process.platform === 'win32' || (stat.mode & 0o111) !== 0)) return candidate;
     } catch { /* try the next PATH entry */ }
   }
   return null;
+}
+
+function cleanOldShims(hubHome: string): void {
+  const rootShimsDir = path.join(hubHome, 'shims');
+  if (!fs.existsSync(rootShimsDir)) return;
+  let realRootShimsDir: string;
+  try {
+    realRootShimsDir = fs.realpathSync(rootShimsDir);
+  } catch {
+    return;
+  }
+
+  for (const name of OLD_SHIM_NAMES) {
+    const filePath = path.join(rootShimsDir, name);
+    try {
+      const lstat = fs.lstatSync(filePath);
+      if (!lstat.isFile() && !lstat.isSymbolicLink()) continue;
+      const real = fs.realpathSync(filePath);
+      if (real.startsWith(realRootShimsDir + path.sep)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch {
+      // file might not exist or cannot be accessed
+    }
+  }
 }
 
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
@@ -125,35 +152,50 @@ export function workerEnvironment(
   options?: WorkerEnvOptions | { settings?: string | null } | null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
-  const shimDir = path.join(hubHome, 'shims');
-  fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+  const serviceDir = path.join(hubHome, 'shims', 'service');
+  const workerDir = path.join(hubHome, 'shims', 'worker');
   const guards = !options || !('guards' in options) || options.guards !== false;
 
-  // 1. systemctl & launchctl shims
+  cleanOldShims(hubHome);
+  fs.mkdirSync(serviceDir, { recursive: true, mode: 0o700 });
+
+  // 1. systemctl & launchctl shims (service guards)
   for (const name of ['systemctl', 'launchctl']) {
     const realBinary = findExecutable(name, env);
     if (!realBinary) continue;
-    const file = path.join(shimDir, name);
+    const file = path.join(serviceDir, name);
     const content = shimScript(realBinary);
     writeShimFile(file, content);
   }
 
   if (guards) {
+    fs.mkdirSync(workerDir, { recursive: true, mode: 0o700 });
+
     // 2. Blocked command shims (ssh, scp, sftp, docker, docker-compose, podman)
     for (const name of WORKER_BLOCKED_COMMANDS) {
-      const file = path.join(shimDir, name);
+      const file = path.join(workerDir, name);
       const content = blockedCommandScript(name);
       writeShimFile(file, content);
     }
 
     // 3. git wrapper shim
     const realGit = findExecutable('git', env) || findExecutable('git', process.env) || '/usr/bin/git';
-    const gitFile = path.join(shimDir, 'git');
+    const gitFile = path.join(workerDir, 'git');
     const gitContent = gitShimScript(realGit);
     writeShimFile(gitFile, gitContent);
   }
 
-  env.PATH = [shimDir, env.PATH || ''].filter(Boolean).join(path.delimiter);
+  const existingPath = (env.PATH || '')
+    .split(path.delimiter)
+    .filter(dir => {
+      if (!dir) return false;
+      const parts = path.resolve(dir).split(path.sep);
+      return !parts.includes('shims');
+    })
+    .join(path.delimiter);
+
+  const shimDirs = guards ? [serviceDir, workerDir] : [serviceDir];
+  env.PATH = [...shimDirs, existingPath].filter(Boolean).join(path.delimiter);
 
   // Check project settings for gitHooks and references
   let gitHooks: 'run' | 'skip' | undefined;

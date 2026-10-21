@@ -503,7 +503,10 @@ Trong cài đặt của dự án (`settings.references`), bạn có thể khai b
     - **Lưu ý**: AgentHub tuyệt đối không tự ý hoàn tác (`revert`) để tránh rủi ro mất dữ liệu của bạn; người dùng có thể tự kiểm tra và hoàn tác thủ công.
 
 #### 2. Rào chắn lệnh cho Worker (`<hubHome>/shims`)
-Khi khởi chạy worker (`agy` hoặc `codex`), AgentHub đưa thư mục `shims` vào đầu biến môi trường `PATH`:
+Khi khởi chạy worker (`agy` hoặc `codex`), AgentHub đưa các thư mục shims vào đầu biến môi trường `PATH`:
+- **Tách biệt shims dịch vụ và shims worker**:
+  - `<hubHome>/shims/service`: Chứa shim cho `systemctl` và `launchctl` (áp dụng cho cả worker và hub) để ngăn worker hoặc các thao tác vô tình tắt hoặc can thiệp dịch vụ nền của AgentHub.
+  - `<hubHome>/shims/worker`: Chứa shim chặn lệnh mạng/container và wrapper `git` (chỉ áp dụng cho worker; các thao tác nội bộ của hub như merge hoặc kiểm tra check tự động bỏ qua để có thể push/commit bình thường).
 - **Chặn các lệnh mạng và container nguy hiểm**:
   - `ssh`, `scp`, `sftp`, `docker`, `docker-compose`, `podman`: Nếu worker gọi các lệnh này, shim sẽ ngay lập tức từ chối, in thông báo lỗi rõ ràng ra `stderr` và thoát với mã lỗi 1 (`exit 1`).
 - **Wrapper an toàn cho `git`**:

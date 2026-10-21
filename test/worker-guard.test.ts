@@ -14,9 +14,11 @@ describe('worker service guard', () => {
     const real = path.join(bin, 'systemctl');
     fs.writeFileSync(real, '#!/bin/sh\nprintf "real:%s\\n" "$*"\n', { mode: 0o700 });
     const env = workerEnvironment(hub, { PATH: bin });
-    const shim = path.join(hub, 'shims', 'systemctl');
+    const shim = path.join(hub, 'shims', 'service', 'systemctl');
     expect(() => execFileSync(shim, ['--user', 'stop', 'agenthub'], { env, encoding: 'utf8', stdio: 'pipe' })).toThrow(WORKER_SERVICE_MESSAGE);
     expect(execFileSync(shim, ['--user', 'status', 'foo'], { env, encoding: 'utf8' })).toContain('real:--user status foo');
+    expect(() => execFileSync('systemctl', ['--user', 'stop', 'agenthub'], { env, encoding: 'utf8', stdio: 'pipe' })).toThrow(WORKER_SERVICE_MESSAGE);
+    expect(execFileSync('systemctl', ['--user', 'status', 'foo'], { env, encoding: 'utf8' })).toContain('real:--user status foo');
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -84,7 +86,7 @@ describe('worker service guard', () => {
     const env = workerEnvironment(hub, { PATH: process.env.PATH });
 
     for (const cmd of ['ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman']) {
-      const shimPath = path.join(hub, 'shims', cmd);
+      const shimPath = path.join(hub, 'shims', 'worker', cmd);
       expect(fs.existsSync(shimPath)).toBe(true);
 
       // Calling through shim directly
@@ -117,7 +119,7 @@ describe('worker service guard', () => {
       GIT_COMMITTER_EMAIL: 'test@example.com',
     });
 
-    const gitShim = path.join(hub, 'shims', 'git');
+    const gitShim = path.join(hub, 'shims', 'worker', 'git');
     expect(fs.existsSync(gitShim)).toBe(true);
 
     // 1. git push is blocked
@@ -164,12 +166,90 @@ describe('worker service guard', () => {
     const bin = path.join(root, 'bin');
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\nprintf "real:%s\\n" "$*"\n', { mode: 0o700 });
-    const env = workerEnvironment(hub, { PATH: bin }, { guards: false });
 
-    expect(env.PATH?.split(path.delimiter)[0]).toBe(path.join(hub, 'shims'));
-    expect(fs.existsSync(path.join(hub, 'shims', 'git'))).toBe(false);
-    expect(fs.existsSync(path.join(hub, 'shims', 'ssh'))).toBe(false);
-    expect(execFileSync('systemctl', ['status', 'agenthub'], { env, encoding: 'utf8' })).toContain('real:status agenthub');
+    const bareRepo = path.join(root, 'bare.git');
+    fs.mkdirSync(bareRepo, { recursive: true });
+    execFileSync('git', ['init', '--bare', bareRepo]);
+
+    const workRepo = path.join(root, 'work');
+    fs.mkdirSync(workRepo, { recursive: true });
+    execFileSync('git', ['init'], { cwd: workRepo });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: workRepo });
+    fs.writeFileSync(path.join(workRepo, 'file.txt'), 'hello');
+    execFileSync('git', ['add', '.'], { cwd: workRepo });
+
+    const gitAuthorEnv = {
+      GIT_AUTHOR_NAME: 'test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    };
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: workRepo, env: { ...process.env, ...gitAuthorEnv } });
+    execFileSync('git', ['remote', 'add', 'origin', bareRepo], { cwd: workRepo });
+
+    // 1. Call workerEnvironment(hub) (worker) FIRST
+    const workerEnv = workerEnvironment(hub, { ...process.env, ...gitAuthorEnv, PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+
+    // 2. Call workerEnvironment(hub, ..., { guards: false }) on the SAME hub
+    const hubEnv = workerEnvironment(hub, { ...process.env, ...gitAuthorEnv, PATH: `${bin}${path.delimiter}${process.env.PATH}` }, { guards: false });
+
+    // Hub env has service shims first, but NOT worker shims
+    expect(hubEnv.PATH?.split(path.delimiter)[0]).toBe(path.join(hub, 'shims', 'service'));
+    expect(hubEnv.PATH?.split(path.delimiter)).not.toContain(path.join(hub, 'shims', 'worker'));
+
+    // Worker env has service shims then worker shims
+    expect(workerEnv.PATH?.split(path.delimiter)[0]).toBe(path.join(hub, 'shims', 'service'));
+    expect(workerEnv.PATH?.split(path.delimiter)[1]).toBe(path.join(hub, 'shims', 'worker'));
+
+    // 3. git push with workerEnv is blocked
+    expect(() => execFileSync('git', ['push', bareRepo, 'main'], { cwd: workRepo, env: workerEnv, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow("AgentHub: worker không được chạy lệnh 'git push'");
+
+    // 4. git push with hubEnv succeeds
+    expect(() => execFileSync('git', ['push', bareRepo, 'main'], { cwd: workRepo, env: hubEnv, encoding: 'utf8' }))
+      .not.toThrow();
+
+    // 5. systemctl stop agenthub is blocked in BOTH workerEnv and hubEnv
+    expect(() => execFileSync('systemctl', ['stop', 'agenthub'], { env: workerEnv, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow(WORKER_SERVICE_MESSAGE);
+    expect(() => execFileSync('systemctl', ['stop', 'agenthub'], { env: hubEnv, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow(WORKER_SERVICE_MESSAGE);
+
+    // systemctl status agenthub is forwarded in both
+    expect(execFileSync('systemctl', ['status', 'agenthub'], { env: workerEnv, encoding: 'utf8' })).toContain('real:status agenthub');
+    expect(execFileSync('systemctl', ['status', 'agenthub'], { env: hubEnv, encoding: 'utf8' })).toContain('real:status agenthub');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('cleans up legacy shims at <hubHome>/shims root if present', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-legacy-shims-'));
+    const hub = path.join(root, 'hub');
+    const oldShimsDir = path.join(hub, 'shims');
+    fs.mkdirSync(oldShimsDir, { recursive: true });
+
+    // Place legacy shim files in root shims dir
+    const legacyGit = path.join(oldShimsDir, 'git');
+    const legacySsh = path.join(oldShimsDir, 'ssh');
+    const legacySystemctl = path.join(oldShimsDir, 'systemctl');
+    const unrelatedFile = path.join(oldShimsDir, 'unrelated.txt');
+    fs.writeFileSync(legacyGit, '#!/bin/sh\n', { mode: 0o700 });
+    fs.writeFileSync(legacySsh, '#!/bin/sh\n', { mode: 0o700 });
+    fs.writeFileSync(legacySystemctl, '#!/bin/sh\n', { mode: 0o700 });
+    fs.writeFileSync(unrelatedFile, 'keep me');
+
+    // Calling workerEnvironment should remove legacy shims but keep unrelated files
+    workerEnvironment(hub, { PATH: process.env.PATH });
+
+    expect(fs.existsSync(legacyGit)).toBe(false);
+    expect(fs.existsSync(legacySsh)).toBe(false);
+    expect(fs.existsSync(legacySystemctl)).toBe(false);
+    expect(fs.existsSync(unrelatedFile)).toBe(true);
+
+    // And new shims exist in subdirectories
+    expect(fs.existsSync(path.join(hub, 'shims', 'service', 'systemctl'))).toBe(true);
+    expect(fs.existsSync(path.join(hub, 'shims', 'worker', 'git'))).toBe(true);
+    expect(fs.existsSync(path.join(hub, 'shims', 'worker', 'ssh'))).toBe(true);
 
     fs.rmSync(root, { recursive: true, force: true });
   });
