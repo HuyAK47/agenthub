@@ -41,6 +41,7 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
+import { BrainPolicy } from './brain/policy.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -95,10 +96,16 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
   const chatPermissionRepo = new ChatPermissionRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
   chatPermissionRepo.expirePending();
+  const brainPolicy = new BrainPolicy({
+    roots: [process.cwd(), config.hubHome, config.worktreesDir],
+    extraPatterns: config.brain.policy.flatMap((pattern) => {
+      try { return [new RegExp(pattern)]; } catch { return []; }
+    }),
+  });
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
-  });
+  }, brainPolicy);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { ChatPermissionRepo, ChatPermissionRow } from '../db/index.js';
+import { BrainPolicy } from '../brain/policy.js';
 
 export type PermissionDecision = 'allow' | 'deny' | 'allow_always';
 
@@ -8,6 +9,7 @@ export interface PermissionRequestInput {
   messageId?: string | null;
   toolName: string;
   input: Record<string, unknown>;
+  kind?: 'brain' | 'user';
 }
 
 interface PendingRequest {
@@ -32,6 +34,7 @@ export class PermissionBroker {
     private repo: ChatPermissionRepo,
     private timeoutSec = 600,
     private onRequest?: PermissionEvent,
+    private brainPolicy?: BrainPolicy,
   ) {}
 
   listPending(sessionId?: string): ChatPermissionRow[] {
@@ -47,6 +50,17 @@ export class PermissionBroker {
   }
 
   request(input: PermissionRequestInput): Promise<PermissionResult> {
+    if (input.kind === 'brain' && this.brainPolicy) {
+      const decision = this.brainPolicy.decide(input);
+      if (decision) {
+        const id = crypto.randomUUID();
+        this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' });
+        this.repo.resolve(id, decision.action, decision.message, decision.reason);
+        return Promise.resolve(decision.action === 'allow'
+          ? { behavior: 'allow', updatedInput: input.input }
+          : { behavior: 'deny', message: decision.message });
+      }
+    }
     const pattern = permissionPattern(input.input);
     const key = `${input.sessionId}:${input.toolName}`;
     if (pattern && this.always.get(key)?.has(pattern)) {
@@ -76,7 +90,7 @@ export class PermissionBroker {
     const row = this.repo.get(id);
     if (!pending || !row || row.status !== 'pending') return false;
     clearTimeout(pending.timer);
-    const result = this.repo.resolve(id, decision, message || null);
+    const result = this.repo.resolve(id, decision, message || null, 'user');
     this.pending.delete(id);
     if (decision === 'allow_always') {
       const pattern = permissionPattern(JSON.parse(row.input) as Record<string, unknown>);

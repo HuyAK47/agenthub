@@ -365,6 +365,7 @@ export const UpdateConfigSchema = z.object({
       z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
       z.object({ type: z.literal('wait') }),
     ])).max(10),
+    policy: z.array(z.string().min(1)).max(100).optional(),
   }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
@@ -2654,7 +2655,7 @@ export class AppService {
         autoCompactPercent: this.config.chat.autoCompactPercent ?? 85,
         models: this.config.chat.models,
       },
-      brain: { fallback: this.config.brain.fallback },
+      brain: { fallback: this.config.brain.fallback, policy: this.config.brain.policy },
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
       savings: this.config.savings,
@@ -2693,6 +2694,7 @@ export class AppService {
     // Apply in-memory
     updateConfigInMemory(this.config, parsed);
     if (parsed.brain?.fallback) this.chatService?.configureFailoverSteps(this.config.brain.fallback);
+    if (parsed.brain?.policy) this.config.brain.policy = [...parsed.brain.policy];
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);

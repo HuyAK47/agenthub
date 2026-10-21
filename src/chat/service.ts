@@ -203,7 +203,7 @@ export class ChatService {
     return { ok: true };
   }
 
-  async requestPermission(input: { sessionId: string; messageId?: string | null; toolName: string; input: Record<string, unknown> }) {
+  async requestPermission(input: { sessionId: string; messageId?: string | null; toolName: string; input: Record<string, unknown>; kind?: 'brain' | 'user' }) {
     const running = this.runningTurns.get(input.sessionId);
     if (running) {
       running.waitingPermission = true;
@@ -1829,7 +1829,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   // MCP permission-prompt-tool calls this endpoint and waits for the dashboard decision.
   fastify.post('/api/chat/permissions', async (req: FastifyRequest) => {
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
-      sessionId?: string; messageId?: string; tool_name?: string; input?: unknown;
+      sessionId?: string; messageId?: string; tool_name?: string; input?: unknown; kind?: 'brain' | 'user';
     };
     if (!body.sessionId || !body.tool_name || !body.input || typeof body.input !== 'object') {
       throw new HttpError(400, 'bad_request', 'Thiếu sessionId, tool_name hoặc input');
@@ -1839,6 +1839,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
       messageId: body.messageId,
       toolName: body.tool_name,
       input: body.input as Record<string, unknown>,
+      kind: body.kind,
     });
   });
 
