@@ -21,7 +21,9 @@ import {
   KnowledgeRepo,
   TaskBatchRepo,
   BrainTurnRepo,
+  CiRepo,
 } from './db/index.js';
+import { CiWatchService } from './ci.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
 import { Engine, AgyEngine, CodexEngine, FakeEngine } from './engines/index.js';
@@ -82,6 +84,8 @@ export interface DaemonContext {
   telegramService: TelegramBotService;
   brainRunner: BrainRunner;
   deployService: DeployService;
+  ciRepo: CiRepo;
+  ciService: CiWatchService;
 }
 
 export interface CreateContextOptions {
@@ -285,6 +289,16 @@ export function createContext(
   );
   service.deployService = deployService;
 
+  const ciRepo = new CiRepo(db);
+  const ciService = new CiWatchService({
+    config,
+    projectRepo,
+    ciRepo,
+    eventBus: scheduler.getEventBus(),
+  });
+  service.ciRepo = ciRepo;
+  service.ciService = ciService;
+
   const notifier = new NotificationService({
     eventBus: scheduler.getEventBus(),
     config,
@@ -292,6 +306,7 @@ export function createContext(
     profileRepo,
     quotaMarkRepo,
     projectRepo,
+    ciRepo,
   });
 
   const telegramService = new TelegramBotService({
@@ -304,6 +319,7 @@ export function createContext(
     quotaMarkRepo,
     chatService,
     brainSession: true,
+    ciRepo,
   });
   service.setTelegramBotService(telegramService);
 
@@ -341,6 +357,8 @@ export function createContext(
     telegramService,
     brainRunner,
     deployService,
+    ciRepo,
+    ciService,
   };
 }
 
@@ -357,6 +375,11 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.bulletinService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.ciService?.stop();
   } catch {
     // ignore
   }
@@ -421,6 +444,7 @@ export async function startDaemon(
   ctx.claudeScanner.start();
   ctx.bulletinService.start();
   ctx.brainRunner.start();
+  ctx.ciService.start();
 
   // Start Telegram bot if enabled
   if (config.telegram?.enabled) {

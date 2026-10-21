@@ -92,6 +92,7 @@ export const vi = {
     overlapWarningTitle: 'Cảnh báo trùng file',
     overlapWarningDesc: 'Có {count} cảnh báo sửa trùng file giữa các task đang chạy:',
     brains: 'Bộ não', brainMode: 'Chế độ', brainStatewaiting_limit: 'chờ hết giới hạn quota', brainStatewaiting_permission: 'chờ bạn cấp quyền', brainMode_off: 'tắt', brainMode_suggest: 'gợi ý', brainMode_auto: 'tự động', brainMode_external: 'Claude ngoài điều phối', brainStateidle: 'rảnh', brainStaterunning: 'đang chạy', brainStatewaiting: 'đang chờ', brainStateerror: 'lỗi', brainQueued: 'đang xếp hàng', brainTokens: 'Token hôm nay', openBrainChat: 'Mở phiên chat',
+    ciCardTitle: 'CI', ciCardSubtitle: 'Trạng thái CI GitHub Actions gần nhất', ciCardNoData: 'Chưa có dữ liệu CI', ciPassed: 'Thành công', ciFailed: 'Thất bại', ciRunning: 'Đang chạy',
   },
   tasks: {
     title: 'Quản lý Task',
@@ -468,6 +469,7 @@ export const vi = {
     checksHint: 'Các lệnh kiểm tra tự động trước khi review (JSON array)',
     hooksHint: 'Lệnh chạy sau khi xoá worktree (tuỳ chọn)',
     settings: 'Cài đặt', saveSettings: 'Lưu cài đặt', saveSettingsError: 'Không thể lưu cài đặt dự án', settingsPartialHint: 'Thay đổi được gửi theo từng phần settings của project.', brainMode: 'Bộ não', brainInherit: 'Kế thừa toàn cục', brainOff: 'Tắt', brainSuggest: 'Gợi ý', brainAuto: 'Tự động', brainExternal: 'Claude ngoài (VS Code) điều phối', brainDescinherit: 'Dùng cấu hình toàn cục.', brainDescoff: 'Không điều phối tự động.', brainDescsuggest: 'Chỉ gợi ý khi cần.', brainDescauto: 'Tự động lập kế hoạch và giao việc.', brainDescexternal: 'Claude ngoài (VS Code) điều phối.', dailyTokenBudget: 'Ngân sách token/ngày', maxTurnsPerHour: 'Lượt tối đa/giờ', worktreeInstall: 'Cài phụ thuộc', worktreeAuto: 'Tự động', worktreeSkip: 'Không cài', gitHooks: 'Git hooks', gitHooksRun: 'Chạy', gitHooksSkip: 'Bỏ qua', integrationEnabled: 'Bật nhánh tích hợp', integrationBaseRef: 'Nhánh gốc', references: 'Tham chiếu chỉ đọc', addReference: 'Thêm', referenceName: 'Tên', referencePath: 'Đường dẫn', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Đầy đủ', telegramMinimal: 'Tối giản',
+    ciLabel: 'Theo dõi CI GitHub Actions', ciEnabled: 'Bật theo dõi CI', ciBranch: 'Nhánh theo dõi CI', ciStatusPassed: 'CI: Thành công', ciStatusFailed: 'CI: Thất bại', ciStatusRunning: 'CI: Đang chạy', ciViewRun: 'Xem run trên GitHub', ciNoRun: 'Chưa có run',
   },
   settings: {
     title: 'Cài đặt hệ thống',

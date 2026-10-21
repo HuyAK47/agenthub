@@ -19,6 +19,7 @@ describe('project settings parsing', () => {
       brain: { mode: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
       integration: { enabled: false },
+      ci: {},
       references: [],
       notifications: { telegramContent: 'full' },
     });
@@ -48,6 +49,18 @@ describe('project settings parsing', () => {
     expect(next.brain).toEqual({ mode: 'auto', dailyTokenBudget: 5000 });
     expect(next.references).toEqual([{ name: 'glossary', path: '/data/glossary.md', inject: true }]);
     expect(next.worktree).toEqual(DEFAULT_PROJECT_SETTINGS.worktree);
+  });
+
+  it('merges ci settings and preserves unset fields', () => {
+    const updated = mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, {
+      ci: { enabled: true, branch: 'develop' },
+    });
+    expect(updated.ci).toEqual({ enabled: true, branch: 'develop' });
+
+    const partial = mergeProjectSettings(updated, {
+      ci: { branch: 'staging' },
+    });
+    expect(partial.ci).toEqual({ enabled: true, branch: 'staging' });
   });
 });
 
