@@ -890,7 +890,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
         );
-        const args = buildClaudeArgs({
+        const args = buildClaudeArgs({ planning: this.config.planning,
           text: '/compact',
           claudeSessionId: session.claudeSessionId,
           mode: session.mode,
@@ -1071,7 +1071,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
         );
-        const args = buildClaudeArgs({
+        const args = buildClaudeArgs({ planning: this.config.planning,
           text: FORK_SUMMARY_PROMPT,
           claudeSessionId: session.claudeSessionId,
           mode: session.mode,
@@ -1213,7 +1213,7 @@ export class ChatService {
     const session = this.chatSessionRepo.get(turn.sessionId);
     const execution = this.failoverExecution(turn);
     const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
-    const args = buildClaudeArgs({
+    const args = buildClaudeArgs({ planning: this.config.planning,
       text: turn.text,
       claudeSessionId: turn.claudeSessionId,
       mode: turn.mode,
@@ -1530,7 +1530,7 @@ export class ChatService {
     const execution = this.failoverExecution({ sessionId: session.id, messageId: '', text: '', projectId: session.projectId, mode: session.mode, claudeSessionId: session.claudeSessionId, model: session.model, profileName: session.profileName });
     if (execution.pausedUntil) return undefined;
     const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
-    const proc = spawnClaude(claudeBin, buildClaudeArgs({
+    const proc = spawnClaude(claudeBin, buildClaudeArgs({ planning: this.config.planning,
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
       mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec),

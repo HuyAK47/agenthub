@@ -50,7 +50,7 @@ Luôn xem diff thật (`hub_git diff <baseRef>...<branch>`), đừng chỉ đọ
 
 - Chia việc nhỏ, mỗi task 30–90 phút, sao cho nhiều worker chạy song song được.
 - Việc nặng hoặc nằm trên đường găng giao Codex trước (`modelChain: ["codex:…", "gemini-…"]`). Việc lá, giao diện, tài liệu giao Gemini.
-- Kế hoạch từ 3 task trở lên thì dùng `hub_create_batch` (đợt nháp), rồi nhắn người dùng duyệt, trừ khi họ bảo giao ngay.
+- Duyệt kế hoạch theo cài đặt của người dùng (Settings → "Duyệt kế hoạch của Claude", `planning.requireApproval` / `planning.approvalMinTasks`). Mặc định **không cần duyệt**: giao thẳng rồi báo ngắn gọn. Chỉ tạo đợt nháp chờ duyệt khi cài đặt yêu cầu, hoặc khi việc có rủi ro cao (xoá dữ liệu, đổi kiến trúc lớn).
 - Hai task cùng sửa một file dùng chung thì cho chạy nối tiếp bằng `dependsOn`. Nếu không thì chốt giao diện chung vào `integration` trước.
 - Mỗi đề bài phải nêu rõ:
   - nhánh gốc (`integration`);

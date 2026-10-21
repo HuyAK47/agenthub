@@ -475,6 +475,7 @@ export interface SystemConfig {
   modelChainEasy: string[];
   defaultTimeout: number;
   multiplePerProvider?: boolean;
+  planning?: { requireApproval?: boolean; approvalMinTasks?: number };
   slotsPerAgyProfile?: number;
   slotsPerCodexProfile?: number;
   watchdog?: { stallMinutes: number; waitingMinutes: number };
