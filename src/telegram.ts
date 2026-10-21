@@ -118,7 +118,7 @@ export interface TelegramServiceOptions {
 
 export type PendingChatState =
   | { action: 'reject_feedback'; taskId: string }
-  | { action: 'newtask_description' }
+  | { action: 'newtask_description'; projectId?: string }
   | { action: 'newtask_project_description'; description: string }
   | { action: 'newtask_project' }
   | { action: 'newtask_title'; projectId: string }
@@ -603,7 +603,11 @@ export class TelegramBotService {
 
       if (pendingState.action === 'newtask_description') {
         this.chatStates.delete(chatId);
-        await this.handleNewTaskDescription(chatId, rawText);
+        if (pendingState.projectId) {
+          await this.sendAutoTaskToClaude(chatId, pendingState.projectId, rawText);
+        } else {
+          await this.handleNewTaskDescription(chatId, rawText);
+        }
         return;
       }
 
@@ -863,20 +867,27 @@ export class TelegramBotService {
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId : taskId;
     if (!sessionId) return;
     const reply = this.chatReplies.get(sessionId);
-    if (!reply) return;
-    if (type === 'chat.delta' && typeof data.text === 'string') {
-      reply.text += data.text;
-      this.scheduleChatEdit(sessionId);
-    } else if (type === 'chat.done') {
-      void this.finishChatReply(sessionId, false);
-    } else if (type === 'chat.error') {
-      reply.text = `❌ ${typeof data.message === 'string' ? data.message : 'Lỗi chat'}`;
-      void this.finishChatReply(sessionId, true);
-      const pending = this.pendingAutoTasks.get(sessionId);
+    const pending = this.pendingAutoTasks.get(sessionId);
+    if (type === 'chat.done') {
+      this.pendingAutoTasks.delete(sessionId);
+      if (reply) void this.finishChatReply(sessionId, false);
+      return;
+    }
+    if (type === 'chat.error') {
+      if (reply) {
+        reply.text = `❌ ${typeof data.message === 'string' ? data.message : 'Lỗi chat'}`;
+        void this.finishChatReply(sessionId, true);
+      }
       if (pending) {
         this.pendingAutoTasks.delete(sessionId);
         void this.saveFallbackDraft(pending.chatId, pending.description, pending.projectId);
       }
+      return;
+    }
+    if (!reply) return;
+    if (type === 'chat.delta' && typeof data.text === 'string') {
+      reply.text += data.text;
+      this.scheduleChatEdit(sessionId);
     } else if ((type === 'chat.permission_request' || type === 'chat.permission') && typeof data.id === 'string') {
       void this.sendPermissionRequest(reply.chatId, data);
     }
@@ -1131,6 +1142,12 @@ export class TelegramBotService {
         if (action === 'proj') {
           const projectId = taskIdOrParam;
           const currentState = this.chatStates.get(chatId);
+          if (currentState?.action === 'newtask_description') {
+            this.chatStates.set(chatId, { action: 'newtask_description', projectId });
+            await this.answerCallbackQuery(query.id, `Đã chọn ${projectId}`);
+            await this.sendMessage(chatId, `📁 Đã chọn project <b>${this.escapeHtml(projectId)}</b>. Hãy gửi một đoạn mô tả chung về việc cần làm:`);
+            return;
+          }
           if (currentState?.action === 'newtask_project_description') {
             this.chatStates.delete(chatId);
             await this.answerCallbackQuery(query.id, `Đã chọn ${projectId}`);
@@ -1154,7 +1171,7 @@ export class TelegramBotService {
 
         if (action === 'level') {
           const state = this.chatStates.get(chatId);
-          const projectId = state && 'projectId' in state ? state.projectId : '';
+          const projectId = state && 'projectId' in state && typeof state.projectId === 'string' ? state.projectId : '';
           const title = state && 'title' in state ? state.title : '';
           const body = state && 'body' in state ? state.body : '';
           const level = (taskIdOrParam === 'hard' ? 'hard' : 'easy') as 'easy' | 'hard';
@@ -1568,7 +1585,11 @@ export class TelegramBotService {
     const haystack = description.toLocaleLowerCase();
     const matches = projects.filter((project) => {
       const candidates = [project.id, project.name].filter(Boolean).map((value) => value.toLocaleLowerCase());
-      return candidates.some((candidate) => candidate.length > 0 && haystack.includes(candidate));
+      return candidates.some((candidate) => {
+        if (!candidate) return false;
+        const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'u').test(haystack);
+      });
     });
     return matches.length === 1 ? matches[0] : null;
   }
@@ -1593,7 +1614,7 @@ export class TelegramBotService {
       return;
     }
     if (!project) {
-      await this.saveFallbackDraft(chatId, trimmed, '');
+      await this.sendMessage(chatId, '❌ Không có project nào trong hệ thống.');
       return;
     }
     await this.sendAutoTaskToClaude(chatId, project.id, trimmed);
@@ -1636,7 +1657,7 @@ export class TelegramBotService {
       await this.sendMessage(chatId, '❌ Không thể lưu nháp vì chưa xác định được project.');
       return;
     }
-    const title = description.slice(0, 60);
+    const title = this.fallbackTaskTitle(description);
     try {
       const task = this.service.createTask({
         project: projectId,
@@ -1646,7 +1667,7 @@ export class TelegramBotService {
         level: 'easy',
         start: false,
       });
-      await this.sendMessage(chatId, `💾 Đã lưu nháp, Claude sẽ hoàn thiện khi có quota.\nTask: <code>${task.id}</code>\n<b>${this.escapeHtml(task.title)}</b>`, {
+      await this.sendMessage(chatId, `💾 Đã lưu nháp từ mô tả; bạn có thể giao ngay hoặc nhờ Claude hoàn thiện sau.\nTask: <code>${task.id}</code>\n<b>${this.escapeHtml(task.title)}</b>`, {
         inline_keyboard: [[
           { text: '🚀 Giao ngay', callback_data: `draft:start:${task.id}` },
           { text: '💾 Giữ nháp', callback_data: `draft:keep:${task.id}` },
@@ -1656,6 +1677,18 @@ export class TelegramBotService {
       const errMsg = err instanceof Error ? err.message : String(err);
       await this.sendMessage(chatId, `❌ Lỗi lưu nháp: ${this.escapeHtml(errMsg)}`);
     }
+  }
+
+  private fallbackTaskTitle(description: string): string {
+    if (description.length <= 60) return description;
+    const words = description.trim().split(/\s+/);
+    let title = '';
+    for (const word of words) {
+      const next = title ? `${title} ${word}` : word;
+      if (next.length > 59) break;
+      title = next;
+    }
+    return `${title || description.slice(0, 59).trimEnd()}…`;
   }
 
   private async startNewTaskWizard(chatId: number): Promise<void> {
