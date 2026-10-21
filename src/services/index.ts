@@ -32,7 +32,7 @@ import { BulletinService } from '../bulletin.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
-import { QuotaUsageService } from '../quota/usage.js';
+import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
@@ -769,8 +769,23 @@ export class AppService {
       profileName: row.profileName, status: row.status, resetsAt: row.resetsAt, rateLimitType: row.rateLimitType,
       observedAt: row.observedAt, limited: isClaudeQuotaLimited(row.status || undefined), source: 'transcript',
     }));
-    for (const row of this.usageService.getAll().filter((item) => item.grp.startsWith('Claude') && item.remainingPct > 0)) {
-      if (!profiles.some((item) => item.profileName === row.profileName)) profiles.push({ profileName: row.profileName, status: 'allowed', resetsAt: row.resetAt, rateLimitType: null, observedAt: new Date(row.fetchedAt * 1000).toISOString(), limited: false, source: '/usage' });
+    const usageByProfile = new Map<string, ReturnType<typeof this.usageService.getAll>>();
+    for (const row of this.usageService.getAll()) {
+      const rows = usageByProfile.get(row.profileName) || [];
+      rows.push(row);
+      usageByProfile.set(row.profileName, rows);
+    }
+    for (const [profileName, rows] of usageByProfile) {
+      const latestUsageAt = Math.max(...rows.map((row) => row.fetchedAt));
+      const usageObservedAt = new Date(latestUsageAt * 1000).toISOString();
+      const current = profiles.find((item) => item.profileName === profileName);
+      if (!current || !current.observedAt || latestUsageAt * 1000 >= Date.parse(current.observedAt)) {
+        const available = hasClaudeQuotaAvailable(rows);
+        const resetAt = Math.min(...rows.filter((row) => row.grp.startsWith('Claude')).map((row) => row.resetAt));
+        const next = { profileName, status: available ? 'allowed' : 'rejected', resetsAt: Number.isFinite(resetAt) ? resetAt : null, rateLimitType: null, observedAt: usageObservedAt, limited: !available, source: '/usage' };
+        if (current) Object.assign(current, next);
+        else profiles.push(next);
+      }
     }
     for (const profile of this.profileRepo.getAll().filter((item) => item.engine === 'claude' && !profiles.some((row) => row.profileName === item.name))) {
       profiles.push({ profileName: profile.name, status: null, resetsAt: null, rateLimitType: null, observedAt: new Date().toISOString(), limited: false, source: 'chưa quan sát' });

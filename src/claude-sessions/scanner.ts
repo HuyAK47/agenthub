@@ -23,6 +23,13 @@ export interface ClaudeScanOptions {
   eventBus?: EventBus;
 }
 
+export function isRealClaudeAssistant(event: ClaudeTranscriptEvent): boolean {
+  if (event.type !== 'assistant' || event.isApiErrorMessage) return false;
+  const model = typeof event.message?.model === 'string' ? event.message.model : '';
+  const output = integer(event.message?.usage?.output_tokens);
+  return model.length > 0 && model !== '<synthetic>' && output > 0;
+}
+
 export function redactTranscriptText(value: unknown, maxLength: number): string {
   if (typeof value !== 'string') return '';
   let text = value.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]');
@@ -164,7 +171,7 @@ export class ClaudeSessionScanner {
           const quota = quotaInfo(event);
           const profileName = this.profileForSession(record.sessionId);
           if (quota) repo.setQuota({ ...quota, profileName, observedAt: ts });
-          else if (event.type === 'assistant') {
+          else if (isRealClaudeAssistant(event)) {
             if (repo.markAllowedAfter(profileName, ts)) this.options.eventBus?.emit('claude.quota_available', undefined, { profileName, observedAt: ts, source: 'transcript' });
           }
         }
@@ -301,6 +308,7 @@ type ClaudeTranscriptEvent = {
   uuid?: string;
   requestId?: string;
   aiTitle?: string;
+  isApiErrorMessage?: boolean;
   isSidechain?: boolean;
   quotaLimits?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown; isUsingOverage?: unknown };
   rate_limit_info?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown; utilization?: unknown };

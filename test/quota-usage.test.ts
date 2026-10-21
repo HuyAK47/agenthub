@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import { openDatabase, ProfileRepo, QuotaMarkRepo, QuotaUsageRepo } from '../src/db/index.js';
-import { parseUsage, QuotaUsageService } from '../src/quota/usage.js';
+import { hasClaudeQuotaAvailable, parseUsage, QuotaUsageService } from '../src/quota/usage.js';
 import { ProfileLockService } from '../src/profiles/locks.js';
 
 const sampleResetAt = Math.floor(Date.now() / 1000) + 3600;
@@ -16,6 +16,17 @@ const sample = [
 ].join('\n');
 
 describe('quota usage', () => {
+  it('requires every Claude window to have quota remaining', () => {
+    expect(hasClaudeQuotaAvailable([
+      { grp: 'Claude and GPT models', remainingPct: 0 },
+      { grp: 'Claude and GPT models', remainingPct: 60 },
+    ])).toBe(false);
+    expect(hasClaudeQuotaAvailable([
+      { grp: 'Claude and GPT models', remainingPct: 1 },
+      { grp: 'Claude and GPT models', remainingPct: 60 },
+    ])).toBe(true);
+  });
+
   it('parses the agy usage format and ignores malformed lines', () => {
     const parsed = parseUsage(`${sample}\nnoise\tmissing\nBroken\tFive Hour Limit Remaining\tnope\tnot-date`);
     expect(parsed).toHaveLength(4);

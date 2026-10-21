@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrainRepo, BrainService } from '../src/brain.js';
 import { EventRepo, MIGRATIONS, openDatabase } from '../src/db/index.js';
 import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
-import { ClaudeSessionScanner, encodeProjectDir, isClaudeProcessOpen, isClaudeQuotaLimited, redactTranscriptText } from '../src/claude-sessions/scanner.js';
+import { ClaudeSessionScanner, encodeProjectDir, isClaudeProcessOpen, isClaudeQuotaLimited, isRealClaudeAssistant, redactTranscriptText } from '../src/claude-sessions/scanner.js';
 import { ClaudeFailoverState } from '../src/chat/failover.js';
 import { attributeTurn, taskRefsFromToolInput } from '../src/claude-sessions/attribution.js';
 
@@ -42,6 +42,13 @@ function addProjectAndTask(db: ReturnType<typeof openDatabase>, projectDir: stri
 }
 
 describe('Claude session privacy and quota handling', () => {
+  it('only treats a real assistant response as successful quota evidence', () => {
+    expect(isRealClaudeAssistant({ type: 'assistant', isApiErrorMessage: true, message: { model: 'claude-sonnet', usage: { output_tokens: 5 } } })).toBe(false);
+    expect(isRealClaudeAssistant({ type: 'assistant', message: { model: '<synthetic>', usage: { output_tokens: 5 } } })).toBe(false);
+    expect(isRealClaudeAssistant({ type: 'assistant', message: { model: 'claude-sonnet', usage: { output_tokens: 0 } } })).toBe(false);
+    expect(isRealClaudeAssistant({ type: 'assistant', message: { model: 'claude-sonnet', usage: { output_tokens: 5 } } })).toBe(true);
+  });
+
   it('auto-resumes only a stable stopped session into a real chat session', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
     const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
@@ -143,6 +150,28 @@ describe('Claude session privacy and quota handling', () => {
     expect(repo.quota('claude-may')).toMatchObject({ status: 'allowed', observedAt: '2026-10-21T08:05:00.000Z' });
     expect(repo.quota('claude-other')).toMatchObject({ status: 'rejected' });
     expect(repo.markAllowedAfter('claude-may', '2026-10-21T08:04:00.000Z')).toBe(false);
+    db.close();
+  });
+
+  it('does not clear rejected quota from a synthetic API error assistant event', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects', encodeProjectDir(path.join(root, 'project'))); const projectDir = path.join(root, 'project');
+    fs.mkdirSync(transcriptDir, { recursive: true }); fs.mkdirSync(projectDir);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path) VALUES (?,?,?)').run('p', 'Project', projectDir);
+    db.prepare("INSERT INTO chat_sessions (id,claudeSessionId,title,model,profileName) VALUES ('chat','session','Session','sonnet','claude-may')").run();
+    const base = Date.parse('2026-10-21T08:00:00.000Z');
+    const event = (timestamp: string, message: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ type: 'assistant', sessionId: 'session', cwd: projectDir, timestamp, ...extra, message });
+    const file = path.join(transcriptDir, 'session.jsonl');
+    fs.writeFileSync(file, [
+      JSON.stringify(event(new Date(base).toISOString(), { id: 'limited', model: 'claude-sonnet', usage: { input_tokens: 1, output_tokens: 1 }, content: [] }, { quotaLimits: { status: 'rejected', resetsAt: 1_900_000_000, rateLimitType: 'five_hour' } })),
+      JSON.stringify(event(new Date(base + 60_000).toISOString(), { id: 'synthetic', model: '<synthetic>', usage: { input_tokens: 0, output_tokens: 0 }, content: [] }, { isApiErrorMessage: true })),
+    ].join('\n') + '\n');
+    await new ClaudeSessionScanner(db, { dir: path.join(root, 'projects') }).scan();
+    expect(db.prepare('SELECT status FROM claude_quota_profiles WHERE profileName=?').get('claude-may')).toEqual({ status: 'rejected' });
+    fs.appendFileSync(file, `${JSON.stringify(event(new Date(base + 120_000).toISOString(), { id: 'real', model: 'claude-sonnet', usage: { input_tokens: 2, output_tokens: 3 }, content: [] }))}\n`);
+    await new ClaudeSessionScanner(db, { dir: path.join(root, 'projects') }).scan();
+    expect(db.prepare('SELECT status FROM claude_quota_profiles WHERE profileName=?').get('claude-may')).toEqual({ status: 'allowed' });
     db.close();
   });
 
