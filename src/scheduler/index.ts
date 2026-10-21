@@ -35,7 +35,6 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
-import { projectSettings } from '../projects/settings.js';
 import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
