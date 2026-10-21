@@ -600,10 +600,6 @@ export class TelegramBotService {
         await this.sendMessage(chatId, '▶️ Đã tiếp tục giao task mới.');
         break;
 
-      case '/brain':
-        await this.handleBrainCommand(chatId, argStr);
-        break;
-
       default:
         await this.sendMessage(chatId, `Lệnh không hợp lệ: ${cmd}. Gõ /help để xem hướng dẫn.`);
         break;
@@ -615,6 +611,20 @@ export class TelegramBotService {
     const parts = argStr.split(/\s+/).filter(Boolean);
     if (parts[0] !== 'mode') {
       const brain = this.service.getStatus().brain;
+      const detailed = brain as (typeof brain & {
+        source?: string;
+        sessions?: Array<{ link: string; title: string; state?: string; stale?: boolean; lastUserRequest?: string; lastTool?: { name: string; summary?: string } }>;
+      });
+      if (detailed?.sessions) {
+        let text = `🧠 <b>Claude · Điều phối</b>\n• Trạng thái: <b>${this.brainLabel(detailed)}</b>\n• Nguồn: ${this.escapeHtml(detailed.source || 'hub')}\n`;
+        for (const session of detailed.sessions) {
+          text += `\n• <a href="${this.escapeHtml(session.link)}">${this.escapeHtml(session.title)}</a> · ${this.brainLabel(session)}\n`;
+          if (session.lastUserRequest) text += `  Yêu cầu: ${this.escapeHtml(session.lastUserRequest)}\n`;
+          if (session.lastTool) text += `  Tool: ${this.escapeHtml(session.lastTool.name)}${session.lastTool.summary ? ` — ${this.escapeHtml(session.lastTool.summary)}` : ''}\n`;
+        }
+        await this.sendMessage(chatId, text);
+        return;
+      }
       const activity = brain ? ` · trạng thái <b>${this.brainLabel(brain)}</b>` : '';
       await this.sendMessage(chatId, `🧠 Bộ não: <b>${current.mode}</b> · model <b>${current.model}</b> · tối đa ${current.maxTurnsPerHour} lượt/giờ${activity}`);
       return;
