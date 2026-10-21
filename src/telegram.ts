@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo } from './db/index.js';
+import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 
@@ -29,6 +29,34 @@ export function isProjectMergeEnabled(project?: ProjectRow | null): boolean {
   } catch {
     return false;
   }
+}
+
+export function slugify(title: string): string {
+  const withoutDiacritics = title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+
+  const kebab = withoutDiacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50)
+    .replace(/-+$/, '');
+
+  return kebab || 'task';
+}
+
+export function generateTaskSlug(title: string, projectId: string, taskRepo: TaskRepo): string {
+  const baseSlug = slugify(title);
+  let slug = baseSlug;
+  let counter = 2;
+  while (taskRepo.get(`${projectId}/${slug}`)) {
+    slug = `${baseSlug}-${counter}`;
+    counter += 1;
+  }
+  return slug;
 }
 
 export interface TelegramUpdate {
@@ -85,16 +113,37 @@ export interface TelegramServiceOptions {
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  sleepFn?: (ms: number) => Promise<void>;
   execFile?: GitDiffFn;
   tokenOverride?: string;
   chatService?: ChatService;
   brainSession?: boolean;
 }
 
-interface PendingChatState {
-  action: 'reject_feedback';
-  taskId: string;
-}
+export type PendingChatState =
+  | { action: 'reject_feedback'; taskId: string }
+  | { action: 'newtask_project' }
+  | { action: 'newtask_title'; projectId: string }
+  | { action: 'newtask_body'; projectId: string; title: string; bodyLines: string[] }
+  | { action: 'newtask_level'; projectId: string; title: string; body: string }
+  | {
+      action: 'newtask_model';
+      projectId: string;
+      title: string;
+      body: string;
+      level: 'easy' | 'hard';
+      defaultModel: string;
+    }
+  | {
+      action: 'newtask_confirm';
+      projectId: string;
+      title: string;
+      body: string;
+      level: 'easy' | 'hard';
+      slug: string;
+      modelChain?: string[];
+      modelDisplay: string;
+    };
 
 interface SendQueueItem {
   chatId: number;
@@ -189,7 +238,7 @@ export class TelegramBotService {
     this.quotaMarkRepo = opts.quotaMarkRepo;
     this.fetchFn = opts.fetch || globalThis.fetch;
     this.now = opts.now || (() => Date.now());
-    this.sleepFn = opts.sleep || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleepFn = opts.sleep || opts.sleepFn || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
     this.chatService = opts.chatService;
     this.brainSession = opts.brainSession === true;
@@ -508,6 +557,60 @@ export class TelegramBotService {
         }
         return;
       }
+
+      if (pendingState.action === 'newtask_title') {
+        const title = rawText.trim();
+        if (!title) {
+          await this.sendMessage(chatId, 'Tiêu đề không được để trống. Vui lòng nhập tiêu đề:');
+          return;
+        }
+        this.chatStates.set(chatId, {
+          action: 'newtask_body',
+          projectId: pendingState.projectId,
+          title,
+          bodyLines: [],
+        });
+        await this.sendMessage(
+          chatId,
+          `📝 Tiêu đề: <b>${this.escapeHtml(title)}</b>\n\nNhập <b>đề bài</b> cho task (có thể gửi nhiều tin nhắn, gõ <code>/done</code> để kết thúc, hoặc <code>/cancel</code> để huỷ):`,
+        );
+        return;
+      }
+
+      if (pendingState.action === 'newtask_body') {
+        if (rawText.toLowerCase() === '/done') {
+          const body = pendingState.bodyLines.join('\n\n').trim();
+          this.chatStates.set(chatId, {
+            action: 'newtask_level',
+            projectId: pendingState.projectId,
+            title: pendingState.title,
+            body,
+          });
+          const keyboard: InlineKeyboardButton[][] = [
+            [
+              { text: '🟢 Dễ (easy)', callback_data: 'newtask:level:easy' },
+              { text: '🔴 Khó (hard)', callback_data: 'newtask:level:hard' },
+            ],
+            [{ text: '❌ Huỷ', callback_data: 'newtask:cancel' }],
+          ];
+          await this.sendMessage(chatId, '⚙️ Chọn <b>độ khó</b> cho task:', { inline_keyboard: keyboard });
+          return;
+        }
+
+        pendingState.bodyLines.push(rawText);
+        await this.sendMessage(chatId, '✓ Đã nhận. Gửi tiếp nội dung hoặc gõ <code>/done</code> để tiếp tục.');
+        return;
+      }
+
+      if (
+        pendingState.action === 'newtask_project' ||
+        pendingState.action === 'newtask_level' ||
+        pendingState.action === 'newtask_model' ||
+        pendingState.action === 'newtask_confirm'
+      ) {
+        await this.sendMessage(chatId, 'Vui lòng chọn tùy chọn bằng các nút bấm bên trên, hoặc gửi /cancel để huỷ.');
+        return;
+      }
     }
 
     // 3. Command processing
@@ -568,6 +671,18 @@ export class TelegramBotService {
 
       case '/task':
         await this.handleTaskDetailCommand(chatId, argStr);
+        break;
+
+      case '/newtask':
+        await this.handleNewTaskCommand(chatId, argStr);
+        break;
+
+      case '/plan':
+        await this.handlePlanCommand(chatId, args);
+        break;
+
+      case '/drafts':
+        await this.handleDraftsCommand(chatId);
         break;
 
       case '/log':
@@ -942,6 +1057,220 @@ export class TelegramBotService {
         break;
       }
 
+      case 'newtask': {
+        if (action === 'cancel') {
+          this.chatStates.delete(chatId);
+          await this.answerCallbackQuery(query.id, 'Đã huỷ thao tác.');
+          await this.sendMessage(chatId, 'Đã hủy thao tác tạo task.');
+          return;
+        }
+
+        if (action === 'proj') {
+          const projectId = taskIdOrParam;
+          this.chatStates.set(chatId, { action: 'newtask_title', projectId });
+          await this.answerCallbackQuery(query.id, `Đã chọn ${projectId}`);
+          await this.sendMessage(
+            chatId,
+            `📁 Dự án: <b>${this.escapeHtml(projectId)}</b>\n\n✏️ Vui lòng nhập <b>tiêu đề</b> cho task:\n(Gõ /cancel để huỷ)`,
+          );
+          return;
+        }
+
+        if (action === 'level') {
+          const state = this.chatStates.get(chatId);
+          const projectId = state && 'projectId' in state ? state.projectId : '';
+          const title = state && 'title' in state ? state.title : '';
+          const body = state && 'body' in state ? state.body : '';
+          const level = (taskIdOrParam === 'hard' ? 'hard' : 'easy') as 'easy' | 'hard';
+          const defaultModel =
+            this.config.defaultModelChains[level]?.[0] ||
+            (level === 'hard' ? 'codex:gpt-5.6-luna' : 'gemini-3.8-flash-medium');
+          const modelOpts = this.service.getModelOptions();
+          const allModels = Array.from(
+            new Set([...(modelOpts.configured || []), ...(modelOpts.suggestions || [])]),
+          );
+
+          this.chatStates.set(chatId, {
+            action: 'newtask_model',
+            projectId,
+            title,
+            body,
+            level,
+            defaultModel,
+          });
+
+          const otherModels = allModels.filter((m) => m !== defaultModel);
+          const modelButtons: InlineKeyboardButton[][] = [
+            [{ text: `⭐ Mặc định (${defaultModel})`, callback_data: 'newtask:model:default' }],
+          ];
+          for (const m of otherModels) {
+            modelButtons.push([{ text: m, callback_data: `newtask:model:${m}` }]);
+          }
+          modelButtons.push([{ text: '❌ Huỷ', callback_data: 'newtask:cancel' }]);
+
+          await this.answerCallbackQuery(query.id, `Đã chọn ${level}`);
+          await this.sendMessage(
+            chatId,
+            `⚙️ Độ khó: <b>${level}</b>\n\n🤖 Chọn <b>model</b> cho task:`,
+            { inline_keyboard: modelButtons },
+          );
+          return;
+        }
+
+        if (action === 'model') {
+          const modelChoice = taskIdOrParam;
+          const state = this.chatStates.get(chatId);
+          if (!state || state.action !== 'newtask_model') {
+            await this.answerCallbackQuery(query.id, 'Thao tác đã hết hạn.');
+            return;
+          }
+
+          const isDefault = modelChoice === 'default';
+          const modelDisplay = isDefault ? `${state.defaultModel} (mặc định)` : modelChoice;
+          const modelChain = isDefault ? undefined : [modelChoice];
+          const slug = generateTaskSlug(state.title, state.projectId, this.taskRepo);
+
+          this.chatStates.set(chatId, {
+            action: 'newtask_confirm',
+            projectId: state.projectId,
+            title: state.title,
+            body: state.body,
+            level: state.level,
+            slug,
+            modelChain,
+            modelDisplay,
+          });
+
+          const confirmKeyboard: InlineKeyboardButton[][] = [
+            [
+              { text: '🚀 Giao ngay', callback_data: 'newtask:confirm:queued' },
+              { text: '💾 Lưu nháp', callback_data: 'newtask:confirm:draft' },
+              { text: '❌ Huỷ', callback_data: 'newtask:confirm:cancel' },
+            ],
+          ];
+
+          const summaryText =
+            `📋 <b>Xác nhận tạo task</b>\n\n` +
+            `• Dự án: <code>${this.escapeHtml(state.projectId)}</code>\n` +
+            `• Tiêu đề: <b>${this.escapeHtml(state.title)}</b>\n` +
+            `• Slug: <code>${this.escapeHtml(slug)}</code>\n` +
+            `• Độ khó: <code>${state.level}</code>\n` +
+            `• Model: <code>${this.escapeHtml(modelDisplay)}</code>\n` +
+            `• Đề bài:\n<i>${this.escapeHtml(state.body || '(không có)')}</i>`;
+
+          await this.answerCallbackQuery(query.id, 'Đã chọn model.');
+          await this.sendMessage(chatId, summaryText, { inline_keyboard: confirmKeyboard });
+          return;
+        }
+
+        if (action === 'confirm') {
+          const choice = taskIdOrParam;
+          const state = this.chatStates.get(chatId);
+          if (!state || state.action !== 'newtask_confirm') {
+            await this.answerCallbackQuery(query.id, 'Thao tác đã hết hạn.');
+            return;
+          }
+
+          if (choice === 'cancel') {
+            this.chatStates.delete(chatId);
+            await this.answerCallbackQuery(query.id, 'Đã huỷ.');
+            await this.sendMessage(chatId, 'Đã hủy thao tác tạo task.');
+            return;
+          }
+
+          const start = choice === 'queued';
+          try {
+            const task = this.service.createTask({
+              project: state.projectId,
+              slug: state.slug,
+              title: state.title,
+              body: state.body,
+              level: state.level,
+              modelChain: state.modelChain,
+              start,
+            });
+            this.chatStates.delete(chatId);
+            if (start) {
+              await this.answerCallbackQuery(query.id, 'Đã giao việc!');
+              await this.sendMessage(
+                chatId,
+                `🚀 Đã giao task <code>${task.id}</code> vào hàng đợi:\n<b>${this.escapeHtml(task.title)}</b>`,
+              );
+            } else {
+              await this.answerCallbackQuery(query.id, 'Đã lưu nháp!');
+              await this.sendMessage(
+                chatId,
+                `💾 Đã lưu nháp task <code>${task.id}</code>:\n<b>${this.escapeHtml(task.title)}</b>\n\nDùng /drafts để quản lý.`,
+              );
+            }
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await this.answerCallbackQuery(query.id, 'Lỗi tạo task.');
+            await this.sendMessage(chatId, `❌ Lỗi khi tạo task: ${errMsg}`);
+          }
+          return;
+        }
+        break;
+      }
+
+      case 'draft': {
+        const taskId = taskIdOrParam;
+        if (action === 'start') {
+          try {
+            this.service.startTask(taskId);
+            await this.answerCallbackQuery(query.id, 'Đã giao task!');
+            await this.sendMessage(chatId, `🚀 Đã giao task <code>${taskId}</code> vào hàng đợi.`);
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await this.answerCallbackQuery(query.id, 'Lỗi giao task.');
+            await this.sendMessage(chatId, `❌ Lỗi khi giao task: ${errMsg}`);
+          }
+        } else if (action === 'delete') {
+          try {
+            this.service.deleteTask(taskId);
+            await this.answerCallbackQuery(query.id, 'Đã xoá task!');
+            await this.sendMessage(chatId, `🗑️ Đã xoá task nháp <code>${taskId}</code>.`);
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await this.answerCallbackQuery(query.id, 'Lỗi xoá task.');
+            await this.sendMessage(chatId, `❌ Lỗi khi xoá task: ${errMsg}`);
+          }
+        } else if (action === 'keep') {
+          await this.answerCallbackQuery(query.id, 'Đã lưu nháp.');
+          await this.sendMessage(chatId, `💾 Đã lưu nháp task <code>${taskId}</code>. Dùng /drafts để xem và quản lý.`);
+        }
+        break;
+      }
+
+      case 'batch': {
+        const batchId = taskIdOrParam;
+        if (action === 'dispatch') {
+          try {
+            const result = this.service.dispatchBatch(batchId);
+            await this.answerCallbackQuery(query.id, 'Đã giao cả đợt!');
+            await this.sendMessage(
+              chatId,
+              `🚀 Đã giao ${result.dispatchedCount} task của đợt <b>${this.escapeHtml(batchId)}</b> vào hàng đợi.`,
+            );
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await this.answerCallbackQuery(query.id, 'Lỗi giao đợt.');
+            await this.sendMessage(chatId, `❌ Lỗi khi giao đợt: ${errMsg}`);
+          }
+        } else if (action === 'discard') {
+          try {
+            this.service.discardBatch(batchId);
+            await this.answerCallbackQuery(query.id, 'Đã huỷ đợt!');
+            await this.sendMessage(chatId, `🛑 Đã huỷ đợt <b>${this.escapeHtml(batchId)}</b>.`);
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await this.answerCallbackQuery(query.id, 'Lỗi huỷ đợt.');
+            await this.sendMessage(chatId, `❌ Lỗi khi huỷ đợt: ${errMsg}`);
+          }
+        }
+        break;
+      }
+
       default:
         await this.answerCallbackQuery(query.id);
         break;
@@ -1066,6 +1395,162 @@ export class TelegramBotService {
     }
 
     await this.sendMessage(chatId, text, buttons.length > 0 ? { inline_keyboard: buttons } : undefined);
+  }
+
+  private async handleNewTaskCommand(chatId: number, argStr: string): Promise<void> {
+    const trimmed = argStr.trim();
+    if (!trimmed) {
+      await this.startNewTaskWizard(chatId);
+      return;
+    }
+
+    const pipeIdx = trimmed.indexOf('|');
+    if (pipeIdx === -1) {
+      await this.sendMessage(
+        chatId,
+        'Cú pháp dạng nhanh: /newtask &lt;project&gt; &lt;tiêu đề&gt; | &lt;đề bài&gt;\nHoặc chỉ gõ /newtask để tạo từng bước.',
+      );
+      return;
+    }
+
+    const beforePipe = trimmed.slice(0, pipeIdx).trim();
+    const body = trimmed.slice(pipeIdx + 1).trim();
+
+    const firstSpace = beforePipe.indexOf(' ');
+    if (firstSpace === -1) {
+      await this.sendMessage(
+        chatId,
+        'Cú pháp dạng nhanh: /newtask &lt;project&gt; &lt;tiêu đề&gt; | &lt;đề bài&gt;',
+      );
+      return;
+    }
+
+    const project = beforePipe.slice(0, firstSpace).trim();
+    const title = beforePipe.slice(firstSpace + 1).trim();
+
+    if (!project || !title) {
+      await this.sendMessage(
+        chatId,
+        'Cú pháp dạng nhanh: /newtask &lt;project&gt; &lt;tiêu đề&gt; | &lt;đề bài&gt;',
+      );
+      return;
+    }
+
+    const projObj = this.projectRepo.get(project);
+    if (!projObj) {
+      await this.sendMessage(chatId, `❌ Project "${this.escapeHtml(project)}" không tồn tại.`);
+      return;
+    }
+
+    const slug = generateTaskSlug(title, project, this.taskRepo);
+    try {
+      const task = this.service.createTask({
+        project,
+        slug,
+        title,
+        body,
+        level: 'easy',
+        start: false,
+      });
+
+      const keyboard: InlineKeyboardButton[][] = [
+        [
+          { text: '🚀 Giao ngay', callback_data: `draft:start:${task.id}` },
+          { text: '💾 Lưu nháp', callback_data: `draft:keep:${task.id}` },
+        ],
+      ];
+
+      await this.sendMessage(
+        chatId,
+        `📝 Đã tạo nháp task <code>${task.id}</code>:\n<b>${this.escapeHtml(task.title)}</b>\n\nBạn muốn giao việc ngay hay lưu nháp?`,
+        { inline_keyboard: keyboard },
+      );
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await this.sendMessage(chatId, `❌ Lỗi khi tạo task: ${errMsg}`);
+    }
+  }
+
+  private async startNewTaskWizard(chatId: number): Promise<void> {
+    const projects = this.projectRepo.getAll();
+    if (projects.length === 0) {
+      await this.sendMessage(chatId, '❌ Không có project nào trong hệ thống.');
+      return;
+    }
+
+    const keyboard: InlineKeyboardButton[][] = projects.map((p) => [
+      { text: p.name ? `${p.name} (${p.id})` : p.id, callback_data: `newtask:proj:${p.id}` },
+    ]);
+    keyboard.push([{ text: '❌ Huỷ', callback_data: 'newtask:cancel' }]);
+
+    this.chatStates.set(chatId, { action: 'newtask_project' });
+    await this.sendMessage(chatId, '📁 <b>Chọn project cho task mới:</b>', {
+      inline_keyboard: keyboard,
+    });
+  }
+
+  private async handlePlanCommand(chatId: number, args: string[]): Promise<void> {
+    if (args.length < 2) {
+      await this.sendMessage(chatId, 'Cú pháp: /plan &lt;project&gt; &lt;mục tiêu&gt;');
+      return;
+    }
+
+    const project = args[0];
+    const goal = args.slice(1).join(' ').trim();
+
+    const projObj = this.projectRepo.get(project);
+    if (!projObj) {
+      await this.sendMessage(chatId, `❌ Project "${this.escapeHtml(project)}" không tồn tại.`);
+      return;
+    }
+
+    if (!this.chatService) {
+      await this.sendMessage(chatId, 'Chat Claude chưa được bật.');
+      return;
+    }
+
+    const prompt = `Lập kế hoạch cho dự án "${project}" với mục tiêu: ${goal}\nHãy sử dụng công cụ hub_create_batch để đề xuất một đợt (batch) task nháp cho dự án này.`;
+    await this.handleChatMessage(chatId, prompt);
+  }
+
+  private async handleDraftsCommand(chatId: number): Promise<void> {
+    const draftTasks = this.service.listTasks({ status: 'draft' });
+    const draftBatches = this.service.listBatches({ status: 'draft' });
+
+    if (draftTasks.length === 0 && draftBatches.length === 0) {
+      await this.sendMessage(chatId, '📝 Hiện không có task hoặc đợt nháp nào.');
+      return;
+    }
+
+    let text = '📋 <b>Danh sách bản nháp:</b>\n';
+    const keyboard: InlineKeyboardButton[][] = [];
+
+    if (draftBatches.length > 0) {
+      text = text + `\n📦 <b>Đợt nháp (${draftBatches.length}):</b>\n`;
+      for (const b of draftBatches.slice(0, 5)) {
+        text = text + `• <b>${this.escapeHtml(b.title)}</b> (<code>${b.id}</code>)\n`;
+        keyboard.push([
+          { text: `🚀 Giao đợt: ${b.title.slice(0, 15)}`, callback_data: `batch:dispatch:${b.id}` },
+          { text: '🗑️ Xoá đợt', callback_data: `batch:discard:${b.id}` },
+        ]);
+      }
+    }
+
+    if (draftTasks.length > 0) {
+      text = text + `\n📝 <b>Task nháp (${draftTasks.length}):</b>\n`;
+      for (const t of draftTasks.slice(0, 10)) {
+        text = text + `• <code>${t.id}</code>: ${this.escapeHtml(t.title)}\n`;
+        keyboard.push([
+          { text: `🚀 Giao: ${t.slug.slice(0, 15)}`, callback_data: `draft:start:${t.id}` },
+          { text: '🗑️ Xoá', callback_data: `draft:delete:${t.id}` },
+        ]);
+      }
+      if (draftTasks.length > 10) {
+        text = text + `<i>... và còn ${draftTasks.length - 10} task nháp khác.</i>\n`;
+      }
+    }
+
+    await this.sendMessage(chatId, text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
   }
 
   private async handleLogCommand(chatId: number, idOrSlug: string): Promise<void> {
@@ -1279,7 +1764,8 @@ export class TelegramBotService {
     // Deduplication check: ignore duplicate events within 10 seconds
     const profileKey = (p.profile || p.worker || p.profileName || '') as string;
     const familyKey = (p.family || p.model || '') as string;
-    const dedupKey = `${type}:${taskId || ''}:${profileKey}:${familyKey}`;
+    const batchKey = (p.batchId || '') as string;
+    const dedupKey = `${type}:${taskId || batchKey}:${profileKey}:${familyKey}`;
     const now = this.now();
     const lastTime = this.lastNotificationTime.get(dedupKey) || 0;
     if (now - lastTime < 10_000) {
@@ -1295,10 +1781,59 @@ export class TelegramBotService {
         break;
       }
       case 'batch.created': {
-        const count = typeof p.taskCount === 'number' ? p.taskCount : 0;
+        const batchId = typeof p.batchId === 'string' ? p.batchId : undefined;
+        let batchInfo: (TaskBatchRow & { tasks: TaskRow[] }) | null = null;
+        if (batchId) {
+          try {
+            batchInfo = this.service.getBatch(batchId);
+          } catch {
+            // ignore
+          }
+        }
+
+        const count = batchInfo ? batchInfo.tasks.length : (typeof p.taskCount === 'number' ? p.taskCount : 0);
+        const title = batchInfo?.title || (typeof p.title === 'string' ? p.title : 'Kế hoạch đề xuất');
         const who = typeof p.createdBy === 'string' && p.createdBy ? p.createdBy : 'Claude';
         const label = who.toLowerCase() === 'claude' ? 'Claude' : who;
-        this.broadcastMessage(`${label} đề xuất ${count} task, chờ bạn duyệt`);
+
+        let text = `📦 <b>${this.escapeHtml(label)} đề xuất đợt task mới:</b>\n`;
+        text = text + `• Tiêu đề đợt: <b>${this.escapeHtml(title)}</b>\n`;
+        text = text + `• Số lượng: <b>${count} task</b>\n\n`;
+
+        if (batchInfo && batchInfo.tasks.length > 0) {
+          text = text + '<b>Danh sách task:</b>\n';
+          for (const t of batchInfo.tasks) {
+            let depStr = '';
+            let parsedDeps: string[] = [];
+            if (typeof t.dependsOn === 'string') {
+              try {
+                const parsed = JSON.parse(t.dependsOn);
+                if (Array.isArray(parsed)) parsedDeps = parsed;
+                else if (parsed) parsedDeps = [String(parsed)];
+              } catch {
+                if (t.dependsOn.trim()) parsedDeps = [t.dependsOn.trim()];
+              }
+            } else if (Array.isArray(t.dependsOn)) {
+              parsedDeps = t.dependsOn;
+            }
+            if (parsedDeps.length > 0) {
+              depStr = ` <i>(phụ thuộc: ${this.escapeHtml(parsedDeps.join(', '))})</i>`;
+            }
+            text = text + `• <code>${t.id}</code>: ${this.escapeHtml(t.title)}${depStr}\n`;
+          }
+        }
+
+        const keyboard: InlineKeyboardButton[][] = [];
+        if (batchId) {
+          const dashboardUrl = `http://127.0.0.1:${this.config.port}/#/plans/${encodeURIComponent(batchId)}`;
+          keyboard.push([
+            { text: '🚀 Giao cả đợt', callback_data: `batch:dispatch:${batchId}` },
+            { text: '❌ Huỷ đợt', callback_data: `batch:discard:${batchId}` },
+          ]);
+          keyboard.push([{ text: '🌐 Xem trên dashboard', url: dashboardUrl }]);
+        }
+
+        this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
         break;
       }
 
@@ -1653,6 +2188,9 @@ export class TelegramBotService {
 /brain - Xem Claude đang làm gì hoặc chờ bạn trả lời
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard
+/newtask - Tạo task mới (hội thoại từng bước hoặc: /newtask &lt;project&gt; &lt;tiêu đề&gt; | &lt;đề bài&gt;)
+/plan &lt;project&gt; &lt;mục tiêu&gt; - Nhờ Claude lập kế hoạch và đề xuất một đợt task nháp
+/drafts - Xem danh sách task và đợt nháp, kèm nút giao hoặc xoá
 /log &lt;id&gt; - Xem 30 dòng cuối log của task
 /retry &lt;id&gt; - Chạy lại task bị failed hoặc blocked
 /cancel &lt;id&gt; - Hủy task (kèm nút xác nhận)
