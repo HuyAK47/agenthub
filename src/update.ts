@@ -7,21 +7,37 @@ import { getPlatform } from './platform/index.js';
 import type { ServiceUninstallResult } from './platform/types.js';
 
 export function compareSemver(a: string, b: string): number {
-  const parse = (v: string) =>
-    v
-      .replace(/^v/, '')
-      .split('.')
-      .map((p) => {
-        const n = parseInt(p, 10);
-        return Number.isNaN(n) ? 0 : n;
-      });
+  // "1.0.0-rc.1" -> core [1,0,0], pre ["rc", 1]. A release ranks above its pre-releases.
+  const parse = (v: string) => {
+    const [core, pre] = v.replace(/^v/, '').split('-', 2) as [string, string | undefined];
+    const nums = core.split('.').map((p) => {
+      const n = parseInt(p, 10);
+      return Number.isNaN(n) ? 0 : n;
+    });
+    const preParts = pre ? pre.split('.').map((p) => (/^\d+$/.test(p) ? Number(p) : p)) : [];
+    return { nums, preParts };
+  };
   const pa = parse(a);
   const pb = parse(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length, 3); i++) {
-    const na = pa[i] ?? 0;
-    const nb = pb[i] ?? 0;
+  for (let i = 0; i < Math.max(pa.nums.length, pb.nums.length, 3); i++) {
+    const na = pa.nums[i] ?? 0;
+    const nb = pb.nums[i] ?? 0;
     if (na > nb) return 1;
     if (na < nb) return -1;
+  }
+  if (!pa.preParts.length || !pb.preParts.length) {
+    return pa.preParts.length === pb.preParts.length ? 0 : pa.preParts.length ? -1 : 1;
+  }
+  for (let i = 0; i < Math.max(pa.preParts.length, pb.preParts.length); i++) {
+    const x = pa.preParts[i];
+    const y = pb.preParts[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    if (typeof x === 'number' && typeof y === 'number') return x > y ? 1 : -1;
+    if (typeof x === 'number') return -1;
+    if (typeof y === 'number') return 1;
+    return x > y ? 1 : -1;
   }
   return 0;
 }
