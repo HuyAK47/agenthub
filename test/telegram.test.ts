@@ -602,7 +602,19 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
 
       const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls).toHaveLength(1);
-      expect(calls[0].body?.text).toContain('Claude đang chờ bạn trả lời');
+      expect(calls[0].body?.text).toContain('đang chờ bạn trả lời');
+      expect(calls[0].body?.text).toContain('Chờ phản hồi');
+    });
+
+    it('does not notify for hub chat / brain sessions that already answered in Telegram', () => {
+      currentTime = Date.now();
+      ctx.claudeSessionRepo.upsert({
+        sessionId: 'hub-chat-waiting', cwd: tmpDir, title: 'Bộ não', isHubChat: 1,
+        lastAt: new Date(currentTime - 6 * 60_000).toISOString(), lastEventKind: 'assistant_text',
+      });
+      const handleChatEvent = (bot as unknown as { handleEvent(type: string, taskId?: string, payload?: unknown): void }).handleEvent.bind(bot);
+      handleChatEvent('brain.updated');
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
     });
 
     it('/tasks lists tasks and filters by status', async () => {

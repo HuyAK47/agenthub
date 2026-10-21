@@ -9,10 +9,6 @@ import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 
-function statusBrainWaiting(brain: { sessions?: Array<{ state: string; lastActivityAt: string }> } | undefined, now: number): boolean {
-  return Boolean(brain?.sessions?.some((session) => session.state === 'waiting' && now - Date.parse(session.lastActivityAt) > 5 * 60_000));
-}
-
 const execFileAsync = promisify(execFile);
 
 export type GitDiffFn = (
@@ -1962,11 +1958,16 @@ export class TelegramBotService {
 
       case 'brain.updated': {
         const currentBrain = this.service.getStatus().brain;
-        const waitingIds = new Set((currentBrain?.sessions || []).filter((session) => session.state === 'waiting' && this.now() - Date.parse(session.lastActivityAt) > 5 * 60_000).map((session) => session.sessionId));
+        // Only Claude Code sessions outside the hub (e.g. an editor) can be silently waiting:
+        // hub chat / brain replies already reached the user, so they never trigger this.
+        const waiting = (currentBrain?.sessions || []).filter((session) => !session.isHubChat && session.state === 'waiting' && this.now() - Date.parse(session.lastActivityAt) > 5 * 60_000);
+        const waitingIds = new Set(waiting.map((session) => session.sessionId));
         for (const id of [...this.brainWaitingNotified]) if (!waitingIds.has(id)) this.brainWaitingNotified.delete(id);
-        if (notify.brainWaiting === false || !statusBrainWaiting(currentBrain, this.now()) || [...waitingIds].every((id) => this.brainWaitingNotified.has(id))) return;
-        for (const id of waitingIds) this.brainWaitingNotified.add(id);
-        this.broadcastMessage('🧠 <b>Claude đang chờ bạn trả lời</b>\nDùng /brain để xem phiên và yêu cầu gần nhất.');
+        const fresh = waiting.filter((session) => !this.brainWaitingNotified.has(session.sessionId));
+        if (notify.brainWaiting === false || fresh.length === 0) return;
+        for (const session of fresh) this.brainWaitingNotified.add(session.sessionId);
+        const lines = fresh.map((session) => `• <b>${this.escapeHtml(session.title)}</b>${session.lastUserRequest ? `\n  Yêu cầu cuối: ${this.escapeHtml(session.lastUserRequest)}` : ''}`).join('\n');
+        this.broadcastMessage(`🧠 <b>Phiên Claude Code đang chờ bạn trả lời</b> (ngoài hub, quá 5 phút)\n${lines}`);
         break;
       }
 

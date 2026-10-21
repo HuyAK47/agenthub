@@ -50,6 +50,8 @@ export interface BrainSession {
   state: 'working' | 'waiting' | 'inactive';
   tokens5h: number | null;
   link: string;
+  /** Hub chat / brain session: its answers already reach the user through the hub or Telegram. */
+  isHubChat: boolean;
 }
 
 export const UpdateBrainSchema = z.object({
@@ -179,6 +181,7 @@ export class BrainService {
       lastTool: row.lastToolName ? { name: row.lastToolName, summary: row.lastToolSummary || '' } : null,
       state: row.lastEventKind === 'assistant_text' ? 'waiting' : 'working',
       tokens5h: row.fiveHourTokens,
+      isHubChat: row.isHubChat === 1,
       link: `/claude-sessions/${encodeURIComponent(row.sessionId)}`,
     }));
   }
