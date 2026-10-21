@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -194,7 +194,7 @@ describe('dependency context in worker files', () => {
     }
   });
 
-  it('retains diff stat and done report from database even after dependency branch is merged into baseRef and worktree removed', () => {
+  it('retains diff stat and done report from database even after dependency branch is merged into baseRef and worktree removed', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-sched-deps-'));
     try {
       const projectPath = path.join(root, 'repo');
@@ -231,6 +231,12 @@ describe('dependency context in worker files', () => {
       const config = loadConfig(root);
       config.hubHome = root;
       config.worktreesDir = path.join(root, 'worktrees');
+      // Keep this scheduler test independent of the host's actual free disk.
+      vi.spyOn(fs, 'statfsSync').mockReturnValue({
+        bsize: 1024 * 1024,
+        bavail: 10 * 1024,
+        blocks: 100 * 1024,
+      } as fs.StatFs);
       const db = openDatabase(config.dbPath);
       const projectRepo = new ProjectRepo(db);
       const profileRepo = new ProfileRepo(db);
@@ -305,8 +311,8 @@ describe('dependency context in worker files', () => {
 
       scheduler.tick();
 
+      await vi.waitFor(() => expect(taskRepo.get('p1/consumer')?.status).toBe('running'));
       const consumer = taskRepo.get('p1/consumer')!;
-      expect(consumer.status).toBe('running');
       expect(consumer.worktreePath).toBeDefined();
 
       const taskMd = fs.readFileSync(path.join(consumer.worktreePath!, '.agenthub', 'task.md'), 'utf8');

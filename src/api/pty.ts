@@ -35,10 +35,12 @@ export class PtyManager {
   private sessions = new Map<string, PtySession>(); // sessionId -> PtySession
   private profileToSession = new Map<string, string>(); // profileName -> sessionId
   private emailRefreshTimers = new Set<NodeJS.Timeout>();
+  private stopped = false;
 
   constructor(private service: AppService) {}
 
   createSession(profileName: string): string {
+    this.stopped = false;
     let profile = this.service.profileRepo.get(profileName);
     if (!profile) {
       // Create isolated profile if not yet created
@@ -132,6 +134,7 @@ export class PtyManager {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const timer of this.emailRefreshTimers) {
       clearTimeout(timer);
     }
@@ -146,6 +149,7 @@ export class PtyManager {
   }
 
   private scheduleEmailRefresh(profileName: string): void {
+    if (this.stopped) return;
     const profile = this.service.profileRepo.get(profileName);
     if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
       this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);

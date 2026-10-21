@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -125,7 +125,7 @@ describe('c-accounts-manage: Quản lý tài khoản', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    it('scheduler ưu tiên hồ sơ priority cao hơn khi quota ngang nhau', () => {
+    it('scheduler ưu tiên hồ sơ priority cao hơn khi quota ngang nhau', async () => {
       const repoDir = path.join(tmpDir, 'repo');
       fs.mkdirSync(repoDir, { recursive: true });
       execFileSync('git', ['init', repoDir], { stdio: 'ignore' });
@@ -175,6 +175,7 @@ describe('c-accounts-manage: Quản lý tài khoản', () => {
 
       ctx.scheduler.tick();
 
+      await vi.waitFor(() => expect(ctx.runRepo.getByTask('p-sched/t1')).toHaveLength(1));
       const runs = ctx.runRepo.getByTask('p-sched/t1');
       expect(runs.length).toBe(1);
       // prof-high có priority 10 cao hơn prof-low có priority 1
