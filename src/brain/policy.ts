@@ -215,7 +215,7 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
         if (pushArgs.length === 0) return false;
         const hasForbidden = pushArgs.some((arg) => {
           if (arg === '-f' || arg.startsWith('-f=') || /force/i.test(arg)) return true;
-          if (arg === '--mirror') return true;
+          if (arg === '--mirror' || arg === '--all' || arg === '--tags') return true;
           if (arg === '-d' || arg === '--delete') return true;
           if (arg.startsWith('+')) return true;
           if (arg.startsWith(':')) return true;
@@ -229,10 +229,12 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
 
         const protectedBranches = new Set(['main', 'master', 'integration']);
         const targetsProtected = pushArgs.some((arg) => {
-          if (protectedBranches.has(arg)) return true;
+          if (arg.startsWith('-')) return false;
+          const normalizeRef = (ref: string) => ref.replace(/^\+/, '').replace(/^refs\/heads\//, '');
+          if (protectedBranches.has(normalizeRef(arg))) return true;
           if (arg.includes(':')) {
             const parts = arg.split(':');
-            const target = parts[parts.length - 1];
+            const target = normalizeRef(parts[parts.length - 1]);
             if (protectedBranches.has(target)) return true;
           }
           return false;
@@ -252,10 +254,12 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
     }
     if (executable === 'npm' || executable === 'pnpm') {
       if (args[0] === 'exec') return false;
-      if (args[0] === 'ci') return permissions !== 'standard';
+      const lockfile = executable === 'npm' ? 'package-lock.json' : 'pnpm-lock.yaml';
+      const hasLockfile = fs.existsSync(path.join(cwd, lockfile));
+      if (args[0] === 'ci') return permissions !== 'standard' && args.length === 1;
       if (args[0] === 'install') {
         if (permissions === 'standard') return false;
-        return args.slice(1).every((arg) => arg.startsWith('-'));
+        return args.length === 1 && hasLockfile;
       }
       const script = args[0] === 'run' ? args[1] : args[0];
       return ['test', 'lint', 'typecheck', 'build', 'build:web'].includes(script || '');

@@ -212,6 +212,23 @@ describe('BrainPolicy', () => {
     expect(trusted.decide({ toolName: 'Bash', input: { command: 'git push origin feature', cwd: root } })?.action).toBe('allow');
   });
 
+  it('trusted permission: npm install is lockfile-only and protected push refs stay denied', () => {
+    const { root } = make();
+    const trusted = new BrainPolicy({ roots: [root], permissions: 'trusted' });
+    fs.writeFileSync(path.join(root, 'package-lock.json'), '{}');
+
+    expect(trusted.decide({ toolName: 'Bash', input: { command: 'npm install', cwd: root } })?.action).toBe('allow');
+    for (const command of [
+      'npm install -g evil',
+      'npm install --prefix /tmp evil',
+      'git push origin refs/heads/main',
+      'git push origin feature:refs/heads/main',
+      'git push --all origin',
+    ]) {
+      expect(trusted.decide({ toolName: 'Bash', input: { command, cwd: root } })?.action ?? null).not.toBe('allow');
+    }
+  });
+
   it('API: PATCH project permissions=full and PUT /api/config require confirm and emit brain.trust_changed', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-api-'));
     dirs.push(tmp);

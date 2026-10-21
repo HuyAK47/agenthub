@@ -518,9 +518,10 @@ export class ChatService {
   private validateSessionOptions(body: {
     mode?: 'safe' | 'full';
     model?: string;
+    kind?: 'chat' | 'brain';
   }): { mode: 'safe' | 'full'; model: string } {
     const mode = body.mode || 'safe';
-    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
+    if (mode === 'full' && body.kind !== 'brain' && this.config.chat?.allowFullMode !== true) {
       throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
     }
     const model = body.model ?? this.config.chat.model;
