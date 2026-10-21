@@ -915,11 +915,13 @@ export class Scheduler {
       // Check if process is still alive
       if (!this.isProcessAlive(rt.pid, rt.pidStart)) {
         // Process has ended, check results
-        void this.handleRunCompletion(taskId, rt).catch((error) => {
+        try {
+          await this.handleRunCompletion(taskId, rt);
+        } catch (error) {
           if (!this.stopped) {
             console.error(`[scheduler] handleRunCompletion failed for ${taskId}:`, error);
           }
-        });
+        }
         continue;
       }
 

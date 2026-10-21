@@ -1257,7 +1257,6 @@ describe('Checking after worker completion', () => {
     // Case 1: scheduler is running (not stopped) -> console.error is called
     schedulerInternal.running.set('test-project/t1', fakeRt);
     await schedulerInternal.checkRunningTasks();
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(errorSpy).toHaveBeenCalledWith(
       '[scheduler] handleRunCompletion failed for test-project/t1:',
@@ -1269,7 +1268,6 @@ describe('Checking after worker completion', () => {
     scheduler.stop();
     schedulerInternal.running.set('test-project/t1', fakeRt);
     await schedulerInternal.checkRunningTasks();
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
