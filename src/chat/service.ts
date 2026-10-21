@@ -108,6 +108,7 @@ export class ChatService {
   private snapshotAt = new Map<string, number>();
   private snapshotEventAt = new Map<string, number>();
   private retryTimers = new Map<string, NodeJS.Timeout>();
+  private telegramChatBySession = new Map<string, number>();
 
   constructor(
     public config: AgentHubConfig,
@@ -178,6 +179,9 @@ export class ChatService {
   setClaudeApiKey(value: string): void {
     this.failoverState.setApiKey(value);
   }
+
+  setTelegramChat(sessionId: string, chatId: number): void { this.telegramChatBySession.set(sessionId, chatId); }
+  getTelegramChat(sessionId: string): number | undefined { return this.telegramChatBySession.get(sessionId); }
 
   configureFailoverSteps(steps: ClaudeFallbackStep[]): void {
     this.failoverState.configureSteps(steps);
@@ -693,7 +697,7 @@ export class ChatService {
   sendMessage(
     sessionId: string,
     text: string,
-    opts: { queueIfBusy?: boolean; fromQueue?: boolean } = {},
+    opts: { queueIfBusy?: boolean; fromQueue?: boolean; telegramChatId?: number } = {},
   ): { userMessageId: string; assistantMessageId: string; queued?: boolean; position?: number } {
     if (typeof text !== 'string' || text.trim().length === 0) {
       throw new HttpError(400, 'bad_request', 'Nội dung tin nhắn không được để trống');
@@ -706,6 +710,7 @@ export class ChatService {
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
     }
+    if (opts.telegramChatId !== undefined) this.setTelegramChat(sessionId, opts.telegramChatId);
 
     if (session.busy === 1 || this.runningTurns.has(sessionId)) {
       // A person writing to a busy session (typically a brain in the middle of an event turn) is

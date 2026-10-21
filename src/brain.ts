@@ -288,6 +288,7 @@ export function registerBrainRoutes(
         queued: usage?.queued || false,
         lastTurnAt: usage?.lastTurnAt || session?.lastMessageAt || null,
         tokensToday: usage?.tokensToday || 0,
+        directives: appService.directiveRepo?.list(projectId) || [],
       };
     });
     const assistants = [null, ...projects.map((project) => project.id)].map((projectId) => {
@@ -326,17 +327,25 @@ export function registerBrainRoutes(
 
   fastify.delete('/api/brain/directives/:id', async (req: FastifyRequest) => {
     if (!appService?.directiveRepo) throw new HttpError(503, 'unavailable', 'Directive service chưa sẵn sàng');
-    if (!appService.directiveRepo.remove((req.params as { id: string }).id)) throw new HttpError(404, 'not_found', 'Chỉ thị không tồn tại');
+    const id = (req.params as { id: string }).id;
+    const directive = appService.directiveRepo.get(id);
+    const projectId = (req.query as { projectId?: string }).projectId;
+    if (!directive || (projectId !== undefined && directive.projectId !== projectId)) throw new HttpError(404, 'not_found', 'Chỉ thị không tồn tại');
+    if (!appService.directiveRepo.remove(id)) throw new HttpError(404, 'not_found', 'Chỉ thị không tồn tại');
     return { ok: true };
   });
 
   fastify.post('/api/brain/ask', async (req: FastifyRequest) => {
     if (!appService?.chatService) throw new HttpError(503, 'unavailable', 'Chat service chưa sẵn sàng');
-    const body = (req.body || {}) as { question?: string; projectId?: string | null };
+    const body = (req.body || {}) as { question?: string; projectId?: string | null; sourceSessionId?: string };
     if (!body.question?.trim()) throw new HttpError(400, 'bad_request', 'question là bắt buộc');
     const sessionId = body.projectId ? `brain:${body.projectId}` : 'brain';
     appService.chatService.getOrCreateSession(sessionId, { title: body.projectId ? `Bộ não · ${body.projectId}` : 'Bộ não', kind: 'brain', projectId: body.projectId || null, mode: 'safe', model: appService.config.brain.model });
-    return appService.chatService.sendMessage(sessionId, `CÂU HỎI TỪ TRỢ LÝ (cần quyết định): ${body.question.trim()}`, { queueIfBusy: true });
+    const sourceChatId = body.sourceSessionId ? appService.chatService.getTelegramChat(body.sourceSessionId) : undefined;
+    const questionId = crypto.randomUUID();
+    const result = appService.chatService.sendMessage(sessionId, `CÂU HỎI TỪ TRỢ LÝ [${questionId}] (cần quyết định): ${body.question.trim()}`, { queueIfBusy: true });
+    appService.scheduler.getEventBus().emit('brain.question_asked', sessionId, { questionId, sourceChatId, projectId: body.projectId || null });
+    return result;
   });
 
   fastify.get('/api/brain/digest', async () => {

@@ -1371,18 +1371,22 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
     async (args) => {
       try {
+        const targetProject = args.projectId ?? scopedProject();
+        assertProject(targetProject, 'Chỉ thị');
         if (args.action === 'list') {
-          const query = args.projectId ? `?projectId=${encodeURIComponent(args.projectId)}` : '';
+          const query = targetProject ? `?projectId=${encodeURIComponent(targetProject)}` : '';
           const rows = await callApi<Array<{ id: string; projectId: string | null; text: string }>>('GET', `/api/brain/directives${query}`);
           return { content: [{ type: 'text', text: rows.length ? rows.map((row) => `- ${row.id}: ${row.text}`).join('\n') : '(không có chỉ thị)' }] };
         }
         if (args.action === 'remove') {
           if (!args.id) throw new Error('id là bắt buộc khi xoá chỉ thị');
-          await callApi('DELETE', `/api/brain/directives/${encodeURIComponent(args.id)}`);
+          // The API also verifies ownership of the directive's project.
+          const query = targetProject ? `?projectId=${encodeURIComponent(targetProject)}` : '';
+          await callApi('DELETE', `/api/brain/directives/${encodeURIComponent(args.id)}${query}`);
           return { content: [{ type: 'text', text: `✓ Đã xoá chỉ thị ${args.id}` }] };
         }
         if (!args.text?.trim()) throw new Error('text là bắt buộc khi thêm chỉ thị');
-        const row = await callApi<{ id: string }>('POST', '/api/brain/directives', { projectId: args.projectId || null, text: args.text, createdBy: 'assistant' });
+        const row = await callApi<{ id: string }>('POST', '/api/brain/directives', { projectId: targetProject || null, text: args.text, createdBy: 'assistant' });
         return { content: [{ type: 'text', text: `✓ Đã thêm chỉ thị ${row.id}` }] };
       } catch (err: unknown) { return handleError(err); }
     },
@@ -1394,7 +1398,13 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     { question: z.string().min(1), projectId: z.string().nullable().optional() },
     async (args) => {
       try {
-        const result = await callApi<{ queued?: boolean }>('POST', '/api/brain/ask', args);
+        const projectId = args.projectId ?? scopedProject();
+        assertProject(projectId, 'Hỏi bộ não');
+        const result = await callApi<{ queued?: boolean }>('POST', '/api/brain/ask', {
+          ...args,
+          projectId,
+          sourceSessionId: options?.chatSessionId || process.env.AGENTHUB_CHAT_SESSION_ID,
+        });
         return { content: [{ type: 'text', text: result.queued ? '✓ Đã xếp câu hỏi cho bộ não; câu trả lời sẽ được gửi lại.' : '✓ Đã gửi câu hỏi cho bộ não.' }] };
       } catch (err: unknown) { return handleError(err); }
     },
