@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { AgentHubConfig } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { QuotaMarkRepo, TaskRepo, ProfileRepo } from './db/index.js';
+import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
 import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
@@ -19,6 +19,7 @@ export interface NotificationServiceOptions {
   profileRepo?: ProfileRepo;
   quotaMarkRepo?: QuotaMarkRepo;
   projectRepo?: { get(id: string): { settings?: string | null } | undefined };
+  ciRepo?: CiRepo;
   exec?: NotifyExecFn;
   now?: () => number;
 }

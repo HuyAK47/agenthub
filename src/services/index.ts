@@ -27,7 +27,9 @@ import {
   KnowledgeEntryRow,
   TaskBatchRepo,
   TaskBatchRow,
+  CiRepo,
 } from '../db/index.js';
+import type { CiWatchService } from '../ci.js';
 import { BulletinService } from '../bulletin.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
@@ -59,7 +61,7 @@ import type { DeployService } from '../deploy.js';
 
 const execFileAsync = promisify(execFile);
 
-function apiProject(project: ProjectRow, hubHome?: string): ProjectRow {
+function apiProject(project: ProjectRow, hubHome?: string, ciRepo?: CiRepo): ProjectRow {
   let merge: unknown = null;
   if (project.merge) {
     try { merge = JSON.parse(project.merge); } catch { merge = null; }
@@ -77,6 +79,24 @@ function apiProject(project: ProjectRow, hubHome?: string): ProjectRow {
   const settings = projectSettings(project);
   const resolvedHubHome = hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub');
   const integrationStatus = settings.integration.enabled ? getIntegrationStatus(project, resolvedHubHome) : null;
+  let ciStatus: unknown = null;
+  if (ciRepo) {
+    const latestRun = ciRepo.getLatest(project.id);
+    if (latestRun) {
+      let jobs: unknown = [];
+      try { jobs = JSON.parse(latestRun.jobs); } catch { jobs = []; }
+      ciStatus = {
+        runId: latestRun.runId,
+        workflow: latestRun.workflow,
+        sha: latestRun.sha,
+        status: latestRun.status,
+        conclusion: latestRun.conclusion,
+        url: latestRun.url,
+        completedAt: latestRun.completedAt,
+        jobs,
+      };
+    }
+  }
   return {
     ...project,
     merge,
@@ -84,6 +104,7 @@ function apiProject(project: ProjectRow, hubHome?: string): ProjectRow {
     review,
     settings,
     integrationStatus,
+    ciStatus,
     createdAt: toApiTime(project.createdAt)!,
   } as unknown as ProjectRow;
 }
@@ -687,6 +708,8 @@ export function formatEventSummary(
 
 export class AppService {
   public deployService?: DeployService;
+  public ciRepo?: CiRepo;
+  public ciService?: CiWatchService;
   private profileChecks = new Set<string>();
   private reviewingTasks = new Set<string>();
   constructor(
@@ -1054,7 +1077,7 @@ export class AppService {
 
   // --- Projects ---
   listProjects(): ProjectRow[] {
-    return this.projectRepo.getAll().map((p) => ({ ...apiProject(p, this.config.hubHome), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
+    return this.projectRepo.getAll().map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
   }
 
   getProject(id: string): ProjectRow {
@@ -1062,7 +1085,7 @@ export class AppService {
     if (!proj) {
       throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
     }
-    return { ...apiProject(proj, this.config.hubHome), afterMerge: this.config.deploy?.[proj.id] || null } as ProjectRow;
+    return { ...apiProject(proj, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[proj.id] || null } as ProjectRow;
   }
 
   getDeployStatus(id: string) {

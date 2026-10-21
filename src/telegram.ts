@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo } from './db/index.js';
+import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo, CiRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 import { planningRule } from './chat/claude.js';
@@ -128,6 +128,7 @@ export interface TelegramServiceOptions {
   tokenOverride?: string;
   chatService?: ChatService;
   brainSession?: boolean;
+  ciRepo?: CiRepo;
 }
 
 export type PendingChatState =
