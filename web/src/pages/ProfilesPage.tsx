@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -97,6 +97,7 @@ function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return
 
 export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
+  const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
@@ -111,6 +112,7 @@ export const ProfilesPage: React.FC = () => {
   const [checking, setChecking] = useState<Record<string, boolean>>({});
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const scrolledHash = useRef<string | null>(null);
   const {
     data: profiles = [],
     isLoading,
@@ -118,12 +120,13 @@ export const ProfilesPage: React.FC = () => {
   } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles, refetchInterval: 5000 });
 
   useEffect(() => {
-    if (isLoading || profiles.length === 0 || !window.location.hash) return;
-    const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    if (!hash || isLoading || profiles.length === 0 || scrolledHash.current === hash) return;
+    const target = document.getElementById(decodeURIComponent(hash.slice(1)));
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      scrolledHash.current = hash;
     }
-  }, [isLoading, profiles]);
+  }, [hash, isLoading, profiles]);
   const { data: systemConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig });
   const { data: status } = useQuery({
     queryKey: ['status'],
