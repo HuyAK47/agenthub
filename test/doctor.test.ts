@@ -558,7 +558,7 @@ describe('Doctor checks', () => {
 
   describe('cmdDoctor CLI', () => {
     it('executes cmdDoctor in text mode and returns report', async () => {
-      const config = loadConfig();
+      const config = loadConfig(path.join(tmpHome, '.agenthub'));
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       const report = await cmdDoctor(config, [], {
@@ -606,7 +606,7 @@ describe('Doctor checks', () => {
     });
 
     it('executes cmdDoctor with --json flag and prints valid JSON', async () => {
-      const config = loadConfig();
+      const config = loadConfig(path.join(tmpHome, '.agenthub'));
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       const report = await cmdDoctor(config, ['--json'], {
