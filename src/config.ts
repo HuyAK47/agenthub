@@ -18,6 +18,33 @@ export interface ChatConfig {
   autoCompactPercent: number;
 }
 
+export interface BrainDigestConfig {
+  enabled: boolean;
+  time: string;
+}
+
+export interface QuietHoursConfig {
+  enabled: boolean;
+  start: string;
+  end: string;
+}
+
+export interface NotificationsConfig {
+  desktop: boolean;
+  quietHours: QuietHoursConfig;
+}
+
+export const DEFAULT_QUIET_HOURS_CONFIG: QuietHoursConfig = {
+  enabled: false,
+  start: '22:00',
+  end: '07:00',
+};
+
+export const DEFAULT_BRAIN_DIGEST_CONFIG: BrainDigestConfig = {
+  enabled: true,
+  time: '18:00',
+};
+
 export interface BrainConfig {
   fallback: ClaudeFallbackStep[];
   policy: string[];
@@ -27,6 +54,7 @@ export interface BrainConfig {
   maxTurnsPerHour: number;
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
+  digest: BrainDigestConfig;
 }
 
 export interface ClaudeSessionsConfig {
@@ -190,9 +218,7 @@ export interface AgentHubConfig {
     failoverSec: number;
     maxChangesRequested: number;
   };
-  notifications: {
-    desktop: boolean;
-  };
+  notifications: NotificationsConfig;
   disk: {
     minFreeGB: number;
     extraPaths: ExtraDiskPath[];
@@ -232,9 +258,10 @@ export function saveConfig(
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
-    notifications: {
+    notifications?: Partial<{
       desktop: boolean;
-    };
+      quietHours?: Partial<QuietHoursConfig>;
+    }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
@@ -275,7 +302,38 @@ export function saveConfig(
     ...(patch.chat && typeof patch.chat === 'object'
       ? { chat: { ...((current.chat as Record<string, unknown>) || {}), ...patch.chat } }
       : {}),
-    ...(patch.brain && typeof patch.brain === 'object' ? { brain: { ...((current.brain as Record<string, unknown>) || {}), ...patch.brain } } : {}),
+    ...(patch.brain && typeof patch.brain === 'object'
+      ? {
+          brain: {
+            ...((current.brain as Record<string, unknown>) || {}),
+            ...patch.brain,
+            ...(patch.brain.digest && typeof patch.brain.digest === 'object'
+              ? {
+                  digest: {
+                    ...((((current.brain as Record<string, unknown>) || {}).digest as Record<string, unknown>) || {}),
+                    ...patch.brain.digest,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(patch.notifications && typeof patch.notifications === 'object'
+      ? {
+          notifications: {
+            ...((current.notifications as Record<string, unknown>) || {}),
+            ...patch.notifications,
+            ...(patch.notifications.quietHours && typeof patch.notifications.quietHours === 'object'
+              ? {
+                  quietHours: {
+                    ...((((current.notifications as Record<string, unknown>) || {}).quietHours as Record<string, unknown>) || {}),
+                    ...patch.notifications.quietHours,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(patch.reviewer && typeof patch.reviewer === 'object'
       ? { reviewer: { ...((current.reviewer as Record<string, unknown>) || {}), ...patch.reviewer } }
       : {}),
@@ -346,9 +404,10 @@ export function updateConfigInMemory(
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
-    notifications: {
+    notifications?: Partial<{
       desktop: boolean;
-    };
+      quietHours?: Partial<QuietHoursConfig>;
+    }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
@@ -411,13 +470,33 @@ export function updateConfigInMemory(
     if (patch.chat.claudeProfile !== undefined) config.chat.claudeProfile = patch.chat.claudeProfile;
     if (patch.chat.autoCompactPercent !== undefined) config.chat.autoCompactPercent = patch.chat.autoCompactPercent;
   }
-  if (patch.brain?.fallback) config.brain.fallback = normalizeFallbackSteps(patch.brain.fallback);
+  if (patch.brain) {
+    if (patch.brain.fallback) config.brain.fallback = normalizeFallbackSteps(patch.brain.fallback);
+    if (patch.brain.policy) config.brain.policy = [...patch.brain.policy];
+    if (patch.brain.claudeProfile !== undefined) config.brain.claudeProfile = patch.brain.claudeProfile;
+    if (patch.brain.model !== undefined) config.brain.model = patch.brain.model;
+    if (patch.brain.mode !== undefined) config.brain.mode = patch.brain.mode;
+    if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
+    if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
+    if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
+    if (patch.brain.digest) {
+      config.brain.digest = {
+        ...config.brain.digest,
+        ...patch.brain.digest,
+      };
+    }
+  }
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
   if (patch.notifications) {
-    config.notifications = {
-      ...config.notifications,
-      ...patch.notifications,
-    };
+    if (patch.notifications.desktop !== undefined) {
+      config.notifications.desktop = patch.notifications.desktop;
+    }
+    if (patch.notifications.quietHours) {
+      config.notifications.quietHours = {
+        ...config.notifications.quietHours,
+        ...patch.notifications.quietHours,
+      };
+    }
   }
   if (patch.disk?.minFreeGB !== undefined) {
     config.disk.minFreeGB = patch.disk.minFreeGB;
@@ -727,6 +806,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       turnTimeoutSec: typeof brainRaw.turnTimeoutSec === 'number' && brainRaw.turnTimeoutSec > 0
         ? Math.floor(brainRaw.turnTimeoutSec)
         : 20 * 60,
+      digest: typeof brainRaw.digest === 'string'
+        ? { enabled: true, time: brainRaw.digest }
+        : typeof brainRaw.digest === 'object' && brainRaw.digest !== null
+        ? {
+            enabled: (brainRaw.digest as { enabled?: boolean }).enabled !== false,
+            time: typeof (brainRaw.digest as { time?: string }).time === 'string' && (brainRaw.digest as { time: string }).time.trim()
+              ? (brainRaw.digest as { time: string }).time.trim()
+              : DEFAULT_BRAIN_DIGEST_CONFIG.time,
+          }
+        : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
@@ -756,6 +845,23 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
         ? (userConfig.notifications as { desktop: boolean }).desktop
         : true,
+      quietHours: (() => {
+        const raw = (userConfig.notifications as { quietHours?: unknown } | undefined)?.quietHours;
+        if (typeof raw === 'string') {
+          const parts = raw.split('-');
+          if (parts.length === 2) {
+            return { enabled: true, start: parts[0].trim(), end: parts[1].trim() };
+          }
+        } else if (raw && typeof raw === 'object') {
+          const obj = raw as Record<string, unknown>;
+          return {
+            enabled: obj.enabled === true,
+            start: typeof obj.start === 'string' && obj.start.trim() ? obj.start.trim() : DEFAULT_QUIET_HOURS_CONFIG.start,
+            end: typeof obj.end === 'string' && obj.end.trim() ? obj.end.trim() : DEFAULT_QUIET_HOURS_CONFIG.end,
+          };
+        }
+        return { ...DEFAULT_QUIET_HOURS_CONFIG };
+      })(),
     },
     disk,
     cleanup,
