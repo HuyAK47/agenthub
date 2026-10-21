@@ -10,6 +10,17 @@ import { findAgyPath } from '../doctor.js';
 
 export { accountKey, sameAccount } from './account.js';
 
+/** Resolve the system Claude profile while keeping existing installations compatible. */
+export function resolveClaudeProfile(
+  profileRepo: Pick<ProfileRepo, 'getAll'>,
+  configuredProfile: string | undefined,
+  configuredExplicitly = false,
+): string {
+  if (configuredExplicitly && configuredProfile) return configuredProfile;
+  const existing = profileRepo.getAll().find((profile) => profile.engine === 'claude' && profile.kind === 'system');
+  return existing?.name || configuredProfile || 'claude-default';
+}
+
 // Symlinks to create in isolated HOME per PLAN 2.1
 const SYMLINK_TARGETS = [
   '.nvm',

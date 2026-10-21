@@ -15,6 +15,7 @@ export interface ChatConfig {
   models: string[];
   permissionTimeoutSec: number;
   claudeProfile?: string;
+  claudeProfileExplicit?: boolean;
   autoCompactPercent: number;
 }
 
@@ -22,6 +23,7 @@ export interface BrainConfig {
   fallback: ClaudeFallbackStep[];
   policy: string[];
   claudeProfile: string;
+  claudeProfileExplicit?: boolean;
   model: string;
   mode: 'off' | 'suggest' | 'auto';
   maxTurnsPerHour: number;
@@ -567,6 +569,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       : ['opus', 'sonnet', 'haiku'],
     permissionTimeoutSec: typeof chatRaw.permissionTimeoutSec === 'number' ? chatRaw.permissionTimeoutSec : 600,
     claudeProfile: typeof chatRaw.claudeProfile === 'string' ? chatRaw.claudeProfile : 'claude-default',
+    claudeProfileExplicit: typeof chatRaw.claudeProfile === 'string' && chatRaw.claudeProfile.trim().length > 0,
     autoCompactPercent: typeof chatRaw.autoCompactPercent === 'number' ? chatRaw.autoCompactPercent : 85,
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
@@ -714,6 +717,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       claudeProfile: typeof brainRaw.claudeProfile === 'string' && brainRaw.claudeProfile.trim()
         ? brainRaw.claudeProfile.trim()
         : chat.claudeProfile || 'claude-default',
+      claudeProfileExplicit:
+        (typeof brainRaw.claudeProfile === 'string' && brainRaw.claudeProfile.trim().length > 0) ||
+        chat.claudeProfileExplicit === true,
       model: typeof brainRaw.model === 'string' && brainRaw.model
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),

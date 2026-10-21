@@ -199,6 +199,7 @@ export function createContext(config: AgentHubConfig, engineOverrides?: Map<stri
     eventBus: scheduler.getEventBus(),
     chatService,
     chatSessionRepo,
+    profileRepo,
     turnRepo: brainTurnRepo,
   });
 

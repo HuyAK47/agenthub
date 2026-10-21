@@ -413,6 +413,29 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(JSON.parse(delRes.body).ok).toBe(true);
   });
 
+  it('uses an existing legacy Claude system profile when no profile is configured', async () => {
+    ctx.profileRepo.upsert({
+      name: 'claude-may',
+      engine: 'claude',
+      kind: 'system',
+      home: os.homedir(),
+      email: null,
+      enabled: 1,
+    });
+    config.chat.claudeProfileExplicit = false;
+    config.brain.claudeProfileExplicit = false;
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      headers: authHeaders(),
+      payload: { title: 'Legacy Claude' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(JSON.parse(response.body).profileName).toBe('claude-may');
+  });
+
   it('full streaming flow: POST message -> chat.delta -> chat.done, saves claudeSessionId and uses --resume', async () => {
     // 1. Create a session
     const createRes = await server.inject({

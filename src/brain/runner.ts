@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { BrainConfig } from '../config.js';
-import { BrainTurnRepo, ChatSessionRepo } from '../db/index.js';
+import { BrainTurnRepo, ChatSessionRepo, ProfileRepo } from '../db/index.js';
+import { resolveClaudeProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
 
@@ -15,6 +16,7 @@ export interface BrainRunnerOptions {
   eventBus: EventBus;
   chatService: Pick<ChatService, 'getOrCreateSession' | 'sendMessage'>;
   chatSessionRepo: ChatSessionRepo;
+  profileRepo?: Pick<ProfileRepo, 'getAll'>;
   turnRepo: BrainTurnRepo;
   debounceMs?: number;
   now?: () => number;
@@ -109,7 +111,7 @@ export class BrainRunner {
       this.opts.chatSessionRepo.updateKind(this.sessionId, 'brain');
       this.opts.chatSessionRepo.updateTitle(this.sessionId, 'Bộ não');
       this.opts.chatSessionRepo.updateModel(this.sessionId, this.opts.config.model);
-      this.opts.chatSessionRepo.updateProfileName(this.sessionId, this.opts.config.claudeProfile);
+      this.opts.chatSessionRepo.updateProfileName(this.sessionId, this.profileName());
       this.opts.chatSessionRepo.updatePinned(this.sessionId, 1);
       return this.opts.chatSessionRepo.get(this.sessionId)!;
     }
@@ -117,11 +119,19 @@ export class BrainRunner {
       title: 'Bộ não',
       mode: 'safe',
       model: this.opts.config.model,
-      profileName: this.opts.config.claudeProfile,
+      profileName: this.profileName(),
       kind: 'brain',
     });
     this.opts.chatSessionRepo.updatePinned(this.sessionId, 1);
     return this.opts.chatSessionRepo.get(this.sessionId)!;
+  }
+
+  private profileName(): string {
+    return resolveClaudeProfile(
+      this.opts.profileRepo || { getAll: () => [] },
+      this.opts.config.claudeProfile,
+      this.opts.config.claudeProfileExplicit,
+    );
   }
 
   private onEvent(type: string, taskId?: string, payload?: unknown): void {

@@ -22,7 +22,7 @@ import {
 import { PermissionBroker } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
-import { isProfileLoggedIn } from '../profiles/index.js';
+import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
 import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage, ClaudeQuotaSignal } from './parse.js';
 import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
 import {
@@ -460,7 +460,11 @@ export class ChatService {
       mode,
       model,
       busy: 0,
-      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-default',
+      profileName: body.profileName ?? resolveClaudeProfile(
+        this.profileRepo || { getAll: () => [] },
+        this.config.chat.claudeProfile,
+        this.config.chat.claudeProfileExplicit,
+      ),
       kind: body.kind,
     });
 
@@ -489,7 +493,11 @@ export class ChatService {
       mode,
       model,
       busy: 0,
-      profileName: body.profileName ?? this.config.chat.claudeProfile ?? 'claude-default',
+      profileName: body.profileName ?? resolveClaudeProfile(
+        this.profileRepo || { getAll: () => [] },
+        this.config.chat.claudeProfile,
+        this.config.chat.claudeProfileExplicit,
+      ),
       kind: body.kind,
     });
     return this.chatSessionRepo.get(id)!;
