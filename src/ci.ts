@@ -112,6 +112,12 @@ export class CiWatchService {
     this.fetchFn = opts.fetchFn || globalThis.fetch;
     this.getGitRemoteUrl = opts.getGitRemoteUrl || defaultGetGitRemoteUrl;
     this.now = opts.now || (() => Date.now());
+
+    // Active runs are persisted so a daemon restart keeps the 3-minute poll
+    // cadence before the next GitHub response arrives.
+    for (const projectId of this.ciRepo.listActiveProjects()) {
+      this.activeRunsByProject.set(projectId, true);
+    }
   }
 
   start(): void {

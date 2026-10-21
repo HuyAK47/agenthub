@@ -380,10 +380,12 @@ export class NotificationService {
     }
     this.lastSent.set(key, now);
 
-    // notify-send has no portable "warning" value; retain the warning level
-    // in the service and map it to the supported normal desktop urgency.
+    // notify-send supports low, normal, and critical (not warning). Keep the
+    // service's warning classification while explicitly using normal urgency.
     const args = urgency === 'critical'
       ? ['-u', 'critical', '-t', '10000', '-a', 'AgentHub', message]
+      : urgency === 'warning'
+      ? ['-u', 'normal', '-t', '10000', '-a', 'AgentHub', message]
       : ['-t', '10000', '-a', 'AgentHub', message];
 
     try {

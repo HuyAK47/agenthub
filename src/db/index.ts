@@ -2073,6 +2073,14 @@ export class CiRepo {
       .get(projectId, runId) as CiRunRow | undefined;
   }
 
+  listActiveProjects(): string[] {
+    return (
+      this.db
+        .prepare("SELECT DISTINCT projectId FROM ci_runs WHERE completedAt IS NULL AND status != 'completed'")
+        .all() as Array<{ projectId: string }>
+    ).map((row) => row.projectId);
+  }
+
   getLatest(projectId: string): CiRunRow | undefined {
     return this.db
       .prepare(

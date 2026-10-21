@@ -185,6 +185,39 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
   });
 
   describe('Polling and Event Emission', () => {
+    it('restores active polling state from persisted runs after restart', async () => {
+      projectRepo.insert({
+        id: 'p-restart',
+        name: 'Restart',
+        path: '/tmp/p-restart',
+        defaultBranch: 'main',
+        envTemplate: null,
+        maxParallel: 2,
+      });
+      ciRepo.insert({
+        projectId: 'p-restart',
+        runId: 999,
+        workflow: 'CI',
+        sha: 'active-sha',
+        status: 'in_progress',
+        conclusion: null,
+        jobs: '[]',
+        completedAt: null,
+      });
+
+      const service = new CiWatchService({
+        config,
+        projectRepo,
+        ciRepo,
+        eventBus,
+        now: () => 1_000_000,
+        getGitRemoteUrl: async () => 'https://github.com/org/repo.git',
+        fetchFn: async () => new Response(JSON.stringify({ workflow_runs: [] }), { status: 200 }),
+      });
+
+      await expect(service.pollProjectIfDue(projectRepo.get('p-restart')!)).resolves.toBeNull();
+    });
+
     it('handles completed success run and emits ci.passed', async () => {
       projectRepo.insert({
         id: 'p1',
