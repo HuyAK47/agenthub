@@ -194,6 +194,10 @@ export class BrainRunner {
       this.schedule();
       return;
     }
+    if (type === 'chat.error') {
+      this.retryFailedEvents(active, String(data.message || 'brain turn failed'));
+      return;
+    }
     this.flush();
   }
 
@@ -216,6 +220,10 @@ export class BrainRunner {
     if (active.timer) clearTimeout(active.timer);
     this.opts.turnRepo.finish(active.id, { status: 'failed', error });
     this.active.delete(sessionId);
+    this.retryFailedEvents(active, error);
+  }
+
+  private retryFailedEvents(active: ActiveTurn, error: string): void {
     active.retries += 1;
     for (const event of active.events) this.retryCounts.set(event.id || '', active.retries);
     if (active.retries >= MAX_RETRIES) {

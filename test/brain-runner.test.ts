@@ -9,7 +9,7 @@ import { EventBus } from '../src/scheduler/index.js';
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: number; projectSettings?: Record<string, string> } = {}) {
+function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: number; dailyTokenBudget?: number; projectSettings?: Record<string, string> } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-runner-'));
   dirs.push(dir);
   const db = openDatabase(path.join(dir, 'hub.db'));
@@ -29,7 +29,7 @@ function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: 
     },
     sendMessage(_id: string, text: string) { sent.push(`${_id}: ${text}`); return { userMessageId: 'u', assistantMessageId: 'a' }; },
   };
-  const brainConfig = { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode, maxConcurrent: options.maxConcurrent ?? 2, maxTurnsPerHour: 20, dailyTokenBudget: 0 } as const;
+  const brainConfig = { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode, maxConcurrent: options.maxConcurrent ?? 2, maxTurnsPerHour: 20, dailyTokenBudget: options.dailyTokenBudget ?? 0 } as const;
   const runner = new BrainRunner({
     config: brainConfig,
     eventBus: events,
@@ -124,5 +124,50 @@ describe('BrainRunner', () => {
     ctx.runner.flush();
     expect(ctx.sent).toHaveLength(1);
     expect(ctx.sent[0]).toContain('free/task');
+  });
+
+  it('stops every project when the global token budget is exhausted', () => {
+    const ctx = setup('suggest', { projectSettings: { p1: '{}', p2: '{}' }, dailyTokenBudget: 100 });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, status, inputTokens, outputTokens, startedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run('global-budget', 'event', 'old', 'p1', 'done', 60, 40, today.toISOString());
+    const limited: unknown[] = [];
+    ctx.events.on('brain.limited', (_taskId, payload) => limited.push(payload));
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p1/task');
+    ctx.events.emit('task.done', 'p2/task');
+    ctx.runner.flush();
+    expect(ctx.sent).toHaveLength(0);
+    expect(limited).toContainEqual({ reason: 'budget', scope: 'global' });
+    ctx.runner.stop();
+  });
+
+  it('drops an event after three ordinary failures and reports an incident', () => {
+    const ctx = setup('auto');
+    const incidents: unknown[] = [];
+    ctx.events.on('brain.notify', (_taskId, payload) => incidents.push(payload));
+    ctx.runner.start();
+    ctx.events.emit('task.failed');
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      ctx.runner.flush();
+      ctx.events.emit('chat.error', undefined, { sessionId: 'brain', message: 'temporary failure' });
+    }
+    expect(ctx.runner.getQueuedEvents()).toHaveLength(0);
+    expect(incidents).toContainEqual(expect.objectContaining({ level: 'incident' }));
+    ctx.runner.stop();
+  });
+
+  it('keeps an event after quota failure and emits brain.waiting', () => {
+    const ctx = setup('auto');
+    const waiting: unknown[] = [];
+    ctx.events.on('brain.waiting', (_taskId, payload) => waiting.push(payload));
+    ctx.runner.start();
+    ctx.events.emit('task.failed');
+    ctx.runner.flush();
+    ctx.events.emit('chat.error', undefined, { sessionId: 'brain', message: 'rate limit reached' });
+    expect(ctx.runner.getQueuedEvents()).toHaveLength(1);
+    expect(waiting).toContainEqual({ reason: 'quota' });
+    ctx.runner.stop();
   });
 });
