@@ -9,6 +9,7 @@ export interface GitReferenceSnapshot {
   path: string;
   head: string | null;
   status: string;
+  unavailable?: boolean;
 }
 
 export interface DirFileEntry {
@@ -51,6 +52,22 @@ export interface ReferenceModification {
 }
 
 const MAX_DIR_FILES = 5000;
+const GIT_EXEC_OPTIONS = {
+  encoding: 'utf8' as const,
+  stdio: ['ignore', 'pipe', 'ignore'] as ['ignore', 'pipe', 'ignore'],
+  timeout: 10_000,
+  maxBuffer: 1024 * 1024,
+};
+
+function runGit(refPath: string, args: string[]): { value: string | null; timedOut: boolean } {
+  try {
+    return { value: execFileSync('git', args, { cwd: refPath, ...GIT_EXEC_OPTIONS }).trim(), timedOut: false };
+  } catch (error) {
+    const timedOut = error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+    if (timedOut) console.warn(`Reference git command timed out after 10s: ${refPath} git ${args.join(' ')}`);
+    return { value: null, timedOut };
+  }
+}
 
 function walkDir(dir: string, baseDir = dir, acc = new Map<string, DirFileEntry>()): Map<string, DirFileEntry> {
   if (acc.size >= MAX_DIR_FILES) return acc;
@@ -123,26 +140,16 @@ export function takeReferenceSnapshot(ref: { name: string; path: string }): Refe
   // Directory: check if it is a git repository
   const gitDir = path.join(ref.path, '.git');
   if (fs.existsSync(gitDir)) {
-    let head: string | null = null;
-    try {
-      head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ref.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    } catch {
-      head = null;
-    }
-
-    let status = '';
-    try {
-      status = execFileSync('git', ['status', '--porcelain'], { cwd: ref.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    } catch {
-      status = '';
-    }
+    const headResult = runGit(ref.path, ['rev-parse', 'HEAD']);
+    const statusResult = runGit(ref.path, ['status', '--porcelain']);
 
     return {
       kind: 'git',
       name: ref.name,
       path: ref.path,
-      head,
-      status,
+      head: headResult.value,
+      status: statusResult.value ?? '',
+      unavailable: headResult.timedOut || statusResult.timedOut,
     };
   }
 
@@ -226,19 +233,12 @@ export function detectReferenceModifications(snapshots: ReferenceSnapshot[]): Re
     }
 
     if (snapshot.kind === 'git') {
-      let currentHead: string | null = null;
-      try {
-        currentHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: snapshot.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      } catch {
-        currentHead = null;
-      }
-
-      let currentStatus = '';
-      try {
-        currentStatus = execFileSync('git', ['status', '--porcelain'], { cwd: snapshot.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      } catch {
-        currentStatus = '';
-      }
+      if (snapshot.unavailable) continue;
+      const headResult = runGit(snapshot.path, ['rev-parse', 'HEAD']);
+      const statusResult = runGit(snapshot.path, ['status', '--porcelain']);
+      if (headResult.timedOut || statusResult.timedOut) continue;
+      const currentHead = headResult.value;
+      const currentStatus = statusResult.value ?? '';
 
       if (currentHead !== snapshot.head || currentStatus !== snapshot.status) {
         const fileSet = new Set<string>();
@@ -251,12 +251,9 @@ export function detectReferenceModifications(snapshots: ReferenceSnapshot[]): Re
         // Files from commit difference if HEAD changed
         if (snapshot.head && currentHead && snapshot.head !== currentHead) {
           try {
-            const diffOut = execFileSync('git', ['diff', '--name-only', `${snapshot.head}..${currentHead}`], {
-              cwd: snapshot.path,
-              encoding: 'utf8',
-              stdio: ['ignore', 'pipe', 'ignore'],
-            }).trim();
-            for (const f of diffOut.split('\n').map((s) => s.trim()).filter(Boolean)) {
+            const diffResult = runGit(snapshot.path, ['diff', '--name-only', `${snapshot.head}..${currentHead}`]);
+            if (diffResult.timedOut) continue;
+            for (const f of (diffResult.value ?? '').split('\n').map((s) => s.trim()).filter(Boolean)) {
               fileSet.add(f);
             }
           } catch {

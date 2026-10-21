@@ -16,6 +16,7 @@ import {
   TaskRepo,
   RunRepo,
   EventRepo,
+  RunMetricsRepo,
 } from '../src/db/index.js';
 import { Scheduler } from '../src/scheduler/index.js';
 import { FakeEngine, type Engine } from '../src/engines/index.js';
@@ -247,6 +248,7 @@ process.exit(0);
       const taskRepo = new TaskRepo(db);
       const runRepo = new RunRepo(db);
       const eventRepo = new EventRepo(db);
+      const runMetricsRepo = new RunMetricsRepo(db);
 
       const fakeEngine = new FakeEngine(fakeAgent);
       const engines = new Map<string, Engine>([['agy', fakeEngine]]);
@@ -260,6 +262,10 @@ process.exit(0);
         profileRepo,
         quotaMarkRepo,
         engines,
+        undefined,
+        undefined,
+        undefined,
+        runMetricsRepo,
       );
 
       // Track reference.modified event
@@ -319,6 +325,7 @@ process.exit(0);
       const updatedTask = taskRepo.get(task.id);
       expect(updatedTask).toBeDefined();
       expect(updatedTask?.status).toBe('blocked');
+      expect(runMetricsRepo.getByTask(task.id)).toHaveLength(1);
 
       // Check events
       expect(refModifiedEvents.length).toBeGreaterThanOrEqual(1);
