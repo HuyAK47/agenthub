@@ -1004,13 +1004,17 @@ export class TelegramBotService {
     if (!projectId) {
       const statuses = this.service.getDeployStatuses();
       await this.sendMessage(chatId, statuses.length
-        ? statuses.map((status) => `${status.projectId}: ${status.status}${status.error ? ` — ${status.error}` : ''}`).join('\n')
+        ? statuses.map((status) => `${this.escapeHtml(status.projectId)}: ${this.escapeHtml(status.status)}${status.error ? ` — ${this.escapeHtml(status.error)}` : ''}`).join('\n')
         : 'Chưa có lượt deploy nào. Dùng: /deploy <project>');
       return;
     }
     try {
       const status = await this.service.rerunDeploy(projectId);
-      await this.sendMessage(chatId, status.status === 'succeeded' || status.status === 'restarting' ? `✅ Deploy ${projectId} ${status.status === 'restarting' ? 'đang khởi động lại hub' : 'thành công'}.` : `❌ Deploy ${projectId} thất bại: ${status.error || status.status}`);
+      await this.sendMessage(chatId, status.status === 'queued' || status.status === 'running'
+        ? `⏳ Deploy ${this.escapeHtml(projectId)} đã vào hàng đợi.`
+        : status.status === 'succeeded' || status.status === 'restarting'
+          ? `✅ Deploy ${this.escapeHtml(projectId)} ${status.status === 'restarting' ? 'đang khởi động lại hub' : 'thành công'}.`
+          : `❌ Deploy ${this.escapeHtml(projectId)} thất bại: ${this.escapeHtml(status.error || status.status)}`);
     } catch (error) {
       await this.sendMessage(chatId, `❌ ${this.escapeHtml(error instanceof Error ? error.message : String(error))}`);
     }
