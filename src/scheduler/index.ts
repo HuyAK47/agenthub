@@ -3015,7 +3015,8 @@ export class Scheduler {
   }
 
   private getMonitoredDisks(): MonitoredDisk[] {
-    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
+    const roots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    return getMonitoredDisks(roots, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
   }
 
   private getBlockingDisk(): MonitoredDisk | undefined {

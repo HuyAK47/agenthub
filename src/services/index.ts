@@ -1134,7 +1134,8 @@ export class AppService {
 
     const diskReader = this.scheduler ? this.scheduler.getDiskReader() : getDiskSpaceSync;
     const disk = diskReader(this.config.worktreesDir);
-    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
+    const worktreeRoots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const disks = getMonitoredDisks(worktreeRoots, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
     const runningTaskIds = runningTasks.map((r) => r.taskId);
     const overlaps = this.taskNoteRepo
       ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)
