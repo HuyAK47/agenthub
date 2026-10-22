@@ -5,8 +5,10 @@ import {
   addProjectKnowledge,
   createProject,
   deleteProject,
+  restoreProject,
   deleteProjectKnowledge,
   getProjectKnowledge,
+  getArchivedProjects,
   getProjects,
   updateProjectKnowledge,
 } from '../api/client';
@@ -52,6 +54,7 @@ function ProjectSettingsForm({
 }) {
   const { t } = useLocale();
   const { suggestModalTour } = useTour();
+  const [confirmFullPermission, setConfirmFullPermission] = useState(false);
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) =>
     onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () =>
@@ -87,10 +90,9 @@ function ProjectSettingsForm({
             value={value.brain.permissions ?? 'inherit'}
             onChange={(e) => {
               const permissions = e.target.value;
-              if (
-                permissions === 'full' &&
-                (suggestModalTour('modal-full-permission'), !window.confirm(t('extra.fullModeConfirm')))
-              ) {
+              if (permissions === 'full') {
+                setConfirmFullPermission(true);
+                suggestModalTour('modal-full-permission');
                 return;
               }
               update('brain', { permissions });
@@ -314,6 +316,18 @@ function ProjectSettingsForm({
           {t('projects.settingsPartialHint')}
         </p>
       )}
+      {confirmFullPermission && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" data-tour="modal-full-permission">
+          <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-2xl">
+            <h2 className="text-base font-semibold">{t('common.confirm')}</h2>
+            <p className="mt-2 text-sm text-[var(--t-text-2)]">{t('extra.fullModeConfirm')}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="button-secondary" onClick={() => setConfirmFullPermission(false)}>{t('common.cancel')}</button>
+              <button type="button" className="button-primary" onClick={() => { update('brain', { permissions: 'full' }); setConfirmFullPermission(false); }}>{t('common.confirm')}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -327,6 +341,7 @@ export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [drawerProject, setDrawerProject] = useState<Project | null>(null);
 
   useEffect(() => {
@@ -354,6 +369,11 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: archivedProjects = [] } = useQuery({
+    queryKey: ['projects', 'archived'],
+    queryFn: getArchivedProjects,
+    enabled: showArchived,
   });
 
   // Keep drawer project in sync with latest query data or URL param
@@ -388,10 +408,15 @@ export const ProjectsPage: React.FC = () => {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: deleteProject,
-    onSuccess: () => {
+    mutationFn: ({ id, purge, confirm }: { id: string; purge?: boolean; confirm?: string }) => deleteProject(id, { purge, confirm }),
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      if (result.warnings?.length) window.alert(result.warnings.join('\n'));
     },
+  });
+  const restoreMutation = useMutation({
+    mutationFn: restoreProject,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
   });
 
   const knowledgeQuery = useQuery({
@@ -547,6 +572,24 @@ export const ProjectsPage: React.FC = () => {
         </Button>
       </div>
 
+      <div>
+        <Button type="button" variant="ghost" size="sm" onClick={() => setShowArchived((value) => !value)}>
+          {t('projects.archivedTitle')}
+        </Button>
+      </div>
+
+      {archivedProjects.length > 0 && (
+        <Card className="p-4 space-y-2">
+          <h2 className="font-semibold">{t('projects.archivedTitle')}</h2>
+          {archivedProjects.map((project) => (
+            <div key={project.id} className="flex items-center justify-between text-sm">
+              <span>{project.name} <span className="font-mono text-xs">({project.id})</span></span>
+              <Button size="sm" variant="secondary" onClick={() => restoreMutation.mutate(project.id)}>{t('projects.restore')}</Button>
+            </div>
+          ))}
+        </Card>
+      )}
+
       {/* Registration Form */}
       {showAddForm && (
         <Card data-tour="modal-register-project" className="p-6 space-y-4">
@@ -604,6 +647,7 @@ export const ProjectsPage: React.FC = () => {
                   {t('projects.branchHint')}
                 </p>
                 <Input
+                  data-tour="project-default-branch"
                   type="text"
                   placeholder="main"
                   value={defaultBranch}
@@ -632,6 +676,7 @@ export const ProjectsPage: React.FC = () => {
 
             {/* Advanced Section (collapsible, collapsed by default) */}
             <details
+              data-tour="project-register-advanced"
               data-testid="advanced-section"
               className="border border-[var(--t-border)] rounded-lg p-3 group"
             >
@@ -867,12 +912,13 @@ export const ProjectsPage: React.FC = () => {
                       size="sm"
                       title={t('extra.deleteProject')}
                       onClick={() => {
-                        if (
-                          confirm(
-                            t('projects.confirmDelete', { name: proj.name }),
-                          )
-                        ) {
-                          deleteMutation.mutate(proj.id);
+                        if (window.confirm(t('projects.archiveConfirm', { name: proj.name }))) {
+                          deleteMutation.mutate({ id: proj.id });
+                          return;
+                        }
+                        const typed = window.prompt(t('projects.purgeConfirm', { id: proj.id }));
+                        if (typed === proj.id) {
+                          deleteMutation.mutate({ id: proj.id, purge: true, confirm: typed });
                         }
                       }}
                       className="p-1.5 text-[var(--t-text-3)] hover:text-[var(--t-crit)]"

@@ -341,7 +341,7 @@ export const SettingsPage: React.FC = () => {
             <div data-tour="model-chain">
               <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                 {t('settings.hardChainLabel')}
-                <InfoTooltip text="Thứ tự model khó dùng trước rồi mới fallback xuống model dễ; ví dụ opus → sonnet → haiku." label={t('settings.hardChainLabel')} />
+                <InfoTooltip text={t('settings.hardChainInfo')} label={t('settings.hardChainLabel')} />
               </label>
               <textarea
                 rows={4}

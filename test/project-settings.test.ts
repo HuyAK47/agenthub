@@ -18,7 +18,7 @@ describe('project settings parsing', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
       brain: { mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
-      integration: { enabled: false },
+      integration: { enabled: false, autoMerge: false },
       ci: {},
       references: [],
       reviewChecklist: [],

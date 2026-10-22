@@ -65,6 +65,7 @@ import type { DeployService } from '../deploy.js';
 import type { PerfCollector } from '../perf.js';
 
 const execFileAsync = promisify(execFile);
+const CODEX_EMAIL_RECHECK_MS = 10 * 60 * 1000;
 
 function apiProject(project: ProjectRow, hubHome?: string, ciRepo?: CiRepo): ProjectRow {
   let merge: unknown = null;
@@ -1188,8 +1189,9 @@ export class AppService {
   }
 
   // --- Projects ---
-  listProjects(): ProjectRow[] {
-    return this.projectRepo.getAll().map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
+  listProjects(includeArchived = false): ProjectRow[] {
+    const projects = includeArchived ? this.projectRepo.getAllIncludingArchived() : this.projectRepo.getAll();
+    return projects.map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
   }
 
   getProject(id: string): ProjectRow {
@@ -1224,7 +1226,8 @@ export class AppService {
   createProject(raw: unknown): ProjectRow {
     const parsed = CreateProjectSchema.parse(raw);
     const id = parsed.id || parsed.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-    if (this.projectRepo.get(id)) {
+    const existing = this.projectRepo.getIncludingArchived(id);
+    if (existing && !existing.archivedAt) {
       throw new HttpError(409, 'conflict', `Project ID "${id}" đã tồn tại`);
     }
 
@@ -1283,6 +1286,24 @@ export class AppService {
     }
     if (!branchExists) {
       throw new HttpError(400, 'bad_request', `Nhánh mặc định "${parsed.defaultBranch}" không tồn tại trong repository`);
+    }
+
+    const archived = this.projectRepo.getAllIncludingArchived().find(
+      (project) => project.archivedAt && path.resolve(project.path) === resolvedPath,
+    );
+    if (existing?.archivedAt && !archived) {
+      throw new HttpError(409, 'conflict', `Project ID "${id}" đã tồn tại dưới dạng dự án đã ẩn; hãy dùng đúng đường dẫn để khôi phục`);
+    }
+    if (archived) {
+      this.projectRepo.restore(archived.id);
+      this.projectRepo.update(archived.id, {
+        name: parsed.name,
+        defaultBranch: parsed.defaultBranch,
+        envTemplate: parsed.envTemplate || null,
+        maxParallel: parsed.maxParallel,
+      });
+      this.invalidateOutOfScopeClaudeScanStates();
+      return this.getProject(archived.id);
     }
 
     this.projectRepo.insert({
@@ -1344,24 +1365,113 @@ export class AppService {
     return this.getProject(id);
   }
 
-  deleteProject(id: string): { ok: boolean; warnings?: string[] } {
+  restoreProject(id: string): ProjectRow {
+    const project = this.projectRepo.getIncludingArchived(id);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+    if (project.archivedAt && this.taskNoteRepo) {
+      for (const note of this.taskNoteRepo.getByProject(id)) {
+        if (!note.content.startsWith('project_archive_status:')) continue;
+        try {
+          const saved = JSON.parse(note.content.slice('project_archive_status:'.length)) as { status?: string; waitReason?: string | null };
+          if (saved.status) {
+            this.taskRepo.update(note.taskId, { status: saved.status, waitReason: saved.waitReason as TaskRow['waitReason'] });
+          }
+        } catch {
+          // Ignore malformed historical notes.
+        }
+      }
+    }
+    this.projectRepo.restore(id);
+    this.invalidateOutOfScopeClaudeScanStates();
+    return this.getProject(id);
+  }
+
+  deleteProject(id: string, options?: { purge?: boolean; confirm?: string }): { ok: boolean; archived?: boolean; counts?: Record<string, number>; warnings?: string[] } {
     const proj = this.projectRepo.get(id);
     if (!proj) {
       throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
     }
 
-    // Check if any task in this project is currently running
+    const projectTasks = this.taskRepo.getAll().filter((task) => task.projectId === id);
     const runningMap = this.scheduler.getRunning();
-    const hasRunningTask = Array.from(runningMap.values()).some((r) => r.projectId === id);
-    if (hasRunningTask) {
-      throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy`);
+    const runningTasks = projectTasks.filter((task) => ['running', 'checking'].includes(task.status));
+    for (const running of runningMap.values()) {
+      if (running.projectId === id && !runningTasks.some((task) => task.id === running.taskId)) {
+        const task = this.taskRepo.get(running.taskId);
+        if (task) runningTasks.push({ ...task, status: 'running' });
+        else throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy: ${running.taskId}`);
+      }
+    }
+    if (runningTasks.length > 0) {
+      throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy (running/checking): ${runningTasks.map((task) => task.id).join(', ')}`);
     }
 
-    const warning = removeIntegrationWorktree(proj, this.config.hubHome);
+    const deleteData = this.projectRepo.getDeleteData(id);
+    if (!options?.purge) {
+      const tasksToPause = projectTasks.filter((task) =>
+        ['draft', 'queued', 'waiting_quota', 'review'].includes(task.status),
+      );
+      for (const task of tasksToPause) {
+        this.taskRepo.update(task.id, { status: 'paused' });
+        this.taskNoteRepo?.insert({
+          projectId: id,
+          taskId: task.id,
+          kind: 'note',
+          content: `project_archive_status:${JSON.stringify({ status: task.status, waitReason: task.waitReason || null })}`,
+        });
+        this.scheduler.getEventBus().emit('task.paused', task.id, {
+          reason: 'project_archived',
+          projectId: id,
+        });
+      }
+      this.projectRepo.archive(id);
+      this.brainRunner?.stopProject(id);
+      const warning = removeIntegrationWorktree(proj, this.config.hubHome);
+      this.invalidateOutOfScopeClaudeScanStates();
+      const hasData = Object.values(deleteData.counts).some((count) => count > 0);
+      return warning
+        ? { ok: true, ...(hasData ? { archived: true, counts: deleteData.counts } : {}), warnings: [warning] }
+        : { ok: true, ...(hasData ? { archived: true, counts: deleteData.counts } : {}) };
+    }
 
-    this.projectRepo.delete(id);
+    if (options.confirm !== id) {
+      throw new HttpError(400, 'bad_request', `Xóa vĩnh viễn cần confirm đúng tên định danh: ${id}`);
+    }
+
+    const warnings: string[] = [];
+    const integrationWarning = removeIntegrationWorktree(proj, this.config.hubHome);
+    if (integrationWarning) warnings.push(integrationWarning);
+    for (const task of deleteData.tasks) {
+      if (!task.worktreePath || !fs.existsSync(task.worktreePath)) continue;
+      let dirty = true;
+      try {
+        dirty = execFileSync('git', ['-C', task.worktreePath, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }).trim().length > 0;
+      } catch { /* keep dirty=true when status cannot be checked */ }
+      if (dirty) {
+        warnings.push(`Giữ worktree ${task.worktreePath} vì có thay đổi chưa commit`);
+        continue;
+      }
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(proj.path, task.worktreePath, { projectId: id, taskId: task.id, slug: task.slug });
+      if (!removed) warnings.push(`Không thể gỡ worktree ${task.worktreePath}; đã giữ nguyên`);
+    }
+
+    const logRoot = path.resolve(this.config.logsDir);
+    for (const task of deleteData.tasks) {
+      const logPath = path.resolve(logRoot, task.id);
+      const relative = path.relative(logRoot, logPath);
+      if (relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && fs.existsSync(logPath)) {
+        try { fs.rmSync(logPath, { recursive: true, force: true }); } catch { warnings.push(`Không thể dọn log ${logPath}`); }
+      }
+    }
+
+    try {
+      this.projectRepo.purge(id);
+    } catch {
+      throw new HttpError(409, 'conflict', 'Không thể xóa dữ liệu dự án vì còn liên kết dữ liệu; không có dữ liệu nào bị xóa');
+    }
+    this.brainRunner?.stopProject(id);
     this.invalidateOutOfScopeClaudeScanStates();
-    return warning ? { ok: true, warnings: [warning] } : { ok: true };
+    return { ok: true, counts: deleteData.counts, ...(warnings.length > 0 ? { warnings } : {}) };
   }
 
   private invalidateOutOfScopeClaudeScanStates() {
@@ -1606,13 +1716,11 @@ export class AppService {
         }
       }
       if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
+        // ChatGPT logins often print no email, so a short retry would spawn the CLI on every poll.
         const lastCheck = this.emailCheckCache.get(p.name) || 0;
-        if (now - lastCheck > 30_000) {
+        if (now - lastCheck > CODEX_EMAIL_RECHECK_MS) {
           this.emailCheckCache.set(p.name, now);
-          const email = this.refreshCodexEmail(p);
-          if (email) {
-            p.email = email;
-          }
+          void this.refreshCodexEmail(p);
         }
       }
     }
@@ -2080,27 +2188,34 @@ export class AppService {
     return apiProfile(this.profileRepo.get(newName)!);
   }
 
-  private refreshCodexEmail(profile: ProfileRow): string | null {
-    if (profile.engine !== 'codex') return null;
+  private codexEmailChecks = new Map<string, Promise<string | null>>();
+
+  /** Reads the Codex account email in the background; one check per profile at a time, never blocking the event loop. */
+  private refreshCodexEmail(profile: ProfileRow): Promise<string | null> {
+    if (profile.engine !== 'codex') return Promise.resolve(null);
+    const running = this.codexEmailChecks.get(profile.name);
+    if (running) return running;
     const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
-    if (!codexPath) return null;
+    if (!codexPath) return Promise.resolve(null);
     const checkEnv: NodeJS.ProcessEnv = { ...process.env };
     if (profile.kind === 'isolated' && profile.home) {
       checkEnv.CODEX_HOME = profile.home;
     }
-    try {
-      const res = execFileSync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' });
-      const parsed = parseCodexLoginStatus(res);
-      if (parsed.email && parsed.email !== profile.email) {
-        this.profileRepo.upsert({ ...profile, email: parsed.email });
-        // Gói đã lưu thuộc tài khoản cũ.
-        this.profileRepo.updatePlan(profile.name, null);
-        return parsed.email;
-      }
-    } catch {
-      // ignore
-    }
-    return null;
+    const check = execFileAsync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' })
+      .then(({ stdout, stderr }) => {
+        const parsed = parseCodexLoginStatus(`${stdout}${stderr}`);
+        if (parsed.email && parsed.email !== profile.email) {
+          this.profileRepo.upsert({ ...profile, email: parsed.email });
+          // Gói đã lưu thuộc tài khoản cũ.
+          this.profileRepo.updatePlan(profile.name, null);
+          return parsed.email;
+        }
+        return null;
+      })
+      .catch(() => null)
+      .finally(() => this.codexEmailChecks.delete(profile.name));
+    this.codexEmailChecks.set(profile.name, check);
+    return check;
   }
 
   startProfileCheck(name: string): { started: true } {
@@ -2421,7 +2536,8 @@ export class AppService {
       }
     }
 
-    const project = this.projectRepo.get(task.projectId);
+    // Task history remains readable after its project is archived.
+    const project = this.projectRepo.getIncludingArchived(task.projectId);
     const reviewSettings = project?.review ? (() => {
       try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
     })() : null;
@@ -3139,6 +3255,34 @@ export class AppService {
     return this.taskRepo.get(taskId)!;
     } finally {
       this.reviewingTasks.delete(taskId);
+    }
+  }
+
+  /**
+   * Merges a task whose review chain finished on a Codex approval, when the project opted in with
+   * `integration.autoMerge`. A merged task then self-deploys through the usual task.merged hook.
+   */
+  async autoMergeReviewedTask(taskId: string): Promise<void> {
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.status !== 'review') return;
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return;
+    const settings = projectSettings(project);
+    if (!settings.integration.autoMerge || (!settings.integration.enabled && !project.merge)) return;
+    const last = this.reviewRepo.getByTask(taskId).at(-1);
+    if (!last || last.actor !== 'codex-reviewer' || last.verdict !== 'approved') return;
+    try {
+      await this.reviewTask(toRouteId(taskId), {
+        verdict: 'approved',
+        merge: true,
+        by: 'auto-merge',
+        feedback: 'Tự merge sau khi Codex reviewer chấp thuận.',
+      });
+    } catch (error) {
+      this.scheduler.getEventBus().emit('merge.failed', taskId, {
+        actor: 'auto-merge',
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

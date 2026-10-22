@@ -186,6 +186,7 @@ export class Scheduler {
   private failoverState?: ClaudeFailoverState;
   private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
+  private reviewNotified = new Map<string, string>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
   private recheckWaitingOnDiskOk = true;
@@ -483,7 +484,7 @@ export class Scheduler {
     const shutdownRuns = this.runRepo.getShutdownRuns();
     for (const run of shutdownRuns) {
       const task = this.taskRepo.get(run.taskId);
-      if (task && task.status === 'running') {
+      if (task && this.projectRepo.get(task.projectId) && task.status === 'running') {
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
         this.eventBus.emit('task.queued', run.taskId, { reason: 'daemon_shutdown' });
       }
@@ -503,6 +504,8 @@ export class Scheduler {
         continue;
       }
       if (!this.isProcessAlive(run.pid, run.pidStart)) {
+        const task = this.taskRepo.get(run.taskId);
+        if (!task || !this.projectRepo.get(task.projectId)) continue;
         if (this.recoverFinishedWork(run)) continue;
         this.runRepo.finish(run.id, 'crashed');
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
@@ -829,7 +832,7 @@ export class Scheduler {
       if (this.tasksWaitingForDisk.size > 0) {
         for (const taskId of [...this.tasksWaitingForDisk]) {
           const task = this.taskRepo.get(taskId);
-          if (task && (task.status === 'waiting_quota' || (task.status as string) === 'waiting_disk')) {
+          if (task && this.projectRepo.get(task.projectId) && (task.status === 'waiting_quota' || (task.status as string) === 'waiting_disk')) {
             this.taskRepo.updateStatus(taskId, 'queued');
             this.eventBus.emit('task.queued', taskId, { reason: 'disk_ready' });
           }
@@ -838,6 +841,7 @@ export class Scheduler {
       }
       const diskWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'disk');
       for (const t of diskWaiters) {
+        if (!this.projectRepo.get(t.projectId)) continue;
         this.taskRepo.updateStatus(t.id, 'queued');
         this.eventBus.emit('task.queued', t.id, { reason: 'disk_ready' });
       }
@@ -963,6 +967,7 @@ export class Scheduler {
   wakeWaitingQuotaTasks(reason = 'quota_unblocked'): void {
     const waitingTasks = this.taskRepo.getByStatus('waiting_quota');
     for (const task of waitingTasks) {
+      if (!this.projectRepo.get(task.projectId)) continue;
       if (reason !== 'startup_recheck' && task.waitReason === 'disk') {
         if (this.getMonitoredDisks().some((disk) => disk.low)) continue;
       }
@@ -1731,14 +1736,21 @@ export class Scheduler {
       if (task.reviewerEscalated) continue;
       const chain = this.reviewChainForTask(task);
       const step = chain[task.reviewStep ?? 0];
+      if (chain.length > 0 && (task.reviewStep ?? 0) >= chain.length && this.skippedCodexGate(task, chain)) {
+        // Tasks that passed a Codex gate without a Codex review (older builds skipped same-model work) go round again.
+        this.taskRepo.update(task.id, { reviewStep: 0 });
+        continue;
+      }
       if (chain.length > 0 && (!step || step.mode !== 'gate')) {
-        if ((task.reviewStep ?? 0) >= chain.length) {
+        if ((task.reviewStep ?? 0) >= chain.length && this.markReviewNotified(task, 'complete')) {
           this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true });
         }
         continue;
       }
       if (chain.length > 0 && step?.reviewer === 'claude') {
-        this.eventBus.emit('review.gate_ready', task.id, { reviewStep: task.reviewStep ?? 0, reviewer: 'claude' });
+        if (this.markReviewNotified(task, 'gate')) {
+          this.eventBus.emit('review.gate_ready', task.id, { reviewStep: task.reviewStep ?? 0, reviewer: 'claude' });
+        }
         continue;
       }
       if (chain.length === 0 && (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex')) continue;
@@ -1751,13 +1763,13 @@ export class Scheduler {
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
       if (codexProfiles.length === 0 || !task.worktreePath) continue;
       codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-      const profile = codexProfiles[0];
       const model = reviewerModel(step || { reviewer: this.config.reviewer?.model || 'codex:gpt-5.6-luna', mode: 'gate' }) || this.config.reviewer?.model || 'codex:gpt-5.6-luna';
-      const workerModel = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1)?.model;
-      if (chain.length > 0 && workerModel === model) {
-        this.advanceReviewStep(task, chain, 'reviewer_same_as_worker');
-        continue;
-      }
+      const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+      // Same model as the worker: still review, but from another Codex account in a fresh session.
+      const profile = lastWorker?.model === model
+        ? codexProfiles.find((p) => p.name !== lastWorker.profileName)
+        : codexProfiles[0];
+      if (!profile) continue;
       this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
     }
   }
@@ -1799,6 +1811,23 @@ export class Scheduler {
     }
   }
 
+  private skippedCodexGate(task: TaskRow, chain: ReviewChainStep[]): boolean {
+    if (!chain.some((step) => step.mode === 'gate' && step.reviewer.startsWith('codex:'))) return false;
+    const last = this.reviewRepo?.getByTask(task.id).at(-1);
+    return !last || last.actor !== 'codex-reviewer' || last.verdict !== 'approved';
+  }
+
+  /**
+   * scheduleReviews runs every tick; without this, a task parked at a non-gate step re-emits its
+   * ready event (and a Telegram/desktop notification) on every tick. Returns true once per task+step.
+   */
+  private markReviewNotified(task: TaskRow, kind: 'complete' | 'gate'): boolean {
+    const key = `${kind}:${task.reviewStep ?? 0}`;
+    if (this.reviewNotified.get(task.id) === key) return false;
+    this.reviewNotified.set(task.id, key);
+    return true;
+  }
+
   reviewerRunsForProfile(profileName: string): boolean {
     return [...this.reviewerRuns.values()].some((run) => run.profileName === profileName);
   }
@@ -1829,7 +1858,7 @@ export class Scheduler {
         profile,
         model: reviewerModel,
         cwd: task.worktreePath,
-        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks, project ? projectSettings(project).reviewChecklist : []),
+        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks, project ? projectSettings(project).reviewChecklist : [], project?.path),
         logPath,
         outputPath,
         readOnly: true,
@@ -2581,6 +2610,7 @@ export class Scheduler {
   reviewTask(taskId: string, verdict: 'approved' | 'changes_requested', feedback?: string, by?: string): void {
     const task = this.taskRepo.get(taskId);
     if (!task || task.status !== 'review') return;
+    this.reviewNotified.delete(taskId);
     const chain = this.reviewChainForTask(task);
     const step = chain[task.reviewStep ?? 0];
 
@@ -2797,6 +2827,7 @@ export class Scheduler {
 
   private onTaskDoneOrCancelled(taskId: string): void {
     this.invalidateChecks(taskId);
+    this.reviewNotified.delete(taskId);
     if (!this.config.cleanup?.nodeModulesOnDone) return;
     const task = this.taskRepo.get(taskId);
     if (!task || !task.worktreePath) return;
