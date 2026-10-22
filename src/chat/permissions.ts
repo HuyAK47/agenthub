@@ -102,6 +102,10 @@ export function commandPermissionLabel(command: string): string {
   if (info.dynamic) return 'chỉ lệnh này';
   return info.patterns[0]?.replace(/^command:/, '') || 'lệnh này';
 }
+export function canAlwaysAllowCommand(command: string): boolean {
+  const info = commandPermissionInfo(command);
+  return !info.dynamic && !info.dangerous && info.patterns.length === 1;
+}
 export function permissionPattern(input: Record<string, unknown>): string | null {
   if (typeof input.command === 'string' && input.command) return commandPermissionInfo(input.command).patterns[0] || null;
   for (const key of ['file_path', 'path']) if (typeof input[key] === 'string' && input[key]) return `${key}:${input[key]}`;
@@ -150,7 +154,7 @@ export class PermissionBroker {
   }
   request(input: PermissionRequestInput): Promise<PermissionResult> {
     const sessionKind = this.sessionRepo?.get(input.sessionId)?.kind; const policy = typeof this.brainPolicy === 'function' ? this.brainPolicy(input.sessionId) : this.brainPolicy;
-    if (sessionKind === 'brain' && policy) { const decision = policy.decide(input); if (decision) { const id = crypto.randomUUID(); this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' }); this.repo.resolve(id, decision.action, decision.message, decision.reason); return Promise.resolve(decision.action === 'allow' ? { behavior: 'allow', updatedInput: input.input } : { behavior: 'deny', message: decision.message }); } }
+    if ((sessionKind === 'brain' || sessionKind === 'assistant') && policy) { const decision = policy.decide(input); if (decision) { const id = crypto.randomUUID(); this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' }); this.repo.resolve(id, decision.action, decision.message, decision.reason); return Promise.resolve(decision.action === 'allow' ? { behavior: 'allow', updatedInput: input.input } : { behavior: 'deny', message: decision.message }); } }
     if (this.allowed(input.input, input.toolName, input.sessionId)) return Promise.resolve({ behavior: 'allow', updatedInput: input.input });
     const id = crypto.randomUUID(); const row = this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' }); this.onRequest?.(row);
     return new Promise((resolve) => {

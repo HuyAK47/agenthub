@@ -129,6 +129,23 @@ describe('BrainPolicy', () => {
     expect(global.decide({ toolName: 'Read', input: { file_path: path.join(worktreesDir, 'file.txt'), cwd: worktreesDir } })?.action).toBe('allow');
   });
 
+  it('assistant policies deny writes without asking and allow only safe reads', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-assistant-commands-'));
+    dirs.push(root);
+    const policy = assistantPolicy({ id: 'p1', path: root }, { worktreesDir: root, assistant: { policy: [] } });
+    const denied = ['git merge feature', 'git add package.json', 'git commit -m update', 'git pull', 'npm version 1.0.0', 'npm install', 'npm ci'];
+    for (const command of denied) {
+      expect(policy.decide({ toolName: 'Bash', input: { command, cwd: root } })).toMatchObject({
+        action: 'deny',
+        message: 'Việc này dành cho bộ não — dùng hub_ask_brain hoặc hub_brain_directive',
+      });
+    }
+    for (const command of ['git status', 'git log --oneline -1', 'git diff', 'git show HEAD', 'ls', 'cat package.json', 'grep scripts package.json', 'curl -s https://api.github.com/repos/openai/codex']) {
+      expect(policy.decide({ toolName: 'Bash', input: { command, cwd: root } })?.action).toBe('allow');
+    }
+    expect(policy.decide({ toolName: 'Bash', input: { command: 'git status && npm test', cwd: root } })).toMatchObject({ action: 'deny' });
+  });
+
   it('allows reads in references but denies writes there and outside the project', () => {
     const { root } = make();
     const reference = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-reference-'));
