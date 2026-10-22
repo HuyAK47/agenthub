@@ -184,6 +184,7 @@ async function handlePrompt(prompt) {
         },
       }),
     );
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'PLAN output from fake Claude' }] } }));
     console.log(
       JSON.stringify({
         type: 'assistant',

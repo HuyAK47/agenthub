@@ -765,6 +765,10 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(toolEvent).not.toBeNull();
     expect(toolEvent?.name).toBe('Read');
     expect(toolEvent?.summary).toBe('Read docs/PLAN.md');
+    expect(toolEvent?.status).toBe('done');
+    expect(toolEvent?.input).toEqual({ file_path: 'docs/PLAN.md' });
+    expect(toolEvent?.output).toBe('PLAN output from fake Claude');
+    expect(typeof toolEvent?.durationMs).toBe('number');
 
     // Verify messages in DB
     const msgRes = await server.inject({
@@ -776,6 +780,8 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const toolMsg = messages.find((m: { role: string }) => m.role === 'tool');
     expect(toolMsg).toBeDefined();
     expect(toolMsg.content).toBe('Read docs/PLAN.md');
+    expect(toolMsg.meta.status).toBe('done');
+    expect(toolMsg.meta.output).toBe('PLAN output from fake Claude');
   });
 
   it('handles corrupt stdout lines gracefully', async () => {
