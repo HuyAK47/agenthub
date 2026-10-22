@@ -19,7 +19,7 @@ import {
   ChatRetryRepo,
   ChatRetryRow,
 } from '../db/index.js';
-import { PermissionBroker, commandPermissionLabel } from './permissions.js';
+import { PermissionBroker, canAlwaysAllowCommand, commandPermissionLabel } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
@@ -206,6 +206,7 @@ export class ChatService {
         sessionTitle: session?.title || null,
         projectName: project?.name || null,
         permissionLabel: typeof input.command === 'string' ? commandPermissionLabel(input.command) : row.toolName,
+        canAlwaysAllow: session?.kind !== 'assistant' && (typeof input.command !== 'string' || canAlwaysAllowCommand(input.command)),
       };
     });
   }

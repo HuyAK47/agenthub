@@ -742,13 +742,13 @@ export const ChatPage: React.FC = () => {
                   >
                     {t('extra.allow')}
                   </button>
-                  <button
+                  {permission.canAlwaysAllow !== false && <button
                     type="button"
                     onClick={() => resolvePermission('allow_always')}
                     className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
                   >
                     {`${t('extra.allowAlways')} ${permission.permissionLabel || permission.toolName}`}
-                  </button>
+                  </button>}
                   <button
                     type="button"
                     onClick={() => resolvePermission('deny')}

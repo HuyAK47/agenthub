@@ -692,6 +692,7 @@ export interface ChatPermissionRequest {
   sessionTitle?: string | null;
   projectName?: string | null;
   permissionLabel?: string;
+  canAlwaysAllow?: boolean;
 }
 
 export interface ChatMessage {

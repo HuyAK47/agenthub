@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { openDatabase, ChatPermissionRepo, ChatSessionRepo, PermissionRuleRepo, ProjectRepo } from '../src/db/index.js';
 import { PermissionBroker, commandPermissionInfo } from '../src/chat/permissions.js';
-import { BrainPolicy } from '../src/brain/policy.js';
+import { BrainPolicy, assistantPolicy } from '../src/brain/policy.js';
 
 describe('PermissionBroker', () => {
   let dir: string;
@@ -82,6 +82,28 @@ describe('PermissionBroker', () => {
     expect(broker.listPending('chat-session')).toHaveLength(1);
     broker.resolve(broker.listPending('chat-session')[0].id, 'deny');
     await expect(ordinary).resolves.toMatchObject({ behavior: 'deny' });
+  });
+
+  it('repairs an old assistant session and denies write commands without creating permission requests', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-permission-'));
+    db = openDatabase(path.join(dir, 'hub.db'));
+    const projects = new ProjectRepo(db);
+    projects.insert({ id: 'agenthub', name: 'AgentHub', path: dir, defaultBranch: 'main', maxParallel: 1 });
+    const sessions = new ChatSessionRepo(db);
+    db.prepare("INSERT INTO chat_sessions (id, title, mode, model, kind) VALUES ('assistant:agenthub', 'Trợ lý', 'safe', '', 'chat')").run();
+    const policy = assistantPolicy({ id: 'agenthub', path: dir }, { worktreesDir: dir, assistant: { policy: [] } });
+    const broker = new PermissionBroker(new ChatPermissionRepo(db), 1, undefined, (sessionId) => {
+      const session = sessions.get(sessionId);
+      return session?.kind === 'assistant' ? policy : undefined;
+    }, sessions, undefined, projects);
+
+    const repaired = sessions.get('assistant:agenthub');
+    expect(repaired).toMatchObject({ kind: 'assistant', projectId: 'agenthub' });
+    await expect(broker.request({ sessionId: 'assistant:agenthub', toolName: 'Bash', input: { command: 'git merge feature', cwd: dir } }))
+      .resolves.toMatchObject({ behavior: 'deny', message: 'Việc này dành cho bộ não — dùng hub_ask_brain hoặc hub_brain_directive' });
+    await expect(broker.request({ sessionId: 'assistant:agenthub', toolName: 'Bash', input: { command: 'git status', cwd: dir } }))
+      .resolves.toMatchObject({ behavior: 'allow' });
+    expect(broker.listPending()).toHaveLength(0);
   });
 
   it('uses stable command prefixes and requires every shell segment', async () => {

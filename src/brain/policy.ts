@@ -269,6 +269,52 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
     if (executable === 'npx') {
       return (args[0] === 'vitest' && args[1] === 'run') || (args[0] === 'tsc' && args[1] === '--noEmit');
     }
+    if (executable === 'grep') {
+      if (args.some((arg) => arg === '-f' || arg === '--file' || arg.startsWith('--file='))) return false;
+      let hasExplicitPattern = false;
+      let skipNext = false;
+      const operands: string[] = [];
+      for (const arg of args) {
+        if (skipNext) { skipNext = false; continue; }
+        if (/^-[^-]/u.test(arg)) {
+          const shortOptions = arg.slice(1);
+          if (shortOptions.includes('f')) return false;
+          const regexpIndex = shortOptions.indexOf('e');
+          if (regexpIndex !== -1) {
+            hasExplicitPattern = true;
+            if (regexpIndex === shortOptions.length - 1) skipNext = true;
+            continue;
+          }
+        }
+        if (arg === '-e' || arg === '--regexp') { hasExplicitPattern = true; skipNext = true; continue; }
+        if (arg.startsWith('--regexp=') || (arg.startsWith('-e') && arg.length > 2)) { hasExplicitPattern = true; continue; }
+        if (!arg.startsWith('-')) operands.push(arg);
+      }
+      const fileOperands = hasExplicitPattern ? operands : operands.slice(1);
+      return operands.length >= (hasExplicitPattern ? 0 : 1)
+        && fileOperands.every((arg) => safePath(arg, roots, cwd) && !isSecretPath(arg, cwd));
+    }
+    if (executable === 'curl') {
+      let url: string | undefined;
+      for (let i = 0; i < args.length; i += 1) {
+        const arg = args[i];
+        if (arg === '-X' || arg === '--request') {
+          if (args[++i]?.toUpperCase() !== 'GET') return false;
+        } else if (arg.startsWith('--request=')) {
+          if (arg.slice('--request='.length).toUpperCase() !== 'GET') return false;
+        } else if (arg === '-H' || arg === '--header') {
+          const header = args[++i];
+          if (!header || header.startsWith('@') || /[$`]/u.test(header)) return false;
+        } else if (arg.startsWith('-')) {
+          if (!['-s', '-S', '-L', '--silent', '--show-error', '--location'].includes(arg)) return false;
+        } else if (url) {
+          return false;
+        } else {
+          url = arg;
+        }
+      }
+      return Boolean(url && /^https:\/\/api\.github\.com(?:\/|$)/i.test(url));
+    }
     if (executable === 'node') {
       if (permissions === 'standard') return false;
       if (args.length === 0) return false;
@@ -329,14 +375,14 @@ export class BrainPolicy {
       ]).has(toolName)) return null;
       return { action: 'allow', reason: 'policy:auto_allow', message: 'MCP AgentHub được policy tự cho phép' };
     }
+    if (toolName === 'Bash' && this.denyBashWrites && (/[;&|\n]/u.test(command) || !allowedCommand(command, this.roots, cwd, 'standard'))) {
+      return { action: 'deny', reason: 'policy:deny', message: 'Việc này dành cho bộ não — dùng hub_ask_brain hoặc hub_brain_directive' };
+    }
     if (toolName === 'Bash' && DENY_COMMAND.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Lệnh thuộc danh sách luôn từ chối' };
     }
-    if (toolName === 'Bash' && this.denyBashWrites && !allowedCommand(command, this.roots, cwd, 'standard')) {
-      return { action: 'deny', reason: 'policy:deny', message: 'Trợ lý chỉ được dùng Bash cho thao tác đọc an toàn' };
-    }
     if (this.denyToolWrites && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
-      return { action: 'deny', reason: 'policy:deny', message: 'Trợ lý chỉ được đọc và điều phối qua MCP' };
+      return { action: 'deny', reason: 'policy:deny', message: 'Việc này dành cho bộ não — dùng hub_ask_brain hoặc hub_brain_directive' };
     }
     const touchesReadOnly = paths.some((value) => this.readOnlyRoots.some((root) => within(path.isAbsolute(value) ? value : path.resolve(cwd, value), root)));
     if (touchesReadOnly && !READ_TOOLS.has(toolName)) {
