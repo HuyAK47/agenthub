@@ -88,12 +88,18 @@ function shimScript(realBinary: string): string {
   return `#!/bin/sh
 blocked_action=0
 blocked_unit=0
+blocked_service_path=0
 for arg in "$@"; do
   case "$arg" in
     stop|disable|kill|restart|mask|bootout|unload) blocked_action=1 ;;
     agenthub|agenthub.service|dev.agenthub) blocked_unit=1 ;;
+    "$HOME/.config/systemd/user/"*|"$HOME/Library/LaunchAgents/"*) blocked_service_path=1 ;;
   esac
 done
+if [ "$blocked_service_path" -eq 1 ]; then
+  echo ${shellQuote(WORKER_SERVICE_MESSAGE)} >&2
+  exit 1
+fi
 if [ "$blocked_action" -eq 1 ] && [ "$blocked_unit" -eq 1 ]; then
   echo ${shellQuote(WORKER_SERVICE_MESSAGE)} >&2
   exit 1
