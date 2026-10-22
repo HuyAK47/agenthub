@@ -22,6 +22,8 @@ export interface SpawnOpts {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null };
   codexSandbox?: 'off' | 'workspace-write';
+  /** Approval policy for interactive brain runs. Full bypasses approvals; safe modes do not. */
+  codexApproval?: 'never' | 'on-request' | 'untrusted';
   workerCount?: number;
   streamOutput?: boolean;
   mcpConfigPath?: string;
@@ -287,6 +289,11 @@ export class CodexEngine implements Engine {
       args.splice(2, 0, '--sandbox', 'workspace-write');
     } else {
       args.splice(2, 0, '--dangerously-bypass-approvals-and-sandbox');
+    }
+    // Keep Codex behind its approval broker for standard/trusted brain sessions.
+    // `never` is only used together with the explicit full-permission bypass.
+    if (opts.codexApproval) {
+      args.splice(-1, 0, '-c', `approval_policy=${opts.codexApproval}`);
     }
     if (opts.outputPath) args.splice(-1, 0, '--output-last-message', opts.outputPath);
 

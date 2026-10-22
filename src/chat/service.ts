@@ -47,6 +47,7 @@ import { readCodexRateLimits } from '../quota/codex-usage.js';
 import { buildProjectKnowledgeContext } from '../projects/knowledge-context.js';
 import { projectSettings } from '../projects/settings.js';
 import { effectiveBrainCodexProfile, effectiveBrainEngine } from '../brain/engine.js';
+import { effectiveBrainPermission } from '../brain/mode.js';
 import { CodexEngine } from '../engines/index.js';
 
 async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
@@ -1767,8 +1768,8 @@ export class ChatService {
 
     const logPath = path.join(sessionDir, 'codex.log');
     const engine = new CodexEngine(this.codexBinOverride, session.mode === 'full' ? 'off' : 'workspace-write');
-
     const project = turn.projectId ? this.projectRepo.get(turn.projectId) : undefined;
+    const permission = effectiveBrainPermission(project, this.config.brain);
     const projectKnowledge = project && this.knowledgeRepo
       ? buildProjectKnowledgeContext(this.knowledgeRepo.getByProject(project.id), projectSettings(project).references, undefined, project.path).text
       : undefined;
@@ -1801,6 +1802,11 @@ export class ChatService {
         mcpConfigPath,
         hubHome: this.config.hubHome,
         codexSandbox: session.mode === 'full' ? 'off' : 'workspace-write',
+        // Codex has no Claude-style allowedTools callback. Its approval policy
+        // is the process-level enforcement boundary for non-full brain modes:
+        // standard/trusted commands must be approved by Codex instead of being
+        // executed autonomously; full is the sole explicit bypass mode.
+        codexApproval: permission === 'full' ? 'never' : permission === 'standard' ? 'untrusted' : 'on-request',
         project: this.projectRepo.get(turn.projectId || '') || undefined,
       });
     } catch (error) {
@@ -1891,6 +1897,7 @@ export class ChatService {
           this.forceClaude.add(turn.sessionId);
           this.chatSessionRepo.setBusy(turn.sessionId, 0);
           this.setSessionState(turn.sessionId, 'idle');
+          this.lastEngines.set(turn.sessionId, 'claude');
           this.executeTurn(turn);
           return;
         }
