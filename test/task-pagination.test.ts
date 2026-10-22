@@ -36,8 +36,11 @@ describe('TaskRepo.page', () => {
 
   it('filters project/status and accent-insensitive escaped search', () => {
     const { repo, db } = setup();
+    new ProjectRepo(db).insert({ id: 'p2', name: 'Other project', path: '/tmp/other-project', defaultBranch: 'main', envTemplate: null, maxParallel: 2 });
+    repo.insert({ id: 'p2~same-slug', projectId: 'p2', slug: 'same-slug', title: 'Same slug in another project', status: 'running' });
     db.prepare("INSERT INTO tasks (id, projectId, slug, title, level, dependsOn) VALUES ('p1~underscore', 'p1', 'underscore', 'x_y literal', 'easy', '[]')").run();
-    expect(repo.page({ status: 'running', limit: 20 }).items.map((task) => task.id)).toEqual(['p1~b']);
+    expect(repo.page({ project: 'p1', limit: 20 }).items.every((task) => task.projectId === 'p1')).toBe(true);
+    expect(repo.page({ status: 'running', limit: 20 }).items.map((task) => task.id)).toEqual(['p2~same-slug', 'p1~b']);
     expect(repo.page({ search: 'dang nhap', limit: 20 }).items.map((task) => task.id)).toEqual(['p1~a']);
     expect(repo.page({ search: '%', limit: 20 }).items).toHaveLength(0);
     expect(repo.page({ search: '_', limit: 20 }).items.map((task) => task.slug)).toEqual(['underscore']);
