@@ -1,6 +1,6 @@
-import React, { memo, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { memo, useEffect, useMemo, useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { getProjects, getStatus, getTasks } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
@@ -11,6 +11,7 @@ import { useLocale } from '../context/LocaleContext';
 import { useShowMore } from '../components/CollapsibleList';
 import { TaskDag } from '../components/dag';
 import { filterTasksForDag } from '../components/dag/dagUtils';
+import { Pagination } from '../components/ui';
 
 const normalizeText = (text: string): string =>
   text
@@ -219,36 +220,50 @@ export const KanbanColumn = memo(KanbanColumnComponent);
 export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
+  const [urlParams, setUrlParams] = useSearchParams();
   const [viewMode, setViewMode] = useState<'kanban' | 'dag'>('kanban');
-  const [selectedProject, setSelectedProject] = useState<string>('all');
-  const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [selectedProject, setSelectedProject] = useState<string>(urlParams.get('project') || 'all');
+  const [selectedStatus, setSelectedStatus] = useState<string>(urlParams.get('status') || 'all');
   const [doneFilter, setDoneFilter] = useState<'active_chains' | '1d' | '3d' | '7d' | '30d' | 'all'>('active_chains');
-  const [search, setSearch] = useState<string>('');
+  const [search, setSearch] = useState<string>(urlParams.get('search') || '');
+  const [page, setPage] = useState(Number(urlParams.get('page') || 1));
+  const [pageSize, setPageSize] = useState(Number(urlParams.get('pageSize') || 20));
+  const [cursors, setCursors] = useState<Record<number, string | undefined>>({});
+  const cursor = cursors[page - 1];
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
   });
 
-  const { data: tasks = [], isLoading } = useQuery({
-    queryKey: ['tasks', selectedProject],
-    queryFn: () => getTasks(selectedProject !== 'all' ? { project: selectedProject } : undefined),
+  const { data, isLoading } = useQuery({
+    queryKey: ['tasks', selectedProject, search, page, pageSize, cursor],
+    queryFn: () => getTasks({ project: selectedProject, search, limit: pageSize, cursor }),
     refetchInterval: 5000,
+    placeholderData: keepPreviousData,
   });
+  useEffect(() => {
+    if (data?.nextCursor) setCursors((current) => ({ ...current, [page]: data.nextCursor || undefined }));
+  }, [data?.nextCursor, page]);
+  useEffect(() => {
+    const next = new URLSearchParams(urlParams);
+    const values: Record<string, string> = { project: selectedProject, status: selectedStatus, search, page: String(page), pageSize: String(pageSize) };
+    for (const [key, value] of Object.entries(values)) {
+      if (value && value !== 'all' && value !== '1' && !(key === 'pageSize' && value === '20')) next.set(key, value);
+      else next.delete(key);
+    }
+    if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
+  }, [selectedProject, selectedStatus, search, page, pageSize, setUrlParams, urlParams]);
+  useEffect(() => {
+    setPage(1);
+    setCursors({});
+  }, [selectedProject, search, pageSize]);
+  const tasks = data || [];
 
   const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
 
   const dagTasks = useMemo(() => {
-    let list = tasks;
-    const query = normalizeText(search.trim());
-    if (query) {
-      list = list.filter((task) => {
-        const slugMatch = normalizeText(task.slug).includes(query);
-        const titleMatch = normalizeText(task.title).includes(query);
-        return slugMatch || titleMatch;
-      });
-    }
-    return filterTasksForDag(list, {
+    return filterTasksForDag(tasks, {
       project: selectedProject,
       status: selectedStatus,
       doneFilter,
@@ -428,6 +443,7 @@ export const TasksPage: React.FC = () => {
           ))}
         </div>
       )}
+      <Pagination page={page} pageSize={pageSize} total={data?.total || data?.length || 0} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />
     </div>
   );
 };

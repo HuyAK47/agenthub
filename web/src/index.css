@@ -423,7 +423,20 @@ body {
 
 html {
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border) transparent;
 }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border) transparent;
+}
+
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar:hover { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--t-border); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--t-text-3); }
 
 .theme-transition,
 .theme-transition * {
