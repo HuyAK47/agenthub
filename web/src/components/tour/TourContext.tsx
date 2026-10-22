@@ -79,7 +79,17 @@ const pageTours: Record<string, TourDefinition> = {
   ] },
 };
 
-const TourContext = createContext<TourContextValue | null>(null);
+const noOpTourContext: TourContextValue = {
+  active: null,
+  stepIndex: 0,
+  openTour: () => {},
+  closeTour: () => {},
+  next: () => {},
+  previous: () => {},
+  getPageTour: () => null,
+};
+
+const TourContext = createContext<TourContextValue>(noOpTourContext);
 
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
@@ -153,7 +163,5 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 };
 
 export function useTour(): TourContextValue {
-  const value = useContext(TourContext);
-  if (!value) throw new Error('useTour must be used within TourProvider');
-  return value;
+  return useContext(TourContext);
 }
