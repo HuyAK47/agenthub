@@ -7,6 +7,7 @@ import { createContext, closeContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
+import { DeployService } from '../src/deploy.js';
 import {
   TelegramBotService,
   readTelegramToken,
@@ -858,6 +859,53 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[0].body?.text).toContain('Đã đẩy p1 lên remote (push lúc 14:30)');
       pushSpy.mockRestore();
+    });
+
+    it('/deploy <project> push reports ❌ when commandRunner fails with code!=0', async () => {
+      ctx.projectRepo.update('p1', {
+        merge: JSON.stringify({ enabled: true, worktrees: { main: tmpDir } }),
+      });
+      config.deploy = {
+        p1: {
+          steps: [],
+          timeoutSec: 2,
+          restartHub: false,
+          push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true },
+        },
+      };
+
+      const failingRunner = vi.fn(async () => ({ code: 1, output: 'push rejected: failed' }));
+      const deployService = new DeployService(
+        config,
+        ctx.projectRepo,
+        ctx.scheduler.getEventBus(),
+        0,
+        failingRunner,
+      );
+      (deployService as unknown as { latest: Map<string, unknown> }).latest.set('p1', {
+        projectId: 'p1',
+        status: 'succeeded',
+      });
+      ctx.service.deployService = deployService;
+
+      recordedCalls = [];
+      await bot.handleUpdate({
+        update_id: 26,
+        message: {
+          message_id: 26,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/deploy p1 push',
+        },
+      });
+      expect(failingRunner).toHaveBeenCalled();
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls.length).toBeGreaterThan(0);
+      const text = String(calls[calls.length - 1].body?.text);
+      expect(text).toContain('❌');
+      expect(text).toContain('Đẩy p1 thất bại');
+      expect(text).toContain('exit 1');
+      expect(text).not.toContain('✅');
     });
   });
 

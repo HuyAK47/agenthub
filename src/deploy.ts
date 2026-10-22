@@ -251,6 +251,7 @@ export class DeployService {
       const prev = this.latest.get(projectId) || { projectId, status: 'failed' };
       const status: DeployStatus = {
         ...prev,
+        status: 'failed',
         error: errorMsg,
         logPath,
       };
