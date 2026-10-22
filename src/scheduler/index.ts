@@ -186,6 +186,7 @@ export class Scheduler {
   private failoverState?: ClaudeFailoverState;
   private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
+  private reviewNotified = new Map<string, string>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
   private recheckWaitingOnDiskOk = true;
@@ -1736,13 +1737,15 @@ export class Scheduler {
       const chain = this.reviewChainForTask(task);
       const step = chain[task.reviewStep ?? 0];
       if (chain.length > 0 && (!step || step.mode !== 'gate')) {
-        if ((task.reviewStep ?? 0) >= chain.length) {
+        if ((task.reviewStep ?? 0) >= chain.length && this.markReviewNotified(task, 'complete')) {
           this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true });
         }
         continue;
       }
       if (chain.length > 0 && step?.reviewer === 'claude') {
-        this.eventBus.emit('review.gate_ready', task.id, { reviewStep: task.reviewStep ?? 0, reviewer: 'claude' });
+        if (this.markReviewNotified(task, 'gate')) {
+          this.eventBus.emit('review.gate_ready', task.id, { reviewStep: task.reviewStep ?? 0, reviewer: 'claude' });
+        }
         continue;
       }
       if (chain.length === 0 && (!snapshot.active || snapshot.step?.type !== 'engine' || snapshot.step.engine !== 'codex')) continue;
@@ -1801,6 +1804,17 @@ export class Scheduler {
     } else {
       this.eventBus.emit('review.gate_completed', task.id, { reviewStep: nextStep, reason });
     }
+  }
+
+  /**
+   * scheduleReviews runs every tick; without this, a task parked at a non-gate step re-emits its
+   * ready event (and a Telegram/desktop notification) on every tick. Returns true once per task+step.
+   */
+  private markReviewNotified(task: TaskRow, kind: 'complete' | 'gate'): boolean {
+    const key = `${kind}:${task.reviewStep ?? 0}`;
+    if (this.reviewNotified.get(task.id) === key) return false;
+    this.reviewNotified.set(task.id, key);
+    return true;
   }
 
   reviewerRunsForProfile(profileName: string): boolean {
@@ -2585,6 +2599,7 @@ export class Scheduler {
   reviewTask(taskId: string, verdict: 'approved' | 'changes_requested', feedback?: string, by?: string): void {
     const task = this.taskRepo.get(taskId);
     if (!task || task.status !== 'review') return;
+    this.reviewNotified.delete(taskId);
     const chain = this.reviewChainForTask(task);
     const step = chain[task.reviewStep ?? 0];
 
@@ -2801,6 +2816,7 @@ export class Scheduler {
 
   private onTaskDoneOrCancelled(taskId: string): void {
     this.invalidateChecks(taskId);
+    this.reviewNotified.delete(taskId);
     if (!this.config.cleanup?.nodeModulesOnDone) return;
     const task = this.taskRepo.get(taskId);
     if (!task || !task.worktreePath) return;

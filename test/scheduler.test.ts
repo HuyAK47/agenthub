@@ -616,6 +616,21 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  it('announces a finished review chain once instead of on every tick', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    taskRepo.update('test-project/review', { reviewStep: 1 });
+    for (let tick = 0; tick < 10; tick++) scheduler.tick();
+    const ready = () => eventRepo.getRecent(50).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/review');
+    expect(ready()).toHaveLength(1);
+    // A new review round may announce again.
+    scheduler.reviewTask('test-project/review', 'changes_requested', 'fix it', 'brain');
+    taskRepo.update('test-project/review', { status: 'review', reviewStep: 1 });
+    scheduler.tick();
+    expect(ready()).toHaveLength(2);
+    scheduler.stop();
+  });
+
   it('escalates before spawning when autocheck results are missing', () => {
     const { scheduler } = makeReviewer('reviewer-approved', false);
     scheduler.tick();

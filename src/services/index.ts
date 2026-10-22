@@ -63,6 +63,7 @@ import type { DeployService } from '../deploy.js';
 import type { PerfCollector } from '../perf.js';
 
 const execFileAsync = promisify(execFile);
+const CODEX_EMAIL_RECHECK_MS = 10 * 60 * 1000;
 
 function apiProject(project: ProjectRow, hubHome?: string, ciRepo?: CiRepo): ProjectRow {
   let merge: unknown = null;
@@ -1568,13 +1569,11 @@ export class AppService {
         }
       }
       if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
+        // ChatGPT logins often print no email, so a short retry would spawn the CLI on every poll.
         const lastCheck = this.emailCheckCache.get(p.name) || 0;
-        if (now - lastCheck > 30_000) {
+        if (now - lastCheck > CODEX_EMAIL_RECHECK_MS) {
           this.emailCheckCache.set(p.name, now);
-          const email = this.refreshCodexEmail(p);
-          if (email) {
-            p.email = email;
-          }
+          void this.refreshCodexEmail(p);
         }
       }
     }
@@ -1955,25 +1954,32 @@ export class AppService {
     return apiProfile(this.profileRepo.get(newName)!);
   }
 
-  private refreshCodexEmail(profile: ProfileRow): string | null {
-    if (profile.engine !== 'codex') return null;
+  private codexEmailChecks = new Map<string, Promise<string | null>>();
+
+  /** Reads the Codex account email in the background; one check per profile at a time, never blocking the event loop. */
+  private refreshCodexEmail(profile: ProfileRow): Promise<string | null> {
+    if (profile.engine !== 'codex') return Promise.resolve(null);
+    const running = this.codexEmailChecks.get(profile.name);
+    if (running) return running;
     const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
-    if (!codexPath) return null;
+    if (!codexPath) return Promise.resolve(null);
     const checkEnv: NodeJS.ProcessEnv = { ...process.env };
     if (profile.kind === 'isolated' && profile.home) {
       checkEnv.CODEX_HOME = profile.home;
     }
-    try {
-      const res = execFileSync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' });
-      const parsed = parseCodexLoginStatus(res);
-      if (parsed.email && parsed.email !== profile.email) {
-        this.profileRepo.upsert({ ...profile, email: parsed.email });
-        return parsed.email;
-      }
-    } catch {
-      // ignore
-    }
-    return null;
+    const check = execFileAsync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' })
+      .then(({ stdout, stderr }) => {
+        const parsed = parseCodexLoginStatus(`${stdout}${stderr}`);
+        if (parsed.email && parsed.email !== profile.email) {
+          this.profileRepo.upsert({ ...profile, email: parsed.email });
+          return parsed.email;
+        }
+        return null;
+      })
+      .catch(() => null)
+      .finally(() => this.codexEmailChecks.delete(profile.name));
+    this.codexEmailChecks.set(profile.name, check);
+    return check;
   }
 
   startProfileCheck(name: string): { started: true } {
