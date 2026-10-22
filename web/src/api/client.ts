@@ -329,7 +329,9 @@ export interface ImportTokensResult {
   }>;
 }
 
+/** Nhập tài khoản từ token: Antigravity (mặc định) hoặc Codex (`engine: 'codex'`). */
 export async function importAgyTokens(data: {
+  engine?: 'agy' | 'codex';
   tokens: any;
   accountType?: 'personal' | 'team' | 'api';
 }): Promise<ImportTokensResult> {

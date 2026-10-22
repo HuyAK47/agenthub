@@ -810,6 +810,8 @@ function AddProfileModal({
   const { t } = useLocale();
   const [engine, setEngine] = useState<Provider>('agy');
   const [method, setMethod] = useState<'terminal' | 'cockpit'>('terminal');
+  // Nhập token có cho Antigravity (refresh token kiểu Cockpit) và Codex (JSON id/access/refresh token).
+  const supportsTokenImport = engine === 'agy' || engine === 'codex';
 
   // Terminal state
   const [name, setName] = useState('');
@@ -859,6 +861,7 @@ function AddProfileModal({
     setCockpitError('');
     try {
       const result = await importAgyTokens({
+        engine: engine === 'codex' ? 'codex' : 'agy',
         tokens: parsed,
         accountType: cockpitAccountType,
       });
@@ -887,9 +890,13 @@ function AddProfileModal({
             onChange={(e) => {
               const next = e.target.value as Provider;
               setEngine(next);
-              if (next !== 'agy') {
+              if (next !== 'agy' && next !== 'codex') {
                 setMethod('terminal');
               }
+              // Dữ liệu token của engine này không dùng được cho engine khác.
+              setCockpitJson('');
+              setCockpitResult(null);
+              setCockpitError('');
             }}
             className="field mt-1"
           >
@@ -899,7 +906,7 @@ function AddProfileModal({
           </select>
         </label>
 
-        {engine === 'agy' && (
+        {supportsTokenImport && (
           <div>
             <span className="block text-xs font-medium text-[var(--t-text-3)] mb-1.5">
               {t('profiles.authMethod')}
@@ -931,13 +938,13 @@ function AddProfileModal({
                     : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
                 }`}
               >
-                {t('profiles.tabImportCockpit')}
+                {t(engine === 'codex' ? 'profiles.tabImportCodex' : 'profiles.tabImportCockpit')}
               </button>
             </div>
           </div>
         )}
 
-        {engine !== 'agy' || method === 'terminal' ? (
+        {!supportsTokenImport || method === 'terminal' ? (
           <form onSubmit={handleCreateTerminal} className="space-y-4">
             <p className="text-xs text-[var(--t-text-3)]">
               {t('profiles.addDescription')}
@@ -1035,7 +1042,7 @@ function AddProfileModal({
             ) : (
               <form onSubmit={handleImportCockpit} className="space-y-4">
                 <p className="text-xs text-[var(--t-text-3)]">
-                  {t('profiles.cockpitImportDesc')}
+                  {t(engine === 'codex' ? 'profiles.codexImportDesc' : 'profiles.cockpitImportDesc')}
                 </p>
                 {cockpitError && (
                   <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
@@ -1050,7 +1057,7 @@ function AddProfileModal({
                     autoComplete="off"
                     value={cockpitJson}
                     onChange={(e) => setCockpitJson(e.target.value)}
-                    placeholder={t('profiles.cockpitJsonPlaceholder')}
+                    placeholder={t(engine === 'codex' ? 'profiles.codexJsonPlaceholder' : 'profiles.cockpitJsonPlaceholder')}
                     rows={6}
                     className="field mt-1 font-mono text-xs leading-relaxed"
                   />

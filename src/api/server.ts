@@ -296,7 +296,7 @@ export async function createServer(
   });
 
   fastify.post('/api/profiles/import-tokens', async (req: FastifyRequest, reply: FastifyReply) => {
-    const result = await service.importAgyTokens(req.body);
+    const result = await service.importTokens(req.body);
     return reply.status(200).send(result);
   });
 

@@ -32,6 +32,7 @@ import {
 } from '../db/index.js';
 import type { CiWatchService } from '../ci.js';
 import { BulletinService } from '../bulletin.js';
+import { parseCodexTokenItem, writeCodexAuthFile } from '../profiles/codexToken.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, inspectAgyAccessToken } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
@@ -712,6 +713,20 @@ export function formatEventSummary(
       }
       return type;
   }
+}
+
+export interface TokenImportResult {
+  success: boolean;
+  total: number;
+  successCount: number;
+  failedCount: number;
+  results: Array<{
+    name: string;
+    email: string;
+    action: 'created' | 'updated' | 'skipped';
+    status: 'ok' | 'error';
+    message?: string;
+  }>;
 }
 
 export class AppService {
@@ -1471,23 +1486,17 @@ export class AppService {
     return apiProfile(this.profileRepo.get(parsed.name)!);
   }
 
-  /**
-   * verify: chạy Check bằng agy cho từng hồ sơ nhập thành công (kết quả về qua sự kiện profile.check).
-   * CLI tắt vì nó đóng DB ngay sau khi nhập.
-   */
-  async importAgyTokens(raw: unknown, options: { verify?: boolean } = {}): Promise<{
-    success: boolean;
-    total: number;
-    successCount: number;
-    failedCount: number;
-    results: Array<{
-      name: string;
-      email: string;
-      action: 'created' | 'updated' | 'skipped';
-      status: 'ok' | 'error';
-      message?: string;
-    }>;
-  }> {
+  /** Nhập token theo engine trong payload (`engine: "codex"`; mặc định agy). */
+  async importTokens(raw: unknown, options: { verify?: boolean } = {}): Promise<TokenImportResult> {
+    const engine = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>).engine : undefined;
+    if (engine === 'codex') return this.importCodexTokens(raw, options);
+    if (engine !== undefined && engine !== 'agy') {
+      throw new HttpError(400, 'bad_request', `Chưa hỗ trợ nhập token cho engine "${String(engine)}"`);
+    }
+    return this.importAgyTokens(raw, options);
+  }
+
+  private parseTokenImportPayload(raw: unknown): { rawList: unknown[]; accountType: 'personal' | 'team' | 'api' } {
     let payload: unknown = raw;
     if (typeof payload === 'string') {
       try {
@@ -1515,6 +1524,10 @@ export class AppService {
       } catch {
         throw new HttpError(400, 'bad_request', 'Trường "tokens" không phải là JSON hợp lệ');
       }
+    } else if (payloadObj.tokens && typeof payloadObj.tokens === 'object') {
+      // Dán thẳng một object (vd. auth.json của Codex có "tokens" lồng bên trong).
+      const inner = payloadObj.tokens as Record<string, unknown>;
+      rawList = [inner.refresh_token || inner.tokens ? inner : payloadObj];
     } else if (payloadObj.refresh_token || payloadObj.refreshToken || payloadObj.token) {
       rawList = [payloadObj];
     } else {
@@ -1528,14 +1541,146 @@ export class AppService {
     if (rawList.length === 0) {
       throw new HttpError(400, 'bad_request', 'Danh sách token trống');
     }
+    return { rawList, accountType };
+  }
 
-    const results: Array<{
-      name: string;
-      email: string;
-      action: 'created' | 'updated' | 'skipped';
-      status: 'ok' | 'error';
-      message?: string;
-    }> = [];
+  /**
+   * Chọn hồ sơ nhận token: tên chỉ định, hồ sơ cùng email, hoặc tên mới từ email.
+   * Chỉ ghi vào hồ sơ isolated cùng engine; áp dụng chính sách multiplePerProvider như createProfile.
+   */
+  private resolveTokenImportTarget(
+    engine: 'agy' | 'codex',
+    email: string,
+    item: Record<string, unknown>,
+    accountType: 'personal' | 'team' | 'api',
+  ): { targetName: string; existing: ProfileRow | undefined; action: 'created' | 'updated' } | { name: string; error: string } {
+    const label = engine === 'codex' ? 'Codex' : 'Antigravity';
+    const isTarget = (p: ProfileRow) => p.engine === engine && p.kind === 'isolated';
+    const sameEmail = (p: ProfileRow) => (p.email || '').toLowerCase() === email;
+    const customName = String(item.name || item.profile_name || item.profileName || '').trim();
+    let targetName = '';
+    if (customName) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(customName)) {
+        return { name: customName, error: 'Tên hồ sơ chỉ được chứa chữ, số, "_" và "-"' };
+      }
+      const named = this.profileRepo.get(customName);
+      if (named && !isTarget(named)) {
+        return { name: customName, error: `Hồ sơ "${customName}" đã tồn tại và không phải hồ sơ ${label} riêng` };
+      }
+      targetName = customName;
+    } else {
+      const all = this.profileRepo.getAll(true).filter((p) => isTarget(p) && sameEmail(p));
+      const match = all.find((p) => !p.deletedAt) || all[0];
+      if (match) {
+        targetName = match.name;
+      } else {
+        const base = email.split('@')[0].replace(/[^a-z0-9_-]/g, '_') || `${engine}_account`;
+        targetName = base;
+        for (let idx = 2; this.profileRepo.get(targetName); idx++) targetName = `${base}_${idx}`;
+      }
+    }
+
+    const existing = this.profileRepo.get(targetName);
+    const action: 'created' | 'updated' = existing && !existing.deletedAt ? 'updated' : 'created';
+    if (action === 'created' && !this.config.multiplePerProvider && accountType === 'personal') {
+      const personal = this.profileRepo.getAll().find((p) => p.engine === engine && p.accountType === 'personal');
+      if (personal) {
+        return {
+          name: targetName,
+          error: `Đã có hồ sơ cá nhân cho engine ${engine} (${personal.name}); hãy chọn loại Team/API hoặc bật multiplePerProvider`,
+        };
+      }
+    }
+    return { targetName, existing, action };
+  }
+
+  /** Bắt đầu Check cho các hồ sơ vừa nhập; kết quả về qua sự kiện profile.check. */
+  private verifyImportedProfiles(results: TokenImportResult['results']): void {
+    for (const item of results) {
+      if (item.status !== 'ok') continue;
+      try {
+        this.startProfileCheck(item.name);
+      } catch {
+        // Đang có lượt kiểm tra khác cho hồ sơ này; kết quả của nó cũng phản ánh token mới.
+      }
+    }
+  }
+
+  /**
+   * Nhập tài khoản Codex từ JSON export (id_token/access_token/refresh_token...) hoặc auth.json.
+   * Ghi auth.json vào CODEX_HOME riêng của hồ sơ rồi để `codex login status` xác nhận (verify).
+   */
+  async importCodexTokens(raw: unknown, options: { verify?: boolean } = {}): Promise<TokenImportResult> {
+    const { rawList, accountType } = this.parseTokenImportPayload(raw);
+    const results: TokenImportResult['results'] = [];
+    const fail = (name: string, email: string, message: string) =>
+      results.push({ name, email, action: 'skipped', status: 'error', message });
+
+    for (const rawItem of rawList) {
+      if (!rawItem || typeof rawItem !== 'object') {
+        fail('', '', 'Mục dữ liệu không phải là object hợp lệ');
+        continue;
+      }
+      const item = rawItem as Record<string, unknown>;
+      const parsed = parseCodexTokenItem(item);
+      if ('error' in parsed) {
+        fail('', typeof item.email === 'string' ? item.email : '', parsed.error);
+        continue;
+      }
+      if (!parsed.email) {
+        fail('', '', 'Không xác định được email (thiếu trường email và id_token không có email)');
+        continue;
+      }
+      const email = parsed.email;
+
+      const target = this.resolveTokenImportTarget('codex', email, item, accountType);
+      if ('error' in target) {
+        fail(target.name, email, target.error);
+        continue;
+      }
+      const { targetName, existing, action } = target;
+
+      if (action === 'created') {
+        if (existing) this.profileRepo.restore(targetName);
+        this.coreProfileService.createProfile(targetName, 'codex', accountType);
+      }
+      const current = this.profileRepo.get(targetName)!;
+      writeCodexAuthFile(current.home || path.join(this.config.hubHome, 'codex-homes', targetName), parsed);
+      this.profileRepo.upsert({ ...current, email });
+      this.profileRepo.updateAuthState(targetName, 'ok', 'Đã nhập token Codex', null);
+
+      if (action === 'created') {
+        this.scheduler.getEventBus().emit('profile.created', undefined, { name: targetName });
+      } else {
+        this.scheduler.getEventBus().emit('profile.updated', undefined, { name: targetName, email });
+      }
+      results.push({
+        name: targetName,
+        email,
+        action,
+        status: 'ok',
+        message: `${action === 'updated' ? 'Cập nhật token thành công' : 'Thêm tài khoản thành công'}${options.verify === false ? '' : ' · đang kiểm tra với Codex'}`,
+      });
+    }
+
+    if (options.verify !== false) this.verifyImportedProfiles(results);
+    return {
+      success: results.some((r) => r.status === 'ok'),
+      total: rawList.length,
+      successCount: results.filter((r) => r.status === 'ok').length,
+      failedCount: results.filter((r) => r.status === 'error').length,
+      results,
+    };
+  }
+
+  /**
+   * verify: chạy Check bằng agy cho từng hồ sơ nhập thành công (kết quả về qua sự kiện profile.check).
+   * CLI tắt vì nó đóng DB ngay sau khi nhập.
+   */
+  async importAgyTokens(raw: unknown, options: { verify?: boolean } = {}): Promise<TokenImportResult> {
+    const { rawList, accountType } = this.parseTokenImportPayload(raw);
+
+    const results: TokenImportResult['results'] = [];
     const fail = (name: string, email: string, message: string) =>
       results.push({ name, email, action: 'skipped', status: 'error', message });
 
@@ -1560,45 +1705,13 @@ export class AppService {
       }
       const refreshToken = refreshTokenRaw.trim();
 
-      // Chỉ cập nhật hồ sơ agy isolated; không bao giờ ghi token vào hồ sơ keyring hay engine khác.
-      const isAgyIsolated = (p: ProfileRow) => p.engine === 'agy' && p.kind === 'isolated';
       const sameEmail = (p: ProfileRow) => (p.email || '').toLowerCase() === email;
-      const customName = String(item.name || item.profile_name || item.profileName || '').trim();
-      let targetName = '';
-      if (customName) {
-        if (!/^[a-zA-Z0-9_-]+$/.test(customName)) {
-          fail(customName, email, 'Tên hồ sơ chỉ được chứa chữ, số, "_" và "-"');
-          continue;
-        }
-        const existing = this.profileRepo.get(customName);
-        if (existing && !isAgyIsolated(existing)) {
-          fail(customName, email, `Hồ sơ "${customName}" đã tồn tại và không phải hồ sơ Antigravity riêng`);
-          continue;
-        }
-        targetName = customName;
-      } else {
-        const all = this.profileRepo.getAll(true).filter((p) => isAgyIsolated(p) && sameEmail(p));
-        const match = all.find((p) => !p.deletedAt) || all[0];
-        if (match) {
-          targetName = match.name;
-        } else {
-          const base = email.split('@')[0].replace(/[^a-z0-9_-]/g, '_') || 'agy_account';
-          targetName = base;
-          for (let idx = 2; this.profileRepo.get(targetName); idx++) targetName = `${base}_${idx}`;
-        }
+      const target = this.resolveTokenImportTarget('agy', email, item, accountType);
+      if ('error' in target) {
+        fail(target.name, email, target.error);
+        continue;
       }
-
-      const existing = this.profileRepo.get(targetName);
-      const action: 'created' | 'updated' = existing && !existing.deletedAt ? 'updated' : 'created';
-
-      // Cùng chính sách với createProfile: không tạo thêm hồ sơ cá nhân khi multiplePerProvider tắt.
-      if (action === 'created' && !this.config.multiplePerProvider && accountType === 'personal') {
-        const personal = this.profileRepo.getAll().find((p) => p.engine === 'agy' && p.accountType === 'personal');
-        if (personal) {
-          fail(targetName, email, `Đã có hồ sơ cá nhân cho engine agy (${personal.name}); hãy chọn loại Team/API hoặc bật multiplePerProvider`);
-          continue;
-        }
-      }
+      const { targetName, existing, action } = target;
 
       // Xác thực và đổi access_token qua Google OAuth
       let exchanged: Awaited<ReturnType<typeof exchangeAgyRefreshToken>>;
@@ -1648,16 +1761,7 @@ export class AppService {
       });
     }
 
-    if (options.verify !== false) {
-      for (const item of results) {
-        if (item.status !== 'ok') continue;
-        try {
-          this.startProfileCheck(item.name);
-        } catch {
-          // Đang có lượt kiểm tra khác cho hồ sơ này; kết quả của nó cũng phản ánh token mới.
-        }
-      }
-    }
+    if (options.verify !== false) this.verifyImportedProfiles(results);
 
     return {
       success: results.some((r) => r.status === 'ok'),

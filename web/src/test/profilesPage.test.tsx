@@ -375,6 +375,27 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(checkSpy).not.toHaveBeenCalled();
   });
 
+  it('9d. Thêm tài khoản Codex bằng JSON token: gửi engine codex và tự kiểm tra', async () => {
+    const importSpy = vi.spyOn(client, 'importAgyTokens').mockResolvedValue({
+      success: true, total: 1, successCount: 1, failedCount: 0,
+      results: [{ name: 'coder', email: 'coder@example.com', action: 'created', status: 'ok', message: 'ok' }],
+    });
+    renderPage();
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Thêm tài khoản/ }));
+    fireEvent.change(screen.getByRole('combobox', { name: /Nhà cung cấp|Provider/ }), { target: { value: 'codex' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Nhập token (JSON)' }));
+    const tokens = [{ email: 'coder@example.com', id_token: 'a.b.c', access_token: 'x', refresh_token: 'y', type: 'codex' }];
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: JSON.stringify(tokens) } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Nhập tài khoản' }));
+    });
+
+    expect(importSpy).toHaveBeenCalledWith({ engine: 'codex', tokens, accountType: 'personal' });
+    expect(await screen.findByText(/Kết quả nhập/)).toBeInTheDocument();
+  });
+
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
     const profilesWithExpired: Profile[] = [
       {

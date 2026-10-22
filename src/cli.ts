@@ -714,9 +714,11 @@ export async function cmdProfile(
       const sourceArg = extraArgs[0];
       const accountTypeArg = extraArgs.find((arg) => arg.startsWith('--account-type='))?.split('=')[1]
         || (extraArgs.includes('--account-type') ? extraArgs[extraArgs.indexOf('--account-type') + 1] : 'personal');
+      const engineArg = extraArgs.find((arg) => arg.startsWith('--engine='))?.split('=')[1]
+        || (extraArgs.includes('--engine') ? extraArgs[extraArgs.indexOf('--engine') + 1] : 'agy');
 
       if (!sourceArg) {
-        console.error('Cách dùng: agenthub profile import-tokens <đường_dẫn_file_json | chuỗi_json> [--account-type personal|team|api]');
+        console.error('Cách dùng: agenthub profile import-tokens <đường_dẫn_file_json | chuỗi_json> [--engine agy|codex] [--account-type personal|team|api]');
         process.exitCode = 1;
         break;
       }
@@ -740,9 +742,10 @@ export async function cmdProfile(
         }
       }
 
-      console.log('Đang kiểm tra và nhập tài khoản Antigravity từ Cockpit token...');
+      console.log(engineArg === 'codex' ? 'Đang nhập tài khoản Codex từ token...' : 'Đang kiểm tra và nhập tài khoản Antigravity từ Cockpit token...');
       try {
-        const result = await ctx.service.importAgyTokens({
+        const result = await ctx.service.importTokens({
+          engine: engineArg,
           tokens: payloadRaw,
           accountType: accountTypeArg,
         }, { verify: false });
