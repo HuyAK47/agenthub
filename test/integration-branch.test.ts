@@ -422,6 +422,35 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(ctx.taskRepo.get(task3.id)!.status).toBe('review');
   });
 
+  it('auto-merges a Codex approval without a review chain on the project default branch', async () => {
+    const repo = path.join(tmpDir, 'review-no-chain-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'no-chain-proj',
+      name: 'Review without chain',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { review: { autoMerge: true } },
+      merge: { enabled: true, worktrees: { main: repo }, checks: [], timeoutSec: 30 },
+    });
+    ctx.service.createTask({ project: 'no-chain-proj', slug: 'feat', title: 'Feature', body: 'Do it', level: 'easy', start: true });
+    ctx.scheduler.tick();
+    const task = ctx.taskRepo.get('no-chain-proj/feat')!;
+    fs.writeFileSync(path.join(task.worktreePath!, 'feature.txt'), 'feature\n');
+    execFileSync('git', ['-C', task.worktreePath!, 'add', '.']);
+    execFileSync('git', ['-C', task.worktreePath!, 'commit', '-m', 'feat: no-chain']);
+    ctx.taskRepo.update(task.id, { status: 'review' });
+    persistPassedCheck(task.id, 'no-chain');
+
+    await ctx.service.reviewTask(task.id, {
+      verdict: 'approved',
+      by: 'codex-reviewer',
+      feedback: 'ok',
+    });
+    await vi.waitFor(() => expect(ctx.taskRepo.get(task.id)!.status).toBe('done'), { timeout: 5000 });
+    expect(fs.existsSync(path.join(repo, 'feature.txt'))).toBe(true);
+  });
+
   it('sends an escalated review back once on the strongest model when no auto brain is running', async () => {
     const repo = path.join(tmpDir, 'esc-repo');
     initGitRepo(repo, 'main');

@@ -312,7 +312,11 @@ export function createContext(
   service.deployService = deployService;
   scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {
     const data = payload && typeof payload === 'object' ? payload as { reviewChainComplete?: unknown } : {};
-    if (taskId && data.reviewChainComplete === true) void service.autoMergeReviewedTask(taskId);
+    if (taskId && data.reviewChainComplete === true) {
+      // ReviewTask emits this event before it releases its reviewingTasks guard.
+      // Defer the merge so the normal service path can finish first.
+      setImmediate(() => void service.autoMergeReviewedTask(taskId));
+    }
   });
   scheduler.getEventBus().on('task.queued', (taskId) => {
     if (taskId) service.clearFailedAutoMerge(taskId);

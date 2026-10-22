@@ -3100,7 +3100,12 @@ export class AppService {
     if (checks.length === 0 || checks.some((c) => !c.ok)) return;
     if (this.failedAutoMerges.has(taskId)) return;
     // The ready event can arrive twice for one approval; the first call is already merging.
-    if (this.reviewingTasks.has(taskId)) return;
+    if (this.reviewingTasks.has(taskId)) {
+      // A reviewer approval emits task.review_ready before the outer review API call
+      // releases its guard. Retry once on the next event-loop turn after that call ends.
+      setImmediate(() => void this.autoMergeReviewedTask(taskId));
+      return;
+    }
     try {
       await this.reviewTask(toRouteId(taskId), {
         verdict: 'approved',
