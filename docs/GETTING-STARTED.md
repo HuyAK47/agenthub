@@ -57,6 +57,10 @@ agenthub setup
 
 Installer kiểm tra `SHA256SUMS`, cài dependencies production theo máy hiện tại, và giữ lại hai bản cũ trong `~/.agenthub-app/` để rollback qua symlink `current`.
 
+### Cài lỗi thì sao?
+
+Không cần dọn thủ công. Nếu tải, kiểm tra native module, `setup`, symlink hoặc service thất bại, bộ cài tự xoá thư mục tạm và hoàn tác `current`, CLI cùng service về bản trước (nếu có). Chi tiết lỗi được giữ tại `${TMPDIR:-/tmp}/agenthub-install-<time>.log`; hãy gửi file này khi cần hỗ trợ. Bản trước vẫn hoạt động.
+
 ```bash
 git clone https://github.com/ducanh19020217/agenthub.git ~/agenthub
 cd ~/agenthub

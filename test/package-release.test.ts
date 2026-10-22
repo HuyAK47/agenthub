@@ -17,7 +17,15 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv = {}) {
 // runs on linux-arm64 and macos).
 const PLATFORM_ARCH = `${process.platform === 'darwin' ? 'macos' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
 
-function makeRelease(base: string, version: string, checksum = true) {
+type ReleaseOptions = {
+  checksum?: boolean;
+  setupFails?: boolean;
+  serviceFails?: boolean;
+  brokenNative?: boolean;
+};
+
+function makeRelease(base: string, version: string, options: ReleaseOptions | boolean = {}) {
+  const normalized = typeof options === 'boolean' ? { checksum: options } : options;
   const releaseDir = path.join(base, 'releases', 'download', `v${version}`);
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-fixture-'));
   fs.mkdirSync(path.join(staging, 'bin'), { recursive: true });
@@ -25,14 +33,36 @@ function makeRelease(base: string, version: string, checksum = true) {
   fs.writeFileSync(path.join(staging, 'package-lock.json'), JSON.stringify({
     name: 'agenthub', version, lockfileVersion: 3, requires: true, packages: { '': { name: 'agenthub', version } },
   }));
-  fs.writeFileSync(path.join(staging, 'bin/agenthub'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(staging, 'bin/agenthub'), `#!/bin/sh
+set -eu
+case "${'${1:-}'}" in
+  link)
+    mkdir -p "${'${AGENTHUB_LINK_DIR:-$HOME/.local/bin}'}"
+    printf '%s\n' "${'${0}'}" > "${'${0}'}.target"
+    ln -sfn "${'${0}'}.target" "${'${AGENTHUB_LINK_DIR:-$HOME/.local/bin}'}/agenthub"
+    ;;
+  install-service)
+    mkdir -p "${'${HOME}'}/.config/systemd/user"
+    printf 'ExecStart=%s\n' "${'${0}'}" > "${'${HOME}'}/.config/systemd/user/agenthub.service"
+    ${normalized.serviceFails ? 'exit 1' : ':'}
+    ;;
+  setup)
+    ${normalized.setupFails ? 'exit 1' : ':'}
+    ;;
+esac
+exit 0
+`, { mode: 0o755 });
   // Real release archives ship prebuilt production node_modules, so install needs no compiler.
   fs.mkdirSync(path.join(staging, 'node_modules'), { recursive: true });
+  if (normalized.brokenNative) {
+    fs.mkdirSync(path.join(staging, 'node_modules/x/build/Release'), { recursive: true });
+    fs.writeFileSync(path.join(staging, 'node_modules/x/build/Release/x.node'), 'not a native module');
+  }
   fs.mkdirSync(releaseDir, { recursive: true });
   const archiveName = `agenthub-${version}-${PLATFORM_ARCH}.tar.gz`;
   expect(run('tar', ['-czf', path.join(releaseDir, archiveName), '-C', staging, '.']).status).toBe(0);
   const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(releaseDir, archiveName))).digest('hex');
-  fs.writeFileSync(path.join(releaseDir, 'SHA256SUMS'), `${checksum ? digest : '0'.repeat(64)}  ${archiveName}\n`);
+  fs.writeFileSync(path.join(releaseDir, 'SHA256SUMS'), `${normalized.checksum !== false ? digest : '0'.repeat(64)}  ${archiveName}\n`);
   fs.rmSync(staging, { recursive: true, force: true });
 }
 
@@ -97,6 +127,92 @@ describe('release packaging and installation', () => {
     expect(fs.existsSync(path.join(app, '1.0.0'))).toBe(true);
     expect(fs.existsSync(path.join(app, '2.0.0'))).toBe(true);
     expect(fs.existsSync(path.join(app, '3.0.0'))).toBe(true);
+  });
+
+  it('rolls back current, cli link, and service when install-service fails', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-service-rollback-'));
+    const base = path.join(home, 'fake-release');
+    const app = path.join(home, 'app');
+    const linkDir = path.join(home, 'links');
+    const systemctlLog = path.join(home, 'systemctl.log');
+    const fakeSystemctl = path.join(home, 'systemctl');
+    fs.writeFileSync(fakeSystemctl, `#!/bin/sh
+printf '%s\n' "$*" >> '${systemctlLog}'
+`, { mode: 0o755 });
+    makeRelease(base, '1.0.0');
+    makeRelease(base, '2.0.0', { serviceFails: true });
+    const env = {
+      HOME: home,
+      AGENTHUB_DIR: app,
+      AGENTHUB_HOME: path.join(home, 'data'),
+      AGENTHUB_LINK_DIR: linkDir,
+      AGENTHUB_RELEASE_BASE: base,
+      AGENTHUB_SYSTEMCTL: fakeSystemctl,
+    };
+
+    expect(run('/bin/sh', [installer, '--from-release', '1.0.0'], env).status).toBe(0);
+    const oldLink = fs.readlinkSync(path.join(linkDir, 'agenthub'));
+    const oldService = fs.readFileSync(path.join(home, '.config/systemd/user/agenthub.service'), 'utf8');
+    const failed = run('/bin/sh', [installer, '--from-release', '2.0.0'], env);
+
+    expect(failed.status).not.toBe(0);
+    expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.0.0');
+    expect(fs.readlinkSync(path.join(linkDir, 'agenthub'))).toBe(oldLink);
+    expect(fs.readFileSync(path.join(home, '.config/systemd/user/agenthub.service'), 'utf8')).toBe(oldService);
+    expect(fs.existsSync(path.join(app, '2.0.0'))).toBe(false);
+    expect(fs.readFileSync(systemctlLog, 'utf8')).toContain('--user daemon-reload');
+    expect(failed.stderr).toContain('Đã hoàn tác về bản trước');
+    expect(failed.stderr).not.toContain('Không có gì bị thay đổi trên máy');
+  });
+
+  it('keeps the running release intact when reinstalling the same version fails in setup', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-same-version-'));
+    const base = path.join(home, 'fake-release');
+    const app = path.join(home, 'app');
+    const env = {
+      HOME: home,
+      AGENTHUB_DIR: app,
+      AGENTHUB_HOME: path.join(home, 'data'),
+      AGENTHUB_RELEASE_BASE: base,
+      AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+    };
+    makeRelease(base, '1.0.0');
+    expect(run('/bin/sh', [installer, '--from-release', '1.0.0'], env).status).toBe(0);
+    const before = fs.readFileSync(path.join(app, '1.0.0', 'bin/agenthub'), 'utf8');
+    makeRelease(base, '1.0.0', { setupFails: true });
+
+    const failed = run('/bin/sh', [installer, '--from-release', '1.0.0'], env);
+
+    expect(failed.status).not.toBe(0);
+    expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.0.0');
+    expect(fs.readFileSync(path.join(app, '1.0.0', 'bin/agenthub'), 'utf8')).toBe(before);
+    expect(failed.stderr).toContain('Không có gì bị thay đổi trên máy');
+    expect(failed.stderr).not.toContain('Đã hoàn tác về bản trước');
+    expect(fs.readdirSync(app).filter((name) => /^\.1\.0\.0\.tmp\./.test(name))).toHaveLength(0);
+  });
+
+  it('rejects a broken native file before switching current and identifies the file', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-native-'));
+    const base = path.join(home, 'fake-release');
+    const app = path.join(home, 'app');
+    const env = {
+      HOME: home,
+      AGENTHUB_DIR: app,
+      AGENTHUB_HOME: path.join(home, 'data'),
+      AGENTHUB_RELEASE_BASE: base,
+      AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+    };
+    makeRelease(base, '1.0.0');
+    makeRelease(base, '2.0.0', { brokenNative: true });
+    expect(run('/bin/sh', [installer, '--from-release', '1.0.0'], env).status).toBe(0);
+
+    const failed = run('/bin/sh', [installer, '--from-release', '2.0.0'], env);
+
+    expect(failed.status).not.toBe(0);
+    expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.0.0');
+    expect(failed.stderr).toContain('module native không nạp được');
+    expect(failed.stderr).toContain('node_modules/x/build/Release/x.node');
+    expect(failed.stderr).toContain('Gói release bị thiếu hoặc hỏng file native');
   });
 
   it.each(['', '../x', '1.0;rm'])('rejects invalid release version %j before creating app paths', (version) => {
