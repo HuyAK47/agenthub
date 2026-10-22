@@ -358,6 +358,7 @@ export interface ProjectBrain {
   projectName: string;
   mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
   permissions?: 'standard' | 'trusted' | 'full';
+  sessionMode?: 'safe' | 'full';
   sessionId: string;
   state: 'idle' | 'running' | 'waiting' | 'error';
   queued: boolean;

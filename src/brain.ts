@@ -285,6 +285,7 @@ export function registerBrainRoutes(
         projectName: project?.name || 'Hệ thống',
         mode: effectiveBrainMode(projectId, project, appService.config.brain),
         permissions: effectiveBrainPermission(project, appService.config.brain),
+        sessionMode: session?.mode || (effectiveBrainPermission(project, appService.config.brain) === 'full' ? 'full' : 'safe'),
         sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
         state: session?.state || 'idle',
         queued: usage?.queued || false,
@@ -342,7 +343,9 @@ export function registerBrainRoutes(
     const body = (req.body || {}) as { question?: string; projectId?: string | null; sourceSessionId?: string };
     if (!body.question?.trim()) throw new HttpError(400, 'bad_request', 'question là bắt buộc');
     const sessionId = body.projectId ? `brain:${body.projectId}` : 'brain';
-    appService.chatService.getOrCreateSession(sessionId, { title: body.projectId ? `Bộ não · ${body.projectId}` : 'Bộ não', kind: 'brain', projectId: body.projectId || null, mode: 'safe', model: appService.config.brain.model });
+    const project = body.projectId ? appService.projectRepo.get(body.projectId) : undefined;
+    const permission = effectiveBrainPermission(project, appService.config.brain);
+    appService.chatService.getOrCreateSession(sessionId, { title: body.projectId ? `Bộ não · ${body.projectId}` : 'Bộ não', kind: 'brain', projectId: body.projectId || null, mode: permission === 'full' ? 'full' : 'safe', model: appService.config.brain.model });
     const sourceChatId = body.sourceSessionId ? appService.chatService.getTelegramChat(body.sourceSessionId) : undefined;
     const questionId = crypto.randomUUID();
     const result = appService.chatService.sendMessage(sessionId, `CÂU HỎI TỪ TRỢ LÝ [${questionId}] (cần quyết định): ${body.question.trim()}`, { queueIfBusy: true });
