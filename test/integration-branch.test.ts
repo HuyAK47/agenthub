@@ -66,6 +66,10 @@ describe('Integration branch and cross-project dependencies', () => {
   });
 
   it('cross-project dependency: task FE creates worktree from defaultBranch of FE, waits for BE, and deps.md records BE project/repo and diff summary', async () => {
+    // The test simulates the BE worker finishing (commit + DONE below). Set before any task is
+    // created: createTask(start: true) can trigger a tick that spawns the worker right away, and a
+    // fake worker in 'done' mode would record its own DONE first.
+    process.env.FAKE_MODE = 'sleep-loop';
     const beRepo = path.join(tmpDir, 'be-repo');
     const feRepo = path.join(tmpDir, 'fe-repo');
     initGitRepo(beRepo, 'main');
@@ -104,10 +108,6 @@ describe('Integration branch and cross-project dependencies', () => {
       dependsOn: ['be/api-v1'],
       start: true,
     });
-
-    // The test simulates the BE worker finishing (commit + DONE below); keep the fake worker from
-    // finishing on its own, or the hub may record its own DONE first and the assertions race.
-    process.env.FAKE_MODE = 'sleep-loop';
 
     // 1st tick: BE task should start, FE task must wait
     ctx.scheduler.tick();
