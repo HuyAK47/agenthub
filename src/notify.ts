@@ -37,6 +37,7 @@ export class NotificationService {
   private now: () => number;
   private lastSent = new Map<string, number>();
   private lastSentCi = new Map<string, number>();
+  private lastSentSummary = new Map<string, number>();
   private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
@@ -114,6 +115,14 @@ export class NotificationService {
     if (!this.config.notifications || this.config.notifications.desktop === false) {
       return;
     }
+    // Hand-built integrations from older callers omit desktopLevel; retain their
+    // previous behavior while loaded config always supplies the important default.
+    const level = this.config.notifications.desktopLevel || 'all';
+    if (level === 'off') return;
+    if (level === 'important' && !new Set([
+      'brain.notify', 'task.review_ready', 'task.failed', 'task.blocked', 'review.escalated',
+      'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed',
+    ]).has(type)) return;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
@@ -203,11 +212,7 @@ export class NotificationService {
 
       case 'task.paused':
       case 'load.task_paused': {
-        const title = this.resolveTaskTitle(taskId, p);
-        const msg = p.reason === 'load'
-          ? `Tạm dừng task ${title} do quá tải hệ thống`
-          : `Tạm dừng task ${title}`;
-        this.notify(msg, 'normal');
+        this.notifyLoadSummary(now, p.reason === 'load' ? 'quá tải hệ thống' : 'yêu cầu tạm dừng');
         break;
       }
 
@@ -256,6 +261,7 @@ export class NotificationService {
           }
           break;
         }
+        if (level === 'important' && !isAllExhausted) break;
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
         const family = (p.family || p.model || '') as string;
         const resetTimeStr = this.resolveResetTime(p, name, family);
@@ -295,16 +301,13 @@ export class NotificationService {
       }
 
       case 'task.overlap': {
-        const file = (p.file || p.filename || '') as string;
-        const otherTaskId = (p.otherTaskId || '') as string;
-        const taskTitle = this.resolveTaskTitle(taskId, p);
-        const otherTitle = this.resolveTaskTitle(otherTaskId);
-        const msg = file
-          ? `AgentHub: Trùng file ${file} giữa ${taskTitle} và ${otherTitle}`
-          : `AgentHub: Trùng sửa file giữa ${taskTitle} và ${otherTitle}`;
-        this.notify(msg, 'normal');
+        // Overlap details remain in the bulletin/dashboard; they are too noisy for desktop.
         break;
       }
+
+      case 'load.high':
+        this.notifyLoadSummary(now, 'tải hệ thống cao');
+        break;
 
       case 'ci.failed': {
         const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || 'dự án';
@@ -379,6 +382,9 @@ export class NotificationService {
   }
 
   private notify(message: string, urgency: 'normal' | 'warning' | 'critical' = 'normal'): void {
+    const level = this.config.notifications?.desktopLevel || 'all';
+    if (level === 'off') return;
+    if (level === 'critical' && urgency !== 'critical') return;
     const key = `${urgency}:${message}`;
     const now = this.now();
     const last = this.lastSent.get(key);
@@ -407,5 +413,12 @@ export class NotificationService {
     } catch {
       // Ignore if notify-send is missing or fails
     }
+  }
+
+  private notifyLoadSummary(now: number, reason: string): void {
+    const last = this.lastSentSummary.get('load') || 0;
+    if (now - last < 15 * 60_000) return;
+    this.lastSentSummary.set('load', now);
+    this.notify(`AgentHub: Đã tạm dừng/gặp ${reason}; xem dashboard để biết chi tiết`, 'normal');
   }
 }

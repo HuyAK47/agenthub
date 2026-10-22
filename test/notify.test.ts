@@ -24,6 +24,8 @@ describe('NotificationService (Desktop Notifications)', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-notify-test-'));
     process.env.AGENTHUB_HOME = tmpDir;
     config = loadConfig(tmpDir);
+    // Legacy cases below exercise the unfiltered notification formatter.
+    config.notifications.desktopLevel = 'all';
 
     db = openDatabase(config.dbPath);
     projectRepo = new ProjectRepo(db);
@@ -53,6 +55,15 @@ describe('NotificationService (Desktop Notifications)', () => {
   const fakeExec = (file: string, args: string[]) => {
     execCalls.push({ file, args });
   };
+
+  it('important level suppresses account-specific quota and overlap notifications', () => {
+    config.notifications.desktopLevel = 'important';
+    const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
+    notifier.start();
+    eventBus.emit('quota.exhausted', undefined, { profile: 'g1', family: 'gemini' });
+    eventBus.emit('task.overlap', 'proj/task-1', { otherTaskId: 'proj/task-2', file: 'shared.ts' });
+    expect(execCalls).toHaveLength(0);
+  });
 
   it('notifies on task.review_ready with title and optional checks indicator', () => {
     taskRepo.insert({

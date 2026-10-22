@@ -831,7 +831,8 @@ export class Scheduler {
     } else {
       const diskSpace = disks.find((disk) => disk.source === 'worktrees')!;
       this.dockerDiskLow = false;
-      if (this.diskLow) {
+      const recovered = diskSpace.freeGB >= diskSpace.minFreeGB + 1;
+      if (this.diskLow && recovered) {
         this.diskLow = false;
         this.eventBus.emit('disk.ok', undefined, {
           freeGB: diskSpace.freeGB,
