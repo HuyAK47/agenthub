@@ -303,6 +303,8 @@ export interface CheckResult {
 }
 
 export interface TaskDetail extends Task {
+  mergeAvailable?: boolean;
+  mergeUnavailableReason?: string | null;
   reviewChain?: ReviewChainStep[];
   reviewMaxRounds?: number;
   runs: Run[];

@@ -135,6 +135,21 @@ function apiTask(task: TaskRow): TaskRow {
   };
 }
 
+function hasConfiguredMerge(project: ProjectRow, baseRef: string): boolean {
+  const settings = projectSettings(project);
+  if (settings.integration.enabled) return true;
+  if (!project.merge) return false;
+  try {
+    const merge = JSON.parse(project.merge) as { enabled?: boolean; worktrees?: Record<string, unknown> };
+    return merge.enabled === true
+      && !!merge.worktrees
+      && typeof merge.worktrees[baseRef] === 'string'
+      && path.isAbsolute(merge.worktrees[baseRef]);
+  } catch {
+    return false;
+  }
+}
+
 export function apiTaskNote(note: TaskNoteRow): TaskNoteRow {
   return {
     ...note,
@@ -767,6 +782,9 @@ export class AppService {
   private perfCollector?: PerfCollector;
   private profileChecks = new Set<string>();
   private reviewingTasks = new Set<string>();
+  private gitVersion: { value: string | null; checkedAt: number } | null = null;
+  private gitVersionCheck?: Promise<string | null>;
+  private static readonly SETUP_VERSION_CACHE_MS = 10 * 60 * 1000;
   constructor(
     public config: AgentHubConfig,
     public projectRepo: ProjectRepo,
@@ -802,11 +820,25 @@ export class AppService {
     if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng');
     const tools = await this.setupManager.status();
     const profiles = this.listProfiles();
-    let gitVersion: string | null = null;
-    try { gitVersion = execFileSync('git', ['--version'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { /* optional */ }
+    const gitVersion = await this.getGitVersion();
     let mcpRegistered = false;
     try { mcpRegistered = fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8').includes('agenthub'); } catch { /* optional */ }
     return { node: { version: process.versions.node, ok: Number(process.versions.node.split('.')[0]) >= 22 }, git: { version: gitVersion, installed: Boolean(gitVersion) }, tools, profiles, mcpRegistered, serviceRunning: true, ...this.setupManager.getSetupState() };
+  }
+
+  private async getGitVersion(): Promise<string | null> {
+    if (this.gitVersion && Date.now() - this.gitVersion.checkedAt < AppService.SETUP_VERSION_CACHE_MS) return this.gitVersion.value;
+    if (this.gitVersionCheck) return this.gitVersionCheck;
+    this.gitVersionCheck = (async () => {
+      let value: string | null = null;
+      try {
+        const output = await execFileAsync('git', ['--version'], { encoding: 'utf8', timeout: 5000 });
+        value = output.stdout.trim();
+      } catch { /* optional */ }
+      this.gitVersion = { value, checkedAt: Date.now() };
+      return value;
+    })();
+    try { return await this.gitVersionCheck; } finally { this.gitVersionCheck = undefined; }
   }
   installSetupTool(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.install(tool); }
   getSetupLogPath(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.getLogPath(tool); }
@@ -2299,6 +2331,7 @@ export class AppService {
 
     // Task history remains readable after its project is archived.
     const project = this.projectRepo.getIncludingArchived(task.projectId);
+    const configuredMerge = project ? hasConfiguredMerge(project, task.baseRef || project.defaultBranch) : false;
     const reviewSettings = project?.review ? (() => {
       try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
     })() : null;
@@ -2338,6 +2371,8 @@ export class AppService {
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
       reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
+      mergeAvailable: configuredMerge,
+      mergeUnavailableReason: configuredMerge ? null : 'Project chưa cấu hình merge tự động. Mở Cài đặt dự án → Integration để bật.',
       reviewStep: task.reviewStep ?? 0,
       reviewMaxRounds: reviewSettings?.maxRounds || 2,
       doneContent,
@@ -2985,7 +3020,7 @@ export class AppService {
         mergeResult = await mergeTaskIntoBase(task, project, { hubHome: this.config.hubHome });
       } catch (error) {
         if (error instanceof MergeError) {
-          this.createMergeFailureDraft(task, error.message);
+          if (!error.configuration) this.createMergeFailureDraft(task, error.message);
           throw new HttpError(error.statusCode, error.error, error.message);
         }
         throw error;
@@ -3081,6 +3116,19 @@ export class AppService {
   }
 
   private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
+    const existing = this.taskRepo.getDerivedFrom(source.id).find((task) =>
+      task.sourceRef
+      && !['done', 'cancelled', 'failed', 'blocked'].includes(task.status)
+      && (() => {
+        try {
+          const sourceRef = JSON.parse(task.sourceRef) as { checkName?: unknown };
+          return sourceRef.checkName === 'merge';
+        } catch {
+          return false;
+        }
+      })(),
+    );
+    if (existing) return existing;
     const slugBase = `${source.slug}-fix-merge`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
     let slug = slugBase;
     for (let index = 2; this.taskRepo.get(`${source.projectId}/${slug}`); index += 1) slug = `${slugBase}-${index}`;
