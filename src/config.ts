@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
 import type { ExtraDiskPath } from './disk.js';
 import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
+import { BrandingConfig, parseBranding } from './branding.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -285,6 +286,7 @@ export interface AgentHubConfig {
   workers: WorkersConfig;
   ui: UiConfig;
   checks: ChecksConfig;
+  branding: BrandingConfig;
   deploy: Record<string, DeployProjectConfig>;
 }
 
@@ -332,6 +334,7 @@ export function saveConfig(
     }>;
     workers?: Partial<WorkersConfig>;
     ui?: Partial<UiConfig>;
+    branding?: Partial<BrandingConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -352,6 +355,9 @@ export function saveConfig(
   const updated = {
     ...current,
     ...patch,
+    ...(patch.branding && typeof patch.branding === 'object'
+      ? { branding: { ...((current.branding as Record<string, unknown>) || {}), ...patch.branding } }
+      : {}),
     ...(patch.chat && typeof patch.chat === 'object'
       ? { chat: { ...((current.chat as Record<string, unknown>) || {}), ...patch.chat } }
       : {}),
@@ -495,6 +501,7 @@ export function updateConfigInMemory(
     }>;
     workers?: Partial<WorkersConfig>;
     ui?: Partial<UiConfig>;
+    branding?: Partial<BrandingConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -652,6 +659,7 @@ export function updateConfigInMemory(
     };
   }
   if (patch.ui?.tours) config.ui = { ...config.ui, tours: { ...config.ui.tours, ...patch.ui.tours } };
+  if (patch.branding) config.branding = parseBranding({ ...config.branding, ...patch.branding });
   if (patch.tools?.installers) {
     for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
       if (!value) continue;
@@ -892,6 +900,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ? Object.fromEntries(Object.entries(rawUi.tours).filter(([, value]) => typeof value === 'boolean'))
       : {},
   };
+  const branding = parseBranding(userConfig.branding);
 
   return {
     hubHome,
@@ -1052,6 +1061,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     workers,
     ui,
     checks,
+    branding,
     deploy,
   };
 }

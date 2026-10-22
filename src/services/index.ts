@@ -382,6 +382,13 @@ export const MarkQuotaSchema = z.object({
 });
 
 export const UpdateConfigSchema = z.object({
+  branding: z.object({
+    name: z.string().trim().min(1).max(80).optional(),
+    shortName: z.string().trim().min(1).max(12).optional(),
+    logo: z.string().trim().max(80).optional(),
+    accentColor: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+    tagline: z.string().trim().max(160).optional(),
+  }).optional(),
   modelChainHard: z.array(modelValidator).min(1).optional(),
   modelChainEasy: z.array(modelValidator).min(1).optional(),
   defaultTimeout: z.number().int().positive().optional(),
@@ -3248,6 +3255,7 @@ export class AppService {
   // --- Config ---
   getConfig() {
     return {
+      branding: this.config.branding,
       modelChainHard: this.config.defaultModelChains.hard,
       modelChainEasy: this.config.defaultModelChains.easy,
       defaultTimeout: this.config.defaultTimeout,
