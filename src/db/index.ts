@@ -644,6 +644,10 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_check_results_task_run ON check_results(taskId, runId);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
   `,
+  // Migration 49: bind persisted check results to the worktree revision.
+  `
+  ALTER TABLE check_results ADD COLUMN head TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {

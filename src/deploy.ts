@@ -28,7 +28,7 @@ type ProcessRunner = (command: string, args: string[], options: { cwd: string; e
 type RestartRunner = (command: string, args: string[]) => { on?: (event: string, listener: (error: Error) => void) => unknown } | void;
 
 export interface RestartGuard {
-  snapshot: () => { checks: number; editing: number; brain: boolean };
+  snapshot: () => { checks: number; editing: number };
 }
 
 const hubPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -457,12 +457,12 @@ export class DeployService {
     const startedWaiting = Date.now();
     while (this.restartGuard) {
       const blockers = this.restartGuard.snapshot();
-      const blocked = blockers.checks > 0 || blockers.editing > 0 || blockers.brain;
+      const blocked = blockers.checks > 0 || blockers.editing > 0;
       if (!blocked || Date.now() - startedWaiting >= maxWaitMs) break;
-      const waiting = `chờ khởi động lại (đang có ${blockers.checks} lượt kiểm tra)`;
+      const waiting = `chờ khởi động lại (đang có ${blockers.checks} lượt kiểm tra, ${blockers.editing} worker)`;
       const current = this.latest.get(status.projectId) || status;
       this.latest.set(status.projectId, { ...current, status: 'restarting', error: waiting });
-      this.eventBus.emit('deploy.restart_waiting', undefined, { projectId: status.projectId, checks: blockers.checks, editing: blockers.editing, brain: blockers.brain, message: waiting });
+      this.eventBus.emit('deploy.restart_waiting', undefined, { projectId: status.projectId, checks: blockers.checks, editing: blockers.editing, message: waiting });
       await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, Math.max(1, maxWaitMs))));
     }
     const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');

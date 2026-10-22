@@ -147,6 +147,7 @@ interface QueuedCheck {
   taskId: string;
   runId: string;
   queuedAt: number;
+  reuseSavedResults: boolean;
   resolve: () => void;
 }
 
@@ -261,6 +262,7 @@ export class Scheduler {
     this.eventBus.on('quota.cleared', () => this.wakeWaitingQuotaTasks('quota_cleared'));
     this.eventBus.on('task.done', (taskId) => this.onTaskDoneOrCancelled(taskId));
     this.eventBus.on('task.cancelled', (taskId) => this.onTaskDoneOrCancelled(taskId));
+    this.eventBus.on('task.queued', (taskId) => this.invalidateChecks(taskId));
   }
 
   getCheckResults(taskId: string) { return this.db ? getCheckResults(this.db, taskId) : []; }
@@ -280,11 +282,11 @@ export class Scheduler {
     return { active, running: [...this.reviewerRuns.keys()], waiting: active ? Math.max(0, this.taskRepo.getByStatus('review').length - this.reviewerRuns.size) : 0 };
   }
 
-  getRestartSnapshot(projectId?: string): { checks: number; editing: number; brain: boolean } {
+  getRestartSnapshot(projectId?: string): { checks: number; editing: number } {
     const editing = projectId
       ? [...this.running.values()].filter((running) => running.projectId === projectId).length
       : this.running.size;
-    return { checks: this.checkingActive.size, editing, brain: false };
+    return { checks: this.checkingActive.size, editing };
   }
 
   getEventBus(): EventBus {
@@ -597,6 +599,7 @@ export class Scheduler {
   private recoverFinishedWork(run: { id: string; taskId: string; startedAt: string }): boolean {
     const task = this.taskRepo.get(run.taskId);
     if (!task) return false;
+    if (task.status === 'done' || task.status === 'cancelled') return false;
     const parsedStartedAt = parseDbTime(run.startedAt);
     const startedAt = Number.isNaN(parsedStartedAt) ? 0 : parsedStartedAt;
     const marker = this.markerForRun(task, startedAt);
@@ -634,7 +637,7 @@ export class Scheduler {
         if (this.stopped) return;
         const runs = this.runRepo.getByTask(task.id);
         const runId = runs[runs.length - 1]?.id || 'recovered';
-        void this.runChecksForTask(task.id, runId).catch((error) => {
+        void this.runChecksForTask(task.id, runId, true).catch((error) => {
           if (!this.stopped) console.error(`[scheduler] recoverCheckingTasks failed for ${task.id}:`, error);
         });
       }
@@ -645,20 +648,22 @@ export class Scheduler {
     }
   }
 
-  async runChecksForTask(taskId: string, runId: string): Promise<void> {
+  async runChecksForTask(taskId: string, runId: string, reuseSavedResults = false): Promise<void> {
     if (this.stopped) return;
-    const existing = this.checkingPromises.get(taskId);
-    if (existing) return existing;
     const task = this.taskRepo.get(taskId);
     if (!task) return;
     // A completed or cancelled task is terminal. In particular, a daemon
     // restart must never resurrect it merely because an old marker remains.
     if (task.status === 'done' || task.status === 'cancelled') return;
+    const currentRunId = this.checkingRunIds.get(taskId);
+    const existing = this.checkingPromises.get(taskId);
+    if (existing && currentRunId === runId) return existing;
+    if (existing && currentRunId !== runId) this.invalidateChecks(taskId);
     let resolve!: () => void;
     const promise = new Promise<void>((done) => { resolve = done; });
     this.checkingPromises.set(taskId, promise);
     this.checkingRunIds.set(taskId, runId);
-    this.checkingQueue.push({ taskId, runId, queuedAt: Date.now(), resolve });
+    this.checkingQueue.push({ taskId, runId, queuedAt: Date.now(), reuseSavedResults, resolve });
     this.pumpChecks();
     return promise;
   }
@@ -673,17 +678,18 @@ export class Scheduler {
       });
       if (index < 0) return;
       const entry = this.checkingQueue.splice(index, 1)[0];
+      const entryPromise = this.checkingPromises.get(entry.taskId);
       const task = this.taskRepo.get(entry.taskId);
       const worktree = task?.worktreePath || `project:${task?.projectId || entry.taskId}`;
       this.checkingActive.set(entry.taskId, entry);
       this.checkingWorktrees.add(worktree);
-      void this.executeChecksForTask(entry.taskId, entry.runId)
+      void this.executeChecksForTask(entry.taskId, entry.runId, entry.reuseSavedResults)
         .catch((error) => {
           if (!this.stopped) console.error(`[scheduler] checks failed for ${entry.taskId}:`, error);
         })
         .finally(() => {
           this.checkingActive.delete(entry.taskId);
-          this.checkingPromises.delete(entry.taskId);
+          if (this.checkingPromises.get(entry.taskId) === entryPromise) this.checkingPromises.delete(entry.taskId);
           if (this.checkingRunIds.get(entry.taskId) === entry.runId) this.checkingRunIds.delete(entry.taskId);
           this.checkingWorktrees.delete(worktree);
           entry.resolve();
@@ -692,16 +698,17 @@ export class Scheduler {
     }
   }
 
-  private async executeChecksForTask(taskId: string, runId: string): Promise<void> {
+  private async executeChecksForTask(taskId: string, runId: string, reuseSavedResults: boolean): Promise<void> {
     if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
     if (!task || task.status === 'done' || task.status === 'cancelled') return;
+    if (this.checkingRunIds.get(taskId) !== runId) return;
     this.taskRepo.update(taskId, { status: 'checking' });
     this.eventBus.emit('task.checking', taskId);
 
     const project = this.projectRepo.get(task.projectId);
     const checks = this.checkRunner && project
-      ? await this.checkRunner.run(task, project, runId)
+      ? await this.checkRunner.run(task, project, runId, { reuseSavedResults })
       : { passed: true, failed: [], results: [] };
 
     if (this.stopped) return;
@@ -2786,10 +2793,21 @@ export class Scheduler {
   }
 
   private onTaskDoneOrCancelled(taskId: string): void {
+    this.invalidateChecks(taskId);
     if (!this.config.cleanup?.nodeModulesOnDone) return;
     const task = this.taskRepo.get(taskId);
     if (!task || !task.worktreePath) return;
     this.worktreeService.cleanNodeModules(task.worktreePath);
+  }
+
+  private invalidateChecks(taskId: string): void {
+    const queued = this.checkingQueue.filter((entry) => entry.taskId === taskId);
+    this.checkingQueue = this.checkingQueue.filter((entry) => entry.taskId !== taskId);
+    for (const entry of queued) entry.resolve();
+    // A running check is allowed to finish and release its worktree lock, but
+    // its completion is stale and can no longer change task state.
+    this.checkingRunIds.delete(taskId);
+    this.checkingPromises.delete(taskId);
   }
 
   private cleanExpiredWorktrees(): void {
