@@ -122,6 +122,16 @@ export const ProfilesPage: React.FC = () => {
   const [planFilter, setPlanFilter] = useState<string>('all');
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const scrolledHash = useRef<string | null>(null);
+  const [showFab, setShowFab] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowFab(window.scrollY > 120);
+    };
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
   const {
     data: profiles = [],
     isLoading,
@@ -409,6 +419,24 @@ export const ProfilesPage: React.FC = () => {
           }}
         />
       )}
+      {/* Floating Action Button (FAB) khi cuộn trang */}
+      <button
+        type="button"
+        data-testid="fab-add-account"
+        aria-label={t('profiles.addBtn')}
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowAdd(true);
+        }}
+        className={`fixed bottom-8 right-8 z-30 flex items-center gap-2 rounded-full bg-[var(--t-accent)] p-3 sm:px-4 sm:py-3 text-sm font-semibold text-white shadow-xl shadow-[var(--t-accent)]/30 ring-1 ring-white/20 transition-all duration-300 ease-out hover:scale-105 hover:shadow-2xl hover:shadow-[var(--t-accent)]/45 active:scale-95 cursor-pointer ${
+          showFab
+            ? 'translate-y-0 opacity-100 pointer-events-auto'
+            : 'translate-y-6 opacity-0 pointer-events-none'
+        }`}
+      >
+        <Plus className="h-5 w-5" />
+        <span className="hidden sm:inline">{t('profiles.addBtn')}</span>
+      </button>
     </div>
   );
 };
