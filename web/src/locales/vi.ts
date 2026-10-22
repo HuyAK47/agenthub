@@ -976,6 +976,8 @@ export const vi = {
     notificationsTitle: 'Thông báo & Tóm tắt',
     notificationsDescription: 'Cấu hình thông báo máy tính, chế độ bộ não, giờ yên tĩnh và tóm tắt định kỳ.',
     desktopNotifyLabel: 'Thông báo trên máy tính (Desktop Notifications)',
+    desktopNotifyLevelLabel: 'Mức thông báo trên máy tính',
+    desktopNotifyLevelAll: 'Tất cả', desktopNotifyLevelImportant: 'Quan trọng', desktopNotifyLevelCritical: 'Chỉ khẩn cấp', desktopNotifyLevelOff: 'Tắt',
     desktopNotifyHint: 'Gửi thông báo desktop qua notify-send / osascript khi có sự kiện quan trọng.',
     brainModeLabel: 'Chế độ hoạt động của Bộ não',
     brainModeHint: 'Trong chế độ Tự động, các thông báo thô từng task được chặn, chỉ gửi thông báo quan trọng và sự cố.', brainMaxConcurrent: 'Số lượt bộ não chạy đồng thời tối đa',

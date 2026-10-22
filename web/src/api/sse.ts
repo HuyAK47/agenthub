@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { getToken } from './client';
 import { EventItem } from '../types/api';
+import { notifyBrowserEvent } from '../notifications';
 
 export type EventCallback = (event: EventItem) => void;
 export type RunOutputCallback = (taskId: string, chunk: string, runId?: string) => void;
@@ -145,6 +146,9 @@ export function connectSSE(queryClient: QueryClient): () => void {
           payload: parsed.payload !== undefined ? parsed.payload : parsed,
         };
 
+        const notificationConfig = queryClient.getQueryData<{ notifications?: { desktop?: boolean; desktopLevel?: 'all' | 'important' | 'critical' | 'off' } }>(['config'])?.notifications;
+        if (notificationConfig?.desktop !== false) notifyBrowserEvent(eventItem, notificationConfig?.desktopLevel || 'important');
+
         // Notify raw event listeners
         for (const listener of eventListeners) {
           try {
@@ -219,6 +223,12 @@ export function connectSSE(queryClient: QueryClient): () => void {
       'profile.updated',
       'profile.check',
       'quota.exhausted',
+      'disk.low',
+      'disk.ok',
+      'disk.docker_low',
+      'brain.notify',
+      'ci.failed',
+      'review.escalated',
       'quota.cleared',
       'config.updated',
       'brain.status',

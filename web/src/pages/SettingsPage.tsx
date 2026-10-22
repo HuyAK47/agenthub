@@ -32,6 +32,7 @@ export const SettingsPage: React.FC = () => {
   const [claudeOverhead, setClaudeOverhead] = useState<number>(40_000);
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
+  const [desktopNotifyLevel, setDesktopNotifyLevel] = useState<'all' | 'important' | 'critical' | 'off'>('important');
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
   const [brainPermissions, setBrainPermissions] = useState<'standard' | 'trusted' | 'full'>('standard');
   const [brainMaxConcurrent, setBrainMaxConcurrent] = useState<number>(2);
@@ -102,6 +103,7 @@ export const SettingsPage: React.FC = () => {
         }
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
+      setDesktopNotifyLevel(config.notifications?.desktopLevel ?? 'important');
       setBrainMode(config.brain?.mode ?? 'suggest');
       setBrainPermissions(config.brain?.permissions ?? 'standard');
       setBrainMaxConcurrent(config.brain?.maxConcurrent ?? 2);
@@ -200,6 +202,7 @@ export const SettingsPage: React.FC = () => {
       ...(brainPermissions === 'full' ? { confirm: true } : {}),
       notifications: {
         desktop: desktopNotify,
+        desktopLevel: desktopNotifyLevel,
         quietHours: {
           enabled: quietHoursEnabled,
           start: quietHoursStart.trim() || '22:00',
@@ -640,6 +643,18 @@ export const SettingsPage: React.FC = () => {
                 onChange={(e) => setDesktopNotify(e.target.checked)}
                 className="rounded border-[var(--t-border)]"
               />
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] space-y-2">
+              <label htmlFor="desktop-notify-level" className="text-sm font-semibold text-[var(--t-text)]">
+                {t('settings.desktopNotifyLevelLabel')}
+              </label>
+              <select id="desktop-notify-level" data-testid="desktop-notify-level" value={desktopNotifyLevel} onChange={(e) => setDesktopNotifyLevel(e.target.value as typeof desktopNotifyLevel)} className="block rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm">
+                <option value="all">{t('settings.desktopNotifyLevelAll')}</option>
+                <option value="important">{t('settings.desktopNotifyLevelImportant')}</option>
+                <option value="critical">{t('settings.desktopNotifyLevelCritical')}</option>
+                <option value="off">{t('settings.desktopNotifyLevelOff')}</option>
+              </select>
             </div>
 
             <div className="py-2 border-b border-[var(--t-border)] space-y-2">
