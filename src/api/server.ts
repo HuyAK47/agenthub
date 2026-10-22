@@ -15,6 +15,7 @@ import { PtyManager, registerPtyRoutes } from './pty.js';
 import { registerBrainRoutes } from '../brain.js';
 import { registerChatRoutes } from '../chat/service.js';
 import { brandingLogoPath, saveBrandingLogo } from '../branding.js';
+import { decodeCursor } from '../pagination.js';
 
 export function resolveWebDistDir(customDir?: string): string {
   return path.resolve(customDir || resolveWebDir(import.meta.url, process.env));
@@ -351,6 +352,9 @@ export async function createServer(
   // --- Tasks API ---
   fastify.get('/api/tasks', async (req: FastifyRequest) => {
     const query = req.query as { project?: string; status?: string; search?: string; q?: string; limit?: string; cursor?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) {
+      throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    }
     if (query.limit === undefined) return service.listTasks(query);
     return service.listTasksPage({ ...query, search: query.search ?? query.q });
   });

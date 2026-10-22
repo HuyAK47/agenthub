@@ -2224,8 +2224,7 @@ export class AppService {
   }
 
   // --- Tasks ---
-  listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
-    const tasks = this.taskRepo.list(filter);
+  private decorateTasks(tasks: TaskRow[]): TaskRow[] {
     const projects = new Map(this.projectRepo.getAll().map((project) => [project.id, project]));
     const running = this.scheduler.getRunning();
     return tasks.map((task) => {
@@ -2258,33 +2257,13 @@ export class AppService {
     }) as TaskRow[];
   }
 
+  listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
+    return this.decorateTasks(this.taskRepo.list(filter));
+  }
+
   listTasksPage(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string }): PageResult<TaskRow> {
     const page = this.taskRepo.page(filter);
-    const projects = new Map(this.projectRepo.getAll().map((project) => [project.id, project]));
-    const running = this.scheduler.getRunning();
-    const items = page.items.map((task) => {
-      const run = running.get(task.id);
-      const project = projects.get(task.projectId);
-      let reviewChain = parseReviewChain(project?.reviewChain);
-      if (project?.review) {
-        try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
-      }
-      return {
-        ...apiTask(task),
-        reviewChain,
-        checks: this.scheduler.getCheckResults(task.id),
-        paused: Boolean(run?.paused),
-        pauseReason: run?.pauseReason ?? null,
-        currentRun: run ? {
-          startedAt: new Date(run.startTime).toISOString(), lastOutputAt: new Date(run.lastOutputAt).toISOString(),
-          lastActivityAt: new Date(run.lastActivityAt).toISOString(), activitySource: run.activitySource,
-          noCommitMinutes: run.noCommitMinutes ?? null, isLooping: run.isLooping ?? false,
-          loopingCommand: run.loopingCommand ?? null, paused: Boolean(run.paused), pauseReason: run.pauseReason ?? null,
-          rss: run.rss ?? 0, cpu: run.cpu ?? 0,
-        } : null,
-      };
-    }) as TaskRow[];
-    return { ...page, items };
+    return { ...page, items: this.decorateTasks(page.items) };
   }
 
   getTasksGraph(options?: { project?: string; includeDone?: string | boolean }) {

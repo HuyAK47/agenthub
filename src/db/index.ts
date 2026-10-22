@@ -1,6 +1,10 @@
 import Database from 'better-sqlite3';
 import { decodeCursor, encodeCursor, parsePageSize, PageResult } from '../pagination.js';
 
+function normalizeSearchText(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, (c) => c === 'đ' ? 'd' : 'D').toLowerCase();
+}
+
 export const MIGRATIONS: string[] = [
   // Migration 0: initial schema
   `
@@ -716,6 +720,7 @@ export function openDatabase(dbPath: string): Database.Database {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  db.function('agenthub_normalize', normalizeSearchText);
 
   // Run migrations
   const versionRow = (() => {
@@ -1318,12 +1323,13 @@ export class TaskRepo {
     if (filter?.status && filter.status !== 'all') { conditions.push('status = ?'); values.push(filter.status); }
     if (filter?.search?.trim()) {
       const search = `%${filter.search.trim().replace(/[\\%_]/g, '\\$&')}%`;
-      conditions.push("(slug LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')");
+      conditions.push("(agenthub_normalize(slug) LIKE agenthub_normalize(?) ESCAPE '\\' OR agenthub_normalize(title) LIKE agenthub_normalize(?) ESCAPE '\\')");
       values.push(search, search);
     }
     const cursor = decodeCursor(filter?.cursor);
+    if (filter?.cursor && !cursor) throw new Error('Invalid pagination cursor');
     if (cursor) {
-      conditions.push('(updatedAt < ? OR (updatedAt = ? AND id < ?))');
+      conditions.push('(createdAt < ? OR (createdAt = ? AND id < ?))');
       values.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
     }
     const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
@@ -1331,11 +1337,11 @@ export class TaskRepo {
     const countValues = values.slice(0, cursor ? -3 : undefined);
     const total = (this.db.prepare(`SELECT COUNT(*) as count FROM tasks${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
     const limit = parsePageSize(filter?.limit);
-    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY updatedAt DESC, id DESC LIMIT ?`).all(...values, limit + 1) as TaskRow[];
+    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, limit + 1) as TaskRow[];
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
     const last = items.at(-1);
-    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.updatedAt, last.id) : null };
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null };
   }
 
   getByProject(projectId: string): TaskRow[] {
