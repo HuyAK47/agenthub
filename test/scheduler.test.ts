@@ -1533,6 +1533,73 @@ describe('Checking after worker completion', () => {
     scheduler.stop();
   });
 
+  it('ignores stale completion before reference modifications can block the retried task', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-stale-reference');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+    const referencePath = path.join(tmpDir, 'reference.txt');
+    fs.writeFileSync(referencePath, 'before');
+
+    taskRepo.insert({
+      id: 'test-project/stale-reference',
+      projectId: 'test-project',
+      slug: 'stale-reference',
+      title: 'Stale Reference',
+      status: 'review',
+      body: 'Task body',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-stale-reference',
+      taskId: 'test-project/stale-reference',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+    };
+
+    scheduler.reviewTask('test-project/stale-reference', 'changes_requested', 'Retry this task');
+    fs.writeFileSync(referencePath, 'after');
+    await schedulerInternal.handleRunCompletion('test-project/stale-reference', {
+      runId: 'run-stale-reference',
+      taskId: 'test-project/stale-reference',
+      pid: 999996,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }) },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 5000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+      referenceSnapshots: [{ kind: 'file', name: 'reference', path: referencePath, mtimeMs: 0, size: 6 }],
+    });
+
+    expect(taskRepo.get('test-project/stale-reference')?.status).toBe('queued');
+    expect(runRepo.get('run-stale-reference')?.outcome).toBe('crashed');
+    expect(runRepo.get('run-stale-reference')?.reason).toBe('stale_worker');
+    expect(fs.existsSync(path.join(worktreePath, '.agenthub', 'BLOCKED'))).toBe(false);
+    expect(eventRepo.getRecent(20).filter((event) => event.taskId === 'test-project/stale-reference' && event.type === 'task.blocked')).toHaveLength(0);
+
+    scheduler.stop();
+  });
+
   it('does not check or emit review_ready when worker finishes on a done task during live execution', async () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);

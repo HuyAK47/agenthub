@@ -1413,6 +1413,15 @@ export class Scheduler {
       const task = this.taskRepo.get(taskId);
       if (!task) return;
 
+      // Reject stale completions before touching the worktree, markers, or
+      // reference state. A worker that finished after retry/cancel/overlap
+      // must not be allowed to mutate the task based on its old files.
+      const earlyRejection = this.workerCompletionRejection(taskId, rt.runId);
+      if (earlyRejection) {
+        this.runRepo.finish(rt.runId, 'crashed', undefined, earlyRejection);
+        return;
+      }
+
       if (task.worktreePath) {
         await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
       }
@@ -1503,6 +1512,11 @@ export class Scheduler {
     }
 
     // Check if any read-only references were modified
+    const referenceRejection = this.workerCompletionRejection(taskId, rt.runId);
+    if (referenceRejection) {
+      this.runRepo.finish(rt.runId, 'crashed', undefined, referenceRejection);
+      return;
+    }
     if (rt.referenceSnapshots && rt.referenceSnapshots.length > 0) {
       const modifications = detectReferenceModifications(rt.referenceSnapshots);
       if (modifications.length > 0) {
@@ -1644,6 +1658,21 @@ export class Scheduler {
         console.error(`[scheduler] handleRunCompletion failed for ${taskId}:`, error);
       }
     }
+  }
+
+  /** Return a reason when a worker completion is no longer authoritative. */
+  private workerCompletionRejection(taskId: string, runId: string): string | null {
+    const task = this.taskRepo.get(taskId);
+    const run = this.runRepo.get(runId);
+    if (!task || !run || run.taskId !== taskId || run.kind !== 'worker' || run.outcome !== null) return 'stale_worker';
+    if (task.status !== 'running') return 'stale_worker';
+    const activeWorkerRuns = this.runRepo
+      .getByTask(taskId)
+      .filter((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
+    if (activeWorkerRuns.length !== 1 || activeWorkerRuns[0].id !== runId) return 'overlapping_worker';
+    const runningTask = this.running.get(taskId);
+    if (runningTask && runningTask.runId !== runId) return 'overlapping_worker';
+    return null;
   }
 
   private async handleReferenceModifications(
