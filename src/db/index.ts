@@ -633,6 +633,17 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE tasks ADD COLUMN creationGoal TEXT;
   CREATE INDEX IF NOT EXISTS idx_tasks_creation_session ON tasks(projectId, creationSessionId, createdAt);
   `,
+  // Migration 48: indexes for dashboard/API filters and per-resource history.
+  `
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(projectId, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_task_deps_dependency ON task_deps(dependsOnId, taskId);
+  CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(taskId, id);
+  CREATE INDEX IF NOT EXISTS idx_runs_outcome_task ON runs(outcome, taskId);
+  CREATE INDEX IF NOT EXISTS idx_check_results_task_run ON check_results(taskId, runId);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -1123,6 +1134,21 @@ export class TaskRepo {
     return this.db.prepare('SELECT * FROM tasks ORDER BY createdAt').all() as TaskRow[];
   }
 
+  list(filter?: { project?: string; status?: string }): TaskRow[] {
+    const conditions: string[] = [];
+    const values: string[] = [];
+    if (filter?.project) {
+      conditions.push('projectId = ?');
+      values.push(filter.project);
+    }
+    if (filter?.status) {
+      conditions.push('status = ?');
+      values.push(filter.status);
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
+  }
+
   getByProject(projectId: string): TaskRow[] {
     return this.db
       .prepare('SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt')
@@ -1359,6 +1385,10 @@ export class TaskBatchRepo {
 export class RunRepo {
   constructor(private db: Database.Database) {}
 
+  getAll(): RunRow[] {
+    return this.db.prepare('SELECT * FROM runs ORDER BY startedAt').all() as RunRow[];
+  }
+
   getByTask(taskId: string): RunRow[] {
     return this.db
       .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt')
@@ -1450,6 +1480,10 @@ export interface ReviewRow {
 
 export class ReviewRepo {
   constructor(private db: Database.Database) {}
+
+  getAll(): ReviewRow[] {
+    return this.db.prepare('SELECT * FROM reviews ORDER BY createdAt').all() as ReviewRow[];
+  }
 
   getByTask(taskId: string): ReviewRow[] {
     return this.db

@@ -2067,17 +2067,12 @@ export class AppService {
 
   // --- Tasks ---
   listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
-    let tasks = this.taskRepo.getAll();
-    if (filter?.project) {
-      tasks = tasks.filter((t) => t.projectId === filter.project);
-    }
-    if (filter?.status) {
-      tasks = tasks.filter((t) => t.status === filter.status);
-    }
+    const tasks = this.taskRepo.list(filter);
+    const projects = new Map(this.projectRepo.getAll().map((project) => [project.id, project]));
     const running = this.scheduler.getRunning();
     return tasks.map((task) => {
       const run = running.get(task.id);
-      const project = this.projectRepo.get(task.projectId);
+      const project = projects.get(task.projectId);
       let reviewChain = parseReviewChain(project?.reviewChain);
       if (project?.review) {
         try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
