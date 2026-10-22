@@ -11,7 +11,7 @@ export const TelegramCard: React.FC<TelegramCardProps> = () => {
   const { t } = useLocale(); const qc = useQueryClient();
   const [token, setToken] = React.useState(''); const [message, setMessage] = React.useState(''); const [botName, setBotName] = React.useState('');
   const status = useQuery({ queryKey: ['telegram-status'], queryFn: getTelegramStatus });
-  const pairing = useQuery({ queryKey: ['telegram-pairing'], queryFn: () => getTelegramPairingCode(false), refetchInterval: 1000 });
+  const pairing = useQuery({ queryKey: ['telegram-pairing'], queryFn: () => getTelegramPairingCode(false), refetchInterval: 5000 });
   const config = status.data;
   const refresh = () => createTelegramPairCode().then((data) => qc.setQueryData(['telegram-pairing'], data));
   const save = useMutation({ mutationFn: () => putTelegramToken(token), onSuccess: () => { setToken(''); setMessage(t('telegram.tokenSaved')); qc.invalidateQueries({ queryKey: ['telegram-status'] }); }, onError: (e: Error) => setMessage(e.message) });
