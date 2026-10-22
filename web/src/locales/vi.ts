@@ -103,6 +103,10 @@ export const vi = {
     allProjects: 'Tất cả project',
     createTask: 'Tạo Task',
     filterQuick: 'Lọc slug / tiêu đề',
+    listView: 'Danh sách',
+    slug: 'Slug',
+    status: 'Trạng thái',
+    project: 'Project',
   },
   pagination: {
     rowsPerPage: 'Số dòng/trang',

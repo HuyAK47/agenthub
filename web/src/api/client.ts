@@ -424,9 +424,18 @@ export async function deleteQuota(name: string, family: string): Promise<{ ok: b
   );
 }
 
-type TaskList = Task[] & { total?: number; nextCursor?: string | null };
+export interface TaskQuery {
+  project?: string;
+  status?: string;
+  search?: string;
+  limit?: number;
+  cursor?: string;
+}
 
-export async function getTasks(params?: { project?: string; status?: string; search?: string; limit?: number; cursor?: string }): Promise<TaskList> {
+export function getTasks(): Promise<Task[]>;
+export function getTasks(params: Omit<TaskQuery, 'limit'> & { limit?: undefined }): Promise<Task[]>;
+export function getTasks(params: TaskQuery & { limit: number }): Promise<PageResponse<Task>>;
+export async function getTasks(params?: TaskQuery): Promise<Task[] | PageResponse<Task>> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.status) query.set('status', params.status);
@@ -435,11 +444,7 @@ export async function getTasks(params?: { project?: string; status?: string; sea
   if (params?.cursor) query.set('cursor', params.cursor);
   const qStr = query.toString();
   const result = await apiFetch<PageResponse<Task> | Task[]>(`/api/tasks${qStr ? `?${qStr}` : ''}`);
-  if (Array.isArray(result)) return result;
-  const items = result.items as TaskList;
-  items.total = result.total;
-  items.nextCursor = result.nextCursor;
-  return items;
+  return result;
 }
 
 export interface PageResponse<T> {
@@ -449,8 +454,7 @@ export interface PageResponse<T> {
 }
 
 export async function getTasksPage(params?: { project?: string; status?: string; search?: string; limit?: number; cursor?: string }): Promise<PageResponse<Task>> {
-  const result = await getTasks(params);
-  return { items: result, total: result.total ?? result.length, nextCursor: result.nextCursor ?? null };
+  return getTasks({ ...params, limit: params?.limit ?? 20 });
 }
 
 export async function getTaskGraph(params?: {

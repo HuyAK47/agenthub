@@ -5,13 +5,13 @@ import { getProjects, getStatus, getTasks } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
-import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network } from 'lucide-react';
+import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, List } from 'lucide-react';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { useLocale } from '../context/LocaleContext';
 import { useShowMore } from '../components/CollapsibleList';
 import { TaskDag } from '../components/dag';
 import { filterTasksForDag } from '../components/dag/dagUtils';
-import { Pagination } from '../components/ui';
+import { DataTable } from '../components/ui';
 
 const normalizeText = (text: string): string =>
   text
@@ -221,7 +221,7 @@ export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
   const [urlParams, setUrlParams] = useSearchParams();
-  const [viewMode, setViewMode] = useState<'kanban' | 'dag'>('kanban');
+  const [viewMode, setViewMode] = useState<'kanban' | 'dag' | 'list'>((urlParams.get('view') as 'kanban' | 'dag' | 'list') || 'kanban');
   const [selectedProject, setSelectedProject] = useState<string>(urlParams.get('project') || 'all');
   const [selectedStatus, setSelectedStatus] = useState<string>(urlParams.get('status') || 'all');
   const [doneFilter, setDoneFilter] = useState<'active_chains' | '1d' | '3d' | '7d' | '30d' | 'all'>('active_chains');
@@ -236,25 +236,17 @@ export const TasksPage: React.FC = () => {
     queryFn: getProjects,
   });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading: isPageLoading } = useQuery({
     queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor],
-    queryFn: async () => {
-      let nextCursor = cursor;
-      if (!nextCursor && page > 1) {
-        for (let previousPage = 1; previousPage < page; previousPage += 1) {
-          const previous = await getTasks({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor: nextCursor });
-          nextCursor = previous.nextCursor ?? undefined;
-          if (!nextCursor) break;
-        }
-      }
-      return getTasks({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor: nextCursor });
-    },
+    queryFn: () => getTasks({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor }),
+    enabled: viewMode === 'list' && (page === 1 || Boolean(cursor)),
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
   });
-  const { data: allTasks = [] } = useQuery({
+  const { data: allTasks = [], isLoading: isAllTasksLoading } = useQuery({
     queryKey: ['tasks-kanban', selectedProject, search],
     queryFn: () => getTasks({ project: selectedProject, search }),
+    enabled: viewMode !== 'list',
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
   });
@@ -264,13 +256,13 @@ export const TasksPage: React.FC = () => {
   }, [data?.nextCursor, page]);
   useEffect(() => {
     const next = new URLSearchParams(urlParams);
-    const values: Record<string, string> = { project: selectedProject, status: selectedStatus, search, page: String(page), pageSize: String(pageSize) };
+    const values: Record<string, string> = { project: selectedProject, status: selectedStatus, search, page: String(page), pageSize: String(pageSize), view: viewMode };
     for (const [key, value] of Object.entries(values)) {
-      if (value && value !== 'all' && value !== '1' && !(key === 'pageSize' && value === '20')) next.set(key, value);
+      if (value && value !== 'all' && value !== '1' && !(key === 'pageSize' && value === '20') && !(key === 'view' && value === 'kanban')) next.set(key, value);
       else next.delete(key);
     }
     if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
-  }, [selectedProject, selectedStatus, search, page, pageSize, setUrlParams, urlParams]);
+  }, [selectedProject, selectedStatus, search, page, pageSize, viewMode, setUrlParams, urlParams]);
   useEffect(() => {
     if (initialFilters.current) {
       initialFilters.current = false;
@@ -279,6 +271,9 @@ export const TasksPage: React.FC = () => {
     setPage(1);
     setCursors({});
   }, [selectedProject, search, selectedStatus, pageSize]);
+  useEffect(() => {
+    if (viewMode === 'list' && page > 1 && !cursor) setPage(1);
+  }, [viewMode, page, cursor]);
   const tasks = allTasks;
 
   const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
@@ -319,6 +314,17 @@ export const TasksPage: React.FC = () => {
             >
               <LayoutGrid className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t('dag.toggleKanban')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              data-testid="view-toggle-list"
+              aria-label={t('tasks.listView')}
+              title={t('tasks.listView')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${viewMode === 'list' ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+            >
+              <List className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t('tasks.listView')}</span>
             </button>
             <button
               type="button"
@@ -374,7 +380,7 @@ export const TasksPage: React.FC = () => {
           </div>
 
           {/* DAG-specific filters (Status & Done cutoff) */}
-          {viewMode === 'dag' && (
+          {viewMode !== 'kanban' && (
             <>
               {/* Status Filter */}
               <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
@@ -443,7 +449,23 @@ export const TasksPage: React.FC = () => {
         </div>
       </div>
 
-      {isLoading ? (
+      {viewMode === 'list' ? (
+        <DataTable
+          rows={data?.items || []}
+          loading={isPageLoading}
+          columns={[
+            { key: 'slug', title: t('tasks.slug'), render: (task) => <Link className="font-mono text-[var(--t-accent)] hover:underline" to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}>{task.slug}</Link> },
+            { key: 'title', title: t('tasks.title'), render: (task) => <span className="truncate" title={task.title}>{task.title}</span> },
+            { key: 'status', title: t('tasks.status'), render: (task) => <StatusBadge status={task.status} size="sm" /> },
+            { key: 'project', title: t('tasks.project'), render: (task) => <span>{task.projectId}</span> },
+          ]}
+          page={page}
+          pageSize={pageSize}
+          total={data?.total || 0}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => { setPageSize(size); setPage(1); setCursors({}); }}
+        />
+      ) : isAllTasksLoading ? (
         <div className="flex items-center justify-center min-h-[40vh]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
         </div>
@@ -464,7 +486,6 @@ export const TasksPage: React.FC = () => {
           ))}
         </div>
       )}
-      <Pagination page={page} pageSize={pageSize} total={data?.total || data?.length || 0} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />
     </div>
   );
 };

@@ -48,17 +48,54 @@ describe('TasksPage & Kanban Long Lists', () => {
     vi.restoreAllMocks();
   });
 
-  function renderPage() {
+  function renderPage(initialEntry = '/tasks') {
     return render(
       <QueryClientProvider client={queryClient}>
         <LocaleProvider initialLocale="vi">
-          <MemoryRouter initialEntries={['/tasks']}>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <TasksPage />
           </MemoryRouter>
         </LocaleProvider>
       </QueryClientProvider>,
     );
   }
+
+  it('view danh sách chỉ hiển thị trang hiện tại và gửi cursor khi chuyển trang', async () => {
+    const firstPage = createDoneTasks(2);
+    const secondPage = createDoneTasks(1).map((task) => ({ ...task, slug: 'page-two' }));
+    const getTasks = vi.spyOn(client, 'getTasks').mockImplementation(async (params?: client.TaskQuery) => {
+      if (params?.limit) {
+        return params.cursor
+          ? { items: secondPage, total: 3, nextCursor: null }
+          : { items: firstPage, total: 3, nextCursor: 'cursor-page-2' };
+      }
+      return [];
+    });
+
+    renderPage('/tasks?view=list&pageSize=1&search=needle');
+
+    expect(await screen.findByText('slug-1')).toBeInTheDocument();
+    expect(screen.queryByText('page-two')).not.toBeInTheDocument();
+    expect(screen.queryByText('slug-3')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /trang sau/i }));
+    expect(await screen.findByText('page-two')).toBeInTheDocument();
+    expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1, cursor: 'cursor-page-2', search: 'needle' }));
+  });
+
+  it('khôi phục filter từ URL và reset về trang đầu khi filter đổi', async () => {
+    const getTasks = vi.spyOn(client, 'getTasks').mockImplementation(async (params?: client.TaskQuery) =>
+      params?.limit ? { items: createDoneTasks(1), total: 1, nextCursor: null } : [],
+    );
+
+    renderPage('/tasks?view=list&page=3&status=review&search=alpha');
+
+    const search = await screen.findByDisplayValue('alpha');
+    expect(screen.getByRole('combobox', { name: /lọc theo trạng thái/i })).toHaveValue('review');
+    fireEvent.change(search, { target: { value: 'beta' } });
+    await screen.findByText('slug-1');
+    expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'review', search: 'beta', limit: 20 }));
+  });
 
   it('cột 131 task chỉ render 10 thẻ done + nút Xem thêm, bấm thì thêm đúng step', async () => {
     const tasks = createDoneTasks(131);

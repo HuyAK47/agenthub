@@ -105,6 +105,10 @@ export const en: typeof vi = {
     allProjects: 'All projects',
     createTask: 'New Task',
     filterQuick: 'Filter slug / title',
+    listView: 'List',
+    slug: 'Slug',
+    status: 'Status',
+    project: 'Project',
   },
   pagination: {
     rowsPerPage: 'Rows/page',
