@@ -264,7 +264,9 @@ export function createContext(
     knowledgeRepo,
   });
 
-  const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());
+  const deployService = new DeployService(config, projectRepo, scheduler.getEventBus(), undefined, undefined, undefined, undefined, {
+    snapshot: () => scheduler.getRestartSnapshot(),
+  });
   deployService.start();
 
   const bulletinService = new BulletinService({

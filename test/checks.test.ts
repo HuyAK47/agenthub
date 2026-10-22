@@ -4,11 +4,35 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { openDatabase, ProjectRow, TaskRow } from '../src/db/index.js';
-import { CheckRunner, getCheckResults } from '../src/checks.js';
+import { CheckRunner, detectChecks, getCheckResults } from '../src/checks.js';
 import { WorktreeService } from '../src/worktrees/index.js';
 import { loadConfig } from '../src/config.js';
 
 describe('checks and worktree excludes', () => {
+  it('filters heavy checks only when auto-detected and does not reuse stale results on a fresh run', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'checks-heavy-test-'));
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ scripts: { lint: 'echo lint', 'package-release': 'echo release' } }));
+    expect(detectChecks(tmp).map((check) => check.name)).toEqual(['lint']);
+    const db = openDatabase(path.join(tmp, 'hub.db'));
+    db.prepare('INSERT INTO projects (id, name, path, defaultBranch, maxParallel) VALUES (?, ?, ?, ?, ?)').run('p1', 'P1', tmp, 'main', 1);
+    db.prepare('INSERT INTO tasks (id, projectId, slug, title, status) VALUES (?, ?, ?, ?, ?)').run('p1/t1', 'p1', 't1', 'T1', 'review');
+    db.prepare('INSERT INTO runs (id, taskId, engine, model, profileName) VALUES (?, ?, ?, ?, ?)').run('run-1', 'p1/t1', 'agy', 'model', 'p1');
+    db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('p1/t1', 'run-1', 'lint', 0, 1, 1, 'stale');
+    const runner = new CheckRunner(db);
+    const project = { id: 'p1', name: 'P1', path: tmp, defaultBranch: 'main', maxParallel: 1,
+      checks: JSON.stringify([{ name: 'package-release', cmd: [process.execPath, '-e', 'process.exit(0)'] }]) } as ProjectRow;
+    const task = { id: 'p1/t1', projectId: 'p1', slug: 't1', title: 'T1', body: '', level: 'easy', modelChain: null,
+      baseRef: 'main', branch: 'main', worktreePath: tmp, status: 'review', dependsOn: '[]', attempt: 0, resume: 0,
+      createdAt: '', updatedAt: '', checkFixAttempts: 0 } as TaskRow;
+    const result = await runner.run(task, project, 'run-1');
+    expect(result.results.map((check) => check.name)).toContain('package-release');
+    expect(result.results.find((check) => check.name === 'package-release')?.ok).toBe(true);
+    expect(result.results.find((check) => check.name === 'lint')).toBeUndefined();
+    db.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('returns only the latest autocheck run', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'checks-latest-test-'));
     const db = openDatabase(path.join(tmp, 'hub.db'));

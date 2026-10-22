@@ -27,6 +27,10 @@ type GitRunner = (cwd: string, args: string[]) => Promise<{ code: number; output
 type ProcessRunner = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }) => Promise<{ code: number; output: string; timedOut?: boolean }>;
 type RestartRunner = (command: string, args: string[]) => { on?: (event: string, listener: (error: Error) => void) => unknown } | void;
 
+export interface RestartGuard {
+  snapshot: () => { checks: number; editing: number };
+}
+
 const hubPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export function formatTime(isoOrDate: string | Date | number): string {
@@ -54,7 +58,9 @@ export class DeployService {
     private eventBus: EventBus,
     private debounceMs = 60_000,
     private commandRunner: GitRunner = async (cwd, args) => {
-      const result = await runInProcessGroup('git', args, { cwd, env: process.env, timeoutMs: 120_000, maxOutput: 1024 * 1024 });
+      const env: NodeJS.ProcessEnv = { ...process.env, AGENTHUB_WORKER: undefined };
+      if (env.PATH) env.PATH = env.PATH.split(path.delimiter).filter((entry) => !entry.includes(`${path.sep}shims${path.sep}worker`)).join(path.delimiter);
+      const result = await runInProcessGroup('git', args, { cwd, env, timeoutMs: 120_000, maxOutput: 1024 * 1024 });
       return { code: result.code ?? 1, output: result.output };
     },
     private processRunner: ProcessRunner = async (command, args, options) => {
@@ -66,6 +72,7 @@ export class DeployService {
       child.unref();
       return child;
     },
+    private restartGuard?: RestartGuard,
   ) {}
 
   start(): void {
@@ -412,7 +419,7 @@ export class DeployService {
       write(status.status === 'restarting' ? 'deploy completed; hub is restarting' : 'deploy succeeded');
       if (status.status === 'restarting') {
         this.eventBus.emit('deploy.restarting', undefined, { projectId, commit, logPath });
-        this.restartHub(status);
+        await this.restartHub(status);
       } else {
         this.eventBus.emit('deploy.succeeded', undefined, { projectId, commit, logPath });
       }
@@ -444,7 +451,20 @@ export class DeployService {
     } catch { return null; }
   }
 
-  private restartHub(status: DeployStatus): void {
+  private async restartHub(status: DeployStatus): Promise<void> {
+    const definition = this.definition(status.projectId);
+    const maxWaitMs = (definition?.restartMaxWaitMin ?? 20) * 60_000;
+    const startedWaiting = Date.now();
+    while (this.restartGuard) {
+      const blockers = this.restartGuard.snapshot();
+      const blocked = blockers.checks > 0 || blockers.editing > 0;
+      if (!blocked || Date.now() - startedWaiting >= maxWaitMs) break;
+      const waiting = `chờ khởi động lại (đang có ${blockers.checks} lượt kiểm tra, ${blockers.editing} worker)`;
+      const current = this.latest.get(status.projectId) || status;
+      this.latest.set(status.projectId, { ...current, status: 'restarting', error: waiting });
+      this.eventBus.emit('deploy.restart_waiting', undefined, { projectId: status.projectId, checks: blockers.checks, editing: blockers.editing, message: waiting });
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, Math.max(1, maxWaitMs))));
+    }
     const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
     const args = process.platform === 'darwin' ? ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] : ['--user', 'restart', 'agenthub', '--no-block'];
     const statePath = path.join(this.config.hubHome, 'deploy-restart.json');
