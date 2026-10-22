@@ -46,7 +46,6 @@ const SetupRedirect: React.FC = () => {
 };
 
 export const App: React.FC = () => {
-  const { data: config } = useQuery({ queryKey: ['config'], queryFn: getConfig, staleTime: 30_000 });
   useEffect(() => {
     // Start SSE stream connection and automatic cache invalidation
     const cleanupSSE = connectSSE(queryClient);
@@ -57,6 +56,15 @@ export const App: React.FC = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <AppShell />
+    </QueryClientProvider>
+  );
+};
+
+/** Everything that reads queries (branding config included) must render inside QueryClientProvider. */
+const AppShell: React.FC = () => {
+  const { data: config } = useQuery({ queryKey: ['config'], queryFn: getConfig, staleTime: 30_000 });
+  return (
       <ThemeProvider>
         <LocaleProvider appName={config?.branding?.name}>
           <BrandingProvider branding={config?.branding}>
@@ -99,6 +107,5 @@ export const App: React.FC = () => {
           </BrandingProvider>
         </LocaleProvider>
       </ThemeProvider>
-    </QueryClientProvider>
   );
 };
