@@ -33,6 +33,8 @@ import {
   rerunProjectDeploy,
   getProjectDeployStatus,
   getConfig,
+  getReviewChecklistPreview,
+  createTask,
 } from '../api/client';
 
 export interface ProjectSettingsDrawerProps {
@@ -48,6 +50,7 @@ export const defaultProjectSettings = (): NonNullable<Project['settings']> => ({
   integration: { enabled: false },
   ci: {},
   references: [],
+  reviewChecklist: [],
   notifications: { telegramContent: 'full' },
 });
 
@@ -79,6 +82,7 @@ export function changedSettings(
     'integration',
     'ci',
     'references',
+    'reviewChecklist',
     'notifications',
   ] as const;
   sections.forEach((section) => {
@@ -161,6 +165,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [draftHooks, setDraftHooks] = useState<string>('');
   const [draftReview, setDraftReview] = useState<string>('');
   const [draftEnvTemplate, setDraftEnvTemplate] = useState<string>('');
+  const [checklistDraft, setChecklistDraft] = useState('');
 
   const [checksError, setChecksError] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -175,6 +180,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   useEffect(() => {
     if (project) {
       setDraftSettings(project.settings ? JSON.parse(JSON.stringify(project.settings)) : defaultProjectSettings());
+      setChecklistDraft((project.settings?.reviewChecklist || []).join('\n'));
       setDraftChecks(
         typeof project.checks === 'string'
           ? project.checks
@@ -362,6 +368,15 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       JSON.stringify(origSettings.references),
     [draftSettings.references, origSettings.references],
   );
+  const checklistChanged = useMemo(
+    () => JSON.stringify(draftSettings.reviewChecklist || []) !== JSON.stringify(origSettings.reviewChecklist || []),
+    [draftSettings.reviewChecklist, origSettings.reviewChecklist],
+  );
+  const checklistPreview = useQuery({
+    queryKey: ['project-checklist-preview', project?.id, draftSettings.reviewChecklist],
+    queryFn: () => getReviewChecklistPreview(project!.id),
+    enabled: Boolean(isOpen && project?.id && (draftSettings.reviewChecklist || []).length),
+  });
   const notificationsChanged = useMemo(
     () =>
       JSON.stringify(draftSettings.notifications) !==
@@ -391,6 +406,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     if (worktreeChanged) count++;
     if (integrationChanged) count++;
     if (referencesChanged) count++;
+    if (checklistChanged) count++;
     if (notificationsChanged) count++;
     if (checksChanged) count++;
     if (hooksChanged) count++;
@@ -402,6 +418,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     worktreeChanged,
     integrationChanged,
     referencesChanged,
+    checklistChanged,
     notificationsChanged,
     checksChanged,
     hooksChanged,
@@ -466,6 +483,17 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     },
   });
 
+  const suggestChecksMutation = useMutation({
+    mutationFn: () => createTask({
+      project: project!.id,
+      slug: `checklist-${Date.now()}`,
+      title: 'Chuyển checklist thành kiểm tra tự động',
+      body: `Đọc các file checklist dưới đây và chuyển các mục lặp lại thành checks tự động (semgrep/grep script):\n\n${(draftSettings.reviewChecklist || []).map((item) => `- ${item}`).join('\n')}`,
+      level: 'easy',
+    }),
+    onSuccess: () => setToastMessage(t('projects.draftChecksCreated')),
+  });
+
   const handleDiscard = () => {
     if (!project) return;
     setDraftSettings(
@@ -473,6 +501,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
         ? JSON.parse(JSON.stringify(project.settings))
         : defaultProjectSettings(),
     );
+    setChecklistDraft((origSettings.reviewChecklist || []).join('\n'));
     setDraftChecks(origChecks);
     setDraftHooks(origHooks);
     setDraftReview(origReview);
@@ -522,6 +551,12 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     }
 
     saveMutation.mutate(payload);
+  };
+
+  const handleChecklistChange = (value: string) => {
+    const paths = value.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, 5);
+    setChecklistDraft(value);
+    setDraftSettings((prev) => ({ ...prev, reviewChecklist: paths }));
   };
 
   if (!isOpen || !project) return null;
@@ -1202,6 +1237,33 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                 </TableBody>
               </Table>
             )}
+          </Card>
+
+          {/* Section 4b: Kiến thức & checklist */}
+          <Card className="p-5 space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-[var(--t-text)]">{t('projects.knowledgeChecklistTitle')}</h3>
+              <p className="text-xs text-[var(--t-text-3)]">{t('projects.knowledgeChecklistHint')}</p>
+            </div>
+            <textarea
+              value={checklistDraft}
+              onChange={(e) => handleChecklistChange(e.target.value)}
+              placeholder={t('projects.knowledgeChecklistPlaceholder')}
+              rows={3}
+              className="w-full rounded border p-2 bg-[var(--t-surface-2)] text-xs font-mono"
+              aria-label={t('projects.reviewChecklistLabel')}
+            />
+            {checklistPreview.data?.map((item) => (
+              <div key={item.path} className="rounded border p-2 text-xs">
+                <div className="flex justify-between"><span className="font-semibold">{item.path}</span><span>{item.size === null ? t('projects.checklistUnreadable') : `${item.size} bytes`}</span></div>
+                {item.truncated && <div className="text-[var(--t-crit)]">{t('projects.checklistTooLarge')}</div>}
+                {item.warning && <div className="text-[var(--t-crit)]">{item.warning}</div>}
+                {item.content && <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{item.content.slice(0, 4000)}</pre>}
+              </div>
+            ))}
+            <Button variant="secondary" size="sm" disabled={(draftSettings.reviewChecklist || []).length === 0 || suggestChecksMutation.isPending} onClick={() => suggestChecksMutation.mutate()}>
+              {t('projects.suggestAutomaticChecks')}
+            </Button>
           </Card>
 
           {/* Section 5: Thông báo (Notifications) */}

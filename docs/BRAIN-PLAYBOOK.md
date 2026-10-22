@@ -26,20 +26,21 @@ Sau mỗi lần xử lý, cập nhật trạng thái bằng `hub_brain` (hoặc 
 Luôn xem diff thật (`hub_git diff <baseRef>...<branch>`), đừng chỉ đọc báo cáo DONE của worker.
 
 1. **Phạm vi:** task làm đúng đề bài, không sửa lan sang chỗ khác.
-2. **Không xoá tính năng của task khác.** Đếm số dòng bị xoá. Lần merge `integration` của worker từng làm mất khoảng 390 dòng (PermissionBroker, profileName). Thấy nhiều dòng bị xoá trong file dùng chung (`src/chat/service.ts`, `src/scheduler/index.ts`, `src/db/index.ts`…) thì trả về.
-3. **Migration DB:**
+2. **Checklist dự án:** nếu có `settings.reviewChecklist`, đọc từng file và đối chiếu diff. Feedback phải liệt kê mục vi phạm; nếu không có, ghi rõ `đã đối chiếu checklist: không vi phạm`.
+3. **Không xoá tính năng của task khác.** Đếm số dòng bị xoá. Lần merge `integration` của worker từng làm mất khoảng 390 dòng (PermissionBroker, profileName). Thấy nhiều dòng bị xoá trong file dùng chung (`src/chat/service.ts`, `src/scheduler/index.ts`, `src/db/index.ts`…) thì trả về.
+4. **Migration DB:**
    - Chỉ được thêm vào **cuối** mảng `MIGRATIONS`, không bao giờ chèn vào giữa. Chèn vào giữa làm DB đang chạy hỏng khi khởi động lại.
    - Các nhánh chạy song song hay trùng số migration. Khi merge, đánh lại số sau migration cuối của `integration`.
    - Cập nhật `test/fixtures/migrations.lock` bằng cách **chỉ thêm dòng**. Test `migrations-append-only` sẽ báo lỗi nếu làm sai.
    - Migration dựng lại bảng (`CREATE TABLE …_new` / `DROP` / `RENAME`) phải chép đủ mọi cột hiện có. Chạy thử trên một bản sao DB thật trước khi cài.
-4. **Test:** phải có test cho hành vi mới. Task nào thiếu test thì trả về và nêu cụ thể các trường hợp cần test.
-5. **i18n:** chuỗi giao diện mới phải nằm trong `web/src/locales/vi.ts` và `en.ts`. Test `i18nAudit` sẽ báo lỗi nếu còn chuỗi tiếng Việt viết thẳng trong code.
-6. **Bảo mật:**
+5. **Test:** phải có test cho hành vi mới. Task nào thiếu test thì trả về và nêu cụ thể các trường hợp cần test.
+6. **i18n:** chuỗi giao diện mới phải nằm trong `web/src/locales/vi.ts` và `en.ts`. Test `i18nAudit` sẽ báo lỗi nếu còn chuỗi tiếng Việt viết thẳng trong code.
+7. **Bảo mật:**
    - Không chạy lệnh tuỳ ý lấy từ API hoặc từ config sửa được qua API.
    - Không ghi hay in token, email.
    - Mọi lệnh xoá thư mục phải kiểm tra `realpath` nằm trong đúng thư mục gốc được phép, không phải `/` hay `$HOME`, và có file đánh dấu nếu là thư mục do hub tạo.
-7. **Không commit file `.agenthub/`** (DONE, BLOCKED, context) vào repo.
-8. Lỗi cùng một kiểu xuất hiện nhiều lần thì đưa thành test hoặc thành quy tắc trong sổ tay này.
+8. **Không commit file `.agenthub/`** (DONE, BLOCKED, context) vào repo.
+9. Lỗi cùng một kiểu xuất hiện nhiều lần thì đưa thành test hoặc thành quy tắc trong sổ tay này.
 
 ## 3. Merge
 

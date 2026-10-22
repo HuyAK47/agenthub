@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
 import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
+import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -3116,6 +3117,22 @@ export class AppService {
   listKnowledge(projectId: string): KnowledgeEntryRow[] {
     if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
+  }
+
+  reviewChecklistPreview(projectId: string) {
+    const project = this.projectRepo.get(projectId);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    return projectSettings(project).reviewChecklist.slice(0, 5).map((entry) => {
+      const filePath = resolveProjectFile(project.path, entry);
+      if (!filePath) return { path: entry, resolvedPath: null, size: null, truncated: false, content: null, warning: 'Đường dẫn không hợp lệ hoặc nằm ngoài project' };
+      try {
+        const stat = fs.statSync(filePath);
+        const truncated = stat.size > 64 * 1024;
+        return { path: entry, resolvedPath: filePath, size: stat.size, truncated, content: truncated ? null : fs.readFileSync(filePath, 'utf8') };
+      } catch {
+        return { path: entry, resolvedPath: filePath, size: null, truncated: false, content: null, warning: 'Không thể đọc file' };
+      }
+    });
   }
 
   addKnowledge(projectId: string, raw: unknown): KnowledgeEntryRow {

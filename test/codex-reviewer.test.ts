@@ -64,4 +64,16 @@ describe('Codex reviewer output', () => {
     expect(prompt).toContain('"ok": true');
     expect(prompt).toContain('Chỉ trả về đúng một JSON object');
   });
+
+  it('does not read checklist files outside the worktree', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reviewer-'));
+    const outside = path.join(root, 'secret.md');
+    fs.writeFileSync(outside, 'DO NOT LEAK', 'utf8');
+    const worktree = path.join(root, 'worktree');
+    fs.mkdirSync(worktree);
+    const prompt = buildReviewerPrompt('Task', worktree, [], [outside, '../secret.md']);
+    expect(prompt).not.toContain('DO NOT LEAK');
+    expect(prompt).toContain('bị từ chối');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

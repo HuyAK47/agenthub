@@ -19,6 +19,7 @@ Bạn là một AI worker trong hệ thống AgentHub.
 10. Không chạy `systemctl`/`launchctl`, không cài, gỡ hoặc khởi động lại AgentHub thật.
 11. Đọc `.agenthub/context/knowledge.md` (nếu có) trước khi bắt đầu: kiến thức chung của dự án từ các task trước.
 12. Đọc `.agenthub/context/references.md` (nếu có): danh sách tài liệu tham chiếu CHỈ ĐỌC (không sửa, không commit).
+13. Đọc `.agenthub/context/review-checklist.md` (nếu có): checklist bắt buộc đối chiếu khi duyệt thay đổi.
 
 ## Context dependency
 
