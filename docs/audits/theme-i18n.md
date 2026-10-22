@@ -8,8 +8,8 @@
 
 - Theme đã có lựa chọn `dark`, `light`, `system`, lưu trong `localStorage`, theo dõi `prefers-color-scheme` và script trong `index.html` để áp dụng class trước khi React khởi chạy. Bổ sung token cho overlay, terminal và log để tránh nhấp nháy/đổi màu sai khi đổi theme.
 - Thay màu cố định ở terminal, live log, modal overlay, Plans badge/status, Claude session badge, Settings form và một số trạng thái bằng CSS token semantic.
-- Chuỗi UI hard-code ở skip link, BrainCard, chat session list/tool step, project knowledge, Settings, Profiles modal, Dashboard orphan process, Task detail liên kết task và Chat model aria-label đã chuyển sang i18n.
-- Sửa nhãn Plans dùng đúng khóa theo locale; bổ sung phần hiển thị cài đặt phê duyệt khi chưa có batch và test hiện có xác nhận 12/12 case của Plans.
+- Chuỗi UI hard-code ở skip link, BrainCard, chat session list/tool step, project knowledge (áp lại vào bố cục mới), Settings, Profiles modal, Dashboard orphan process, Task detail liên kết task và Chat model aria-label đã chuyển sang i18n.
+- Nhãn Plans trong layout sidebar dùng `common.plans` theo đúng locale; PlansPage chỉ đổi màu badge trạng thái sang token semantic, tích hợp với cấu hình duyệt kế hoạch từ integration (12/12 test plansPage đạt).
 - `vi` và `en` tiếp tục có cùng tập khóa. Test `i18nAudit.test.tsx` đã có kiểm tra parity khóa và render các trang in English không còn dấu tiếng Việt.
 
 ## Còn lại / lý do
