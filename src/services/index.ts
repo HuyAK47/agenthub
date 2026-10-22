@@ -33,7 +33,7 @@ import {
 import type { CiWatchService } from '../ci.js';
 import { BulletinService } from '../bulletin.js';
 import { parseCodexTokenItem, writeCodexAuthFile } from '../profiles/codexToken.js';
-import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, inspectAgyAccessToken } from '../profiles/index.js';
+import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, inspectAgyAccessToken, fetchAgyTier, agyTierToPlan } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
@@ -1327,7 +1327,34 @@ export class AppService {
       const fields = token.fieldNames?.length ? ` (các trường: ${token.fieldNames.slice(0, 12).join(', ')})` : '';
       return { avatarUrl: profile.avatarUrl ?? null, message: reasons[token.skip] + fields };
     }
-    const { info, status } = await fetchAgyGoogleUserInfoDetailed(token.accessToken);
+    const [{ info, status }, tier] = await Promise.all([
+      fetchAgyGoogleUserInfoDetailed(token.accessToken),
+      fetchAgyTier(token.accessToken),
+    ]);
+    const otherAccount = Boolean(info?.email && profile.email && info.email.toLowerCase() !== profile.email.toLowerCase());
+    const planNote = otherAccount ? '' : this.applyAgyTier(profile, tier);
+    const avatar = this.applyAgyAvatar(profile, info, status, otherAccount);
+    return { avatarUrl: avatar.avatarUrl, message: avatar.message + planNote };
+  }
+
+  /** Lưu gói Google AI (FREE/PRO/ULTRA) đọc từ loadCodeAssist; trả đoạn ghi chú cho thông báo. */
+  private applyAgyTier(profile: ProfileRow, tier: { tierId: string | null; status: number }): string {
+    const plan = agyTierToPlan(tier.tierId);
+    if (!plan) return tier.status === 200 ? '' : ` · Không đọc được gói (${tier.status ? `HTTP ${tier.status}` : 'lỗi mạng'})`;
+    if (plan !== profile.plan) {
+      this.profileRepo.updatePlan(profile.name, plan);
+      this.scheduler.getEventBus().emit('profile.updated', undefined, { name: profile.name, plan });
+    }
+    return ` · Gói ${plan.toUpperCase()}`;
+  }
+
+  private applyAgyAvatar(
+    profile: ProfileRow,
+    info: Awaited<ReturnType<typeof fetchAgyGoogleUserInfoDetailed>>['info'],
+    status: number,
+    otherAccount: boolean,
+  ): { avatarUrl: string | null; message: string } {
+    const name = profile.name;
     if (!info) {
       const message = status === 0
         ? 'Không kết nối được tới Google'
@@ -1338,10 +1365,10 @@ export class AppService {
             : `Google trả lỗi HTTP ${status}`;
       return { avatarUrl: profile.avatarUrl ?? null, message };
     }
-    if (!info.picture) return { avatarUrl: profile.avatarUrl ?? null, message: 'Google không trả về ảnh đại diện (token thiếu quyền profile hoặc tài khoản chưa đặt ảnh)' };
-    if (info.email && profile.email && info.email.toLowerCase() !== profile.email.toLowerCase()) {
+    if (otherAccount) {
       return { avatarUrl: profile.avatarUrl ?? null, message: `Token thuộc tài khoản khác (${info.email}), bỏ qua ảnh` };
     }
+    if (!info.picture) return { avatarUrl: profile.avatarUrl ?? null, message: 'Google không trả về ảnh đại diện (token thiếu quyền profile hoặc tài khoản chưa đặt ảnh)' };
     if (info.picture !== profile.avatarUrl) {
       this.profileRepo.updateAvatarUrl(name, info.picture);
       this.scheduler.getEventBus().emit('profile.updated', undefined, { name, avatarUrl: info.picture });
@@ -1385,6 +1412,7 @@ export class AppService {
           this.profileRepo.upsert({ ...profile, email });
           // Ảnh đại diện thuộc tài khoản cũ; chỉ lấy lại được khi đăng nhập bằng refresh token.
           if (profile.avatarUrl) this.profileRepo.updateAvatarUrl(profile.name, null);
+          if (profile.plan) this.profileRepo.updatePlan(profile.name, null);
         } catch {
           return email;
         }
@@ -1725,16 +1753,13 @@ export class AppService {
         continue;
       }
 
-      // Lấy Google user info (bao gồm avatar / picture)
-      let avatarUrl: string | null = null;
-      try {
-        const userInfo = await fetchAgyGoogleUserInfo(exchanged.accessToken);
-        if (userInfo?.picture) {
-          avatarUrl = userInfo.picture;
-        }
-      } catch {
-        // bỏ qua nếu không lấy được ảnh
-      }
+      // Lấy ảnh Google và gói Google AI (loadCodeAssist, như Cockpit tools) bằng access token vừa đổi.
+      const [userInfo, tier] = await Promise.all([
+        fetchAgyGoogleUserInfo(exchanged.accessToken).catch(() => null),
+        fetchAgyTier(exchanged.accessToken),
+      ]);
+      const avatarUrl: string | null = userInfo?.picture ?? null;
+      const plan = agyTierToPlan(tier.tierId);
 
       if (action === 'created') {
         if (existing) this.profileRepo.restore(targetName);
@@ -1746,6 +1771,8 @@ export class AppService {
       const nextAvatar = avatarUrl ?? (sameEmail(current) ? current.avatarUrl ?? null : null);
       this.profileRepo.upsert({ ...current, email });
       this.profileRepo.updateAvatarUrl(targetName, nextAvatar);
+      // Gói cũ chỉ giữ khi vẫn là cùng tài khoản và lần này không đọc được gói.
+      this.profileRepo.updatePlan(targetName, plan ?? (sameEmail(current) ? current.plan ?? null : null));
       // Google đã nhận refresh token; agy có dùng được file token hay không thì Check bên dưới xác nhận.
       this.profileRepo.updateAuthState(targetName, 'ok', 'Đã xác thực qua refresh token', null);
 

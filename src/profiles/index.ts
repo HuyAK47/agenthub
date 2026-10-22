@@ -10,7 +10,7 @@ import { normalizePlan } from './plan.js';
 import { findAgyPath } from '../doctor.js';
 
 export { accountKey, sameAccount } from './account.js';
-export { exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, readAgyAccessToken, inspectAgyAccessToken, getAgyGoogleClientId, getAgyGoogleClientSecret, GOOGLE_TOKEN_ENDPOINT } from './agyToken.js';
+export { exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, readAgyAccessToken, inspectAgyAccessToken, fetchAgyTier, agyTierToPlan, getAgyGoogleClientId, getAgyGoogleClientSecret, GOOGLE_TOKEN_ENDPOINT } from './agyToken.js';
 
 /** Resolve the system Claude profile while keeping existing installations compatible. */
 export function resolveClaudeProfile(
