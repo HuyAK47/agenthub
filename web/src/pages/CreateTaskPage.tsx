@@ -104,6 +104,8 @@ export const CreateTaskPage: React.FC = () => {
         <button
           type="button"
           onClick={() => navigate('/tasks')}
+          aria-label={t('common.back')}
+          title={t('common.back')}
           className="p-2 rounded-lg text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-surface-2)] cursor-pointer"
         >
           <ArrowLeft className="w-5 h-5" />

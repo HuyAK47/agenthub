@@ -495,6 +495,8 @@ export const TaskDetailPage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate('/tasks')}
+            aria-label={t('common.back')}
+            title={t('common.back')}
             className="p-2 mt-1 rounded-lg text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-surface-2)] cursor-pointer"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -703,7 +705,11 @@ export const TaskDetailPage: React.FC = () => {
           {(task.status === 'done' || task.status === 'cancelled') && task.worktreePath && (
             <button
               type="button"
-              onClick={() => deleteWorktreeMutation.mutate()}
+              onClick={() => {
+                if (window.confirm(t('taskDetail.confirmDeleteWorktree'))) {
+                  deleteWorktreeMutation.mutate();
+                }
+              }}
               disabled={deleteWorktreeMutation.isPending}
               className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] text-[var(--t-text-3)] text-xs font-medium hover:bg-[var(--t-surface-2)] inline-flex items-center gap-1.5 cursor-pointer"
             >
