@@ -820,6 +820,45 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[0].body?.text).toContain('Đã đưa task p1/task-fail vào hàng đợi');
     });
+
+    it('/deploy without arguments lists deploy statuses including pushStatus', async () => {
+      const getStatusSpy = vi.spyOn(ctx.service, 'getDeployStatuses').mockReturnValue([
+        { projectId: 'p1', status: 'succeeded', pushStatus: 'push lúc 14:00' },
+      ]);
+      await bot.handleUpdate({
+        update_id: 24,
+        message: {
+          message_id: 24,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/deploy',
+        },
+      });
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[0].body?.text).toContain('p1: succeeded (push lúc 14:00)');
+      getStatusSpy.mockRestore();
+    });
+
+    it('/deploy <project> push invokes pushDeployNow and reports result', async () => {
+      const pushSpy = vi.spyOn(ctx.service, 'pushDeployNow').mockResolvedValue({
+        projectId: 'p1',
+        status: 'succeeded',
+        pushStatus: 'push lúc 14:30',
+      });
+      await bot.handleUpdate({
+        update_id: 25,
+        message: {
+          message_id: 25,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/deploy p1 push',
+        },
+      });
+      expect(pushSpy).toHaveBeenCalledWith('p1');
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[0].body?.text).toContain('Đã đẩy p1 lên remote (push lúc 14:30)');
+      pushSpy.mockRestore();
+    });
   });
 
   describe('4. Inline button callbacks', () => {

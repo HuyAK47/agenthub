@@ -499,6 +499,10 @@ export class DeployService {
     return [...this.latest.keys()].map((id) => this.getStatus(id)!).filter(Boolean);
   }
 
+  async waitForQueue(): Promise<void> {
+    await this.queue;
+  }
+
   rerun(projectId: string): DeployStatus {
     if (!this.definition(projectId) || !this.projectRepo.get(projectId)) return { projectId, status: 'skipped' };
     return this.enqueue(projectId);
