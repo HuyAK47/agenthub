@@ -2,6 +2,16 @@
 
 **English** | [Tiếng Việt](../GETTING-STARTED.md)
 
+## Rename the application
+
+Open **Settings → Application name** to change the display name, short name, tagline, and accent color. You can also use the CLI:
+
+```bash
+agenthub config set branding.name "New name"
+```
+
+This changes display text only. The `agenthub` CLI, service, `~/.agenthub` directory, MCP server, `AGENTHUB_*` environment variables, and release package name remain unchanged. PNG/SVG logos can be uploaded in Settings; logos are limited to 256KB and SVG is safety-checked.
+
 A beginner's guide to installing AgentHub, connecting AI worker accounts, and delegating coding tasks.
 
 AgentHub runs locally on your machine. It breaks down development tasks and schedules them across AI coding workers (Gemini via Antigravity CLI and OpenAI Codex CLI). Each task runs in an isolated git worktree. The hub continuously monitors quota limits, system load, and disk headroom, and automatically executes quality checks (lint, test, build, migration verification) once a worker finishes. **Claude Code** acts as the central coordinator ("Brain"): planning, delegating, reviewing, and merging code.

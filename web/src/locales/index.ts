@@ -45,5 +45,9 @@ export function translate(
     }
   }
 
+  if (params?.appName !== undefined && params.appName !== null) {
+    text = text.replace(/AgentHub/g, String(params.appName));
+  }
+
   return text;
 }

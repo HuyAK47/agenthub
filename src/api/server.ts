@@ -14,6 +14,7 @@ import { registerSseRoute } from './sse.js';
 import { PtyManager, registerPtyRoutes } from './pty.js';
 import { registerBrainRoutes } from '../brain.js';
 import { registerChatRoutes } from '../chat/service.js';
+import { brandingLogoPath, saveBrandingLogo } from '../branding.js';
 
 export function resolveWebDistDir(customDir?: string): string {
   return path.resolve(customDir || resolveWebDir(import.meta.url, process.env));
@@ -477,6 +478,35 @@ export async function createServer(
   // --- Config API ---
   fastify.get('/api/config', async () => {
     return service.getConfig();
+  });
+
+  fastify.get('/api/branding/logo', async (_req, reply) => {
+    const logoPath = brandingLogoPath(config.hubHome);
+    if (!logoPath) return reply.status(404).send({ error: 'not_found', message: 'Chưa cấu hình logo' });
+    const mime = logoPath.endsWith('.svg') ? 'image/svg+xml' : 'image/png';
+    return reply
+      .header('Cache-Control', 'public, max-age=300')
+      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Content-Disposition', `inline; filename="logo${mime === 'image/svg+xml' ? '.svg' : '.png'}"`)
+      .type(mime)
+      .send(fs.createReadStream(logoPath));
+  });
+
+  fastify.put('/api/branding/logo', async (req: FastifyRequest) => {
+    const body = (req.body || {}) as { mimeType?: unknown; data?: unknown };
+    if (typeof body.mimeType !== 'string' || typeof body.data !== 'string') {
+      throw new HttpError(400, 'bad_request', 'Logo cần mimeType và data base64');
+    }
+    let data: Buffer;
+    try { data = Buffer.from(body.data, 'base64'); } catch { throw new HttpError(400, 'bad_request', 'Logo base64 không hợp lệ'); }
+    try {
+      const logo = saveBrandingLogo(config.hubHome, body.mimeType, data);
+      service.updateConfig({ branding: { logo } });
+      return { ok: true, logo };
+    } catch (error) {
+      throw new HttpError(400, 'invalid_logo', error instanceof Error ? error.message : 'Logo không hợp lệ');
+    }
   });
 
   fastify.put('/api/config', async (req: FastifyRequest) => {

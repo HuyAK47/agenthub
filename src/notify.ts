@@ -38,6 +38,7 @@ export class NotificationService {
   private lastSentCi = new Map<string, number>();
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
+  private get appName(): string { return this.config.branding?.name || 'AgentHub'; }
   private checkTimer?: NodeJS.Timeout;
 
   constructor(opts: NotificationServiceOptions) {
@@ -79,7 +80,7 @@ export class NotificationService {
 
     const count = this.quietHoursQueue.length;
     this.quietHoursQueue = [];
-    this.notify(`AgentHub: ${count} thông báo trong đêm`, 'normal');
+    this.notify(`${this.appName}: ${count} thông báo trong đêm`, 'normal');
     return true;
   }
 
@@ -157,11 +158,11 @@ export class NotificationService {
         const text = typeof p.text === 'string' ? p.text : '';
         if (!text) break;
         if (p.level === 'incident') {
-          this.notify(`🚨 Sự cố AgentHub: ${text}`, 'critical');
+          this.notify(`🚨 Sự cố ${this.appName}: ${text}`, 'critical');
         } else if (p.level === 'decision') {
           this.notify(`📌 Cần quyết định: ${text}`, 'normal');
         } else {
-          this.notify(`ℹ️ AgentHub: ${text}`, 'normal');
+          this.notify(`ℹ️ ${this.appName}: ${text}`, 'normal');
         }
         break;
       }
@@ -176,7 +177,7 @@ export class NotificationService {
 
       case 'task.review_ready': {
         const title = this.resolveTaskTitle(taskId, p);
-        let msg = `AgentHub: ${title} chờ review`;
+        let msg = `${this.appName}: ${title} chờ review`;
         if ('checksPassed' in p) {
           msg += ` (${p.checksPassed ? '✓' : '✗'} checks)`;
         }
@@ -186,13 +187,13 @@ export class NotificationService {
 
       case 'task.failed': {
         const title = this.resolveTaskTitle(taskId, p);
-        this.notify(`AgentHub: ${title} thất bại`, 'critical');
+        this.notify(`${this.appName}: ${title} thất bại`, 'critical');
         break;
       }
 
       case 'task.blocked': {
         const title = this.resolveTaskTitle(taskId, p);
-        this.notify(`AgentHub: ${title} bị chặn`, 'normal');
+        this.notify(`${this.appName}: ${title} bị chặn`, 'normal');
         break;
       }
 
@@ -381,10 +382,10 @@ export class NotificationService {
     // notify-send supports low, normal, and critical (not warning). Keep the
     // service's warning classification while explicitly using normal urgency.
     const args = urgency === 'critical'
-      ? ['-u', 'critical', '-t', '10000', '-a', 'AgentHub', message]
+      ? ['-u', 'critical', '-t', '10000', '-a', this.appName, message]
       : urgency === 'warning'
-      ? ['-u', 'normal', '-t', '10000', '-a', 'AgentHub', message]
-      : ['-t', '10000', '-a', 'AgentHub', message];
+      ? ['-u', 'normal', '-t', '10000', '-a', this.appName, message]
+      : ['-t', '10000', '-a', this.appName, message];
 
     try {
       if (this.execFn) {

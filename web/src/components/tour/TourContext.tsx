@@ -166,7 +166,13 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const key = Object.keys(pageTours).find((candidate) => candidate === pathname || (candidate !== '/' && pathname.startsWith(`${candidate}/`)));
     return key ? pageTours[key] : null;
   }, []);
-  const active = useMemo(() => tourDefinitions.find((tour) => tour.id === activeId) || Object.values(pageTours).find((tour) => tour.id === activeId) || modalTourDefinitions.find((tour) => tour.id === activeId) || (activeId ? null : null), [activeId]);
+  const active = useMemo(() => {
+    const tour = tourDefinitions.find((item) => item.id === activeId)
+      || Object.values(pageTours).find((item) => item.id === activeId)
+      || modalTourDefinitions.find((item) => item.id === activeId)
+      || null;
+    return tour;
+  }, [activeId, config?.branding?.name]);
 
   const markSeen = useCallback(async (id: string) => {
     try {

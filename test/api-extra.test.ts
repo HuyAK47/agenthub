@@ -292,6 +292,25 @@ describe('AgentHub API Extra Endpoints', () => {
     });
   });
 
+  describe('branding logo security headers', () => {
+    it('serves sanitized SVG with a restrictive policy and inline disposition', async () => {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path/></svg>';
+      const upload = await server.inject({
+        method: 'PUT',
+        url: '/api/branding/logo',
+        headers: authHeaders(),
+        payload: { mimeType: 'image/svg+xml', data: Buffer.from(svg).toString('base64') },
+      });
+      expect(upload.statusCode).toBe(200);
+
+      const response = await server.inject({ method: 'GET', url: '/api/branding/logo', headers: authHeaders() });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'; img-src data:");
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['content-disposition']).toBe('inline; filename="logo.svg"');
+    });
+  });
+
   // =========================================================================
   // 2. PATCH /api/projects/:id (checks validation) & DELETE /api/projects/:id (409)
   // =========================================================================
