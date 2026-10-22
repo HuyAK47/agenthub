@@ -58,7 +58,7 @@ export class DeployService {
     private eventBus: EventBus,
     private debounceMs = 60_000,
     private commandRunner: GitRunner = async (cwd, args) => {
-      const env = { ...process.env, AGENTHUB_WORKER: undefined };
+      const env: NodeJS.ProcessEnv = { ...process.env, AGENTHUB_WORKER: undefined };
       if (env.PATH) env.PATH = env.PATH.split(path.delimiter).filter((entry) => !entry.includes(`${path.sep}shims${path.sep}worker`)).join(path.delimiter);
       const result = await runInProcessGroup('git', args, { cwd, env, timeoutMs: 120_000, maxOutput: 1024 * 1024 });
       return { code: result.code ?? 1, output: result.output };
