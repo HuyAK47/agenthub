@@ -21,7 +21,7 @@ let runRepo: RunRepo;
 let eventRepo: EventRepo;
 
 function setupTestEnv() {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-sched-test-'));
+  tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-sched-test-')));
   const agyHomesDir = path.join(tmpDir, 'agy-homes');
   fs.mkdirSync(agyHomesDir, { recursive: true });
 
@@ -491,11 +491,16 @@ describe('Codex reviewer failover lifecycle', () => {
 
   function makeReviewer(mode: string, withChecks = true) {
     const projectPath = path.join(tmpDir, 'review-repo');
-    if (!projectRepo.get('test-project')) createTestProject(projectPath);
+    if (!projectRepo.get('test-project') || !fs.existsSync(projectPath)) createTestProject(projectPath);
     profileRepo.upsert({ name: 'codex-1', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
     const worktreePath = path.join(tmpDir, 'review-worktree');
     fs.rmSync(worktreePath, { recursive: true, force: true });
-    fs.cpSync(projectPath, worktreePath, { recursive: true });
+    try {
+      execFileSync('git', ['-C', projectPath, 'worktree', 'prune']);
+      execFileSync('git', ['-C', projectPath, 'worktree', 'add', '-q', '-b', `review-${Date.now()}-${Math.random().toString(36).slice(2)}`, worktreePath, 'main']);
+    } catch {
+      fs.cpSync(projectPath, worktreePath, { recursive: true });
+    }
     taskRepo.insert({ id: 'test-project/review', projectId: 'test-project', slug: 'review', title: 'Review me', body: 'Check the change.', status: 'review' });
     taskRepo.update('test-project/review', { worktreePath });
     process.env.FAKE_MODE = mode;
