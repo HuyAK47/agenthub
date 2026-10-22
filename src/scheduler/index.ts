@@ -483,7 +483,7 @@ export class Scheduler {
     const shutdownRuns = this.runRepo.getShutdownRuns();
     for (const run of shutdownRuns) {
       const task = this.taskRepo.get(run.taskId);
-      if (task && task.status === 'running') {
+      if (task && this.projectRepo.get(task.projectId) && task.status === 'running') {
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
         this.eventBus.emit('task.queued', run.taskId, { reason: 'daemon_shutdown' });
       }
@@ -503,6 +503,8 @@ export class Scheduler {
         continue;
       }
       if (!this.isProcessAlive(run.pid, run.pidStart)) {
+        const task = this.taskRepo.get(run.taskId);
+        if (!task || !this.projectRepo.get(task.projectId)) continue;
         if (this.recoverFinishedWork(run)) continue;
         this.runRepo.finish(run.id, 'crashed');
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
@@ -829,7 +831,7 @@ export class Scheduler {
       if (this.tasksWaitingForDisk.size > 0) {
         for (const taskId of [...this.tasksWaitingForDisk]) {
           const task = this.taskRepo.get(taskId);
-          if (task && (task.status === 'waiting_quota' || (task.status as string) === 'waiting_disk')) {
+          if (task && this.projectRepo.get(task.projectId) && (task.status === 'waiting_quota' || (task.status as string) === 'waiting_disk')) {
             this.taskRepo.updateStatus(taskId, 'queued');
             this.eventBus.emit('task.queued', taskId, { reason: 'disk_ready' });
           }
@@ -838,6 +840,7 @@ export class Scheduler {
       }
       const diskWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'disk');
       for (const t of diskWaiters) {
+        if (!this.projectRepo.get(t.projectId)) continue;
         this.taskRepo.updateStatus(t.id, 'queued');
         this.eventBus.emit('task.queued', t.id, { reason: 'disk_ready' });
       }
@@ -963,6 +966,7 @@ export class Scheduler {
   wakeWaitingQuotaTasks(reason = 'quota_unblocked'): void {
     const waitingTasks = this.taskRepo.getByStatus('waiting_quota');
     for (const task of waitingTasks) {
+      if (!this.projectRepo.get(task.projectId)) continue;
       if (reason !== 'startup_recheck' && task.waitReason === 'disk') {
         if (this.getMonitoredDisks().some((disk) => disk.low)) continue;
       }

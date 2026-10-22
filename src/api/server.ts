@@ -191,8 +191,10 @@ export async function createServer(
   }
 
   // --- Projects API ---
-  fastify.get('/api/projects', async () => {
-    return service.listProjects();
+  fastify.get('/api/projects', async (req: FastifyRequest) => {
+    const query = req.query as { archived?: string | boolean };
+    const includeArchived = query?.archived === true || query?.archived === 'true' || query?.archived === '1';
+    return service.listProjects(includeArchived);
   });
 
   fastify.get('/api/projects/:id', async (req: FastifyRequest) => {
@@ -235,7 +237,14 @@ export async function createServer(
 
   fastify.delete('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return service.deleteProject(id);
+    const query = req.query as { purge?: string | boolean; confirm?: string };
+    const purge = query?.purge === true || query?.purge === 'true' || query?.purge === '1';
+    return service.deleteProject(id, { purge, confirm: query?.confirm });
+  });
+
+  fastify.post('/api/projects/:id/restore', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.restoreProject(id);
   });
 
   fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
