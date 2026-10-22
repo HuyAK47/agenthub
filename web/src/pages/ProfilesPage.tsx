@@ -29,6 +29,7 @@ import {
   refreshProfileUsage,
   renameProfile,
   updateProfile,
+  updateConfig,
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { DailyUsageTable } from '../components/DailyUsageTable';
@@ -874,6 +875,23 @@ function AddProfileModal({
     }
   };
 
+  const enableAndRetryImport = async () => {
+    setCockpitLoading(true);
+    setCockpitError('');
+    try {
+      const parsed = JSON.parse(cockpitJson);
+      await updateConfig({ multiplePerProvider: true });
+      const result = await importAgyTokens({ tokens: parsed, accountType: cockpitAccountType });
+      setCockpitResult(result);
+      if (result.failedCount === 0) setCockpitJson('');
+      onImported(result);
+    } catch (err: any) {
+      setCockpitError(err?.message || t('profiles.importFailed'));
+    } finally {
+      setCockpitLoading(false);
+    }
+  };
+
   return (
     <Modal
       title={t('profiles.addBtn')}
@@ -1022,6 +1040,11 @@ function AddProfileModal({
                   {cockpitResult.failedCount > 0 && (
                     <button type="button" onClick={() => setCockpitResult(null)} className="button-secondary">
                       {t('profiles.importBack')}
+                    </button>
+                  )}
+                  {cockpitResult.results.some((item) => item.status === 'error' && item.message?.includes('Cho phép nhiều tài khoản')) && (
+                    <button type="button" disabled={cockpitLoading} onClick={enableAndRetryImport} className="button-secondary">
+                      {cockpitLoading ? t('profiles.importingTokens') : t('profiles.enableMultipleAndRetry')}
                     </button>
                   )}
                   <button

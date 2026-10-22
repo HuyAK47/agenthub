@@ -892,7 +892,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
-    multiplePerProvider: userConfig.multiplePerProvider === true,
+    multiplePerProvider: userConfig.multiplePerProvider !== false,
     multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,
     slotsPerCodexProfile: (userConfig.slotsPerCodexProfile as number) || 2,

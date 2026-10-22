@@ -17,6 +17,7 @@ export const SettingsPage: React.FC = () => {
   const [hardChain, setHardChain] = useState<string>('');
   const [easyChain, setEasyChain] = useState<string>('');
   const [timeoutHours, setTimeoutHours] = useState<number>(3);
+  const [multiplePerProvider, setMultiplePerProvider] = useState<boolean>(true);
   const [claudeBin, setClaudeBin] = useState<string>('claude');
   const [allowFullMode, setAllowFullMode] = useState<boolean>(false);
   const [chatModel, setChatModel] = useState<string>('sonnet');
@@ -64,6 +65,7 @@ export const SettingsPage: React.FC = () => {
       setHardChain(hardList.join('\n'));
       setEasyChain(easyList.join('\n'));
       setTimeoutHours(Math.max(1, Math.round(timeoutSec / 3600)));
+      setMultiplePerProvider(config.multiplePerProvider !== false);
       setClaudeBin(config.chat?.claudeBin || 'claude');
       setAllowFullMode(Boolean(config.chat?.allowFullMode));
       setChatModel(config.chat?.model || 'sonnet');
@@ -152,6 +154,7 @@ export const SettingsPage: React.FC = () => {
       modelChainHard: hardModels,
       modelChainEasy: easyModels,
       defaultTimeout,
+      multiplePerProvider,
       modelChains: {
         hard: hardModels,
         easy: easyModels,
@@ -326,6 +329,25 @@ export const SettingsPage: React.FC = () => {
                 value={timeoutHours}
                 onChange={(e) => setTimeoutHours(parseInt(e.target.value, 10) || 1)}
                 className="w-32 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+              />
+            </div>
+
+            <div className="flex items-start justify-between gap-4 border-t border-[var(--t-border)] pt-4">
+              <div>
+                <label htmlFor="multiple-per-provider" className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('settings.multiplePerProviderLabel')}
+                </label>
+                <p className="mt-1 text-xs text-[var(--t-text-3)]">
+                  {t('settings.multiplePerProviderHint')}
+                </p>
+              </div>
+              <input
+                id="multiple-per-provider"
+                data-testid="multiple-per-provider-toggle"
+                type="checkbox"
+                checked={multiplePerProvider}
+                onChange={(e) => setMultiplePerProvider(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-[var(--t-border)]"
               />
             </div>
 
