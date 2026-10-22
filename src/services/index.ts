@@ -135,6 +135,21 @@ function apiTask(task: TaskRow): TaskRow {
   };
 }
 
+function hasConfiguredMerge(project: ProjectRow, baseRef: string): boolean {
+  const settings = projectSettings(project);
+  if (settings.integration.enabled) return true;
+  if (!project.merge) return false;
+  try {
+    const merge = JSON.parse(project.merge) as { enabled?: boolean; worktrees?: Record<string, unknown> };
+    return merge.enabled === true
+      && !!merge.worktrees
+      && typeof merge.worktrees[baseRef] === 'string'
+      && path.isAbsolute(merge.worktrees[baseRef]);
+  } catch {
+    return false;
+  }
+}
+
 export function apiTaskNote(note: TaskNoteRow): TaskNoteRow {
   return {
     ...note,
@@ -2316,11 +2331,7 @@ export class AppService {
 
     // Task history remains readable after its project is archived.
     const project = this.projectRepo.getIncludingArchived(task.projectId);
-    const settings = projectSettings(project);
-    let configuredMerge = settings.integration.enabled;
-    if (project?.merge) {
-      try { configuredMerge = configuredMerge || (JSON.parse(project.merge) as { enabled?: boolean }).enabled === true; } catch { /* handled by merge endpoint */ }
-    }
+    const configuredMerge = project ? hasConfiguredMerge(project, task.baseRef || project.defaultBranch) : false;
     const reviewSettings = project?.review ? (() => {
       try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
     })() : null;
@@ -3106,7 +3117,16 @@ export class AppService {
 
   private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
     const existing = this.taskRepo.getDerivedFrom(source.id).find((task) =>
-      task.sourceRef && !['done', 'cancelled', 'failed', 'blocked'].includes(task.status),
+      task.sourceRef
+      && !['done', 'cancelled', 'failed', 'blocked'].includes(task.status)
+      && (() => {
+        try {
+          const sourceRef = JSON.parse(task.sourceRef) as { checkName?: unknown };
+          return sourceRef.checkName === 'merge';
+        } catch {
+          return false;
+        }
+      })(),
     );
     if (existing) return existing;
     const slugBase = `${source.slug}-fix-merge`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
