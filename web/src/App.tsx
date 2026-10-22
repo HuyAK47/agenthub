@@ -81,6 +81,7 @@ export const App: React.FC = () => {
                   <Route path="savings" element={<SavingsPage />} />
                   <Route path="profiles" element={<ProfilesPage />} />
                   <Route path="projects" element={<ProjectsPage />} />
+                  <Route path="projects/:id/settings" element={<ProjectsPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                 </Route>
               </Routes>

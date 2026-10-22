@@ -4,6 +4,7 @@ import {
   CheckProfileResponse,
   CreateProfileInput,
   CreateProjectInput,
+  DeployStatus,
   CreateTaskInput,
   CaptureTaskInput,
   HubStatus,
@@ -249,6 +250,8 @@ export async function getProjects(): Promise<Project[]> {
 }
 
 export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+export const getProjectDeployStatus = (id: string) =>
+  apiFetch<DeployStatus | null>(`/api/projects/${encodeURIComponent(id)}/deploy`);
 
 export async function createProject(data: CreateProjectInput): Promise<Project> {
   return apiFetch<Project>('/api/projects', {

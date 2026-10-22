@@ -143,6 +143,16 @@ export interface CiStatusSummary {
   jobs?: CiJob[];
 }
 
+export interface DeployStatus {
+  projectId: string;
+  status: 'queued' | 'running' | 'restarting' | 'succeeded' | 'failed' | 'skipped';
+  startedAt?: string;
+  finishedAt?: string;
+  commit?: string;
+  error?: string;
+  logPath?: string;
+}
+
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
   brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
@@ -599,6 +609,8 @@ export interface SystemConfig {
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
     maxConcurrent?: number;
+    dailyTokenBudget?: number;
+    maxTurnsPerHour?: number;
     digest?: {
       enabled: boolean;
       time: string;
@@ -746,6 +758,7 @@ export interface UpdateProjectInput {
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
   settings?: Partial<ProjectSettings>;
+  confirm?: boolean;
 }
 
 export interface CreateProfileInput {
