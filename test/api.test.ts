@@ -567,6 +567,23 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&cursor=broken&limit=1', headers: authHeaders() })).statusCode).toBe(400);
   });
 
+  it('GET /api/claude/sessions pages sessions and keeps the legacy response without limit', async () => {
+    ctx.claudeSessionRepo.upsert({ sessionId: 'session-old', cwd: tmpDir, title: 'Old', lastAt: '2026-01-01T00:00:00Z' });
+    ctx.claudeSessionRepo.upsert({ sessionId: 'session-new', cwd: tmpDir, title: 'New', lastAt: '2026-01-02T00:00:00Z' });
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/claude/sessions', headers: authHeaders() });
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+
+    const page = await server.inject({ method: 'GET', url: '/api/claude/sessions?limit=1', headers: authHeaders() });
+    expect(page.statusCode).toBe(200);
+    const body = JSON.parse(page.body);
+    expect(body.total).toBe(2);
+    expect(body.items.map((session: { sessionId: string }) => session.sessionId)).toEqual(['session-new']);
+    const next = await server.inject({ method: 'GET', url: `/api/claude/sessions?limit=1&cursor=${encodeURIComponent(body.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(next.body).items.map((session: { sessionId: string }) => session.sessionId)).toEqual(['session-old']);
+    expect((await server.inject({ method: 'GET', url: '/api/claude/sessions?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
   it('Tasks workflow: create, start, cancel, review, retry, commits, and worktree removal', async () => {
     const repoPath = path.join(tmpDir, 'test-repo');
     initGitRepo(repoPath);

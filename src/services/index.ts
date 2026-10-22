@@ -50,6 +50,7 @@ import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
+import type { ClaudeSessionRow } from '../claude-sessions/repo.js';
 import { isClaudeProcessOpen, isClaudeQuotaLimited, ClaudeSessionScanner } from '../claude-sessions/scanner.js';
 import type { PageResult } from '../pagination.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
@@ -813,11 +814,10 @@ export class AppService {
   getSetupLogPath(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.getLogPath(tool); }
   completeSetup(skip = false) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.complete(skip); }
 
-  listClaudeSessions(activeWithinMin?: number) {
-    if (!this.claudeSessionRepo) return [];
+  private decorateClaudeSessions(rows: ClaudeSessionRow[], activeWithinMin?: number) {
     const min = typeof activeWithinMin === 'number' && !Number.isNaN(activeWithinMin) ? activeWithinMin : (this.config.claudeSessions?.activeWithinMin ?? 10);
     const cutoff = Date.now() - min * 60_000;
-    return this.claudeSessionRepo.list().map((session) => {
+    return rows.map((session) => {
       const active = (!!session.lastAt && Date.parse(session.lastAt) >= cutoff) || (!!session.cwd && isClaudeProcessOpen(session.cwd));
       const title = session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId);
       return {
@@ -827,6 +827,19 @@ export class AppService {
         topTasks: this.claudeSessionRepo!.topTasks(session.sessionId),
       };
     });
+  }
+  listClaudeSessions(activeWithinMin?: number) {
+    if (!this.claudeSessionRepo) return [];
+    return this.decorateClaudeSessions(this.claudeSessionRepo.list(), activeWithinMin);
+  }
+  pageClaudeSessions(options?: { activeWithinMin?: number; limit?: string | number; offset?: string | number; cursor?: string }) {
+    if (!this.claudeSessionRepo) return { items: [], total: 0, nextCursor: null };
+    const rawLimit = typeof options?.limit === 'number' ? options.limit : Number(options?.limit);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(100, Math.floor(rawLimit)) : 20;
+    const rawOffset = typeof options?.offset === 'number' ? options.offset : Number(options?.offset);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+    const page = this.claudeSessionRepo.page(limit, offset, options?.cursor);
+    return { ...page, items: this.decorateClaudeSessions(page.items, options?.activeWithinMin) };
   }
   getClaudeSession(id: string, activeWithinMin?: number) {
     if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');

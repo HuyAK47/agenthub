@@ -550,8 +550,11 @@ export async function createServer(
   });
 
   fastify.get('/api/claude/sessions', async (req: FastifyRequest) => {
-    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
-    return service.listClaudeSessions(raw ? Number(raw) : undefined);
+    const query = (req.query as { activeWithinMin?: string; limit?: string; offset?: string; cursor?: string } | undefined) || {};
+    const activeWithinMin = query.activeWithinMin ? Number(query.activeWithinMin) : undefined;
+    if (query.limit === undefined) return service.listClaudeSessions(activeWithinMin);
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return service.pageClaudeSessions({ activeWithinMin, limit: query.limit, offset: query.offset, cursor: query.cursor });
   });
   fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => {
     const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
