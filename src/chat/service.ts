@@ -87,22 +87,30 @@ export interface RunningTurn {
 }
 
 const TOOL_OUTPUT_LIMIT = 4096;
-const SECRET_TOOL_PATH = /(?:^|[\\/])(?:auth\.json|\.?credentials?\.json|.*(?:token|keyring).*|secrets)(?:[\\/]|$)/i;
+const SECRET_TOOL_PATH = /(?:^|[\\/\s'"])(?:auth\.json|\.?credentials?\.json|[^\\/\s'"]*token[^\\/\s'"]*\.json|keyring[^\\/\s'"]*|\.env)(?=$|[\\/\s'"])/i;
+const SECRET_TOOL_DIRECTORY = /(?:~?[\\/]\.codex(?:[\\/]|$)|~?[\\/]\.agy-homes(?:[\\/]|$))/i;
 
-function toolInputPath(input?: Record<string, unknown>): string | undefined {
-  if (!input) return undefined;
-  for (const key of ['file_path', 'path', 'file', 'cwd']) {
-    if (typeof input[key] === 'string') return input[key] as string;
-  }
-  return undefined;
+function isSecretToolInput(input?: Record<string, unknown>): boolean {
+  if (!input) return false;
+  const values = ['file_path', 'path', 'file', 'cwd', 'command']
+    .map((key) => input[key])
+    .filter((value): value is string => typeof value === 'string');
+  return values.some((value) => SECRET_TOOL_PATH.test(value) || SECRET_TOOL_DIRECTORY.test(value));
 }
 
 function boundedToolOutput(output: string | undefined, input?: Record<string, unknown>): string | undefined {
-  if (output === undefined || SECRET_TOOL_PATH.test(toolInputPath(input) || '')) return undefined;
+  if (output === undefined || isSecretToolInput(input)) return undefined;
   return output.length > TOOL_OUTPUT_LIMIT ? `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n…` : output;
 }
 
 function boundedToolInput(input: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = isSecretToolInput(input)
+    ? Object.fromEntries(Object.entries(input).map(([key, value]) => (
+      ['content', 'new_string', 'old_string'].includes(key) && typeof value === 'string'
+        ? [key, '[đã ẩn]']
+        : [key, value]
+    )))
+    : input;
   const compact = (value: unknown): unknown => {
     if (typeof value === 'string') {
       return value.length > 2000 ? `${value.slice(0, 2000)}\n…` : value;
@@ -113,14 +121,14 @@ function boundedToolInput(input: Record<string, unknown>): Record<string, unknow
     }
     return value;
   };
-  const compacted = compact(input) as Record<string, unknown>;
+  const compacted = compact(sanitized) as Record<string, unknown>;
   const serialized = JSON.stringify(compacted);
   if (serialized.length <= TOOL_OUTPUT_LIMIT) return compacted;
   return { truncated: true, preview: `${serialized.slice(0, TOOL_OUTPUT_LIMIT - 1)}…` };
 }
 
 function toolDiff(name: string, input?: Record<string, unknown>): string | undefined {
-  if (!/(?:edit|write|multiedit|notebookedit)/i.test(name) || !input || SECRET_TOOL_PATH.test(toolInputPath(input) || '')) return undefined;
+  if (!/(?:edit|write|multiedit|notebookedit)/i.test(name) || !input || isSecretToolInput(input)) return undefined;
   const oldText = typeof input.old_string === 'string' ? input.old_string : '';
   const newText = typeof input.new_string === 'string' ? input.new_string : typeof input.content === 'string' ? input.content : '';
   if (!oldText && !newText) return undefined;
@@ -1908,12 +1916,14 @@ export class ChatService {
   private emitChatTool(
     sessionId: string,
     messageId: string,
+    toolMessageId: string,
+    toolUseId: string,
     name: string,
     summary: string,
     data: { input?: Record<string, unknown>; output?: string; status: 'running' | 'done' | 'error'; durationMs?: number; diff?: string; } = { status: 'running' },
   ): void {
     this.emitEvent('chat.tool', {
-      sessionId, messageId, name, summary,
+      sessionId, messageId, toolMessageId, toolUseId, name, summary,
       ...(data.input !== undefined ? { input: data.input } : {}),
       ...(data.output !== undefined ? { output: data.output } : {}),
       status: data.status,
@@ -1930,7 +1940,7 @@ export class ChatService {
     if (!turn.toolExecutions) turn.toolExecutions = new Map();
     turn.toolExecutions.set(id, { messageId: toolMessageId, startedAt: Date.now(), name: ev.name, summary: ev.summary, input });
     this.chatMessageRepo.insert({ id: toolMessageId, sessionId: turn.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify(meta) });
-    this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary, { input, status: 'running', diff: meta.diff });
+    this.emitChatTool(turn.sessionId, turn.messageId, toolMessageId, id, ev.name, ev.summary, { input, status: 'running', diff: meta.diff });
   }
 
   private recordToolResult(turn: RunningTurn, ev: Extract<ParsedStreamEvent, { type: 'tool_result' }>): void {
@@ -1945,7 +1955,7 @@ export class ChatService {
     const durationMs = Date.now() - execution.startedAt;
     const meta = { name: execution.name, summary: execution.summary, input: execution.input, output, status, durationMs, diff: toolDiff(execution.name, execution.input), id };
     this.chatMessageRepo.upsert({ id: execution.messageId, sessionId: turn.sessionId, role: 'tool', content: execution.summary, meta: JSON.stringify(meta) });
-    this.emitChatTool(turn.sessionId, turn.messageId, execution.name, execution.summary, { input: execution.input, output, status, durationMs, diff: meta.diff });
+    this.emitChatTool(turn.sessionId, turn.messageId, execution.messageId, id, execution.name, execution.summary, { input: execution.input, output, status, durationMs, diff: meta.diff });
     executions.delete(id);
   }
 
