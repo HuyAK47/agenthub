@@ -276,6 +276,16 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
       const operands: string[] = [];
       for (const arg of args) {
         if (skipNext) { skipNext = false; continue; }
+        if (/^-[^-]/u.test(arg)) {
+          const shortOptions = arg.slice(1);
+          if (shortOptions.includes('f')) return false;
+          const regexpIndex = shortOptions.indexOf('e');
+          if (regexpIndex !== -1) {
+            hasExplicitPattern = true;
+            if (regexpIndex === shortOptions.length - 1) skipNext = true;
+            continue;
+          }
+        }
         if (arg === '-e' || arg === '--regexp') { hasExplicitPattern = true; skipNext = true; continue; }
         if (arg.startsWith('--regexp=') || (arg.startsWith('-e') && arg.length > 2)) { hasExplicitPattern = true; continue; }
         if (!arg.startsWith('-')) operands.push(arg);

@@ -151,8 +151,14 @@ describe('BrainPolicy', () => {
       'grep -f ~/.codex/auth.json src/x.ts',
       'grep --file=~/.codex/auth.json src/x.ts',
       'grep -e foo ~/.codex/auth.json',
+      'grep -f/home/x/.codex/auth.json src/x.ts',
+      'grep -rf ~/.codex/auth.json src',
+      'grep -rfx ~/.codex/auth.json src',
     ]) {
       expect(policy.decide({ toolName: 'Bash', input: { command, cwd: root } })?.action ?? null).not.toBe('allow');
+    }
+    for (const command of ['grep -rn foo src', 'grep -ie foo package.json']) {
+      expect(policy.decide({ toolName: 'Bash', input: { command, cwd: root } })?.action).toBe('allow');
     }
     expect(policy.decide({ toolName: 'Bash', input: { command: 'git status && npm test', cwd: root } })).toMatchObject({ action: 'deny' });
   });
