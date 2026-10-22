@@ -1211,7 +1211,7 @@ export class AppService {
   createNewProject(raw: unknown): ProjectRow {
     const input = z.object({
       name: z.string().min(1), path: z.string().min(1), defaultBranch: z.string().min(1).default('main'),
-      maxParallel: z.number().int().positive().default(3), settings: ProjectSettingsInputSchema.optional(),
+      maxParallel: z.number().int().positive().default(3), checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(), settings: ProjectSettingsInputSchema.optional(),
     }).parse(raw);
     if (!path.isAbsolute(input.path)) throw new HttpError(400, 'bad_request', 'Đường dẫn phải là đường dẫn tuyệt đối');
     try { createNewGitProject(input.path, input.defaultBranch); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
