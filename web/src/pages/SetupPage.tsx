@@ -23,6 +23,7 @@ import { Button } from '../components/ui/Button';
 import { StatTile } from '../components/ui/StatTile';
 import { StatusBadge } from '../components/StatusBadge';
 import { Profile } from '../types/api';
+import { UsageModes } from '../components/UsageModes';
 
 export interface SetupCheckItem {
   key: string;
@@ -446,6 +447,8 @@ export const SetupPage: React.FC = () => {
         icon={<Wrench className="w-5 h-5" />}
         iconColor={readyCount === checks.length ? 'var(--t-ok)' : 'var(--t-accent)'}
       />
+
+      <UsageModes />
 
       {/* Environment & Tools Checks */}
       <div data-tour="setup-tools"><Card className="overflow-hidden">
