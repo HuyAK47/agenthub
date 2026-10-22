@@ -9,7 +9,7 @@ AgentHub supports two coordination models. Choose one per project; you do not ne
 | Planner/reviewer | The hub brain | External Claude Code |
 | Where you assign work | Web Chat, Tasks, or Telegram | Claude Code in VS Code/terminal |
 | Brain setting | `auto` or `suggest` | Set the project to `external` (or global `off`) |
-| `claude` CLI | Not required for the hub brain | Required, signed in, with quota |
+| `claude` CLI | Required, signed in, with quota; no IDE needed | Required, signed in, with quota |
 | Monitoring | Dashboard and Telegram | `hub_*` tools, Dashboard, and Telegram |
 
 ## A. Standalone hub
@@ -22,7 +22,8 @@ Choose A when you want to give a goal from the web or phone, do not want to open
 
 - The AgentHub daemon is running and at least one project is registered.
 - At least one worker account is signed in: Antigravity CLI (`agy`) and/or Codex CLI.
-- Worker quota is available. Claude Code is not required for the standalone hub brain.
+- The `claude` CLI is installed with a signed-in profile/account and available quota for the hub brain; you do not need to open an IDE or run an interactive Claude Code session.
+- Worker quota is available.
 - Telegram is optional; remote control requires a bot token and a paired chat.
 
 ### Setup

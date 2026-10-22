@@ -9,7 +9,7 @@ AgentHub có hai mô hình điều phối. Chọn một mô hình cho mỗi proj
 | Ai lập kế hoạch/review | Bộ não của hub | Claude Code bên ngoài |
 | Nơi giao việc | Web Chat, Tasks hoặc Telegram | Claude Code trong VS Code/terminal |
 | Cấu hình brain | `auto` hoặc `suggest` | Project đặt `external` (hoặc global `off`) |
-| Cần `claude` CLI | Không bắt buộc cho brain của hub | Có, phải đăng nhập và còn quota |
+| Cần `claude` CLI | Có, phải đăng nhập và còn quota; không cần mở IDE | Có, phải đăng nhập và còn quota |
 | Theo dõi | Dashboard và Telegram | Tool `hub_*`, Dashboard và Telegram |
 
 ## A. Hub độc lập
@@ -22,7 +22,8 @@ Chọn A nếu bạn muốn giao một mục tiêu từ web hoặc điện tho�
 
 - AgentHub daemon đang chạy, có ít nhất một project đã đăng ký.
 - Ít nhất một tài khoản worker đã đăng nhập: Antigravity CLI (`agy`) và/hoặc Codex CLI.
-- Quota của worker đủ cho task. Claude Code không bắt buộc cho mô hình brain độc lập.
+- CLI `claude` đã cài, có profile/tài khoản đăng nhập và còn quota cho brain của hub; bạn không cần mở IDE hay chạy Claude Code tương tác.
+- Quota của worker đủ cho task.
 - Telegram là tùy chọn; cần bot token và một chat đã ghép đôi nếu muốn điều khiển từ xa.
 
 ### Cài đặt và thiết lập

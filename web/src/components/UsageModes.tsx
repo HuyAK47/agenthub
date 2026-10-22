@@ -10,7 +10,9 @@ export const UsageModes: React.FC<{ compact?: boolean }> = ({ compact = false })
   const { t, locale } = useLocale();
   const [mode, setMode] = useState<UsageMode>('hub');
   const [copied, setCopied] = useState(false);
-  const docsPath = locale === 'en' ? '/docs/en/USAGE-MODES.md' : '/docs/USAGE-MODES.md';
+  const docsPath = locale === 'en'
+    ? 'https://github.com/ducanh19020217/agenthub/blob/main/docs/en/USAGE-MODES.md'
+    : 'https://github.com/ducanh19020217/agenthub/blob/main/docs/USAGE-MODES.md';
 
   const copyMcpCommand = async () => {
     try {
@@ -65,11 +67,11 @@ export const UsageModes: React.FC<{ compact?: boolean }> = ({ compact = false })
                 <span>{copied ? t('usageModes.copied') : t('usageModes.copy')}</span>
               </Button>
             </div>
-            <a href={docsPath} className="inline-flex items-center gap-1 text-sm text-[var(--t-accent)] hover:underline">{t('usageModes.docs')} <ExternalLink size={13} /></a>
+            <a href={docsPath} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-[var(--t-accent)] hover:underline">{t('usageModes.docs')} <ExternalLink size={13} /></a>
           </div>
         )}
       </div>
-      {mode === 'hub' && <a href={docsPath} className="inline-flex items-center gap-1 text-sm text-[var(--t-accent)] hover:underline">{t('usageModes.docs')} <ExternalLink size={13} /></a>}
+      {mode === 'hub' && <a href={docsPath} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-[var(--t-accent)] hover:underline">{t('usageModes.docs')} <ExternalLink size={13} /></a>}
     </section>
   );
 };
