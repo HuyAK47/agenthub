@@ -547,7 +547,7 @@ export const ChatPage: React.FC = () => {
             </button>
 
             {activeSession ? (
-              <div className="min-w-0 flex items-center gap-2.5 flex-1">
+              <div className="min-w-0 flex items-center gap-2.5 flex-1" data-tour="assistant-chat">
                 <div className="w-7 h-7 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shrink-0">
                   C
                 </div>
@@ -719,6 +719,7 @@ export const ChatPage: React.FC = () => {
             {/* Permission Request Dialog */}
             {permission && (
               <div
+                data-tour="chat-permissions"
                 className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm animate-fade-in"
                 role="dialog"
                 aria-label={t('extra.permissionAria')}

@@ -12,6 +12,8 @@ export const TourOverlay: React.FC = () => {
   const location = useLocation();
   const [rect, setRect] = useState<Rect | null>(null);
   const step = active?.steps[stepIndex];
+  const title = step ? t(step.title) : '';
+  const content = step ? t(step.content) : '';
 
   useEffect(() => {
     if (!active || !step) return;
@@ -66,13 +68,13 @@ export const TourOverlay: React.FC = () => {
   const safeStyle: React.CSSProperties = { top, left: safeLeft, width: bubbleWidth, transform: preferred.transform };
 
   return (
-    <div className="fixed inset-0 z-[70]" role="dialog" aria-modal="true" aria-label={step.title}>
+    <div className="fixed inset-0 z-[70]" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-black/55" />
       <div className="absolute rounded-xl pointer-events-none border-2 border-[var(--t-accent)] shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" style={{ top: rect.top - 4, left: rect.left - 4, width: rect.width + 8, height: rect.height + 8 }} />
       <section className="absolute rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-2xl text-[var(--t-text)] max-sm:!left-3 max-sm:!right-3 max-sm:!bottom-3 max-sm:!top-auto max-sm:!transform-none max-sm:!w-auto" style={safeStyle}>
         <button type="button" onClick={() => closeTour(false)} aria-label={t('tour.close')} className="absolute right-2 top-2 rounded p-1 text-[var(--t-text-3)] hover:bg-[var(--t-hover)]"><X size={16} /></button>
-        <h2 className="pr-6 text-base font-semibold">{step.title}</h2>
-        <p className="mt-2 text-sm text-[var(--t-text-2)]">{step.content}</p>
+        <h2 className="pr-6 text-base font-semibold">{title}</h2>
+        <p className="mt-2 text-sm text-[var(--t-text-2)]">{content}</p>
         <div className="mt-4 flex items-center justify-between gap-3">
           <span className="text-xs text-[var(--t-text-3)]">{t('tour.step', { current: stepIndex + 1, total: active.steps.length })}</span>
           <div className="flex gap-2">

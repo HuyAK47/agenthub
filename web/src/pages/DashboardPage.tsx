@@ -229,6 +229,7 @@ export const DashboardPage: React.FC = () => {
         <div className="flex items-center gap-3 shrink-0">
           {status.disk && (
             <div
+              data-tour="resource-status"
               data-testid="disk-status"
               className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border transition-colors ${
                 (status.disk.minFreeGB !== undefined ? status.disk.freeGB < status.disk.minFreeGB : status.disk.freeGB < 5)
@@ -246,6 +247,7 @@ export const DashboardPage: React.FC = () => {
           )}
           {status.load && (
             <div
+              data-tour="performance"
               data-testid="load-status"
               className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border ${
                 status.load.overloaded
@@ -575,7 +577,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
-      <div data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
+      <div data-tour="provider-quotas" data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
         {([
           ['agy', 'Antigravity'],
           ['codex', 'Codex'],

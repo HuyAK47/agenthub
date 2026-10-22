@@ -416,7 +416,7 @@ export const TaskDetailPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-tour="task-summary">
       {task.reviewerEscalated ? (
         <div className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_12%,transparent)] px-4 py-3 text-sm text-[var(--t-text)]">
           {t('extra.waitingApprover')}
@@ -505,7 +505,7 @@ export const TaskDetailPage: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap" data-tour="task-run-actions">
           {/* Edit (if draft, queued, waiting_quota, or failed) */}
           {['draft', 'queued', 'waiting_quota', 'failed'].includes(task.status) && (
             <button
@@ -656,7 +656,7 @@ export const TaskDetailPage: React.FC = () => {
       {(task.sourceRef || (task.derivedTasks && task.derivedTasks.length > 0)) && <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 text-sm space-y-2"><h2 className="font-semibold">{t('extra.linkedTasks')}</h2>{task.sourceRef && <p>{t('extra.generatedFrom')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(task.sourceRef!.taskId.replace('/', '~'))}`)}>{task.sourceRef.taskId}</button></p>}{task.derivedTasks?.map((derived) => <p key={derived.id}>{t('extra.generatedTask')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(derived.id.replace('/', '~'))}`)}>{derived.id}</button></p>)}</section>}
 
       {/* Tabs */}
-      <div className="flex border-b border-[var(--t-border)] space-x-6 text-sm font-medium">
+      <div className="flex border-b border-[var(--t-border)] space-x-6 text-sm font-medium" data-tour="task-detail-tabs">
         <button
           type="button"
           onClick={() => setActiveTab('log')}

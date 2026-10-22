@@ -37,6 +37,7 @@ import { QuotaUsage } from '../components/QuotaUsage';
 import { useLocale } from '../context/LocaleContext';
 import { Profile } from '../types/api';
 import { formatReset, formatTimeTitle } from '../lib/time';
+import { useTour } from '../components/tour/TourContext';
 
 const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
@@ -102,6 +103,7 @@ function usageText(profile: Profile) {
 
 export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
@@ -138,6 +140,9 @@ export const ProfilesPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const runningByProfile = new Map((status?.running || []).map((run) => [run.profileName, run]));
+  useEffect(() => {
+    if (showAdd) suggestModalTour('modal-add-account');
+  }, [showAdd, suggestModalTour]);
   const toast = (text: string, isError = false) => {
     const id = ++toastSeq.current;
     setToasts((old) => [...old, { id, text, error: isError }]);
@@ -216,7 +221,7 @@ export const ProfilesPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6" onClick={() => menu && setMenu(null)}>
+    <div className="space-y-6" onClick={() => menu && setMenu(null)} data-tour="account-types">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('profiles.title')}</h1>
@@ -226,6 +231,7 @@ export const ProfilesPage: React.FC = () => {
         </div>
         <button
           type="button"
+          data-tour="add-account"
           onClick={(e) => {
             e.stopPropagation();
             setShowAdd(true);
@@ -258,7 +264,7 @@ export const ProfilesPage: React.FC = () => {
           {providers.map((provider) => {
             const grouped = profiles.filter((profile) => profile.engine === provider.id);
             return (
-              <section key={provider.id} aria-labelledby={`provider-${provider.id}`}>
+              <section key={provider.id} aria-labelledby={`provider-${provider.id}`} data-tour="profile-quotas">
                 <div className="mb-3 flex items-center gap-3">
                   <div className="h-8 w-1 rounded-full" style={{ background: provider.color }} />
                   <div>
@@ -312,6 +318,7 @@ export const ProfilesPage: React.FC = () => {
       )}
       <DailyUsageTable />
       {showAdd && (
+        <div data-tour="modal-add-account">
         <AddProfileModal
           onClose={() => {
             setShowAdd(false);
@@ -333,6 +340,7 @@ export const ProfilesPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
         />
+        </div>
       )}
       {editing && (
         <EditProfileModal

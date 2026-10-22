@@ -26,6 +26,7 @@ import {
   StatTile,
 } from './ui';
 import { useLocale } from '../context/LocaleContext';
+import { InfoTooltip } from './tour/InfoTooltip';
 import { Project, ProjectSettings, UpdateProjectInput } from '../types/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -639,11 +640,12 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           )}
 
           {/* Section 1: Bộ não (Brain) */}
-          <Card className="p-5 space-y-5">
+          <Card className="p-5 space-y-5" data-tour="project-brain-settings">
             <div className="space-y-1">
               <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-[var(--t-accent)]" />
                 <span>{t('projects.sectionBrainTitle')}</span>
+                <InfoTooltip text="Chọn chế độ và quyền theo mức tin cậy của repository; full có thể chạy lệnh và sửa file rộng hơn." label="Giải thích bộ não" />
               </h3>
               <p className="text-xs text-[var(--t-text-3)]">
                 {t('projects.sectionBrainDesc')}
@@ -859,7 +861,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           </Card>
 
           {/* Section 2: Worktree */}
-          <Card className="p-5 space-y-4">
+          <Card className="p-5 space-y-4" data-tour="project-worktree">
             <div className="space-y-1">
               <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-[var(--t-accent)]" />
@@ -966,7 +968,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           </Card>
 
           {/* Section 3: Nhánh tích hợp (Integration Branch) */}
-          <Card className="p-5 space-y-4">
+          <Card className="p-5 space-y-4" data-tour="project-references">
             <div className="space-y-1">
               <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
                 <GitBranch className="w-4 h-4 text-[var(--t-accent)]" />
@@ -1334,6 +1336,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           {/* Section 6: Kiểm tra & review (Advanced - Collapsed by default) */}
           <details
             data-testid="advanced-settings-section"
+            data-tour="project-checks"
             className="border border-[var(--t-border)] rounded-xl bg-[var(--t-surface)] p-5 group space-y-4"
           >
             <summary className="cursor-pointer select-none flex items-center justify-between">

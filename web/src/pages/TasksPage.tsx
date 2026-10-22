@@ -256,9 +256,9 @@ export const TasksPage: React.FC = () => {
   }, [tasks, search, selectedProject, selectedStatus, doneFilter]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-tour="task-lifecycle">
       {/* Top Bar: Filter & New Task Button */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4" data-tour="task-filters">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
             {t('tasks.title')}
@@ -268,7 +268,7 @@ export const TasksPage: React.FC = () => {
 
         <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
           {/* View Mode Toggle: Kanban <-> Sơ đồ (DAG) */}
-          <div className="flex items-center bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-0.5 shadow-xs">
+          <div className="flex items-center bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-0.5 shadow-xs" data-tour="task-views">
             <button
               type="button"
               onClick={() => setViewMode('kanban')}
@@ -398,6 +398,7 @@ export const TasksPage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate('/tasks/new')}
+            data-tour="task-actions"
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold shadow-xs cursor-pointer transition-colors shrink-0"
           >
             <Plus className="w-4 h-4" />
@@ -416,7 +417,7 @@ export const TasksPage: React.FC = () => {
         </div>
       ) : (
         /* Kanban Board Grid */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-8" data-tour="task-columns">
           {KANBAN_STATUSES.map((statusKey) => (
             <KanbanColumn
               key={statusKey}

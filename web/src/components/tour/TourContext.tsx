@@ -10,6 +10,8 @@ export type TourStep = {
   title: string;
   content: string;
   placement?: 'top' | 'bottom' | 'left' | 'right';
+  /** Short hint shown when a target is temporarily unavailable. */
+  note?: string;
 };
 
 export type TourDefinition = { id: string; steps: TourStep[] };
@@ -22,62 +24,119 @@ type TourContextValue = {
   next: () => void;
   previous: () => void;
   getPageTour: (pathname: string) => TourDefinition | null;
+  suggestModalTour: (id: string) => void;
 };
 
 const fallbackKey = 'agenthub_tours_seen';
 
 export const tourDefinitions: TourDefinition[] = [
   { id: 'intro', steps: [
-    { id: 'overview', route: '/', selector: '[data-tour="overview"]', title: 'Tổng quan', content: 'Theo dõi worker đang chạy, quota và bộ não điều phối.', placement: 'bottom' },
-    { id: 'setup', route: '/setup', selector: '[data-tour="setup"]', title: 'Thiết lập', content: 'Cài CLI và hoàn tất các bước thiết lập ban đầu.', placement: 'right' },
-    { id: 'profiles', route: '/profiles', selector: '[data-tour="profiles"]', title: 'Tài khoản', content: 'Thêm hoặc đăng nhập tài khoản agy, Codex và Claude.', placement: 'right' },
-    { id: 'projects', route: '/projects', selector: '[data-tour="projects"]', title: 'Project', content: 'Đăng ký dự án và mở cài đặt bộ não, quyền, worktree.', placement: 'right' },
-    { id: 'chat', route: '/chat', selector: '[data-tour="chat"]', title: 'Chat', content: 'Nói chuyện với Trợ lý hoặc bộ não và giao việc bằng lời.', placement: 'right' },
-    { id: 'tasks', route: '/tasks', selector: '[data-tour="tasks"]', title: 'Task', content: 'Theo dõi task, log và duyệt kết quả worker.', placement: 'right' },
-    { id: 'plans', route: '/plans', selector: '[data-tour="plans"]', title: 'Kế hoạch', content: 'Xem Claude chia việc và theo dõi tiến độ.', placement: 'right' },
-    { id: 'settings', route: '/settings', selector: '[data-tour="settings"]', title: 'Cài đặt', content: 'Cấu hình Telegram, duyệt kế hoạch và thông báo.', placement: 'right' },
-    { id: 'telegram', route: '/settings', selector: '[data-tour="telegram"]', title: 'Telegram', content: 'Điều khiển hub bằng /use, /newtask, /status, /digest…', placement: 'top' },
+    { id: 'overview', route: '/', selector: '[data-tour="overview"]', title: 'tour.steps.intro.overview.title', content: 'tour.steps.intro.overview.content', placement: 'bottom' },
+    { id: 'connection', route: '/', selector: '[data-tour="connection-status"]', title: 'tour.steps.intro.connection.title', content: 'tour.steps.intro.connection.content', placement: 'bottom' },
+    { id: 'resources', route: '/', selector: '[data-tour="resource-status"]', title: 'tour.steps.intro.resources.title', content: 'tour.steps.intro.resources.content', placement: 'bottom' },
+    { id: 'brain', route: '/', selector: '[data-tour="brain"]', title: 'tour.steps.intro.brain.title', content: 'tour.steps.intro.brain.content', placement: 'bottom' },
+    { id: 'assistant', route: '/chat', selector: '[data-tour="assistant-chat"]', title: 'tour.steps.intro.assistant.title', content: 'tour.steps.intro.assistant.content', placement: 'right' },
+    { id: 'projects', route: '/projects', selector: '[data-tour="projects"]', title: 'tour.steps.intro.projects.title', content: 'tour.steps.intro.projects.content', placement: 'right' },
+    { id: 'tasks', route: '/tasks', selector: '[data-tour="tasks"]', title: 'tour.steps.intro.tasks.title', content: 'tour.steps.intro.tasks.content', placement: 'right' },
+    { id: 'queue', route: '/tasks', selector: '[data-tour="task-filters"]', title: 'tour.steps.intro.queue.title', content: 'tour.steps.intro.queue.content', placement: 'bottom' },
+    { id: 'plans', route: '/plans', selector: '[data-tour="plans"]', title: 'tour.steps.intro.plans.title', content: 'tour.steps.intro.plans.content', placement: 'right' },
+    { id: 'lifecycle', route: '/tasks', selector: '[data-tour="task-lifecycle"]', title: 'tour.steps.intro.lifecycle.title', content: 'tour.steps.intro.lifecycle.content', placement: 'top' },
+    { id: 'profiles', route: '/profiles', selector: '[data-tour="profiles"]', title: 'tour.steps.intro.profiles.title', content: 'tour.steps.intro.profiles.content', placement: 'right' },
+    { id: 'settings', route: '/settings', selector: '[data-tour="settings"]', title: 'tour.steps.intro.settings.title', content: 'tour.steps.intro.settings.content', placement: 'right' },
+    { id: 'setup', route: '/setup', selector: '[data-tour="setup"]', title: 'tour.steps.intro.setup.title', content: 'tour.steps.intro.setup.content', placement: 'right' },
+    { id: 'help', route: '/', selector: '[data-tour="help"]', title: 'tour.steps.intro.help.title', content: 'tour.steps.intro.help.content', placement: 'bottom' },
   ] },
 ];
 
 const pageTours: Record<string, TourDefinition> = {
   '/': { id: 'page-dashboard', steps: [
-    { id: 'overview', selector: '[data-tour="overview"]', title: 'Tổng quan', content: 'Đây là nơi xem nhanh sức khỏe của hub.', placement: 'bottom' },
-    { id: 'brain', selector: '[data-tour="brain"]', title: 'Bộ não', content: 'Claude điều phối và theo dõi các worker tại đây.', placement: 'bottom' },
-    { id: 'workers', selector: '[data-tour="workers"]', title: 'Worker', content: 'Các task đang chạy và log trực tiếp xuất hiện ở khu vực này.', placement: 'top' },
+    { id: 'overview', selector: '[data-tour="overview"]', title: 'tour.steps.page-dashboard.overview.title', content: 'tour.steps.page-dashboard.overview.content', placement: 'bottom' },
+    { id: 'resources', selector: '[data-tour="resource-status"]', title: 'tour.steps.page-dashboard.resources.title', content: 'tour.steps.page-dashboard.resources.content', placement: 'bottom' },
+    { id: 'brain', selector: '[data-tour="brain"]', title: 'tour.steps.page-dashboard.brain.title', content: 'tour.steps.page-dashboard.brain.content', placement: 'bottom' },
+    { id: 'quotas', selector: '[data-tour="provider-quotas"]', title: 'tour.steps.page-dashboard.quotas.title', content: 'tour.steps.page-dashboard.quotas.content', placement: 'top' },
+    { id: 'performance', selector: '[data-tour="performance"]', title: 'tour.steps.page-dashboard.performance.title', content: 'tour.steps.page-dashboard.performance.content', placement: 'top' },
+    { id: 'checklist', selector: '[data-tour="checklist"]', title: 'tour.steps.page-dashboard.checklist.title', content: 'tour.steps.page-dashboard.checklist.content', placement: 'top' },
+    { id: 'workers', selector: '[data-tour="workers"]', title: 'tour.steps.page-dashboard.workers.title', content: 'tour.steps.page-dashboard.workers.content', placement: 'top' },
   ] },
   '/projects': { id: 'page-projects', steps: [
-    { id: 'projects', selector: '[data-tour="projects"]', title: 'Project', content: 'Danh sách project đã đăng ký với AgentHub.', placement: 'bottom' },
+    { id: 'projects', selector: '[data-tour="projects"]', title: 'tour.steps.page-projects.projects.title', content: 'tour.steps.page-projects.projects.content', placement: 'bottom' },
+    { id: 'register', selector: '[data-tour="project-register"]', title: 'tour.steps.page-projects.register.title', content: 'tour.steps.page-projects.register.content', placement: 'bottom' },
+    { id: 'project-card', selector: '[data-tour="project-card"]', title: 'tour.steps.page-projects.project-card.title', content: 'tour.steps.page-projects.project-card.content', placement: 'top' },
+    { id: 'brain-settings', selector: '[data-tour="project-brain-settings"]', title: 'tour.steps.page-projects.brain-settings.title', content: 'tour.steps.page-projects.brain-settings.content', placement: 'left' },
+    { id: 'worktree', selector: '[data-tour="project-worktree"]', title: 'tour.steps.page-projects.worktree.title', content: 'tour.steps.page-projects.worktree.content', placement: 'left' },
+    { id: 'references', selector: '[data-tour="project-references"]', title: 'tour.steps.page-projects.references.title', content: 'tour.steps.page-projects.references.content', placement: 'left' },
+    { id: 'checks', selector: '[data-tour="project-checks"]', title: 'tour.steps.page-projects.checks.title', content: 'tour.steps.page-projects.checks.content', placement: 'left' },
   ] },
   '/settings': { id: 'page-settings', steps: [
-    { id: 'settings', selector: '[data-tour="settings"]', title: 'Cài đặt', content: 'Điều chỉnh cách hub điều phối worker.', placement: 'bottom' },
-    { id: 'telegram', selector: '[data-tour="telegram"]', title: 'Telegram', content: 'Kết nối bot và chọn loại thông báo.', placement: 'top' },
+    { id: 'settings', selector: '[data-tour="settings"]', title: 'tour.steps.page-settings.settings.title', content: 'tour.steps.page-settings.settings.content', placement: 'bottom' },
+    { id: 'model-chain', selector: '[data-tour="model-chain"]', title: 'tour.steps.page-settings.model-chain.title', content: 'tour.steps.page-settings.model-chain.content', placement: 'bottom' },
+    { id: 'planning-approval', selector: '[data-tour="planning-approval"]', title: 'tour.steps.page-settings.planning-approval.title', content: 'tour.steps.page-settings.planning-approval.content', placement: 'bottom' },
+    { id: 'brain-policy', selector: '[data-tour="brain-policy"]', title: 'tour.steps.page-settings.brain-policy.title', content: 'tour.steps.page-settings.brain-policy.content', placement: 'bottom' },
+    { id: 'notifications', selector: '[data-tour="notifications"]', title: 'tour.steps.page-settings.notifications.title', content: 'tour.steps.page-settings.notifications.content', placement: 'top' },
+    { id: 'telegram', selector: '[data-tour="telegram"]', title: 'tour.steps.page-settings.telegram.title', content: 'tour.steps.page-settings.telegram.content', placement: 'top' },
+    { id: 'accounts', selector: '[data-tour="multiple-accounts"]', title: 'tour.steps.page-settings.accounts.title', content: 'tour.steps.page-settings.accounts.content', placement: 'top' },
+    { id: 'updates', selector: '[data-tour="updates"]', title: 'tour.steps.page-settings.updates.title', content: 'tour.steps.page-settings.updates.content', placement: 'top' },
   ] },
   '/setup': { id: 'page-setup', steps: [
-    { id: 'setup', selector: '[data-tour="setup"]', title: 'Thiết lập', content: 'Kiểm tra công cụ, MCP và tài khoản worker.', placement: 'right' },
-    { id: 'help', selector: '[data-tour="help"]', title: 'Trợ giúp', content: 'Mở lại hướng dẫn trang này bất cứ lúc nào.', placement: 'bottom' },
+    { id: 'setup', selector: '[data-tour="setup"]', title: 'tour.steps.page-setup.setup.title', content: 'tour.steps.page-setup.setup.content', placement: 'right' },
+    { id: 'tools', selector: '[data-tour="setup-tools"]', title: 'tour.steps.page-setup.tools.title', content: 'tour.steps.page-setup.tools.content', placement: 'right' },
+    { id: 'profiles', selector: '[data-tour="setup-profiles"]', title: 'tour.steps.page-setup.profiles.title', content: 'tour.steps.page-setup.profiles.content', placement: 'right' },
+    { id: 'setup-result', selector: '[data-tour="setup-result"]', title: 'tour.steps.page-setup.setup-result.title', content: 'tour.steps.page-setup.setup-result.content', placement: 'right' },
+    { id: 'help', selector: '[data-tour="help"]', title: 'tour.steps.page-setup.help.title', content: 'tour.steps.page-setup.help.content', placement: 'bottom' },
   ] },
   '/profiles': { id: 'page-profiles', steps: [
-    { id: 'profiles', selector: '[data-tour="profiles"]', title: 'Tài khoản', content: 'Theo dõi quota và đăng nhập các tài khoản worker.', placement: 'right' },
-    { id: 'help', selector: '[data-tour="help"]', title: 'Trợ giúp', content: 'Mở lại hướng dẫn trang này bất cứ lúc nào.', placement: 'bottom' },
+    { id: 'profiles', selector: '[data-tour="profiles"]', title: 'tour.steps.page-profiles.profiles.title', content: 'tour.steps.page-profiles.profiles.content', placement: 'right' },
+    { id: 'provider-quota', selector: '[data-tour="profile-quotas"]', title: 'tour.steps.page-profiles.provider-quota.title', content: 'tour.steps.page-profiles.provider-quota.content', placement: 'right' },
+    { id: 'account-types', selector: '[data-tour="account-types"]', title: 'tour.steps.page-profiles.account-types.title', content: 'tour.steps.page-profiles.account-types.content', placement: 'right' },
+    { id: 'add-account', selector: '[data-tour="add-account"]', title: 'tour.steps.page-profiles.add-account.title', content: 'tour.steps.page-profiles.add-account.content', placement: 'right' },
+    { id: 'reauth', selector: '[data-tour="reauth"]', title: 'tour.steps.page-profiles.reauth.title', content: 'tour.steps.page-profiles.reauth.content', placement: 'right' },
+    { id: 'help', selector: '[data-tour="help"]', title: 'tour.steps.page-profiles.help.title', content: 'tour.steps.page-profiles.help.content', placement: 'bottom' },
   ] },
   '/tasks': { id: 'page-tasks', steps: [
-    { id: 'tasks', selector: '[data-tour="tasks"]', title: 'Task', content: 'Xem Kanban, sơ đồ phụ thuộc và tạo task mới.', placement: 'right' },
-    { id: 'help', selector: '[data-tour="help"]', title: 'Trợ giúp', content: 'Mở lại hướng dẫn trang này bất cứ lúc nào.', placement: 'bottom' },
+    { id: 'tasks', selector: '[data-tour="tasks"]', title: 'tour.steps.page-tasks.tasks.title', content: 'tour.steps.page-tasks.tasks.content', placement: 'right' },
+    { id: 'filters', selector: '[data-tour="task-filters"]', title: 'tour.steps.page-tasks.filters.title', content: 'tour.steps.page-tasks.filters.content', placement: 'bottom' },
+    { id: 'views', selector: '[data-tour="task-views"]', title: 'tour.steps.page-tasks.views.title', content: 'tour.steps.page-tasks.views.content', placement: 'bottom' },
+    { id: 'lifecycle', selector: '[data-tour="task-lifecycle"]', title: 'tour.steps.page-tasks.lifecycle.title', content: 'tour.steps.page-tasks.lifecycle.content', placement: 'top' },
+    { id: 'actions', selector: '[data-tour="task-actions"]', title: 'tour.steps.page-tasks.actions.title', content: 'tour.steps.page-tasks.actions.content', placement: 'top' },
+    { id: 'columns', selector: '[data-tour="task-columns"]', title: 'tour.steps.page-tasks.columns.title', content: 'tour.steps.page-tasks.columns.content', placement: 'top' },
+    { id: 'help', selector: '[data-tour="help"]', title: 'tour.steps.page-tasks.help.title', content: 'tour.steps.page-tasks.help.content', placement: 'bottom' },
   ] },
   '/tasks-detail': { id: 'page-task-detail', steps: [
-    { id: 'tasks', selector: '[data-tour="tasks"]', title: 'Chi tiết task', content: 'Từ đây bạn có thể xem log, báo cáo và review task.', placement: 'right' },
-    { id: 'help', selector: '[data-tour="help"]', title: 'Trợ giúp', content: 'Mở lại hướng dẫn trang này bất cứ lúc nào.', placement: 'bottom' },
+    { id: 'tasks', selector: '[data-tour="tasks"]', title: 'tour.steps.page-task-detail.tasks.title', content: 'tour.steps.page-task-detail.tasks.content', placement: 'right' },
+    { id: 'tabs', selector: '[data-tour="task-detail-tabs"]', title: 'tour.steps.page-task-detail.tabs.title', content: 'tour.steps.page-task-detail.tabs.content', placement: 'bottom' },
+    { id: 'run-actions', selector: '[data-tour="task-run-actions"]', title: 'tour.steps.page-task-detail.run-actions.title', content: 'tour.steps.page-task-detail.run-actions.content', placement: 'bottom' },
+    { id: 'review', selector: '[data-tour="task-review"]', title: 'tour.steps.page-task-detail.review.title', content: 'tour.steps.page-task-detail.review.content', placement: 'bottom' },
+    { id: 'capture', selector: '[data-tour="task-capture"]', title: 'tour.steps.page-task-detail.capture.title', content: 'tour.steps.page-task-detail.capture.content', placement: 'top' },
+    { id: 'task-summary', selector: '[data-tour="task-summary"]', title: 'tour.steps.page-task-detail.task-summary.title', content: 'tour.steps.page-task-detail.task-summary.content', placement: 'top' },
+    { id: 'help', selector: '[data-tour="help"]', title: 'tour.steps.page-task-detail.help.title', content: 'tour.steps.page-task-detail.help.content', placement: 'bottom' },
   ] },
   '/chat': { id: 'page-chat', steps: [
-    { id: 'chat', selector: '[data-tour="chat"]', title: 'Chat', content: 'Trao đổi trực tiếp với Claude hoặc Trợ lý.', placement: 'right' },
-    { id: 'help', selector: '[data-tour="help"]', title: 'Trợ giúp', content: 'Mở lại hướng dẫn trang này bất cứ lúc nào.', placement: 'bottom' },
+    { id: 'chat', selector: '[data-tour="chat"]', title: 'tour.steps.page-chat.chat.title', content: 'tour.steps.page-chat.chat.content', placement: 'right' },
+    { id: 'assistant', selector: '[data-tour="assistant-chat"]', title: 'tour.steps.page-chat.assistant.title', content: 'tour.steps.page-chat.assistant.content', placement: 'bottom' },
+    { id: 'composer', selector: '[data-tour="chat-composer"]', title: 'tour.steps.page-chat.composer.title', content: 'tour.steps.page-chat.composer.content', placement: 'top' },
+    { id: 'new-session', selector: '[data-tour="new-session"]', title: 'tour.steps.page-chat.new-session.title', content: 'tour.steps.page-chat.new-session.content', placement: 'bottom' },
+    { id: 'permissions', selector: '[data-tour="chat-permissions"]', title: 'tour.steps.page-chat.permissions.title', content: 'tour.steps.page-chat.permissions.content', placement: 'top' },
+    { id: 'sessions', selector: '[data-tour="chat-sessions"]', title: 'tour.steps.page-chat.sessions.title', content: 'tour.steps.page-chat.sessions.content', placement: 'right' },
+    { id: 'help', selector: '[data-tour="help"]', title: 'tour.steps.page-chat.help.title', content: 'tour.steps.page-chat.help.content', placement: 'bottom' },
   ] },
   '/plans': { id: 'page-plans', steps: [
-    { id: 'plans', selector: '[data-tour="plans"]', title: 'Kế hoạch', content: 'Xem, chỉnh sửa và duyệt kế hoạch của Claude.', placement: 'right' },
-    { id: 'help', selector: '[data-tour="help"]', title: 'Trợ giúp', content: 'Mở lại hướng dẫn trang này bất cứ lúc nào.', placement: 'bottom' },
+    { id: 'plans', selector: '[data-tour="plans"]', title: 'tour.steps.page-plans.plans.title', content: 'tour.steps.page-plans.plans.content', placement: 'right' },
+    { id: 'filters', selector: '[data-tour="plan-filters"]', title: 'tour.steps.page-plans.filters.title', content: 'tour.steps.page-plans.filters.content', placement: 'bottom' },
+    { id: 'current', selector: '[data-tour="current-plan"]', title: 'tour.steps.page-plans.current.title', content: 'tour.steps.page-plans.current.content', placement: 'bottom' },
+    { id: 'add-task', selector: '[data-tour="add-task"]', title: 'tour.steps.page-plans.add-task.title', content: 'tour.steps.page-plans.add-task.content', placement: 'top' },
+    { id: 'approve-plan', selector: '[data-tour="approve-plan"]', title: 'tour.steps.page-plans.approve-plan.title', content: 'tour.steps.page-plans.approve-plan.content', placement: 'top' },
+    { id: 'help', selector: '[data-tour="help"]', title: 'tour.steps.page-plans.help.title', content: 'tour.steps.page-plans.help.content', placement: 'bottom' },
   ] },
 };
+
+export const modalTourDefinitions: TourDefinition[] = [
+  { id: 'modal-add-account', steps: [{ id: 'modal', selector: '[data-tour="modal-add-account"]', title: 'tour.steps.modal-add-account.modal.title', content: 'tour.steps.modal-add-account.modal.content' }] },
+  { id: 'modal-register-project', steps: [{ id: 'modal', selector: '[data-tour="modal-register-project"]', title: 'tour.steps.modal-register-project.modal.title', content: 'tour.steps.modal-register-project.modal.content' }] },
+  { id: 'modal-create-task', steps: [{ id: 'modal', selector: '[data-tour="modal-create-task"]', title: 'tour.steps.modal-create-task.modal.title', content: 'tour.steps.modal-create-task.modal.content' }] },
+  { id: 'modal-new-session', steps: [{ id: 'modal', selector: '[data-tour="modal-new-session"]', title: 'tour.steps.modal-new-session.modal.title', content: 'tour.steps.modal-new-session.modal.content' }] },
+  { id: 'modal-full-permission', steps: [{ id: 'modal', selector: '[data-tour="modal-full-permission"]', title: 'tour.steps.modal-full-permission.modal.title', content: 'tour.steps.modal-full-permission.modal.content' }] },
+  { id: 'modal-delete-project', steps: [{ id: 'modal', selector: '[data-tour="modal-delete-project"]', title: 'tour.steps.modal-delete-project.modal.title', content: 'tour.steps.modal-delete-project.modal.content' }] },
+];
 
 const noOpTourContext: TourContextValue = {
   active: null,
@@ -87,6 +146,7 @@ const noOpTourContext: TourContextValue = {
   next: () => {},
   previous: () => {},
   getPageTour: () => null,
+  suggestModalTour: () => {},
 };
 
 const TourContext = createContext<TourContextValue>(noOpTourContext);
@@ -106,12 +166,13 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const key = Object.keys(pageTours).find((candidate) => candidate === pathname || (candidate !== '/' && pathname.startsWith(`${candidate}/`)));
     return key ? pageTours[key] : null;
   }, []);
-  const active = useMemo(() => tourDefinitions.find((tour) => tour.id === activeId) || (activeId ? Object.values(pageTours).find((tour) => tour.id === activeId) || null : null), [activeId]);
+  const active = useMemo(() => tourDefinitions.find((tour) => tour.id === activeId) || Object.values(pageTours).find((tour) => tour.id === activeId) || modalTourDefinitions.find((tour) => tour.id === activeId) || (activeId ? null : null), [activeId]);
 
   const markSeen = useCallback(async (id: string) => {
     try {
       const old = JSON.parse(localStorage.getItem(fallbackKey) || '{}');
       localStorage.setItem(fallbackKey, JSON.stringify({ ...old, [id]: true }));
+      if (id.startsWith('modal-')) localStorage.setItem(`${fallbackKey}:${id}`, '1');
     } catch { /* storage is optional */ }
     try {
       await updateConfig({ ui: { tours: { ...seen, [id]: true } } });
@@ -121,12 +182,18 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [queryClient, seen]);
 
   const openTour = useCallback((id: string) => {
-    const tour = tourDefinitions.find((item) => item.id === id) || Object.values(pageTours).find((item) => item.id === id);
+    const tour = tourDefinitions.find((item) => item.id === id) || Object.values(pageTours).find((item) => item.id === id) || modalTourDefinitions.find((item) => item.id === id);
     if (!tour) return;
     setActiveId(tour.id);
     setStepIndex(0);
     if (tour.steps[0]?.route && location.pathname !== tour.steps[0].route) navigate(tour.steps[0].route);
   }, [location.pathname, navigate]);
+
+  const suggestModalTour = useCallback((id: string) => {
+    let seenModal = false;
+    try { seenModal = localStorage.getItem(`${fallbackKey}:${id}`) === '1'; } catch { /* optional storage */ }
+    if (!seenModal) openTour(id);
+  }, [openTour]);
 
   const closeTour = useCallback((completed = true) => {
     if (active) void markSeen(active.id);
@@ -159,7 +226,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!seen.intro && !localSeen.intro) openTour('intro');
   }, [activeId, openTour, seen.intro, setup]);
 
-  return <TourContext.Provider value={{ active, stepIndex, openTour, closeTour, next, previous, getPageTour }}>{children}</TourContext.Provider>;
+  return <TourContext.Provider value={{ active, stepIndex, openTour, closeTour, next, previous, getPageTour, suggestModalTour }}>{children}</TourContext.Provider>;
 };
 
 export function useTour(): TourContextValue {

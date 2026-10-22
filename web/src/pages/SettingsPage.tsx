@@ -6,6 +6,7 @@ import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
 import { deletePermissionRule, getPermissionRules } from '../api/chat';
 import { useTour } from '../components/tour/TourContext';
+import { InfoTooltip } from '../components/tour/InfoTooltip';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
@@ -220,7 +221,7 @@ export const SettingsPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl space-y-6" data-tour="settings">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -254,7 +255,7 @@ export const SettingsPage: React.FC = () => {
         <div className="p-8 text-center text-[var(--t-crit)] text-sm">{t('settings.loadError')}</div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div id="planning-approval" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3 shadow-xs" data-testid="planning-approval">
+          <div id="planning-approval" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3 shadow-xs" data-testid="planning-approval" data-tour="planning-approval">
             <h2 className="text-sm font-semibold">{t('extra.planningApprovalTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.planningApprovalHint')}</p>
             {(['none', 'large', 'all'] as const).map((mode) => (
@@ -269,7 +270,7 @@ export const SettingsPage: React.FC = () => {
               </label>
             ))}
           </div>
-          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs" data-tour="brain-policy">
             <div className="space-y-2">
               <label className="text-xs font-semibold">{t('projects.brainPermissions')}</label>
               <select value={brainPermissions} onChange={(e) => { const value = e.target.value as typeof brainPermissions; if (value === 'full' && !window.confirm(t('extra.fullModeConfirm'))) return; setBrainPermissions(value); }} className="block rounded border p-2 bg-[var(--t-surface-2)]"><option value="standard">{t('projects.brainPermissionStandard')}</option><option value="trusted">{t('projects.brainPermissionTrusted')}</option><option value="full">{t('projects.brainPermissionFull')}</option></select>
@@ -284,9 +285,10 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             {/* Hard chain */}
-            <div>
+            <div data-tour="model-chain">
               <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                 {t('settings.hardChainLabel')}
+                <InfoTooltip text="Thứ tự model khó dùng trước rồi mới fallback xuống model dễ; ví dụ opus → sonnet → haiku." label={t('settings.hardChainLabel')} />
               </label>
               <textarea
                 rows={4}
@@ -344,6 +346,7 @@ export const SettingsPage: React.FC = () => {
               <input
                 id="multiple-per-provider"
                 data-testid="multiple-per-provider-toggle"
+                data-tour="multiple-accounts"
                 type="checkbox"
                 checked={multiplePerProvider}
                 onChange={(e) => setMultiplePerProvider(e.target.checked)}
@@ -563,7 +566,7 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          <section data-testid="notifications-settings" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
+          <section data-testid="notifications-settings" data-tour="notifications" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-[color-mix(in_srgb,var(--t-accent)_15%,transparent)] text-[var(--t-accent)]">
