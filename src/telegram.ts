@@ -232,6 +232,9 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'rules', description: 'Quy tắc quyền đã cấp: /rules · /rules del <số>' },
 ];
 
+
+/** Identical notification texts are sent at most once per window. */
+const NOTIFY_REPEAT_WINDOW_MS = 30 * 60 * 1000;
 export class TelegramBotService {
   private config: AgentHubConfig;
   private service: AppService;
@@ -242,6 +245,7 @@ export class TelegramBotService {
   private quotaMarkRepo?: QuotaMarkRepo;
   private ciRepo?: CiRepo;
   private lastSentCi = new Map<string, number>();
+  private lastBroadcast = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
   private get appName(): string { return this.config.branding?.name || 'AgentHub'; }
@@ -3454,6 +3458,12 @@ export class TelegramBotService {
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
   ): void {
+    // Event notifications can fire repeatedly for the same state (quota polls, scheduler ticks).
+    const now = this.now();
+    const last = this.lastBroadcast.get(text);
+    if (last !== undefined && now - last < NOTIFY_REPEAT_WINDOW_MS) return;
+    this.lastBroadcast.set(text, now);
+    for (const [key, at] of this.lastBroadcast) if (now - at >= NOTIFY_REPEAT_WINDOW_MS) this.lastBroadcast.delete(key);
     const allowed = this.config.telegram?.allowedChatIds || [];
     for (const chatId of allowed) {
       void this.sendMessage(chatId, text, replyMarkup);

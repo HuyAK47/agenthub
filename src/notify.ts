@@ -374,7 +374,7 @@ export class NotificationService {
     const key = `${urgency}:${message}`;
     const now = this.now();
     const last = this.lastSent.get(key);
-    if (last !== undefined && now - last < 30_000) {
+    if (last !== undefined && now - last < 30 * 60 * 1000) {
       return;
     }
     this.lastSent.set(key, now);
