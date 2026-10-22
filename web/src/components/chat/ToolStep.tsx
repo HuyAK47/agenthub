@@ -58,6 +58,7 @@ export const ToolStep: React.FC<ToolStepGroupProps> = ({ messages, isRunning = f
         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] text-[var(--text-secondary)] border border-[var(--border-default)] shadow-xs transition-colors cursor-pointer"
       >
         <Wrench className="w-3.5 h-3.5" />
+        <span aria-hidden="true">⚙ </span>
         <span className="font-semibold text-[var(--text-primary)]">
           {t('extra.stepsDone', { count: messages.length })}
         </span>{' '}
