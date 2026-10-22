@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import pty from 'node-pty';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket } from 'ws';
@@ -9,6 +10,69 @@ import { AppService, HttpError } from '../services/index.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { CodexEngine } from '../engines/index.js';
 import { accountKey, isProfileLoggedIn } from '../profiles/index.js';
+
+const require = createRequire(import.meta.url);
+
+let spawnHelperChecked = false;
+
+/**
+ * Cấp quyền thực thi (+x) cho các file binary spawn-helper nếu thiếu bit thực thi.
+ */
+export function fixSpawnHelperPermissions(candidates: string[]): void {
+  for (const file of candidates) {
+    if (fs.existsSync(file)) {
+      try {
+        const stat = fs.statSync(file);
+        if ((stat.mode & 0o111) === 0) {
+          fs.chmodSync(file, stat.mode | 0o755);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+/**
+ * Trên macOS, node-pty gọi binary 'spawn-helper' qua posix_spawnp.
+ * Các file prebuild từ npm thường thiếu quyền thực thi (+x), dẫn đến lỗi
+ * 'posix_spawnp failed' / 503 pty_unavailable.
+ *
+ * Chỉ chạy một lần trên darwin; hỗ trợ nhận ptyDir hoặc danh sách đường dẫn phục vụ test.
+ */
+export function ensureSpawnHelperExecutable(target?: string | string[]): void {
+  if (Array.isArray(target)) {
+    fixSpawnHelperPermissions(target);
+    return;
+  }
+  if (typeof target === 'string') {
+    const candidates = [
+      path.join(target, 'build', 'Release', 'spawn-helper'),
+      path.join(target, 'build', 'Debug', 'spawn-helper'),
+      path.join(target, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
+    ];
+    fixSpawnHelperPermissions(candidates);
+    return;
+  }
+
+  if (process.platform !== 'darwin' || spawnHelperChecked) {
+    return;
+  }
+  spawnHelperChecked = true;
+
+  try {
+    const ptyPackageJson = require.resolve('node-pty/package.json');
+    const ptyDir = path.dirname(ptyPackageJson);
+    const candidates = [
+      path.join(ptyDir, 'build', 'Release', 'spawn-helper'),
+      path.join(ptyDir, 'build', 'Debug', 'spawn-helper'),
+      path.join(ptyDir, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
+    ];
+    fixSpawnHelperPermissions(candidates);
+  } catch {
+    // ignore
+  }
+}
 
 interface PtySession {
   id: string;
@@ -115,6 +179,10 @@ export class PtyManager {
       command = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
     }
     if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
+
+    if (process.platform === 'darwin' && !spawnHelperChecked) {
+      ensureSpawnHelperExecutable();
+    }
 
     let ptyProcess: pty.IPty;
     try {

@@ -512,19 +512,24 @@ describe('Doctor checks', () => {
         },
       });
 
+      const isDarwin = process.platform === 'darwin';
+      const expectedPassed = isDarwin ? 9 : 10;
+      const expectedSkipped = isDarwin ? 1 : 0;
+
       expect(report.ok).toBe(true);
       expect(report.summary.total).toBe(10);
-      expect(report.summary.passed).toBe(10);
+      expect(report.summary.passed).toBe(expectedPassed);
+      expect(report.summary.skipped).toBe(expectedSkipped);
       expect(report.summary.failed).toBe(0);
 
       const text = formatDoctorText(report);
       expect(text).toContain('=== AgentHub Doctor ===');
-      expect(text).toContain('Tất cả 10/10 mục kiểm tra đều đạt!');
+      expect(text).toContain(`Tất cả ${expectedPassed}/10 mục kiểm tra đều đạt!`);
 
       const json = formatDoctorJson(report);
       const parsed = JSON.parse(json);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary.passed).toBe(10);
+      expect(parsed.summary.passed).toBe(expectedPassed);
       expect(parsed.checks.length).toBe(10);
     });
 
@@ -651,7 +656,8 @@ describe('Doctor checks', () => {
       const jsonOutput = consoleSpy.mock.calls[0][0];
       const parsed = JSON.parse(jsonOutput);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary.passed).toBe(10);
+      const isDarwin = process.platform === 'darwin';
+      expect(parsed.summary.passed).toBe(isDarwin ? 9 : 10);
       consoleSpy.mockRestore();
     });
   });

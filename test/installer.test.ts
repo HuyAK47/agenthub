@@ -10,49 +10,102 @@ import { linuxPlatform } from '../src/platform/linux.js';
 const installer = path.resolve('scripts/install.sh');
 
 describe('safe installer and updater commands', () => {
-  it('uninstalls only temporary paths and calls the injected systemctl', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-'));
-    const bin = path.join(home, 'bin');
-    const log = path.join(home, 'systemctl.log');
-    const fakeSystemctl = path.join(bin, 'systemctl');
-    const app = path.join(home, 'app');
-    const data = path.join(home, 'data');
-    const linkDir = path.join(home, 'links');
-    fs.mkdirSync(bin, { recursive: true });
-    fs.mkdirSync(app, { recursive: true });
-    fs.mkdirSync(data, { recursive: true });
-    fs.mkdirSync(linkDir, { recursive: true });
-    fs.writeFileSync(path.join(app, 'sentinel'), 'app');
-    fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
-    expect(spawnSync('git', ['-C', app, 'init'], { encoding: 'utf8' }).status).toBe(0);
-    expect(spawnSync('git', ['-C', app, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
-    fs.writeFileSync(path.join(data, 'sentinel'), 'data');
-    fs.symlinkSync(path.join(app, 'sentinel'), path.join(linkDir, 'agenthub'));
-    fs.writeFileSync(fakeSystemctl, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$AGENTHUB_FAKE_LOG"\n');
-    fs.chmodSync(fakeSystemctl, 0o755);
+  it.skipIf(process.platform === 'darwin')(
+    'uninstalls only temporary paths and calls the injected systemctl',
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-'));
+      const bin = path.join(home, 'bin');
+      const log = path.join(home, 'systemctl.log');
+      const fakeSystemctl = path.join(bin, 'systemctl');
+      const app = path.join(home, 'app');
+      const data = path.join(home, 'data');
+      const linkDir = path.join(home, 'links');
+      fs.mkdirSync(bin, { recursive: true });
+      fs.mkdirSync(app, { recursive: true });
+      fs.mkdirSync(data, { recursive: true });
+      fs.mkdirSync(linkDir, { recursive: true });
+      fs.writeFileSync(path.join(app, 'sentinel'), 'app');
+      fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
+      expect(spawnSync('git', ['-C', app, 'init'], { encoding: 'utf8' }).status).toBe(0);
+      expect(spawnSync('git', ['-C', app, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
+      fs.writeFileSync(path.join(data, 'sentinel'), 'data');
+      fs.symlinkSync(path.join(app, 'sentinel'), path.join(linkDir, 'agenthub'));
+      fs.writeFileSync(fakeSystemctl, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$AGENTHUB_FAKE_LOG"\n');
+      fs.chmodSync(fakeSystemctl, 0o755);
 
-    const result = spawnSync('/bin/sh', [installer, '--uninstall'], {
-      env: {
-        ...process.env,
-        HOME: home,
-        PATH: `${bin}:/usr/bin:/bin`,
-        AGENTHUB_DIR: app,
-        AGENTHUB_HOME: data,
-        AGENTHUB_LINK_DIR: linkDir,
-        AGENTHUB_SYSTEMCTL: fakeSystemctl,
-        AGENTHUB_FAKE_LOG: log,
-      },
-      encoding: 'utf8',
-    });
+      const result = spawnSync('/bin/sh', [installer, '--uninstall'], {
+        env: {
+          ...process.env,
+          HOME: home,
+          PATH: `${bin}:/usr/bin:/bin`,
+          AGENTHUB_DIR: app,
+          AGENTHUB_HOME: data,
+          AGENTHUB_LINK_DIR: linkDir,
+          AGENTHUB_SYSTEMCTL: fakeSystemctl,
+          AGENTHUB_FAKE_LOG: log,
+        },
+        encoding: 'utf8',
+      });
 
-    expect(result.status).toBe(0);
-    expect(fs.existsSync(app)).toBe(false);
-    expect(fs.existsSync(data)).toBe(true);
-    expect(fs.existsSync(path.join(linkDir, 'agenthub'))).toBe(false);
-    expect(fs.readFileSync(log, 'utf8')).toContain('--user stop agenthub');
-    expect(fs.readFileSync(log, 'utf8')).toContain('--user disable agenthub');
-    expect(fs.readFileSync(log, 'utf8')).toContain('--user daemon-reload');
-  });
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(app)).toBe(false);
+      expect(fs.existsSync(data)).toBe(true);
+      expect(fs.existsSync(path.join(linkDir, 'agenthub'))).toBe(false);
+      expect(fs.readFileSync(log, 'utf8')).toContain('--user stop agenthub');
+      expect(fs.readFileSync(log, 'utf8')).toContain('--user disable agenthub');
+      expect(fs.readFileSync(log, 'utf8')).toContain('--user daemon-reload');
+    },
+  );
+
+  it.runIf(process.platform === 'darwin')(
+    'uninstalls only temporary paths and calls the injected launchctl on macOS',
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-darwin-'));
+      const bin = path.join(home, 'bin');
+      const log = path.join(home, 'launchctl.log');
+      const fakeLaunchctl = path.join(bin, 'launchctl');
+      const app = path.join(home, 'app');
+      const data = path.join(home, 'data');
+      const linkDir = path.join(home, 'links');
+      const plistDir = path.join(home, 'Library', 'LaunchAgents');
+      const plistFile = path.join(plistDir, 'dev.agenthub.plist');
+      fs.mkdirSync(bin, { recursive: true });
+      fs.mkdirSync(app, { recursive: true });
+      fs.mkdirSync(data, { recursive: true });
+      fs.mkdirSync(linkDir, { recursive: true });
+      fs.mkdirSync(plistDir, { recursive: true });
+      fs.writeFileSync(plistFile, '<plist></plist>');
+      fs.writeFileSync(path.join(app, 'sentinel'), 'app');
+      fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
+      expect(spawnSync('git', ['-C', app, 'init'], { encoding: 'utf8' }).status).toBe(0);
+      expect(spawnSync('git', ['-C', app, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
+      fs.writeFileSync(path.join(data, 'sentinel'), 'data');
+      fs.symlinkSync(path.join(app, 'sentinel'), path.join(linkDir, 'agenthub'));
+      fs.writeFileSync(fakeLaunchctl, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$AGENTHUB_FAKE_LOG"\n');
+      fs.chmodSync(fakeLaunchctl, 0o755);
+
+      const result = spawnSync('/bin/sh', [installer, '--uninstall'], {
+        env: {
+          ...process.env,
+          HOME: home,
+          PATH: `${bin}:/usr/bin:/bin`,
+          AGENTHUB_DIR: app,
+          AGENTHUB_HOME: data,
+          AGENTHUB_LINK_DIR: linkDir,
+          AGENTHUB_LAUNCHCTL: fakeLaunchctl,
+          AGENTHUB_FAKE_LOG: log,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(app)).toBe(false);
+      expect(fs.existsSync(data)).toBe(true);
+      expect(fs.existsSync(path.join(linkDir, 'agenthub'))).toBe(false);
+      expect(fs.existsSync(plistFile)).toBe(false);
+      expect(fs.readFileSync(log, 'utf8')).toContain('bootout');
+    },
+  );
 
   it('does not delete an ordinary git directory without the installer marker', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-unmarked-'));
@@ -144,6 +197,7 @@ describe('safe installer and updater commands', () => {
         AGENTHUB_DIR: path.join(home, 'app'),
         AGENTHUB_HOME: path.join(home, 'data'),
         AGENTHUB_SYSTEMCTL: path.join(home, 'must-not-run'),
+        AGENTHUB_LAUNCHCTL: path.join(home, 'must-not-run'),
         AGENTHUB_FAKE_LOG: log,
       },
       encoding: 'utf8',

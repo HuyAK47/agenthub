@@ -70,9 +70,19 @@ describe('release packaging and installation', () => {
     const app = path.join(home, 'app');
     const fakeSystemctl = path.join(home, 'systemctl');
     fs.writeFileSync(fakeSystemctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const fakeLaunchctl = path.join(home, 'launchctl');
+    fs.writeFileSync(fakeLaunchctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     makeRelease(base, '1.0.0');
     makeRelease(base, '2.0.0', false);
-    const env = { HOME: home, AGENTHUB_DIR: app, AGENTHUB_HOME: path.join(home, 'data'), AGENTHUB_RELEASE_BASE: base, AGENTHUB_SYSTEMCTL: fakeSystemctl, AGENTHUB_NO_BROWSER: '1' };
+    const env = {
+      HOME: home,
+      AGENTHUB_DIR: app,
+      AGENTHUB_HOME: path.join(home, 'data'),
+      AGENTHUB_RELEASE_BASE: base,
+      AGENTHUB_SYSTEMCTL: fakeSystemctl,
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
+      AGENTHUB_NO_BROWSER: '1',
+    };
     expect(run('/bin/sh', [installer, '--from-release', '1.0.0'], env).status).toBe(0);
     const before = fs.readlinkSync(path.join(app, 'current'));
     const bad = run('/bin/sh', [installer, '--from-release', '2.0.0'], env);
@@ -125,14 +135,21 @@ describe('release rollback', () => {
     const app = path.join(home, 'app');
     const fakeSystemctl = path.join(home, 'systemctl');
     fs.writeFileSync(fakeSystemctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const fakeLaunchctl = path.join(home, 'launchctl');
+    fs.writeFileSync(fakeLaunchctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     for (const version of ['1.0.0', '2.0.0', '3.0.0']) {
       fs.mkdirSync(path.join(app, version), { recursive: true });
       fs.writeFileSync(path.join(app, version, 'package.json'), JSON.stringify({ version }));
     }
     fs.symlinkSync('3.0.0', path.join(app, 'current'));
-    const previous = { HOME: process.env.HOME, AGENTHUB_SYSTEMCTL: process.env.AGENTHUB_SYSTEMCTL };
+    const previous = {
+      HOME: process.env.HOME,
+      AGENTHUB_SYSTEMCTL: process.env.AGENTHUB_SYSTEMCTL,
+      AGENTHUB_LAUNCHCTL: process.env.AGENTHUB_LAUNCHCTL,
+    };
     process.env.HOME = home;
     process.env.AGENTHUB_SYSTEMCTL = fakeSystemctl;
+    process.env.AGENTHUB_LAUNCHCTL = fakeLaunchctl;
     try {
       await cmdRollback(['1.0.0'], path.join(app, '3.0.0'));
       expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.0.0');
@@ -145,6 +162,8 @@ describe('release rollback', () => {
       else process.env.HOME = previous.HOME;
       if (previous.AGENTHUB_SYSTEMCTL === undefined) delete process.env.AGENTHUB_SYSTEMCTL;
       else process.env.AGENTHUB_SYSTEMCTL = previous.AGENTHUB_SYSTEMCTL;
+      if (previous.AGENTHUB_LAUNCHCTL === undefined) delete process.env.AGENTHUB_LAUNCHCTL;
+      else process.env.AGENTHUB_LAUNCHCTL = previous.AGENTHUB_LAUNCHCTL;
     }
 
     const onlyCurrent = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-rollback-empty-'));

@@ -38,7 +38,17 @@ function getProcessState(pid: number): string | null {
   try {
     const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
     const m = status.match(/^State:\s+([A-Z])/m);
-    return m ? m[1] : null;
+    if (m) return m[1];
+  } catch {
+    // /proc is not available on macOS
+  }
+  try {
+    const out = execFileSync('ps', ['-o', 'state=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const firstChar = out.charAt(0).toUpperCase();
+    return firstChar || null;
   } catch {
     return null;
   }
