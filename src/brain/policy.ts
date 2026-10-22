@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { BrainConfig } from '../config.js';
 import { projectSettings } from '../projects/settings.js';
+import { projectWorktreeRoot } from '../projects/paths.js';
 import { effectiveBrainModeFromSettings, effectiveBrainPermission, type BrainPermission } from './mode.js';
 
 export type BrainPolicyAction = 'allow' | 'deny';
@@ -424,11 +425,11 @@ export class BrainPolicy {
  */
 export function projectBrainPolicy(
   project: { id: string; path: string; settings?: string | null },
-  config: { worktreesDir: string; brain: Pick<BrainConfig, 'mode' | 'policy' | 'permissions'> },
+  config: { worktreesDir: string; hubHome?: string; brain: Pick<BrainConfig, 'mode' | 'policy' | 'permissions'> },
 ): BrainPolicy {
   const settings = projectSettings(project);
   return new BrainPolicy({
-    roots: [project.path, path.join(config.worktreesDir, project.id)],
+    roots: [project.path, projectWorktreeRoot(project, config.hubHome || config.worktreesDir)],
     readOnlyRoots: settings.references.map((reference) => reference.path),
     extraPatterns: config.brain.policy.flatMap((pattern) => {
       try { return [new RegExp(pattern)]; } catch { return []; }
@@ -439,11 +440,11 @@ export function projectBrainPolicy(
 }
 
 export function assistantPolicy(
-  project: { id: string; path: string },
-  config: { worktreesDir: string; assistant: Pick<BrainConfig, 'policy'> & { permissions?: 'guarded' | 'full' } },
+  project: { id: string; path: string; settings?: string | null },
+  config: { worktreesDir: string; hubHome?: string; assistant: Pick<BrainConfig, 'policy'> & { permissions?: 'guarded' | 'full' } },
 ): BrainPolicy {
   return new BrainPolicy({
-    roots: [project.path, path.join(config.worktreesDir, project.id)],
+    roots: [project.path, projectWorktreeRoot(project, config.hubHome || config.worktreesDir)],
     extraPatterns: config.assistant.policy.flatMap((pattern) => {
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
