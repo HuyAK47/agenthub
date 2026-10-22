@@ -253,6 +253,14 @@ export interface TaskBatch {
   createdBy: string | null;
   createdAt: string;
   tasks?: Task[];
+  progress?: {
+    total: number;
+    done: number;
+    running: number;
+    failed: number;
+    waiting: number;
+    pending: number;
+  };
 }
 
 export interface CreateBatchInput {
@@ -268,6 +276,7 @@ export interface CreateBatchInput {
     dependsOn?: string[];
   }>;
   createdBy?: string;
+  dispatch?: boolean;
 }
 
 export interface CheckResult {
