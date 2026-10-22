@@ -78,7 +78,7 @@ describe('ClaudeSessionsPage', () => {
     const page = vi.mocked(client.getClaudeSessionsPage);
     renderPage('/claude-sessions?page=3&pageSize=50');
     await screen.findByText('Implement feature');
-    expect(page).toHaveBeenCalledWith({ limit: 50, offset: 100 });
+    expect(page).toHaveBeenCalledWith({ limit: 50, offset: 100, sort: 'lastAt', order: 'desc' });
   });
 
   it('shows a token chart, turn rows, and active badge in the detail view', async () => {
