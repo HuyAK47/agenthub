@@ -1,5 +1,7 @@
 # AgentHub
 
+**Landing page:** [Giới thiệu AgentHub](https://ducanh19020217.github.io/agenthub/)
+
 [English](README.md) | **Tiếng Việt**
 
 AgentHub là "hệ điều hành" cục bộ quản lý các worker AI coding (Antigravity CLI và Codex CLI), được điều phối và giám sát bởi **Claude Code** qua giao thức MCP (Model Context Protocol) cùng giao diện Web Dashboard trực quan.
