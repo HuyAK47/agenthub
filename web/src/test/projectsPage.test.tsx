@@ -215,6 +215,32 @@ describe('ProjectsPage', () => {
     expect(deleteSpy).toHaveBeenCalledWith('proj-1', expect.anything());
   });
 
+  it('4b. Hộp xác nhận cho phép purge bằng cách gõ đúng id', async () => {
+    const deleteSpy = vi.spyOn(client, 'deleteProject').mockResolvedValue({ ok: true });
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    vi.spyOn(window, 'prompt').mockReturnValue('proj-1');
+
+    renderPage();
+    expect(await screen.findByText('XFarm')).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle(/Xóa project/i));
+
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('proj-1', { purge: true, confirm: 'proj-1' }));
+  });
+
+  it('4c. Hiển thị dự án đã ẩn và gọi restore', async () => {
+    const archivedProject = { ...mockProject, id: 'old-proj', name: 'Old Project' };
+    vi.spyOn(client, 'getArchivedProjects').mockResolvedValue([archivedProject]);
+    const restoreSpy = vi.spyOn(client, 'restoreProject').mockResolvedValue(archivedProject);
+
+    renderPage();
+    expect(await screen.findByText('XFarm')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Dự án đã ẩn/i }));
+    expect(await screen.findByText('Old Project')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Khôi phục/i }));
+
+    await waitFor(() => expect(restoreSpy).toHaveBeenCalledWith('old-proj', expect.anything()));
+  });
+
   it('5. Sửa checks tùy chỉnh trong drawer chi tiết và lưu thành công bằng 1 nút Lưu', async () => {
     const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue({
       ...mockProject,
