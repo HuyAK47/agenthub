@@ -60,6 +60,7 @@ import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
+import { createNewGitProject, inspectProject } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
 import type { PerfCollector } from '../perf.js';
 
@@ -1199,6 +1200,27 @@ export class AppService {
   listProjects(includeArchived = false): ProjectRow[] {
     const projects = includeArchived ? this.projectRepo.getAllIncludingArchived() : this.projectRepo.getAll();
     return projects.map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
+  }
+
+  inspectProject(raw: unknown) {
+    const input = z.object({ path: z.string().min(1) }).parse(raw);
+    if (!path.isAbsolute(input.path)) throw new HttpError(400, 'bad_request', 'Đường dẫn phải là đường dẫn tuyệt đối');
+    return inspectProject(input.path);
+  }
+
+  createNewProject(raw: unknown): ProjectRow {
+    const input = z.object({
+      name: z.string().min(1), path: z.string().min(1), defaultBranch: z.string().min(1).default('main'),
+      maxParallel: z.number().int().positive().default(3), settings: ProjectSettingsInputSchema.optional(),
+    }).parse(raw);
+    if (!path.isAbsolute(input.path)) throw new HttpError(400, 'bad_request', 'Đường dẫn phải là đường dẫn tuyệt đối');
+    try { createNewGitProject(input.path, input.defaultBranch); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    try {
+      return this.createProject({ ...input, path: path.resolve(input.path) });
+    } catch (error) {
+      try { fs.rmSync(path.resolve(input.path), { recursive: true, force: true }); } catch { /* best effort cleanup */ }
+      throw error;
+    }
   }
 
   getProject(id: string): ProjectRow {
