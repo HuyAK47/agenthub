@@ -106,6 +106,14 @@ export const en: typeof vi = {
     createTask: 'New Task',
     filterQuick: 'Filter slug / title',
   },
+  pagination: {
+    rowsPerPage: 'Rows/page',
+    pageOf: 'Page {page}/{pages}',
+    previous: 'Previous page',
+    next: 'Next page',
+    loading: 'Loading…',
+    empty: 'No data',
+  },
   dag: {
     title: 'Dependency Diagram',
     toggleKanban: 'Kanban',

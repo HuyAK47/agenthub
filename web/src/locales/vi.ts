@@ -104,6 +104,14 @@ export const vi = {
     createTask: 'Tạo Task',
     filterQuick: 'Lọc slug / tiêu đề',
   },
+  pagination: {
+    rowsPerPage: 'Số dòng/trang',
+    pageOf: 'Trang {page}/{pages}',
+    previous: 'Trang trước',
+    next: 'Trang sau',
+    loading: 'Đang tải…',
+    empty: 'Không có dữ liệu',
+  },
   dag: {
     title: 'Sơ đồ phụ thuộc',
     toggleKanban: 'Kanban',

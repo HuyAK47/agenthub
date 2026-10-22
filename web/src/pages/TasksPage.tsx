@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useState } from 'react';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { getProjects, getStatus, getTasks } from '../api/client';
@@ -237,11 +237,28 @@ export const TasksPage: React.FC = () => {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['tasks', selectedProject, search, page, pageSize, cursor],
-    queryFn: () => getTasks({ project: selectedProject, search, limit: pageSize, cursor }),
+    queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor],
+    queryFn: async () => {
+      let nextCursor = cursor;
+      if (!nextCursor && page > 1) {
+        for (let previousPage = 1; previousPage < page; previousPage += 1) {
+          const previous = await getTasks({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor: nextCursor });
+          nextCursor = previous.nextCursor ?? undefined;
+          if (!nextCursor) break;
+        }
+      }
+      return getTasks({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor: nextCursor });
+    },
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
   });
+  const { data: allTasks = [] } = useQuery({
+    queryKey: ['tasks-kanban', selectedProject, search],
+    queryFn: () => getTasks({ project: selectedProject, search }),
+    refetchInterval: 5000,
+    placeholderData: keepPreviousData,
+  });
+  const initialFilters = useRef(true);
   useEffect(() => {
     if (data?.nextCursor) setCursors((current) => ({ ...current, [page]: data.nextCursor || undefined }));
   }, [data?.nextCursor, page]);
@@ -255,10 +272,14 @@ export const TasksPage: React.FC = () => {
     if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
   }, [selectedProject, selectedStatus, search, page, pageSize, setUrlParams, urlParams]);
   useEffect(() => {
+    if (initialFilters.current) {
+      initialFilters.current = false;
+      return;
+    }
     setPage(1);
     setCursors({});
-  }, [selectedProject, search, pageSize]);
-  const tasks = data || [];
+  }, [selectedProject, search, selectedStatus, pageSize]);
+  const tasks = allTasks;
 
   const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
 
