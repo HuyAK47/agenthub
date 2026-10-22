@@ -8,7 +8,7 @@ node scripts/notify-audit.mjs --db /path/to/hub.db
 node scripts/notify-audit.mjs --db /path/to/hub.db --config /path/to/config.json
 ```
 
-The script reports sends after content dedupe, quiet-hours/config gates, the one-hour disk-state throttle, the 15-minute load summary, and the engine-wide quota check. It reads notification and Telegram settings from the config next to the database (or `--config`). The Telegram column applies the same engine/family gate and configured notify flags as `src/telegram.ts`; the browser column applies the same allow-list and throttle keys as `web/src/notifications.ts`. It also excludes SSE activity that is not a notification event.
+The script reports eligible sends after content dedupe, quiet-hours/config gates, the one-hour disk-state throttle, the 15-minute load summary, the disk hysteresis guard, and the engine-wide quota check. It reads notification and Telegram settings from the config next to the database (or `--config`), and resolves the affected engine from either the event profile or its explicit `engine` field before checking all enabled profiles in that engine. The Telegram column applies the same engine/family gate and configured notify flags as `src/telegram.ts`; the browser column applies the same allow-list, hysteresis, grouped load body, and throttle keys as `web/src/notifications.ts`. It also excludes SSE activity that is not a notification event.
 
 ## Event volume supplied with the task
 

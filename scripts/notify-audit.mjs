@@ -57,8 +57,13 @@ if (!fs.existsSync(dbPath)) {
     const quotaAllForEngine = (payload, at) => {
       const profile = byName.get(payload.profile || payload.profileName || payload.worker);
       const family = payload.family || payload.model;
-      if (!profile || !family) return payload.allExhausted === true;
-      const sameEngine = profiles.filter((p) => p.engine === profile.engine);
+      const engine = payload.engine || profile?.engine;
+      // Prefer the database state over the producer's convenience flag. This
+      // also handles events emitted without a profile name but with engine and
+      // family context (the scheduler's normal quota event shape).
+      if (!family || !engine) return payload.allExhausted === true;
+      const sameEngine = profiles.filter((p) => p.engine === engine);
+      if (sameEngine.length === 0) return false;
       return sameEngine.length > 0 && sameEngine.every((p) => marks.some((m) => m.profileName === p.name && m.family === family && m.until * 1000 > at));
     };
     const incident = (type, payload, at) => payload.level === 'incident' || payload.urgency === 'critical' || payload.critical === true
@@ -99,6 +104,13 @@ if (!fs.existsSync(dbPath)) {
       let desktopImportant = desktopEnabled && desktopLevel === 'important' && important.has(row.type) && (row.type !== 'quota.exhausted' || quotaAll);
       if (desktopLevel === 'critical') desktopAll = desktopEnabled && ['task.failed', 'disk.docker_low', 'quota.exhausted'].includes(row.type) && (row.type !== 'quota.exhausted' || quotaAll);
       if (inQuietHours(at) && !incident(row.type, payload, at)) desktopAll = desktopImportant = false;
+      if (row.type === 'disk.ok') {
+        const freeGB = typeof payload.freeGB === 'number' ? payload.freeGB : NaN;
+        const minFreeGB = typeof payload.minFreeGB === 'number' ? payload.minFreeGB : NaN;
+        if (!Number.isFinite(freeGB) || !Number.isFinite(minFreeGB) || freeGB < minFreeGB + 1) {
+          desktopAll = desktopImportant = false;
+        }
+      }
       if (row.type === 'disk.low' || row.type === 'disk.ok') {
         const previous = diskSeen.get(row.type) || 0;
         desktopAll = desktopAll && at - previous >= 60 * 60_000;

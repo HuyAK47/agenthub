@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { notifyBrowserEvent, shouldNotifyBrowserEvent } from '../notifications';
+import { browserNotificationBody, notifyBrowserEvent, shouldNotifyBrowserEvent } from '../notifications';
 import { EventItem } from '../types/api';
 
 const event = (type: string, payload: Record<string, unknown> = {}): EventItem => ({
@@ -40,6 +40,11 @@ describe('browser notification policy', () => {
     now.mockRestore();
   });
 
+  it('requires the disk hysteresis margin before browser recovery notification', () => {
+    expect(shouldNotifyBrowserEvent(event('disk.ok', { freeGB: 3.5, minFreeGB: 3 }), 'all')).toBe(false);
+    expect(shouldNotifyBrowserEvent(event('disk.ok', { freeGB: 4, minFreeGB: 3 }), 'all')).toBe(true);
+  });
+
   it('shares the desktop load-summary window across pause and load event types', () => {
     notifyBrowserEvent(event('task.paused', { reason: 'load' }), 'all');
     notifyBrowserEvent(event('load.task_paused', { reason: 'load' }), 'all');
@@ -51,5 +56,10 @@ describe('browser notification policy', () => {
     notifyBrowserEvent(event('quota.exhausted', { allExhausted: true, engine: 'agy', family: 'gemini' }), 'all');
     notifyBrowserEvent(event('quota.exhausted', { allExhausted: true, engine: 'codex', family: 'codex' }), 'all');
     expect(localStorage.length).toBe(2);
+  });
+
+  it('uses the same grouped body for the load/pause notification family', () => {
+    expect(browserNotificationBody(event('load.high'))).toContain('tải cao');
+    expect(browserNotificationBody(event('task.paused'))).toBe(browserNotificationBody(event('load.task_paused')));
   });
 });
