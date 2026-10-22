@@ -277,6 +277,9 @@ export async function getProjectKnowledge(projectId: string): Promise<KnowledgeE
   return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
 }
 
+export const getReviewChecklistPreview = (projectId: string) =>
+  apiFetch<Array<{ path: string; resolvedPath: string; size: number | null; truncated: boolean; content: string | null; warning?: string }>>(`/api/projects/${encodeURIComponent(projectId)}/review-checklist/preview`);
+
 export async function addProjectKnowledge(
   projectId: string,
   data: { content: string; pinned?: boolean },

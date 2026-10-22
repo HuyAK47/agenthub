@@ -160,6 +160,7 @@ export interface ProjectSettings {
   integration: { enabled: boolean; branch?: string; baseRef?: string };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
+  reviewChecklist?: string[];
   notifications: { telegramContent: 'full' | 'minimal' };
 }
 
