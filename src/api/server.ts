@@ -199,6 +199,11 @@ export async function createServer(
 
   fastify.post('/api/projects/inspect', async (req: FastifyRequest) => service.inspectProject(req.body));
 
+  fastify.post('/api/projects/:id/guidance', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.writeProjectGuidance(id, req.body);
+  });
+
   // Creating a repository is intentionally separate from registering an existing one.
   // Keep both spellings for clients that adopted the early wizard contract.
   for (const route of ['/api/projects/new', '/api/projects/create']) {

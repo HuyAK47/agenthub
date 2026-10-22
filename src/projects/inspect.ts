@@ -21,6 +21,7 @@ export interface ProjectInspection {
   guidanceFiles: string[];
   mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
   claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
+  claudeSessionPreviews: Array<{ name: string; content: string }>;
   hasClaudeMemory: boolean;
   memoryPreview: string | null;
   suggestedSettings: {
@@ -106,9 +107,24 @@ export function inspectProject(projectPath: string, home = os.homedir()): Projec
   const encoded = encodedProjectDir(resolved);
   const claudeRoot = path.join(home, '.claude', 'projects', encoded);
   let claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }> = [];
+  let claudeSessionPreviews: Array<{ name: string; content: string }> = [];
   try {
     claudeSessions = fs.readdirSync(claudeRoot).filter((name) => name.endsWith('.jsonl')).flatMap((name) => {
       try { const sessionStat = fs.statSync(path.join(claudeRoot, name)); return [{ name, modifiedAt: new Date(sessionStat.mtimeMs).toISOString(), sizeBytes: sessionStat.size }]; } catch { return []; }
+    });
+    claudeSessionPreviews = claudeSessions.map(({ name }) => {
+      try {
+        const lines = fs.readFileSync(path.join(claudeRoot, name), 'utf8').slice(0, 64_000).split('\n');
+        const content = lines.flatMap((line) => {
+          try {
+            const item = JSON.parse(line) as { type?: string; role?: string; message?: { role?: string; content?: unknown } };
+            const value = item.message?.content ?? (item.type === 'user' || item.type === 'assistant' ? item.message : null);
+            const text = typeof value === 'string' ? value : Array.isArray(value) ? value.filter((part): part is { text: string } => Boolean(part && typeof part === 'object' && 'text' in part && typeof part.text === 'string')).map((part) => part.text).join('\n') : '';
+            return text ? [`${item.message?.role || item.role || item.type || 'message'}: ${text.slice(0, 2_000)}`] : [];
+          } catch { return []; }
+        }).join('\n\n').slice(0, 8_000);
+        return { name, content };
+      } catch { return { name, content: '' }; }
     });
   } catch { /* optional */ }
   const mountpoint = command('findmnt', ['-T', resolved, '-n', '-o', 'TARGET']);
@@ -127,7 +143,7 @@ export function inspectProject(projectPath: string, home = os.homedir()): Projec
     language: isDirectory ? detectLanguage(resolved, packageJson) : 'Unknown',
     projectFiles: PROJECT_FILES.filter((name) => files.has(name)), guidanceFiles,
     mount: { mountpoint, temporary: resolved.startsWith('/tmp/') || resolved.startsWith('/run/'), encrypted: mountType.toLowerCase().includes('crypt') },
-    claudeSessions, hasClaudeMemory: memoryPreview !== null, memoryPreview,
+    claudeSessions, claudeSessionPreviews, hasClaudeMemory: memoryPreview !== null, memoryPreview,
     suggestedSettings: { skipInstall: lockfiles.length > 0 || Boolean(monorepoType), skipGitHooks: Boolean(files.has('.husky') || files.has('commitlint.config.js')), sensitiveProject, checks },
   };
 }

@@ -1208,6 +1208,16 @@ export class AppService {
     return inspectProject(input.path);
   }
 
+  writeProjectGuidance(id: string, raw: unknown) {
+    const input = z.object({ content: z.string().min(1).max(32_000), confirm: z.literal(true) }).parse(raw);
+    const project = this.projectRepo.get(id);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+    const target = path.join(project.path, 'AGENTS.md');
+    if (fs.existsSync(target)) throw new HttpError(409, 'conflict', 'AGENTS.md đã tồn tại trong project');
+    fs.writeFileSync(target, input.content, { encoding: 'utf8', flag: 'wx', mode: 0o644 });
+    return { ok: true };
+  }
+
   createNewProject(raw: unknown): ProjectRow {
     const input = z.object({
       name: z.string().min(1), path: z.string().min(1), defaultBranch: z.string().min(1).default('main'),
