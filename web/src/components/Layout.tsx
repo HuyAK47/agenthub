@@ -23,6 +23,8 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import { CircleHelp } from 'lucide-react';
+import { HelpPanel } from './tour/HelpPanel';
 
 const PlansBadgeInner: React.FC = () => {
   const { data: batches = [] } = useQuery({
@@ -37,7 +39,7 @@ const PlansBadgeInner: React.FC = () => {
   return (
     <span
       data-testid="plans-sidebar-badge"
-      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/30 leading-none"
+      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-[color-mix(in_srgb,var(--t-warn)_20%,transparent)] text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)] leading-none"
     >
       {draftCount}
     </span>
@@ -58,6 +60,7 @@ export const Layout: React.FC = () => {
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
   const [sseConnected, setSseConnected] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -115,7 +118,7 @@ export const Layout: React.FC = () => {
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--t-surface)] focus:text-[var(--t-accent)] focus:border focus:border-[var(--t-border)] focus:shadow-lg focus:font-medium focus:text-sm focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]"
       >
-        {locale === 'en' ? 'Skip to content' : 'Bỏ qua tới nội dung'}
+        {t('extra.skipToContent')}
       </a>
 
       {/* Sidebar (240px wide on >=1100px, 68px icon-only on <1100px) */}
@@ -151,6 +154,7 @@ export const Layout: React.FC = () => {
                 end={item.to === '/'}
                 title={item.label}
                 aria-label={item.label}
+                data-tour={item.to === '/' ? 'overview' : item.to.slice(1).split('/')[0]}
                 className={({ isActive }) =>
                   `relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors max-[1100px]:justify-center max-[1100px]:px-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--t-surface)] ${
                     isActive
@@ -179,8 +183,17 @@ export const Layout: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              data-tour="help"
+              onClick={() => setHelpOpen(true)}
+              title={t('tour.help')}
+              aria-label={t('tour.help')}
+              className="rounded-lg border border-[var(--t-border)] p-1.5 text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]"
+            ><CircleHelp size={17} /></button>
             {/* Connection Status Indicator */}
             <div
+              data-tour="connection-status"
               title={connected ? t('extra.connected') : t('extra.disconnected')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
                 connected
@@ -275,6 +288,7 @@ export const Layout: React.FC = () => {
           <Outlet />
         </main>
       </div>
+      <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 };

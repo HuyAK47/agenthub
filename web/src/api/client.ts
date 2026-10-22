@@ -4,6 +4,7 @@ import {
   CheckProfileResponse,
   CreateProfileInput,
   CreateProjectInput,
+  DeployStatus,
   CreateTaskInput,
   CaptureTaskInput,
   HubStatus,
@@ -27,7 +28,10 @@ import {
   ModelOptions,
   TaskBatch,
   CreateBatchInput,
+  PerfReport,
 } from '../types/api';
+
+export const getPerf = () => apiFetch<PerfReport>('/api/perf');
 
 export async function getModelOptions(): Promise<ModelOptions> {
   return apiFetch<ModelOptions>('/api/models');
@@ -249,6 +253,8 @@ export async function getProjects(): Promise<Project[]> {
 }
 
 export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+export const getProjectDeployStatus = (id: string) =>
+  apiFetch<DeployStatus | null>(`/api/projects/${encodeURIComponent(id)}/deploy`);
 
 export async function createProject(data: CreateProjectInput): Promise<Project> {
   return apiFetch<Project>('/api/projects', {
@@ -273,6 +279,9 @@ export async function deleteProject(id: string): Promise<{ ok: boolean }> {
 export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
   return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
 }
+
+export const getReviewChecklistPreview = (projectId: string) =>
+  apiFetch<Array<{ path: string; resolvedPath: string; size: number | null; truncated: boolean; content: string | null; warning?: string }>>(`/api/projects/${encodeURIComponent(projectId)}/review-checklist/preview`);
 
 export async function addProjectKnowledge(
   projectId: string,
@@ -618,7 +627,7 @@ export async function getConfig(): Promise<SystemConfig> {
   return apiFetch<SystemConfig>('/api/config');
 }
 
-export async function updateConfig(data: SystemConfig): Promise<SystemConfig> {
+export async function updateConfig(data: Partial<SystemConfig>): Promise<SystemConfig> {
   return apiFetch<SystemConfig>('/api/config', {
     method: 'PUT',
     body: JSON.stringify(data),

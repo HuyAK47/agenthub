@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProjectsPage } from '../pages/ProjectsPage';
 import { LocaleProvider } from '../context/LocaleContext';
@@ -27,6 +27,15 @@ describe('ProjectsPage', () => {
       },
     });
     vi.spyOn(client, 'getProjects').mockResolvedValue([mockProject]);
+    vi.spyOn(client, 'getConfig').mockResolvedValue({
+      modelChainHard: ['codex:gpt-5.6-luna'],
+      modelChainEasy: ['gemini-3.8-flash-high'],
+      defaultTimeout: 10800,
+      brain: {
+        dailyTokenBudget: 10000000,
+        maxTurnsPerHour: 20,
+      },
+    } as any);
   });
 
   afterEach(() => {
@@ -38,7 +47,10 @@ describe('ProjectsPage', () => {
       <QueryClientProvider client={queryClient}>
         <LocaleProvider initialLocale="vi">
           <MemoryRouter initialEntries={initialEntries}>
-            <ProjectsPage />
+            <Routes>
+              <Route path="/projects" element={<ProjectsPage />} />
+              <Route path="/projects/:id/settings" element={<ProjectsPage />} />
+            </Routes>
           </MemoryRouter>
         </LocaleProvider>
       </QueryClientProvider>,
@@ -63,18 +75,23 @@ describe('ProjectsPage', () => {
     expect(await screen.findByText('XFarm')).toBeInTheDocument();
 
     // Mở form đăng ký
-    const registerBtn = screen.getByRole('button', { name: /Đăng ký project/i });
+    const registerBtn = screen.getByRole('button', { name: /Đăng ký Project/i });
     fireEvent.click(registerBtn);
 
-    expect(screen.getByRole('heading', { name: /Đăng ký Project mới/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: /Đăng ký Project mới/i }),
+    ).toBeInTheDocument();
 
     // Điền thông tin
     fireEvent.change(screen.getByPlaceholderText('vd: XFarm, AgentHub'), {
       target: { value: 'AgentHub' },
     });
-    fireEvent.change(screen.getByPlaceholderText('vd: /home/user/projects/xfarm'), {
-      target: { value: '/home/user/projects/agenthub' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText('vd: /home/user/projects/xfarm'),
+      {
+        target: { value: '/home/user/projects/agenthub' },
+      },
+    );
 
     // Submit form
     const saveBtn = screen.getByRole('button', { name: /Lưu Project/i });
@@ -97,7 +114,9 @@ describe('ProjectsPage', () => {
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['projects'] });
     // Form đóng lại
-    expect(screen.queryByRole('heading', { name: /Đăng ký Project mới/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: /Đăng ký Project mới/i }),
+    ).not.toBeInTheDocument();
   });
 
   it('2. envTemplate JSON sai cú pháp thì hiện lỗi validation và vô hiệu hóa nút submit', async () => {
@@ -105,7 +124,7 @@ describe('ProjectsPage', () => {
 
     expect(await screen.findByText('XFarm')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Đăng ký project/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Đăng ký Project/i }));
 
     const envTextarea = screen.getByTestId('env-template-textarea');
     const saveBtn = screen.getByRole('button', { name: /Lưu Project/i });
@@ -145,14 +164,17 @@ describe('ProjectsPage', () => {
 
     expect(await screen.findByText('XFarm')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Đăng ký project/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Đăng ký Project/i }));
 
     fireEvent.change(screen.getByPlaceholderText('vd: XFarm, AgentHub'), {
       target: { value: 'HighConcurrency' },
     });
-    fireEvent.change(screen.getByPlaceholderText('vd: /home/user/projects/xfarm'), {
-      target: { value: '/path/parallel' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText('vd: /home/user/projects/xfarm'),
+      {
+        target: { value: '/path/parallel' },
+      },
+    );
 
     // Thay đổi maxParallel sang 6
     const maxParallelInput = screen.getByRole('spinbutton');
@@ -174,7 +196,9 @@ describe('ProjectsPage', () => {
   });
 
   it('4. Bấm nút xóa project có xác nhận window.confirm và gọi deleteProject', async () => {
-    const deleteSpy = vi.spyOn(client, 'deleteProject').mockResolvedValue({ ok: true });
+    const deleteSpy = vi.spyOn(client, 'deleteProject').mockResolvedValue({
+      ok: true,
+    });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderPage();
@@ -191,7 +215,7 @@ describe('ProjectsPage', () => {
     expect(deleteSpy).toHaveBeenCalledWith('proj-1', expect.anything());
   });
 
-  it('5. Sửa checks tùy chỉnh trên project đã có và lưu thành công', async () => {
+  it('5. Sửa checks tùy chỉnh trong drawer chi tiết và lưu thành công bằng 1 nút Lưu', async () => {
     const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue({
       ...mockProject,
       checks: [{ name: 'lint', cmd: ['npm', 'run', 'lint'] }],
@@ -201,16 +225,25 @@ describe('ProjectsPage', () => {
 
     expect(await screen.findByText('XFarm')).toBeInTheDocument();
 
-    // The checks textarea sits next to its "Lưu checks" button (other textareas follow it, e.g. review chain)
-    const cardChecksTextarea = screen.getByRole('button', { name: /Lưu checks/i }).parentElement!.querySelector('textarea')!;
+    // Mở drawer chi tiết cài đặt
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+    expect(await screen.findByTestId('project-settings-drawer')).toBeInTheDocument();
 
-    fireEvent.change(cardChecksTextarea, {
+    // Mở mục Kiểm tra & review (Nâng cao)
+    const advancedSection = screen.getByTestId('advanced-settings-section');
+    fireEvent.click(advancedSection.querySelector('summary')!);
+
+    const checksTextarea = screen.getByTestId('checks-json-textarea');
+    fireEvent.change(checksTextarea, {
       target: { value: '[{"name":"lint","cmd":["npm","run","lint"]}]' },
     });
 
-    const saveChecksBtn = screen.getByRole('button', { name: /Lưu checks/i });
+    // Thanh unsaved changes xuất hiện với duy nhất 1 nút Lưu
+    expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+    const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+
     await act(async () => {
-      fireEvent.click(saveChecksBtn);
+      fireEvent.click(saveBtn);
       await Promise.resolve();
     });
 
@@ -219,37 +252,43 @@ describe('ProjectsPage', () => {
     });
   });
 
-  it('6. Sửa hooks trên project đã có và lưu thành công', async () => {
+  it('6. Sửa hooks trong mục Nâng cao và lưu thành công', async () => {
     const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue({
       ...mockProject,
-      hooks: { onWorktreeRemoved: ['docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"'] },
+      hooks: {
+        onWorktreeRemoved: [
+          'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_1"',
+        ],
+      },
     });
 
     renderPage();
 
     expect(await screen.findByText('XFarm')).toBeInTheDocument();
 
-    const textboxes = screen.getAllByRole('textbox');
-    // In project card, first textbox is hooks
-    const cardHooksTextarea = textboxes[0];
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+    expect(await screen.findByTestId('project-settings-drawer')).toBeInTheDocument();
 
-    fireEvent.change(cardHooksTextarea, {
+    const advancedSection = screen.getByTestId('advanced-settings-section');
+    fireEvent.click(advancedSection.querySelector('summary')!);
+
+    const hooksTextarea = screen.getByTestId('hooks-textarea');
+    fireEvent.change(hooksTextarea, {
       target: {
-        value: 'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"\ndocker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_mt_{slug_underscored}"',
+        value: 'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_1"',
       },
     });
 
-    const saveHooksBtn = screen.getByRole('button', { name: /Lưu hooks/i });
+    const saveBtn = screen.getByRole('button', { name: 'Lưu' });
     await act(async () => {
-      fireEvent.click(saveHooksBtn);
+      fireEvent.click(saveBtn);
       await Promise.resolve();
     });
 
     expect(updateSpy).toHaveBeenCalledWith('proj-1', {
       hooks: {
         onWorktreeRemoved: [
-          'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"',
-          'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_mt_{slug_underscored}"',
+          'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_1"',
         ],
       },
     });
@@ -262,51 +301,69 @@ describe('ProjectsPage', () => {
 
     expect(await screen.findByTestId('projects-empty-guide')).toBeInTheDocument();
     expect(screen.getByText('Bắt đầu với Project đầu tiên')).toBeInTheDocument();
-    expect(screen.getByText(/Project là một repo git trên máy này/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Project là một repo git trên máy này/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Clone repo về máy/)).toBeInTheDocument();
     expect(screen.getByText(/Bấm "Đăng ký Project"/)).toBeInTheDocument();
     expect(screen.getByText(/Giao việc bằng \/newtask/)).toBeInTheDocument();
 
-    // Nút "Đăng ký project đầu tiên" mở form
-    const firstRegBtn = screen.getByRole('button', { name: /Đăng ký project đầu tiên/i });
+    const firstRegBtn = screen.getByRole('button', {
+      name: /Đăng ký project đầu tiên/i,
+    });
     expect(firstRegBtn).toBeInTheDocument();
 
     fireEvent.click(firstRegBtn);
-    expect(screen.getByRole('heading', { name: /Đăng ký Project mới/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: /Đăng ký Project mới/i }),
+    ).toBeInTheDocument();
   });
 
   it('8. URL param ?new=1 tự động mở form đăng ký', async () => {
     renderPage(['/projects?new=1']);
 
-    expect(await screen.findByRole('heading', { name: /Đăng ký Project mới/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: /Đăng ký Project mới/i }),
+    ).toBeInTheDocument();
   });
 
   it('9. Form đăng ký có các gợi ý trường và mục Nâng cao thu gọn mặc định', async () => {
     renderPage(['/projects?new=1']);
 
-    expect(await screen.findByRole('heading', { name: /Đăng ký Project mới/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: /Đăng ký Project mới/i }),
+    ).toBeInTheDocument();
 
-    // Gợi ý các trường
-    expect(screen.getByText('Tên hiển thị, hệ thống sẽ tự động tạo ID dự án')).toBeInTheDocument();
-    expect(screen.getByText('Thư mục gốc repo git, đường dẫn tuyệt đối')).toBeInTheDocument();
-    expect(screen.getByText('Nhánh worker tách ra và merge về')).toBeInTheDocument();
-    expect(screen.getByText('Số lượng task tối đa chạy song song trên project này')).toBeInTheDocument();
+    expect(
+      screen.getByText('Tên hiển thị, hệ thống sẽ tự động tạo ID dự án'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Thư mục gốc repo git, đường dẫn tuyệt đối'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Nhánh worker tách ra và merge về'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Số lượng task tối đa chạy song song trên project này'),
+    ).toBeInTheDocument();
 
-    // Mục Nâng cao thu gọn mặc định
     const advancedDetails = screen.getByTestId('advanced-section');
     expect(advancedDetails).toBeInTheDocument();
     expect(advancedDetails).not.toHaveAttribute('open');
 
-    // Mở mục nâng cao
     const summary = advancedDetails.querySelector('summary')!;
     expect(summary).toHaveTextContent('Nâng cao');
     fireEvent.click(summary);
 
-    expect(screen.getByText(/Tuỳ chọn, ví dụ cổng\/DB riêng cho mỗi worktree/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Tuỳ chọn, ví dụ cổng\/DB riêng cho mỗi worktree/),
+    ).toBeInTheDocument();
   });
 
   it('10. Form đăng ký hiển thị lỗi trả về từ server khi thất bại', async () => {
-    vi.spyOn(client, 'createProject').mockRejectedValue(new Error('Đường dẫn repo phải là đường dẫn tuyệt đối: relative/path'));
+    vi.spyOn(client, 'createProject').mockRejectedValue(
+      new Error('Đường dẫn repo phải là đường dẫn tuyệt đối: relative/path'),
+    );
 
     renderPage(['/projects?new=1']);
 
@@ -315,9 +372,12 @@ describe('ProjectsPage', () => {
     fireEvent.change(screen.getByPlaceholderText('vd: XFarm, AgentHub'), {
       target: { value: 'MyProject' },
     });
-    fireEvent.change(screen.getByPlaceholderText('vd: /home/user/projects/xfarm'), {
-      target: { value: 'relative/path' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText('vd: /home/user/projects/xfarm'),
+      {
+        target: { value: 'relative/path' },
+      },
+    );
 
     const saveBtn = screen.getByRole('button', { name: /Lưu Project/i });
     await act(async () => {
@@ -327,7 +387,9 @@ describe('ProjectsPage', () => {
 
     const formError = await screen.findByTestId('form-error-msg');
     expect(formError).toBeInTheDocument();
-    expect(formError).toHaveTextContent('Đường dẫn repo phải là đường dẫn tuyệt đối: relative/path');
+    expect(formError).toHaveTextContent(
+      'Đường dẫn repo phải là đường dẫn tuyệt đối: relative/path',
+    );
   });
 
   it('11. Lưu settings project gửi đúng section thay đổi', async () => {
@@ -335,10 +397,21 @@ describe('ProjectsPage', () => {
     renderPage();
     await screen.findByText('XFarm');
     fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
-    const mode = screen.getAllByRole('combobox')[0];
-    fireEvent.change(mode, { target: { value: 'external' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Lưu cài đặt' }));
-    await waitFor(() => expect(updateSpy).toHaveBeenCalledWith('proj-1', { settings: { brain: { mode: 'external' } } }));
+
+    expect(await screen.findByTestId('project-settings-drawer')).toBeInTheDocument();
+    const externalRadio = screen.getByRole('radio', {
+      name: /Claude ngoài \(VS Code\) điều phối/i,
+    });
+    fireEvent.click(externalRadio);
+
+    const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() =>
+      expect(updateSpy).toHaveBeenCalledWith('proj-1', {
+        settings: { brain: { mode: 'external' } },
+      }),
+    );
   });
 
   it('12. Lưu settings lỗi 400 thì hiện message và xoá thông báo khi sửa form hoặc lưu thành công', async () => {
@@ -350,28 +423,35 @@ describe('ProjectsPage', () => {
     await screen.findByText('XFarm');
     fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
 
-    const modeSelect = screen.getAllByRole('combobox')[0];
-    fireEvent.change(modeSelect, { target: { value: 'auto' } });
+    const autoRadio = screen.getByDisplayValue('auto');
+    fireEvent.click(autoRadio);
 
-    const saveBtn = screen.getByRole('button', { name: 'Lưu cài đặt' });
+    const saveBtn = screen.getByRole('button', { name: 'Lưu' });
     fireEvent.click(saveBtn);
 
     const errorMsg = await screen.findByTestId('settings-error-msg');
     expect(errorMsg).toBeInTheDocument();
-    expect(errorMsg).toHaveTextContent('Tên nhánh tích hợp trùng với nhánh mặc định: main');
+    expect(errorMsg).toHaveTextContent(
+      'Tên nhánh tích hợp trùng với nhánh mặc định: main',
+    );
 
     // Sửa form thì thông báo lỗi biến mất
-    fireEvent.change(modeSelect, { target: { value: 'suggest' } });
+    const suggestRadio = screen.getByDisplayValue('suggest');
+    fireEvent.click(suggestRadio);
     expect(screen.queryByTestId('settings-error-msg')).not.toBeInTheDocument();
 
     // Submit lại và lỗi lại hiện
-    fireEvent.click(saveBtn);
-    expect(await screen.findByTestId('settings-error-msg')).toHaveTextContent('Tên nhánh tích hợp trùng với nhánh mặc định: main');
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+    expect(await screen.findByTestId('settings-error-msg')).toHaveTextContent(
+      'Tên nhánh tích hợp trùng với nhánh mặc định: main',
+    );
 
     // Lưu thành công thì xoá thông báo lỗi
     updateSpy.mockResolvedValueOnce(mockProject);
-    fireEvent.click(saveBtn);
-    await waitFor(() => expect(screen.queryByTestId('settings-error-msg')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('settings-error-msg')).not.toBeInTheDocument(),
+    );
   });
 
   it('13. Nhập "abc" vào ngân sách token thì payload không chứa NaN', async () => {
@@ -384,10 +464,10 @@ describe('ProjectsPage', () => {
     fireEvent.change(tokenBudgetInput, { target: { value: 'abc' } });
 
     // Thay đổi mode để section brain được gửi
-    const modeSelect = screen.getAllByRole('combobox')[0];
-    fireEvent.change(modeSelect, { target: { value: 'suggest' } });
+    const suggestRadio = screen.getByDisplayValue('suggest');
+    fireEvent.click(suggestRadio);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Lưu cài đặt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
     await waitFor(() => expect(updateSpy).toHaveBeenCalled());
     const payload = updateSpy.mock.calls[0][1];
@@ -397,11 +477,157 @@ describe('ProjectsPage', () => {
 
     // Nhập số nguyên dương hợp lệ thì được cập nhật
     fireEvent.change(tokenBudgetInput, { target: { value: '5000' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Lưu cài đặt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
     await waitFor(() => {
       expect(updateSpy).toHaveBeenLastCalledWith('proj-1', {
         settings: { brain: { mode: 'suggest', dailyTokenBudget: 5000 } },
       });
     });
+  });
+
+  it('14. JSON sai cú pháp trong checks / review / envTemplate báo lỗi và chặn lưu', async () => {
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+
+    const advancedSection = screen.getByTestId('advanced-settings-section');
+    fireEvent.click(advancedSection.querySelector('summary')!);
+
+    const checksTextarea = screen.getByTestId('checks-json-textarea');
+    fireEvent.change(checksTextarea, {
+      target: { value: '{"broken": json}' },
+    });
+
+    const checksError = await screen.findByTestId('checks-error-msg');
+    expect(checksError).toBeInTheDocument();
+
+    // Nút Lưu bị vô hiệu hoá
+    const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+    expect(saveBtn).toBeDisabled();
+
+    // Sửa lại hợp lệ
+    fireEvent.change(checksTextarea, {
+      target: { value: '[{"name":"lint","cmd":["npm","run","lint"]}]' },
+    });
+    expect(screen.queryByTestId('checks-error-msg')).not.toBeInTheDocument();
+    expect(saveBtn).toBeEnabled();
+  });
+
+  it('15. Toàn quyền (full) yêu cầu xác nhận window.confirm và gửi confirm: true', async () => {
+    const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue(mockProject);
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+
+    // User huỷ confirm khi click Toàn quyền
+    confirmSpy.mockReturnValueOnce(false);
+    const fullRadio = screen.getByRole('radio', { name: /Toàn quyền/i });
+    fireEvent.click(fullRadio);
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(fullRadio).not.toBeChecked();
+
+    // User đồng ý confirm
+    confirmSpy.mockReturnValueOnce(true);
+    fireEvent.click(fullRadio);
+    expect(fullRadio).toBeChecked();
+
+    // Cảnh báo đỏ xuất hiện
+    expect(screen.getByRole('alert')).toHaveTextContent(/Toàn quyền cho phép Claude chạy mọi lệnh/i);
+
+    const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() =>
+      expect(updateSpy).toHaveBeenCalledWith('proj-1', {
+        settings: { brain: { mode: 'inherit', permissions: 'full' } },
+        confirm: true,
+      }),
+    );
+  });
+
+  it('16. Tham chiếu chỉ đọc: thêm, xoá và validate tên hợp lệ', async () => {
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+
+    // Thêm tham chiếu
+    const addRefBtn = screen.getByRole('button', { name: /Thêm/i });
+    fireEvent.click(addRefBtn);
+
+    const nameInput = screen.getByPlaceholderText('vd: docs-api, schema');
+    expect(nameInput).toBeInTheDocument();
+
+    // Nhập tên không hợp lệ có dấu cách
+    fireEvent.change(nameInput, { target: { value: 'invalid name with space' } });
+    expect(
+      screen.getByText(/Tên chỉ gồm chữ cái, số, gạch ngang/i),
+    ).toBeInTheDocument();
+
+    // Sửa tên thành hợp lệ
+    fireEvent.change(nameInput, { target: { value: 'docs-api' } });
+    expect(
+      screen.queryByText(/Tên chỉ gồm chữ cái, số, gạch ngang/i),
+    ).not.toBeInTheDocument();
+
+    // Xoá tham chiếu
+    const deleteRefBtn = screen.getByTitle('Xoá dòng');
+    fireEvent.click(deleteRefBtn);
+    expect(screen.queryByPlaceholderText('vd: docs-api, schema')).not.toBeInTheDocument();
+  });
+
+  it('17. Hiển thị integrationStatus dạng StatTile khi project có dữ liệu', async () => {
+    vi.spyOn(client, 'getProjects').mockResolvedValue([
+      {
+        ...mockProject,
+        settings: {
+          brain: { mode: 'auto' },
+          worktree: { install: 'auto', gitHooks: 'run' },
+          integration: { enabled: true, branch: 'integration', baseRef: 'main' },
+          ci: {},
+          references: [],
+          notifications: { telegramContent: 'full' },
+        },
+        integrationStatus: {
+          path: '/home/user/projects/xfarm/.git/worktrees/integration',
+          branch: 'integration',
+          exists: true,
+          currentBranch: 'integration',
+          dirty: false,
+          ahead: 2,
+          behind: 0,
+        },
+      },
+    ]);
+
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+
+    const tiles = await screen.findByTestId('integration-status-tiles');
+    expect(tiles).toBeInTheDocument();
+    expect(screen.getByText('/home/user/projects/xfarm/.git/worktrees/integration')).toBeInTheDocument();
+    expect(screen.getByText('+2 / -0')).toBeInTheDocument();
+    expect(screen.getByText('Sạch (Clean)')).toBeInTheDocument();
+  });
+
+  it('18. Nút Huỷ trong thanh thay đổi hoàn tác các giá trị đã sửa về ban đầu', async () => {
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+
+    const offRadio = screen.getByDisplayValue('off');
+    fireEvent.click(offRadio);
+
+    expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+    // Bấm nút Huỷ
+    const cancelBtn = screen.getByRole('button', { name: 'Huỷ' });
+    fireEvent.click(cancelBtn);
+
+    // Thanh thay đổi biến mất và mode quay lại ban đầu
+    expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
+    expect(offRadio).not.toBeChecked();
   });
 });

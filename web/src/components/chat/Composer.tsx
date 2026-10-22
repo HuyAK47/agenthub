@@ -55,7 +55,7 @@ export const Composer: React.FC<ComposerProps> = ({
   };
 
   return (
-    <div className="p-4 border-t border-[var(--border-default)] bg-[var(--bg-surface)]">
+    <div data-tour="chat-composer" className="p-4 border-t border-[var(--border-default)] bg-[var(--bg-surface)]">
       {/* Quick Prompts when conversation is empty */}
       {isEmpty && (
         <div className="mb-3 space-y-1.5">

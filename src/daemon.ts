@@ -50,6 +50,7 @@ import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
+import { PerfCollector } from './perf.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -88,6 +89,7 @@ export interface DaemonContext {
   deployService: DeployService;
   ciRepo: CiRepo;
   ciService: CiWatchService;
+  perfCollector: PerfCollector;
 }
 
 export interface CreateContextOptions {
@@ -242,7 +244,7 @@ export function createContext(
     quotaMarkRepo,
     usageRepo,
     eventRepo,
-    { failoverState, retryRepo: chatRetryRepo },
+    { failoverState, retryRepo: chatRetryRepo, knowledgeRepo },
   );
   scheduler.getEventBus().on('claude.quota_available', (_taskId, payload) => {
     const data = payload && typeof payload === 'object' ? payload as { profileName?: unknown; observedAt?: unknown } : {};
@@ -260,9 +262,12 @@ export function createContext(
     turnRepo: brainTurnRepo,
     projectRepo,
     directiveRepo,
+    knowledgeRepo,
   });
 
-  const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());
+  const deployService = new DeployService(config, projectRepo, scheduler.getEventBus(), undefined, undefined, undefined, undefined, {
+    snapshot: () => scheduler.getRestartSnapshot(),
+  });
   deployService.start();
 
   const bulletinService = new BulletinService({
@@ -302,6 +307,8 @@ export function createContext(
     directiveRepo,
   );
   service.deployService = deployService;
+  const perfCollector = new PerfCollector();
+  service.setPerfCollector(perfCollector);
 
   const ciRepo = new CiRepo(db);
   const ciService = new CiWatchService({
@@ -375,10 +382,16 @@ export function createContext(
     deployService,
     ciRepo,
     ciService,
+    perfCollector,
   };
 }
 
 export function closeContext(ctx: DaemonContext): void {
+  try {
+    ctx.perfCollector?.stop();
+  } catch {
+    // ignore
+  }
   try {
     ctx.brainRunner?.stop();
   } catch {
@@ -463,6 +476,7 @@ export async function startDaemon(
   ctx.bulletinService.start();
   ctx.brainRunner.start();
   ctx.ciService.start();
+  ctx.perfCollector.start();
 
   // Start Telegram bot if enabled
   if (config.telegram?.enabled) {

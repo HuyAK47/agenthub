@@ -627,6 +627,27 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_brain_directives_project_active ON brain_directives(projectId, active, createdAt);
   `,
+  // Migration 47: preserve the Claude session and original goal for standalone task history grouping.
+  `
+  ALTER TABLE tasks ADD COLUMN creationSessionId TEXT;
+  ALTER TABLE tasks ADD COLUMN creationGoal TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_creation_session ON tasks(projectId, creationSessionId, createdAt);
+  `,
+  // Migration 48: indexes for dashboard/API filters and per-resource history.
+  `
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(projectId, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_task_deps_dependency ON task_deps(dependsOnId, taskId);
+  CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(taskId, id);
+  CREATE INDEX IF NOT EXISTS idx_runs_outcome_task ON runs(outcome, taskId);
+  CREATE INDEX IF NOT EXISTS idx_check_results_task_run ON check_results(taskId, runId);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
+  `,
+  // Migration 49: bind persisted check results to the worktree revision.
+  `
+  ALTER TABLE check_results ADD COLUMN head TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -784,6 +805,8 @@ export interface TaskRow {
   diffStat?: string | null;
   slot: number | null;
   batchId?: string | null;
+  creationSessionId?: string | null;
+  creationGoal?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1122,6 +1145,21 @@ export class TaskRepo {
     return this.db.prepare('SELECT * FROM tasks ORDER BY createdAt').all() as TaskRow[];
   }
 
+  list(filter?: { project?: string; status?: string }): TaskRow[] {
+    const conditions: string[] = [];
+    const values: string[] = [];
+    if (filter?.project) {
+      conditions.push('projectId = ?');
+      values.push(filter.project);
+    }
+    if (filter?.status) {
+      conditions.push('status = ?');
+      values.push(filter.status);
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
+  }
+
   getByProject(projectId: string): TaskRow[] {
     return this.db
       .prepare('SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt')
@@ -1164,13 +1202,15 @@ export class TaskRepo {
     diffStat?: string | null;
     sourceRef?: string | null;
     batchId?: string | null;
+    creationSessionId?: string | null;
+    creationGoal?: string | null;
     skipDeps?: boolean;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -1190,6 +1230,8 @@ export class TaskRepo {
         row.diffStat || null,
         row.sourceRef || null,
         row.batchId || null,
+        row.creationSessionId || null,
+        row.creationGoal || null,
       );
 
     // Populate task_deps
@@ -1354,6 +1396,10 @@ export class TaskBatchRepo {
 export class RunRepo {
   constructor(private db: Database.Database) {}
 
+  getAll(): RunRow[] {
+    return this.db.prepare('SELECT * FROM runs ORDER BY startedAt').all() as RunRow[];
+  }
+
   getByTask(taskId: string): RunRow[] {
     return this.db
       .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt')
@@ -1446,6 +1492,10 @@ export interface ReviewRow {
 export class ReviewRepo {
   constructor(private db: Database.Database) {}
 
+  getAll(): ReviewRow[] {
+    return this.db.prepare('SELECT * FROM reviews ORDER BY createdAt').all() as ReviewRow[];
+  }
+
   getByTask(taskId: string): ReviewRow[] {
     return this.db
       .prepare('SELECT * FROM reviews WHERE taskId = ? ORDER BY createdAt')
@@ -1506,16 +1556,35 @@ export interface ChatMessageRow {
 export class ChatSessionRepo {
   constructor(private db: Database.Database) {}
 
+  private normalizeAssistantSession(session: ChatSessionRow): ChatSessionRow {
+    const isAssistantId = session.id === 'assistant' || session.id.startsWith('assistant:');
+    if (!isAssistantId) return session;
+    const projectId = session.id === 'assistant' || session.id === 'assistant:global'
+      ? null
+      : session.id.slice('assistant:'.length);
+    if (session.kind === 'assistant' && session.projectId === projectId) return session;
+    try {
+      this.db.prepare("UPDATE chat_sessions SET kind = 'assistant', projectId = ?, updatedAt = datetime('now') WHERE id = ?")
+        .run(projectId, session.id);
+      return this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(session.id) as ChatSessionRow;
+    } catch {
+      // Keep the assistant kind even if an old database references a project
+      // that has since been removed and the foreign-key update cannot apply.
+      this.db.prepare("UPDATE chat_sessions SET kind = 'assistant', updatedAt = datetime('now') WHERE id = ?").run(session.id);
+      return this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(session.id) as ChatSessionRow;
+    }
+  }
+
   getAll(options?: { archived?: number | null }): ChatSessionRow[] {
     const archived = options?.archived !== undefined ? options.archived : 0;
     if (archived === null) {
       return this.db
         .prepare('SELECT * FROM chat_sessions ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
-        .all() as ChatSessionRow[];
+        .all().map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
     }
     return this.db
       .prepare('SELECT * FROM chat_sessions WHERE archived = ? ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
-      .all(archived) as ChatSessionRow[];
+      .all(archived).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
   }
 
   search(query: string, options?: { archived?: number | null }): ChatSessionRow[] {
@@ -1534,7 +1603,7 @@ export class ChatSessionRepo {
            WHERE (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
            ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
         )
-        .all(pattern, pattern) as ChatSessionRow[];
+        .all(pattern, pattern).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
     }
     return this.db
       .prepare(
@@ -1543,13 +1612,12 @@ export class ChatSessionRepo {
          WHERE s.archived = ? AND (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
          ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
       )
-      .all(archived, pattern, pattern) as ChatSessionRow[];
+      .all(archived, pattern, pattern).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
   }
 
   get(id: string): ChatSessionRow | undefined {
-    return this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as
-      | ChatSessionRow
-      | undefined;
+    const session = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined;
+    return session ? this.normalizeAssistantSession(session) : undefined;
   }
 
   insert(row: {
@@ -1596,10 +1664,17 @@ export class ChatSessionRepo {
   }
 
   getByKind(kind: 'chat' | 'brain' | 'assistant', projectId?: string | null): ChatSessionRow | undefined {
-    if (projectId === undefined) {
-      return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+    if (kind === 'assistant') {
+      const id = projectId ? `assistant:${projectId}` : 'assistant';
+      const session = this.get(id);
+      if (session?.kind === 'assistant') return session;
     }
-    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
+    if (projectId === undefined) {
+      const session = this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+      return session ? this.normalizeAssistantSession(session) : undefined;
+    }
+    const session = this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
+    return session ? this.normalizeAssistantSession(session) : undefined;
   }
 
   updateKind(id: string, kind: 'chat' | 'brain' | 'assistant'): void {

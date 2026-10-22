@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
 import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
+import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -61,6 +62,7 @@ import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
 import type { DeployService } from '../deploy.js';
+import type { PerfCollector } from '../perf.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -149,6 +151,23 @@ export function apiBatch(batch: TaskBatchRow): TaskBatchRow {
     ...batch,
     createdAt: toApiTime(batch.createdAt) || batch.createdAt,
   };
+}
+
+export interface BatchProgress {
+  total: number;
+  done: number;
+  running: number;
+  failed: number;
+  waiting: number;
+  pending: number;
+}
+
+function batchProgress(tasks: TaskRow[]): BatchProgress {
+  const done = tasks.filter((task) => task.status === 'done').length;
+  const running = tasks.filter((task) => ['running', 'checking', 'review'].includes(task.status)).length;
+  const failed = tasks.filter((task) => ['failed', 'blocked', 'cancelled'].includes(task.status)).length;
+  const waiting = tasks.filter((task) => ['waiting_quota', 'draft'].includes(task.status)).length;
+  return { total: tasks.length, done, running, failed, waiting, pending: Math.max(0, tasks.length - done - running - failed - waiting) };
 }
 
 export function extractKnowledgeSection(doneContent: string): string | null {
@@ -258,6 +277,8 @@ export const CreateTaskSchema = z.object({
   start: z.boolean().optional(),
   fromClaude: z.boolean().optional(),
   batchId: z.string().optional(),
+  sessionId: z.string().optional(),
+  goal: z.string().optional(),
 });
 
 export const BatchTaskInputSchema = z.object({
@@ -275,6 +296,8 @@ export const CreateBatchSchema = z.object({
   goal: z.string().optional(),
   tasks: z.array(BatchTaskInputSchema).min(1),
   createdBy: z.string().optional(),
+  dispatch: z.boolean().optional(),
+  sessionId: z.string().optional(),
 });
 
 export const UpdateBatchSchema = z.object({
@@ -339,6 +362,10 @@ export const CreateProfileSchema = z.object({
   engine: z.enum(['agy', 'claude', 'codex']).default('agy'),
   accountType: z.enum(['personal', 'team', 'api']).default('personal'),
 });
+
+function providerLabel(engine: 'agy' | 'codex' | 'claude'): string {
+  return engine === 'agy' ? 'Gemini' : engine === 'codex' ? 'Codex' : 'Claude';
+}
 
 export const RenameProfileSchema = z.object({
   newName: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
@@ -458,6 +485,8 @@ export const UpdateConfigSchema = z.object({
     enabled: z.boolean().optional(),
     high: z.number().positive().optional(),
     ok: z.number().positive().optional(),
+    pressureHigh: z.number().positive().optional(),
+    pressureOk: z.number().positive().optional(),
     minFreeMemGB: z.number().positive().optional(),
     recoverAfterSec: z.number().int().positive().optional(),
   }).optional(),
@@ -480,6 +509,9 @@ export const UpdateConfigSchema = z.object({
       quota: z.boolean().optional(),
       fallback: z.boolean().optional(),
     }).optional(),
+  }).optional(),
+  ui: z.object({
+    tours: z.record(z.boolean()).optional(),
   }).optional(),
 });
 
@@ -749,6 +781,7 @@ export class AppService {
   public deployService?: DeployService;
   public ciRepo?: CiRepo;
   public ciService?: CiWatchService;
+  private perfCollector?: PerfCollector;
   private profileChecks = new Set<string>();
   private reviewingTasks = new Set<string>();
   constructor(
@@ -778,6 +811,9 @@ export class AppService {
     public brainRunner?: BrainRunner,
     public directiveRepo?: BrainDirectiveRepo,
   ) {}
+
+  setPerfCollector(collector: PerfCollector): void { this.perfCollector = collector; }
+  getPerf() { return { samples: this.perfCollector?.getSamples() || [], latest: this.perfCollector?.latest() || null }; }
 
   async getSetupStatus() {
     if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng');
@@ -1170,6 +1206,12 @@ export class AppService {
     this.getProject(id);
     if (!this.deployService) throw new HttpError(503, 'unavailable', 'Deploy service chưa sẵn sàng');
     return this.deployService.rerun(id);
+  }
+
+  async pushDeployNow(id: string) {
+    this.getProject(id);
+    if (!this.deployService) throw new HttpError(503, 'unavailable', 'Deploy service chưa sẵn sàng');
+    return this.deployService.pushNow(id);
   }
 
   createProject(raw: unknown): ProjectRow {
@@ -1599,9 +1641,17 @@ export class AppService {
   createProfile(raw: unknown): ProfileRow {
     const parsed = CreateProfileSchema.parse(raw);
     if (!this.config.multiplePerProvider && parsed.accountType === 'personal') {
-      const existing = this.profileRepo.getAll().find((profile) => profile.engine === parsed.engine && profile.accountType === 'personal');
+      const existing = this.profileRepo.getAll().find((profile) =>
+        profile.engine === parsed.engine &&
+        profile.accountType === 'personal' &&
+        isProfileLoggedIn(profile),
+      );
       if (existing) {
-        throw new HttpError(409, 'provider_policy', `Đã có hồ sơ cá nhân cho engine ${parsed.engine}; hãy dùng hồ sơ API/Team hoặc bật multiplePerProvider`);
+        throw new HttpError(
+          409,
+          'provider_policy',
+          `Đã có tài khoản ${providerLabel(parsed.engine)} cá nhân: ${existing.label || existing.name}. Bật 'Cho phép nhiều tài khoản' trong Cài đặt, hoặc chọn loại Team/API.`,
+        );
       }
     }
     if (this.profileRepo.get(parsed.name)) {
@@ -1715,12 +1765,15 @@ export class AppService {
 
     const existing = this.profileRepo.get(targetName);
     const action: 'created' | 'updated' = existing && !existing.deletedAt ? 'updated' : 'created';
+    // Theo upstream: chỉ tính tài khoản cá nhân đã đăng nhập, và chỉ dẫn tới tuỳ chọn trong Cài đặt.
     if (action === 'created' && !this.config.multiplePerProvider && accountType === 'personal') {
-      const personal = this.profileRepo.getAll().find((p) => p.engine === engine && p.accountType === 'personal');
+      const personal = this.profileRepo.getAll().find((p) =>
+        p.engine === engine && p.accountType === 'personal' && isProfileLoggedIn(p),
+      );
       if (personal) {
         return {
           name: targetName,
-          error: `Đã có hồ sơ cá nhân cho engine ${engine} (${personal.name}); hãy chọn loại Team/API hoặc bật multiplePerProvider`,
+          error: `Đã có tài khoản ${engine === 'codex' ? 'Codex' : 'Gemini'} cá nhân: ${personal.label || personal.name}. Bật 'Cho phép nhiều tài khoản' trong Cài đặt, hoặc chọn loại Team/API.`,
         };
       }
     }
@@ -2288,17 +2341,12 @@ export class AppService {
 
   // --- Tasks ---
   listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
-    let tasks = this.taskRepo.getAll();
-    if (filter?.project) {
-      tasks = tasks.filter((t) => t.projectId === filter.project);
-    }
-    if (filter?.status) {
-      tasks = tasks.filter((t) => t.status === filter.status);
-    }
+    const tasks = this.taskRepo.list(filter);
+    const projects = new Map(this.projectRepo.getAll().map((project) => [project.id, project]));
     const running = this.scheduler.getRunning();
     return tasks.map((task) => {
       const run = running.get(task.id);
-      const project = this.projectRepo.get(task.projectId);
+      const project = projects.get(task.projectId);
       let reviewChain = parseReviewChain(project?.reviewChain);
       if (project?.review) {
         try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
@@ -2435,6 +2483,37 @@ export class AppService {
     let initialStatus = parsed.start ? 'queued' : 'draft';
     let batchId = parsed.batchId || null;
 
+    if (parsed.fromClaude && parsed.start && !batchId && !this.config.planning?.requireApproval && this.taskBatchRepo) {
+      initialStatus = 'queued';
+      const sessionId = parsed.sessionId || null;
+      const recent = sessionId
+        ? this.taskBatchRepo.list(parsed.project, 'dispatched').find((batch) => {
+            if (batch.createdBy !== 'claude-auto' || !batch.goal) return false;
+            const tasks = this.taskRepo.getByBatch(batch.id);
+            return tasks.some((task) => task.creationSessionId === sessionId &&
+              Math.abs(Date.parse(task.createdAt.replace(' ', 'T') + 'Z') - Date.now()) <= 30 * 60 * 1000);
+          })
+        : undefined;
+      const goal = parsed.goal?.trim() || parsed.title;
+      if (recent) {
+        batchId = recent.id;
+      } else {
+        const newBatchId = `batch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+        this.taskBatchRepo.create({
+          id: newBatchId,
+          projectId: parsed.project,
+          title: goal.length > 100 ? `${goal.slice(0, 97)}...` : goal,
+          goal,
+          status: 'dispatched',
+          createdBy: 'claude-auto',
+        });
+        batchId = newBatchId;
+        const payload = { batchId: newBatchId, projectId: parsed.project, title: goal, goal, taskCount: 0, createdBy: 'claude-auto' };
+        this.eventRepo.insert('batch.created', undefined, payload);
+        this.scheduler.getEventBus().emit('batch.created', undefined, payload);
+      }
+    }
+
     if (parsed.fromClaude && this.config.planning?.requireApproval) {
       initialStatus = 'draft';
       if (!batchId && this.taskBatchRepo) {
@@ -2480,6 +2559,8 @@ export class AppService {
       status: initialStatus,
       sourceRef: parsed.sourceRef ? JSON.stringify(parsed.sourceRef) : null,
       batchId,
+      creationSessionId: parsed.fromClaude ? parsed.sessionId || null : null,
+      creationGoal: parsed.fromClaude ? parsed.goal || null : null,
     });
 
     if (initialStatus === 'queued') {
@@ -2682,7 +2763,7 @@ export class AppService {
     return updatedTask;
   }
 
-  createBatch(raw: unknown): TaskBatchRow & { tasks: TaskRow[] } {
+  createBatch(raw: unknown): TaskBatchRow & { tasks: TaskRow[]; progress: BatchProgress } {
     const parsed = CreateBatchSchema.parse(raw);
     const project = this.projectRepo.get(parsed.project);
     if (!project) {
@@ -2760,11 +2841,14 @@ export class AppService {
     this.eventRepo.insert('batch.created', undefined, payload);
     this.scheduler.getEventBus().emit('batch.created', undefined, payload);
 
+    if (parsed.dispatch) this.dispatchBatch(batchId);
+
     const batchRow = apiBatch(this.taskBatchRepo.get(batchId)!);
-    return { ...batchRow, tasks: createdTasks };
+    const tasks = this.taskRepo.getByBatch(batchId).map(apiTask);
+    return { ...batchRow, tasks, progress: batchProgress(tasks) };
   }
 
-  getBatch(id: string): TaskBatchRow & { tasks: TaskRow[] } {
+  getBatch(id: string): TaskBatchRow & { tasks: TaskRow[]; progress: BatchProgress } {
     if (!this.taskBatchRepo) {
       throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
     }
@@ -2773,12 +2857,15 @@ export class AppService {
       throw new HttpError(404, 'not_found', `Đợt "${id}" không tồn tại`);
     }
     const tasks = this.taskRepo.getByBatch(id).map(apiTask);
-    return { ...apiBatch(batch), tasks };
+    return { ...apiBatch(batch), tasks, progress: batchProgress(tasks) };
   }
 
-  listBatches(params?: { project?: string; status?: string }): TaskBatchRow[] {
+  listBatches(params?: { project?: string; status?: string }): Array<TaskBatchRow & { progress: BatchProgress }> {
     if (!this.taskBatchRepo) return [];
-    return this.taskBatchRepo.list(params?.project, params?.status).map(apiBatch);
+    return this.taskBatchRepo.list(params?.project, params?.status).map((batch) => ({
+      ...apiBatch(batch),
+      progress: batchProgress(this.taskRepo.getByBatch(batch.id)),
+    }));
   }
 
   dispatchBatch(id: string): { ok: boolean; batchId: string; dispatchedCount: number } {
@@ -3277,6 +3364,22 @@ export class AppService {
     return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
   }
 
+  reviewChecklistPreview(projectId: string) {
+    const project = this.projectRepo.get(projectId);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    return projectSettings(project).reviewChecklist.slice(0, 5).map((entry) => {
+      const filePath = resolveProjectFile(project.path, entry);
+      if (!filePath) return { path: entry, resolvedPath: null, size: null, truncated: false, content: null, warning: 'Đường dẫn không hợp lệ hoặc nằm ngoài project' };
+      try {
+        const stat = fs.statSync(filePath);
+        const truncated = stat.size > 64 * 1024;
+        return { path: entry, resolvedPath: filePath, size: stat.size, truncated, content: truncated ? null : fs.readFileSync(filePath, 'utf8') };
+      } catch {
+        return { path: entry, resolvedPath: filePath, size: null, truncated: false, content: null, warning: 'Không thể đọc file' };
+      }
+    });
+  }
+
   addKnowledge(projectId: string, raw: unknown): KnowledgeEntryRow {
     if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     const parsed = CreateKnowledgeSchema.parse(raw);
@@ -3435,6 +3538,7 @@ export class AppService {
         chats: this.config.telegram.chats,
         notify: this.config.telegram.notify,
       },
+      ui: this.config.ui,
     };
   }
 

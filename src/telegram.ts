@@ -21,7 +21,8 @@ import {
 } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
-import { commandPermissionLabel } from './chat/permissions.js';
+import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permissions.js';
+import { formatReset } from './time-format.js';
 import { quotaLowText } from './quota/alerts.js';
 
 const execFileAsync = promisify(execFile);
@@ -209,6 +210,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'use', description: 'Chọn dự án: /use <dự án> · xem dự án đang chọn: /use' },
   { command: 'brain', description: 'Bộ não: /brain · /brain trust [dự án] standard|trusted|full|inherit' },
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
+  { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
@@ -217,7 +219,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'plan', description: 'Lên kế hoạch: /plan <project> <mục tiêu>' },
   { command: 'drafts', description: 'Task/đợt nháp chờ giao' },
   { command: 'approve', description: 'Duyệt & merge: /approve <id>' },
-  { command: 'deploy', description: 'Chạy deploy gần nhất: /deploy <project>' },
+  { command: 'deploy', description: 'Chạy deploy gần nhất: /deploy <project> [push]' },
   { command: 'reject', description: 'Trả về: /reject <id> <nhận xét>' },
   { command: 'retry', description: 'Chạy lại task: /retry <id>' },
   { command: 'log', description: 'Xem log cuối của task: /log <id>' },
@@ -524,7 +526,7 @@ export class TelegramBotService {
   }
 
   buildCurrentDigest(): DigestData {
-    return generateDigest({
+    const digest = generateDigest({
       taskRepo: this.taskRepo,
       projectRepo: this.projectRepo,
       profileRepo: this.profileRepo,
@@ -535,6 +537,38 @@ export class TelegramBotService {
       now: () => this.now(),
       accumulatedQuietHoursMessages: this.quietHoursQueue.map((q) => q.text),
       port: this.config.port,
+    });
+    const plans = this.buildPlansSummary();
+    if (plans) digest.text += `\n\n${plans}`;
+    return digest;
+  }
+
+  private buildPlansSummary(): string {
+    const batches = this.service.listBatches().filter((batch) => batch.status !== 'discarded');
+    const active = batches.filter((batch) => batch.progress.total > 0 && batch.progress.done < batch.progress.total && batch.progress.failed === 0).slice(0, 5);
+    if (active.length === 0) return '';
+    const lines = active.map((batch) => `• ${this.escapeHtml(batch.title)} — ${batch.progress.done}/${batch.progress.total} xong`);
+    return `📦 <b>Kế hoạch đang làm</b>\n${lines.join('\n')}`;
+  }
+
+  private async handlePlansCommand(chatId: number): Promise<void> {
+    const batches = this.service.listBatches().filter((batch) => batch.status !== 'discarded').slice(0, 5);
+    if (batches.length === 0) {
+      await this.sendMessage(chatId, '📦 Chưa có kế hoạch nào. Khi Claude chia một việc thành nhiều task, kế hoạch sẽ hiện ở đây.');
+      return;
+    }
+    const lines = batches.map((batch) => {
+      const state = batch.status === 'draft'
+        ? 'Nháp chờ duyệt'
+        : batch.progress.failed > 0
+          ? 'Có lỗi'
+          : batch.progress.total > 0 && batch.progress.done === batch.progress.total
+            ? 'Hoàn thành'
+            : 'Đang làm';
+      return `• <b>${this.escapeHtml(batch.title)}</b> — ${state} (${batch.progress.done}/${batch.progress.total} xong)`;
+    });
+    await this.sendMessage(chatId, `📦 <b>5 kế hoạch gần nhất</b>\n${lines.join('\n')}`, {
+      inline_keyboard: [[{ text: '🌐 Xem trên dashboard', url: this.getDashboardUrl('#/plans') }]],
     });
   }
 
@@ -930,6 +964,17 @@ export class TelegramBotService {
 
     // 3. Command processing
     if (!rawText.startsWith('/')) {
+      const remember = rawText.match(/^ghi nhớ\s*:\s*(.+)$/is);
+      if (remember) {
+        const projectId = this.selectedProject.get(chatId);
+        if (!projectId) {
+          await this.sendMessage(chatId, 'Hãy chọn project trước bằng /use <dự án>.');
+        } else {
+          await this.service.addKnowledge(projectId, { content: remember[1].trim(), pinned: true });
+          await this.sendMessage(chatId, '📌 Đã ghim kiến thức cho project đang chọn.');
+        }
+        return;
+      }
       await this.handleChatMessage(chatId, rawText);
       return;
     }
@@ -990,12 +1035,20 @@ export class TelegramBotService {
         await this.handleDigestCommand(chatId);
         break;
 
+      case '/plans':
+        await this.handlePlansCommand(chatId);
+        break;
+
       case '/ci':
         await this.handleCiCommand(chatId, argStr);
         break;
 
       case '/brain':
         await this.handleBrainCommand(chatId, argStr);
+        break;
+
+      case '/knowledge':
+        await this.handleKnowledgeCommand(chatId);
         break;
 
       case '/directives':
@@ -1066,16 +1119,51 @@ export class TelegramBotService {
     }
   }
 
-  private async handleDeployCommand(chatId: number, argStr: string): Promise<void> {
-    const projectId = argStr.trim();
+  private async handleKnowledgeCommand(chatId: number): Promise<void> {
+    const projectId = this.selectedProject.get(chatId);
     if (!projectId) {
-      const statuses = this.service.getDeployStatuses();
-      await this.sendMessage(chatId, statuses.length
-        ? statuses.map((status) => `${this.escapeHtml(status.projectId)}: ${this.escapeHtml(status.status)}${status.error ? ` — ${this.escapeHtml(status.error)}` : ''}`).join('\n')
-        : 'Chưa có lượt deploy nào. Dùng: /deploy <project>');
+      await this.sendMessage(chatId, 'Hãy chọn project trước bằng /use <dự án>.');
       return;
     }
+    const project = this.projectRepo.get(projectId);
+    const entries = this.service.listKnowledge(projectId).filter((entry) => entry.pinned === 1);
+    const checklist = project ? projectSettings(project).reviewChecklist : [];
+    const text = [
+      `🧠 <b>Kiến thức · ${this.escapeHtml(project?.name || projectId)}</b>`,
+      '',
+      '<b>Kiến thức ghim:</b>',
+      entries.length ? entries.map((entry) => `• ${this.escapeHtml(entry.content)}`).join('\n') : '• Không có',
+      '',
+      '<b>Checklist khi duyệt:</b>',
+      checklist.length ? checklist.map((item) => `• ${this.escapeHtml(item)}`).join('\n') : '• Không có',
+    ].join('\n');
+    await this.sendMessage(chatId, text);
+  }
+
+  private async handleDeployCommand(chatId: number, argStr: string): Promise<void> {
+    const trimmed = argStr.trim();
+    if (!trimmed) {
+      const statuses = this.service.getDeployStatuses();
+      await this.sendMessage(chatId, statuses.length
+        ? statuses.map((status) => {
+            const pushInfo = status.pushStatus ? ` (${status.pushStatus})` : '';
+            return `${this.escapeHtml(status.projectId)}: ${this.escapeHtml(status.status)}${this.escapeHtml(pushInfo)}${status.error ? ` — ${this.escapeHtml(status.error)}` : ''}`;
+          }).join('\n')
+        : 'Chưa có lượt deploy nào. Dùng: /deploy <project> [push]');
+      return;
+    }
+    const parts = trimmed.split(/\s+/);
+    const isPush = parts.length > 1 && parts[parts.length - 1].toLowerCase() === 'push';
+    const projectId = isPush ? parts.slice(0, -1).join(' ') : trimmed;
+
     try {
+      if (isPush) {
+        const status = await this.service.pushDeployNow(projectId);
+        await this.sendMessage(chatId, status.status === 'succeeded'
+          ? `✅ Đã đẩy ${this.escapeHtml(projectId)} lên remote (${this.escapeHtml(status.pushStatus || 'thành công')}).`
+          : `❌ Đẩy ${this.escapeHtml(projectId)} thất bại: ${this.escapeHtml(status.error || status.status)}`);
+        return;
+      }
       const status = await this.service.rerunDeploy(projectId);
       await this.sendMessage(chatId, status.status === 'queued' || status.status === 'running'
         ? `⏳ Deploy ${this.escapeHtml(projectId)} đã vào hàng đợi.`
@@ -1579,6 +1667,8 @@ export class TelegramBotService {
     const session = this.chatService?.listSessions().find((item) => item.id === sessionId);
     const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
     const label = command ? commandPermissionLabel(command) : tool;
+    const isAssistantSession = sessionId === 'assistant' || sessionId.startsWith('assistant:');
+    const canAlwaysAllow = !isAssistantSession && (!command || canAlwaysAllowCommand(command));
     const text = [
       `🔐 <b>Dự án: ${this.escapeHtml(project ? `${project.name} (${project.id})` : 'Không gắn dự án')}</b>`,
       `Phiên: <b>${this.escapeHtml(session ? `${session.title || 'Phiên chat'} (${session.id})` : sessionId || 'Phiên chat')}</b> — Claude cần quyền`,
@@ -1590,7 +1680,7 @@ export class TelegramBotService {
     await this.sendMessage(chatId, text, {
       inline_keyboard: [[
         { text: 'Cho phép', callback_data: `permission:allow:${id}` },
-        { text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` },
+        ...(canAlwaysAllow ? [{ text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` }] : []),
         { text: 'Từ chối', callback_data: `permission:deny:${id}` },
       ]],
     });
@@ -2164,7 +2254,7 @@ export class TelegramBotService {
     if (quotaMarks.length > 0) {
       text = text + '\n⏳ <b>Quota đang bị hạn chế:</b>\n';
       for (const q of quotaMarks) {
-        const untilStr = new Date(q.until * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const untilStr = formatReset(q.until, this.now(), 'vi');
         text = text + `• Hồ sơ ${q.profileName} (${q.family}): đến ${untilStr}\n`;
       }
     }
@@ -3266,7 +3356,7 @@ export class TelegramBotService {
 
       case 'chat.limit_waiting': {
         if (!notify.quota || !this.chatService || typeof p.sessionId !== 'string') return;
-        const resetAt = typeof p.resetAt === 'number' ? new Date(p.resetAt * 1000 + 60_000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sau khi reset';
+        const resetAt = typeof p.resetAt === 'number' ? formatReset(p.resetAt * 1000 + 60_000, this.now(), 'vi') : 'sau khi reset';
         this.broadcastMessage(`⏳ <b>Claude đạt giới hạn 5 giờ</b>\nTự gửi lại lúc <b>${resetAt}</b>.`, { inline_keyboard: [[{ text: '⏹ Huỷ', callback_data: `chatlimit:cancel:${p.sessionId}` }, { text: '▶️ Gửi lại ngay', callback_data: `chatlimit:now:${p.sessionId}` }]] });
         break;
       }
@@ -3587,10 +3677,7 @@ export class TelegramBotService {
     }
 
     if (epochSec !== undefined) {
-      const d = new Date(epochSec * 1000);
-      const hh = String(d.getHours()).padStart(2, '0');
-      const mm = String(d.getMinutes()).padStart(2, '0');
-      return `${hh}:${mm}`;
+      return formatReset(epochSec, this.now(), 'vi');
     }
 
     return '';
@@ -3635,8 +3722,10 @@ export class TelegramBotService {
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
+/plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi
 /brain - Xem Claude đang làm gì và bộ não từng dự án · /brain mode [dự án] off|suggest|auto|external|inherit
+/knowledge - Liệt kê kiến thức ghim và checklist của project đang chọn
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard
 /newtask &lt;mô tả chung&gt; - Giao một yêu cầu mới cho Claude tự phân tích và tạo task

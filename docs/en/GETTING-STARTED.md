@@ -50,6 +50,10 @@ sh /tmp/agenthub-install.sh --uninstall
 sh /tmp/agenthub-install.sh --uninstall --purge
 ```
 
+### What if installation fails?
+
+You do not need to clean anything by hand. If download, native-module validation, setup, the CLI link, or service installation fails, the installer removes its temporary directories and restores `current`, the CLI link, and the service to the previous release (when available). Detailed output is kept at `${TMPDIR:-/tmp}/agenthub-install-<time>.log`; include that file when asking for help. The previous release remains usable.
+
 ### Manual Setup:
 
 ```bash
@@ -458,10 +462,25 @@ Deploy steps are trusted configuration in `~/.agenthub/config.json` only; they a
       "steps": [["npm", "run", "build"], ["npm", "run", "build:web"], ["node", "scripts/install-web.mjs"]],
       "timeoutSec": 900,
       "restartHub": true,
-      "push": { "remote": "origin", "from": "integration", "to": "main", "ffOnly": true }
+      "push": {
+        "remote": "origin",
+        "from": "integration",
+        "to": "main",
+        "ffOnly": true,
+        "minIntervalMin": 30
+      }
     }
   }
 }
 ```
 
-Each step runs as argv in the integration worktree and is logged under `~/.agenthub/logs/deploy/<project>/<time>.log`. Push is disabled by default and is fast-forward-only when enabled. Rerun from the Projects page or `/deploy <project>` in Telegram; `/deploy` without an argument shows the latest status.
+Each step runs as argv in the integration worktree and is logged under `~/.agenthub/logs/deploy/<project>/<time>.log`. Push is disabled by default and is fast-forward-only when enabled.
+
+To avoid overloading CI workflows during frequent merges, AgentHub supports **batched pushes** configured via `minIntervalMin` (defaults to 30 minutes):
+- After a successful deploy, the hub only pushes to the remote if the time elapsed since the previous push is ≥ `minIntervalMin`.
+- If the interval has not yet elapsed, the hub schedules a deferred push (executing git push without rebuilding) once the interval expires, batching all intermediate merges into a single push. The push schedule and last push timestamp persist across daemon restarts.
+- Deploy status displays either `push lúc HH:MM` (pushed at HH:MM) or `push đang chờ tới HH:MM` (push scheduled for HH:MM).
+- To push immediately without waiting for the timer, call `POST /api/projects/:id/deploy` with `{"pushNow": true}` or use the Telegram bot command `/deploy <project> push`.
+- **Release requirement:** Prior to creating a release tag, you must trigger `pushNow` and confirm that `main == integration` to ensure the release contains all merged changes.
+
+Rerun the entire deploy pipeline from the Projects page or via `/deploy <project>` in Telegram; `/deploy` without an argument shows the latest status.

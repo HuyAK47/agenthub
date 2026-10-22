@@ -21,7 +21,7 @@ export const CheckResults: React.FC<CheckResultsProps> = ({ checks = [], onRerun
   const { t } = useLocale();
   const [expanded, setExpanded] = useState<string | null>(null);
   return (
-    <section aria-label={t('extra.checkResults')} className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 space-y-3">
+    <section aria-label={t('extra.checkResults')} data-tour="task-review" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-semibold text-[var(--t-text)]">{t('extra.checkResults')}</h2>
         {onRerun && (
@@ -43,7 +43,7 @@ export const CheckResults: React.FC<CheckResultsProps> = ({ checks = [], onRerun
                   <span className="text-[var(--t-text-3)]">{(check.durationMs / 1000).toFixed(1)}s</span>
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                 </button>
-                {isOpen && <div className="border-t border-[var(--t-border)] bg-[var(--t-surface-2)]"><pre className="text-[var(--t-text)] p-3 text-[11px] font-mono whitespace-pre-wrap max-h-64 overflow-auto">{check.outputTail || t('extra.noOutput')}</pre>{onCreateTask && !check.ok && <button type="button" onClick={() => onCreateTask(check)} className="mx-3 mb-3 px-2.5 py-1.5 rounded-md bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer">{t('extra.captureFix')}</button>}</div>}
+                {isOpen && <div className="border-t border-[var(--t-border)] bg-[var(--t-surface-2)]"><pre className="text-[var(--t-text)] p-3 text-[11px] font-mono whitespace-pre-wrap max-h-64 overflow-auto">{check.outputTail || t('extra.noOutput')}</pre>{onCreateTask && !check.ok && <button type="button" data-tour="task-capture" onClick={() => onCreateTask(check)} className="mx-3 mb-3 px-2.5 py-1.5 rounded-md bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer">{t('extra.captureFix')}</button>}</div>}
               </div>
             );
           })}

@@ -532,7 +532,7 @@ export const ChatPage: React.FC = () => {
             </button>
 
             {activeSession ? (
-              <div className="min-w-0 flex items-center gap-2.5 flex-1">
+              <div className="min-w-0 flex items-center gap-2.5 flex-1" data-tour="assistant-chat">
                 <div className="w-7 h-7 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shrink-0">
                   C
                 </div>
@@ -606,7 +606,7 @@ export const ChatPage: React.FC = () => {
               <>
                 {/* Context Meter */}
                 <select
-                  aria-label="Model chat"
+                  aria-label={t('extra.modelChatAria')}
                   value={activeSession.model || systemConfig?.chat?.model || 'sonnet'}
                   disabled={isBusy || updateSessionMutation.isPending}
                   onChange={(event) => updateSessionMutation.mutate({ id: activeSession.id, data: { model: event.target.value } })}
@@ -704,6 +704,7 @@ export const ChatPage: React.FC = () => {
             {/* Permission Request Dialog */}
             {permission && (
               <div
+                data-tour="chat-permissions"
                 className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm animate-fade-in"
                 role="dialog"
                 aria-label={t('extra.permissionAria')}
@@ -727,13 +728,13 @@ export const ChatPage: React.FC = () => {
                   >
                     {t('extra.allow')}
                   </button>
-                  <button
+                  {permission.canAlwaysAllow !== false && <button
                     type="button"
                     onClick={() => resolvePermission('allow_always')}
                     className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
                   >
                     {`${t('extra.allowAlways')} ${permission.permissionLabel || permission.toolName}`}
-                  </button>
+                  </button>}
                   <button
                     type="button"
                     onClick={() => resolvePermission('deny')}

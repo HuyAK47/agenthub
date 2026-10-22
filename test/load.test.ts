@@ -2,12 +2,32 @@ import { describe, expect, it } from 'vitest';
 import { LoadGuard } from '../src/load.js';
 
 describe('LoadGuard', () => {
+  it('uses configured PSI thresholds for high and recovery states', () => {
+    let pressure = { cpuSome: 21, memorySome: 0, ioSome: 0 };
+    let now = 0;
+    const guard = new LoadGuard({ enabled: true, high: 100, ok: 100, pressureHigh: 20, pressureOk: 10, minFreeMemGB: 1, recoverAfterSec: 100 }, {
+      readLoad: () => 0,
+      readFreeMemBytes: () => 4 * 1024 ** 3,
+      readPressure: () => pressure,
+      now: () => now,
+    });
+    expect(guard.update().overloaded).toBe(true);
+    pressure = { cpuSome: 11, memorySome: 0, ioSome: 0 };
+    now = 100_000;
+    expect(guard.update().overloaded).toBe(true);
+    pressure = { cpuSome: 9, memorySome: 0, ioSome: 0 };
+    now = 200_000;
+    expect(guard.update().overloaded).toBe(true);
+    now = 300_000;
+    expect(guard.update().overloaded).toBe(false);
+  });
   it('reduces effective parallelism without changing the configured value', () => {
     const load = 20;
     const memory = 4;
     const guard = new LoadGuard({ enabled: true, high: 16, ok: 11, minFreeMemGB: 1.5, recoverAfterSec: 300 }, {
       readLoad: () => load,
       readFreeMemBytes: () => memory * 1024 ** 3,
+      readPressure: () => ({ cpuSome: 0, memorySome: 0, ioSome: 0 }),
     });
     const project = { maxParallel: 4 };
 
@@ -22,6 +42,7 @@ describe('LoadGuard', () => {
     const guard = new LoadGuard({ enabled: true, high: 16, ok: 11, minFreeMemGB: 1.5, recoverAfterSec: 300 }, {
       readLoad: () => load,
       readFreeMemBytes: () => 4 * 1024 ** 3,
+      readPressure: () => ({ cpuSome: 0, memorySome: 0, ioSome: 0 }),
       now: () => now,
     });
 
@@ -41,6 +62,7 @@ describe('LoadGuard', () => {
     const guard = new LoadGuard({ enabled: true, high: 16, ok: 11, minFreeMemGB: 1.5, recoverAfterSec: 300 }, {
       readLoad: () => load,
       readFreeMemBytes: () => 4 * 1024 ** 3,
+      readPressure: () => ({ cpuSome: 0, memorySome: 0, ioSome: 0 }),
       now: () => now,
     });
 
@@ -75,6 +97,7 @@ describe('LoadGuard', () => {
     }, {
       readLoad: () => load,
       readFreeMemBytes: () => 4 * 1024 ** 3,
+      readPressure: () => ({ cpuSome: 0, memorySome: 0, ioSome: 0 }),
       now: () => now,
     });
 

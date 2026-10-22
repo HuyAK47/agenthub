@@ -1,10 +1,13 @@
 import os from 'node:os';
+import fs from 'node:fs';
 import { getPlatform } from './platform/index.js';
 
 export interface LoadConfig {
   enabled: boolean;
   high: number;
   ok: number;
+  pressureHigh?: number;
+  pressureOk?: number;
   minFreeMemGB: number;
   recoverAfterSec: number;
   pausePolicy?: 'recent' | 'rss';
@@ -19,18 +22,23 @@ export interface LoadSnapshot {
   recoveringSince: number | null;
   highSince?: number | null;
   autoPauseTriggered?: boolean;
+  pressure?: PressureSnapshot;
 }
+export interface PressureSnapshot { cpuSome: number | null; memorySome: number | null; ioSome: number | null; }
 
 export interface LoadGuardOptions {
   readLoad?: () => number;
   readFreeMemBytes?: () => number;
   now?: () => number;
+  readPressure?: () => PressureSnapshot;
 }
 
 export const DEFAULT_LOAD_CONFIG: LoadConfig = {
   enabled: false,
   high: 16,
   ok: 11,
+  pressureHigh: 20,
+  pressureOk: 10,
   minFreeMemGB: 1.5,
   recoverAfterSec: 300,
   pausePolicy: 'recent',
@@ -40,6 +48,13 @@ export const DEFAULT_LOAD_CONFIG: LoadConfig = {
 
 function readFreeMemBytes(): number {
   return getPlatform().freeMemoryBytes();
+}
+
+function readPressure(): PressureSnapshot {
+  const read = (name: string): number | null => {
+    try { const match = fs.readFileSync(`/proc/pressure/${name}`, 'utf8').match(/some\s+avg10=([\d.]+)/); return match ? Number(match[1]) : null; } catch { return null; }
+  };
+  return { cpuSome: read('cpu'), memorySome: read('memory'), ioSome: read('io') };
 }
 
 export class LoadGuard {
@@ -56,8 +71,14 @@ export class LoadGuard {
     const now = (this.options.now || Date.now)();
     const load1 = (this.options.readLoad || (() => os.loadavg()[0]))();
     const freeMemGB = (this.options.readFreeMemBytes || readFreeMemBytes)() / (1024 ** 3);
-    const high = load1 > this.config.high || freeMemGB < this.config.minFreeMemGB;
-    const ok = load1 < this.config.ok && freeMemGB > this.config.minFreeMemGB;
+    const pressure = (this.options.readPressure || readPressure)();
+    // Linux PSI reports percentages (not fractions). An injected reader is also
+    // honored when load/memory are mocked, which keeps pressure behavior testable.
+    const pressureValues = [pressure.cpuSome, pressure.memorySome, pressure.ioSome];
+    const pressureHigh = pressureValues.some((value) => value !== null && value >= (this.config.pressureHigh ?? 20));
+    const pressureOk = pressureValues.every((value) => value === null || value < (this.config.pressureOk ?? 10));
+    const high = load1 > this.config.high || freeMemGB < this.config.minFreeMemGB || pressureHigh;
+    const ok = load1 < this.config.ok && freeMemGB > this.config.minFreeMemGB && pressureOk;
 
     if (!this.config.enabled) {
       this.overloaded = false;
@@ -100,6 +121,7 @@ export class LoadGuard {
       recoveringSince: this.recoveringSince,
       highSince: this.highSince,
       autoPauseTriggered,
+      pressure,
     };
     return this.snapshot;
   }

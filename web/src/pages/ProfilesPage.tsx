@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -30,14 +30,18 @@ import {
   renameProfile,
   updateProfile,
   wakeupProfile,
+  updateConfig,
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { DailyUsageTable } from '../components/DailyUsageTable';
-import { LoginTerminal } from '../components/LoginTerminal';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { useLocale } from '../context/LocaleContext';
 import { ToastViewport, useToasts, type ToastKind } from '../components/ui/Toast';
 import { Profile } from '../types/api';
+import { formatReset, formatTimeTitle } from '../lib/time';
+import { useTour } from '../components/tour/TourContext';
+
+const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
 type Provider = 'agy' | 'codex' | 'claude';
 const providers: Array<{ id: Provider; title: string; subtitleKey: string; color: string }> = [
@@ -99,10 +103,10 @@ function usageText(profile: Profile) {
     // Quota Codex đọc từ log phiên của Codex CLI, nên chỉ có sau lần chạy đầu tiên của hồ sơ.
     : t(profile.engine === 'codex' ? 'profiles.noCodexQuotaYet' : 'profiles.noQuotaData');
 }
-function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; }
 
 export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
@@ -139,6 +143,9 @@ export const ProfilesPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const runningByProfile = new Map((status?.running || []).map((run) => [run.profileName, run]));
+  useEffect(() => {
+    if (showAdd) suggestModalTour('modal-add-account');
+  }, [showAdd, suggestModalTour]);
   const { toasts, push: pushToast, update: updateToast, dismiss: dismissToast } = useToasts();
   /** Thông báo ngắn: tiêu đề + chi tiết tuỳ chọn. */
   const toast = (title: string, kind: ToastKind = 'success', message?: string) => pushToast({ title, kind, message });
@@ -232,7 +239,7 @@ export const ProfilesPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6" onClick={() => menu && setMenu(null)}>
+    <div className="space-y-6" onClick={() => menu && setMenu(null)} data-tour="account-types">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('profiles.title')}</h1>
@@ -242,6 +249,7 @@ export const ProfilesPage: React.FC = () => {
         </div>
         <button
           type="button"
+          data-tour="add-account"
           onClick={(e) => {
             e.stopPropagation();
             setShowAdd(true);
@@ -265,7 +273,7 @@ export const ProfilesPage: React.FC = () => {
           {providers.map((provider) => {
             const grouped = profiles.filter((profile) => profile.engine === provider.id && matchesPlan(profile, planFilter));
             return (
-              <section key={provider.id} aria-labelledby={`provider-${provider.id}`}>
+              <section key={provider.id} aria-labelledby={`provider-${provider.id}`} data-tour="profile-quotas">
                 <div className="mb-3 flex items-center gap-3">
                   <div className="h-8 w-1 rounded-full" style={{ background: provider.color }} />
                   <div>
@@ -320,6 +328,7 @@ export const ProfilesPage: React.FC = () => {
       )}
       <DailyUsageTable />
       {showAdd && (
+        <div data-tour="modal-add-account">
         <AddProfileModal
           onClose={() => {
             setShowAdd(false);
@@ -342,6 +351,7 @@ export const ProfilesPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
         />
+        </div>
       )}
       {editing && (
         <EditProfileModal
@@ -562,7 +572,7 @@ function ProfileCard({
   onRefresh: (silent?: boolean) => void;
   onQuotaRemoved: (family: string) => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const logged = profile.loggedIn ?? Boolean(profile.email);
   const canLogin = profile.kind !== 'keyring' || profile.engine === 'claude';
   // Refresh token chỉ ghi được vào HOME riêng của hồ sơ agy isolated.
@@ -733,7 +743,7 @@ function ProfileCard({
         </div>
         {activeMarks.map((mark) => (
           <div key={mark.family} data-testid={`quota-mark-${mark.family}`} title={mark.reason || undefined} className="mt-2 flex items-center justify-between rounded border border-[var(--t-warn)] px-2 py-1 text-xs text-[var(--t-warn)]">
-            <span>{t('profiles.quotaLocked', { family: mark.family, time: formatHHMM(mark.until) })}</span>
+            <span title={formatTimeTitle(mark.until, locale, mark.reason || 'quota mark')}>{t('profiles.quotaLocked', { family: mark.family, time: formatReset(mark.until, Date.now(), locale) })}</span>
             <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(true); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
           </div>
         ))}
@@ -773,7 +783,7 @@ function ProfileCard({
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-1.5 text-[11px]">
                     <span className="text-[var(--t-warn)]">
-                      {t('profiles.resetsAt', { time: formatHHMM(session.limitResetAt) })}
+                      <span title={formatTimeTitle(session.limitResetAt, locale, 'Claude session limit')}>{t('profiles.resetsAt', { time: formatReset(session.limitResetAt, Date.now(), locale) })}</span>
                     </span>
                     <label className="flex items-center gap-1.5 cursor-pointer text-[var(--t-text-2)] hover:text-[var(--t-text)]">
                       <input
@@ -880,12 +890,13 @@ function Modal({
   children: React.ReactNode;
   maxWidth?: string;
 }) {
+  const { t } = useLocale();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Đóng">
+          <button type="button" onClick={onClose} aria-label={t('extra.closeProfile')}>
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -964,6 +975,23 @@ function AddProfileModal({
       });
       setCockpitResult(result);
       // Không giữ refresh token trong state khi đã nhập xong; giữ lại để sửa nếu có mục lỗi.
+      if (result.failedCount === 0) setCockpitJson('');
+      onImported(result);
+    } catch (err: any) {
+      setCockpitError(err?.message || t('profiles.importFailed'));
+    } finally {
+      setCockpitLoading(false);
+    }
+  };
+
+  const enableAndRetryImport = async () => {
+    setCockpitLoading(true);
+    setCockpitError('');
+    try {
+      const parsed = JSON.parse(cockpitJson);
+      await updateConfig({ multiplePerProvider: true });
+      const result = await importAgyTokens({ tokens: parsed, accountType: cockpitAccountType });
+      setCockpitResult(result);
       if (result.failedCount === 0) setCockpitJson('');
       onImported(result);
     } catch (err: any) {
@@ -1127,6 +1155,11 @@ function AddProfileModal({
                       {t('profiles.importBack')}
                     </button>
                   )}
+                  {cockpitResult.results.some((item) => item.status === 'error' && item.message?.includes('Cho phép nhiều tài khoản')) && (
+                    <button type="button" disabled={cockpitLoading} onClick={enableAndRetryImport} className="button-secondary">
+                      {cockpitLoading ? t('profiles.importingTokens') : t('profiles.enableMultipleAndRetry')}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onClose}
@@ -1285,13 +1318,14 @@ function EditProfileModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useLocale();
   const [label, setLabel] = useState(profile.label || '');
   const [notes, setNotes] = useState(profile.notes || '');
   const [priority, setPriority] = useState(String(profile.priority ?? 0));
   const [enabled, setEnabled] = useState(Boolean(profile.enabled));
   const [error, setError] = useState('');
   return (
-    <Modal title={`Sửa hồ sơ ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.editProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -1305,16 +1339,16 @@ function EditProfileModal({
             });
             onSaved();
           } catch (err: any) {
-            setError(err?.message || 'Không thể lưu hồ sơ');
+            setError(err?.message || t('extra.saveProfileError'));
           }
         }}
       >
         <label className="block text-sm">
-          Tên hiển thị
+          {t('extra.displayName')}
           <input className="field mt-1" value={label} onChange={(e) => setLabel(e.target.value)} />
         </label>
         <label className="block text-sm">
-          Ghi chú
+          {t('extra.notes')}
           <textarea
             className="field mt-1"
             rows={3}
@@ -1323,7 +1357,7 @@ function EditProfileModal({
           />
         </label>
         <label className="block text-sm">
-          Ưu tiên
+          {t('extra.priority')}
           <input
             className="field mt-1"
             type="number"
@@ -1333,14 +1367,14 @@ function EditProfileModal({
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Bật hồ sơ
+          {t('extra.enableProfile')}
         </label>
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('extra.cancel')}
           </button>
-          <button className="button-primary">Lưu</button>
+          <button className="button-primary">{t('extra.save')}</button>
         </div>
       </form>
     </Modal>
@@ -1355,10 +1389,11 @@ function RenameModal({
   onClose: () => void;
   onSaved: (newName: string) => void;
 }) {
+  const { t } = useLocale();
   const [name, setName] = useState(profile.name);
   const [error, setError] = useState('');
   return (
-    <Modal title={`Đổi tên ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.renameProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -1367,12 +1402,12 @@ function RenameModal({
             await renameProfile(profile.name, name.trim());
             onSaved(name.trim());
           } catch (err: any) {
-            setError(err?.message || 'Không thể đổi tên');
+            setError(err?.message || t('extra.renameError'));
           }
         }}
       >
         <label className="block text-sm">
-          Tên mới
+          {t('extra.displayName')}
           <input
             className="field mt-1"
             value={name}
@@ -1383,9 +1418,9 @@ function RenameModal({
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('extra.cancel')}
           </button>
-          <button className="button-primary">Đổi tên</button>
+          <button className="button-primary">{t('extra.rename')}</button>
         </div>
       </form>
     </Modal>
@@ -1405,20 +1440,20 @@ function DeleteModal({
   const [purge, setPurge] = useState(false);
   const [error, setError] = useState('');
   return (
-    <Modal title={`Xoá hồ sơ ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.deleteProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-4"
         onSubmit={async (e) => {
           e.preventDefault();
           if (typed !== profile.name) {
-            setError('Tên nhập lại chưa khớp');
+            setError(t('extra.nameMismatch'));
             return;
           }
           try {
             await deleteProfile(profile.name, purge && profile.kind !== 'keyring');
             onDeleted();
           } catch (err: any) {
-            setError(err?.message || 'Không thể xoá hồ sơ');
+            setError(err?.message || t('extra.deleteError'));
           }
         }}
       >

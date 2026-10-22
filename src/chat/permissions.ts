@@ -102,6 +102,10 @@ export function commandPermissionLabel(command: string): string {
   if (info.dynamic) return 'chỉ lệnh này';
   return info.patterns[0]?.replace(/^command:/, '') || 'lệnh này';
 }
+export function canAlwaysAllowCommand(command: string): boolean {
+  const info = commandPermissionInfo(command);
+  return !info.dynamic && !info.dangerous && info.patterns.length === 1;
+}
 export function permissionPattern(input: Record<string, unknown>): string | null {
   if (typeof input.command === 'string' && input.command) return commandPermissionInfo(input.command).patterns[0] || null;
   for (const key of ['file_path', 'path']) if (typeof input[key] === 'string' && input[key]) return `${key}:${input[key]}`;
@@ -150,15 +154,27 @@ export class PermissionBroker {
   }
   request(input: PermissionRequestInput): Promise<PermissionResult> {
     const sessionKind = this.sessionRepo?.get(input.sessionId)?.kind; const policy = typeof this.brainPolicy === 'function' ? this.brainPolicy(input.sessionId) : this.brainPolicy;
-    if (sessionKind === 'brain' && policy) { const decision = policy.decide(input); if (decision) { const id = crypto.randomUUID(); this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' }); this.repo.resolve(id, decision.action, decision.message, decision.reason); return Promise.resolve(decision.action === 'allow' ? { behavior: 'allow', updatedInput: input.input } : { behavior: 'deny', message: decision.message }); } }
+    if ((sessionKind === 'brain' || sessionKind === 'assistant') && policy) { const decision = policy.decide(input); if (decision) { const id = crypto.randomUUID(); this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' }); this.repo.resolve(id, decision.action, decision.message, decision.reason); return Promise.resolve(decision.action === 'allow' ? { behavior: 'allow', updatedInput: input.input } : { behavior: 'deny', message: decision.message }); } }
     if (this.allowed(input.input, input.toolName, input.sessionId)) return Promise.resolve({ behavior: 'allow', updatedInput: input.input });
     const id = crypto.randomUUID(); const row = this.repo.insert({ id, sessionId: input.sessionId, messageId: input.messageId || null, toolName: input.toolName, input: JSON.stringify(input.input), status: 'pending' }); this.onRequest?.(row);
-    return new Promise((resolve) => { const timer = setTimeout(() => this.resolve(id, 'deny', 'Hết thời gian chờ cấp quyền'), Math.max(1, this.timeoutSec) * 1000); this.pending.set(id, { row, resolve, timer }); });
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const isBrain = this.sessionRepo?.get(input.sessionId)?.kind === 'brain';
+        const message = isBrain
+          ? `Không có ai trả lời yêu cầu quyền trong ${Math.max(1, this.timeoutSec)} giây`
+          : 'Hết thời gian chờ cấp quyền';
+        this.resolveInternal(id, 'deny', message, 'timeout');
+      }, Math.max(1, this.timeoutSec) * 1000);
+      this.pending.set(id, { row, resolve, timer });
+    });
   }
   resolve(id: string, decision: PermissionDecision, message?: string): boolean {
+    return this.resolveInternal(id, decision, message, 'user');
+  }
+  private resolveInternal(id: string, decision: PermissionDecision, message: string | undefined, reason: string): boolean {
     const pending = this.pending.get(id); const row = this.repo.get(id); if (!pending || !row || row.status !== 'pending') return false; clearTimeout(pending.timer); const input = JSON.parse(row.input) as Record<string, unknown>;
     if (decision === 'allow_always' && this.ruleRepo) { const ctx = this.context(row.sessionId); const info = typeof input.command === 'string' ? commandPermissionInfo(input.command) : null; const patterns = info?.dangerous ? [] : info ? (info.dynamic ? [info.exact] : info.patterns) : this.patterns(input, row.toolName, ctx); const scope = ctx.projectId ? 'project' : 'session'; for (const pattern of patterns) this.ruleRepo.insert({ id: crypto.randomUUID(), scope, sessionId: scope === 'session' ? row.sessionId : null, projectId: scope === 'project' ? ctx.projectId : null, toolName: row.toolName, pattern, createdBy: 'user' }); }
-    this.repo.resolve(id, decision, message || null, 'user'); this.pending.delete(id); pending.resolve(decision === 'deny' ? { behavior: 'deny', message: message || 'Quyền công cụ bị từ chối' } : { behavior: 'allow', updatedInput: input }); return true;
+    this.repo.resolve(id, decision, message || null, reason); this.pending.delete(id); pending.resolve(decision === 'deny' ? { behavior: 'deny', message: message || 'Quyền công cụ bị từ chối' } : { behavior: 'allow', updatedInput: input }); return true;
   }
   stop(): void { for (const id of this.pending.keys()) this.resolve(id, 'deny', 'AgentHub đã dừng'); }
 }

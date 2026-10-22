@@ -57,6 +57,10 @@ agenthub setup
 
 Installer kiểm tra `SHA256SUMS`, cài dependencies production theo máy hiện tại, và giữ lại hai bản cũ trong `~/.agenthub-app/` để rollback qua symlink `current`.
 
+### Cài lỗi thì sao?
+
+Không cần dọn thủ công. Nếu tải, kiểm tra native module, `setup`, symlink hoặc service thất bại, bộ cài tự xoá thư mục tạm và hoàn tác `current`, CLI cùng service về bản trước (nếu có). Chi tiết lỗi được giữ tại `${TMPDIR:-/tmp}/agenthub-install-<time>.log`; hãy gửi file này khi cần hỗ trợ. Bản trước vẫn hoạt động.
+
 ```bash
 git clone https://github.com/ducanh19020217/agenthub.git ~/agenthub
 cd ~/agenthub
@@ -433,10 +437,25 @@ Các bước deploy chỉ được khai báo trong `~/.agenthub/config.json`, kh
       "steps": [["npm", "run", "build"], ["npm", "run", "build:web"], ["node", "scripts/install-web.mjs"]],
       "timeoutSec": 900,
       "restartHub": true,
-      "push": { "remote": "origin", "from": "integration", "to": "main", "ffOnly": true }
+      "push": {
+        "remote": "origin",
+        "from": "integration",
+        "to": "main",
+        "ffOnly": true,
+        "minIntervalMin": 30
+      }
     }
   }
 }
 ```
 
-Mỗi bước chạy bằng argv trong worktree tích hợp, có log tại `~/.agenthub/logs/deploy/<project>/<time>.log`. `push` mặc định tắt; khi bật chỉ fast-forward. Có thể chạy lại bằng nút Deploy trên trang Projects hoặc `/deploy <project>` trong Telegram; `/deploy` không có tham số hiển thị trạng thái gần nhất.
+Mỗi bước chạy bằng argv trong worktree tích hợp, có log tại `~/.agenthub/logs/deploy/<project>/<time>.log`. `push` mặc định tắt; khi bật chỉ fast-forward.
+
+Để tránh gây quá tải cho CI khi merge liên tục, hub hỗ trợ **gom lượt push** bằng tuỳ chọn `minIntervalMin` (mặc định 30 phút):
+- Sau mỗi lượt deploy thành công, hub chỉ push nếu khoảng cách từ lần push trước đó ≥ `minIntervalMin`.
+- Nếu chưa đủ thời gian, hub sẽ tự động lên lịch hẹn push hoãn lại (deferred push, không cần build lại) khi đủ thời gian, gom tất cả các lần merge ở giữa vào 1 lượt push duy nhất. Lịch hẹn và thời điểm push gần nhất được lưu bền vững qua các lần khởi động lại daemon.
+- Trạng thái deploy hiển thị thông tin dạng `push lúc HH:MM` hoặc `push đang chờ tới HH:MM`.
+- Để đẩy code ngay lập tức (bỏ qua hẹn giờ), gọi `POST /api/projects/:id/deploy` kèm `{"pushNow": true}` hoặc gửi lệnh Telegram `/deploy <dự án> push`.
+- **Lưu ý khi phát hành:** Trước khi tạo tag phát hành (release tag), bắt buộc phải chạy `pushNow` và xác nhận nhánh `main == integration` để đảm bảo bản phát hành mang đầy đủ các commit mới nhất.
+
+Có thể chạy lại toàn bộ quy trình deploy bằng nút Deploy trên trang Projects hoặc `/deploy <project>` trong Telegram; `/deploy` không có tham số hiển thị trạng thái gần nhất.

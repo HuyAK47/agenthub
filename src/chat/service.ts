@@ -18,8 +18,9 @@ import {
   ChatSessionRow,
   ChatRetryRepo,
   ChatRetryRow,
+  KnowledgeRepo,
 } from '../db/index.js';
-import { PermissionBroker, commandPermissionLabel } from './permissions.js';
+import { PermissionBroker, canAlwaysAllowCommand, commandPermissionLabel } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
@@ -41,6 +42,8 @@ import {
   FORK_SUMMARY_PROMPT,
   buildAssistantPrompt,
 } from './claude.js';
+import { buildProjectKnowledgeContext } from '../projects/knowledge-context.js';
+import { projectSettings } from '../projects/settings.js';
 
 async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
   try {
@@ -131,7 +134,7 @@ export class ChatService {
     public quotaMarkRepo?: QuotaMarkRepo,
     public quotaUsageRepo?: QuotaUsageRepo,
     public eventRepo?: EventRepo,
-    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo },
+    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo; knowledgeRepo?: KnowledgeRepo },
   ) {
     if (options?.claudeBin) {
       this.claudeBinOverride = options.claudeBin;
@@ -140,11 +143,21 @@ export class ChatService {
     // Daemon khởi động lại thì reset busy=0 cho mọi phiên
     this.chatSessionRepo.resetAllBusy();
     this.retryRepo = options?.retryRepo;
+    this.knowledgeRepo = options?.knowledgeRepo;
     for (const retry of this.retryRepo?.getPending() || []) this.armRetry(retry);
   }
 
   private failoverState: ClaudeFailoverState;
   private retryRepo?: ChatRetryRepo;
+  private knowledgeRepo?: KnowledgeRepo;
+
+  private assistantPrompt(session: ChatSessionRow): string {
+    const project = session.projectId ? this.projectRepo.get(session.projectId) : undefined;
+    const context = project && this.knowledgeRepo
+      ? buildProjectKnowledgeContext(this.knowledgeRepo.getByProject(project.id), projectSettings(project).references, undefined, project.path).text
+      : undefined;
+    return buildAssistantPrompt(context);
+  }
 
   private hubSnapshot(session: ChatSessionRow, refresh = false): string {
     const project = session.projectId ? this.projectRepo.get(session.projectId) : undefined;
@@ -206,6 +219,7 @@ export class ChatService {
         sessionTitle: session?.title || null,
         projectName: project?.name || null,
         permissionLabel: typeof input.command === 'string' ? commandPermissionLabel(input.command) : row.toolName,
+        canAlwaysAllow: session?.kind !== 'assistant' && (typeof input.command !== 'string' || canAlwaysAllowCommand(input.command)),
       };
     });
   }
@@ -1005,7 +1019,7 @@ export class ChatService {
           mode: session.mode,
           mcpConfigPath,
           model: session.model,
-          systemPrompt: session.kind === 'assistant' ? buildAssistantPrompt() : undefined,
+          systemPrompt: session.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
         });
 
         let child: ChildProcess;
@@ -1189,7 +1203,7 @@ export class ChatService {
           mode: session.mode,
           mcpConfigPath,
           model: session.model,
-          systemPrompt: session.kind === 'assistant' ? buildAssistantPrompt() : undefined,
+          systemPrompt: session.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
         });
 
         let child: ChildProcess;
@@ -1332,7 +1346,7 @@ export class ChatService {
       mcpConfigPath,
       supportsPartial,
       model: execution.model,
-      systemPrompt: session?.kind === 'assistant' ? buildAssistantPrompt() : undefined,
+      systemPrompt: session?.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
       hubSnapshot: session ? this.hubSnapshot(session) : undefined,
     });
 
@@ -1651,7 +1665,7 @@ export class ChatService {
       persistent: true,
       model: execution.model,
       hubSnapshot: this.hubSnapshot(session, (this.snapshotAt.get(session.id) || 0) > 0 && Date.now() - (this.snapshotAt.get(session.id) || 0) > 10 * 60 * 1000),
-      systemPrompt: session.kind === 'assistant' ? buildAssistantPrompt() : undefined,
+      systemPrompt: session.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
     }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: session.id, chatKind: session.kind, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, profileName: session.profileName, stderrOutput: '' };
     this.persistentProcesses.set(session.id, state);

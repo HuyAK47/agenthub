@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getProjects, getConfig, getProfiles } from '../../api/client';
 import { ChatMode, Profile } from '../../types/api';
 import { X, ShieldCheck, AlertTriangle, Sparkles } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
 import { useFocusTrap } from '../ui/useFocusTrap';
+import { useTour } from '../tour/TourContext';
 
 interface NewSessionModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   isSubmitting = false,
 }) => {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const containerRef = useFocusTrap<HTMLDivElement>({ isOpen, onClose });
   const [projectId, setProjectId] = useState<string>('');
   const [title, setTitle] = useState<string>('');
@@ -43,6 +45,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles, enabled: isOpen });
   const claudeProfiles = profiles.filter((profile: Profile) => profile.engine === 'claude');
 
+  useEffect(() => {
+    if (isOpen) suggestModalTour('modal-new-session');
+  }, [isOpen, suggestModalTour]);
+
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -61,6 +67,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="new-session-modal-title"
+      data-tour="modal-new-session"
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
     >
       <div

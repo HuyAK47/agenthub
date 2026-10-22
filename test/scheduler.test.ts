@@ -1324,6 +1324,119 @@ describe('Checking after worker completion', () => {
   });
 });
 
+describe('Checking queue lifecycle', () => {
+  beforeEach(setupTestEnv);
+  afterEach(teardownTestEnv);
+
+  beforeEach(() => createTestProject(path.join(tmpDir, 'repo')));
+
+  function makeCheckingScheduler(maxConcurrent = 2) {
+    config.checks.maxConcurrent = maxConcurrent;
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map(), undefined, undefined, db);
+    return scheduler as Scheduler & { checkRunner: { run: (...args: unknown[]) => Promise<unknown> } };
+  }
+
+  function addCheckTask(slug: string, worktreePath = path.join(tmpDir, slug), status: 'review' | 'done' | 'cancelled' = 'review') {
+    fs.mkdirSync(worktreePath, { recursive: true });
+    taskRepo.insert({ id: `test-project/${slug}`, projectId: 'test-project', slug, title: slug, status, worktreePath });
+  }
+
+  it('runs at most maxConcurrent checks and starts the FIFO third after one completes', async () => {
+    addCheckTask('c1'); addCheckTask('c2'); addCheckTask('c3');
+    const scheduler = makeCheckingScheduler(2);
+    let active = 0; let peak = 0;
+    const releases: Array<() => void> = [];
+    scheduler.checkRunner = { run: async () => {
+      active++; peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active--;
+      return { passed: true, failed: [], results: [] };
+    } };
+
+    const first = scheduler.runChecksForTask('test-project/c1', 'run-c1');
+    const second = scheduler.runChecksForTask('test-project/c2', 'run-c2');
+    const third = scheduler.runChecksForTask('test-project/c3', 'run-c3');
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(peak).toBe(2);
+    releases.shift()!();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(peak).toBe(2);
+    releases.shift()!(); releases.shift()!();
+    await Promise.all([first, second, third]);
+    scheduler.stop();
+  });
+
+  it('deduplicates the same runId but queues a newer runId after the old run releases the worktree', async () => {
+    addCheckTask('same');
+    const scheduler = makeCheckingScheduler();
+    let calls = 0; let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    scheduler.checkRunner = { run: async () => { calls++; await gate; return { passed: true, failed: [], results: [] }; } };
+    const old = scheduler.runChecksForTask('test-project/same', 'old');
+    const duplicate = scheduler.runChecksForTask('test-project/same', 'old');
+    expect(duplicate).toBeDefined();
+    const newer = scheduler.runChecksForTask('test-project/same', 'new');
+    release();
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(taskRepo.get('test-project/same')?.status).toBe('review');
+    release = () => {};
+    await Promise.all([old, newer]);
+    expect(calls).toBe(2);
+    scheduler.stop();
+  });
+
+  it('does not run checks concurrently for the same worktree', async () => {
+    const worktree = path.join(tmpDir, 'shared');
+    addCheckTask('w1', worktree); addCheckTask('w2', worktree);
+    const scheduler = makeCheckingScheduler(2);
+    let active = 0; let peak = 0; const releases: Array<() => void> = [];
+    scheduler.checkRunner = { run: async () => {
+      active++; peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active--; return { passed: true, failed: [], results: [] };
+    } };
+    const first = scheduler.runChecksForTask('test-project/w1', 'run-w1');
+    const second = scheduler.runChecksForTask('test-project/w2', 'run-w2');
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    expect(peak).toBe(1);
+    releases.shift()!();
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases.shift()!();
+    await Promise.all([first, second]);
+    scheduler.stop();
+  });
+
+  it('keeps a cancelled task unchanged when an old check completes', async () => {
+    addCheckTask('cancel');
+    const scheduler = makeCheckingScheduler();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    scheduler.checkRunner = { run: async () => { await gate; return { passed: true, failed: [], results: [] }; } };
+    const check = scheduler.runChecksForTask('test-project/cancel', 'run-cancel');
+    await vi.waitFor(() => expect(taskRepo.get('test-project/cancel')?.status).toBe('checking'));
+    scheduler.cancelTask('test-project/cancel');
+    release();
+    await check;
+    expect(taskRepo.get('test-project/cancel')?.status).toBe('cancelled');
+    scheduler.stop();
+  });
+
+  it('never changes done or cancelled tasks when recovery asks for checks', async () => {
+    addCheckTask('done', path.join(tmpDir, 'done'), 'done');
+    addCheckTask('cancelled', path.join(tmpDir, 'cancelled'), 'cancelled');
+    const scheduler = makeCheckingScheduler();
+    const runner = scheduler as unknown as { checkRunner: { run: (...args: unknown[]) => Promise<unknown> } };
+    runner.checkRunner = { run: async () => { throw new Error('must not run'); } };
+    await scheduler.runChecksForTask('test-project/done', 'run-done');
+    await scheduler.runChecksForTask('test-project/cancelled', 'run-cancelled');
+    await scheduler.recoverCheckingTasks();
+    expect(taskRepo.get('test-project/done')?.status).toBe('done');
+    expect(taskRepo.get('test-project/cancelled')?.status).toBe('cancelled');
+    scheduler.stop();
+  });
+});
+
 describe('Crash recovery on startup', () => {
   beforeEach(setupTestEnv);
   afterEach(teardownTestEnv);

@@ -135,13 +135,19 @@ export interface DeployPushConfig {
   from: string;
   to: string;
   ffOnly: boolean;
+  minIntervalMin?: number;
 }
 
 export interface DeployProjectConfig {
   steps: string[][];
   timeoutSec: number;
   restartHub: boolean;
+  restartMaxWaitMin?: number;
   push?: DeployPushConfig;
+}
+
+export interface ChecksConfig {
+  maxConcurrent: number;
 }
 
 export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
@@ -220,6 +226,10 @@ export interface WorkersConfig {
   codexSandbox: 'off' | 'workspace-write';
 }
 
+export interface UiConfig {
+  tours: Record<string, boolean>;
+}
+
 export const DEFAULT_WORKERS_CONFIG: WorkersConfig = {
   codexSandbox: 'off',
 };
@@ -293,6 +303,8 @@ export interface AgentHubConfig {
   updates: UpdatesConfig;
   tools: ToolsConfig;
   workers: WorkersConfig;
+  ui: UiConfig;
+  checks: ChecksConfig;
   deploy: Record<string, DeployProjectConfig>;
 }
 
@@ -341,6 +353,7 @@ export function saveConfig(
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
+    ui?: Partial<UiConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -426,6 +439,9 @@ export function saveConfig(
           },
         }
       : {}),
+    ...(patch.ui && typeof patch.ui === 'object'
+      ? { ui: { ...((current.ui as Record<string, unknown>) || {}), ...patch.ui, ...(patch.ui.tours ? { tours: { ...(((current.ui as Record<string, unknown>)?.tours as Record<string, unknown>) || {}), ...patch.ui.tours } } : {}) } }
+      : {}),
     ...(patch.tools ? { tools: { ...((current.tools as Record<string, unknown>) || {}), ...patch.tools, ...(patch.tools.installers ? { installers: { ...(((current.tools as Record<string, unknown>)?.installers as Record<string, unknown>) || {}), ...patch.tools.installers } } : {}) } } : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
       ? {
@@ -502,6 +518,7 @@ export function updateConfigInMemory(
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
+    ui?: Partial<UiConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -664,6 +681,7 @@ export function updateConfigInMemory(
       ...patch.workers,
     };
   }
+  if (patch.ui?.tours) config.ui = { ...config.ui, tours: { ...config.ui.tours, ...patch.ui.tours } };
   if (patch.tools?.installers) {
     for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
       if (!value) continue;
@@ -854,6 +872,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   const workers: WorkersConfig = {
     codexSandbox: rawWorkers.codexSandbox === 'workspace-write' ? 'workspace-write' : DEFAULT_WORKERS_CONFIG.codexSandbox,
   };
+  const rawChecks = (userConfig.checks as Record<string, unknown>) || {};
+  const checks: ChecksConfig = {
+    maxConcurrent: typeof rawChecks.maxConcurrent === 'number' && rawChecks.maxConcurrent > 0
+      ? Math.floor(rawChecks.maxConcurrent)
+      : 2,
+  };
   const rawTools = (userConfig.tools as Record<string, unknown>) || {};
   const rawDeploy = (userConfig.deploy as Record<string, unknown>) || {};
   const rawProjectsConfig = (userConfig.projects as Record<string, unknown>) || {};
@@ -871,13 +895,19 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       : [];
     if (steps.length === 0) continue;
     const pushRaw = value.push as Record<string, unknown> | undefined;
+    const minIntervalMin = typeof pushRaw?.minIntervalMin === 'number' && pushRaw.minIntervalMin >= 0
+      ? Math.floor(pushRaw.minIntervalMin)
+      : 30;
     const push = pushRaw && typeof pushRaw.remote === 'string' && typeof pushRaw.from === 'string' && typeof pushRaw.to === 'string'
-      ? { remote: pushRaw.remote, from: pushRaw.from, to: pushRaw.to, ffOnly: pushRaw.ffOnly !== false }
+      ? { remote: pushRaw.remote, from: pushRaw.from, to: pushRaw.to, ffOnly: pushRaw.ffOnly !== false, minIntervalMin }
       : undefined;
     deploy[projectId] = {
       steps,
       timeoutSec: typeof value.timeoutSec === 'number' && value.timeoutSec > 0 ? Math.floor(value.timeoutSec) : 900,
       restartHub: value.restartHub === true,
+      restartMaxWaitMin: typeof value.restartMaxWaitMin === 'number' && value.restartMaxWaitMin >= 0
+        ? Math.floor(value.restartMaxWaitMin)
+        : 20,
       ...(push ? { push } : {}),
     };
   }
@@ -885,6 +915,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   const installer = (name: string, fallback: ToolInstaller): ToolInstaller => {
     const value = rawInstallers[name];
     return value && typeof value === 'object' ? { ...fallback, ...(value as ToolInstaller) } : fallback;
+  };
+  const rawUi = (userConfig.ui as Record<string, unknown>) || {};
+  const ui: UiConfig = {
+    tours: rawUi.tours && typeof rawUi.tours === 'object'
+      ? Object.fromEntries(Object.entries(rawUi.tours).filter(([, value]) => typeof value === 'boolean'))
+      : {},
   };
 
   return {
@@ -901,7 +937,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
-    multiplePerProvider: userConfig.multiplePerProvider === true,
+    multiplePerProvider: userConfig.multiplePerProvider !== false,
     multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,
     slotsPerCodexProfile: (userConfig.slotsPerCodexProfile as number) || 2,
@@ -1021,6 +1057,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       enabled: typeof rawLoad.enabled === 'boolean' ? rawLoad.enabled : DEFAULT_LOAD_CONFIG.enabled,
       high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
+      pressureHigh: typeof rawLoad.pressureHigh === 'number' ? rawLoad.pressureHigh : DEFAULT_LOAD_CONFIG.pressureHigh,
+      pressureOk: typeof rawLoad.pressureOk === 'number' ? rawLoad.pressureOk : DEFAULT_LOAD_CONFIG.pressureOk,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
       pausePolicy: rawLoad.pausePolicy === 'rss' || rawLoad.pausePolicy === 'recent' ? rawLoad.pausePolicy : DEFAULT_LOAD_CONFIG.pausePolicy,
@@ -1047,6 +1085,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       },
     },
     workers,
+    ui,
+    checks,
     deploy,
   };
 }

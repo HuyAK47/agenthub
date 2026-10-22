@@ -279,10 +279,10 @@ describe('PlansPage', () => {
     renderPlansPage('/plans');
 
     expect(await screen.findByTestId('plans-empty-state')).toBeInTheDocument();
-    expect(screen.getByText('Đợt nháp xuất hiện khi nào:')).toBeInTheDocument();
-    expect(screen.getByText(/Lệnh \/plan trên Telegram \/ chat, hoặc khi cài đặt yêu cầu duyệt/)).toBeInTheDocument();
+    expect(screen.getByText('Kế hoạch sẽ xuất hiện khi nào?')).toBeInTheDocument();
+    expect(screen.getByText(/Khi Claude chia một việc thành nhiều task, kế hoạch sẽ hiện ở đây/)).toBeInTheDocument();
     expect(screen.getByText('Cài đặt hiện tại:')).toBeInTheDocument();
-    expect(screen.getByText('Hiện Claude giao việc ngay, không cần duyệt')).toBeInTheDocument();
+    expect(screen.getByText('Claude giao việc ngay, không cần duyệt')).toBeInTheDocument();
     expect(screen.getByTestId('link-to-settings-planning')).toHaveAttribute('href', '/settings');
   });
 
@@ -320,10 +320,10 @@ describe('PlansPage', () => {
     expect(screen.getByText('Giao cả đợt')).toBeInTheDocument();
   });
 
-  it('12. Hiển thị tiêu đề trang "Duyệt kế hoạch" và phụ đề hướng dẫn', async () => {
+  it('12. Hiển thị tiêu đề trang "Kế hoạch" và phụ đề hướng dẫn', async () => {
     renderPlansPage('/plans/b-1');
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Duyệt kế hoạch');
-    expect(screen.getByText(/Claude gom các task đề xuất thành từng đợt nháp/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Kế hoạch');
+    expect(screen.getByText(/Xem các đợt task, tiến độ và sơ đồ phụ thuộc của Claude/)).toBeInTheDocument();
   });
 });

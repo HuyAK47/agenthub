@@ -162,8 +162,8 @@ export const SessionList: React.FC<SessionListProps> = ({
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="Mở rộng danh sách"
-          aria-label="Mở rộng danh sách"
+          title={t('extra.expandSessions')}
+          aria-label={t('extra.expandSessions')}
           className="p-2 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] cursor-pointer"
         >
           <ChevronRight className="w-5 h-5" />
@@ -182,13 +182,14 @@ export const SessionList: React.FC<SessionListProps> = ({
   }
 
   return (
-    <div className={`flex flex-col h-full bg-[var(--bg-surface)] border-r border-[var(--border-default)] ${className}`}>
+    <div data-tour="chat-sessions" className={`flex flex-col h-full bg-[var(--bg-surface)] border-r border-[var(--border-default)] ${className}`}>
       {/* Top Header / New Chat Button & Collapse Button */}
       <div className="p-3 border-b border-[var(--border-default)] space-y-2.5">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onNewSession}
+            data-tour="new-session"
             className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white font-medium text-xs shadow-xs transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
@@ -198,8 +199,8 @@ export const SessionList: React.FC<SessionListProps> = ({
             <button
               type="button"
               onClick={onToggleCollapse}
-              title="Thu gọn danh sách"
-              aria-label="Thu gọn danh sách"
+              title={t('extra.collapseSessions')}
+              aria-label={t('extra.collapseSessions')}
               className="p-2 rounded-xl border border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] cursor-pointer shrink-0"
             >
               <ChevronLeft className="w-4 h-4" />

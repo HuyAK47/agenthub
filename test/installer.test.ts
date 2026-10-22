@@ -25,6 +25,7 @@ describe('safe installer and updater commands', () => {
       fs.mkdirSync(data, { recursive: true });
       fs.mkdirSync(linkDir, { recursive: true });
       fs.writeFileSync(path.join(app, 'sentinel'), 'app');
+      fs.mkdirSync(path.join(app, '.0.9.0.tmp.123'));
       fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
       expect(spawnSync('git', ['-C', app, 'init'], { encoding: 'utf8' }).status).toBe(0);
       expect(spawnSync('git', ['-C', app, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
@@ -49,6 +50,7 @@ describe('safe installer and updater commands', () => {
 
       expect(result.status).toBe(0);
       expect(fs.existsSync(app)).toBe(false);
+      expect(fs.existsSync(path.join(app, '.0.9.0.tmp.123'))).toBe(false);
       expect(fs.existsSync(data)).toBe(true);
       expect(fs.existsSync(path.join(linkDir, 'agenthub'))).toBe(false);
       expect(fs.readFileSync(log, 'utf8')).toContain('--user stop agenthub');
@@ -190,11 +192,16 @@ describe('safe installer and updater commands', () => {
   it('dry-run never invokes the injected service command or changes paths', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-dry-'));
     const log = path.join(home, 'systemctl.log');
+    const app = path.join(home, 'app');
+    const stale = path.join(app, '.0.9.0.tmp.123');
+    fs.mkdirSync(stale, { recursive: true });
+    fs.writeFileSync(path.join(stale, 'sentinel'), 'keep');
+    fs.writeFileSync(path.join(app, '.agenthub-app'), 'mode=release\n');
     const result = spawnSync('/bin/sh', [installer, '--uninstall', '--dry-run'], {
       env: {
         ...process.env,
         HOME: home,
-        AGENTHUB_DIR: path.join(home, 'app'),
+        AGENTHUB_DIR: app,
         AGENTHUB_HOME: path.join(home, 'data'),
         AGENTHUB_SYSTEMCTL: path.join(home, 'must-not-run'),
         AGENTHUB_LAUNCHCTL: path.join(home, 'must-not-run'),
@@ -206,7 +213,8 @@ describe('safe installer and updater commands', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('[dry-run]');
     expect(fs.existsSync(log)).toBe(false);
-    expect(fs.existsSync(path.join(home, 'app'))).toBe(false);
+    expect(fs.existsSync(path.join(app, '.agenthub-app'))).toBe(true);
+    expect(fs.existsSync(path.join(stale, 'sentinel'))).toBe(true);
   });
 
   it('update uses the injected systemctl for the restart step', async () => {

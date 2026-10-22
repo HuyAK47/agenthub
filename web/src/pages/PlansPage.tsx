@@ -38,12 +38,15 @@ const toArray = (val: string | string[] | null | undefined): string[] => {
   return Array.isArray(val) ? val : [val];
 };
 
-const BatchStatusBadge: React.FC<{ status: BatchStatus }> = ({ status }) => {
+const BatchStatusBadge: React.FC<{ status: BatchStatus | 'working' | 'completed' | 'failed' }> = ({ status }) => {
   const { t } = useLocale();
   const styles = {
-    draft: 'bg-amber-500/15 text-amber-500 border-amber-500/30',
-    dispatched: 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30',
-    discarded: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+    draft: 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]',
+    dispatched: 'bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)]',
+    discarded: 'bg-[color-mix(in_srgb,var(--t-text-3)_15%,transparent)] text-[var(--t-text-3)] border-[color-mix(in_srgb,var(--t-text-3)_30%,transparent)]',
+    working: 'bg-[color-mix(in_srgb,var(--t-accent)_15%,transparent)] text-[var(--t-accent)] border-[color-mix(in_srgb,var(--t-accent)_30%,transparent)]',
+    completed: 'bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)]',
+    failed: 'bg-rose-500/15 text-rose-500 border-rose-500/30',
   }[status];
 
   return (
@@ -325,6 +328,23 @@ export const PlansPage: React.FC = () => {
 
   const isDraft = currentBatch?.status === 'draft';
   const batchTasks = currentBatch?.tasks || [];
+  const progress = currentBatch?.progress || {
+    total: batchTasks.length,
+    done: batchTasks.filter((task) => task.status === 'done').length,
+    running: batchTasks.filter((task) => ['running', 'checking', 'review'].includes(task.status)).length,
+    failed: batchTasks.filter((task) => ['failed', 'blocked'].includes(task.status)).length,
+    waiting: batchTasks.filter((task) => ['draft', 'queued', 'waiting_quota'].includes(task.status)).length,
+    pending: 0,
+  };
+  const effectiveStatus = currentBatch?.status === 'draft'
+    ? 'draft'
+    : currentBatch?.status === 'discarded'
+      ? 'discarded'
+    : progress.failed > 0
+      ? 'failed'
+      : progress.total > 0 && progress.done === progress.total
+        ? 'completed'
+        : 'working';
 
   return (
     <div className="flex flex-col h-[calc(100vh-56px)] overflow-hidden">
@@ -339,7 +359,7 @@ export const PlansPage: React.FC = () => {
         </div>
 
         {/* Global Filter Bar */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3" data-tour="plan-filters">
           <div className="flex items-center gap-2 text-xs">
             <FolderGit2 className="w-4 h-4 text-[var(--t-text-3)]" />
             <select
@@ -446,7 +466,7 @@ export const PlansPage: React.FC = () => {
                       <h3 className="font-semibold text-sm line-clamp-1 text-[var(--t-text)]">
                         {batch.title}
                       </h3>
-                      <BatchStatusBadge status={batch.status} />
+                      <BatchStatusBadge status={batch.status === 'draft' ? 'draft' : batch.status === 'discarded' ? 'discarded' : batch.progress?.failed ? 'failed' : batch.progress && batch.progress.total > 0 && batch.progress.done === batch.progress.total ? 'completed' : 'working'} />
                     </div>
 
                     {batch.goal && (
@@ -461,7 +481,7 @@ export const PlansPage: React.FC = () => {
                       </span>
                       <span>•</span>
                       <span>
-                        {t('plans.tasksCount', { count: batch.tasks?.length ?? 0 })}
+                        {t('plans.progress', { done: batch.progress?.done ?? 0, total: batch.progress?.total ?? 0 })}
                       </span>
                       <span>•</span>
                       <span>{formatBatchTime(batch.createdAt)}</span>
@@ -537,7 +557,7 @@ export const PlansPage: React.FC = () => {
                       >
                         {currentBatch.title}
                       </h2>
-                      <BatchStatusBadge status={currentBatch.status} />
+                      <BatchStatusBadge status={effectiveStatus} />
                     </div>
 
                     <div className="flex items-center gap-3 text-xs text-[var(--t-text-3)] flex-wrap pt-1">
@@ -548,7 +568,7 @@ export const PlansPage: React.FC = () => {
                       <span>•</span>
                       <span className="inline-flex items-center gap-1">
                         <User className="w-3.5 h-3.5" />
-                        {currentBatch.createdBy || 'unknown'}
+                        {currentBatch.createdBy === 'claude-auto' ? t('plans.auto') : currentBatch.createdBy || 'unknown'}
                       </span>
                       <span>•</span>
                       <span className="inline-flex items-center gap-1">
@@ -565,6 +585,7 @@ export const PlansPage: React.FC = () => {
                     <div className="flex items-center gap-2 flex-wrap">
                       <Button
                         data-testid="btn-add-task"
+                        data-tour="add-task"
                         variant="secondary"
                         size="sm"
                         onClick={() => {
@@ -590,6 +611,7 @@ export const PlansPage: React.FC = () => {
 
                       <Button
                         data-testid="btn-dispatch-batch"
+                        data-tour="approve-plan"
                         variant="primary"
                         size="sm"
                         onClick={() => dispatchMutation.mutate()}
@@ -600,6 +622,18 @@ export const PlansPage: React.FC = () => {
                       </Button>
                     </div>
                   )}
+                </div>
+
+                <div className="mt-4" data-testid="batch-progress">
+                  <div className="flex items-center justify-between text-xs text-[var(--t-text-2)] mb-1.5">
+                    <span>{t('plans.progress', { done: progress.done, total: progress.total })}</span>
+                    <span>{progress.running} {t('plans.working').toLowerCase()} · {progress.failed} {t('plans.failed').toLowerCase()}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-[var(--t-surface-2)] overflow-hidden flex">
+                    {progress.done > 0 && <div className="bg-emerald-500" style={{ width: `${(progress.done / Math.max(progress.total, 1)) * 100}%` }} />}
+                    {progress.running > 0 && <div className="bg-blue-500" style={{ width: `${(progress.running / Math.max(progress.total, 1)) * 100}%` }} />}
+                    {progress.failed > 0 && <div className="bg-rose-500" style={{ width: `${(progress.failed / Math.max(progress.total, 1)) * 100}%` }} />}
+                  </div>
                 </div>
 
                 {/* Batch Goal Banner */}
@@ -708,9 +742,9 @@ export const PlansPage: React.FC = () => {
                               {task.slug}
                             </td>
                             <td className="py-3 px-3">
-                              <div className="font-medium text-[var(--t-text)]">
+                              <Link to={`/tasks/${task.id.replace('/', '~')}`} className="font-medium text-[var(--t-accent)] hover:underline">
                                 {task.title}
-                              </div>
+                              </Link>
                               {task.body && (
                                 <div className="text-[11px] text-[var(--t-text-3)] line-clamp-1 mt-0.5">
                                   {task.body}

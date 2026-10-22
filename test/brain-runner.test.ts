@@ -3,13 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BrainRunner } from '../src/brain/runner.js';
-import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, ProjectRepo, openDatabase } from '../src/db/index.js';
+import { BrainTurnRepo, ChatSessionRepo, KnowledgeRepo, ProfileRepo, ProjectRepo, openDatabase } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: number; dailyTokenBudget?: number; projectSettings?: Record<string, string> } = {}) {
+function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: number; dailyTokenBudget?: number; projectSettings?: Record<string, string>; permissions?: 'standard' | 'trusted' | 'full'; setSessionMode?: (id: string, mode: 'safe' | 'full') => void } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-runner-'));
   dirs.push(dir);
   const db = openDatabase(path.join(dir, 'hub.db'));
@@ -17,6 +17,7 @@ function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: 
   const turns = new BrainTurnRepo(db);
   const profiles = new ProfileRepo(db);
   const projects = new ProjectRepo(db);
+  const knowledge = new KnowledgeRepo(db);
   for (const id of Object.keys(options.projectSettings || {})) {
     projects.insert({ id, name: id.toUpperCase(), path: dir, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: options.projectSettings?.[id] });
   }
@@ -27,9 +28,10 @@ function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: 
       if (!sessions.get(id)) sessions.insert({ id, title: body.title, mode: body.mode, model: body.model, profileName: body.profileName, kind: body.kind, projectId: id.startsWith('brain:') ? id.slice('brain:'.length) : null });
       return sessions.get(id)!;
     },
+    setSessionMode: options.setSessionMode,
     sendMessage(_id: string, text: string) { sent.push(`${_id}: ${text}`); return { userMessageId: 'u', assistantMessageId: 'a' }; },
   };
-  const brainConfig = { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode, maxConcurrent: options.maxConcurrent ?? 2, maxTurnsPerHour: 20, dailyTokenBudget: options.dailyTokenBudget ?? 0 } as const;
+  const brainConfig = { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode, permissions: options.permissions ?? 'standard', maxConcurrent: options.maxConcurrent ?? 2, maxTurnsPerHour: 20, dailyTokenBudget: options.dailyTokenBudget ?? 0 } as const;
   const runner = new BrainRunner({
     config: brainConfig,
     eventBus: events,
@@ -39,8 +41,9 @@ function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: 
     turnRepo: turns,
     debounceMs: 60_000,
     projectRepo: projects,
+    knowledgeRepo: knowledge,
   });
-  return { db, sessions, turns, profiles, projects, events, sent, runner };
+  return { db, sessions, turns, profiles, projects, knowledge, events, sent, runner };
 }
 
 describe('BrainRunner', () => {
@@ -65,6 +68,34 @@ describe('BrainRunner', () => {
     ctx.runner.flush();
     const prompt = ctx.sent[0];
     expect(prompt.match(/quota\.exhausted/g)).toHaveLength(1);
+  });
+
+  it('injects project knowledge once, repeats it after content change or compact', () => {
+    const ctx = setup('suggest', { projectSettings: { p: '{"references":[]}' } });
+    ctx.knowledge.insert({ projectId: 'p', taskId: 'manual/p', content: 'Pinned rule', pinned: true });
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p/one');
+    ctx.runner.flush();
+    expect(ctx.sent[0]).toContain('Pinned rule');
+    ctx.events.emit('chat.done', undefined, { sessionId: 'brain:p', usage: {} });
+    ctx.knowledge.insert({ projectId: 'p', taskId: 'manual/p', content: 'New rule', pinned: true });
+    ctx.events.emit('task.done', 'p/two');
+    ctx.runner.flush();
+    expect(ctx.sent[1]).toContain('New rule');
+    ctx.events.emit('chat.done', undefined, { sessionId: 'brain:p', usage: {} });
+    ctx.events.emit('chat.compacted', undefined, { sessionId: 'brain:p' });
+    ctx.events.emit('task.done', 'p/three');
+    ctx.runner.flush();
+    expect(ctx.sent[2]).toContain('Pinned rule');
+  });
+
+  it('puts the project review checklist in the brain prompt', () => {
+    const ctx = setup('suggest', { projectSettings: { p: '{"reviewChecklist":["docs/checklist.md"]}' } });
+    ctx.runner.start();
+    ctx.events.emit('task.review_ready', 'p/task');
+    ctx.runner.flush();
+    expect(ctx.sent[0]).toContain('docs/checklist.md');
+    expect(ctx.sent[0]).toContain('CHECKLIST KHI DUYỆT');
   });
 
   it('does not overlap a user turn and preserves events after quota', () => {
@@ -179,6 +210,26 @@ describe('BrainRunner', () => {
     ctx.events.emit('chat.error', undefined, { sessionId: 'brain', message: 'rate limit reached' });
     expect(ctx.runner.getQueuedEvents()).toHaveLength(1);
     expect(waiting).toContainEqual({ reason: 'quota' });
+    ctx.runner.stop();
+  });
+
+  it('keeps quota events pending when mode synchronization fails at chat completion', () => {
+    let syncAttempts = 0;
+    const ctx = setup('auto', {
+      permissions: 'full',
+      setSessionMode: () => {
+        syncAttempts += 1;
+        throw new Error('session still running');
+      },
+    });
+    ctx.runner.start();
+    ctx.events.emit('task.failed');
+    ctx.runner.flush();
+    ctx.sessions.updateMode('brain', 'safe');
+
+    expect(() => ctx.events.emit('chat.error', undefined, { sessionId: 'brain', message: 'rate limit reached' })).not.toThrow();
+    expect(ctx.runner.getQueuedEvents()).toHaveLength(1);
+    expect(syncAttempts).toBe(1);
     ctx.runner.stop();
   });
 

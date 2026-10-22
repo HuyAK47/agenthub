@@ -353,4 +353,36 @@ describe('Batch Planning & Drafts (c-plan-drafts)', () => {
     // Verify exact notification text from Requirement 5: "Claude đề xuất 6 task, chờ bạn duyệt"
     expect(capturedMsg).toBe('Claude đề xuất 6 task, chờ bạn duyệt');
   });
+
+  it('dispatches a batch in one call and reports progress', () => {
+    const batch = ctx.service.createBatch({
+      project: 'test-proj',
+      title: 'Giao ngay',
+      goal: 'Mục tiêu giao ngay',
+      dispatch: true,
+      tasks: [
+        { slug: 'dispatch-a', title: 'A' },
+        { slug: 'dispatch-b', title: 'B', dependsOn: ['dispatch-a'] },
+      ],
+    });
+
+    expect(batch.status).toBe('dispatched');
+    expect(batch.tasks.every((task) => task.status !== 'draft')).toBe(true);
+    expect(batch.progress).toMatchObject({ total: 2, done: 0 });
+  });
+
+  it('groups standalone Claude tasks from the same session into an automatic dispatched batch', () => {
+    const first = ctx.service.createTask({
+      project: 'test-proj', slug: 'auto-a', title: 'Mục tiêu lớn', body: 'A', start: true,
+      fromClaude: true, sessionId: 'session-1', goal: 'Mục tiêu lớn',
+    });
+    const second = ctx.service.createTask({
+      project: 'test-proj', slug: 'auto-b', title: 'Bước hai', body: 'B', start: true,
+      fromClaude: true, sessionId: 'session-1', goal: 'Mục tiêu lớn',
+    });
+
+    expect(first.batchId).toBeDefined();
+    expect(second.batchId).toBe(first.batchId);
+    expect(ctx.service.getBatch(first.batchId!).status).toBe('dispatched');
+  });
 });

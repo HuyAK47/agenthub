@@ -5,12 +5,11 @@ import { ThemeProvider } from './context/ThemeContext';
 import { LocaleProvider } from './context/LocaleContext';
 import { AuthGate } from './components/AuthGate';
 import { Layout } from './components/Layout';
-import { SavingsPage } from './pages/SavingsPage';
 import { connectSSE } from './api/sse';
-import { ClaudeSessionsPage } from './pages/ClaudeSessionsPage';
-import { SetupPage } from './pages/SetupPage';
 import { useQuery } from '@tanstack/react-query';
 import { getSetupStatus } from './api/client';
+import { TourProvider } from './components/tour/TourContext';
+import { TourOverlay } from './components/tour/TourOverlay';
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
 const TasksPage = lazy(() => import('./pages/TasksPage').then((m) => ({ default: m.TasksPage })));
@@ -21,6 +20,9 @@ const ChatPage = lazy(() => import('./pages/ChatPage').then((m) => ({ default: m
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 const PlansPage = lazy(() => import('./pages/PlansPage').then((m) => ({ default: m.PlansPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const SavingsPage = lazy(() => import('./pages/SavingsPage').then((m) => ({ default: m.SavingsPage })));
+const ClaudeSessionsPage = lazy(() => import('./pages/ClaudeSessionsPage').then((m) => ({ default: m.ClaudeSessionsPage })));
+const SetupPage = lazy(() => import('./pages/SetupPage').then((m) => ({ default: m.SetupPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,8 +59,9 @@ export const App: React.FC = () => {
         <LocaleProvider>
           <AuthGate>
           <BrowserRouter>
-            <SetupRedirect />
-            <Suspense
+            <TourProvider>
+              <SetupRedirect />
+              <Suspense
               fallback={
                 <div className="flex items-center justify-center p-12">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
@@ -81,10 +84,13 @@ export const App: React.FC = () => {
                   <Route path="savings" element={<SavingsPage />} />
                   <Route path="profiles" element={<ProfilesPage />} />
                   <Route path="projects" element={<ProjectsPage />} />
+                  <Route path="projects/:id/settings" element={<ProjectsPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                 </Route>
               </Routes>
-            </Suspense>
+              </Suspense>
+              <TourOverlay />
+            </TourProvider>
           </BrowserRouter>
           </AuthGate>
         </LocaleProvider>

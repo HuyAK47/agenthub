@@ -124,6 +124,8 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.get('/api/perf', async () => service.getPerf());
+
   fastify.get('/api/setup/status', async () => service.getSetupStatus());
   fastify.post('/api/setup/install/:tool', async (req, reply) => {
     const { tool } = req.params as { tool: string };
@@ -204,6 +206,11 @@ export async function createServer(
 
   fastify.post('/api/projects/:id/deploy', async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { pushNow?: boolean };
+    if (body.pushNow === true) {
+      const result = await service.pushDeployNow(id);
+      return reply.status(result.status === 'failed' ? 500 : 200).send(result);
+    }
     return reply.status(202).send(service.rerunDeploy(id));
   });
 
@@ -233,6 +240,11 @@ export async function createServer(
   fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.listKnowledge(id);
+  });
+
+  fastify.get('/api/projects/:id/review-checklist/preview', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.reviewChecklistPreview(id);
   });
 
   fastify.post('/api/projects/:id/knowledge', async (req: FastifyRequest, reply: FastifyReply) => {

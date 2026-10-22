@@ -1,12 +1,12 @@
+import { formatReset } from '../time-format.js';
+
 /** Chuỗi ngắn cho cảnh báo quota.low, dùng chung cho desktop và Telegram. */
-export function quotaLowText(p: Record<string, unknown>): string {
+export function quotaLowText(p: Record<string, unknown>, now = Date.now()): string {
   const name = String(p.profile || 'Hồ sơ');
   const pct = typeof p.remainingPct === 'number' ? p.remainingPct : '?';
   const window = p.window === 'week' ? 'tuần' : '5 giờ';
   const group = p.group ? ` (${String(p.group)})` : '';
-  const resetAt = typeof p.resetAt === 'number' && p.resetAt > 0 ? new Date(p.resetAt * 1000) : null;
-  const reset = resetAt
-    ? ` · reset ${String(resetAt.getHours()).padStart(2, '0')}:${String(resetAt.getMinutes()).padStart(2, '0')} ${resetAt.getDate()}/${resetAt.getMonth() + 1}`
-    : '';
+  // Cùng cách hiện thời gian reset với các thông báo quota khác (formatReset của upstream).
+  const reset = typeof p.resetAt === 'number' && p.resetAt > 0 ? ` · reset ${formatReset(p.resetAt, now)}` : '';
   return `Hồ sơ ${name} còn ${pct}% quota ${window}${group}${reset}`;
 }

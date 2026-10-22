@@ -8,6 +8,7 @@ import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
+import { DeployService } from '../src/deploy.js';
 
 let tmpDir: string;
 let config: ReturnType<typeof loadConfig>;
@@ -397,6 +398,73 @@ describe('AgentHub API Extra Endpoints', () => {
       expect(JSON.parse(deployRes.body)).toMatchObject({ projectId: 'proj-deploy-api', status: 'queued' });
       expect(rerun).toHaveBeenCalledWith('proj-deploy-api');
       rerun.mockRestore();
+
+      const pushSpy = vi.spyOn(ctx.service, 'pushDeployNow').mockResolvedValue({
+        projectId: 'proj-deploy-api',
+        status: 'succeeded',
+        pushStatus: 'push lúc 12:00',
+      });
+      const pushNowRes = await server.inject({
+        method: 'POST',
+        url: '/api/projects/proj-deploy-api/deploy',
+        headers: authHeaders(),
+        payload: { pushNow: true },
+      });
+      expect(pushNowRes.statusCode).toBe(200);
+      expect(JSON.parse(pushNowRes.body)).toMatchObject({ projectId: 'proj-deploy-api', status: 'succeeded', pushStatus: 'push lúc 12:00' });
+      expect(pushSpy).toHaveBeenCalledWith('proj-deploy-api');
+      pushSpy.mockRestore();
+    });
+
+    it('POST /api/projects/:id/deploy {pushNow: true} returns 500 when commandRunner fails with code!=0', async () => {
+      const repoPath = path.join(tmpDir, 'repo-deploy-fail');
+      initGitRepo(repoPath);
+      ctx.projectRepo.insert({
+        id: 'proj-deploy-fail',
+        name: 'Project Deploy Fail',
+        path: repoPath,
+        defaultBranch: 'main',
+        maxParallel: 2,
+        merge: JSON.stringify({ enabled: true, worktrees: { main: repoPath } }),
+      });
+      config.deploy = {
+        'proj-deploy-fail': {
+          steps: [],
+          timeoutSec: 2,
+          restartHub: false,
+          push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true },
+        },
+      };
+
+      const failingRunner = vi.fn(async () => ({ code: 1, output: 'push rejected' }));
+      const deployService = new DeployService(
+        config,
+        ctx.projectRepo,
+        ctx.scheduler.getEventBus(),
+        0,
+        failingRunner,
+      );
+      (deployService as unknown as { latest: Map<string, unknown> }).latest.set('proj-deploy-fail', {
+        projectId: 'proj-deploy-fail',
+        status: 'succeeded',
+        finishedAt: new Date().toISOString(),
+      });
+      ctx.service.deployService = deployService;
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/api/projects/proj-deploy-fail/deploy',
+        headers: authHeaders(),
+        payload: { pushNow: true },
+      });
+      expect(res.statusCode).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({
+        projectId: 'proj-deploy-fail',
+        status: 'failed',
+        error: expect.stringContaining('exit 1'),
+      });
+      expect(failingRunner).toHaveBeenCalled();
     });
 
     it('PATCH /api/projects/:id rejects invalid checks schema', async () => {
