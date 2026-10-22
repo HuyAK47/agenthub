@@ -86,3 +86,9 @@ Không nhắn mỗi lần một task được merge. Gom lại vào bản tóm t
 
 - Quyết định và bài học dài hạn ghi vào sổ kiến thức của dự án (`hub_knowledge`) hoặc vào sổ tay này, qua một task sửa tài liệu.
 - Phiên dài thì để hub tự nén ngữ cảnh. Khi mở phiên mới, đọc lại sổ tay này và các ghi chú đã ghim.
+
+## 8. Quy trình phát hành (Release)
+
+Khi chuẩn bị tạo tag phát hành mới (ví dụ `v*`):
+- Trước khi tạo tag phát hành, **bắt buộc phải kích hoạt `pushNow`** (qua `POST /api/projects/:id/deploy` với `{"pushNow": true}` hoặc lệnh Telegram `/deploy <dự án> push`) để đẩy ngay lập tức các commit từ `integration` sang `main`.
+- **Xác nhận `main == integration`** (cùng trỏ vào commit hash mới nhất) trước khi gắn tag phát hành. Điều này tránh tình trạng tag phát hành trỏ vào commit cũ do cơ chế gom push (`minIntervalMin`) chưa tới hạn đẩy tự động.
