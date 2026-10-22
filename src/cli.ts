@@ -17,6 +17,7 @@ import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
 import { findClaudeBin } from './chat/claude.js';
+import { mcpAddArgs, runMcpInstall } from './tools/mcp-install.js';
 import { getPlatform } from './platform/index.js';
 import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
 import { PerfCollector, formatPerfTable } from './perf.js';
@@ -93,16 +94,20 @@ export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
   const projectRoot = findProjectRoot();
   const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
   const nodePath = process.execPath;
-
-  const command = `claude mcp add --scope user agenthub -- ${nodePath} ${cliPath} mcp`;
+  // Claude có thể nằm trong Node khác (nvm) so với Node đang chạy AgentHub: dùng đường dẫn tuyệt đối.
+  const claudeBin = findClaudeBin(process.env.AGENTHUB_CLAUDE_BIN);
+  const command = `${claudeBin ?? 'claude'} ${mcpAddArgs(nodePath, cliPath).join(' ')}`;
 
   if (isPrint) {
     console.log(`Lệnh đăng ký MCP:\n  ${command}`);
     return command;
   }
+  if (!claudeBin) {
+    throw new Error('Không tìm thấy Claude Code. Hãy cài Claude Code rồi chạy lại `agenthub mcp-install`.');
+  }
 
-  const { execSync } = await import('node:child_process');
-  execSync(command, { stdio: 'inherit' });
+  const output = await runMcpInstall({ claudeBin, nodePath, cliPath });
+  if (output.trim()) console.log(output.trim());
   console.log('✓ Đã đăng ký MCP server với Claude Code');
   return command;
 }

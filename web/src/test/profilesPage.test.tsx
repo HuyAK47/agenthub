@@ -386,7 +386,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     renderPage();
     expect(await screen.findByText('g1')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Thêm tài khoản/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Thêm tài khoản/ })[0]);
     fireEvent.change(screen.getByRole('combobox', { name: /Nhà cung cấp|Provider/ }), { target: { value: 'codex' } });
     fireEvent.click(screen.getByRole('button', { name: 'Nhập token (JSON)' }));
     const tokens = [{ email: 'coder@example.com', id_token: 'a.b.c', access_token: 'x', refresh_token: 'y', type: 'codex' }];

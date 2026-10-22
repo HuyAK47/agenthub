@@ -14,6 +14,8 @@ import { registerSseRoute } from './sse.js';
 import { PtyManager, registerPtyRoutes } from './pty.js';
 import { registerBrainRoutes } from '../brain.js';
 import { registerChatRoutes } from '../chat/service.js';
+import { runMcpInstall } from '../tools/mcp-install.js';
+import { findClaudeBin } from '../chat/claude.js';
 
 export function resolveWebDistDir(customDir?: string): string {
   return path.resolve(customDir || resolveWebDir(import.meta.url, process.env));
@@ -142,13 +144,15 @@ export async function createServer(
   fastify.post('/api/setup/mcp', async () => {
     const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
     const cliPath = path.join(projectRoot, 'dist', 'cli.js');
-    const { execFile } = await import('node:child_process');
-    return new Promise((resolve, reject) => {
-      execFile('claude', ['mcp', 'add', '--scope', 'user', 'agenthub', '--', process.execPath, cliPath, 'mcp'], { timeout: 60_000 }, (error, stdout, stderr) => {
-        if (error) return reject(new HttpError(500, 'mcp_install_failed', stderr || error.message));
-        resolve({ ok: true, output: `${stdout}${stderr}` });
-      });
-    });
+    const claudeBin = findClaudeBin(service.config.chat.claudeBin);
+    if (!claudeBin) {
+      throw new HttpError(404, 'claude_not_found', 'Không tìm thấy Claude Code. Hãy cài Claude Code trước, hoặc đặt đường dẫn trong Cài đặt → Chat (claudeBin).');
+    }
+    try {
+      return { ok: true, output: await runMcpInstall({ claudeBin, nodePath: process.execPath, cliPath }) };
+    } catch (error) {
+      throw new HttpError(500, 'mcp_install_failed', error instanceof Error ? error.message : String(error));
+    }
   });
 
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
