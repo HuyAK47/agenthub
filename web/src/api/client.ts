@@ -604,7 +604,7 @@ export async function getConfig(): Promise<SystemConfig> {
   return apiFetch<SystemConfig>('/api/config');
 }
 
-export async function updateConfig(data: SystemConfig): Promise<SystemConfig> {
+export async function updateConfig(data: Partial<SystemConfig>): Promise<SystemConfig> {
   return apiFetch<SystemConfig>('/api/config', {
     method: 'PUT',
     body: JSON.stringify(data),
