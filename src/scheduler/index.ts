@@ -1833,7 +1833,7 @@ export class Scheduler {
         profile,
         model: reviewerModel,
         cwd: task.worktreePath,
-        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks, project ? projectSettings(project).reviewChecklist : []),
+        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks, project ? projectSettings(project).reviewChecklist : [], project?.path),
         logPath,
         outputPath,
         readOnly: true,
