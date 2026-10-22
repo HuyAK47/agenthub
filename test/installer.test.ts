@@ -275,6 +275,68 @@ describe('safe installer and updater commands', () => {
     }
   });
 
+  it('refuses worker service writes unless explicitly opted in', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-worker-service-'));
+    const systemctl = path.join(home, 'systemctl');
+    fs.writeFileSync(systemctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const previous = {
+      worker: process.env.AGENTHUB_WORKER,
+      allow: process.env.AGENTHUB_ALLOW_SERVICE_WRITE,
+      systemctl: process.env.AGENTHUB_SYSTEMCTL,
+    };
+    process.env.AGENTHUB_WORKER = '1';
+    process.env.AGENTHUB_SYSTEMCTL = systemctl;
+    delete process.env.AGENTHUB_ALLOW_SERVICE_WRITE;
+    try {
+      expect(() => linuxPlatform.installService({
+        nodePath: process.execPath,
+        cliPath: path.join(home, 'dist', 'cli.js'),
+        currentPath: '/tmp/bin',
+        homeDir: home,
+        print: false,
+      })).toThrow('worker không được ghi service file thật');
+      expect(fs.existsSync(path.join(home, '.config/systemd/user/agenthub.service'))).toBe(false);
+
+      process.env.AGENTHUB_ALLOW_SERVICE_WRITE = '1';
+      const result = linuxPlatform.installService({
+        nodePath: process.execPath,
+        cliPath: path.join(home, 'dist', 'cli.js'),
+        currentPath: '/tmp/bin',
+        homeDir: home,
+        print: false,
+      });
+      expect(result.skipped).not.toBe(true);
+      expect(fs.existsSync(result.file)).toBe(true);
+    } finally {
+      if (previous.worker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = previous.worker;
+      if (previous.allow === undefined) delete process.env.AGENTHUB_ALLOW_SERVICE_WRITE; else process.env.AGENTHUB_ALLOW_SERVICE_WRITE = previous.allow;
+      if (previous.systemctl === undefined) delete process.env.AGENTHUB_SYSTEMCTL; else process.env.AGENTHUB_SYSTEMCTL = previous.systemctl;
+    }
+  });
+
+  it('refuses Vitest writes to the real home service file and keeps uninstall untouched', () => {
+    const realHome = os.userInfo().homedir;
+    const serviceFile = path.join(realHome, '.config', 'systemd', 'user', 'agenthub.service');
+    const existedBefore = fs.existsSync(serviceFile);
+    const previous = { worker: process.env.AGENTHUB_WORKER, allow: process.env.AGENTHUB_ALLOW_SERVICE_WRITE };
+    delete process.env.AGENTHUB_WORKER;
+    delete process.env.AGENTHUB_ALLOW_SERVICE_WRITE;
+    try {
+      expect(() => linuxPlatform.installService({
+        nodePath: process.execPath,
+        cliPath: '/tmp/agenthub/dist/cli.js',
+        currentPath: '/tmp/bin',
+        homeDir: realHome,
+        print: false,
+      })).toThrow('Vitest bị từ chối ghi service file dưới HOME thật');
+      expect(() => linuxPlatform.uninstallService({ homeDir: realHome })).toThrow('Vitest bị từ chối ghi service file dưới HOME thật');
+      expect(fs.existsSync(serviceFile)).toBe(existedBefore);
+    } finally {
+      if (previous.worker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = previous.worker;
+      if (previous.allow === undefined) delete process.env.AGENTHUB_ALLOW_SERVICE_WRITE; else process.env.AGENTHUB_ALLOW_SERVICE_WRITE = previous.allow;
+    }
+  });
+
   it('reports a clear error when the release has no archive for the machine architecture', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-arch-'));
     const fakeBin = path.join(home, 'bin');

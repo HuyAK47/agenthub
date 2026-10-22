@@ -5,7 +5,11 @@ import os from 'node:os';
 // Fallback environment isolation before any test runs in worker
 const fallbackSafeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-fallback-home-'));
 const fallbackAgyHomes = path.join(fallbackSafeHome, 'agy-homes');
+const fallbackXdgConfig = path.join(fallbackSafeHome, 'config');
+const fallbackAgenthubHome = path.join(fallbackSafeHome, '.agenthub');
 fs.mkdirSync(fallbackAgyHomes, { recursive: true });
+fs.mkdirSync(fallbackXdgConfig, { recursive: true });
+fs.mkdirSync(fallbackAgenthubHome, { recursive: true });
 
 // Tests must never control the host's services, including when a platform
 // branch is mocked to macOS. Put fail-fast shims first in PATH for every worker
@@ -17,9 +21,16 @@ for (const command of ['systemctl', 'launchctl']) {
 }
 process.env.PATH = `${serviceShimDir}${path.delimiter}${process.env.PATH || ''}`;
 
-if (!process.env.AGENTHUB_HOME) {
-  process.env.AGENTHUB_HOME = fallbackSafeHome;
-}
+// Every test worker and every child it starts gets a private home/config tree.
+// Do not inherit the developer's HOME even when the test runner was launched
+// from the real hub account.
+process.env.HOME = fallbackSafeHome;
+process.env.XDG_CONFIG_HOME = fallbackXdgConfig;
+process.env.AGENTHUB_HOME = fallbackAgenthubHome;
+// The test runner itself is not an AgentHub worker. Individual tests that
+// exercise worker behavior set this flag explicitly and restore it afterwards.
+delete process.env.AGENTHUB_WORKER;
+delete process.env.AGENTHUB_ALLOW_SERVICE_WRITE;
 if (!process.env.AGENTHUB_AGY_HOMES) {
   process.env.AGENTHUB_AGY_HOMES = fallbackAgyHomes;
 }
