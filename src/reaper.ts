@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isDeletableWorktreePath } from './worktrees/index.js';
+import { isDeletableWorktreePath, resolveReal } from './worktrees/index.js';
 import { getPlatform } from './platform/index.js';
 
 export interface ReaperOptions {
@@ -38,15 +38,6 @@ export function isInside(target: string, dir: string): boolean {
   const resolvedTarget = resolveReal(cleanCwd(target));
   const resolvedDir = resolveReal(cleanCwd(dir));
   return resolvedTarget === resolvedDir || resolvedTarget.startsWith(resolvedDir + path.sep);
-}
-
-function resolveReal(target: string): string {
-  const resolved = path.resolve(target);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
 }
 
 export function processAncestors(): Set<number> {

@@ -37,11 +37,26 @@ export interface KnowledgeContext {
   createdAt: string;
 }
 
-function resolveReal(target: string): string {
+export function resolveReal(target: string): string {
   const resolved = path.resolve(target);
   try {
     return fs.realpathSync(resolved);
   } catch {
+    // If target does not exist, walk up to find the nearest existing ancestor,
+    // resolve its real path, and append the non-existent relative segments.
+    // Handles macOS symlinked temp directories (e.g. /var -> /private/var).
+    let cur = resolved;
+    const parts: string[] = [];
+    while (cur !== path.dirname(cur)) {
+      parts.unshift(path.basename(cur));
+      cur = path.dirname(cur);
+      try {
+        const realParent = fs.realpathSync(cur);
+        return path.join(realParent, ...parts);
+      } catch {
+        // Continue walking up
+      }
+    }
     return resolved;
   }
 }
