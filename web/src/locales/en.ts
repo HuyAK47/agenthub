@@ -423,6 +423,8 @@ export const en: typeof vi = {
     accountNameRequired: 'Please enter an account name.',
     creating: 'Creating…',
   },
+  tour: { help: 'Page guide', replay: 'Replay guide', close: 'Close guide', step: 'Step {current}/{total}', previous: 'Back', next: 'Next', skip: 'Skip', finish: 'Finish' },
+  checklist: { title: 'Get started with AgentHub', subtitle: 'Complete a few steps to get to work.', hide: 'Hide checklist', cli: 'Install CLI', account: 'Sign in to a worker account', project: 'Add a project', telegram: 'Connect Telegram', task: 'Create your first task' },
   setup: {
     navLabel: 'Setup', loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
     progress: 'Readiness progress', progressSummary: '{ready}/{total} items ready',

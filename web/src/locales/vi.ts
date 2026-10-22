@@ -422,6 +422,8 @@ export const vi = {
     accountNameRequired: 'Vui lòng nhập tên tài khoản.',
     creating: 'Đang tạo…',
   },
+  tour: { help: 'Hướng dẫn trang này', replay: 'Xem lại hướng dẫn', close: 'Đóng hướng dẫn', step: 'Bước {current}/{total}', previous: 'Quay lại', next: 'Tiếp', skip: 'Bỏ qua', finish: 'Kết thúc' },
+  checklist: { title: 'Bắt đầu với AgentHub', subtitle: 'Hoàn thành vài bước để bắt đầu làm việc.', hide: 'Ẩn danh sách', cli: 'Cài CLI', account: 'Đăng nhập tài khoản worker', project: 'Thêm project', telegram: 'Kết nối Telegram', task: 'Giao task đầu tiên' },
   setup: {
     navLabel: 'Thiết lập', loading: 'Đang kiểm tra môi trường…', title: 'Bắt đầu với AgentHub', subtitle: 'Chuẩn bị các công cụ cần thiết để bạn có thể dùng ngay.',
     progress: 'Tiến độ sẵn sàng', progressSummary: '{ready}/{total} mục đã sẵn sàng',
