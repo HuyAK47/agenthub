@@ -270,8 +270,19 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
       return (args[0] === 'vitest' && args[1] === 'run') || (args[0] === 'tsc' && args[1] === '--noEmit');
     }
     if (executable === 'grep') {
-      const operands = args.filter((arg) => !arg.startsWith('-'));
-      return operands.length >= 1 && operands.slice(1).every((arg) => safePath(arg, roots, cwd));
+      if (args.some((arg) => arg === '-f' || arg === '--file' || arg.startsWith('--file='))) return false;
+      let hasExplicitPattern = false;
+      let skipNext = false;
+      const operands: string[] = [];
+      for (const arg of args) {
+        if (skipNext) { skipNext = false; continue; }
+        if (arg === '-e' || arg === '--regexp') { hasExplicitPattern = true; skipNext = true; continue; }
+        if (arg.startsWith('--regexp=') || (arg.startsWith('-e') && arg.length > 2)) { hasExplicitPattern = true; continue; }
+        if (!arg.startsWith('-')) operands.push(arg);
+      }
+      const fileOperands = hasExplicitPattern ? operands : operands.slice(1);
+      return operands.length >= (hasExplicitPattern ? 0 : 1)
+        && fileOperands.every((arg) => safePath(arg, roots, cwd) && !isSecretPath(arg, cwd));
     }
     if (executable === 'curl') {
       let url: string | undefined;
@@ -282,7 +293,8 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
         } else if (arg.startsWith('--request=')) {
           if (arg.slice('--request='.length).toUpperCase() !== 'GET') return false;
         } else if (arg === '-H' || arg === '--header') {
-          if (!args[++i]) return false;
+          const header = args[++i];
+          if (!header || header.startsWith('@') || /[$`]/u.test(header)) return false;
         } else if (arg.startsWith('-')) {
           if (!['-s', '-S', '-L', '--silent', '--show-error', '--location'].includes(arg)) return false;
         } else if (url) {
