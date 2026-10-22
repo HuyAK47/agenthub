@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, getClaudeApiKeyStatus, setClaudeApiKey } from '../api/client';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
@@ -51,6 +51,7 @@ export const SettingsPage: React.FC = () => {
   const [brandingShortName, setBrandingShortName] = useState('AH');
   const [brandingTagline, setBrandingTagline] = useState('');
   const [brandingAccent, setBrandingAccent] = useState('');
+  const [brandingLogoError, setBrandingLogoError] = useState<string | null>(null);
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['config'],
@@ -218,6 +219,17 @@ export const SettingsPage: React.FC = () => {
     });
   };
 
+  const handleBrandingLogo = async (file: File | undefined) => {
+    if (!file) return;
+    setBrandingLogoError(null);
+    try {
+      await uploadBrandingLogo(file);
+      await queryClient.invalidateQueries({ queryKey: ['config'] });
+    } catch (error) {
+      setBrandingLogoError(error instanceof Error ? error.message : t('settings.brandingLogoError'));
+    }
+  };
+
   const handleToggleFullMode = (e: React.ChangeEvent<HTMLInputElement>) => {
     const checked = e.target.checked;
     if (checked) {
@@ -257,7 +269,9 @@ export const SettingsPage: React.FC = () => {
           <label className="text-sm space-y-1"><span>{t('settings.brandingShortName')}</span><input value={brandingShortName} onChange={(e) => setBrandingShortName(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
           <label className="text-sm space-y-1"><span>{t('settings.brandingTagline')}</span><input value={brandingTagline} onChange={(e) => setBrandingTagline(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
           <label className="text-sm space-y-1"><span>{t('settings.brandingAccent')}</span><input value={brandingAccent} onChange={(e) => setBrandingAccent(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingLogo')}</span><input type="file" accept="image/png,image/svg+xml" onChange={(e) => void handleBrandingLogo(e.target.files?.[0])} className="w-full text-sm" /><span className="block text-xs text-[var(--t-text-3)]">{t('settings.brandingLogoHint')}</span></label>
         </div>
+        {brandingLogoError && <p className="text-sm text-[var(--t-crit)]">{brandingLogoError}</p>}
       </section>
 
       {saveSuccess && (
