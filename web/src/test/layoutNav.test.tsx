@@ -47,7 +47,7 @@ describe('Layout Navigation', () => {
     expect(headerTitle).toHaveTextContent('Phiên Claude');
   });
 
-  it('renders menu item as "Duyệt kế hoạch" and shows badge with number of draft batches', async () => {
+  it('renders menu item as "Kế hoạch" and shows badge with number of draft batches', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -68,7 +68,7 @@ describe('Layout Navigation', () => {
       </QueryClientProvider>,
     );
 
-    const plansLink = screen.getByRole('link', { name: /Duyệt kế hoạch/i });
+    const plansLink = screen.getByRole('link', { name: /Kế hoạch/i });
     expect(plansLink).toBeInTheDocument();
     expect(plansLink).toHaveAttribute('href', '/plans');
 
@@ -97,7 +97,7 @@ describe('Layout Navigation', () => {
       </QueryClientProvider>,
     );
 
-    const plansLink = screen.getByRole('link', { name: /Duyệt kế hoạch/i });
+    const plansLink = screen.getByRole('link', { name: /Kế hoạch/i });
     expect(plansLink).toBeInTheDocument();
 
     await waitFor(() => {
@@ -105,7 +105,7 @@ describe('Layout Navigation', () => {
     });
   });
 
-  it('renders menu item as "Plan review" in en locale', async () => {
+  it('renders menu item as "Plans" in en locale', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -123,7 +123,7 @@ describe('Layout Navigation', () => {
       </QueryClientProvider>,
     );
 
-    const plansLink = screen.getByRole('link', { name: /Plan review/i });
+    const plansLink = screen.getByRole('link', { name: /Plans/i });
     expect(plansLink).toBeInTheDocument();
   });
 });
