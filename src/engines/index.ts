@@ -205,6 +205,64 @@ export class AgyEngine implements Engine {
   }
 }
 
+function findBubblewrap(): string | null {
+  const configured = process.env.AGENTHUB_BWRAP_BIN;
+  if (configured && fs.existsSync(configured)) return configured;
+  for (const candidate of ['/usr/bin/bwrap', '/bin/bwrap']) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function brainSandboxCommand(
+  bwrap: string,
+  command: string,
+  args: string[],
+  cwd: string,
+  hubHome: string,
+  profileHome: string | null | undefined,
+  blockedNames: string[],
+  envPath = process.env.PATH || '',
+): [string, string[]] {
+  const shimRoot = path.join(hubHome, 'shims', 'worker');
+  const sandboxArgs = [
+    '--ro-bind', '/', '/',
+    '--tmpfs', '/tmp',
+    '--bind', hubHome, hubHome,
+    '--bind', cwd, cwd,
+    ...(profileHome && fs.existsSync(profileHome) ? ['--bind', profileHome, profileHome] : []),
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--share-net',
+    '--die-with-parent',
+  ];
+
+  // PATH shims do not protect against /bin/rm or `sh -c /bin/rm`. Overlay the
+  // policy shims in a private mount namespace so absolute paths hit the same
+  // guard without changing the host filesystem.
+  for (const name of blockedNames) {
+    const shim = path.join(shimRoot, name);
+    if (!fs.existsSync(shim)) continue;
+    const targets = new Set([
+      `/bin/${name}`,
+      `/usr/bin/${name}`,
+      ...envPath.split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, name)),
+    ]);
+    for (const target of targets) {
+      if (target.startsWith(`${shimRoot}${path.sep}`)) continue;
+      if (fs.existsSync(target)) sandboxArgs.push('--ro-bind', shim, target);
+    }
+  }
+
+  const gitShim = path.join(shimRoot, 'git');
+  if (fs.existsSync(gitShim)) {
+    for (const target of ['/bin/git', '/usr/bin/git']) {
+      if (fs.existsSync(target)) sandboxArgs.push('--ro-bind', gitShim, target);
+    }
+  }
+  return [bwrap, [...sandboxArgs, '--', command, ...args]];
+}
+
 export class CodexEngine implements Engine {
   id = 'codex' as const;
 
@@ -325,7 +383,23 @@ export class CodexEngine implements Engine {
     );
 
     const [codexExe, codexArgs] = lowPriority(codexPath, args);
-    const [executable, command] = opts.lockFile ? lockCommand(opts.lockFile, [codexExe, ...codexArgs]) : [codexExe, codexArgs];
+    const locked = opts.lockFile ? lockCommand(opts.lockFile, [codexExe, ...codexArgs]) : [codexExe, codexArgs] as [string, string[]];
+    let executable = locked[0];
+    let command = locked[1];
+    if (opts.brainPolicy) {
+      const bwrap = findBubblewrap();
+      if (!bwrap) throw new Error('Codex brain policy requires bubblewrap (bwrap)');
+      [executable, command] = brainSandboxCommand(
+        bwrap,
+        executable,
+        command,
+        opts.cwd,
+        opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+        opts.profile.home,
+        ['rm', 'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman', 'mkfs', 'dd', 'truncate', 'chown', 'chmod'],
+        env.PATH,
+      );
+    }
     const child = spawn(executable, command, {
       cwd: opts.cwd,
       env,

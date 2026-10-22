@@ -223,4 +223,35 @@ process.exit(0);
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it('enforces brain policy for absolute commands and shell indirection', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-policy-'));
+    try {
+      const marker = path.join(tmp, 'must-survive');
+      fs.writeFileSync(marker, 'keep');
+      const fake = path.join(tmp, 'policy-check.mjs');
+      fs.writeFileSync(fake, `
+import { spawnSync } from 'node:child_process';
+const result = spawnSync('/bin/sh', ['-c', '/bin/rm -f ${marker}'], { stdio: 'pipe' });
+process.exit(result.status === 0 ? 0 : 1);
+`, { mode: 0o700 });
+
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      const child = new CodexEngine(fake).spawn({
+        profile,
+        model: 'gpt-5.6-luna',
+        cwd: tmp,
+        prompt: 'policy check',
+        logPath: path.join(tmp, 'policy.log'),
+        hubHome: path.join(tmp, 'hub'),
+        brainPolicy: 'standard',
+        codexSandbox: 'workspace-write',
+      });
+      const exitCode = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      expect(exitCode).not.toBe(0);
+      expect(fs.existsSync(marker)).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
