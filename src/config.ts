@@ -717,9 +717,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
   if (!fs.existsSync(worktreesDir)) fs.mkdirSync(worktreesDir, { recursive: true });
 
+  const testAgyHomesDir = process.env.AGENTHUB_TEST_MODE === '1'
+    ? path.join(path.dirname(hubHome), 'agy-homes')
+    : undefined;
   const agyHomesDir =
     (userConfig.agyHomesDir as string) ||
     process.env.AGENTHUB_AGY_HOMES ||
+    testAgyHomesDir ||
     path.join(os.homedir(), '.agy-homes');
 
   const defaultLogDir =
