@@ -574,6 +574,7 @@ export const ProjectsPage: React.FC = () => {
                   {t('projects.nameHint')}
                 </p>
                 <Input
+                  data-tour="project-default-branch"
                   type="text"
                   placeholder={t('projects.namePlaceholder')}
                   value={name}
@@ -632,6 +633,7 @@ export const ProjectsPage: React.FC = () => {
 
             {/* Advanced Section (collapsible, collapsed by default) */}
             <details
+              data-tour="project-register-advanced"
               data-testid="advanced-section"
               className="border border-[var(--t-border)] rounded-lg p-3 group"
             >

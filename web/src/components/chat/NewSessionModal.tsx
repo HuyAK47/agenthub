@@ -98,7 +98,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
           {/* Project selector */}
-          <div>
+          <div data-tour="session-mode">
             <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-1.5">
               {t('extra.projectOptional')}
             </label>

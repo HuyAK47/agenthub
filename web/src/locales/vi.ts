@@ -743,39 +743,62 @@ export const vi = {
     }
   },
   "modal-add-account": {
-    "modal": {
-      "title": "Thêm tài khoản",
-      "content": "Đây là hộp thoại thêm hồ sơ nhà cung cấp. Dùng để thêm quota hoặc dự phòng. Bấm chọn nhà cung cấp rồi chọn Terminal hoặc Refresh Token; token là bí mật và không nên dán vào nơi khác."
+    "provider": {
+      "title": "Nhà cung cấp và loại tài khoản",
+      "content": "Đây là nơi chọn Antigravity, Codex hoặc Claude và loại cá nhân, Team hay API. Dùng đúng nhà cung cấp để quota và quyền được tính đúng; bấm chọn để đổi luồng đăng nhập."
+    },
+    "login-method": {
+      "title": "Cách đăng nhập",
+      "content": "Terminal mở luồng đăng nhập tương tác và phù hợp khi có trình duyệt; Refresh Token dùng token đã lấy từ phiên nhà cung cấp. Bấm phương thức để đổi cách xác thực; không chia sẻ token."
+    },
+    "token": {
+      "title": "Refresh Token",
+      "content": "Trường này nhận refresh token khi không dùng Terminal. Dùng token lấy từ trang/CLI xác thực chính thức của nhà cung cấp; bấm Tạo để lưu hồ sơ. Token là bí mật và nhiều hồ sơ cùng email vẫn dùng chung quota."
     }
   },
   "modal-register-project": {
-    "modal": {
-      "title": "Đăng ký dự án",
-      "content": "Đây là hộp thoại đăng ký project. Dùng để khai báo đường dẫn, nhánh mặc định và giới hạn song song. Bấm Nâng cao để mở chính sách; đường dẫn sai có thể làm worker sửa nhầm repo."
+    "path": {
+      "title": "Đường dẫn project",
+      "content": "Đây là thư mục repository mà worker được phép làm việc. Dùng đường dẫn tuyệt đối tới đúng repo; bấm Đăng ký để lưu. Đường dẫn sai có thể làm worker sửa nhầm mã nguồn."
+    },
+    "branch": {
+      "title": "Nhánh mặc định",
+      "content": "Đây là nhánh gốc để tạo worktree và so sánh thay đổi. Dùng main hoặc nhánh tích hợp thật của repo; đổi nhánh ảnh hưởng task tạo sau đó."
+    },
+    "advanced": {
+      "title": "Nâng cao và song song",
+      "content": "Phần Nâng cao chứa giới hạn chạy cùng lúc, worktree, checks và biến môi trường. Mở khi cần chính sách riêng; tăng song song có thể làm máy quá tải."
     }
   },
   "modal-create-task": {
-    "modal": {
-      "title": "Tạo task",
-      "content": "Đây là hộp thoại tạo task. Dùng để mô tả mục tiêu, độ khó, chuỗi model và phụ thuộc. Bấm Tạo để xếp hàng; chọn model khó trước sẽ tốn quota hơn."
+    "task": {
+      "title": "Mục tiêu task",
+      "content": "Đây là mô tả việc worker cần làm trong project đã chọn. Viết mục tiêu và tiêu chí rõ ràng để worker tạo diff kiểm chứng được; bấm Tạo để xếp task vào hàng đợi."
+    },
+    "difficulty": {
+      "title": "Độ khó và chuỗi model",
+      "content": "Độ khó chọn chuỗi model khó hoặc dễ; chuỗi được thử từ đầu đến cuối. Dùng hard cho thay đổi phức tạp, easy cho việc nhỏ; model đầu tiên dùng quota trước."
+    },
+    "dependencies": {
+      "title": "Phụ thuộc",
+      "content": "Phụ thuộc buộc task chờ các task được chọn hoàn tất. Dùng khi task sau cần đầu ra của task trước; bấm chọn để liên kết. Tránh tạo vòng phụ thuộc vì task sẽ không chạy."
     }
   },
   "modal-new-session": {
-    "modal": {
-      "title": "Phiên chat mới",
-      "content": "Đây là hộp thoại tạo phiên chat. Dùng để chọn project và chế độ safe/full. Bấm Tạo phiên để lưu ngữ cảnh; full cho phép tác động rộng hơn và cần thận trọng."
+    "project": {
+      "title": "Project của phiên",
+      "content": "Đây là project cung cấp thư mục và chính sách cho phiên chat. Chọn project khi muốn Trợ lý hiểu đúng repo; bấm Tạo phiên để lưu ngữ cảnh mới."
+    },
+    "mode": {
+      "title": "Chế độ safe/full",
+      "content": "Safe yêu cầu kiểm soát trước các thao tác nhạy cảm; Full cho phép tác động rộng hơn. Dùng Safe mặc định và chỉ chọn Full khi tin cậy repo, vì lệnh hoặc file có thể bị thay đổi trực tiếp."
     }
   },
   "modal-full-permission": {
-    "modal": {
+    "confirm": {
       "title": "Xác nhận toàn quyền",
-      "content": "Đây là hộp thoại cảnh báo quyền full. Dùng khi bạn hiểu lệnh và thư mục worker sẽ chạm tới. Bấm Xác nhận chỉ khi cần; quyền này có thể sửa file hoặc chạy lệnh nguy hiểm."
-    }
-  },
-  "modal-delete-project": {
-    "modal": {
-      "title": "Xoá dự án",
-      "content": "Đây là hộp thoại xác nhận xoá project. Dùng để bỏ cấu hình không còn cần. Bấm Xoá sẽ loại project khỏi hub; kiểm tra task và worktree trước vì thao tác có thể khó hoàn tác."
+      "content": "Đây là cảnh báo trước khi cho phép thao tác không cần hỏi lại. Chỉ xác nhận khi hiểu lệnh, thư mục và rủi ro; quyền full có thể sửa file hoặc chạy lệnh nguy hiểm.",
+      "note": "Hộp thoại xác nhận gốc của trình duyệt không có phần tử DOM ổn định; tour sẽ bỏ qua bước này nếu không thể đánh dấu."
     }
   }
 } },
@@ -829,7 +852,7 @@ export const vi = {
     maxParallelHint: 'Số lượng task tối đa chạy song song trên project này',
     advanced: 'Nâng cao',
     envHint: 'Tuỳ chọn, ví dụ cổng/DB riêng cho mỗi worktree với {slot}',
-    checksHint: 'Các lệnh kiểm tra tự động trước khi review (JSON array)',
+    checksHint: 'Các lệnh kiểm tra tự động trước khi review (JSON array)', checksInfo: 'Dùng mảng [{"name":"test","cmd":["npm","test"],"timeoutSec":600}]. Để trống để hub tự phát hiện từ package.json.', envInfo: 'Biến JSON được cấp cho worktree, ví dụ PORT hoặc DATABASE_URL; chỉ inject bí mật khi thật sự cần.', integrationInfo: 'Nhánh tích hợp nhận các thay đổi đã merge để chạy kiểm tra end-to-end.', referencesInfo: 'Inject đưa tài liệu tham chiếu vào ngữ cảnh worker; không dùng file chứa bí mật.', permissionsInfo: 'Quyền quyết định worker được đọc, sửa file và chạy lệnh đến mức nào; full cần repository tin cậy.',
     hooksHint: 'Lệnh chạy sau khi xoá worktree (tuỳ chọn)',
     brainPermissions: 'Quyền của bộ não', brainPermissionInherit: 'Kế thừa toàn cục', brainPermissionStandard: 'Tiêu chuẩn', brainPermissionTrusted: 'Tin cậy', brainPermissionFull: 'Toàn quyền', brainPermissionDescinherit: 'Dùng mặc định toàn cục.', brainPermissionDescstandard: 'Đọc an toàn và lệnh đã duyệt.', brainPermissionDesctrusted: 'Được sửa và chạy lệnh trong dự án.', brainPermissionDescfull: 'Không hỏi quyền; dùng thận trọng.',
     settings: 'Cài đặt', saveSettings: 'Lưu cài đặt', saveSettingsError: 'Không thể lưu cài đặt dự án', settingsPartialHint: 'Thay đổi được gửi theo từng phần settings của project.', brainMode: 'Bộ não', brainInherit: 'Kế thừa toàn cục', brainOff: 'Tắt', brainSuggest: 'Gợi ý', brainAuto: 'Tự động', brainExternal: 'Claude ngoài (VS Code) điều phối', brainDescinherit: 'Dùng cấu hình toàn cục.', brainDescoff: 'Không điều phối tự động.', brainDescsuggest: 'Chỉ gợi ý khi cần.', brainDescauto: 'Tự động lập kế hoạch và giao việc.', brainDescexternal: 'Claude ngoài (VS Code) điều phối.', dailyTokenBudget: 'Ngân sách token/ngày', maxTurnsPerHour: 'Lượt tối đa/giờ', worktreeInstall: 'Cài phụ thuộc', worktreeAuto: 'Tự động', worktreeSkip: 'Không cài', gitHooks: 'Git hooks', gitHooksRun: 'Chạy', gitHooksSkip: 'Bỏ qua', integrationEnabled: 'Bật nhánh tích hợp', integrationBaseRef: 'Nhánh gốc', references: 'Tham chiếu chỉ đọc', addReference: 'Thêm', referenceName: 'Tên', referencePath: 'Đường dẫn', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Đầy đủ', telegramMinimal: 'Tối giản',
@@ -925,7 +948,7 @@ export const vi = {
     languageSectionTitle: 'Ngôn ngữ hiển thị (Display Language)',
     languageSectionDesc: 'Lựa chọn ngôn ngữ cho toàn bộ giao diện dashboard.',
     infoChain: 'Hệ thống sẽ thử lần lượt các model theo thứ tự từ trên xuống dưới. Khi gặp lỗi Quota (429/RESOURCE_EXHAUSTED), Scheduler sẽ tự động chuyển sang model tiếp theo trong chuỗi.',
-    hardChainLabel: 'Chuỗi model mặc định cho task "Hard" (mỗi dòng một model) *',
+    hardChainLabel: 'Chuỗi model mặc định cho task "Hard" (mỗi dòng một model) *', hardChainInfo: 'Thử model khó trước rồi fallback xuống model dễ; ví dụ opus → sonnet → haiku. Model đầu tiên dùng quota trước.',
     hardChainHint: 'Mặc định: codex:gpt-5.6-luna, gemini-3.8-flash-high',
     hardChainRequired: 'Chuỗi model Hard phải có ít nhất 1 model',
     easyChainLabel: 'Chuỗi model mặc định cho task "Easy" (mỗi dòng một model) *',

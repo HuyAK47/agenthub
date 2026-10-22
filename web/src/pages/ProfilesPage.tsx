@@ -911,6 +911,7 @@ function AddProfileModal({
         <label className="block text-sm">
           {t('profiles.provider')}
           <select
+            data-tour="account-provider"
             value={engine}
             onChange={(e) => {
               const next = e.target.value as Provider;
@@ -932,7 +933,7 @@ function AddProfileModal({
             <span className="block text-xs font-medium text-[var(--t-text-3)] mb-1.5">
               {t('profiles.authMethod')}
             </span>
-            <div className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--t-border)] p-1 bg-[var(--t-surface-2)]">
+            <div data-tour="account-login-method" className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--t-border)] p-1 bg-[var(--t-surface-2)]">
               <button
                 type="button"
                 onClick={() => {
@@ -975,7 +976,7 @@ function AddProfileModal({
                 {error}
               </p>
             )}
-            <label className="block text-sm">
+            <label data-tour="account-token" className="block text-sm">
               {t('profiles.accountName')}
               <input
                 autoFocus
