@@ -84,6 +84,7 @@ interface PtySession {
   loginMenuAnswered?: boolean;
   /** agy đã đăng nhập thì vào thẳng chat; hub phải tự gửi /login để lấy link mới. */
   agyRelogin?: 'waiting_prompt' | 'login_sent';
+  exitDisposable?: { dispose: () => void };
 }
 
 // eslint-disable-next-line no-control-regex -- strips terminal escape sequences
@@ -251,9 +252,10 @@ export class PtyManager {
       }
     });
 
-    ptyProcess.onExit(() => {
+    const exitDisposable = ptyProcess.onExit(() => {
       this.handleProcessExit(sessionId, profileName, home);
     });
+    session.exitDisposable = exitDisposable;
 
     this.sessions.set(sessionId, session);
     this.profileToSession.set(profileName, sessionId);
@@ -274,6 +276,8 @@ export class PtyManager {
     }
     this.emailRefreshTimers.clear();
     for (const sessionId of [...this.sessions.keys()]) {
+      const session = this.sessions.get(sessionId);
+      session?.exitDisposable?.dispose();
       this.closeSession(sessionId, 1001, 'Going Away');
     }
   }
@@ -282,28 +286,43 @@ export class PtyManager {
     return this.sessions.get(sessionId);
   }
 
-  private scheduleEmailRefresh(profileName: string): void {
-    if (this.stopped) return;
-    const profile = this.service.profileRepo.get(profileName);
-    if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
-      this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);
-    }
-    this.service.refreshProfileEmail(profileName);
+  private isDatabaseOpen(): boolean {
+    const db = this.service.scheduler.getDatabase();
+    return db ? db.open : true;
+  }
 
-    const timer = setTimeout(() => {
-      this.emailRefreshTimers.delete(timer);
+  private scheduleEmailRefresh(profileName: string): void {
+    if (this.stopped || !this.isDatabaseOpen()) return;
+    try {
+      const profile = this.service.profileRepo.get(profileName);
+      if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
+        this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);
+      }
       this.service.refreshProfileEmail(profileName);
-      // Đăng nhập agy qua terminal xong thì lấy luôn ảnh Google (DEC-007), không đợi bấm Làm mới.
-      if (profile?.engine === 'agy') void this.service.syncAgyAvatarFromToken(profileName).catch(() => null);
-    }, 2000);
-    timer.unref?.();
-    this.emailRefreshTimers.add(timer);
+
+      const timer = setTimeout(() => {
+        this.emailRefreshTimers.delete(timer);
+        if (this.stopped || !this.isDatabaseOpen()) return;
+        try {
+          this.service.refreshProfileEmail(profileName);
+          // Đăng nhập agy qua terminal xong thì lấy luôn ảnh Google (DEC-007), không đợi bấm Làm mới.
+          if (profile?.engine === 'agy') void this.service.syncAgyAvatarFromToken(profileName).catch(() => null);
+        } catch {
+          // Database connection may have closed
+        }
+      }, 2000);
+      timer.unref?.();
+      this.emailRefreshTimers.add(timer);
+    } catch {
+      // Database connection may have closed
+    }
   }
 
   closeSession(sessionId: string, closeCode = 1000, closeReason = 'Session closed'): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
+    session.exitDisposable?.dispose();
     clearTimeout(session.timer);
     try {
       session.process.kill();
@@ -328,8 +347,10 @@ export class PtyManager {
   }
 
   private handleProcessExit(sessionId: string, profileName: string, _home: string): void {
+    if (this.stopped) return;
     const session = this.sessions.get(sessionId);
     if (session) {
+      session.exitDisposable?.dispose();
       clearTimeout(session.timer);
       for (const socket of session.sockets) {
         try {
@@ -342,20 +363,26 @@ export class PtyManager {
       this.profileToSession.delete(profileName);
     }
 
-    this.scheduleEmailRefresh(profileName);
+    if (!this.isDatabaseOpen()) return;
 
-    const profile = this.service.profileRepo.get(profileName);
-    const dupes = this.service.coreProfileService.getDuplicateEmails();
-    const duplicateWarning = profile ? dupes.has(accountKey(profile) || '') : false;
+    try {
+      this.scheduleEmailRefresh(profileName);
 
-    this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
-      name: profileName,
-      email: profile?.email || null,
-      duplicateWarning,
-    });
+      const profile = this.service.profileRepo.get(profileName);
+      const dupes = this.service.coreProfileService.getDuplicateEmails();
+      const duplicateWarning = profile ? dupes.has(accountKey(profile) || '') : false;
 
-    // Move waiting_quota tasks to queued
-    this.service.scheduler.wakeWaitingQuotaTasks('profile_login');
+      this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
+        name: profileName,
+        email: profile?.email || null,
+        duplicateWarning,
+      });
+
+      // Move waiting_quota tasks to queued
+      this.service.scheduler.wakeWaitingQuotaTasks('profile_login');
+    } catch {
+      // Database connection may have closed during process exit
+    }
   }
 
   attachSocket(sessionId: string, socket: WebSocket): void {
