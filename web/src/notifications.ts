@@ -32,7 +32,9 @@ export function notifyBrowserEvent(event: EventItem, level: 'all' | 'important' 
   const identity = event.type === 'disk.low' || event.type === 'disk.ok'
     ? event.type
     : event.type === 'quota.exhausted' && payload.allExhausted === true
-    ? 'quota:engine'
+    ? `quota:${String(payload.engine || 'unknown')}:${String(payload.family || payload.model || 'unknown')}`
+    : event.type === 'task.paused' || event.type === 'load.task_paused' || event.type === 'load.high'
+    ? 'load:summary'
     : `${event.type}:${event.taskId || ''}:${JSON.stringify(payload)}`;
   const key = `agenthub:notification:${identity}`;
   const now = Date.now();

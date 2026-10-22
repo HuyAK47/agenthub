@@ -217,7 +217,13 @@ export function isSystemIncident(
 
   if (type === 'quota.exhausted') {
     if (p.allExhausted === true) return true;
-    if (areAllProfilesQuotaExhausted(profileRepo, quotaMarkRepo, now)) return true;
+    if (areAllProfilesQuotaExhausted(
+      profileRepo,
+      quotaMarkRepo,
+      now,
+      typeof p.family === 'string' ? p.family : undefined,
+      typeof p.engine === 'string' ? p.engine : undefined,
+    )) return true;
   }
 
   return false;

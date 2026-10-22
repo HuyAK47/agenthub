@@ -3043,6 +3043,21 @@ export class TelegramBotService {
     };
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+
+    // Account-level exhaustion belongs in the dashboard. Telegram is an
+    // interrupt channel, so it only reports when every enabled account for
+    // the affected engine/family is unavailable.
+    if (type === 'quota.exhausted') {
+      const allExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
+        this.profileRepo,
+        this.quotaMarkRepo,
+        this.now(),
+        typeof p.family === 'string' ? p.family : undefined,
+        typeof p.engine === 'string' ? p.engine : undefined,
+      );
+      if (!allExhausted) return;
+    }
+
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // Deduplication check: ignore duplicate events within 10 seconds

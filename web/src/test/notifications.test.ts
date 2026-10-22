@@ -39,4 +39,17 @@ describe('browser notification policy', () => {
     expect(localStorage.length).toBe(1);
     now.mockRestore();
   });
+
+  it('shares the desktop load-summary window across pause and load event types', () => {
+    notifyBrowserEvent(event('task.paused', { reason: 'load' }), 'all');
+    notifyBrowserEvent(event('load.task_paused', { reason: 'load' }), 'all');
+    notifyBrowserEvent(event('load.high', { cpu: 99 }), 'all');
+    expect(localStorage.length).toBe(1);
+  });
+
+  it('keeps engine and family quota notifications independent', () => {
+    notifyBrowserEvent(event('quota.exhausted', { allExhausted: true, engine: 'agy', family: 'gemini' }), 'all');
+    notifyBrowserEvent(event('quota.exhausted', { allExhausted: true, engine: 'codex', family: 'codex' }), 'all');
+    expect(localStorage.length).toBe(2);
+  });
 });

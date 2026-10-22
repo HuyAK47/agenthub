@@ -6,7 +6,7 @@
 node scripts/notify-audit.mjs --db /path/to/hub.db
 ```
 
-The script reports actual sends after content dedupe, the one-hour disk-state throttle, the 15-minute load summary, and the engine-wide quota check. It also excludes SSE activity that is not a notification event.
+The script reports sends after content dedupe, the one-hour disk-state throttle, the 15-minute load summary, and the engine-wide quota check. The Telegram column applies the same engine/family gate as `src/telegram.ts`; the browser column applies the same allow-list and throttle keys as `web/src/notifications.ts`. It also excludes SSE activity that is not a notification event.
 
 ## Event volume supplied with the task
 

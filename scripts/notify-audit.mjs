@@ -28,6 +28,7 @@ if (!fs.existsSync(dbPath)) {
     const notificationEvents = new Set([...important, 'batch.created', 'task.paused', 'load.task_paused', 'load.high', 'task.resumed', 'load.task_resumed', 'disk.ok', 'claude.fallback_changed', 'claude.auto_resumed', 'profile.auth_expired', 'ci.passed']);
     const counts = new Map();
     const desktopSeen = new Map();
+    const desktopImportantSeen = new Map();
     const webSeen = new Map();
     const diskSeen = new Map();
     let loadSummaryAt = 0;
@@ -40,7 +41,23 @@ if (!fs.existsSync(dbPath)) {
       const sameEngine = profiles.filter((p) => p.engine === profile.engine);
       return sameEngine.length > 0 && sameEngine.every((p) => marks.some((m) => m.profileName === p.name && m.family === family && m.until * 1000 > at));
     };
-    const eventKey = (row, payload) => `${row.type}:${row.taskId || ''}:${JSON.stringify(payload)}`;
+    const eventKey = (row, payload) => {
+      const task = row.taskId || payload.taskId || '';
+      const title = payload.title || task || 'Task';
+      switch (row.type) {
+        case 'brain.notify': return `${row.type}:${payload.level || 'info'}:${payload.text || ''}`;
+        case 'task.review_ready': return `${row.type}:${title}:${payload.checksPassed === undefined ? '' : payload.checksPassed}`;
+        case 'task.failed': return `${row.type}:${title}`;
+        case 'task.blocked': return `${row.type}:${title}`;
+        case 'quota.exhausted': return payload.allExhausted === true
+          ? `${row.type}:all:${payload.engine || 'unknown'}:${payload.family || payload.model || 'unknown'}`
+          : `${row.type}:${payload.profile || payload.profileName || payload.worker || ''}:${payload.family || payload.model || ''}`;
+        case 'disk.low': return `${row.type}:${payload.freeGB || 0}:${payload.minFreeGB || 0}:${payload.cacheDir || ''}:${payload.largestCacheEntry || ''}`;
+        case 'disk.ok': return `${row.type}:${payload.freeGB || 0}`;
+        case 'ci.failed': return `${row.type}:${payload.projectId || task}:${payload.workflow || 'CI'}:${String(payload.sha || '').slice(0, 7)}`;
+        default: return `${row.type}:${task}`;
+      }
+    };
     const record = (row, field, value) => {
       const item = counts.get(row.type) || { events: 0, desktopAll: 0, desktopImportant: 0, telegram: 0, web: 0 };
       item[field] += value ? 1 : 0;
@@ -73,13 +90,23 @@ if (!fs.existsSync(dbPath)) {
         desktopAll = at - previous >= 30 * 60_000;
         if (desktopAll) desktopSeen.set(key, at);
       }
-      const telegramCandidate = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'quota.exhausted', 'disk.low', 'disk.ok', 'brain.notify']).has(row.type);
+      if (desktopImportant) {
+        const previous = desktopImportantSeen.get(key) || 0;
+        desktopImportant = at - previous >= 30 * 60_000;
+        if (desktopImportant) desktopImportantSeen.set(key, at);
+      }
+      const telegramCandidate = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'quota.exhausted', 'disk.low', 'disk.ok', 'brain.notify']).has(row.type)
+        && (row.type !== 'quota.exhausted' || quotaAll);
       const telegramKey = `telegram:${key}`;
       const telegramPrevious = desktopSeen.get(telegramKey) || 0;
       const telegram = telegramCandidate && at - telegramPrevious >= 30 * 60_000;
       if (telegram) desktopSeen.set(telegramKey, at);
       const webAllowed = notificationEvents.has(row.type) && (row.type !== 'quota.exhausted' || quotaAll);
-      const webKey = row.type === 'quota.exhausted' && quotaAll ? 'quota:engine' : key;
+      const webKey = row.type === 'quota.exhausted' && quotaAll
+        ? `quota:${payload.engine || 'unknown'}:${payload.family || payload.model || 'unknown'}`
+        : row.type === 'task.paused' || row.type === 'load.task_paused' || row.type === 'load.high'
+        ? 'load:summary'
+        : key;
       const webPrevious = webSeen.get(webKey) || 0;
       const webWindow = row.type === 'disk.low' || row.type === 'disk.ok' ? 60 * 60_000 : row.type.startsWith('load.') || row.type === 'task.paused' ? 15 * 60_000 : 30 * 60_000;
       const web = webAllowed && at - webPrevious >= webWindow;
