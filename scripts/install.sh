@@ -71,6 +71,11 @@ restore_release_state() {
       cp "$_old_service_backup" "$_service_file"
     fi
   fi
+  case "$(uname -s 2>/dev/null)" in
+    Linux*)
+      "$SYSTEMCTL" --user daemon-reload 2>/dev/null || true
+      ;;
+  esac
   echo "! Đã hoàn tác current, symlink CLI và service về bản trước (nếu có)." >&2
 }
 
@@ -89,7 +94,11 @@ installer_cleanup() {
     echo "Nguyên nhân: ${_failure_reason:-lệnh cài đặt trả về lỗi}" >&2
     echo "Khắc phục: sửa nguyên nhân rồi chạy lại; bản trước vẫn được giữ nguyên." >&2
     echo "Log chi tiết: $INSTALL_LOG" >&2
-    echo "Không có gì bị thay đổi trên máy; bản trước (nếu có) vẫn dùng được" >&2
+    if [ "$_pointers_changed" = "1" ]; then
+      echo "Đã hoàn tác về bản trước; bản trước (nếu có) vẫn dùng được" >&2
+    else
+      echo "Không có gì bị thay đổi trên máy; bản trước (nếu có) vẫn dùng được" >&2
+    fi
   fi
 }
 
@@ -540,12 +549,6 @@ fi
 if [ "$UNINSTALL" = "1" ]; then
   echo "==> Đang gỡ bỏ AgentHub..."
 
-  # Only inspect a directory carrying the installer marker; never recursively
-  # delete arbitrary user directories just because their names look temporary.
-  if [ -f "$AGENTHUB_DIR/.agenthub-app" ]; then
-    cleanup_stale_tmp_dirs
-  fi
-
   if [ "$DRY_RUN" = "1" ]; then
     echo "[dry-run] $SYSTEMCTL --user stop agenthub"
     echo "[dry-run] $SYSTEMCTL --user disable agenthub"
@@ -566,6 +569,10 @@ if [ "$UNINSTALL" = "1" ]; then
     fi
     exit 0
   fi
+
+  # Only remove exact staging names inside the configured app directory; never
+  # recursively delete arbitrary user directories just because their names look temporary.
+  cleanup_stale_tmp_dirs
 
   # 1. Gỡ service theo nền tảng
   OS="$(uname -s)"
