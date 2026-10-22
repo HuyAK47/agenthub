@@ -257,6 +257,7 @@ export const en: typeof vi = {
     btnRetry: 'Retry',
     btnReview: 'Approve',
     btnMerge: 'Approve & merge',
+    mergeSettingsLink: 'Open Integration settings',
     btnRequestChanges: 'Request Changes',
     btnDeleteWorktree: 'Delete worktree',
     noLog: 'No log output from worker yet...',

@@ -81,7 +81,7 @@ export function pruneNodeModulesCache(
   return { removed, entries: entries.length, bytes: Math.max(0, total) };
 }
 
-export function nodeModulesCacheSummary(cacheBaseDir: string): { path: string; entries: number; bytes: number; largest?: string } {
+export function nodeModulesCacheSummary(cacheBaseDir: string): { path: string; entries: number; bytes: number; largest?: string; largestBytes?: number } {
   try {
     const dirs = fs.readdirSync(cacheBaseDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.tmp-'));
     let bytes = 0;
@@ -91,7 +91,7 @@ export function nodeModulesCacheSummary(cacheBaseDir: string): { path: string; e
       bytes += size;
       if (!largest || size > largest.bytes) largest = { name: entry.name, bytes: size };
     }
-    return { path: cacheBaseDir, entries: dirs.length, bytes, largest: largest?.name };
+    return { path: cacheBaseDir, entries: dirs.length, bytes, largest: largest?.name, largestBytes: largest?.bytes };
   } catch { return { path: cacheBaseDir, entries: 0, bytes: 0 }; }
 }
 

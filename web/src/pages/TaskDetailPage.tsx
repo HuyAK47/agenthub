@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import {
@@ -616,6 +616,10 @@ export const TaskDetailPage: React.FC = () => {
               {task.mergeAvailable === false && (
                 <span className="text-xs text-[var(--t-text-3)] max-w-xs">
                   {task.mergeUnavailableReason || 'Bật Integration trong Cài đặt dự án để dùng merge.'}
+                  {' '}
+                  <Link className="underline text-[var(--t-accent)]" to={`/projects/${encodeURIComponent(task.projectId)}/settings`}>
+                    {t('taskDetail.mergeSettingsLink')}
+                  </Link>
                 </span>
               )}
 

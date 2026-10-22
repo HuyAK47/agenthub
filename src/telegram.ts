@@ -3373,7 +3373,10 @@ export class TelegramBotService {
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 3;
         const cacheDir = typeof p.cacheDir === 'string' ? `\nCache node_modules: <code>${this.escapeHtml(p.cacheDir)}</code>` : '';
-        this.broadcastMessage(`💾 <b>Ổ đĩa thấp</b>\nCòn ${freeGB} GB (&lt; ${minFreeGB} GB): tạm dừng khởi chạy task mới.${cacheDir}`);
+        const largest = typeof p.largestCacheEntry === 'string'
+          ? `\nBản cache lớn nhất: <code>${this.escapeHtml(p.largestCacheEntry)}</code>${typeof p.largestCacheEntryBytes === 'number' ? ` (${(p.largestCacheEntryBytes / 1024 ** 3).toFixed(2)} GB)` : ''}`
+          : '';
+        this.broadcastMessage(`💾 <b>Ổ đĩa thấp</b>\nCòn ${freeGB} GB (&lt; ${minFreeGB} GB): tạm dừng khởi chạy task mới.${cacheDir}${largest}`);
         break;
       }
 

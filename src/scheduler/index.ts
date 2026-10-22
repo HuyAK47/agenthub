@@ -2834,8 +2834,8 @@ export class Scheduler {
   private markDiskLow(disk: MonitoredDisk): void {
     if (this.diskLow) return;
     this.diskLow = true;
-    const cache = nodeModulesCacheSummary(this.config.cacheDir);
     pruneNodeModulesCache(this.config.cacheDir, { maxEntries: this.config.cacheMaxEntries, maxBytes: this.config.cacheMaxGB * 1024 ** 3 });
+    const cache = nodeModulesCacheSummary(this.config.cacheDir);
     this.eventBus.emit('disk.low', undefined, {
       label: disk.label,
       freeGB: disk.freeGB,
@@ -2844,6 +2844,7 @@ export class Scheduler {
       cacheEntries: cache.entries,
       cacheBytes: cache.bytes,
       largestCacheEntry: cache.largest,
+      largestCacheEntryBytes: cache.largestBytes,
     });
   }
 
