@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { projectSettings } from './projects/settings.js';
 import { execFileSync } from 'node:child_process';
+import { testThreadLimit } from './priority.js';
 
 export const WORKER_SERVICE_MESSAGE = 'AgentHub: worker không được điều khiển service của hub';
 export const WORKER_BLOCKED_COMMANDS = ['ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman'] as const;
@@ -196,7 +197,8 @@ export function workerEnvironment(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
   const workerCount = Math.max(1, Math.floor(options && 'workerCount' in options ? (options.workerCount || 1) : Number(env.AGENTHUB_WORKER_COUNT || 1)));
-  const threadLimit = Math.max(1, Math.floor(os.cpus().length / workerCount));
+  env.AGENTHUB_WORKER_COUNT = String(workerCount);
+  const threadLimit = testThreadLimit(workerCount);
   env.VITEST_MAX_THREADS = String(threadLimit);
   env.VITEST_MIN_THREADS = '1';
   env.VITEST_MAX_FORKS = String(threadLimit);

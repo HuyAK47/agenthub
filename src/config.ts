@@ -1007,6 +1007,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       enabled: typeof rawLoad.enabled === 'boolean' ? rawLoad.enabled : DEFAULT_LOAD_CONFIG.enabled,
       high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
+      pressureHigh: typeof rawLoad.pressureHigh === 'number' ? rawLoad.pressureHigh : DEFAULT_LOAD_CONFIG.pressureHigh,
+      pressureOk: typeof rawLoad.pressureOk === 'number' ? rawLoad.pressureOk : DEFAULT_LOAD_CONFIG.pressureOk,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
       pausePolicy: rawLoad.pausePolicy === 'rss' || rawLoad.pausePolicy === 'recent' ? rawLoad.pausePolicy : DEFAULT_LOAD_CONFIG.pausePolicy,

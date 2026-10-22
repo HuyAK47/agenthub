@@ -6,6 +6,8 @@ export interface LoadConfig {
   enabled: boolean;
   high: number;
   ok: number;
+  pressureHigh?: number;
+  pressureOk?: number;
   minFreeMemGB: number;
   recoverAfterSec: number;
   pausePolicy?: 'recent' | 'rss';
@@ -35,6 +37,8 @@ export const DEFAULT_LOAD_CONFIG: LoadConfig = {
   enabled: false,
   high: 16,
   ok: 11,
+  pressureHigh: 20,
+  pressureOk: 10,
   minFreeMemGB: 1.5,
   recoverAfterSec: 300,
   pausePolicy: 'recent',
@@ -70,10 +74,11 @@ export class LoadGuard {
     const pressure = (this.options.readPressure || readPressure)();
     // Linux PSI reports percentages (not fractions). An injected reader is also
     // honored when load/memory are mocked, which keeps pressure behavior testable.
-    const pressureHigh = (!this.options.readLoad || Boolean(this.options.readPressure))
-      && [pressure.cpuSome, pressure.memorySome, pressure.ioSome].some((value) => value !== null && value >= 20);
+    const pressureValues = [pressure.cpuSome, pressure.memorySome, pressure.ioSome];
+    const pressureHigh = pressureValues.some((value) => value !== null && value >= (this.config.pressureHigh ?? 20));
+    const pressureOk = pressureValues.every((value) => value === null || value < (this.config.pressureOk ?? 10));
     const high = load1 > this.config.high || freeMemGB < this.config.minFreeMemGB || pressureHigh;
-    const ok = load1 < this.config.ok && freeMemGB > this.config.minFreeMemGB;
+    const ok = load1 < this.config.ok && freeMemGB > this.config.minFreeMemGB && pressureOk;
 
     if (!this.config.enabled) {
       this.overloaded = false;

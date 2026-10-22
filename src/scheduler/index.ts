@@ -1767,6 +1767,7 @@ export class Scheduler {
         hubHome: this.config.hubHome,
         project,
         gitHooks: project ? projectSettings(project).worktree.gitHooks : undefined,
+        workerCount: 1,
       });
       if (!child.pid) throw new Error('reviewer process has no pid');
       this.runRepo.updatePid(runId, child.pid, this.getProcessStartTime(child.pid));
@@ -2386,6 +2387,7 @@ export class Scheduler {
         project,
         gitHooks: projectSettings(project).worktree.gitHooks,
         codexSandbox: this.config.workers?.codexSandbox || 'off',
+        workerCount: project.maxParallel,
       });
 
       const pid = child.pid!;

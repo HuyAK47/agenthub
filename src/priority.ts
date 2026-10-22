@@ -15,6 +15,10 @@ export const LIMITED_TEST_ENV: Record<string, string> = {
   VITEST_MIN_FORKS: '1',
 };
 
+export function testThreadLimit(workerCount = 1, cpuCount = os.cpus().length): number {
+  return Math.min(2, Math.max(1, Math.floor(cpuCount / Math.max(1, Math.floor(workerCount || 1)))));
+}
+
 /**
  * Chạy lệnh với độ ưu tiên thấp để IDE và trình duyệt của người dùng luôn được ưu tiên.
  * Linux dùng `nice`/`ionice`; macOS chỉ dùng `nice`. Wrapper dùng exec nên PID giữ nguyên.
@@ -44,8 +48,7 @@ export function runInProcessGroup(
     let output = '';
     let timedOut = false;
     let settled = false;
-    const workerCount = Math.max(1, Number(opts.env.AGENTHUB_WORKER_COUNT || 1));
-    const threadLimit = Math.max(1, Math.floor(os.cpus().length / workerCount));
+    const threadLimit = testThreadLimit(Number(opts.env.AGENTHUB_WORKER_COUNT || 1));
     const limitedEnv = {
       ...opts.env,
       VITEST_MAX_THREADS: String(threadLimit), VITEST_MIN_THREADS: '1',
