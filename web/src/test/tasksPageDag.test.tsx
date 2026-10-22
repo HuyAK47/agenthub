@@ -14,6 +14,7 @@ vi.mock('../api/client', async () => {
     ...actual,
     getProjects: vi.fn(),
     getTasks: vi.fn(),
+    getTaskGraph: vi.fn(),
     getStatus: vi.fn().mockResolvedValue({}),
   };
 });
@@ -80,12 +81,21 @@ const mockTasksData: Task[] = [
   },
 ];
 
+const mockGraphData = {
+  nodes: mockTasksData.map((task) => ({ id: task.id, projectId: task.projectId, slug: task.slug, title: task.title, status: task.status, level: task.level, blockedCount: 0, isCritical: false, isMaxBlocker: false })),
+  edges: [{ from: 'p1~t1', to: 'p1~t2', isCritical: true }],
+  criticalPath: ['p1~t1', 'p1~t2'],
+  maxBlockingTaskId: null,
+  maxBlockedCount: 0,
+};
+
 describe('TasksPage - DAG View and Filters', () => {
   it('toggles between Kanban and Sơ đồ (DAG) view', async () => {
     vi.mocked(client.getProjects).mockResolvedValue([
       { id: 'p1', name: 'Project 1', path: '/tmp/p1', defaultBranch: 'main', maxParallel: 2 },
     ]);
     vi.mocked(client.getTasks).mockResolvedValue(mockTasksData);
+    vi.mocked(client.getTaskGraph).mockResolvedValue(mockGraphData);
 
     renderWithProviders(<TasksPage />);
 
@@ -129,6 +139,7 @@ describe('TasksPage - DAG View and Filters', () => {
       { id: 'p1', name: 'Project 1', path: '/tmp/p1', defaultBranch: 'main', maxParallel: 2 },
     ]);
     vi.mocked(client.getTasks).mockResolvedValue(mockTasksData);
+    vi.mocked(client.getTaskGraph).mockResolvedValue(mockGraphData);
 
     renderWithProviders(<TasksPage />);
 

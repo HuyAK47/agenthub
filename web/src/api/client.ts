@@ -430,6 +430,7 @@ export interface TaskQuery {
   search?: string;
   limit?: number;
   cursor?: string;
+  offset?: number;
 }
 
 export function getTasks(): Promise<Task[]>;
@@ -450,13 +451,14 @@ export interface PageResponse<T> {
   nextCursor: string | null;
 }
 
-export async function getTasksPage(params?: { project?: string; status?: string; search?: string; limit?: number; cursor?: string }): Promise<PageResponse<Task>> {
+export async function getTasksPage(params?: TaskQuery): Promise<PageResponse<Task>> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.status) query.set('status', params.status);
   if (params?.search) query.set('search', params.search);
   query.set('limit', String(params?.limit ?? 20));
   if (params?.cursor) query.set('cursor', params.cursor);
+  if (params?.offset !== undefined) query.set('offset', String(params.offset));
   return apiFetch<PageResponse<Task>>(`/api/tasks?${query.toString()}`);
 }
 

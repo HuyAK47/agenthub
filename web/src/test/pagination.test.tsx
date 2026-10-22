@@ -26,4 +26,14 @@ describe('pagination UI', () => {
     rerender(<LocaleProvider initialLocale="en"><DataTable rows={[{ name: 'row 1' }]} columns={columns} page={1} pageSize={20} total={1} /></LocaleProvider>);
     expect(screen.getByText('row 1')).toBeInTheDocument();
   });
+
+  it('sorts sortable columns in both directions', () => {
+    const columns = [{ key: 'name', title: 'Name', sortable: true, sortValue: (row: { name: string }) => row.name, render: (row: { name: string }) => row.name }];
+    render(<LocaleProvider initialLocale="en"><DataTable rows={[{ name: 'Beta' }, { name: 'Alpha' }]} columns={columns} page={1} pageSize={20} total={2} /></LocaleProvider>);
+    const header = screen.getByRole('button', { name: 'Name' });
+    fireEvent.click(header);
+    expect(screen.getAllByRole('row')[1]).toHaveTextContent('Alpha');
+    fireEvent.click(header);
+    expect(screen.getAllByRole('row')[1]).toHaveTextContent('Beta');
+  });
 });

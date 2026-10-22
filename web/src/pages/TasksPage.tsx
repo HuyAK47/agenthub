@@ -1,7 +1,7 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProjects, getStatus, getTasks, getTasksPage } from '../api/client';
+import { getProjects, getStatus, getTaskGraph, getTasks, getTasksPage } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
@@ -46,9 +46,8 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
       });
     }
     return [...list].sort((a, b) => {
-      const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-      const timeB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-      return timeB - timeA;
+      const created = (b.createdAt || '').localeCompare(a.createdAt || '');
+      return created || b.id.localeCompare(a.id);
     });
   }, [tasks, search]);
 
@@ -238,15 +237,22 @@ export const TasksPage: React.FC = () => {
 
   const { data, isLoading: isPageLoading } = useQuery({
     queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor],
-    queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor }),
-    enabled: viewMode === 'list' && (page === 1 || Boolean(cursor)),
+    queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor, offset: cursor ? undefined : (page - 1) * pageSize }),
+    enabled: viewMode === 'list',
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
   });
   const { data: allTasks = [], isLoading: isAllTasksLoading } = useQuery({
     queryKey: ['tasks-kanban', selectedProject, search],
     queryFn: () => getTasks({ project: selectedProject, search }),
-    enabled: viewMode !== 'list',
+    enabled: viewMode === 'kanban',
+    refetchInterval: 5000,
+    placeholderData: keepPreviousData,
+  });
+  const { data: taskGraph, isLoading: isGraphLoading } = useQuery({
+    queryKey: ['tasks-graph', selectedProject, doneFilter],
+    queryFn: () => getTaskGraph({ project: selectedProject, includeDone: doneFilter === 'all' }),
+    enabled: viewMode === 'dag',
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
   });
@@ -271,10 +277,21 @@ export const TasksPage: React.FC = () => {
     setPage(1);
     setCursors({});
   }, [selectedProject, search, selectedStatus, pageSize]);
-  useEffect(() => {
-    if (viewMode === 'list' && page > 1 && !cursor) setPage(1);
-  }, [viewMode, page, cursor]);
-  const tasks = allTasks;
+  const graphTasks = useMemo<Task[]>(() => {
+    if (!taskGraph) return [];
+    const dependencies = new Map<string, string[]>();
+    for (const edge of taskGraph.edges) dependencies.set(edge.to, [...(dependencies.get(edge.to) || []), edge.from]);
+    return taskGraph.nodes.map((node) => ({
+      ...node,
+      dependsOn: dependencies.get(node.id) || [],
+      currentRun: null,
+      attempt: 0,
+      resume: 0,
+      createdAt: '',
+      updatedAt: '',
+    }));
+  }, [taskGraph]);
+  const tasks = viewMode === 'dag' ? graphTasks : allTasks;
 
   const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
 
@@ -461,11 +478,11 @@ export const TasksPage: React.FC = () => {
           ]}
           page={page}
           pageSize={pageSize}
-          total={data?.total || 0}
+          total={data?.total ?? 0}
           onPageChange={setPage}
           onPageSizeChange={(size) => { setPageSize(size); setPage(1); setCursors({}); }}
         />
-      ) : isAllTasksLoading ? (
+      ) : (viewMode === 'kanban' ? isAllTasksLoading : isGraphLoading) ? (
         <div className="flex items-center justify-center min-h-[40vh]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
         </div>

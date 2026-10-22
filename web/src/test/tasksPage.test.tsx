@@ -92,9 +92,10 @@ describe('TasksPage & Kanban Long Lists', () => {
 
     const search = await screen.findByDisplayValue('alpha');
     expect(screen.getByRole('combobox', { name: /lọc theo trạng thái/i })).toHaveValue('review');
+    expect(getTasks).toHaveBeenCalledWith(expect.objectContaining({ status: 'review', search: 'alpha', limit: 20, offset: 40 }));
     fireEvent.change(search, { target: { value: 'beta' } });
     await screen.findByText('slug-1');
-    expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'review', search: 'beta', limit: 20 }));
+    expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'review', search: 'beta', limit: 20, offset: 0 }));
   });
 
   it('cột 131 task chỉ render 10 thẻ done + nút Xem thêm, bấm thì thêm đúng step', async () => {
@@ -237,7 +238,7 @@ describe('TasksPage & Kanban Long Lists', () => {
     expect(screen.getByText(/chờ duyệt/i)).toBeInTheDocument();
   });
 
-  it('sắp xếp theo updatedAt giảm dần (mới nhất lên đầu)', async () => {
+  it('sắp xếp ổn định theo createdAt giảm dần', async () => {
     const tasks: Task[] = [
       {
         id: 'p1~t-old',
@@ -262,7 +263,7 @@ describe('TasksPage & Kanban Long Lists', () => {
         dependsOn: [],
         attempt: 0,
         resume: 0,
-        createdAt: '2026-10-10T00:00:00Z',
+        createdAt: '2026-10-18T00:00:00Z',
         updatedAt: '2026-10-18T00:00:00Z',
       },
     ];
