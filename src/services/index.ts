@@ -459,6 +459,7 @@ export const UpdateConfigSchema = z.object({
     claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
   }).optional(),
   brain: z.object({
+    engine: z.enum(['claude', 'codex']).optional(),
     fallback: z.array(z.discriminatedUnion('type', [
       z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
       z.object({ type: z.literal('model'), model: z.string().min(1) }),
@@ -468,6 +469,8 @@ export const UpdateConfigSchema = z.object({
     ])).max(10).optional(),
     policy: z.array(z.string().min(1)).max(100).optional(),
     claudeProfile: z.string().min(1).optional(),
+    codexProfile: z.string().min(1).optional(),
+    codexModel: z.string().trim().min(1).optional(),
     model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
     mode: z.enum(['off', 'suggest', 'auto']).optional(),
     permissions: z.enum(['standard', 'trusted', 'full']).optional(),
@@ -787,6 +790,7 @@ export class AppService {
   private gitVersion: { value: string | null; checkedAt: number } | null = null;
   private gitVersionCheck?: Promise<string | null>;
   private static readonly SETUP_VERSION_CACHE_MS = 10 * 60 * 1000;
+  private failedAutoMerges = new Set<string>();
   constructor(
     public config: AgentHubConfig,
     public projectRepo: ProjectRepo,
@@ -3075,9 +3079,13 @@ export class AppService {
     }
   }
 
+  clearFailedAutoMerge(taskId: string): void {
+    this.failedAutoMerges.delete(taskId);
+  }
+
   /**
    * Merges a task whose review chain finished on a Codex approval, when the project opted in with
-   * `integration.autoMerge`. A merged task then self-deploys through the usual task.merged hook.
+   * `integration.autoMerge` or `review.autoMerge`. A merged task then self-deploys through the usual task.merged hook.
    */
   async autoMergeReviewedTask(taskId: string): Promise<void> {
     const task = this.taskRepo.get(taskId);
@@ -3085,9 +3093,12 @@ export class AppService {
     const project = this.projectRepo.get(task.projectId);
     if (!project) return;
     const settings = projectSettings(project);
-    if (!settings.integration.autoMerge || (!settings.integration.enabled && !project.merge)) return;
+    if (!(settings.review.autoMerge || settings.integration.autoMerge) || (!settings.integration.enabled && !project.merge)) return;
     const last = this.reviewRepo.getByTask(taskId).at(-1);
     if (!last || (last.actor !== 'codex-reviewer' && last.actor !== 'claude-reviewer') || last.verdict !== 'approved') return;
+    const checks = this.scheduler.getCheckResults(taskId);
+    if (checks.length > 0 && checks.some((c) => !c.ok)) return;
+    if (this.failedAutoMerges.has(taskId)) return;
     // The ready event can arrive twice for one approval; the first call is already merging.
     if (this.reviewingTasks.has(taskId)) return;
     try {
@@ -3097,6 +3108,7 @@ export class AppService {
         by: 'auto-merge',
         feedback: 'Tự merge sau khi Codex reviewer chấp thuận.',
       });
+      this.failedAutoMerges.delete(taskId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.scheduler.getEventBus().emit('merge.failed', taskId, { actor: 'auto-merge', message });
@@ -3112,6 +3124,14 @@ export class AppService {
           console.error(`[review] could not hand merge conflict back for ${taskId}: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
         }
       }
+      this.failedAutoMerges.add(taskId);
+      const isConflict = (error instanceof HttpError && (error.error === 'conflict' || error.statusCode === 409)) ||
+        (error instanceof MergeError && error.error === 'conflict') ||
+        (error instanceof Error && /conflict/i.test(error.message));
+      this.scheduler.getEventBus().emit(isConflict ? 'merge.conflict' : 'merge.failed', taskId, {
+        actor: 'auto-merge',
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -3559,11 +3579,14 @@ export class AppService {
         models: this.config.chat.models,
       },
       brain: {
+        engine: this.config.brain.engine || 'claude',
         mode: this.config.brain.mode,
         maxConcurrent: this.config.brain.maxConcurrent,
         digest: this.config.brain.digest,
         fallback: this.config.brain.fallback,
         policy: this.config.brain.policy,
+        codexProfile: this.config.brain.codexProfile,
+        codexModel: this.config.brain.codexModel,
       },
       assistant: this.config.assistant,
       reviewer: this.config.reviewer,

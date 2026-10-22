@@ -23,6 +23,8 @@ export interface SpawnOpts {
   project?: { settings?: string | null };
   codexSandbox?: 'off' | 'workspace-write';
   workerCount?: number;
+  streamOutput?: boolean;
+  mcpConfigPath?: string;
 }
 
 export interface QuotaDetection {
@@ -213,6 +215,7 @@ export class CodexEngine implements Engine {
 
   static findCodexPath(): string | null {
     try {
+      if (process.env.AGENTHUB_CODEX_BIN && fs.existsSync(process.env.AGENTHUB_CODEX_BIN)) return process.env.AGENTHUB_CODEX_BIN;
       const managed = process.env.AGENTHUB_TOOLS_DIR ? path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'codex') : null;
       if (managed && fs.existsSync(managed)) return managed;
       const homeDir = os.homedir();
@@ -253,6 +256,7 @@ export class CodexEngine implements Engine {
 
     const args = [
       'exec',
+      ...(opts.streamOutput ? ['--json'] : []),
       '--skip-git-repo-check',
       '-m',
       model,
@@ -262,6 +266,20 @@ export class CodexEngine implements Engine {
       opts.cwd,
       opts.prompt,
     ];
+    if (opts.mcpConfigPath) {
+      // Codex accepts MCP overrides as CLI config values. The JSON file is the
+      // same per-session definition used by Claude and keeps the command out
+      // of the user's global Codex configuration.
+      try {
+        const mcp = JSON.parse(fs.readFileSync(opts.mcpConfigPath, 'utf8')) as { mcpServers?: { agenthub?: { command?: string; args?: string[]; env?: Record<string, string> } } };
+        const server = mcp.mcpServers?.agenthub;
+        if (server?.command) {
+          args.splice(-1, 0, '-c', `mcp_servers.agenthub.command=${server.command}`);
+          if (server.args?.length) args.splice(-1, 0, '-c', `mcp_servers.agenthub.args=${JSON.stringify(server.args)}`);
+          if (server.env) args.splice(-1, 0, '-c', `mcp_servers.agenthub.env=${JSON.stringify(server.env)}`);
+        }
+      } catch { /* malformed optional MCP config is handled by Codex */ }
+    }
     const sandboxMode = opts.codexSandbox ?? this.codexSandbox;
     if (opts.readOnly) {
       args.splice(2, 0, '--sandbox', 'read-only');
@@ -283,7 +301,7 @@ export class CodexEngine implements Engine {
     }
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV };
-    if (opts.profile.kind === 'isolated' && opts.profile.home) {
+    if (opts.profile.engine === 'codex' && opts.profile.home) {
       env.CODEX_HOME = opts.profile.home;
     }
     if (opts.env) {
@@ -304,12 +322,10 @@ export class CodexEngine implements Engine {
       cwd: opts.cwd,
       env,
       detached: true,
-      stdio: ['ignore', logFd, logFd],
+      stdio: opts.streamOutput ? ['ignore', 'pipe', 'pipe'] : ['ignore', logFd, logFd],
     });
 
-    child.on('spawn', () => {
-      fs.closeSync(logFd);
-    });
+    child.on('spawn', () => { try { fs.closeSync(logFd); } catch { /* pipe mode */ } });
     child.on('error', () => {
       try { fs.closeSync(logFd); } catch { /* ignore */ }
     });

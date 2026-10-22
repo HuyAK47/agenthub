@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey } from '../api/client';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getProfiles } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
@@ -14,6 +14,8 @@ export const SettingsPage: React.FC = () => {
   const queryClient = useQueryClient();
   const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
   const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
+  const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
+  const codexProfiles = profiles.filter((p) => p.engine === 'codex' && Boolean(p.enabled));
 
   const [hardChain, setHardChain] = useState<string>('');
   const [easyChain, setEasyChain] = useState<string>('');
@@ -32,6 +34,8 @@ export const SettingsPage: React.FC = () => {
   const [claudeOverhead, setClaudeOverhead] = useState<number>(40_000);
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
+  const [brainEngine, setBrainEngine] = useState<'claude' | 'codex'>('claude');
+  const [codexProfile, setCodexProfile] = useState<string>('');
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
   const [brainPermissions, setBrainPermissions] = useState<'standard' | 'trusted' | 'full'>('standard');
   const [brainMaxConcurrent, setBrainMaxConcurrent] = useState<number>(2);
@@ -102,6 +106,8 @@ export const SettingsPage: React.FC = () => {
         }
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
+      setBrainEngine(config.brain?.engine || 'claude');
+      setCodexProfile(config.brain?.codexProfile || '');
       setBrainMode(config.brain?.mode ?? 'suggest');
       setBrainPermissions(config.brain?.permissions ?? 'standard');
       setBrainMaxConcurrent(config.brain?.maxConcurrent ?? 2);
@@ -188,6 +194,8 @@ export const SettingsPage: React.FC = () => {
         claudeOverheadPerTask: Number(claudeOverhead) || 40_000,
       },
       brain: {
+        engine: brainEngine,
+        codexProfile: codexProfile.trim() || undefined,
         mode: brainMode,
         permissions: brainPermissions,
         maxConcurrent: Number(brainMaxConcurrent) || 2,
@@ -640,6 +648,51 @@ export const SettingsPage: React.FC = () => {
                 onChange={(e) => setDesktopNotify(e.target.checked)}
                 className="rounded border-[var(--t-border)]"
               />
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] space-y-2">
+              <div>
+                <label className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('settings.brainEngineLabel')}
+                </label>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('settings.brainEngineHint')}
+                </p>
+              </div>
+              <div className="flex gap-4">
+                {(['claude', 'codex'] as const).map((eng) => (
+                  <label key={eng} className="flex items-center gap-2 text-xs text-[var(--t-text)] cursor-pointer">
+                    <input
+                      type="radio"
+                      name="brainEngine"
+                      value={eng}
+                      checked={brainEngine === eng}
+                      onChange={() => setBrainEngine(eng)}
+                    />
+                    <span className="capitalize">{eng}</span>
+                  </label>
+                ))}
+              </div>
+              {brainEngine === 'codex' && (
+                <div className="pt-2">
+                  <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                    {t('settings.codexProfileLabel')}
+                  </label>
+                  <select
+                    value={codexProfile}
+                    onChange={(e) => setCodexProfile(e.target.value)}
+                    className="w-full max-w-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-xs"
+                  >
+                    <option value="">{t('settings.codexProfileAuto')}</option>
+                    {codexProfiles.map((p) => (
+                      <option key={p.name} value={p.name}>{p.name} {p.email ? `(${p.email})` : ''}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-[var(--t-text-3)] mt-1">
+                    {t('settings.codexProfileHint')}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="py-2 border-b border-[var(--t-border)] space-y-2">

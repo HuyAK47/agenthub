@@ -340,35 +340,77 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(fs.existsSync(path.join(intPath, 'auto.txt'))).toBe(true);
   });
 
-  it('hands an auto-merge conflict back to the worker', async () => {
-    const repo = path.join(tmpDir, 'conflict-repo');
+  it('auto-merges when settings.review.autoMerge is true, preserves review status when false, and emits merge.conflict on conflict', async () => {
+    const repo = path.join(tmpDir, 'review-auto-repo');
     initGitRepo(repo, 'main');
     ctx.service.createProject({
-      id: 'conflict-proj',
-      name: 'Conflict',
+      id: 'rev-proj',
+      name: 'Review auto',
       path: repo,
       defaultBranch: 'main',
-      settings: { integration: { enabled: true, branch: 'agenthub/integration', autoMerge: true } },
+      settings: { integration: { enabled: true, branch: 'agenthub/integration' }, review: { autoMerge: false } },
       merge: { enabled: true, worktrees: {}, checks: [], timeoutSec: 30 },
     });
-    const intPath = path.join(tmpDir, 'integration', 'conflict-proj');
-    ctx.service.createTask({ project: 'conflict-proj', slug: 'feat', title: 'Feature', body: 'Do it', level: 'easy', start: true });
+    ctx.service.createTask({ project: 'rev-proj', slug: 'feat1', title: 'Feature 1', body: 'Do it', level: 'easy', start: true });
     ctx.scheduler.tick();
-    const task = ctx.taskRepo.get('conflict-proj/feat')!;
-    fs.writeFileSync(path.join(task.worktreePath!, 'same.txt'), 'from task\n');
-    execFileSync('git', ['-C', task.worktreePath!, 'add', '.']);
-    execFileSync('git', ['-C', task.worktreePath!, 'commit', '-m', 'feat: task side']);
-    fs.writeFileSync(path.join(intPath, 'same.txt'), 'from integration\n');
-    execFileSync('git', ['-C', intPath, 'add', '.']);
-    execFileSync('git', ['-C', intPath, 'commit', '-m', 'feat: integration side']);
-    ctx.taskRepo.update(task.id, { status: 'review' });
-    ctx.reviewRepo.insert({ id: 'codex-ok-conflict', taskId: task.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
+    const task1 = ctx.taskRepo.get('rev-proj/feat1')!;
+    fs.writeFileSync(path.join(task1.worktreePath!, 'file1.txt'), 'content 1\n');
+    execFileSync('git', ['-C', task1.worktreePath!, 'add', '.']);
+    execFileSync('git', ['-C', task1.worktreePath!, 'commit', '-m', 'feat: 1']);
+    ctx.taskRepo.update(task1.id, { status: 'review' });
+    ctx.reviewRepo.insert({ id: 'codex-ok-1', taskId: task1.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
 
-    await ctx.service.autoMergeReviewedTask(task.id);
-    const after = ctx.taskRepo.get(task.id)!;
-    expect(after.status).not.toBe('review');
-    expect(after.status).not.toBe('done');
-    expect(ctx.reviewRepo.getByTask(task.id).at(-1)?.feedback).toContain('xung đột');
+    // 1. autoMerge is false: task stays in review
+    await ctx.service.autoMergeReviewedTask(task1.id);
+    expect(ctx.taskRepo.get(task1.id)!.status).toBe('review');
+
+    // 2. Turn on review.autoMerge: now merges to done
+    ctx.service.updateProject('rev-proj', { settings: { review: { autoMerge: true } } });
+    await ctx.service.autoMergeReviewedTask(task1.id);
+    expect(ctx.taskRepo.get(task1.id)!.status).toBe('done');
+
+    // 3. Conflict scenario: create task2 with conflicting changes
+    ctx.service.createTask({ project: 'rev-proj', slug: 'feat2', title: 'Feature 2', body: 'Conflict', level: 'easy', start: true });
+    ctx.scheduler.tick();
+    const task2 = ctx.taskRepo.get('rev-proj/feat2')!;
+    // In integration branch, modify file1.txt differently
+    const intPath = path.join(tmpDir, 'integration', 'rev-proj');
+    fs.writeFileSync(path.join(intPath, 'file1.txt'), 'conflict from integration\n');
+    execFileSync('git', ['-C', intPath, 'add', '.']);
+    execFileSync('git', ['-C', intPath, 'commit', '-m', 'chore: conflict base']);
+
+    fs.writeFileSync(path.join(task2.worktreePath!, 'file1.txt'), 'conflict from branch\n');
+    execFileSync('git', ['-C', task2.worktreePath!, 'add', '.']);
+    execFileSync('git', ['-C', task2.worktreePath!, 'commit', '-m', 'feat: conflict']);
+    ctx.taskRepo.update(task2.id, { status: 'review' });
+    ctx.reviewRepo.insert({ id: 'codex-ok-2', taskId: task2.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
+
+    const emitted: string[] = [];
+    ctx.scheduler.getEventBus().on('merge.conflict', (id) => emitted.push(id));
+    ctx.scheduler.getEventBus().on('merge.failed', (id) => emitted.push(id));
+
+    await ctx.service.autoMergeReviewedTask(task2.id);
+    expect(ctx.taskRepo.get(task2.id)!.status).toBe('review');
+    expect(emitted).toContain(task2.id);
+
+    // Calling it again does not retry continuously
+    const countBefore = emitted.length;
+    await ctx.service.autoMergeReviewedTask(task2.id);
+    expect(emitted.length).toBe(countBefore);
+
+    // 4. Failed checks scenario: if checks failed, do not merge
+    ctx.service.createTask({ project: 'rev-proj', slug: 'feat3', title: 'Feature 3', body: 'Failing check', level: 'easy', start: true });
+    ctx.scheduler.tick();
+    const task3 = ctx.taskRepo.get('rev-proj/feat3')!;
+    fs.writeFileSync(path.join(task3.worktreePath!, 'file3.txt'), 'content 3\n');
+    execFileSync('git', ['-C', task3.worktreePath!, 'add', '.']);
+    execFileSync('git', ['-C', task3.worktreePath!, 'commit', '-m', 'feat: 3']);
+    ctx.taskRepo.update(task3.id, { status: 'review' });
+    ctx.reviewRepo.insert({ id: 'codex-ok-3', taskId: task3.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
+    ctx.runRepo.insert({ id: 'r-fake', taskId: task3.id, engine: 'codex', model: 'codex:gpt-5.6-luna', profileName: 'codex-1' });
+    ctx.db.prepare("INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, 'r-fake', 'lint', 0, 1, 100, 'lint error')").run(task3.id);
+    await ctx.service.autoMergeReviewedTask(task3.id);
+    expect(ctx.taskRepo.get(task3.id)!.status).toBe('review');
   });
 
   it('sends an escalated review back once on the strongest model when no auto brain is running', async () => {
