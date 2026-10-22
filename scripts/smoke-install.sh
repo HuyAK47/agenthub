@@ -12,7 +12,7 @@ ARCHIVE_NAME=$(basename -- "$ARCHIVE")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 VERSION=$(printf '%s' "$ARCHIVE_NAME" | sed -n 's/^agenthub-\([0-9][0-9A-Za-z.-]*\)-linux-.*/\1/p')
 [ -n "$VERSION" ]
-docker run --rm -v "$ROOT_DIR:/input:ro" -v "$SCRIPT_DIR/install.sh:/tmp/agenthub-install.sh:ro" -e "ARCHIVE_NAME=$ARCHIVE_NAME" -e "VERSION=$VERSION" node:22-slim sh -eu -c '
+docker run --rm -v "$ROOT_DIR:/input:ro" -v "$SCRIPT_DIR/install.sh:/tmp/agenthub-install.sh:ro" -e "ARCHIVE_NAME=$ARCHIVE_NAME" -e "VERSION=$VERSION" "${SMOKE_IMAGE:-node:22-slim}" sh -eu -c '
   mkdir -p "/tmp/release/releases/download/v$VERSION" /tmp/agenthub-home /tmp/bin /tmp/smoke-bin
   cat > /tmp/smoke-bin/curl <<"EOF"
 #!/bin/sh

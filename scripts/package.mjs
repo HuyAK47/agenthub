@@ -38,6 +38,9 @@ try {
   for (const item of required) copy(item);
   // Release archives are self-contained and build native modules on the release runner.
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--omit=dev', '--prefix', staging], { stdio: 'inherit' });
+  // Native modules (node-pty, better-sqlite3) only load on the Node major they were built for:
+  // record it so install.sh can pick a matching Node and bin/agenthub always runs with it.
+  fs.writeFileSync(path.join(staging, 'node-runtime'), `${process.versions.node.split('.')[0]}\n`);
   fs.mkdirSync(outputDir, { recursive: true });
   const archivePath = path.join(outputDir, archiveName);
   if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
