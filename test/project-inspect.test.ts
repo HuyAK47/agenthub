@@ -2,8 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNewGitProject, inspectProject } from '../src/projects/inspect.js';
+import { loadConfig } from '../src/config.js';
+import { createContext } from '../src/daemon.js';
+import { FakeEngine, type Engine } from '../src/engines/index.js';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -68,5 +71,60 @@ describe('project wizard inspection', () => {
     expect(result.claudeSessions[0]).not.toHaveProperty('path');
     expect(result.memoryPreview).toContain('Use the project conventions.');
     expect(result.memoryPreview).not.toContain('secret');
+  });
+});
+
+describe('project inspection and creation at service level', () => {
+  let tmpDir: string;
+  let ctx: ReturnType<typeof createContext>;
+
+  beforeEach(() => {
+    tmpDir = tempDir();
+    process.env.AGENTHUB_HOME = tmpDir;
+    process.env.AGENTHUB_AGY_HOMES = path.join(tmpDir, 'agy-homes');
+    fs.mkdirSync(process.env.AGENTHUB_AGY_HOMES, { recursive: true });
+    const config = loadConfig(tmpDir);
+    config.port = 0;
+    const engines = new Map<string, Engine>([['agy', new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'))]]);
+    ctx = createContext(config, engines);
+    ctx.scheduler.stop();
+  });
+
+  afterEach(() => {
+    ctx.scheduler.stop();
+  });
+
+  it('rejects relative path on inspectProject via service', () => {
+    expect(() => ctx.service.inspectProject({ path: 'relative/dir' })).toThrow(/đường dẫn tuyệt đối/);
+  });
+
+  it('rejects relative path on createNewProject via service', () => {
+    expect(() => ctx.service.createNewProject({ name: 'New', path: 'relative/dir' })).toThrow(/đường dẫn tuyệt đối/);
+  });
+
+  it('rejects an invalid default branch starting with dash on createNewProject via service', () => {
+    const target = path.join(tmpDir, 'repo-dash');
+    expect(() => ctx.service.createNewProject({ name: 'New', path: target, defaultBranch: '-bad' })).toThrow(/không hợp lệ/);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('rejects non-existent parent directory on createNewProject via service', () => {
+    const target = path.join(tmpDir, 'does-not-exist', 'repo');
+    expect(() => ctx.service.createNewProject({ name: 'New', path: target, defaultBranch: 'main' })).toThrow(/Thư mục cha không tồn tại/);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('summarizes context and creates a tracking task for registered project', () => {
+    const target = path.join(tmpDir, 'valid-repo');
+    const created = ctx.service.createNewProject({ name: 'Summary Project', path: target, defaultBranch: 'main' });
+    const result = ctx.service.summarizeProjectContext(created.id, { sessions: ['session-old.jsonl'] });
+    expect(result.taskId).toBeTruthy();
+    expect(result.status).toBe('ready');
+    expect(result.summary).toContain('session-old.jsonl');
+    expect(result.summary).toContain('Kiến thức tóm tắt');
+  });
+
+  it('rejects summarizeProjectContext for non-existent project', () => {
+    expect(() => ctx.service.summarizeProjectContext('not-found', { sessions: ['s.jsonl'] })).toThrow(/không tồn tại/);
   });
 });
