@@ -1544,7 +1544,13 @@ export class Scheduler {
 
           // Mark quota for profile and same-email profiles
           if (this.quotaService.mark(rt.profileName, family, resetSeconds, `quota exhausted on ${rt.model}`)) {
-            this.eventBus.emit('quota.exhausted', taskId, { profile: rt.profileName, family });
+            const profile = this.profileRepo.get(rt.profileName);
+            this.eventBus.emit('quota.exhausted', taskId, {
+              profile: rt.profileName,
+              family,
+              engine: profile?.engine,
+              allExhausted: profile ? this.quotaService.allProfilesForEngineExhausted(profile.engine, family) : false,
+            });
           }
 
           // Try to find another profile/model

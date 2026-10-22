@@ -37,6 +37,7 @@ import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, ex
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
+import { QuotaService } from '../quota/index.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
@@ -2235,9 +2236,13 @@ export class AppService {
     const parsed = MarkQuotaSchema.parse(raw);
     const seconds = parsed.seconds || 5 * 3600;
     if (this.coreProfileService.markQuota(name, parsed.family, seconds, parsed.reason)) {
+      const engine = profile.engine;
       this.scheduler.getEventBus().emit('quota.exhausted', undefined, {
         profile: name,
         family: parsed.family,
+        engine,
+        allExhausted: new QuotaService(this.quotaMarkRepo, this.profileRepo)
+          .allProfilesForEngineExhausted(engine, parsed.family),
       });
     }
     return { ok: true };

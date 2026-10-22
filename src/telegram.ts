@@ -246,6 +246,8 @@ export class TelegramBotService {
   private quotaMarkRepo?: QuotaMarkRepo;
   private ciRepo?: CiRepo;
   private lastSentCi = new Map<string, number>();
+  private lastSentDisk = new Map<'low' | 'ok', number>();
+  private lastSentLoadSummary = 0;
   private lastBroadcast = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
@@ -3367,6 +3369,15 @@ export class TelegramBotService {
         break;
       }
 
+      case 'task.paused':
+      case 'load.task_paused':
+      case 'load.high': {
+        if (now - this.lastSentLoadSummary < 15 * 60_000) break;
+        this.lastSentLoadSummary = now;
+        this.broadcastMessage(`⚠️ <b>AgentHub tạm dừng/gặp tải cao</b> — xem dashboard để biết chi tiết.`);
+        break;
+      }
+
       case 'claude.quota_exhausted': {
         if (!notify.quota) return;
         this.broadcastMessage('⏳ <b>Claude hết quota</b>\nĐã kích hoạt failover hoặc cần chờ reset quota.');
@@ -3397,6 +3408,9 @@ export class TelegramBotService {
 
       case 'disk.low': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('low');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('low', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 3;
         const cacheDir = typeof p.cacheDir === 'string' ? `\nCache node_modules: <code>${this.escapeHtml(p.cacheDir)}</code>` : '';
@@ -3409,6 +3423,9 @@ export class TelegramBotService {
 
       case 'disk.ok': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('ok');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('ok', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         this.broadcastMessage(`💾 <b>Ổ đĩa đã đủ chỗ</b> (${freeGB} GB): tiếp tục chạy task.`);
         break;
