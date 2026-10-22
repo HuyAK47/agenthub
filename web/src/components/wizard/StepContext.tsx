@@ -168,6 +168,7 @@ export function StepContext({
               <li key={session.name} className="flex items-center gap-2">
                 <input
                   type="checkbox"
+                  aria-label={session.name}
                   checked={draft.selectedSessions.includes(session.name)}
                   onChange={() => toggleSession(session.name)}
                 />
