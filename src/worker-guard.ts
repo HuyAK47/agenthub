@@ -174,12 +174,43 @@ exec ${shellQuote(realBinary)} "$@"
 `;
 }
 
+export function brainGitShimScript(realBinary: string, permissions: 'standard' | 'trusted'): string {
+  if (permissions === 'trusted') return gitShimScript(realBinary);
+  return `#!/bin/sh
+# Brain standard policy: only read-only git commands are autonomous.
+subcmd=""
+skip_next=0
+for arg in "$@"; do
+  if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+  case "$arg" in
+    -C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path) skip_next=1; continue ;;
+    --git-dir=*|--work-tree=*|--namespace=*|--super-prefix=*|--exec-path=*|-c*) continue ;;
+    -*) continue ;;
+    *) subcmd="$arg"; break ;;
+  esac
+done
+case "$subcmd" in
+  status|log|diff|show|branch|rev-parse|merge-base|merge-tree) exec ${shellQuote(realBinary)} "$@" ;;
+  *) echo ${shellQuote('AgentHub: brain standard policy chặn git')} "$subcmd" >&2; exit 1 ;;
+esac
+`;
+}
+
+function brainBlockedShimScript(name: string): string {
+  return `#!/bin/sh
+# AgentHub BrainPolicy enforcement. Codex approvals cannot override this guard.
+echo ${shellQuote(`AgentHub: brain policy chặn lệnh '${name}'`)} >&2
+exit 1
+`;
+}
+
 export interface WorkerEnvOptions {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null } | null;
   guards?: boolean;
   cwd?: string;
   workerCount?: number;
+  brainPolicy?: 'standard' | 'trusted';
 }
 
 const HUB_GIT_NAME = 'AgentHub';
@@ -246,8 +277,20 @@ export function workerEnvironment(
     // 3. git wrapper shim
     const realGit = findExecutable('git', env, hubHome) || findExecutable('git', process.env, hubHome) || '/usr/bin/git';
     const gitFile = path.join(workerDir, 'git');
-    const gitContent = gitShimScript(realGit);
+    const brainPolicy = options && 'brainPolicy' in options ? options.brainPolicy : undefined;
+    const gitContent = brainPolicy ? brainGitShimScript(realGit, brainPolicy) : gitShimScript(realGit);
     writeShimFile(gitFile, gitContent);
+
+    if (brainPolicy) {
+      for (const name of ['rm', 'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman', 'mkfs', 'dd', 'truncate', 'chown', 'chmod']) {
+        writeShimFile(path.join(workerDir, name), brainBlockedShimScript(name));
+      }
+      // serviceDir precedes workerDir in PATH, so replace the permissive worker
+      // service guard for brain sessions with the same unconditional policy.
+      for (const name of ['systemctl', 'launchctl']) {
+        writeShimFile(path.join(serviceDir, name), brainBlockedShimScript(name));
+      }
+    }
   }
 
   const existingPath = (env.PATH || '')

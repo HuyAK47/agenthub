@@ -161,6 +161,25 @@ describe('worker service guard', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('enforces brain policy shims independently of Codex approvals', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-guard-'));
+    const hub = path.join(root, 'hub');
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    execFileSync('git', ['init'], { cwd: repo });
+    const standard = workerEnvironment(hub, { ...process.env }, { cwd: repo, brainPolicy: 'standard' });
+
+    for (const command of ['rm', 'systemctl', 'sudo']) {
+      expect(() => execFileSync(command, ['-rf', path.join(repo, 'missing')], { cwd: repo, env: standard, stdio: 'pipe' }))
+        .toThrow(`AgentHub: brain policy chặn lệnh '${command}'`);
+    }
+    expect(() => execFileSync('git', ['commit', '-m', 'blocked'], { cwd: repo, env: standard, stdio: 'pipe' }))
+      .toThrow('AgentHub: brain standard policy chặn git commit');
+    expect(execFileSync('git', ['status', '--short'], { cwd: repo, env: standard, encoding: 'utf8' })).toBe('');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('can disable worker command guards for hub git operations while keeping service shims', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-hub-env-'));
     const hub = path.join(root, 'hub');

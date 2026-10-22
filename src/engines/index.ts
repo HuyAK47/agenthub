@@ -27,6 +27,7 @@ export interface SpawnOpts {
   workerCount?: number;
   streamOutput?: boolean;
   mcpConfigPath?: string;
+  brainPolicy?: 'standard' | 'trusted';
 }
 
 export interface QuotaDetection {
@@ -319,7 +320,7 @@ export class CodexEngine implements Engine {
       workerEnvironment(
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         env,
-        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount },
+        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount, brainPolicy: opts.brainPolicy },
       ),
     );
 

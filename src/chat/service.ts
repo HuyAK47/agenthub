@@ -1807,6 +1807,7 @@ export class ChatService {
         // standard/trusted commands must be approved by Codex instead of being
         // executed autonomously; full is the sole explicit bypass mode.
         codexApproval: permission === 'full' ? 'never' : permission === 'standard' ? 'untrusted' : 'on-request',
+        brainPolicy: permission === 'full' ? undefined : permission,
         project: this.projectRepo.get(turn.projectId || '') || undefined,
       });
     } catch (error) {
