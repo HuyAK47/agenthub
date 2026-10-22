@@ -426,7 +426,7 @@ export const en: typeof vi = {
     accountNameRequired: 'Please enter an account name.',
     creating: 'Creating…',
   },
-  tour: { help: 'Page guide', replay: 'Replay guide', close: 'Close guide', step: 'Step {current}/{total}', previous: 'Back', next: 'Next', skip: 'Skip', finish: 'Finish' },
+  tour: { help: 'Page guide', replay: 'Replay guide', close: 'Close guide', step: 'Step {current}/{total}', stepCount: '{count} steps', previous: 'Back', next: 'Next', skip: 'Skip', finish: 'Finish', panelTitle: 'Help center', panelDescription: 'Find tours and short guides for each page.', search: 'Search guides…', noResults: 'No matching guide found.', restartCurrent: 'Restart this tour' },
   checklist: { title: 'Get started with AgentHub', subtitle: 'Complete a few steps to get to work.', hide: 'Hide checklist', cli: 'Install CLI', account: 'Sign in to a worker account', project: 'Add a project', telegram: 'Connect Telegram', task: 'Create your first task' },
   setup: {
     navLabel: 'Setup', loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
