@@ -6,7 +6,7 @@ const SOURCE_ROOT = join(process.cwd(), 'src');
 const PALETTE_CLASS =
   /(?:^|[\s'"`])(?:[a-z-]+:)*(?:bg|text|border|ring|divide|from|via|to|outline|decoration|placeholder)-(?:white|black|gray|slate|zinc|neutral|stone|amber|green|red|blue|yellow|orange|purple|indigo|pink|emerald|teal|cyan|lime|sky|violet|fuchsia|rose)(?:-\d+)?(?:\/[^\s'"`]*)?/g;
 const DARK_VARIANT = /(?:^|[\s'"`])dark:(?:bg|text|border|ring|divide|from|via|to|outline|decoration|placeholder)-/g;
-const RAW_COLOR = /#[0-9a-fA-F]{3,8}|\b(?:rgb|rgba)\s*\(/g;
+const RAW_COLOR = /#[0-9a-fA-F]{3,8}|(?:rgb|rgba)\s*\(/g;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

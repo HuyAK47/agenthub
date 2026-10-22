@@ -323,7 +323,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
                     }}
                     className={`group relative flex flex-col justify-between w-full h-full p-2.5 rounded-lg border border-[var(--t-border)] border-l-4 bg-[var(--t-surface)] hover:border-[var(--t-accent)] hover:shadow-md transition-all cursor-pointer ${
                       node.isCritical
-                        ? 'ring-2 ring-[var(--t-warn)] shadow-[0_0_12px_rgba(245,158,11,0.25)]'
+                        ? 'ring-2 ring-[var(--t-warn)] shadow-[0_0_12px_var(--t-warn-glow)]'
                         : ''
                     } ${
                       node.isMaxBlocker
