@@ -459,6 +459,7 @@ export const UpdateConfigSchema = z.object({
     enabled: z.boolean().optional(),
     model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
     policy: z.array(z.string().min(1)).max(100).optional(),
+    permissions: z.enum(['guarded', 'full']).optional(),
   }).optional(),
   notifications: z.object({
     desktop: z.boolean(),

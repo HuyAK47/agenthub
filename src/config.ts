@@ -66,6 +66,8 @@ export interface AssistantConfig {
   enabled: boolean;
   model: string;
   policy: string[];
+  /** guarded: read-only helper (default); full: may edit files and run any command, like a full brain. */
+  permissions: 'guarded' | 'full';
 }
 
 export interface ClaudeSessionsConfig {
@@ -972,6 +974,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       policy: Array.isArray(assistantRaw.policy)
         ? assistantRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
         : [],
+      permissions: assistantRaw.permissions === 'full' ? 'full' : 'guarded',
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
