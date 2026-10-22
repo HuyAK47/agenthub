@@ -202,7 +202,7 @@ export function createContext(
     if (codexPath) {
       engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
-    engines.set(CLAUDE_REVIEW_ENGINE_KEY, new ClaudeReviewEngine(config.chat.claudeBin || 'claude'));
+    engines.set(CLAUDE_REVIEW_ENGINE_KEY, new ClaudeReviewEngine(config.chat.claudeBin));
   }
 
   const scheduler = new Scheduler(

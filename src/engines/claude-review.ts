@@ -4,6 +4,7 @@ import path from 'node:path';
 import { lastNLines, type AuthDetection, type Engine, type QuotaDetection, type SpawnOpts, parseResetTime } from './index.js';
 import { lowPriority } from '../priority.js';
 import { lockCommand } from '../profiles/locks.js';
+import { findClaudeBin } from '../chat/claude.js';
 
 /** Key of the Claude reviewer in the scheduler's engine map (kept apart from worker engines). */
 export const CLAUDE_REVIEW_ENGINE_KEY = 'claude-review';
@@ -18,13 +19,16 @@ export const CLAUDE_REVIEW_TOOLS = 'Read,Grep,Glob,Bash(git diff:*),Bash(git log
 export class ClaudeReviewEngine implements Engine {
   id = 'claude' as const;
 
-  constructor(private claudeBin = 'claude') {}
+  constructor(private configuredBin?: string) {}
 
   family(_model: string): string {
     return 'claude';
   }
 
   spawn(opts: SpawnOpts): ChildProcess {
+    // Resolved per run: the service PATH usually lacks `claude`, and the VS Code build path changes on update.
+    const claudeBin = findClaudeBin(this.configuredBin);
+    if (!claudeBin) throw new Error('Claude CLI not found');
     const model = opts.model.startsWith('claude:') ? opts.model.slice('claude:'.length) : opts.model;
     const args = [
       '-p',
@@ -39,7 +43,7 @@ export class ClaudeReviewEngine implements Engine {
     const env: Record<string, string> = { ...(process.env as Record<string, string>), ENABLE_TOOL_SEARCH: 'false', ...(opts.env || {}) };
     if (opts.profile.kind === 'isolated' && opts.profile.home) env.CLAUDE_CONFIG_DIR = opts.profile.home;
 
-    const [exe, exeArgs] = lowPriority(this.claudeBin, args);
+    const [exe, exeArgs] = lowPriority(claudeBin, args);
     const [executable, command] = opts.lockFile ? lockCommand(opts.lockFile, [exe, ...exeArgs]) : [exe, exeArgs];
     const child = spawn(executable, command, { cwd: opts.cwd, env, detached: true, stdio: ['pipe', outFd, logFd] });
     const closeFds = () => {
