@@ -614,6 +614,7 @@ process.exit(0);`,
 
   describe('7. Tuân thủ điều khoản provider', () => {
     it('chặn personal thứ hai nhưng cho phép team và api', async () => {
+      config.multiplePerProvider = false;
       const first = await server.inject({
         method: 'POST',
         url: '/api/profiles',
@@ -621,6 +622,9 @@ process.exit(0);`,
         payload: { name: 'personal-one', engine: 'agy', accountType: 'personal' },
       });
       expect(first.statusCode).toBe(201);
+      const firstTokenDir = path.join(agyHomesDir, 'personal-one', '.gemini', 'antigravity-cli');
+      fs.mkdirSync(firstTokenDir, { recursive: true });
+      fs.writeFileSync(path.join(firstTokenDir, 'antigravity-oauth-token'), 'fake-token');
 
       const second = await server.inject({
         method: 'POST',

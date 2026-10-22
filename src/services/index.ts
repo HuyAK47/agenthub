@@ -358,6 +358,10 @@ export const CreateProfileSchema = z.object({
   accountType: z.enum(['personal', 'team', 'api']).default('personal'),
 });
 
+function providerLabel(engine: 'agy' | 'codex' | 'claude'): string {
+  return engine === 'agy' ? 'Gemini' : engine === 'codex' ? 'Codex' : 'Claude';
+}
+
 export const RenameProfileSchema = z.object({
   newName: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
 });
@@ -1481,9 +1485,17 @@ export class AppService {
   createProfile(raw: unknown): ProfileRow {
     const parsed = CreateProfileSchema.parse(raw);
     if (!this.config.multiplePerProvider && parsed.accountType === 'personal') {
-      const existing = this.profileRepo.getAll().find((profile) => profile.engine === parsed.engine && profile.accountType === 'personal');
+      const existing = this.profileRepo.getAll().find((profile) =>
+        profile.engine === parsed.engine &&
+        profile.accountType === 'personal' &&
+        isProfileLoggedIn(profile),
+      );
       if (existing) {
-        throw new HttpError(409, 'provider_policy', `Đã có hồ sơ cá nhân cho engine ${parsed.engine}; hãy dùng hồ sơ API/Team hoặc bật multiplePerProvider`);
+        throw new HttpError(
+          409,
+          'provider_policy',
+          `Đã có tài khoản ${providerLabel(parsed.engine)} cá nhân: ${existing.label || existing.name}. Bật 'Cho phép nhiều tài khoản' trong Cài đặt, hoặc chọn loại Team/API.`,
+        );
       }
     }
     if (this.profileRepo.get(parsed.name)) {
@@ -1623,9 +1635,15 @@ export class AppService {
 
       // Cùng chính sách với createProfile: không tạo thêm hồ sơ cá nhân khi multiplePerProvider tắt.
       if (action === 'created' && !this.config.multiplePerProvider && accountType === 'personal') {
-        const personal = this.profileRepo.getAll().find((p) => p.engine === 'agy' && p.accountType === 'personal');
+        const personal = this.profileRepo.getAll().find((p) =>
+          p.engine === 'agy' && p.accountType === 'personal' && isProfileLoggedIn(p),
+        );
         if (personal) {
-          fail(targetName, email, `Đã có hồ sơ cá nhân cho engine agy (${personal.name}); hãy chọn loại Team/API hoặc bật multiplePerProvider`);
+          fail(
+            targetName,
+            email,
+            `Đã có tài khoản Gemini cá nhân: ${personal.label || personal.name}. Bật 'Cho phép nhiều tài khoản' trong Cài đặt, hoặc chọn loại Team/API.`,
+          );
           continue;
         }
       }
