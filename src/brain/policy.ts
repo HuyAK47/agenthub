@@ -332,7 +332,7 @@ export class BrainPolicy {
     if (toolName === 'Bash' && DENY_COMMAND.test(command)) {
       return { action: 'deny', reason: 'policy:deny', message: 'Lệnh thuộc danh sách luôn từ chối' };
     }
-    if (toolName === 'Bash' && this.denyBashWrites && !allowedCommand(command, this.roots, cwd)) {
+    if (toolName === 'Bash' && this.denyBashWrites && !allowedCommand(command, this.roots, cwd, 'standard')) {
       return { action: 'deny', reason: 'policy:deny', message: 'Trợ lý chỉ được dùng Bash cho thao tác đọc an toàn' };
     }
     if (this.denyToolWrites && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
