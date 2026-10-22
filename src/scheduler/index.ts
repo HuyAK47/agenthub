@@ -674,16 +674,7 @@ export class Scheduler {
     // completion path. This prevents callers from turning a running/queued
     // task into checking with an arbitrary or stale run id.
     if (task.status !== 'checking') return;
-    const completedRun = this.runRepo.get(runId);
-    if (!completedRun || completedRun.taskId !== taskId || completedRun.kind !== 'worker' || completedRun.outcome !== 'done') return;
-    const workerRuns = this.runRepo.getByTask(taskId).filter((candidate) => candidate.kind === 'worker');
-    if (workerRuns.at(-1)?.id !== runId) return;
-    const runningTask = this.running.get(taskId);
-    if (runningTask && runningTask.runId !== runId) return;
-    const activeWorkerRuns = this.runRepo
-      .getByTask(taskId)
-      .filter((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
-    if (activeWorkerRuns.some((candidate) => candidate.id !== runId)) return;
+    if (!this.isCurrentCompletedWorker(taskId, runId)) return;
     const currentRunId = this.checkingRunIds.get(taskId);
     const existing = this.checkingPromises.get(taskId);
     if (existing && currentRunId === runId) return existing;
@@ -730,17 +721,8 @@ export class Scheduler {
   private async executeChecksForTask(taskId: string, runId: string, reuseSavedResults: boolean): Promise<void> {
     if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
-    const completedRun = this.runRepo.get(runId);
-    if (!task || task.status !== 'checking' || !completedRun || completedRun.taskId !== taskId || completedRun.kind !== 'worker' || completedRun.outcome !== 'done') return;
-    const workerRuns = this.runRepo.getByTask(taskId).filter((candidate) => candidate.kind === 'worker');
-    if (workerRuns.at(-1)?.id !== runId) return;
+    if (!task || task.status !== 'checking' || !this.isCurrentCompletedWorker(taskId, runId)) return;
     if (this.checkingRunIds.get(taskId) !== runId) return;
-    const runningTask = this.running.get(taskId);
-    if (runningTask && runningTask.runId !== runId) return;
-    const activeWorkerRuns = this.runRepo
-      .getByTask(taskId)
-      .filter((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
-    if (activeWorkerRuns.some((candidate) => candidate.id !== runId)) return;
 
     if (task.status !== 'checking') {
       this.taskRepo.update(taskId, { status: 'checking' });
@@ -805,6 +787,16 @@ export class Scheduler {
       }
     }
     if (!this.stopped) this.triggerTick();
+  }
+
+  /** A check can only follow the latest worker completion, never a caller's stale run id. */
+  private isCurrentCompletedWorker(taskId: string, runId: string): boolean {
+    const completedRun = this.runRepo.get(runId);
+    if (!completedRun || completedRun.taskId !== taskId || completedRun.kind !== 'worker' || completedRun.outcome !== 'done') return false;
+    const workerRuns = this.runRepo.getByTask(taskId).filter((candidate) => candidate.kind === 'worker');
+    if (workerRuns.at(-1)?.id !== runId) return false;
+    if (this.running.has(taskId)) return false;
+    return !workerRuns.some((candidate) => candidate.outcome === null);
   }
 
   private emitReviewReadyIfReview(taskId: string, payload?: unknown): void {

@@ -1751,6 +1751,12 @@ describe('Checking queue lifecycle', () => {
     runRepo.insert({ id: 'stale-run', taskId: 'test-project/strict', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', outcome: 'crashed' });
     await scheduler.runChecksForTask('test-project/strict', 'stale-run');
     expect(run).not.toHaveBeenCalled();
+
+    runRepo.insert({ id: 'completed-strict', taskId: 'test-project/strict', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    runRepo.finish('completed-strict', 'done');
+    runRepo.insert({ id: 'active-strict', taskId: 'test-project/strict', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    await scheduler.runChecksForTask('test-project/strict', 'completed-strict');
+    expect(run).not.toHaveBeenCalled();
     scheduler.stop();
   });
 });
