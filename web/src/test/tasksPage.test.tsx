@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TasksPage } from '../pages/TasksPage';
@@ -98,9 +98,24 @@ describe('TasksPage & Kanban Long Lists', () => {
     expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'review', search: 'beta', limit: 20, offset: 0 }));
   });
 
+  it('khôi phục deep-link page và tiếp tục bằng cursor của trang đó', async () => {
+    const getTasks = vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) => ({
+      items: createDoneTasks(1).map((task) => ({ ...task, slug: `page-${params?.offset ? params.offset / 20 + 1 : 1}` })),
+      total: 80,
+      nextCursor: params?.offset === 40 ? 'cursor-page-4' : null,
+    }));
+
+    renderPage('/tasks?view=list&page=3');
+    expect(await screen.findByText('page-3')).toBeInTheDocument();
+    expect(getTasks).toHaveBeenCalledWith(expect.objectContaining({ offset: 40 }));
+
+    fireEvent.click(screen.getByRole('button', { name: /trang sau/i }));
+    await waitFor(() => expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'cursor-page-4', offset: undefined })));
+  });
+
   it('cột 131 task chỉ render 10 thẻ done + nút Xem thêm, bấm thì thêm đúng step', async () => {
     const tasks = createDoneTasks(131);
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
 
     renderPage();
 
@@ -151,7 +166,7 @@ describe('TasksPage & Kanban Long Lists', () => {
       createdAt: '2026-10-15T00:00:00Z',
       updatedAt: new Date(Date.now() - (25 - i) * 1000).toISOString(),
     }));
-    vi.spyOn(client, 'getTasks').mockResolvedValue(queuedTasks);
+    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(queuedTasks);
 
     renderPage();
 
@@ -194,7 +209,7 @@ describe('TasksPage & Kanban Long Lists', () => {
         updatedAt: '2026-10-15T00:00:00Z',
       },
     ];
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
 
     renderPage();
 
@@ -230,7 +245,7 @@ describe('TasksPage & Kanban Long Lists', () => {
       createdAt: '2026-10-15T00:00:00Z',
       updatedAt: '2026-10-16T00:00:00Z',
     };
-    vi.spyOn(client, 'getTasks').mockResolvedValue([escalatedTask]);
+    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue([escalatedTask]);
 
     renderPage();
 
@@ -267,7 +282,7 @@ describe('TasksPage & Kanban Long Lists', () => {
         updatedAt: '2026-10-18T00:00:00Z',
       },
     ];
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
 
     renderPage();
 
@@ -279,7 +294,7 @@ describe('TasksPage & Kanban Long Lists', () => {
   it('ghi nhớ trạng thái mở rộng trong localStorage', async () => {
     window.localStorage.setItem('agenthub:tasks:done', 'expanded');
     const tasks = createDoneTasks(35);
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
 
     renderPage();
 

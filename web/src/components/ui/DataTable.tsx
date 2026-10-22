@@ -11,11 +11,15 @@ export interface DataTableProps<T> extends Omit<PaginationProps, 'onPageChange' 
   emptyTitle?: string;
   onPageChange?: PaginationProps['onPageChange'];
   onPageSizeChange?: PaginationProps['onPageSizeChange'];
+  sortKey?: string;
+  sortDirection?: 'asc' | 'desc';
+  onSortChange?: (key: string, direction: 'asc' | 'desc') => void;
 }
 
-export function DataTable<T>({ rows, columns, loading, error, emptyTitle, onPageChange, onPageSizeChange, ...pagination }: DataTableProps<T>) {
+export function DataTable<T>({ rows, columns, loading, error, emptyTitle, onPageChange, onPageSizeChange, sortKey, sortDirection, onSortChange, ...pagination }: DataTableProps<T>) {
   const { t } = useLocale();
-  const [sort, setSort] = React.useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  const [localSort, setLocalSort] = React.useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  const sort = sortKey ? { key: sortKey, direction: sortDirection || 'asc' } : localSort;
   const sortedRows = React.useMemo(() => {
     if (!sort) return rows;
     const column = columns.find((item) => item.key === sort.key);
@@ -27,7 +31,11 @@ export function DataTable<T>({ rows, columns, loading, error, emptyTitle, onPage
       return sort.direction === 'asc' ? result : -result;
     });
   }, [columns, rows, sort]);
-  const toggleSort = (key: string) => setSort((current) => current?.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' });
+  const toggleSort = (key: string) => {
+    const direction = sort?.key === key && sort.direction === 'asc' ? 'desc' : 'asc';
+    if (onSortChange) onSortChange(key, direction);
+    else setLocalSort({ key, direction });
+  };
   return <div className="overflow-hidden rounded-xl border border-[var(--t-border)]">
     <div className="max-h-[min(70vh,720px)] overflow-auto">
       <table className="w-full border-collapse text-left text-sm text-[var(--t-text)]">

@@ -1,7 +1,7 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProjects, getStatus, getTaskGraph, getTasks, getTasksPage } from '../api/client';
+import { getAllTasksPaged, getProjects, getStatus, getTaskGraph, getTasksPage } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
@@ -227,6 +227,8 @@ export const TasksPage: React.FC = () => {
   const [search, setSearch] = useState<string>(urlParams.get('search') || '');
   const [page, setPage] = useState(Number(urlParams.get('page') || 1));
   const [pageSize, setPageSize] = useState(Number(urlParams.get('pageSize') || 20));
+  const [sortKey, setSortKey] = useState<'createdAt' | 'updatedAt' | 'title' | 'slug'>((urlParams.get('sort') as 'createdAt' | 'updatedAt' | 'title' | 'slug') || 'createdAt');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>((urlParams.get('order') as 'asc' | 'desc') || 'desc');
   const [cursors, setCursors] = useState<Record<number, string | undefined>>({});
   const cursor = cursors[page - 1];
 
@@ -236,15 +238,19 @@ export const TasksPage: React.FC = () => {
   });
 
   const { data, isLoading: isPageLoading } = useQuery({
-    queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor],
-    queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor, offset: cursor ? undefined : (page - 1) * pageSize }),
+    queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor, sortKey, sortDirection],
+    queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor, offset: cursor ? undefined : (page - 1) * pageSize, sort: sortKey, order: sortDirection }),
     enabled: viewMode === 'list',
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
   });
   const { data: allTasks = [], isLoading: isAllTasksLoading } = useQuery({
     queryKey: ['tasks-kanban', selectedProject, search],
-    queryFn: () => getTasks({ project: selectedProject, search }),
+    queryFn: () => Promise.all(KANBAN_STATUSES.map((status) => getAllTasksPaged({ project: selectedProject, status, search }))).then((pages) => {
+      const unique = new Map<string, Task>();
+      for (const task of pages.flat()) unique.set(task.id, task);
+      return [...unique.values()];
+    }),
     enabled: viewMode === 'kanban',
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
@@ -262,13 +268,13 @@ export const TasksPage: React.FC = () => {
   }, [data?.nextCursor, page]);
   useEffect(() => {
     const next = new URLSearchParams(urlParams);
-    const values: Record<string, string> = { project: selectedProject, status: selectedStatus, search, page: String(page), pageSize: String(pageSize), view: viewMode };
+    const values: Record<string, string> = { project: selectedProject, status: selectedStatus, search, page: String(page), pageSize: String(pageSize), view: viewMode, sort: sortKey, order: sortDirection };
     for (const [key, value] of Object.entries(values)) {
       if (value && value !== 'all' && value !== '1' && !(key === 'pageSize' && value === '20') && !(key === 'view' && value === 'kanban')) next.set(key, value);
       else next.delete(key);
     }
     if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
-  }, [selectedProject, selectedStatus, search, page, pageSize, viewMode, setUrlParams, urlParams]);
+  }, [selectedProject, selectedStatus, search, page, pageSize, viewMode, sortKey, sortDirection, setUrlParams, urlParams]);
   useEffect(() => {
     if (initialFilters.current) {
       initialFilters.current = false;
@@ -471,8 +477,8 @@ export const TasksPage: React.FC = () => {
           rows={data?.items || []}
           loading={isPageLoading}
           columns={[
-            { key: 'slug', title: t('tasks.slug'), render: (task) => <Link className="font-mono text-[var(--t-accent)] hover:underline" to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}>{task.slug}</Link> },
-            { key: 'title', title: t('tasks.title'), render: (task) => <span className="truncate" title={task.title}>{task.title}</span> },
+            { key: 'slug', title: t('tasks.slug'), sortable: true, sortValue: (task) => task.slug, render: (task) => <Link className="font-mono text-[var(--t-accent)] hover:underline" to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}>{task.slug}</Link> },
+            { key: 'title', title: t('tasks.title'), sortable: true, sortValue: (task) => task.title, render: (task) => <span className="truncate" title={task.title}>{task.title}</span> },
             { key: 'status', title: t('tasks.status'), render: (task) => <StatusBadge status={task.status} size="sm" /> },
             { key: 'project', title: t('tasks.project'), render: (task) => <span>{task.projectId}</span> },
           ]}
@@ -481,6 +487,9 @@ export const TasksPage: React.FC = () => {
           total={data?.total ?? 0}
           onPageChange={setPage}
           onPageSizeChange={(size) => { setPageSize(size); setPage(1); setCursors({}); }}
+          sortKey={sortKey}
+          sortDirection={sortDirection}
+          onSortChange={(key, direction) => { setSortKey(key as typeof sortKey); setSortDirection(direction); setPage(1); setCursors({}); }}
         />
       ) : (viewMode === 'kanban' ? isAllTasksLoading : isGraphLoading) ? (
         <div className="flex items-center justify-center min-h-[40vh]">

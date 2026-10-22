@@ -13,7 +13,7 @@ vi.mock('../api/client', async () => {
   return {
     ...actual,
     getProjects: vi.fn(),
-    getTasks: vi.fn(),
+    getAllTasksPaged: vi.fn(),
     getTaskGraph: vi.fn(),
     getStatus: vi.fn().mockResolvedValue({}),
   };
@@ -94,7 +94,7 @@ describe('TasksPage - DAG View and Filters', () => {
     vi.mocked(client.getProjects).mockResolvedValue([
       { id: 'p1', name: 'Project 1', path: '/tmp/p1', defaultBranch: 'main', maxParallel: 2 },
     ]);
-    vi.mocked(client.getTasks).mockResolvedValue(mockTasksData);
+    vi.mocked(client.getAllTasksPaged).mockResolvedValue(mockTasksData);
     vi.mocked(client.getTaskGraph).mockResolvedValue(mockGraphData);
 
     renderWithProviders(<TasksPage />);
@@ -138,7 +138,7 @@ describe('TasksPage - DAG View and Filters', () => {
     vi.mocked(client.getProjects).mockResolvedValue([
       { id: 'p1', name: 'Project 1', path: '/tmp/p1', defaultBranch: 'main', maxParallel: 2 },
     ]);
-    vi.mocked(client.getTasks).mockResolvedValue(mockTasksData);
+    vi.mocked(client.getAllTasksPaged).mockResolvedValue(mockTasksData);
     vi.mocked(client.getTaskGraph).mockResolvedValue(mockGraphData);
 
     renderWithProviders(<TasksPage />);

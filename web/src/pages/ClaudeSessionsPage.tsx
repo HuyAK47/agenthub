@@ -2,10 +2,9 @@ import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { apiFetch, rescanClaudeSessions } from '../api/client';
-import { Card } from '../components/ui/Card';
+import { Card, DataTable } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
 import { formatNumber } from '../utils/format';
-import { CollapsibleList } from '../components/CollapsibleList';
 
 type TaskUsage = { taskId: string; effectiveTokens: number };
 type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[]; limitResetAt?: number | null; autoResumeEnabled?: number };
@@ -17,51 +16,22 @@ const formatTaskId = (id: string, outsideLabel: string) => (id === '_general' ? 
 const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
   const { t, locale } = useLocale();
   return (
-    <Card>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-[var(--t-text-3)]">
-              <th className="py-2">{t('extra.claudeSessions')}</th>
-              <th>{t('extra.model')}</th>
-              <th>{t('extra.messages')}</th>
-              <th>{t('extra.token')}</th>
-              <th>{t('extra.task')}</th>
-              <th>{t('extra.lastActive')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <CollapsibleList items={sessions} initial={20} step={20} storageKey="agenthub:claude-sessions" tableColSpan={6}>
-            {(session) => (
-              <tr className="border-t border-[var(--t-border)]" key={session.sessionId}>
-                <td className="py-3 min-w-[260px]">
-                  <Link className="hover:text-[var(--t-accent)]" to={`/claude-sessions/${encodeURIComponent(session.sessionId)}`}>
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full mr-2 ${session.active ? 'bg-[var(--t-ok)]' : 'bg-[var(--t-text-3)]'}`}
-                      title={session.active ? t('claudeSessions.active') : ''}
-                    />
-                    {session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId)}
-                  </Link>
-                  <div className="text-xs text-[var(--t-text-3)] truncate max-w-[320px]">{session.cwd}</div>
-                </td>
-                <td>{session.model || t('extra.unknown')}</td>
-                <td>{session.messages}</td>
-                <td>{formatTokens(session.effectiveTokens, locale)}</td>
-                <td className="max-w-[220px]">
-                  {session.topTasks.length > 0
-                    ? session.topTasks
-                        .map((task) => `${formatTaskId(task.taskId, t('claudeSessions.outsideTask'))} (${formatTokens(task.effectiveTokens, locale)})`)
-                        .join(', ')
-                    : t('claudeSessions.outsideTask')}
-                </td>
-                <td>{session.lastAt ? new Date(session.lastAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US') : ''}</td>
-              </tr>
-            )}
-            </CollapsibleList>
-          </tbody>
-        </table>
-      </div>
-    </Card>
+    <DataTable
+      rows={sessions}
+      columns={[
+        { key: 'session', title: t('extra.claudeSessions'), sortable: true, sortValue: (session) => session.title || session.sessionId, render: (session) => <div className="min-w-[260px]"><Link className="hover:text-[var(--t-accent)]" to={`/claude-sessions/${encodeURIComponent(session.sessionId)}`}><span className={`inline-block w-2 h-2 rounded-full mr-2 ${session.active ? 'bg-[var(--t-ok)]' : 'bg-[var(--t-text-3)]'}`} title={session.active ? t('claudeSessions.active') : ''} />{session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId)}</Link><div className="text-xs text-[var(--t-text-3)] truncate max-w-[320px]" title={session.cwd}>{session.cwd}</div></div> },
+        { key: 'model', title: t('extra.model'), render: (session) => session.model || t('extra.unknown') },
+        { key: 'messages', title: t('extra.messages'), render: (session) => session.messages },
+        { key: 'tokens', title: t('extra.token'), render: (session) => formatTokens(session.effectiveTokens, locale) },
+        { key: 'task', title: t('extra.task'), render: (session) => session.topTasks.length > 0 ? session.topTasks.map((task) => `${formatTaskId(task.taskId, t('claudeSessions.outsideTask'))} (${formatTokens(task.effectiveTokens, locale)})`).join(', ') : t('claudeSessions.outsideTask') },
+        { key: 'lastAt', title: t('extra.lastActive'), sortable: true, sortValue: (session) => session.lastAt || '', render: (session) => session.lastAt ? new Date(session.lastAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US') : '' },
+      ]}
+      page={1}
+      pageSize={sessions.length || 20}
+      total={sessions.length}
+      onPageChange={() => undefined}
+      emptyTitle={t('pagination.empty')}
+    />
   );
 };
 

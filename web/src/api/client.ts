@@ -431,6 +431,8 @@ export interface TaskQuery {
   limit?: number;
   cursor?: string;
   offset?: number;
+  sort?: 'createdAt' | 'updatedAt' | 'title' | 'slug';
+  order?: 'asc' | 'desc';
 }
 
 export function getTasks(): Promise<Task[]>;
@@ -459,7 +461,20 @@ export async function getTasksPage(params?: TaskQuery): Promise<PageResponse<Tas
   query.set('limit', String(params?.limit ?? 20));
   if (params?.cursor) query.set('cursor', params.cursor);
   if (params?.offset !== undefined) query.set('offset', String(params.offset));
+  if (params?.sort) query.set('sort', params.sort);
+  if (params?.order) query.set('order', params.order);
   return apiFetch<PageResponse<Task>>(`/api/tasks?${query.toString()}`);
+}
+
+export async function getAllTasksPaged(params?: Omit<TaskQuery, 'limit' | 'cursor' | 'offset'>): Promise<Task[]> {
+  const items: Task[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await getTasksPage({ ...params, limit: 100, cursor });
+    items.push(...page.items);
+    cursor = page.nextCursor || undefined;
+  } while (cursor);
+  return items;
 }
 
 export async function getTaskGraph(params?: {
