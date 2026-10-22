@@ -7,6 +7,7 @@ const PALETTE_CLASS =
   /(?:^|[\s'"`])(?:[a-z-]+:)*(?:bg|text|border|ring|divide|from|via|to|outline|decoration|placeholder)-(?:white|black|gray|slate|zinc|neutral|stone|amber|green|red|blue|yellow|orange|purple|indigo|pink|emerald|teal|cyan|lime|sky|violet|fuchsia|rose)(?:-\d+)?(?:\/[^\s'"`]*)?/g;
 const DARK_VARIANT = /(?:^|[\s'"`])dark:(?:bg|text|border|ring|divide|from|via|to|outline|decoration|placeholder)-/g;
 const RAW_COLOR = /#[0-9a-fA-F]{3,8}|(?:rgb|rgba)\s*\(/g;
+const LEGACY_TOKEN = /var\(--(?:bg-app|bg-surface(?:-hover)?|border-default|text-(?:primary|secondary|muted))\)/g;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -27,6 +28,7 @@ describe('theme audit', () => {
         ['palette class', PALETTE_CLASS],
         ['dark variant', DARK_VARIANT],
         ['raw color', RAW_COLOR],
+        ['legacy theme token', LEGACY_TOKEN],
       ] as const) {
         for (const match of content.matchAll(pattern)) {
           const line = content.slice(0, match.index ?? 0).split('\n').length;
