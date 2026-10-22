@@ -34,6 +34,15 @@ describe('TaskRepo.page', () => {
     expect(second.items.map((task) => task.id)).toEqual(['p1~b']);
   });
 
+  it('uses the selected sort value when continuing a cursor', () => {
+    const { repo, db } = setup();
+    const first = repo.page({ limit: 1, sort: 'slug' });
+    expect(first.items.map((task) => task.slug)).toEqual(['c']);
+    db.prepare("INSERT INTO tasks (id, projectId, slug, title, level, dependsOn, createdAt, updatedAt) VALUES ('p1~z', 'p1', 'z', 'New', 'easy', '[]', '2026-02-01', '2026-02-01')").run();
+    const second = repo.page({ limit: 1, sort: 'slug', cursor: first.nextCursor! });
+    expect(second.items.map((task) => task.slug)).toEqual(['b']);
+  });
+
   it('filters project/status and accent-insensitive escaped search', () => {
     const { repo, db } = setup();
     new ProjectRepo(db).insert({ id: 'p2', name: 'Other project', path: '/tmp/other-project', defaultBranch: 'main', envTemplate: null, maxParallel: 2 });

@@ -1333,7 +1333,7 @@ export class TaskRepo {
     const comparison = descending ? '<' : '>';
     if (cursor) {
       conditions.push(`(${sortColumn} ${comparison} ? OR (${sortColumn} = ? AND id ${comparison} ?))`);
-      values.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+      values.push(cursor.value, cursor.value, cursor.id);
     }
     const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
     const countConditions = conditions.slice(0, cursor ? -1 : undefined);
@@ -1346,7 +1346,7 @@ export class TaskRepo {
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
     const last = items.at(-1);
-    return { items, total, nextCursor: hasMore && last ? encodeCursor(String(last[sortColumn as keyof TaskRow] ?? ''), last.id) : null };
+    return { items, total, nextCursor: hasMore && last ? encodeCursor((last[sortColumn as keyof TaskRow] as string | number | null) ?? '', last.id) : null };
   }
 
   getByProject(projectId: string): TaskRow[] {

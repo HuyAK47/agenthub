@@ -483,6 +483,20 @@ describe('Claude session privacy and quota handling', () => {
     expect(detail.title).toBe('12345678');
     db.close();
   });
+
+  it('uses the selected sort value when continuing a cursor', () => {
+    const db = openDatabase(':memory:');
+    const repo = new ClaudeSessionRepo(db);
+    repo.upsert({ sessionId: 'session-a', cwd: '/work/a', title: 'A', messages: 1 });
+    repo.upsert({ sessionId: 'session-b', cwd: '/work/b', title: 'B', messages: 2 });
+    repo.upsert({ sessionId: 'session-c', cwd: '/work/c', title: 'C', messages: 3 });
+    const first = repo.page(1, 0, undefined, 'messages', 'desc');
+    expect(first.items.map((session) => session.sessionId)).toEqual(['session-c']);
+    db.prepare("INSERT INTO claude_sessions (sessionId, cwd, title, messages) VALUES ('session-z', '/work/z', 'Z', 99)").run();
+    const second = repo.page(1, 0, first.nextCursor!, 'messages', 'desc');
+    expect(second.items.map((session) => session.sessionId)).toEqual(['session-b']);
+    db.close();
+  });
 });
 
 describe('ClaudeSessionRepo giữ dữ liệu khi cập nhật thiếu trường', () => {

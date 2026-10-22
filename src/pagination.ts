@@ -18,16 +18,19 @@ export function parsePageSize(value: string | number | undefined): number {
   return Math.min(100, Math.floor(parsed));
 }
 
-export function encodeCursor(updatedAt: string, id: string): string {
-  return Buffer.from(JSON.stringify({ updatedAt, id }), 'utf8').toString('base64url');
+export type CursorValue = string | number;
+
+export function encodeCursor(value: CursorValue, id: string): string {
+  return Buffer.from(JSON.stringify({ value, id }), 'utf8').toString('base64url');
 }
 
-export function decodeCursor(cursor: string | undefined): { updatedAt: string; id: string } | null {
+export function decodeCursor(cursor: string | undefined): { value: CursorValue; id: string } | null {
   if (!cursor) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { updatedAt?: unknown; id?: unknown };
-    return typeof parsed.updatedAt === 'string' && typeof parsed.id === 'string'
-      ? { updatedAt: parsed.updatedAt, id: parsed.id }
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { value?: unknown; updatedAt?: unknown; id?: unknown };
+    const value = typeof parsed.value === 'string' || typeof parsed.value === 'number' ? parsed.value : parsed.updatedAt;
+    return (typeof value === 'string' || typeof value === 'number') && typeof parsed.id === 'string'
+      ? { value, id: parsed.id }
       : null;
   } catch {
     return null;
