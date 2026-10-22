@@ -46,6 +46,16 @@ function initRepo(repo: string, remote?: string): string {
   return git(repo, ['rev-parse', 'HEAD']);
 }
 
+const testGitRunner = async (cwd: string, args: string[]) => {
+  try {
+    const output = git(cwd, args);
+    return { code: 0, output };
+  } catch (err: unknown) {
+    const error = err as { status?: number; message?: string };
+    return { code: error.status ?? 1, output: error.message ?? String(err) };
+  }
+};
+
 function deployEventBus(events: Array<{ type: string; payload: unknown }>) {
   return {
     emit: (type: string, _id?: string, payload?: unknown) => { events.push({ type, payload }); return true; },
@@ -227,6 +237,35 @@ describe('DeployService', () => {
     expect(f.events).toContainEqual(expect.objectContaining({ type: 'deploy.failed', payload: expect.objectContaining({ level: 'incident' }) }));
   });
 
+  it('returns status failed when push fails, even if previous deployment succeeded', async () => {
+    const f = setup();
+    const repo = path.join(f.root, 'repo');
+    initRepo(repo);
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false, push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true } } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      async () => ({ code: 1, output: 'push rejected' }),
+      async () => ({ code: 0, output: '' }),
+    );
+
+    (service as unknown as { latest: Map<string, unknown> }).latest.set('demo', {
+      projectId: 'demo',
+      status: 'succeeded',
+      commit: 'abc',
+    });
+
+    const result = await service.pushNow('demo');
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('exit 1');
+    expect(service.getStatus('demo')?.status).toBe('failed');
+    expect(f.events).toContainEqual(expect.objectContaining({
+      type: 'deploy.failed',
+      payload: expect.objectContaining({ projectId: 'demo', level: 'incident' }),
+    }));
+  });
+
   it('writes a restart marker and invokes the platform restart command only for the hub project', async () => {
     const f = setup();
     const restarts: string[][] = [];
@@ -325,7 +364,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
 
@@ -368,7 +407,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => { stepRuns++; return { code: 0, output: '' }; },
     );
 
@@ -414,7 +453,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
 
@@ -509,7 +548,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
 
@@ -537,7 +576,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
     service2.start();
