@@ -201,6 +201,10 @@ export class BrainRunner {
       }
       return;
     }
+    if (type === 'chat.compacted') {
+      if (typeof data.sessionId === 'string') this.sentKnowledgeHash.delete(data.sessionId);
+      return;
+    }
     if (type === 'chat.message') {
       const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
       if (data.role === 'user') this.userBusy.add(sessionId);
@@ -268,9 +272,9 @@ export class BrainRunner {
     const directives = this.opts.directiveRepo?.list(projectId).map((directive) => `- ${directive.text}`).join('\n') || '- Không có';
     const settings = projectId ? this.projectSettings(projectId) : null;
     const knowledge = projectId && this.opts.knowledgeRepo
-      ? buildProjectKnowledgeContext(this.opts.knowledgeRepo.getByProject(projectId), settings?.references || [])
+      ? buildProjectKnowledgeContext(this.opts.knowledgeRepo.getByProject(projectId), settings?.references || [], undefined, project?.path)
       : null;
-    const key = projectId || '__system__';
+    const key = this.sessionIdFor(projectId);
     let knowledgePrompt = 'KIẾN THỨC DỰ ÁN không đổi; hãy tiếp tục áp dụng kiến thức đã nhận.';
     if (knowledge && this.sentKnowledgeHash.get(key) !== knowledge.hash) {
       this.sentKnowledgeHash.set(key, knowledge.hash);

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AgentHubConfig } from '../config.js';
 import { reapSyncForWorktree } from '../reaper.js';
+import { resolveProjectFile } from '../projects/paths.js';
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -606,8 +607,13 @@ export class WorktreeService {
       '',
     ];
     for (const entry of checklist.slice(0, 5)) {
-      const resolved = projectPath && !path.isAbsolute(entry) ? path.resolve(projectPath, entry) : entry;
+      const resolved = projectPath ? resolveProjectFile(projectPath, entry) : null;
       lines.push(`## ${entry}`, `- Đường dẫn: ${resolved}`);
+      if (!resolved) {
+        lines.push('- CẢNH BÁO: đường dẫn không hợp lệ hoặc nằm ngoài project.');
+        lines.push('');
+        continue;
+      }
       try {
         const stat = fs.statSync(resolved);
         if (!stat.isFile()) {

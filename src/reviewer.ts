@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import path from 'node:path';
+import { resolveProjectFile } from './projects/paths.js';
 
 export type ReviewerVerdict = 'approved' | 'changes_requested';
 
@@ -23,7 +23,8 @@ export function buildReviewerPrompt(taskBody: string, worktreePath: string, chec
   const checklistText = checklist.length === 0
     ? 'Không có checklist dự án.'
     : checklist.slice(0, 5).map((entry) => {
-      const file = path.isAbsolute(entry) ? entry : path.join(worktreePath, entry);
+      const file = resolveProjectFile(worktreePath, entry);
+      if (!file) return `- ${entry}: đường dẫn không hợp lệ hoặc nằm ngoài project; bị từ chối.`;
       try {
         const stat = fs.statSync(file);
         if (!stat.isFile()) return `- ${entry}: không phải file; hãy tự kiểm tra.`;

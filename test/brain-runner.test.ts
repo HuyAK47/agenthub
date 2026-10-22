@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BrainRunner } from '../src/brain/runner.js';
-import { BrainTurnRepo, ChatSessionRepo, ProfileRepo, ProjectRepo, openDatabase } from '../src/db/index.js';
+import { BrainTurnRepo, ChatSessionRepo, KnowledgeRepo, ProfileRepo, ProjectRepo, openDatabase } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 
 const dirs: string[] = [];
@@ -17,6 +17,7 @@ function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: 
   const turns = new BrainTurnRepo(db);
   const profiles = new ProfileRepo(db);
   const projects = new ProjectRepo(db);
+  const knowledge = new KnowledgeRepo(db);
   for (const id of Object.keys(options.projectSettings || {})) {
     projects.insert({ id, name: id.toUpperCase(), path: dir, defaultBranch: 'main', envTemplate: null, maxParallel: 1, settings: options.projectSettings?.[id] });
   }
@@ -40,8 +41,9 @@ function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: 
     turnRepo: turns,
     debounceMs: 60_000,
     projectRepo: projects,
+    knowledgeRepo: knowledge,
   });
-  return { db, sessions, turns, profiles, projects, events, sent, runner };
+  return { db, sessions, turns, profiles, projects, knowledge, events, sent, runner };
 }
 
 describe('BrainRunner', () => {
@@ -66,6 +68,34 @@ describe('BrainRunner', () => {
     ctx.runner.flush();
     const prompt = ctx.sent[0];
     expect(prompt.match(/quota\.exhausted/g)).toHaveLength(1);
+  });
+
+  it('injects project knowledge once, repeats it after content change or compact', () => {
+    const ctx = setup('suggest', { projectSettings: { p: '{"references":[]}' } });
+    ctx.knowledge.insert({ projectId: 'p', taskId: 'manual/p', content: 'Pinned rule', pinned: true });
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p/one');
+    ctx.runner.flush();
+    expect(ctx.sent[0]).toContain('Pinned rule');
+    ctx.events.emit('chat.done', undefined, { sessionId: 'brain:p', usage: {} });
+    ctx.knowledge.insert({ projectId: 'p', taskId: 'manual/p', content: 'New rule', pinned: true });
+    ctx.events.emit('task.done', 'p/two');
+    ctx.runner.flush();
+    expect(ctx.sent[1]).toContain('New rule');
+    ctx.events.emit('chat.done', undefined, { sessionId: 'brain:p', usage: {} });
+    ctx.events.emit('chat.compacted', undefined, { sessionId: 'brain:p' });
+    ctx.events.emit('task.done', 'p/three');
+    ctx.runner.flush();
+    expect(ctx.sent[2]).toContain('Pinned rule');
+  });
+
+  it('puts the project review checklist in the brain prompt', () => {
+    const ctx = setup('suggest', { projectSettings: { p: '{"reviewChecklist":["docs/checklist.md"]}' } });
+    ctx.runner.start();
+    ctx.events.emit('task.review_ready', 'p/task');
+    ctx.runner.flush();
+    expect(ctx.sent[0]).toContain('docs/checklist.md');
+    expect(ctx.sent[0]).toContain('CHECKLIST KHI DUYỆT');
   });
 
   it('does not overlap a user turn and preserves events after quota', () => {

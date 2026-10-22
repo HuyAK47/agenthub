@@ -154,7 +154,7 @@ export class ChatService {
   private assistantPrompt(session: ChatSessionRow): string {
     const project = session.projectId ? this.projectRepo.get(session.projectId) : undefined;
     const context = project && this.knowledgeRepo
-      ? buildProjectKnowledgeContext(this.knowledgeRepo.getByProject(project.id), projectSettings(project).references).text
+      ? buildProjectKnowledgeContext(this.knowledgeRepo.getByProject(project.id), projectSettings(project).references, undefined, project.path).text
       : undefined;
     return buildAssistantPrompt(context);
   }

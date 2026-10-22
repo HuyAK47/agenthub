@@ -128,5 +128,15 @@ describe('project settings through the service', () => {
       path: path.join(tmpDir, 'repo'),
       settings: { references: [{ name: 'has space', path: '/x' }] },
     })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad3',
+      path: path.join(tmpDir, 'repo'),
+      settings: { reviewChecklist: ['/etc/passwd'] },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad4',
+      path: path.join(tmpDir, 'repo'),
+      settings: { reviewChecklist: ['docs/../secret.md'] },
+    })).toThrow();
   });
 });

@@ -11,19 +11,18 @@ export interface KnowledgeReference {
   path: string;
   inject?: boolean;
 }
-
 export interface ProjectKnowledgeContext {
   text: string;
   hash: string;
   truncated: string[];
 }
-
-function readReference(reference: KnowledgeReference): { content?: string; reason?: string; size?: number } {
+function readReference(reference: KnowledgeReference, projectPath?: string): { content?: string; reason?: string; size?: number } {
   try {
-    const stat = fs.statSync(reference.path);
+    const referencePath = projectPath && !path.isAbsolute(reference.path) ? path.resolve(projectPath, reference.path) : reference.path;
+    const stat = fs.statSync(referencePath);
     if (!stat.isFile()) return { reason: 'không phải file' };
     if (stat.size > MAX_REFERENCE_BYTES) return { reason: `vượt giới hạn 64KB (${stat.size} bytes)`, size: stat.size };
-    return { content: fs.readFileSync(reference.path, 'utf8'), size: stat.size };
+    return { content: fs.readFileSync(referencePath, 'utf8'), size: stat.size };
   } catch {
     return { reason: 'không thể đọc' };
   }
@@ -41,6 +40,7 @@ export function buildProjectKnowledgeContext(
   entries: KnowledgeEntryRow[],
   references: KnowledgeReference[],
   maxBytes = MAX_PROJECT_KNOWLEDGE_BYTES,
+  projectPath?: string,
 ): ProjectKnowledgeContext {
   const sections: string[] = ['# KIẾN THỨC DỰ ÁN', '', '## Kiến thức ghim'];
   for (const entry of entries.filter((item) => item.pinned === 1)) {
@@ -50,7 +50,7 @@ export function buildProjectKnowledgeContext(
   sections.push('', '## Tham chiếu inject');
   const truncated: string[] = [];
   for (const reference of references.filter((item) => item.inject)) {
-    const result = readReference(reference);
+    const result = readReference(reference, projectPath);
     sections.push(`### ${reference.name}`, `- Đường dẫn: ${reference.path}`);
     if (result.content !== undefined) {
       sections.push('```', result.content, '```');
@@ -77,8 +77,4 @@ export function buildProjectKnowledgeContext(
     hash: crypto.createHash('sha256').update(full).digest('hex'),
     truncated: [...new Set(truncated)],
   };
-}
-
-export function projectKnowledgePaths(projectPath: string, references: KnowledgeReference[]): string[] {
-  return references.filter((reference) => reference.inject).map((reference) => path.resolve(projectPath, reference.path));
 }
