@@ -28,9 +28,13 @@ export function StepSuggestions({
       : '';
 
   const sensitiveReason =
-    inspection?.mount.encrypted || inspection?.mount.temporary
-      ? t('projects.wizardReasonMount')
-      : '';
+    inspection?.path?.startsWith('/media/')
+      ? t('projects.wizardReasonMedia')
+      : inspection?.mount.encrypted ||
+          inspection?.mount.temporary ||
+          inspection?.suggestedSettings.sensitiveProject
+        ? t('projects.wizardReasonMount')
+        : '';
 
   return (
     <div className="space-y-3">
