@@ -1736,6 +1736,11 @@ export class Scheduler {
       if (task.reviewerEscalated) continue;
       const chain = this.reviewChainForTask(task);
       const step = chain[task.reviewStep ?? 0];
+      if (chain.length > 0 && (task.reviewStep ?? 0) >= chain.length && this.skippedCodexGate(task, chain)) {
+        // Tasks that passed a Codex gate without a Codex review (older builds skipped same-model work) go round again.
+        this.taskRepo.update(task.id, { reviewStep: 0 });
+        continue;
+      }
       if (chain.length > 0 && (!step || step.mode !== 'gate')) {
         if ((task.reviewStep ?? 0) >= chain.length && this.markReviewNotified(task, 'complete')) {
           this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true });
@@ -1804,6 +1809,12 @@ export class Scheduler {
     } else {
       this.eventBus.emit('review.gate_completed', task.id, { reviewStep: nextStep, reason });
     }
+  }
+
+  private skippedCodexGate(task: TaskRow, chain: ReviewChainStep[]): boolean {
+    if (!chain.some((step) => step.mode === 'gate' && step.reviewer.startsWith('codex:'))) return false;
+    const last = this.reviewRepo?.getByTask(task.id).at(-1);
+    return !last || last.actor !== 'codex-reviewer' || last.verdict !== 'approved';
   }
 
   /**
