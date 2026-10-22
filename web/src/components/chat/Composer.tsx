@@ -162,9 +162,9 @@ export const Composer: React.FC<ComposerProps> = ({
             className="w-full resize-none bg-transparent px-4 py-3 text-sm text-[var(--t-text)] placeholder-[var(--t-text-3)] focus:outline-hidden max-h-[180px] min-h-[48px] leading-relaxed"
           />
           {showSuggestions && suggestions.length > 0 && (
-            <div role="listbox" aria-label="Chat suggestions" className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-1.5 shadow-xl">
+            <div role="listbox" aria-label="Chat suggestions" className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-1.5 shadow-xl">
               {suggestions.map((suggestion) => (
-                <button key={suggestion} type="button" role="option" onMouseDown={(event) => event.preventDefault()} onClick={() => insertSuggestion(suggestion)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)]">
+                <button key={suggestion} type="button" role="option" onMouseDown={(event) => event.preventDefault()} onClick={() => insertSuggestion(suggestion)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-[var(--t-text)] hover:bg-[var(--t-surface-2)]">
                   {suggestion.startsWith('@') ? <AtSign className="w-3.5 h-3.5 text-[var(--t-accent)]" /> : <span className="font-mono text-[var(--t-accent)]">/</span>}
                   {suggestion}
                 </button>

@@ -481,7 +481,7 @@ export const ChatPage: React.FC = () => {
   const sessionState = activeSession?.state || (isBusy ? 'running' : 'idle');
 
   return (
-    <div className="relative h-[calc(100vh-8.5rem)] flex rounded-2xl border border-[var(--t-border)] bg-[var(--bg-app)] overflow-hidden shadow-xs">
+    <div className="relative h-[calc(100vh-8.5rem)] flex rounded-2xl border border-[var(--t-border)] bg-[var(--t-bg)] overflow-hidden shadow-xs">
       {/* Toast Notification */}
       {toastMessage && (
         <div
