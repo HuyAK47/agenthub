@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LIMITED_TEST_ENV, lowPriority, runInProcessGroup } from '../src/priority.js';
+import { LIMITED_TEST_ENV, lowPriority, runInProcessGroup, testThreadLimit } from '../src/priority.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -19,6 +19,11 @@ function alive(pid: number): boolean {
 }
 
 describe('priority helpers', () => {
+  it('keeps test runners at most two threads even when worker count is absent', () => {
+    expect(testThreadLimit(1, 12)).toBe(2);
+    expect(testThreadLimit(6, 12)).toBe(2);
+    expect(testThreadLimit(20, 12)).toBe(1);
+  });
   it('wraps commands with nice on linux and macos', () => {
     const [exe, args] = lowPriority('/bin/echo', ['hi']);
     const usesNice =

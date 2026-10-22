@@ -75,7 +75,7 @@ function tail(value: string): string { return value.length > MAX_OUTPUT ? value.
 function envFromFiles(repo: string, hubHome: string, project?: ProjectRow): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const file of ['.env', '.env.local']) if (fs.existsSync(path.join(repo, file))) for (const line of fs.readFileSync(path.join(repo, file), 'utf8').split('\n')) { const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^['"]|['"]$/g, ''); }
-  return workerEnvironment(hubHome, env, { project, guards: false });
+  return workerEnvironment(hubHome, env, { project, guards: false, workerCount: project?.maxParallel });
 }
 async function runOne(check: CheckDefinition, repo: string, hubHome: string, project?: ProjectRow): Promise<CheckResult> {
   const started = Date.now();

@@ -10,6 +10,10 @@ export type TaskStatus =
   | 'cancelled'
   | 'waiting_quota';
 
+export interface PerfGroup { cpuPercent: number; rssBytes: number; processes: number; }
+export interface PerfSample { at: string; cpuCount: number; groups: Record<string, PerfGroup>; }
+export interface PerfReport { samples: PerfSample[]; latest: PerfSample | null; }
+
 export type TaskLevel = 'easy' | 'hard';
 
 export type EngineType = 'agy' | 'codex' | 'claude';

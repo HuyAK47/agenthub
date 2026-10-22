@@ -59,6 +59,7 @@ import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
 import type { DeployService } from '../deploy.js';
+import type { PerfCollector } from '../perf.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -466,6 +467,8 @@ export const UpdateConfigSchema = z.object({
     enabled: z.boolean().optional(),
     high: z.number().positive().optional(),
     ok: z.number().positive().optional(),
+    pressureHigh: z.number().positive().optional(),
+    pressureOk: z.number().positive().optional(),
     minFreeMemGB: z.number().positive().optional(),
     recoverAfterSec: z.number().int().positive().optional(),
   }).optional(),
@@ -746,6 +749,7 @@ export class AppService {
   public deployService?: DeployService;
   public ciRepo?: CiRepo;
   public ciService?: CiWatchService;
+  private perfCollector?: PerfCollector;
   private profileChecks = new Set<string>();
   private reviewingTasks = new Set<string>();
   constructor(
@@ -775,6 +779,9 @@ export class AppService {
     public brainRunner?: BrainRunner,
     public directiveRepo?: BrainDirectiveRepo,
   ) {}
+
+  setPerfCollector(collector: PerfCollector): void { this.perfCollector = collector; }
+  getPerf() { return { samples: this.perfCollector?.getSamples() || [], latest: this.perfCollector?.latest() || null }; }
 
   async getSetupStatus() {
     if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng');

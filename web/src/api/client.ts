@@ -28,7 +28,10 @@ import {
   ModelOptions,
   TaskBatch,
   CreateBatchInput,
+  PerfReport,
 } from '../types/api';
+
+export const getPerf = () => apiFetch<PerfReport>('/api/perf');
 
 export async function getModelOptions(): Promise<ModelOptions> {
   return apiFetch<ModelOptions>('/api/models');

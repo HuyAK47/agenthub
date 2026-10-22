@@ -22,6 +22,7 @@ export interface SpawnOpts {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null };
   codexSandbox?: 'off' | 'workspace-write';
+  workerCount?: number;
 }
 
 export interface QuotaDetection {
@@ -146,7 +147,7 @@ export class AgyEngine implements Engine {
       workerEnvironment(
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         env,
-        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd },
+        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount },
       ),
     );
     const [agyExe, agyArgs] = lowPriority(this.agyPath, args);
@@ -293,7 +294,7 @@ export class CodexEngine implements Engine {
       workerEnvironment(
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         env,
-        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd },
+        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount },
       ),
     );
 
@@ -381,7 +382,7 @@ export class FakeEngine implements Engine {
         workerEnvironment(
           opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
           env,
-          { gitHooks: opts.gitHooks, project: opts.project },
+          { gitHooks: opts.gitHooks, project: opts.project, workerCount: opts.workerCount },
         ),
       );
     }

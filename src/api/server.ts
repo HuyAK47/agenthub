@@ -124,6 +124,8 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.get('/api/perf', async () => service.getPerf());
+
   fastify.get('/api/setup/status', async () => service.getSetupStatus());
   fastify.post('/api/setup/install/:tool', async (req, reply) => {
     const { tool } = req.params as { tool: string };

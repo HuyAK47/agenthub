@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects } from '../api/client';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage, retryChatLimitNow } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -97,6 +97,7 @@ export const DashboardPage: React.FC = () => {
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: getProjects, refetchInterval: 30_000 });
+  const { data: perf } = useQuery({ queryKey: ['perf'], queryFn: getPerf, refetchInterval: 30_000 });
 
   const queryClient = useQueryClient();
   const pauseMutation = useMutation({
@@ -265,6 +266,12 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       <GettingStartedChecklist />
+
+      <section data-testid="perf-card" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-4">
+        <div className="flex items-center justify-between"><div><h2 className="text-base font-semibold">Hiệu năng</h2><p className="text-xs text-[var(--text-secondary)]">CPU/RSS theo nhóm tiến trình · vòng 1 giờ gần nhất</p></div><Cpu className="w-5 h-5 text-[var(--t-accent)]" /></div>
+        {perf?.latest ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{Object.entries(perf.latest.groups).filter(([, value]) => value.processes > 0).sort((a, b) => b[1].cpuPercent - a[1].cpuPercent).map(([name, value]) => <div key={name} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2"><div className="flex justify-between text-xs"><span className="font-medium">{name}</span><span>{value.cpuPercent.toFixed(1)}% CPU</span></div><div className="mt-1 text-xs text-[var(--text-secondary)]">{(value.rssBytes / 1024 ** 3).toFixed(2)} GB · {value.processes} process</div></div>)}</div> : <p className="text-xs text-[var(--text-secondary)]">Chưa có mẫu đo.</p>}
+        {perf?.samples?.length ? <div className="flex h-8 items-end gap-0.5" aria-label="Biểu đồ CPU 1 giờ">{perf.samples.map((sample, index) => <span key={`${sample.at}-${index}`} className="flex-1 rounded-t bg-[var(--t-accent)] opacity-70" style={{ height: `${Math.max(4, Math.min(100, Object.values(sample.groups).reduce((sum, group) => sum + group.cpuPercent, 0) / Math.max(1, sample.cpuCount)))}%` }} />)}</div> : null}
+      </section>
 
       {status.disks && status.disks.length > 0 && (
         <div data-testid="monitored-disks" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
