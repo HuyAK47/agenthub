@@ -405,6 +405,7 @@ export class WorktreeService {
     knowledgeMaxChars = 12000,
     references: Array<{ name: string; path: string; inject?: boolean }> = [],
     projectPath?: string,
+    reviewChecklist: string[] = [],
   ): void {
     const agentHubDir = path.join(worktreePath, '.agenthub');
     if (!fs.existsSync(agentHubDir)) {
@@ -425,6 +426,14 @@ export class WorktreeService {
       fs.writeFileSync(referencesPath, this.buildReferencesContext(references), 'utf-8');
     } else if (fs.existsSync(referencesPath)) {
       fs.rmSync(referencesPath, { force: true });
+    }
+
+    const checklistPath = path.join(agentHubDir, 'context', 'review-checklist.md');
+    if (reviewChecklist.length > 0) {
+      fs.mkdirSync(path.dirname(checklistPath), { recursive: true });
+      fs.writeFileSync(checklistPath, this.buildReviewChecklistContext(reviewChecklist, projectPath), 'utf-8');
+    } else if (fs.existsSync(checklistPath)) {
+      fs.rmSync(checklistPath, { force: true });
     }
 
     // Copy AGENTS.md if present in worktree or project root (<= 32KB)
@@ -585,6 +594,34 @@ export class WorktreeService {
       lines.push('');
     }
 
+    return lines.join('\n');
+  }
+
+  private buildReviewChecklistContext(checklist: string[], projectPath?: string): string {
+    const lines = [
+      '# CHECKLIST KHI DUYỆT',
+      '',
+      'Bộ não và worker bắt buộc đối chiếu thay đổi với từng file dưới đây khi duyệt task.',
+      'Đây là tài liệu chỉ đọc; không sửa hoặc commit các file checklist.',
+      '',
+    ];
+    for (const entry of checklist.slice(0, 5)) {
+      const resolved = projectPath && !path.isAbsolute(entry) ? path.resolve(projectPath, entry) : entry;
+      lines.push(`## ${entry}`, `- Đường dẫn: ${resolved}`);
+      try {
+        const stat = fs.statSync(resolved);
+        if (!stat.isFile()) {
+          lines.push('- CẢNH BÁO: không phải file.');
+        } else if (stat.size > 64 * 1024) {
+          lines.push(`- CẢNH BÁO: file vượt giới hạn 64KB (${stat.size} bytes), hãy tự đọc khi cần.`);
+        } else {
+          lines.push('', '```', fs.readFileSync(resolved, 'utf8'), '```');
+        }
+      } catch {
+        lines.push('- CẢNH BÁO: không thể đọc file, hãy tự kiểm tra đường dẫn khi cần.');
+      }
+      lines.push('');
+    }
     return lines.join('\n');
   }
 

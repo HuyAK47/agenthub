@@ -21,6 +21,7 @@ describe('project settings parsing', () => {
       integration: { enabled: false },
       ci: {},
       references: [],
+      reviewChecklist: [],
       notifications: { telegramContent: 'full' },
     });
     expect(projectSettings(undefined)).toEqual(DEFAULT_PROJECT_SETTINGS);

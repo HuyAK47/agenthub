@@ -1758,7 +1758,7 @@ export class Scheduler {
         profile,
         model: reviewerModel,
         cwd: task.worktreePath,
-        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks),
+        prompt: buildReviewerPrompt(task.body || task.title, task.worktreePath, checks, project ? projectSettings(project).reviewChecklist : []),
         logPath,
         outputPath,
         readOnly: true,
@@ -2173,6 +2173,7 @@ export class Scheduler {
       this.config.context?.knowledgeMaxChars,
       settings?.references || [],
       project?.path,
+      settings?.reviewChecklist || [],
     );
   }
 
