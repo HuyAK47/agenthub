@@ -688,7 +688,20 @@ export const MIGRATIONS: string[] = [
     creationGoal TEXT,
     FOREIGN KEY (projectId) REFERENCES projects(id)
   );
-  INSERT INTO tasks_new SELECT * FROM tasks;
+  INSERT INTO tasks_new (
+    id, projectId, slug, title, body, level, modelChain, baseRef, branch, worktreePath,
+    status, dependsOn, attempt, resume, createdAt, updatedAt, notBefore, transientRetries,
+    slot, checkFixAttempts, reviewerChangesRequested, reviewerEscalated, reviewerEscalatedAt,
+    reviewerEscalationReason, waitReason, doneReport, diffStat, sourceRef, reviewStep, batchId,
+    creationSessionId, creationGoal
+  )
+  SELECT
+    id, projectId, slug, title, body, level, modelChain, baseRef, branch, worktreePath,
+    status, dependsOn, attempt, resume, createdAt, updatedAt, notBefore, transientRetries,
+    slot, checkFixAttempts, reviewerChangesRequested, reviewerEscalated, reviewerEscalatedAt,
+    reviewerEscalationReason, waitReason, doneReport, diffStat, sourceRef, reviewStep, batchId,
+    creationSessionId, creationGoal
+  FROM tasks;
   DROP TABLE tasks;
   ALTER TABLE tasks_new RENAME TO tasks;
   CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(projectId, createdAt);

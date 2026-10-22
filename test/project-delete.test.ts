@@ -65,6 +65,13 @@ describe('project archive and purge', () => {
     expect(ctx.taskRepo.get('archive-me/queued')?.status).toBe('paused');
     expect(ctx.taskRepo.get('archive-me/review')?.status).toBe('paused');
     expect(ctx.taskNoteRepo.getByProject('archive-me')).toHaveLength(2);
+    expect((await server.inject({ method: 'GET', url: '/api/tasks/archive-me~queued', headers: headers() })).statusCode).toBe(200);
+    ctx.profileRepo.upsert({ name: 'archive-worker', engine: 'agy', kind: 'isolated', home: root, email: null, enabled: 1 });
+    ctx.taskRepo.update('archive-me/queued', { status: 'queued' });
+    ctx.scheduler.start();
+    expect(ctx.scheduler.getRunning().has('archive-me/queued')).toBe(false);
+    expect(ctx.taskRepo.get('archive-me/queued')?.status).toBe('queued');
+    ctx.scheduler.stop();
     expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/projects', headers: headers() })).body)).toEqual([]);
     expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/projects/archive-me', headers: headers() })).body).error).toBe('not_found');
 

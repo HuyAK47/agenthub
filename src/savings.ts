@@ -153,7 +153,8 @@ export async function recalculateTaskLines(
   const task = taskRepo.get(taskId);
   if (!task) return null;
 
-  const project = projectRepo.get(task.projectId);
+  // Archived projects retain task history and git statistics.
+  const project = projectRepo.getIncludingArchived(task.projectId);
   if (!project || !project.path) return null;
 
   const baseRef = task.baseRef || project.defaultBranch || 'main';

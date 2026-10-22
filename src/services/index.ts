@@ -2278,7 +2278,8 @@ export class AppService {
       }
     }
 
-    const project = this.projectRepo.get(task.projectId);
+    // Task history remains readable after its project is archived.
+    const project = this.projectRepo.getIncludingArchived(task.projectId);
     const reviewSettings = project?.review ? (() => {
       try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
     })() : null;
