@@ -1357,6 +1357,22 @@ export class AppService {
 
     const deleteData = this.projectRepo.getDeleteData(id);
     if (!options?.purge) {
+      const tasksToPause = projectTasks.filter((task) =>
+        ['draft', 'queued', 'waiting_quota', 'review'].includes(task.status),
+      );
+      for (const task of tasksToPause) {
+        this.taskRepo.update(task.id, { status: 'cancelled' });
+        this.taskNoteRepo?.insert({
+          projectId: id,
+          taskId: task.id,
+          kind: 'note',
+          content: 'Task đã dừng vì dự án được ẩn.',
+        });
+        this.scheduler.getEventBus().emit('task.cancelled', task.id, {
+          reason: 'project_archived',
+          projectId: id,
+        });
+      }
       this.projectRepo.archive(id);
       this.brainRunner?.stopProject(id);
       const warning = removeIntegrationWorktree(proj, this.config.hubHome);
