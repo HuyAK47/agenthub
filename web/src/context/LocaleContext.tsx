@@ -55,8 +55,9 @@ export const LocaleProvider: React.FC<{
     setLocaleState((prev) => (prev === 'vi' ? 'en' : 'vi'));
   };
 
+  const appName = 'AgentHub';
   const t = (key: TranslationKey | string, params?: Record<string, string | number | undefined | null>) => {
-    return translate(locale, key, params);
+    return translate(locale, key, { appName, ...params });
   };
 
   const dict = translations[locale] || translations.vi;

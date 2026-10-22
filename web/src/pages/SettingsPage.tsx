@@ -47,6 +47,10 @@ export const SettingsPage: React.FC = () => {
   const [approvalMinTasks, setApprovalMinTasks] = useState<number>(5);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [brandingName, setBrandingName] = useState('AgentHub');
+  const [brandingShortName, setBrandingShortName] = useState('AH');
+  const [brandingTagline, setBrandingTagline] = useState('');
+  const [brandingAccent, setBrandingAccent] = useState('');
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['config'],
@@ -55,6 +59,10 @@ export const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     if (config) {
+      setBrandingName(config.branding?.name || 'AgentHub');
+      setBrandingShortName(config.branding?.shortName || 'AH');
+      setBrandingTagline(config.branding?.tagline || '');
+      setBrandingAccent(config.branding?.accentColor || '');
       const hardList = config.modelChainHard || config.modelChains?.hard || [];
       const easyList = config.modelChainEasy || config.modelChains?.easy || [];
       const timeoutSec =
@@ -201,6 +209,12 @@ export const SettingsPage: React.FC = () => {
         requireApproval: approvalMode === 'all',
         approvalMinTasks: approvalMode === 'large' ? Math.max(1, Number(approvalMinTasks) || 5) : 0,
       },
+      branding: {
+        name: brandingName.trim() || 'AgentHub',
+        shortName: brandingShortName.trim() || 'AH',
+        ...(brandingTagline.trim() ? { tagline: brandingTagline.trim() } : {}),
+        ...(brandingAccent.trim() ? { accentColor: brandingAccent.trim() } : {}),
+      },
     });
   };
 
@@ -232,6 +246,19 @@ export const SettingsPage: React.FC = () => {
         </div>
         <button type="button" onClick={() => openTour('intro')} className="rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs text-[var(--t-text-2)] hover:bg-[var(--t-hover)]">{t('tour.replay')}</button>
       </div>
+
+      <section className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold">{t('settings.brandingTitle')}</h2>
+          <p className="text-sm text-[var(--t-text-3)]">{t('settings.brandingDescription')}</p>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <label className="text-sm space-y-1"><span>{t('settings.brandingName')}</span><input value={brandingName} onChange={(e) => setBrandingName(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingShortName')}</span><input value={brandingShortName} onChange={(e) => setBrandingShortName(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingTagline')}</span><input value={brandingTagline} onChange={(e) => setBrandingTagline(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingAccent')}</span><input value={brandingAccent} onChange={(e) => setBrandingAccent(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+        </div>
+      </section>
 
       {saveSuccess && (
         <div className="p-4 rounded-xl bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] border border-[var(--t-ok)] text-[var(--t-ok)] text-sm flex items-center gap-2">

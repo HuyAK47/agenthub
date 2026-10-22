@@ -917,6 +917,7 @@ export const vi = {
   },
   settings: {
     title: 'Cài đặt hệ thống',
+    brandingTitle: 'Tên ứng dụng', brandingDescription: 'Chỉ đổi tên hiển thị; lệnh CLI, service, thư mục và biến môi trường kỹ thuật không thay đổi.', brandingName: 'Tên hiển thị', brandingShortName: 'Tên ngắn', brandingTagline: 'Slogan (tuỳ chọn)', brandingAccent: 'Màu nhấn (#RRGGBB)',
     subtitle: 'Cấu hình chuỗi model ưu tiên và thời gian timeout tối đa cho các lượt chạy (DEC-001).',
     saveSuccess: 'Cài đặt hệ thống đã được cập nhật thành công!',
     saveError: 'Không thể lưu cài đặt',

@@ -6,6 +6,7 @@ import { useLocale } from '../context/LocaleContext';
 import { VersionBanner } from './VersionBanner';
 import { subscribeConnectionState } from '../api/sse';
 import { getBatches } from '../api/client';
+import { useBranding } from '../context/BrandingContext';
 import {
   Activity,
   CheckSquare,
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react';
 import { CircleHelp } from 'lucide-react';
 import { HelpPanel } from './tour/HelpPanel';
+import { useTour } from './tour/TourContext';
 
 const PlansBadgeInner: React.FC = () => {
   const { data: batches = [] } = useQuery({
@@ -80,6 +82,10 @@ export const Layout: React.FC = () => {
   }, []);
 
   const connected = isOnline && sseConnected;
+  const { openTour, getPageTour } = useTour();
+  const branding = useBranding();
+  void openTour;
+  void getPageTour;
 
   const navItems = [
     { to: '/', label: t('common.dashboard'), icon: Activity },
@@ -111,6 +117,11 @@ export const Layout: React.FC = () => {
 
   const pageTitle = getPageTitle(location.pathname);
 
+  useEffect(() => {
+    document.title = `${pageTitle} · ${branding.name}`;
+    if (branding.accentColor) document.documentElement.style.setProperty('--t-accent', branding.accentColor);
+  }, [branding.accentColor, branding.name, pageTitle]);
+
   return (
     <div className="min-h-screen bg-[var(--t-bg)] text-[var(--t-text)] flex font-sans transition-colors duration-150">
       {/* Skip to main content link for keyboard users */}
@@ -130,16 +141,17 @@ export const Layout: React.FC = () => {
           <NavLink
             to="/"
             end
-            title="AgentHub"
-            aria-label="AgentHub"
+            title={branding.name}
+            aria-label={branding.name}
             className="flex items-center gap-3 overflow-hidden rounded-lg focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--t-surface)]"
           >
             <div className="w-8 h-8 rounded-lg bg-[var(--t-accent)] flex items-center justify-center text-white shrink-0 shadow-xs">
-              <Bot size={18} />
+              {branding.logo ? <img src="/api/branding/logo" alt="" className="w-full h-full rounded-lg object-contain" /> : <Bot size={18} />}
             </div>
             <span className="font-bold text-base tracking-tight text-[var(--t-text)] max-[1100px]:hidden truncate">
-              AgentHub
+              {branding.name}
             </span>
+            <span className="sr-only max-[1100px]:not-sr-only font-bold text-sm">{branding.shortName}</span>
           </NavLink>
         </div>
 

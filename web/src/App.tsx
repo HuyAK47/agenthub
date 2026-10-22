@@ -7,7 +7,8 @@ import { AuthGate } from './components/AuthGate';
 import { Layout } from './components/Layout';
 import { connectSSE } from './api/sse';
 import { useQuery } from '@tanstack/react-query';
-import { getSetupStatus } from './api/client';
+import { getConfig, getSetupStatus } from './api/client';
+import { BrandingProvider } from './context/BrandingContext';
 import { TourProvider } from './components/tour/TourContext';
 import { TourOverlay } from './components/tour/TourOverlay';
 
@@ -45,6 +46,7 @@ const SetupRedirect: React.FC = () => {
 };
 
 export const App: React.FC = () => {
+  const { data: config } = useQuery({ queryKey: ['config'], queryFn: getConfig, staleTime: 30_000 });
   useEffect(() => {
     // Start SSE stream connection and automatic cache invalidation
     const cleanupSSE = connectSSE(queryClient);
@@ -57,6 +59,7 @@ export const App: React.FC = () => {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <LocaleProvider>
+          <BrandingProvider branding={config?.branding}>
           <AuthGate>
           <BrowserRouter>
             <TourProvider>
@@ -93,6 +96,7 @@ export const App: React.FC = () => {
             </TourProvider>
           </BrowserRouter>
           </AuthGate>
+          </BrandingProvider>
         </LocaleProvider>
       </ThemeProvider>
     </QueryClientProvider>

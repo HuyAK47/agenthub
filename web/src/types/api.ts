@@ -592,6 +592,7 @@ export interface DailyUsageReport {
 }
 
 export interface SystemConfig {
+  branding?: { name: string; shortName: string; logo?: string; accentColor?: string; tagline?: string };
   modelChainHard: string[];
   modelChainEasy: string[];
   defaultTimeout: number;

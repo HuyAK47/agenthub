@@ -918,6 +918,7 @@ export const en: typeof vi = {
   },
   settings: {
     title: 'System Settings',
+    brandingTitle: 'Application name', brandingDescription: 'Only the display name changes; technical CLI commands, services, directories, and environment variables stay the same.', brandingName: 'Display name', brandingShortName: 'Short name', brandingTagline: 'Tagline (optional)', brandingAccent: 'Accent color (#RRGGBB)',
     subtitle: 'Configure preferred model chains and maximum run timeout (DEC-001).',
     saveSuccess: 'System settings updated successfully!',
     saveError: 'Failed to save settings',
