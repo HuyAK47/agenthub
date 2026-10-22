@@ -765,6 +765,10 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(toolEvent).not.toBeNull();
     expect(toolEvent?.name).toBe('Read');
     expect(toolEvent?.summary).toBe('Read docs/PLAN.md');
+    expect(toolEvent?.status).toBe('done');
+    expect(toolEvent?.input).toEqual({ file_path: 'docs/PLAN.md' });
+    expect(toolEvent?.output).toBe('PLAN output from fake Claude');
+    expect(typeof toolEvent?.durationMs).toBe('number');
 
     // Verify messages in DB
     const msgRes = await server.inject({
@@ -776,6 +780,8 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const toolMsg = messages.find((m: { role: string }) => m.role === 'tool');
     expect(toolMsg).toBeDefined();
     expect(toolMsg.content).toBe('Read docs/PLAN.md');
+    expect(toolMsg.meta.status).toBe('done');
+    expect(toolMsg.meta.output).toBe('PLAN output from fake Claude');
   });
 
   it('handles corrupt stdout lines gracefully', async () => {
@@ -802,6 +808,132 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     await vi.waitFor(() => {
       expect(doneEvent).not.toBeNull();
     }, { timeout: 10_000 });
+  });
+
+  it('bounds tool input/output and omits secret file output', async () => {
+    const createSession = async () => {
+      const response = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+      return JSON.parse(response.body) as { id: string };
+    };
+
+    const largeSession = await createSession();
+    let largeDone = false;
+    ctx.scheduler.getEventBus().on('chat.done', (_taskId, payload) => {
+      if ((payload as Record<string, unknown>).sessionId === largeSession.id) largeDone = true;
+    });
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${largeSession.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'tool-large' },
+    });
+    await vi.waitFor(() => expect(largeDone).toBe(true), { timeout: 10_000 });
+    const largeMessages = JSON.parse((await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${largeSession.id}/messages`,
+      headers: authHeaders(),
+    })).body).messages;
+    const largeTool = largeMessages.find((message: { role: string }) => message.role === 'tool');
+    expect(JSON.stringify(largeTool.meta.input).length).toBeLessThanOrEqual(4096);
+    expect(largeTool.meta.output.length).toBeLessThanOrEqual(4098);
+    expect(largeTool.meta.diff).toContain('- old');
+    expect(largeTool.meta.diff).toContain('+ new');
+
+    const secretSession = await createSession();
+    let secretDone = false;
+    ctx.scheduler.getEventBus().on('chat.done', (_taskId, payload) => {
+      if ((payload as Record<string, unknown>).sessionId === secretSession.id) secretDone = true;
+    });
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${secretSession.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'tool-secret' },
+    });
+    await vi.waitFor(() => expect(secretDone).toBe(true), { timeout: 10_000 });
+    const secretMessages = JSON.parse((await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${secretSession.id}/messages`,
+      headers: authHeaders(),
+    })).body).messages;
+    const secretTool = secretMessages.find((message: { role: string }) => message.role === 'tool');
+    expect(secretTool.meta.output).toBeUndefined();
+    expect(JSON.stringify(secretTool)).not.toContain('SECRET_TOKEN_VALUE');
+
+    const secretInputSession = await createSession();
+    let secretInputDone = false;
+    const secretInputEvents: unknown[] = [];
+    ctx.scheduler.getEventBus().on('chat.tool', (_taskId, payload) => {
+      if ((payload as Record<string, unknown>).sessionId === secretInputSession.id) secretInputEvents.push(payload);
+    });
+    ctx.scheduler.getEventBus().on('chat.done', (_taskId, payload) => {
+      if ((payload as Record<string, unknown>).sessionId === secretInputSession.id) secretInputDone = true;
+    });
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${secretInputSession.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'tool-secret-input' },
+    });
+    await vi.waitFor(() => expect(secretInputDone).toBe(true), { timeout: 10_000 });
+    const secretInputMessages = JSON.parse((await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${secretInputSession.id}/messages`,
+      headers: authHeaders(),
+    })).body).messages;
+    const secretToolJson = JSON.stringify(secretInputMessages.filter((message: { role: string }) => message.role === 'tool'));
+    expect(secretToolJson).not.toContain('SECRET_WRITE_VALUE');
+    expect(secretToolJson).not.toContain('SECRET_BASH_VALUE');
+    expect(secretToolJson).not.toContain('SECRET_ENV_VALUE');
+    expect(secretToolJson).toContain('[đã ẩn]');
+    expect(JSON.stringify(secretInputEvents)).not.toContain('SECRET_WRITE_VALUE');
+    expect(JSON.stringify(secretInputEvents)).not.toContain('SECRET_BASH_VALUE');
+    expect(JSON.stringify(secretInputEvents)).not.toContain('SECRET_ENV_VALUE');
+
+    const tokenizerSession = await createSession();
+    let tokenizerDone = false;
+    ctx.scheduler.getEventBus().on('chat.done', (_taskId, payload) => {
+      if ((payload as Record<string, unknown>).sessionId === tokenizerSession.id) tokenizerDone = true;
+    });
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${tokenizerSession.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'tool-tokenizer' },
+    });
+    await vi.waitFor(() => expect(tokenizerDone).toBe(true), { timeout: 10_000 });
+    const tokenizerMessages = JSON.parse((await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${tokenizerSession.id}/messages`,
+      headers: authHeaders(),
+    })).body).messages;
+    expect(tokenizerMessages.find((message: { role: string }) => message.role === 'tool').meta.output).toBe('NORMAL_TOKENIZER_OUTPUT');
+  });
+
+  it('keeps multiple tool steps separate from the streaming assistant message', async () => {
+    const createRes = await server.inject({ method: 'POST', url: '/api/chat/sessions', headers: authHeaders() });
+    const session = JSON.parse(createRes.body) as { id: string };
+    let done = false;
+    ctx.scheduler.getEventBus().on('chat.done', (_taskId, payload) => {
+      if ((payload as Record<string, unknown>).sessionId === session.id) done = true;
+    });
+    await server.inject({
+      method: 'POST',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+      payload: { text: 'tool-multi' },
+    });
+    await vi.waitFor(() => expect(done).toBe(true), { timeout: 10_000 });
+    const messages = JSON.parse((await server.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${session.id}/messages`,
+      headers: authHeaders(),
+    })).body).messages;
+    const tools = messages.filter((message: { role: string }) => message.role === 'tool');
+    expect(tools).toHaveLength(2);
+    expect(new Set(tools.map((message: { id: string }) => message.id)).size).toBe(2);
+    expect(tools.map((message: { meta: { status: string } }) => message.meta.status)).toEqual(['done', 'done']);
+    expect(messages.find((message: { role: string }) => message.role === 'assistant').content).toContain('Assistant text after tools.');
   });
 
   it('handles error result from claude and emits chat.error', async () => {

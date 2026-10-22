@@ -82,7 +82,60 @@ export interface RunningTurn {
   isCompact?: boolean;
   isForkSummary?: boolean;
   accumulatedText?: string;
+  toolExecutions?: Map<string, { messageId: string; startedAt: number; name: string; summary: string; input?: Record<string, unknown> }>;
   onFinish?: (err?: Error, result?: { contextTokens?: number; summary?: string }) => void;
+}
+
+const TOOL_OUTPUT_LIMIT = 4096;
+const SECRET_TOOL_PATH = /(?:^|[\\/\s'"])(?:auth\.json|\.?credentials?\.json|[^\\/\s'"]*token[^\\/\s'"]*\.json|keyring[^\\/\s'"]*|\.env(?:\.[^\\/\s'"]+)?)(?=$|[\\/\s'"])/i;
+const SECRET_TOOL_DIRECTORY = /(?:~?[\\/]\.codex(?:[\\/]|$)|~?[\\/]\.agy-homes(?:[\\/]|$))/i;
+
+function isSecretToolInput(input?: Record<string, unknown>): boolean {
+  if (!input) return false;
+  const values = ['file_path', 'path', 'file', 'cwd', 'command']
+    .map((key) => input[key])
+    .filter((value): value is string => typeof value === 'string');
+  return values.some((value) => SECRET_TOOL_PATH.test(value) || SECRET_TOOL_DIRECTORY.test(value));
+}
+
+function boundedToolOutput(output: string | undefined, input?: Record<string, unknown>): string | undefined {
+  if (output === undefined || isSecretToolInput(input)) return undefined;
+  return output.length > TOOL_OUTPUT_LIMIT ? `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n…` : output;
+}
+
+function boundedToolInput(input: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = isSecretToolInput(input)
+    ? Object.fromEntries(Object.entries(input).map(([key, value]) => (
+      ['content', 'new_string', 'old_string'].includes(key) && typeof value === 'string'
+        ? [key, '[đã ẩn]']
+        : [key, value]
+    )))
+    : input;
+  const compact = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      return value.length > 2000 ? `${value.slice(0, 2000)}\n…` : value;
+    }
+    if (Array.isArray(value)) return value.map(compact);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, compact(child)]));
+    }
+    return value;
+  };
+  const compacted = compact(sanitized) as Record<string, unknown>;
+  const serialized = JSON.stringify(compacted);
+  if (serialized.length <= TOOL_OUTPUT_LIMIT) return compacted;
+  return { truncated: true, preview: `${serialized.slice(0, TOOL_OUTPUT_LIMIT - 1)}…` };
+}
+
+function toolDiff(name: string, input?: Record<string, unknown>): string | undefined {
+  if (!/(?:edit|write|multiedit|notebookedit)/i.test(name) || !input || isSecretToolInput(input)) return undefined;
+  const oldText = typeof input.old_string === 'string' ? input.old_string : '';
+  const newText = typeof input.new_string === 'string' ? input.new_string : typeof input.content === 'string' ? input.content : '';
+  if (!oldText && !newText) return undefined;
+  return [
+    ...oldText.split('\n').filter(Boolean).map((line) => `- ${line}`),
+    ...newText.split('\n').filter(Boolean).map((line) => `+ ${line}`),
+  ].join('\n');
 }
 
 interface PersistentProcess {
@@ -1442,20 +1495,14 @@ export class ChatService {
           }
           runningTurn.pendingToolUse = true;
           this.pauseTurnWatchdog(runningTurn);
-          this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
-          this.chatMessageRepo.insert({
-            id: crypto.randomUUID(),
-            sessionId: turn.sessionId,
-            role: 'tool',
-            content: ev.summary,
-            meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
-          });
+          this.recordToolStart(runningTurn, ev);
         } else if (ev.type === 'permission_request') {
           runningTurn.waitingPermission = true;
           this.pauseTurnWatchdog(runningTurn);
           this.setSessionState(turn.sessionId, 'waiting_permission');
           this.emitEvent('chat.permission', { sessionId: turn.sessionId, messageId: turn.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
         } else if (ev.type === 'tool_result') {
+          this.recordToolResult(runningTurn, ev);
           runningTurn.pendingToolUse = false;
           runningTurn.waitingPermission = false;
           this.resetTurnWatchdog(runningTurn);
@@ -1560,15 +1607,9 @@ export class ChatService {
           }
           runningTurn.pendingToolUse = true;
           this.pauseTurnWatchdog(runningTurn);
-          this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
-          this.chatMessageRepo.insert({
-            id: crypto.randomUUID(),
-            sessionId: turn.sessionId,
-            role: 'tool',
-            content: ev.summary,
-            meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
-          });
+          this.recordToolStart(runningTurn, ev);
         } else if (ev.type === 'tool_result') {
+          this.recordToolResult(runningTurn, ev);
           runningTurn.pendingToolUse = false;
           runningTurn.waitingPermission = false;
           this.resetTurnWatchdog(runningTurn);
@@ -1688,14 +1729,14 @@ export class ChatService {
         if (ev.usage) proc.lastAssistantUsage = ev.usage;
         proc.active.pendingToolUse = true;
         this.pauseTurnWatchdog(proc.active);
-        this.emitChatTool(proc.sessionId, proc.active.messageId, ev.name, ev.summary);
-        this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }) });
+        this.recordToolStart(proc.active, ev);
       } else if (ev.type === 'permission_request' && proc.active) {
         proc.active.waitingPermission = true;
         this.pauseTurnWatchdog(proc.active);
         this.setSessionState(proc.sessionId, 'waiting_permission');
         this.emitEvent('chat.permission', { sessionId: proc.sessionId, messageId: proc.active.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
       } else if (ev.type === 'tool_result' && proc.active) {
+        this.recordToolResult(proc.active, ev);
         proc.active.pendingToolUse = false;
         proc.active.waitingPermission = false;
         this.resetTurnWatchdog(proc.active);
@@ -1875,10 +1916,47 @@ export class ChatService {
   private emitChatTool(
     sessionId: string,
     messageId: string,
+    toolMessageId: string,
+    toolUseId: string,
     name: string,
     summary: string,
+    data: { input?: Record<string, unknown>; output?: string; status: 'running' | 'done' | 'error'; durationMs?: number; diff?: string; } = { status: 'running' },
   ): void {
-    this.emitEvent('chat.tool', { sessionId, messageId, name, summary });
+    this.emitEvent('chat.tool', {
+      sessionId, messageId, toolMessageId, toolUseId, name, summary,
+      ...(data.input !== undefined ? { input: data.input } : {}),
+      ...(data.output !== undefined ? { output: data.output } : {}),
+      status: data.status,
+      ...(data.durationMs !== undefined ? { durationMs: data.durationMs } : {}),
+      ...(data.diff !== undefined ? { diff: data.diff } : {}),
+    });
+  }
+
+  private recordToolStart(turn: RunningTurn, ev: Extract<ParsedStreamEvent, { type: 'tool_use' }>): void {
+    const id = ev.id || crypto.randomUUID();
+    const toolMessageId = crypto.randomUUID();
+    const input = boundedToolInput(ev.input || {});
+    const meta = { name: ev.name, summary: ev.summary, input, status: 'running' as const, diff: toolDiff(ev.name, input), id };
+    if (!turn.toolExecutions) turn.toolExecutions = new Map();
+    turn.toolExecutions.set(id, { messageId: toolMessageId, startedAt: Date.now(), name: ev.name, summary: ev.summary, input });
+    this.chatMessageRepo.insert({ id: toolMessageId, sessionId: turn.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify(meta) });
+    this.emitChatTool(turn.sessionId, turn.messageId, toolMessageId, id, ev.name, ev.summary, { input, status: 'running', diff: meta.diff });
+  }
+
+  private recordToolResult(turn: RunningTurn, ev: Extract<ParsedStreamEvent, { type: 'tool_result' }>): void {
+    const executions = turn.toolExecutions;
+    if (!executions || executions.size === 0) return;
+    const id = ev.toolUseId && executions.has(ev.toolUseId) ? ev.toolUseId : [...executions.keys()].at(-1);
+    if (!id) return;
+    const execution = executions.get(id);
+    if (!execution) return;
+    const output = boundedToolOutput(ev.output, execution.input);
+    const status = ev.isError ? 'error' as const : 'done' as const;
+    const durationMs = Date.now() - execution.startedAt;
+    const meta = { name: execution.name, summary: execution.summary, input: execution.input, output, status, durationMs, diff: toolDiff(execution.name, execution.input), id };
+    this.chatMessageRepo.upsert({ id: execution.messageId, sessionId: turn.sessionId, role: 'tool', content: execution.summary, meta: JSON.stringify(meta) });
+    this.emitChatTool(turn.sessionId, turn.messageId, execution.messageId, id, execution.name, execution.summary, { input: execution.input, output, status, durationMs, diff: meta.diff });
+    executions.delete(id);
   }
 
   private emitChatDone(

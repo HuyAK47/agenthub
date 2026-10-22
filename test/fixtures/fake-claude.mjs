@@ -65,6 +65,57 @@ async function handlePrompt(prompt) {
     await new Promise(() => {});
   }
 
+  if (prompt.includes('tool-secret') && !prompt.includes('tool-secret-input')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-secret-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool_secret_1', name: 'Read', input: { file_path: '/tmp/auth.json' } }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_1', content: 'SECRET_TOKEN_VALUE' }] } }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-secret-123', is_error: false, result: 'Đã đọc file.' }));
+    return;
+  }
+
+  if (prompt.includes('tool-secret-input')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-secret-input-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool_secret_write', name: 'Write', input: { file_path: '/tmp/auth.json', content: 'SECRET_WRITE_VALUE' } },
+      { type: 'tool_use', id: 'tool_secret_bash', name: 'Bash', input: { command: 'cat ~/.codex/auth.json' } },
+      { type: 'tool_use', id: 'tool_secret_env', name: 'Write', input: { file_path: '/tmp/.env.local', content: 'SECRET_ENV_VALUE' } },
+    ] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_write', content: 'SECRET_WRITE_VALUE' }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_bash', content: 'SECRET_BASH_VALUE' }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_env', content: 'SECRET_ENV_VALUE' }] } }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-secret-input-123', is_error: false, result: 'Đã xử lý.' }));
+    return;
+  }
+
+  if (prompt.includes('tool-tokenizer')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-tokenizer-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool_tokenizer_1', name: 'Read', input: { file_path: 'src/tokenizer.ts' } }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_tokenizer_1', content: 'NORMAL_TOKENIZER_OUTPUT' }] } }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-tokenizer-123', is_error: false, result: 'Đã đọc.' }));
+    return;
+  }
+
+  if (prompt.includes('tool-multi')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-multi-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool_multi_a', name: 'Read', input: { file_path: 'src/a.ts' } },
+      { type: 'tool_use', id: 'tool_multi_b', name: 'Bash', input: { command: 'git log -3' } },
+    ] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_multi_a', content: 'A output' }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_multi_b', content: 'B output' }] } }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Assistant text after tools.' }] } }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-multi-123', is_error: false, result: 'Assistant text after tools.' }));
+    return;
+  }
+
+  if (prompt.includes('tool-large')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-large-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool_large_1', name: 'mcp__agenthub__Edit', input: { file_path: 'src/example.ts', old_string: 'old', new_string: 'new', content: 'x'.repeat(6000) } }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_large_1', content: 'y'.repeat(6000) }] } }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-large-123', is_error: false, result: 'Đã sửa file.' }));
+    return;
+  }
+
   if (prompt.trim() === 'quota') {
     console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-quota-123' }));
     console.log(JSON.stringify({ type: 'result', session_id: 'sess-quota-123', is_error: true, result: 'Usage limit reached. Try again in 1m' }));
@@ -184,6 +235,7 @@ async function handlePrompt(prompt) {
         },
       }),
     );
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'PLAN output from fake Claude' }] } }));
     console.log(
       JSON.stringify({
         type: 'assistant',

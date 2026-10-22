@@ -50,6 +50,7 @@ export const ChatPage: React.FC = () => {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [isLocalBusy, setIsLocalBusy] = useState(false);
   const [permission, setPermission] = useState<ChatPermissionRequest | null>(null);
+  const [editText, setEditText] = useState<string | null>(null);
   const retryLimitMutation = useMutation({
     mutationFn: (id: string) => retryChatLimitNow(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chatSessions'] }),
@@ -189,16 +190,35 @@ export const ChatPage: React.FC = () => {
           return [...prev, newMsg];
         });
       } else if (type === 'chat.tool') {
-        const { messageId, name, summary } = payload;
-        setToolStepCount((count) => count + 1);
+        const { messageId, toolMessageId, toolUseId, name, summary, input, output, status, durationMs, diff } = payload;
+        const toolId = toolMessageId || `tool-${toolUseId || messageId}`;
+        if (status !== 'done' && status !== 'error') setToolStepCount((count) => count + 1);
         setCurrentTool(summary || name || null);
         setMessages((prev) => {
-          if (prev.some((m) => m.id === messageId)) return prev;
+          const existingIndex = prev.findIndex((message) => message.id === toolId);
+          if (existingIndex !== -1) {
+            const updated = [...prev];
+            updated[existingIndex] = {
+              ...updated[existingIndex],
+              content: summary || name || updated[existingIndex].content,
+              meta: {
+                ...updated[existingIndex].meta,
+                name,
+                summary,
+                ...(input !== undefined ? { input } : {}),
+                ...(output !== undefined ? { output } : {}),
+                ...(status !== undefined ? { status } : {}),
+                ...(durationMs !== undefined ? { durationMs } : {}),
+                ...(diff !== undefined ? { diff } : {}),
+              },
+            };
+            return updated;
+          }
           const toolMsg: ChatMessage = {
-            id: messageId,
+            id: toolId,
             role: 'tool',
             content: summary || name,
-            meta: { name, summary },
+            meta: { name, summary, input, output, status, durationMs, diff },
             createdAt: new Date().toISOString(),
           };
           return [...prev, toolMsg];
@@ -416,6 +436,7 @@ export const ChatPage: React.FC = () => {
 
   const handleSendMessage = (text: string) => {
     if (!activeSession) return;
+    setEditText(null);
     sendMessageMutation.mutate({ sessId: activeSession.id, text });
   };
 
@@ -710,6 +731,7 @@ export const ChatPage: React.FC = () => {
             onLoadMore={handleLoadMore}
             onRetryMessage={handleRetryFromError}
             onNewSession={() => setIsModalOpen(true)}
+            onEditMessage={(message) => setEditText(message.content)}
           />
         )}
 
@@ -723,18 +745,24 @@ export const ChatPage: React.FC = () => {
                 className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm animate-fade-in"
                 role="dialog"
                 aria-label={t('extra.permissionAria')}
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === 'Enter') { event.preventDefault(); resolvePermission('allow'); }
+                  if (event.key === 'Escape') { event.preventDefault(); resolvePermission('deny'); }
+                }}
               >
                 <div className="font-semibold text-[var(--text-primary)]">
                   {t('extra.permissionTitle', { tool: permission.toolName })}
                 </div>
                 <div className="text-xs text-[var(--text-muted)]">
-                  {`Dự án: ${permission.projectName ? `${permission.projectName} (${activeSession.projectId || ''})` : 'Không gắn dự án'} · Phiên: ${permission.sessionTitle || activeSession.title} (${permission.sessionId})`}
+                  {`${t(permission.projectName ? 'extra.permissionProject' : 'extra.permissionNoProject', { project: permission.projectName ? `${permission.projectName} (${activeSession.projectId || ''})` : undefined })} · ${t('extra.permissionSession', { session: `${permission.sessionTitle || activeSession.title} (${permission.sessionId})` })}`}
                 </div>
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)] font-mono">
                   {typeof permission.input.command === 'string' ? permission.input.command.slice(0, 500) : JSON.stringify(permission.input, null, 2)}
                 </pre>
-                {typeof permission.input.cwd === 'string' && <div className="text-xs text-[var(--text-muted)]">cwd: <code>{permission.input.cwd}</code></div>}
-                {typeof permission.input.file_path === 'string' && <div className="text-xs text-[var(--text-muted)]">file: <code>{permission.input.file_path}</code></div>}
+                {typeof permission.input.cwd === 'string' && <div className="text-xs text-[var(--text-muted)]">{t('extra.permissionCwd')}: <code>{permission.input.cwd}</code></div>}
+                {typeof permission.input.file_path === 'string' && <div className="text-xs text-[var(--text-muted)]">{t('extra.permissionFile')}: <code>{permission.input.file_path}</code></div>}
                 <div className="mt-2 flex gap-2">
                   <button
                     type="button"
@@ -786,6 +814,8 @@ export const ChatPage: React.FC = () => {
               busy={isBusy}
               isEmpty={messages.length === 0}
               disabled={!activeSession}
+              sessionKey={activeSession.id}
+              editText={editText}
             />
           </>
         )}

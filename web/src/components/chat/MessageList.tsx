@@ -19,6 +19,7 @@ export interface MessageListProps {
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
   onRetryMessage?: (message: ChatMessage) => void;
+  onEditMessage?: (message: ChatMessage) => void;
   onNewSession?: () => void;
   className?: string;
 }
@@ -35,6 +36,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   isLoadingMore = false,
   onLoadMore,
   onRetryMessage,
+  onEditMessage,
   onNewSession,
   className = '',
 }) => {
@@ -329,6 +331,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                         ? () => onRetryMessage(msg)
                         : undefined
                     }
+                    onEdit={msg.role === 'user' && onEditMessage ? () => onEditMessage(msg) : undefined}
                   />
                 </div>
               );

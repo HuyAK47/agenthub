@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChatPage } from '../pages/ChatPage';
@@ -493,6 +494,34 @@ describe('c-chat-history-ui Tests', () => {
       await waitFor(() => {
         expect(sendSpy).toHaveBeenCalledWith('s-err', 'Lệnh cần thử lại');
       });
+    });
+
+    it('nhấn Enter trên nút Từ chối không bị dialog đổi thành Cho phép', async () => {
+      const session: ChatSession = {
+        id: 's-permission', title: 'Permission', mode: 'safe', busy: true,
+        state: 'waiting_permission', updatedAt: new Date().toISOString(),
+      };
+      vi.spyOn(chatApi, 'getChatSessions').mockResolvedValue([session]);
+      vi.spyOn(chatApi, 'getChatMessages').mockResolvedValue(Object.assign([], { hasMore: false }));
+      vi.spyOn(chatApi, 'getChatPermissions').mockResolvedValue([{
+        id: 'permission-1', sessionId: session.id, toolName: 'Bash', input: { command: 'echo hi' },
+        status: 'pending', createdAt: new Date().toISOString(),
+      }]);
+      const decideSpy = vi.spyOn(chatApi, 'decideChatPermission').mockResolvedValue({ ok: true });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/chat/s-permission']}>
+            <Routes><Route path="/chat/:sessionId" element={<ChatPage />} /></Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      const deny = await screen.findByRole('button', { name: 'Từ chối' });
+      fireEvent.keyDown(deny, { key: 'Enter', code: 'Enter' });
+      await userEvent.setup().click(deny);
+      expect(decideSpy).toHaveBeenCalledWith('permission-1', 'deny');
+      expect(decideSpy).not.toHaveBeenCalledWith('permission-1', 'allow');
     });
   });
 });

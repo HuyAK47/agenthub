@@ -30,6 +30,9 @@ export type ParsedStreamEvent =
     }
   | {
       type: 'tool_result';
+      toolUseId?: string;
+      output?: string;
+      isError?: boolean;
     }
   | {
       type: 'permission_request';
@@ -195,8 +198,22 @@ export function parseStreamJsonLine(line: string): ParsedStreamEvent[] {
 
   if ((data.type === 'user' || data.type === 'tool_result') && data.message && typeof data.message === 'object') {
     const msg = data.message as Record<string, unknown>;
-    if (Array.isArray(msg.content) && msg.content.some((block) => block && typeof block === 'object' && (block as Record<string, unknown>).type === 'tool_result')) {
-      return [{ type: 'tool_result' }];
+    if (Array.isArray(msg.content)) {
+      const block = msg.content.find((item) => item && typeof item === 'object' && (item as Record<string, unknown>).type === 'tool_result') as Record<string, unknown> | undefined;
+      if (block) {
+        const content = block.content;
+        const output = typeof content === 'string'
+          ? content
+          : content === undefined
+            ? undefined
+            : JSON.stringify(content);
+        return [{
+          type: 'tool_result',
+          ...(typeof block.tool_use_id === 'string' ? { toolUseId: block.tool_use_id } : {}),
+          ...(output !== undefined ? { output } : {}),
+          ...(block.is_error === true ? { isError: true } : {}),
+        }];
+      }
     }
   }
 
