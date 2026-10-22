@@ -36,8 +36,8 @@ export function summarizeTool(message: ChatMessage, labels?: { read: string; run
   return name || message.content || labels?.default || 'Tool';
 }
 
-export function formatToolDuration(durationMs?: number): string | null {
+export function formatToolDuration(durationMs?: number, locale: 'vi' | 'en' = 'vi'): string | null {
   if (durationMs === undefined) return null;
   if (durationMs < 1000) return `${durationMs}ms`;
-  return `${(durationMs / 1000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })}s`;
+  return `${(durationMs / 1000).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US', { maximumFractionDigits: 1 })}s`;
 }

@@ -17,10 +17,10 @@ function statusIcon(message: ChatMessage, isRunning: boolean) {
 }
 
 export const ToolStepItem: React.FC<ToolStepProps & { isRunning?: boolean }> = ({ message, isRunning = false }) => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const Icon = ICONS[getToolKind(message.meta?.name)];
-  const duration = formatToolDuration(message.meta?.durationMs);
+  const duration = formatToolDuration(message.meta?.durationMs, locale);
   const hasDetails = Boolean(message.meta?.input || message.meta?.output || message.meta?.diff);
 
   return (
