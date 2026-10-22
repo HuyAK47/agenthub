@@ -535,6 +535,35 @@ describe('AgentHub HTTP API Endpoints', () => {
   });
 
   // --- Tasks API ---
+  it('GET /api/tasks supports cursor pagination, filters, totals, and legacy responses', async () => {
+    ctx.projectRepo.insert({ id: 'pageproj', name: 'Page Project', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 2 });
+    for (const [slug, status, title, date] of [
+      ['one', 'queued', 'Đăng nhập', '2026-01-01'],
+      ['two', 'running', 'Build app', '2026-01-02'],
+      ['three', 'done', 'Đăng xuất', '2026-01-03'],
+    ] as const) {
+      ctx.taskRepo.insert({ id: `pageproj/${slug}`, projectId: 'pageproj', slug, title, status });
+      ctx.db.prepare('UPDATE tasks SET createdAt = ?, updatedAt = ? WHERE id = ?').run(date, date, `pageproj/${slug}`);
+    }
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj', headers: authHeaders() });
+    expect(legacy.statusCode).toBe(200);
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+
+    const first = await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&limit=1', headers: authHeaders() });
+    expect(first.statusCode).toBe(200);
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody.total).toBe(3);
+    expect(firstBody.items.map((task: { slug: string }) => task.slug)).toEqual(['three']);
+
+    const second = await server.inject({ method: 'GET', url: `/api/tasks?project=pageproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(second.body).items.map((task: { slug: string }) => task.slug)).toEqual(['two']);
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&status=running&search=BUILD&limit=20', headers: authHeaders() })).body).items).toHaveLength(1);
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%25&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%5F&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&cursor=broken&limit=1', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
   it('Tasks workflow: create, start, cancel, review, retry, commits, and worktree removal', async () => {
     const repoPath = path.join(tmpDir, 'test-repo');
     initGitRepo(repoPath);

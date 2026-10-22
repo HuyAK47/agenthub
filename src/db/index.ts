@@ -1316,7 +1316,7 @@ export class TaskRepo {
     return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
   }
 
-  page(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string }): PageResult<TaskRow> {
+  page(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskRow> {
     const conditions: string[] = [];
     const values: unknown[] = [];
     if (filter?.project && filter.project !== 'all') { conditions.push('projectId = ?'); values.push(filter.project); }
@@ -1337,7 +1337,9 @@ export class TaskRepo {
     const countValues = values.slice(0, cursor ? -3 : undefined);
     const total = (this.db.prepare(`SELECT COUNT(*) as count FROM tasks${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
     const limit = parsePageSize(filter?.limit);
-    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, limit + 1) as TaskRow[];
+    const offset = typeof filter?.offset === 'number' ? filter.offset : Number(filter?.offset || 0);
+    const safeOffset = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit + 1, safeOffset) as TaskRow[];
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
     const last = items.at(-1);
