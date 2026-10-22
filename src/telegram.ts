@@ -3068,7 +3068,13 @@ export class TelegramBotService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
+        (p.allExhausted === true || areAllProfilesQuotaExhausted(
+          this.profileRepo,
+          this.quotaMarkRepo,
+          now,
+          typeof p.family === 'string' ? p.family : undefined,
+          typeof p.engine === 'string' ? p.engine : undefined,
+        ));
 
       const isAllowedInAuto =
         type === 'brain.notify' ||
@@ -3318,7 +3324,13 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now);
+        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
+          this.profileRepo,
+          this.quotaMarkRepo,
+          now,
+          typeof p.family === 'string' ? p.family : undefined,
+          typeof p.engine === 'string' ? p.engine : undefined,
+        );
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');

@@ -38,6 +38,7 @@ export class NotificationService {
   private lastSent = new Map<string, number>();
   private lastSentCi = new Map<string, number>();
   private lastSentSummary = new Map<string, number>();
+  private lastSentDisk = new Map<'low' | 'ok', number>();
   private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
@@ -125,6 +126,18 @@ export class NotificationService {
     ]).has(type)) return;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (type === 'quota.exhausted') {
+      const allExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
+        this.profileRepo,
+        this.quotaMarkRepo,
+        this.now(),
+        typeof p.family === 'string' ? p.family : undefined,
+        typeof p.engine === 'string' ? p.engine : undefined,
+      );
+      // Individual quota exhaustion remains visible in the dashboard. Desktop
+      // should only interrupt the user when an entire engine is unavailable.
+      if (!allExhausted) return;
+    }
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // 1. In brain auto mode: suppress raw task notifications
@@ -133,7 +146,13 @@ export class NotificationService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now()));
+        (p.allExhausted === true || areAllProfilesQuotaExhausted(
+          this.profileRepo,
+          this.quotaMarkRepo,
+          this.now(),
+          typeof p.family === 'string' ? p.family : undefined,
+          typeof p.engine === 'string' ? p.engine : undefined,
+        ));
 
       const isSystemEvent =
         type === 'brain.notify' ||
@@ -230,6 +249,7 @@ export class NotificationService {
       }
 
       case 'disk.low': {
+        if (!this.shouldSendDisk('low', now)) break;
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 0;
         const cacheDir = typeof p.cacheDir === 'string' ? ` Cache node_modules: ${p.cacheDir}.` : '';
@@ -241,6 +261,7 @@ export class NotificationService {
       }
 
       case 'disk.ok': {
+        if (!this.shouldSendDisk('ok', now)) break;
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         this.notify(`Ổ đĩa đã đủ chỗ (${freeGB} GB): tiếp tục chạy task`, 'normal');
         break;
@@ -254,7 +275,13 @@ export class NotificationService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now());
+        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
+          this.profileRepo,
+          this.quotaMarkRepo,
+          this.now(),
+          typeof p.family === 'string' ? p.family : undefined,
+          typeof p.engine === 'string' ? p.engine : undefined,
+        );
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
@@ -420,5 +447,12 @@ export class NotificationService {
     if (now - last < 15 * 60_000) return;
     this.lastSentSummary.set('load', now);
     this.notify(`AgentHub: Đã tạm dừng/gặp ${reason}; xem dashboard để biết chi tiết`, 'normal');
+  }
+
+  private shouldSendDisk(state: 'low' | 'ok', now: number): boolean {
+    const last = this.lastSentDisk.get(state);
+    if (last !== undefined && now - last < 60 * 60_000) return false;
+    this.lastSentDisk.set(state, now);
+    return true;
   }
 }

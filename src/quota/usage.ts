@@ -251,7 +251,13 @@ export class QuotaUsageService {
           const key = `${profile.name}|${family}|${entry.resetAt}`;
           if (!markChanged || this.announcedExhausted.has(key)) continue;
           this.announcedExhausted.add(key);
-          this.eventBus?.emit('quota.exhausted', undefined, { profile: profile.name, family, reason: 'usage' });
+          this.eventBus?.emit('quota.exhausted', undefined, {
+            profile: profile.name,
+            family,
+            engine: profile.engine,
+            allExhausted: this.allProfilesForEngineExhausted(profile, family),
+            reason: 'usage',
+          });
         }
       }
     }
@@ -267,6 +273,13 @@ export class QuotaUsageService {
       changed = this.marks.mark(p.name, family, until, 'usage') || changed;
     }
     return changed;
+  }
+
+  private allProfilesForEngineExhausted(profile: ProfileRow, family: string): boolean {
+    const active = this.profiles.getEnabled().filter((candidate) => candidate.engine === profile.engine);
+    const now = Math.floor(Date.now() / 1000);
+    const marks = this.marks.getActive(now);
+    return active.length > 0 && active.every((candidate) => marks.some((mark) => mark.profileName === candidate.name && mark.family === family));
   }
 
   bestRemaining(profile: ProfileRow, family: string): number | null {

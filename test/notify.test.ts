@@ -6,7 +6,6 @@ import { loadConfig } from '../src/config.js';
 import { openDatabase, TaskRepo, QuotaMarkRepo, EventRepo, ProjectRepo, ProfileRepo } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 import { NotificationService } from '../src/notify.js';
-import { formatReset } from '../src/time-format.js';
 
 describe('NotificationService (Desktop Notifications)', () => {
   let tmpDir: string;
@@ -63,6 +62,14 @@ describe('NotificationService (Desktop Notifications)', () => {
     eventBus.emit('quota.exhausted', undefined, { profile: 'g1', family: 'gemini' });
     eventBus.emit('task.overlap', 'proj/task-1', { otherTaskId: 'proj/task-2', file: 'shared.ts' });
     expect(execCalls).toHaveLength(0);
+  });
+
+  it('suppresses account-specific quota notifications even at all level', () => {
+    const notifier = new NotificationService({ eventBus, config, profileRepo, quotaMarkRepo, exec: fakeExec });
+    notifier.start();
+    eventBus.emit('quota.exhausted', undefined, { profile: 'g1', family: 'gemini', engine: 'agy' });
+    expect(execCalls).toHaveLength(0);
+    notifier.stop();
   });
 
   it('notifies on task.review_ready with title and optional checks indicator', () => {
@@ -189,9 +196,8 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
-  it('notifies on quota.exhausted with profile, family, and readable reset time', () => {
+  it('suppresses quota.exhausted for an individual profile', () => {
     const resetEpoch = Math.floor(Date.now() / 1000) + 3600;
-    const expectedTime = formatReset(resetEpoch, Date.now(), 'vi');
 
     const notifier = new NotificationService({
       eventBus,
@@ -202,29 +208,21 @@ describe('NotificationService (Desktop Notifications)', () => {
     });
     notifier.start();
 
-    // From payload resetAt
+    // Individual quota is dashboard-only, even when desktop level is `all`.
     eventBus.emit('quota.exhausted', undefined, {
       profile: 'g1',
       family: 'gemini',
       resetAt: resetEpoch,
     });
-    expect(execCalls).toHaveLength(1);
-    expect(execCalls[0]).toEqual({
-      file: 'notify-send',
-      args: ['-t', '10000', '-a', 'AgentHub', `Hồ sơ g1 hết quota gemini tới ${expectedTime}`],
-    });
+    expect(execCalls).toHaveLength(0);
 
-    // From active quota mark
+    // A second individual profile is also suppressed.
     quotaMarkRepo.mark('chinh', 'claude', resetEpoch, 'test');
     eventBus.emit('quota.exhausted', undefined, {
       profile: 'chinh',
       family: 'claude',
     });
-    expect(execCalls).toHaveLength(2);
-    expect(execCalls[1]).toEqual({
-      file: 'notify-send',
-      args: ['-t', '10000', '-a', 'AgentHub', `Hồ sơ chinh hết quota claude tới ${expectedTime}`],
-    });
+    expect(execCalls).toHaveLength(0);
 
     notifier.stop();
   });
@@ -252,6 +250,36 @@ describe('NotificationService (Desktop Notifications)', () => {
       ['-t', '10000', '-a', 'AgentHub', 'Ổ đĩa đã đủ chỗ (10 GB): tiếp tục chạy task'],
     ]);
 
+    notifier.stop();
+  });
+
+  it('limits each disk state to one desktop notification per hour', () => {
+    let current = 1_000_000;
+    const notifier = new NotificationService({ eventBus, config, exec: fakeExec, now: () => current });
+    notifier.start();
+
+    eventBus.emit('disk.low', undefined, { freeGB: 1, minFreeGB: 3 });
+    current += 30 * 60_000;
+    eventBus.emit('disk.low', undefined, { freeGB: 0.5, minFreeGB: 3 });
+    current += 30 * 60_000;
+    eventBus.emit('disk.low', undefined, { freeGB: 0.25, minFreeGB: 3 });
+
+    expect(execCalls).toHaveLength(2);
+    notifier.stop();
+  });
+
+  it('treats quota exhaustion per engine, not across all profiles', () => {
+    config.notifications.desktopLevel = 'important';
+    quotaMarkRepo.mark('g1', 'gemini', Math.floor(Date.now() / 1000) + 3600);
+    const notifier = new NotificationService({ eventBus, config, profileRepo, quotaMarkRepo, exec: fakeExec });
+    notifier.start();
+    eventBus.emit('quota.exhausted', undefined, { profile: 'g1', family: 'gemini', engine: 'agy' });
+    expect(execCalls).toHaveLength(0);
+
+    quotaMarkRepo.mark('chinh', 'gemini', Math.floor(Date.now() / 1000) + 3600);
+    eventBus.emit('quota.exhausted', undefined, { profile: 'chinh', family: 'gemini', engine: 'agy' });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toBe('AgentHub: Mọi tài khoản đều đã hết quota');
     notifier.stop();
   });
 
@@ -367,6 +395,7 @@ describe('NotificationService (Desktop Notifications)', () => {
     expect(execCalls[1].args.at(-1)).toContain('Ổ đĩa còn 1 GB');
 
     // 4. All profiles quota exhausted is a system incident and should be notified
+    quotaMarkRepo.mark('g1', 'claude', Math.floor(Date.now() / 1000) + 3600);
     quotaMarkRepo.mark('chinh', 'claude', Math.floor(Date.now() / 1000) + 3600);
     eventBus.emit('quota.exhausted', undefined, { profile: 'chinh', family: 'claude' });
     expect(execCalls).toHaveLength(3);

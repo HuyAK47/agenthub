@@ -172,15 +172,28 @@ export function areAllProfilesQuotaExhausted(
   profileRepo?: ProfileRepo,
   quotaMarkRepo?: QuotaMarkRepo,
   now = Date.now(),
+  family?: string,
+  engine?: string,
 ): boolean {
   if (!profileRepo || !quotaMarkRepo) return false;
-  const profiles = profileRepo.getAll(true);
+  const profiles = profileRepo.getAll().filter((profile) => profile.enabled === 1);
   if (profiles.length === 0) return false;
 
   const marks = quotaMarkRepo.getActive(Math.floor(now / 1000)).filter((m) => m.until > Math.floor(now / 1000));
-  const exhaustedProfiles = new Set(marks.map((m) => m.profileName));
+  const exhausted = new Set(marks.filter((mark) => !family || mark.family === family).map((m) => m.profileName));
 
-  return profiles.every((p) => exhaustedProfiles.has(p.name));
+  const groups = new Map<string, typeof profiles>();
+  for (const profile of profiles) {
+    if (engine && profile.engine !== engine) continue;
+    const group = groups.get(profile.engine) || [];
+    group.push(profile);
+    groups.set(profile.engine, group);
+  }
+  if (groups.size === 0) return false;
+
+  // A quota event is actionable when every account of one engine is exhausted,
+  // not only when every profile in the whole hub is exhausted.
+  return [...groups.values()].some((group) => group.every((profile) => exhausted.has(profile.name)));
 }
 
 /**
