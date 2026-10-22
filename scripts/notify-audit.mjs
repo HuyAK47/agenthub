@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 const args = process.argv.slice(2);
 const valueAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
 const dbPath = valueAfter('--db') || path.join(process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'), 'hub.db');
+const configPath = valueAfter('--config') || path.join(path.dirname(dbPath), 'config.json');
 if (!fs.existsSync(dbPath)) {
   console.error(`Database not found: ${path.basename(dbPath)}`);
   process.exitCode = 1;
@@ -23,6 +24,14 @@ if (!fs.existsSync(dbPath)) {
     `).all();
     const profiles = db.prepare('SELECT name, engine, enabled FROM profiles WHERE deletedAt IS NULL AND enabled = 1').all();
     const marks = db.prepare('SELECT profileName, family, until FROM quota_marks').all();
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { /* optional for exported databases */ }
+    const notifications = config.notifications && typeof config.notifications === 'object' ? config.notifications : {};
+    const desktopEnabled = notifications.desktop !== false;
+    const desktopLevel = ['all', 'important', 'critical', 'off'].includes(notifications.desktopLevel) ? notifications.desktopLevel : 'important';
+    const telegram = config.telegram && typeof config.telegram === 'object' ? config.telegram : {};
+    const telegramEnabled = telegram.enabled === true && Array.isArray(telegram.allowedChatIds) && telegram.allowedChatIds.length > 0;
+    const telegramNotify = { reviewReady: true, failed: true, blocked: true, quota: true, fallback: true, ...(telegram.notify || {}) };
     const byName = new Map(profiles.map((p) => [p.name, p]));
     const important = new Set(['brain.notify', 'task.review_ready', 'task.failed', 'task.blocked', 'review.escalated', 'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed']);
     const notificationEvents = new Set([...important, 'batch.created', 'task.paused', 'load.task_paused', 'load.high', 'task.resumed', 'load.task_resumed', 'disk.ok', 'claude.fallback_changed', 'claude.auto_resumed', 'profile.auth_expired', 'ci.passed']);
@@ -31,9 +40,20 @@ if (!fs.existsSync(dbPath)) {
     const desktopImportantSeen = new Map();
     const webSeen = new Map();
     const diskSeen = new Map();
+    const telegramDiskSeen = new Map();
     let loadSummaryAt = 0;
     const payloadOf = (row) => { try { return row.payload ? JSON.parse(row.payload) : {}; } catch { return {}; } };
     const timeOf = (row) => { const n = Number(row.ts); return Number.isFinite(n) ? (n < 1e12 ? n * 1000 : n) : Date.parse(row.ts); };
+    const inQuietHours = (at) => {
+      const q = notifications.quietHours;
+      if (!q || q.enabled !== true) return false;
+      const [sh, sm] = String(q.start || '22:00').split(':').map(Number);
+      const [eh, em] = String(q.end || '07:00').split(':').map(Number);
+      const mins = new Date(at).getHours() * 60 + new Date(at).getMinutes();
+      const start = sh * 60 + sm;
+      const end = eh * 60 + em;
+      return start <= end ? mins >= start && mins < end : mins >= start || mins < end;
+    };
     const quotaAllForEngine = (payload, at) => {
       const profile = byName.get(payload.profile || payload.profileName || payload.worker);
       const family = payload.family || payload.model;
@@ -41,6 +61,9 @@ if (!fs.existsSync(dbPath)) {
       const sameEngine = profiles.filter((p) => p.engine === profile.engine);
       return sameEngine.length > 0 && sameEngine.every((p) => marks.some((m) => m.profileName === p.name && m.family === family && m.until * 1000 > at));
     };
+    const incident = (type, payload, at) => payload.level === 'incident' || payload.urgency === 'critical' || payload.critical === true
+      || ['disk.low', 'disk.docker_low', 'claude.quota_exhausted', 'hub.restart_failed', 'system.error'].includes(type)
+      || (type === 'quota.exhausted' && quotaAllForEngine(payload, at));
     const eventKey = (row, payload) => {
       const task = row.taskId || payload.taskId || '';
       const title = payload.title || task || 'Task';
@@ -72,8 +95,10 @@ if (!fs.existsSync(dbPath)) {
       counts.set(row.type, eventCount);
       const key = eventKey(row, payload);
       const quotaAll = row.type === 'quota.exhausted' && quotaAllForEngine(payload, at);
-      let desktopAll = notificationEvents.has(row.type) && row.type !== 'task.overlap' && (row.type !== 'quota.exhausted' || quotaAll);
-      let desktopImportant = important.has(row.type) && (row.type !== 'quota.exhausted' || quotaAll);
+      let desktopAll = desktopEnabled && desktopLevel !== 'off' && notificationEvents.has(row.type) && row.type !== 'task.overlap' && (row.type !== 'quota.exhausted' || quotaAll);
+      let desktopImportant = desktopEnabled && desktopLevel === 'important' && important.has(row.type) && (row.type !== 'quota.exhausted' || quotaAll);
+      if (desktopLevel === 'critical') desktopAll = desktopEnabled && ['task.failed', 'disk.docker_low', 'quota.exhausted'].includes(row.type) && (row.type !== 'quota.exhausted' || quotaAll);
+      if (inQuietHours(at) && !incident(row.type, payload, at)) desktopAll = desktopImportant = false;
       if (row.type === 'disk.low' || row.type === 'disk.ok') {
         const previous = diskSeen.get(row.type) || 0;
         desktopAll = desktopAll && at - previous >= 60 * 60_000;
@@ -95,13 +120,28 @@ if (!fs.existsSync(dbPath)) {
         desktopImportant = at - previous >= 30 * 60_000;
         if (desktopImportant) desktopImportantSeen.set(key, at);
       }
-      const telegramCandidate = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'quota.exhausted', 'disk.low', 'disk.ok', 'brain.notify']).has(row.type)
-        && (row.type !== 'quota.exhausted' || quotaAll);
+      const telegramTypeAllowed = (row.type === 'task.review_ready' && telegramNotify.reviewReady)
+        || (row.type === 'task.failed' && telegramNotify.failed)
+        || (row.type === 'task.blocked' && telegramNotify.blocked)
+        || (row.type === 'quota.exhausted' && telegramNotify.quota)
+        || ((row.type === 'disk.low' || row.type === 'disk.ok') && telegramNotify.fallback)
+        || row.type === 'brain.notify';
+      const telegramCandidate = telegramEnabled && telegramTypeAllowed && (row.type !== 'quota.exhausted' || quotaAll)
+        && (!inQuietHours(at) || incident(row.type, payload, at));
       const telegramKey = `telegram:${key}`;
       const telegramPrevious = desktopSeen.get(telegramKey) || 0;
-      const telegram = telegramCandidate && at - telegramPrevious >= 30 * 60_000;
+      let telegram = telegramCandidate && at - telegramPrevious >= 30 * 60_000;
+      if (telegram && (row.type === 'disk.low' || row.type === 'disk.ok')) {
+        const previousDisk = telegramDiskSeen.get(row.type) || 0;
+        telegram = at - previousDisk >= 60 * 60_000;
+        if (telegram) telegramDiskSeen.set(row.type, at);
+      }
       if (telegram) desktopSeen.set(telegramKey, at);
-      const webAllowed = notificationEvents.has(row.type) && (row.type !== 'quota.exhausted' || quotaAll);
+      const webAllowed = desktopEnabled && desktopLevel !== 'off' && notificationEvents.has(row.type)
+        && (desktopLevel !== 'important' || important.has(row.type))
+        && (desktopLevel !== 'critical' ? true : ['task.failed', 'disk.docker_low', 'quota.exhausted'].includes(row.type))
+        && (row.type !== 'quota.exhausted' || quotaAll)
+        && (!inQuietHours(at) || incident(row.type, payload, at));
       const webKey = row.type === 'quota.exhausted' && quotaAll
         ? `quota:${payload.engine || 'unknown'}:${payload.family || payload.model || 'unknown'}`
         : row.type === 'task.paused' || row.type === 'load.task_paused' || row.type === 'load.high'
