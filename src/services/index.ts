@@ -2208,7 +2208,7 @@ export class AppService {
     let initialStatus = parsed.start ? 'queued' : 'draft';
     let batchId = parsed.batchId || null;
 
-    if (parsed.fromClaude && !batchId && !this.config.planning?.requireApproval && this.taskBatchRepo) {
+    if (parsed.fromClaude && parsed.start && !batchId && !this.config.planning?.requireApproval && this.taskBatchRepo) {
       initialStatus = 'queued';
       const sessionId = parsed.sessionId || null;
       const recent = sessionId
