@@ -40,6 +40,7 @@ import { ToastViewport, useToasts, type ToastKind } from '../components/ui/Toast
 import { Profile } from '../types/api';
 import { formatReset, formatTimeTitle } from '../lib/time';
 import { useTour } from '../components/tour/TourContext';
+import { AgentIcon } from '../components/AgentIcon';
 
 const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
@@ -287,8 +288,9 @@ export const ProfilesPage: React.FC = () => {
                 <div className="mb-3 flex items-center gap-3">
                   <div className="h-8 w-1 rounded-full" style={{ background: provider.color }} />
                   <div>
-                    <h2 id={`provider-${provider.id}`} className="text-lg font-semibold">
-                      {provider.title}
+                    <h2 id={`provider-${provider.id}`} className="text-lg font-semibold flex items-center gap-2">
+                      <AgentIcon provider={provider.id} className="h-5 w-5 shrink-0" />
+                      <span>{provider.title}</span>
                     </h2>
                     <p className="text-xs text-[var(--t-text-3)]">{t(provider.subtitleKey)}</p>
                   </div>
