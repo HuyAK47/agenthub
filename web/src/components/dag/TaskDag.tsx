@@ -119,7 +119,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
     return (
       <div
         data-testid="task-dag-empty"
-        className={`flex flex-col items-center justify-center p-12 rounded-xl border border-dashed border-[var(--border-default)] bg-[var(--bg-surface)] min-h-[420px] text-[var(--text-muted)] text-sm ${className}`}
+        className={`flex flex-col items-center justify-center p-12 rounded-xl border border-dashed border-[var(--t-border)] bg-[var(--t-surface)] min-h-[420px] text-[var(--t-text-3)] text-sm ${className}`}
       >
         <p className="italic">{t('dag.empty')}</p>
       </div>
@@ -135,7 +135,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onWheel={handleWheel}
-      className={`relative w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] overflow-hidden select-none min-h-[500px] h-[640px] cursor-grab active:cursor-grabbing ${className}`}
+      className={`relative w-full rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] overflow-hidden select-none min-h-[500px] h-[640px] cursor-grab active:cursor-grabbing ${className}`}
     >
       {/* Background Dot Grid */}
       <svg
@@ -152,11 +152,11 @@ export const TaskDag: React.FC<TaskDagProps> = ({
 
       {/* Top Overlay: Stats & Legend */}
       <div className="absolute top-3 left-3 z-10 flex items-center gap-2 flex-wrap pointer-events-none">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--bg-surface)]/90 backdrop-blur-md border border-[var(--border-default)] shadow-xs pointer-events-auto text-xs font-medium text-[var(--text-primary)]">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--t-surface)]/90 backdrop-blur-md border border-[var(--t-border)] shadow-xs pointer-events-auto text-xs font-medium text-[var(--t-text)]">
           <span>{t('dag.totalTasks', { count: tasks.length })}</span>
           {layout.criticalPath.length > 0 && (
             <>
-              <span className="w-1 h-1 rounded-full bg-[var(--border-default)]" />
+              <span className="w-1 h-1 rounded-full bg-[var(--t-border)]" />
               <span className="inline-flex items-center gap-1 text-[var(--t-warn)] font-semibold">
                 <Flame className="w-3.5 h-3.5" />
                 {t('dag.criticalPathCount', { count: layout.criticalPath.length })}
@@ -165,7 +165,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
           )}
           {layout.maxBlockedCount > 0 && (
             <>
-              <span className="w-1 h-1 rounded-full bg-[var(--border-default)]" />
+              <span className="w-1 h-1 rounded-full bg-[var(--t-border)]" />
               <span className="inline-flex items-center gap-1 text-[var(--t-crit)] font-semibold">
                 <AlertTriangle className="w-3.5 h-3.5" />
                 {t('dag.maxBlockerLabel', { count: layout.maxBlockedCount })}
@@ -177,13 +177,13 @@ export const TaskDag: React.FC<TaskDagProps> = ({
 
       {/* Bottom-right Overlay: Zoom / Pan Controls */}
       {!hideControls && (
-        <div className="absolute bottom-3 right-3 z-10 flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-surface)]/90 backdrop-blur-md border border-[var(--border-default)] shadow-xs">
+        <div className="absolute bottom-3 right-3 z-10 flex items-center gap-1 p-1 rounded-lg bg-[var(--t-surface)]/90 backdrop-blur-md border border-[var(--t-border)] shadow-xs">
           <button
             type="button"
             onClick={zoomIn}
             title={t('dag.zoomIn')}
             aria-label={t('dag.zoomIn')}
-            className="p-1.5 rounded hover:bg-[var(--t-surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+            className="p-1.5 rounded hover:bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:text-[var(--t-text)] cursor-pointer transition-colors"
           >
             <ZoomIn className="w-4 h-4" />
           </button>
@@ -192,7 +192,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
             onClick={zoomOut}
             title={t('dag.zoomOut')}
             aria-label={t('dag.zoomOut')}
-            className="p-1.5 rounded hover:bg-[var(--t-surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+            className="p-1.5 rounded hover:bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:text-[var(--t-text)] cursor-pointer transition-colors"
           >
             <ZoomOut className="w-4 h-4" />
           </button>
@@ -201,11 +201,11 @@ export const TaskDag: React.FC<TaskDagProps> = ({
             onClick={fitView}
             title={t('dag.fitView')}
             aria-label={t('dag.fitView')}
-            className="p-1.5 rounded hover:bg-[var(--t-surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+            className="p-1.5 rounded hover:bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:text-[var(--t-text)] cursor-pointer transition-colors"
           >
             <Maximize2 className="w-4 h-4" />
           </button>
-          <span className="px-2 text-[11px] font-mono font-medium text-[var(--text-muted)] border-l border-[var(--border-default)]">
+          <span className="px-2 text-[11px] font-mono font-medium text-[var(--t-text-3)] border-l border-[var(--t-border)]">
             {Math.round(scale * 100)}%
           </span>
         </div>
@@ -228,7 +228,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
             markerHeight="6"
             orient="auto"
           >
-            <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--border-default)" />
+            <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--t-border)" />
           </marker>
 
           {/* Arrowhead marker for critical path edges */}
@@ -272,7 +272,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
                   data-critical={edge.isCritical}
                   d={d}
                   fill="none"
-                  stroke={edge.isCritical ? 'var(--t-warn)' : 'var(--border-default)'}
+                  stroke={edge.isCritical ? 'var(--t-warn)' : 'var(--t-border)'}
                   strokeWidth={edge.isCritical ? 2.5 : 1.5}
                   strokeDasharray={edge.isCritical ? 'none' : undefined}
                   markerEnd={
@@ -321,7 +321,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
                     style={{
                       borderLeftColor: `var(--status-${task.status}-color, var(--t-accent))`,
                     }}
-                    className={`group relative flex flex-col justify-between w-full h-full p-2.5 rounded-lg border border-[var(--border-default)] border-l-4 bg-[var(--bg-surface)] hover:border-[var(--t-accent)] hover:shadow-md transition-all cursor-pointer ${
+                    className={`group relative flex flex-col justify-between w-full h-full p-2.5 rounded-lg border border-[var(--t-border)] border-l-4 bg-[var(--t-surface)] hover:border-[var(--t-accent)] hover:shadow-md transition-all cursor-pointer ${
                       node.isCritical
                         ? 'ring-2 ring-[var(--t-warn)] shadow-[0_0_12px_rgba(245,158,11,0.25)]'
                         : ''
@@ -333,7 +333,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
                   >
                     {/* Top Row: Slug & Status / Badges */}
                     <div className="flex items-center justify-between gap-1.5">
-                      <span className="text-[11px] font-mono font-bold text-[var(--text-secondary)] truncate max-w-[120px]">
+                      <span className="text-[11px] font-mono font-bold text-[var(--t-text-2)] truncate max-w-[120px]">
                         {task.slug}
                       </span>
 
@@ -354,14 +354,14 @@ export const TaskDag: React.FC<TaskDagProps> = ({
                     <div className="my-1">
                       <h4
                         title={task.title}
-                        className="text-xs font-semibold text-[var(--text-primary)] line-clamp-1 group-hover:text-[var(--t-accent)] transition-colors"
+                        className="text-xs font-semibold text-[var(--t-text)] line-clamp-1 group-hover:text-[var(--t-accent)] transition-colors"
                       >
                         {task.title}
                       </h4>
                     </div>
 
                     {/* Bottom Row: Metadata & Blocker indicator */}
-                    <div className="flex items-center justify-between gap-1 pt-1 border-t border-[var(--border-subtle)] text-[10px]">
+                    <div className="flex items-center justify-between gap-1 pt-1 border-t border-[var(--t-border)] text-[10px]">
                       {/* Running Model / Profile or Project */}
                       {task.status === 'running' && (runningModel || runningProfile) ? (
                         <div
@@ -372,7 +372,7 @@ export const TaskDag: React.FC<TaskDagProps> = ({
                           <span className="truncate">{runningModel || runningProfile}</span>
                         </div>
                       ) : (
-                        <span className="text-[var(--text-muted)] truncate max-w-[100px]">
+                        <span className="text-[var(--t-text-3)] truncate max-w-[100px]">
                           {task.projectId}
                         </span>
                       )}
@@ -384,14 +384,14 @@ export const TaskDag: React.FC<TaskDagProps> = ({
                           className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
                             node.isMaxBlocker
                               ? 'bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] border border-[color-mix(in_srgb,var(--t-crit)_30%,transparent)]'
-                              : 'bg-[var(--t-surface-2)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
+                              : 'bg-[var(--t-surface-2)] text-[var(--t-text-3)] border border-[var(--t-border)]'
                           }`}
                         >
                           <AlertTriangle className="w-2.5 h-2.5" />
                           <span>{t('dag.blockingCount', { count: node.blockedCount })}</span>
                         </span>
                       ) : (
-                        <ArrowUpRight className="w-3 h-3 text-[var(--text-muted)] group-hover:text-[var(--t-accent)] transition-colors" />
+                        <ArrowUpRight className="w-3 h-3 text-[var(--t-text-3)] group-hover:text-[var(--t-accent)] transition-colors" />
                       )}
                     </div>
                   </div>

@@ -69,7 +69,7 @@ export const TourOverlay: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-[70]" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="absolute inset-0 bg-black/55" />
+      <div className="absolute inset-0 bg-[var(--t-overlay)]" />
       <div className="absolute rounded-xl pointer-events-none border-2 border-[var(--t-accent)] shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" style={{ top: rect.top - 4, left: rect.left - 4, width: rect.width + 8, height: rect.height + 8 }} />
       <section className="absolute rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-2xl text-[var(--t-text)] max-sm:!left-3 max-sm:!right-3 max-sm:!bottom-3 max-sm:!top-auto max-sm:!transform-none max-sm:!w-auto" style={safeStyle}>
         <button type="button" onClick={() => closeTour(false)} aria-label={t('tour.close')} className="absolute right-2 top-2 rounded p-1 text-[var(--t-text-3)] hover:bg-[var(--t-hover)]"><X size={16} /></button>
@@ -79,7 +79,7 @@ export const TourOverlay: React.FC = () => {
           <span className="text-xs text-[var(--t-text-3)]">{t('tour.step', { current: stepIndex + 1, total: active.steps.length })}</span>
           <div className="flex gap-2">
             <button type="button" onClick={previous} disabled={stepIndex === 0} className="rounded-lg border border-[var(--t-border)] px-3 py-1.5 text-xs disabled:opacity-40">{t('tour.previous')}</button>
-            <button type="button" onClick={next} className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white">{stepIndex === active.steps.length - 1 ? t('tour.finish') : t('tour.next')}</button>
+            <button type="button" onClick={next} className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--t-on-accent)]">{stepIndex === active.steps.length - 1 ? t('tour.finish') : t('tour.next')}</button>
             <button type="button" onClick={() => closeTour(false)} className="rounded-lg px-2 py-1.5 text-xs text-[var(--t-text-3)] hover:text-[var(--t-text)]">{t('tour.skip')}</button>
           </div>
         </div>

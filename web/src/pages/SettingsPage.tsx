@@ -527,7 +527,7 @@ export const SettingsPage: React.FC = () => {
           {/* Savings config block */}
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div>
-              <h2 className="text-base font-semibold text-[var(--text-primary)]">
+              <h2 className="text-base font-semibold text-[var(--t-text)]">
                 {t('settings.savingsSectionTitle')}
               </h2>
               <p className="text-xs text-[var(--t-text-3)] mt-0.5">
@@ -768,7 +768,7 @@ export const SettingsPage: React.FC = () => {
             <button
               type="submit"
               disabled={mutation.isPending}
-              className="px-5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
+              className="px-5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
             >
               <Save className="w-4 h-4" />
               <span>{mutation.isPending ? t('common.loading') : t('settings.saveConfigBtn')}</span>

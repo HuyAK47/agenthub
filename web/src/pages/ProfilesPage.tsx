@@ -236,7 +236,7 @@ export const ProfilesPage: React.FC = () => {
             e.stopPropagation();
             setShowAdd(true);
           }}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-semibold text-white"
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-semibold text-[var(--t-on-accent)]"
         >
           <Plus className="h-4 w-4" />
           {t('profiles.addBtn')}
@@ -440,7 +440,7 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
   if (initial) {
     return (
       <div
-        className="flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
+        className="flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-xl font-bold text-[var(--t-on-accent)] shadow-xs"
         style={{ background: getAvatarGradient(profile.email || profile.name) }}
       >
         <span className="text-base tracking-wider drop-shadow-xs">{initial}</span>
@@ -738,7 +738,7 @@ function ProfileCard({
       <div className="mt-4 flex items-center justify-between border-t border-[var(--t-border)] pt-3">
         <label className="flex items-center gap-2 text-xs text-[var(--t-text-3)]">
           <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-5 w-9 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'}`}>
-            <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-4' : ''}`} />
+            <span className={`block h-4 w-4 rounded-full bg-[var(--t-surface)] transition-transform ${profile.enabled ? 'translate-x-4' : ''}`} />
           </button>
           {t('profiles.enable')}
         </label>
@@ -795,7 +795,7 @@ function Modal({
 }) {
   const { t } = useLocale();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--t-overlay)] p-4">
       <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
@@ -1403,7 +1403,7 @@ function LoginWizard({
       ? 'Claude'
       : 'Antigravity';
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--t-overlay)] p-3">
       <div className="flex h-[90vh] w-[96vw] max-w-[1400px] flex-col overflow-hidden rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-2xl">
         <div className="border-b border-[var(--t-border)] p-4">
           <h2 className="text-lg font-semibold">

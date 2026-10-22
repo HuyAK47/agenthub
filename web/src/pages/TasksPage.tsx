@@ -83,7 +83,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
         <div className="flex items-center gap-2">
           <StatusBadge status={statusKey} size="sm" />
         </div>
-        <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[var(--bg-surface)] border border-[var(--border-default)] text-[var(--text-primary)]">
+        <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[var(--t-surface)] border border-[var(--t-border)] text-[var(--t-text)]">
           {tasks.length}
         </span>
       </div>
@@ -91,7 +91,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
       {/* Cards List */}
       <div className="space-y-2.5 flex-1 overflow-y-auto">
         {filteredTasks.length === 0 ? (
-          <div className="h-24 border border-dashed border-[var(--border-default)] rounded-lg flex items-center justify-center text-xs text-[var(--text-muted)] italic">
+          <div className="h-24 border border-dashed border-[var(--t-border)] rounded-lg flex items-center justify-center text-xs text-[var(--t-text-3)] italic">
             {t('common.empty')}
           </div>
         ) : (
@@ -99,10 +99,10 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
             <Link
               key={task.id}
               to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}
-              className="block bg-[var(--bg-surface)] p-3.5 rounded-lg border border-[var(--border-default)] shadow-xs hover:border-[var(--t-accent)] hover:shadow-sm transition-all group"
+              className="block bg-[var(--t-surface)] p-3.5 rounded-lg border border-[var(--t-border)] shadow-xs hover:border-[var(--t-accent)] hover:shadow-sm transition-all group"
             >
               <div className="flex items-start justify-between gap-2 mb-1.5">
-                <span className="text-xs font-mono text-[var(--text-secondary)] font-medium">
+                <span className="text-xs font-mono text-[var(--t-text-2)] font-medium">
                   {task.slug}
                 </span>
                 {task.checks && task.checks.length > 0 && (
@@ -121,10 +121,10 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
                     {task.checks.every((check) => check.ok) ? '✓' : '✗'}
                   </span>
                 )}
-                <ArrowUpRight className="w-3.5 h-3.5 text-[var(--text-muted)] group-hover:text-[var(--t-accent)] transition-colors" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-[var(--t-text-3)] group-hover:text-[var(--t-accent)] transition-colors" />
               </div>
 
-              <h3 className="text-sm font-semibold text-[var(--text-primary)] line-clamp-2 mb-2.5">
+              <h3 className="text-sm font-semibold text-[var(--t-text)] line-clamp-2 mb-2.5">
                 {task.title}
               </h3>
 
@@ -162,8 +162,8 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border-subtle)] text-[11px]">
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--bg-surface-subtle)] font-medium text-[var(--text-secondary)] border border-[var(--border-subtle)]">
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--t-border)] text-[11px]">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] font-medium text-[var(--t-text-2)] border border-[var(--t-border)]">
                   {task.projectId}
                 </span>
 
@@ -179,7 +179,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
                   )}
 
                   {task.attempt > 0 && (
-                    <span className="font-mono text-[var(--text-muted)]">#{task.attempt}</span>
+                    <span className="font-mono text-[var(--t-text-3)]">#{task.attempt}</span>
                   )}
                 </div>
               </div>
@@ -202,7 +202,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
               <button
                 type="button"
                 onClick={collapse}
-                className="text-xs text-[var(--text-secondary)] hover:underline cursor-pointer"
+                className="text-xs text-[var(--t-text-2)] hover:underline cursor-pointer"
               >
                 Thu gọn
               </button>
@@ -260,15 +260,15 @@ export const TasksPage: React.FC = () => {
       {/* Top Bar: Filter & New Task Button */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4" data-tour="task-filters">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--t-text)]">
             {t('tasks.title')}
           </h1>
-          <p className="text-sm text-[var(--text-secondary)]">{t('tasks.subtitle')}</p>
+          <p className="text-sm text-[var(--t-text-2)]">{t('tasks.subtitle')}</p>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
           {/* View Mode Toggle: Kanban <-> Sơ đồ (DAG) */}
-          <div className="flex items-center bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-0.5 shadow-xs" data-tour="task-views">
+          <div className="flex items-center bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg p-0.5 shadow-xs" data-tour="task-views">
             <button
               type="button"
               onClick={() => setViewMode('kanban')}
@@ -277,8 +277,8 @@ export const TasksPage: React.FC = () => {
               title={t('dag.toggleKanban')}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
                 viewMode === 'kanban'
-                  ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold'
+                  : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" />
@@ -292,8 +292,8 @@ export const TasksPage: React.FC = () => {
               title={t('dag.toggleDag')}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
                 viewMode === 'dag'
-                  ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold'
+                  : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
               }`}
             >
               <Network className="w-3.5 h-3.5" />
@@ -302,34 +302,34 @@ export const TasksPage: React.FC = () => {
           </div>
 
           {/* Quick Filter (Slug / Title) */}
-          <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
+          <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t('tasks.filterQuick')}
               aria-label={t('tasks.filterQuick')}
-              className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none w-36 sm:w-48"
+              className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] placeholder-[var(--t-text-3)] focus:outline-none w-36 sm:w-48"
             />
           </div>
 
           {/* Project Filter */}
-          <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
-            <Filter className="w-4 h-4 text-[var(--text-secondary)]" />
+          <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
+            <Filter className="w-4 h-4 text-[var(--t-text-2)]" />
             <select
               value={selectedProject}
               onChange={(e) => setSelectedProject(e.target.value)}
               aria-label={t('tasks.filterProject')}
-              className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] focus:outline-none cursor-pointer"
+              className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] focus:outline-none cursor-pointer"
             >
-              <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+              <option value="all" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                 {t('tasks.allProjects')}
               </option>
               {projects.map((p) => (
                 <option
                   key={p.id}
                   value={p.id}
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                  className="bg-[var(--t-surface)] text-[var(--t-text)]"
                 >
                   {p.name}
                 </option>
@@ -341,21 +341,21 @@ export const TasksPage: React.FC = () => {
           {viewMode === 'dag' && (
             <>
               {/* Status Filter */}
-              <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
+              <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
                 <select
                   value={selectedStatus}
                   onChange={(e) => setSelectedStatus(e.target.value)}
                   aria-label={t('dag.filterStatus')}
-                  className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                  className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] focus:outline-none cursor-pointer"
                 >
-                  <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="all" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.allStatuses')}
                   </option>
                   {KANBAN_STATUSES.map((st) => (
                     <option
                       key={st}
                       value={st}
-                      className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                      className="bg-[var(--t-surface)] text-[var(--t-text)]"
                     >
                       {t(`status.${st}`)}
                     </option>
@@ -364,29 +364,29 @@ export const TasksPage: React.FC = () => {
               </div>
 
               {/* Done tasks filter */}
-              <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
+              <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
                 <select
                   value={doneFilter}
                   onChange={(e) => setDoneFilter(e.target.value as any)}
                   aria-label={t('dag.hideDone')}
-                  className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                  className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] focus:outline-none cursor-pointer"
                 >
-                  <option value="active_chains" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="active_chains" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.activeChains')}
                   </option>
-                  <option value="1d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="1d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done1d')}
                   </option>
-                  <option value="3d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="3d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done3d')}
                   </option>
-                  <option value="7d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="7d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done7d')}
                   </option>
-                  <option value="30d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="30d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done30d')}
                   </option>
-                  <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="all" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.doneAll')}
                   </option>
                 </select>
@@ -399,7 +399,7 @@ export const TasksPage: React.FC = () => {
             type="button"
             onClick={() => navigate('/tasks/new')}
             data-tour="task-actions"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold shadow-xs cursor-pointer transition-colors shrink-0"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold shadow-xs cursor-pointer transition-colors shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>{t('tasks.createTask')}</span>

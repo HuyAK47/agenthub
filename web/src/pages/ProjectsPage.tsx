@@ -810,7 +810,7 @@ export const ProjectsPage: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   1
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -819,7 +819,7 @@ export const ProjectsPage: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   2
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -828,7 +828,7 @@ export const ProjectsPage: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   3
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">

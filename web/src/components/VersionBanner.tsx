@@ -53,7 +53,7 @@ export const VersionBanner: React.FC = () => {
     <div
       data-tour="updates"
       role="alert"
-      className="bg-[var(--t-accent)] text-white px-4 py-2 text-sm font-medium flex items-center justify-between shadow-md relative z-50"
+      className="bg-[var(--t-accent)] text-[var(--t-on-accent)] px-4 py-2 text-sm font-medium flex items-center justify-between shadow-md relative z-50"
     >
       <div className="flex items-center gap-2">
         <RefreshCw className="w-4 h-4 animate-spin-slow" />
