@@ -776,6 +776,7 @@ export const en: typeof vi = {
       "content": "Advanced settings contain concurrency, worktrees, checks, and environment variables. Open them for project-specific policy; increasing concurrency can overload the machine."
     }
   },
+  "modal-project-wizard": { "modal": { "title": "Project registration wizard", "content": "Walk through repository inspection, safe settings, previous context, and project creation." } },
   "modal-create-task": {
     "task": {
       "title": "Task goal",
@@ -931,6 +932,9 @@ export const en: typeof vi = {
     deployRestart: 'Restart hub: {val}',
     deployPush: 'Push branch: {from} → {to} ({remote})',
     noDeployConfig: 'No post-merge deploy configuration found (afterMerge).',
+    wizardOpen: 'Open wizard', wizardTitle: 'Project registration wizard', wizardProgress: 'Wizard progress',
+    wizardWhy0: 'Choose how to start so AgentHub can prepare the right setup.', wizardWhy1: 'AgentHub needs an absolute directory path to inspect safely.', wizardWhy2: 'A quick inspection helps choose the right branch and understand the repository.', wizardWhy3: 'Review and toggle these suggestions before creating the project.', wizardWhy4: 'Review references and previous context before pinning anything.', wizardWhy5: 'Configure the brain and notifications for this project.', wizardWhy6: 'Review every choice before creating the project.',
+    wizardExisting: 'Existing repository', wizardExistingDesc: 'Use an existing Git repository.', wizardNew: 'New project', wizardNewDesc: 'Create a directory, initialize Git, add an empty commit, and create the default branch.', wizardRepo: 'Repository', wizardNotGit: 'Not a Git repository', wizardLanguage: 'Primary language', wizardBranch: 'Current branch', wizardRemote: 'Remote host', wizardLockfiles: 'Lockfiles', wizardGuidance: 'Guidance files', wizardNewReady: 'The new directory will be created at the final step.', wizardSuggestionsDesc: 'Based on the repository inspection, these settings are recommended:', wizardSkipInstall: 'Do not install dependencies in worktrees', wizardSkipHooks: 'Skip Git hooks when workers commit', wizardIntegration: 'Enable a separate integration branch (the hub merges locally and never pushes)', wizardContextDesc: 'Review AGENTS.md and previous Claude Code sessions. References are read-only.', wizardGuidanceFound: 'Guidance files were found in the repository.', wizardGuidanceDraft: 'No AGENTS.md exists; you can create a draft after registration.', wizardSessionsFound: '{count} previous Claude Code session(s) are available to review.', wizardNoSessions: 'No previous Claude Code sessions were found for this directory.', wizardContextReadonly: 'Knowledge is only pinned after you approve the content.', wizardSummary: 'Selection summary', wizardBack: 'Back', wizardNext: 'Next', wizardCreate: 'Create project',
     deployLatestStatus: 'Latest run',
     deployStatusQueued: 'Queued',
     deployStatusRunning: 'Deploying',

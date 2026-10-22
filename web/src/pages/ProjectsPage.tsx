@@ -34,6 +34,7 @@ import {
   ProjectSettingsDrawer,
   defaultProjectSettings,
 } from '../components/ProjectSettingsDrawer';
+import { ProjectWizard } from '../components/ProjectWizard';
 
 function parsePositiveInt(val: string): number | undefined {
   const trimmed = val.trim();
@@ -342,6 +343,7 @@ export const ProjectsPage: React.FC = () => {
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   const [drawerProject, setDrawerProject] = useState<Project | null>(null);
 
   useEffect(() => {
@@ -570,7 +572,12 @@ export const ProjectsPage: React.FC = () => {
               : t('projects.registerBtn')}
           </span>
         </Button>
+        <Button type="button" variant="secondary" onClick={() => { resetForm(); setShowWizard(true); }} className="gap-1.5 self-start sm:self-auto">
+          <span>{t('projects.wizardOpen')}</span>
+        </Button>
       </div>
+
+      {showWizard && <ProjectWizard onClose={() => setShowWizard(false)} />}
 
       <div>
         <Button type="button" variant="ghost" size="sm" onClick={() => setShowArchived((value) => !value)}>

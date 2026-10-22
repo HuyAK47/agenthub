@@ -162,7 +162,9 @@ Trong AgentHub, một **project** là một git repository trên máy của bạ
 
 1. **Chuẩn bị repo**: Clone repo về máy (nếu chưa có). Đảm bảo repo đã được khởi tạo git và có nhánh mặc định (như `main`).
 2. **Đăng ký project vào hub**:
-   - **Trên Web Dashboard**: Truy cập trang **Thiết lập** (Setup) và bấm nút **"Thêm dự án"**, hoặc vào trang **Projects** bấm **"Đăng ký Project"** (hoặc mở trực tiếp đường dẫn `/projects?new=1`). Điền tên gợi nhớ và đường dẫn tuyệt đối tới thư mục repo git.
+   - **Đưa dự án có sẵn vào hub**: Truy cập trang **Projects**, mở **Trình hướng dẫn đăng ký**, chọn **Repo có sẵn trên máy**, nhập đường dẫn tuyệt đối rồi để AgentHub dò nhánh, lockfile, hooks, ngôn ngữ, tài liệu hướng dẫn và các phiên Claude Code cũ. Kiểm tra các gợi ý trước khi tạo; phần **Nâng cao** vẫn cho phép điền tay.
+   - **Tạo dự án mới**: Trong cùng trình hướng dẫn, chọn **Dự án mới**. AgentHub sẽ tạo thư mục mới, chạy `git init`, tạo commit rỗng và nhánh mặc định ngay trên máy trước khi đăng ký project.
+   - Luôn kiểm tra đường dẫn và nhánh gốc. Nhánh tích hợp (nếu bật) chỉ được hub merge local, không bao giờ tự push.
    - **Hoặc qua CLI**:
      ```bash
      agenthub project add <tên> /đường/dẫn/tuyệt/đối/tới/repo

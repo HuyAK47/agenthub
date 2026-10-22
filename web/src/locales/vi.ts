@@ -775,6 +775,7 @@ export const vi = {
       "content": "Phần Nâng cao chứa giới hạn chạy cùng lúc, worktree, checks và biến môi trường. Mở khi cần chính sách riêng; tăng song song có thể làm máy quá tải."
     }
   },
+  "modal-project-wizard": { "modal": { "title": "Trình hướng dẫn đăng ký dự án", "content": "Đi qua từng bước để dò repo, chọn thiết lập an toàn, xem ngữ cảnh cũ và tạo dự án." } },
   "modal-create-task": {
     "task": {
       "title": "Mục tiêu task",
@@ -931,6 +932,9 @@ export const vi = {
     deployPush: 'Đẩy nhánh: {from} → {to} ({remote})',
     noDeployConfig: 'Chưa có cấu hình deploy sau khi merge (afterMerge).',
     deployLatestStatus: 'Lượt gần nhất',
+    wizardOpen: 'Mở trình hướng dẫn', wizardTitle: 'Đăng ký dự án từng bước', wizardProgress: 'Tiến độ trình hướng dẫn',
+    wizardWhy0: 'Chọn cách bắt đầu để AgentHub biết cần chuẩn bị gì.', wizardWhy1: 'AgentHub chỉ cần một thư mục tuyệt đối để kiểm tra an toàn.', wizardWhy2: 'Kiểm tra nhanh giúp chọn đúng nhánh và hiểu cấu trúc repo.', wizardWhy3: 'Các gợi ý này có thể bật/tắt trước khi tạo dự án.', wizardWhy4: 'Chọn tài liệu tham khảo và xem lại ngữ cảnh cũ trước khi ghim.', wizardWhy5: 'Thiết lập bộ não và thông báo cho riêng dự án này.', wizardWhy6: 'Kiểm tra lại mọi lựa chọn trước khi tạo.',
+    wizardExisting: 'Repo có sẵn trên máy', wizardExistingDesc: 'Dùng một repository Git hiện có.', wizardNew: 'Dự án mới', wizardNewDesc: 'Tạo thư mục, git init, commit rỗng và nhánh mặc định.', wizardRepo: 'Repository', wizardNotGit: 'Chưa phải Git', wizardLanguage: 'Ngôn ngữ chính', wizardBranch: 'Nhánh hiện tại', wizardRemote: 'Remote host', wizardLockfiles: 'Lockfile', wizardGuidance: 'Tài liệu hướng dẫn', wizardNewReady: 'Thư mục mới sẽ được tạo ở bước cuối.', wizardSuggestionsDesc: 'Dựa trên kết quả dò repo, đây là các thiết lập được đề xuất:', wizardSkipInstall: 'Không cài phụ thuộc trong worktree', wizardSkipHooks: 'Bỏ qua git hooks khi worker commit', wizardIntegration: 'Bật nhánh tích hợp riêng (hub merge local, không bao giờ push)', wizardContextDesc: 'Kiểm tra AGENTS.md và các phiên Claude Code cũ. Nội dung tham chiếu chỉ được đọc.', wizardGuidanceFound: 'Đã tìm thấy tài liệu hướng dẫn trong repo.', wizardGuidanceDraft: 'Chưa có AGENTS.md; bạn có thể tạo bản nháp sau khi đăng ký.', wizardSessionsFound: 'Có {count} phiên Claude Code cũ để xem lại.', wizardNoSessions: 'Chưa có phiên Claude Code cũ cho thư mục này.', wizardContextReadonly: 'Việc ghim kiến thức chỉ thực hiện sau khi bạn duyệt nội dung.', wizardSummary: 'Tóm tắt lựa chọn', wizardBack: 'Quay lại', wizardNext: 'Tiếp', wizardCreate: 'Tạo dự án',
     deployStatusQueued: 'Chờ thực hiện',
     deployStatusRunning: 'Đang deploy',
     deployStatusRestarting: 'Đang khởi động lại hub',

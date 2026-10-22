@@ -4,6 +4,7 @@ import {
   CheckProfileResponse,
   CreateProfileInput,
   CreateProjectInput,
+  CreateNewProjectInput,
   DeployStatus,
   CreateTaskInput,
   CaptureTaskInput,
@@ -11,6 +12,7 @@ import {
   LoginSessionResponse,
   Profile,
   Project,
+  ProjectInspection,
   RetryTaskInput,
   ReviewTaskInput,
   SystemConfig,
@@ -255,6 +257,9 @@ export async function getProjects(): Promise<Project[]> {
 export async function getArchivedProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects?archived=true');
 }
+
+export const inspectProject = (path: string) => apiFetch<ProjectInspection>('/api/projects/inspect', { method: 'POST', body: JSON.stringify({ path }) });
+export const createNewProject = (data: CreateNewProjectInput) => apiFetch<Project>('/api/projects/new', { method: 'POST', body: JSON.stringify(data) });
 
 export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
 export const getProjectDeployStatus = (id: string) =>
