@@ -9,7 +9,7 @@ import { EventBus } from '../src/scheduler/index.js';
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: number; dailyTokenBudget?: number; projectSettings?: Record<string, string>; permissions?: 'standard' | 'trusted' | 'full'; setSessionMode?: (id: string, mode: 'safe' | 'full') => void } = {}) {
+function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: number; dailyTokenBudget?: number; projectSettings?: Record<string, string>; permissions?: 'standard' | 'trusted' | 'full'; setSessionMode?: (id: string, mode: 'safe' | 'full') => void; failFirstSend?: boolean } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-runner-'));
   dirs.push(dir);
   const db = openDatabase(path.join(dir, 'hub.db'));
@@ -29,7 +29,13 @@ function setup(mode: 'suggest' | 'auto' = 'suggest', options: { maxConcurrent?: 
       return sessions.get(id)!;
     },
     setSessionMode: options.setSessionMode,
-    sendMessage(_id: string, text: string) { sent.push(`${_id}: ${text}`); return { userMessageId: 'u', assistantMessageId: 'a' }; },
+    sendMessage(_id: string, text: string) {
+      if (options.failFirstSend) {
+        options.failFirstSend = false;
+        throw new Error('send failed');
+      }
+      sent.push(`${_id}: ${text}`); return { userMessageId: 'u', assistantMessageId: 'a' };
+    },
   };
   const brainConfig = { fallback: [], policy: [], claudeProfile: 'p', model: 'opus', mode, permissions: options.permissions ?? 'standard', maxConcurrent: options.maxConcurrent ?? 2, maxTurnsPerHour: 20, dailyTokenBudget: options.dailyTokenBudget ?? 0 } as const;
   const runner = new BrainRunner({
@@ -96,6 +102,15 @@ describe('BrainRunner', () => {
     ctx.runner.flush();
     expect(ctx.sent[0]).toContain('docs/checklist.md');
     expect(ctx.sent[0]).toContain('CHECKLIST KHI DUYỆT');
+  });
+
+  it('does not mark knowledge as sent when sending the first turn fails', () => {
+    const ctx = setup('suggest', { failFirstSend: true, projectSettings: { p: '{}' } });
+    ctx.knowledge.insert({ projectId: 'p', taskId: 'manual/p', content: 'Retry rule', pinned: true });
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p/first');
+    ctx.runner.flush();
+    expect(ctx.sent[0]).toContain('Retry rule');
   });
 
   it('does not overlap a user turn and preserves events after quota', () => {

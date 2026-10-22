@@ -18,12 +18,12 @@ export interface ReviewerCheckSummary {
 
 const REVIEWER_SCHEMA = `{"verdict":"approved|changes_requested","feedback":"specific markdown feedback"}`;
 
-export function buildReviewerPrompt(taskBody: string, worktreePath: string, checks: ReviewerCheckSummary[] = [], checklist: string[] = []): string {
+export function buildReviewerPrompt(taskBody: string, worktreePath: string, checks: ReviewerCheckSummary[] = [], checklist: string[] = [], projectPath = worktreePath): string {
   const checkSummary = JSON.stringify(checks, null, 2);
   const checklistText = checklist.length === 0
     ? 'Không có checklist dự án.'
     : checklist.slice(0, 5).map((entry) => {
-      const file = resolveProjectFile(worktreePath, entry);
+      const file = resolveProjectFile(projectPath, entry);
       if (!file) return `- ${entry}: đường dẫn không hợp lệ hoặc nằm ngoài project; bị từ chối.`;
       try {
         const stat = fs.statSync(file);

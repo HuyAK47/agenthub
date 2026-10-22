@@ -76,4 +76,31 @@ describe('Codex reviewer output', () => {
     expect(prompt).toContain('bị từ chối');
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it('reads checklist files from the canonical project, not a mutable worktree', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reviewer-project-'));
+    const project = path.join(root, 'project');
+    const worktree = path.join(root, 'worktree');
+    fs.mkdirSync(path.join(project, 'docs'), { recursive: true });
+    fs.mkdirSync(path.join(worktree, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(project, 'docs', 'checklist.md'), 'CANONICAL CHECK', 'utf8');
+    fs.writeFileSync(path.join(worktree, 'docs', 'checklist.md'), 'WORKTREE ATTACK', 'utf8');
+    const prompt = buildReviewerPrompt('Task', worktree, [], ['docs/checklist.md'], project);
+    expect(prompt).toContain('CANONICAL CHECK');
+    expect(prompt).not.toContain('WORKTREE ATTACK');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('rejects a checklist symlink escaping the canonical project', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reviewer-symlink-'));
+    const project = path.join(root, 'project');
+    const outside = path.join(root, 'secret.md');
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(outside, 'SYMLINK SECRET', 'utf8');
+    fs.symlinkSync(outside, path.join(project, 'checklist.md'));
+    const prompt = buildReviewerPrompt('Task', project, [], ['checklist.md'], project);
+    expect(prompt).not.toContain('SYMLINK SECRET');
+    expect(prompt).toContain('bị từ chối');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

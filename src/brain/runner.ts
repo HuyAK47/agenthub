@@ -28,7 +28,7 @@ export interface BrainRunnerOptions {
 }
 
 export interface BrainQueuedEvent { id?: string; type: string; taskId?: string; projectId?: string | null; payload?: unknown; priority?: boolean; }
-interface ActiveTurn { id: string; events: BrainQueuedEvent[]; retries: number; timer?: NodeJS.Timeout; }
+interface ActiveTurn { id: string; events: BrainQueuedEvent[]; retries: number; knowledgeHash?: string; timer?: NodeJS.Timeout; }
 
 /** Routes resident-brain turns by project while retaining the system brain for incidents. */
 export class BrainRunner {
@@ -138,12 +138,16 @@ export class BrainRunner {
     const priority = projectEvents.find((event) => event.priority);
     const events = priority ? [priority] : projectEvents;
     this.pending = this.pending.filter((event) => !(event.priority ? event === priority : !priority && (event.projectId ?? null) === projectId));
-    const input = priority ? this.formatDirectiveAcknowledgement(priority, projectId) : this.formatEvents(events, this.mode(projectId), projectId);
+    const formatted = priority
+      ? { text: this.formatDirectiveAcknowledgement(priority, projectId) }
+      : this.formatEvents(events, this.mode(projectId), projectId);
+    const input = formatted.text;
     const turn = this.opts.turnRepo.insert({ id: crypto.randomUUID(), trigger: 'event', input, projectId });
-    const active: ActiveTurn = { id: turn.id, events, retries: Math.max(0, ...events.map((event) => this.retryCounts.get(event.id || '') || 0)) };
+    const active: ActiveTurn = { id: turn.id, events, retries: Math.max(0, ...events.map((event) => this.retryCounts.get(event.id || '') || 0)), knowledgeHash: formatted.knowledgeHash };
     this.active.set(sessionId, active);
     try {
       this.opts.chatService.sendMessage(sessionId, input);
+      if (active.knowledgeHash) this.sentKnowledgeHash.set(sessionId, active.knowledgeHash);
       active.timer = setTimeout(() => this.failActive(sessionId, 'brain turn timeout'), (this.opts.config.turnTimeoutSec ?? 1200) * 1000);
       active.timer.unref?.();
     } catch (error) {
@@ -257,7 +261,7 @@ export class BrainRunner {
     this.timer.unref?.();
   }
 
-  private formatEvents(events: BrainQueuedEvent[], mode: EffectiveBrainMode, projectId: string | null): string {
+  private formatEvents(events: BrainQueuedEvent[], mode: EffectiveBrainMode, projectId: string | null): { text: string; knowledgeHash?: string } {
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
     const context = project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
     const seenQuota = new Set<string>();
@@ -276,14 +280,15 @@ export class BrainRunner {
       : null;
     const key = this.sessionIdFor(projectId);
     let knowledgePrompt = 'KIẾN THỨC DỰ ÁN không đổi; hãy tiếp tục áp dụng kiến thức đã nhận.';
+    let knowledgeHash: string | undefined;
     if (knowledge && this.sentKnowledgeHash.get(key) !== knowledge.hash) {
-      this.sentKnowledgeHash.set(key, knowledge.hash);
       knowledgePrompt = knowledge.text;
+      knowledgeHash = knowledge.hash;
     }
     const checklist = settings?.reviewChecklist.length
       ? `\nCHECKLIST KHI DUYỆT (BẮT BUỘC):\n${settings.reviewChecklist.map((item) => `- ${item}`).join('\n')}\nKhi review phải liệt kê mục vi phạm hoặc ghi rõ “đã đối chiếu checklist: không vi phạm”.`
       : '';
-    return `${context}\n${knowledgePrompt}${checklist}\nCHỈ THỊ CỦA NGƯỜI DÙNG (bắt buộc tuân theo):\n${directives}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
+    return { text: `${context}\n${knowledgePrompt}${checklist}\nCHỈ THỊ CỦA NGƯỜI DÙNG (bắt buộc tuân theo):\n${directives}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`, knowledgeHash };
   }
 
   private formatDirectiveAcknowledgement(event: BrainQueuedEvent, projectId: string | null): string {
