@@ -409,6 +409,14 @@ describe('Integration branch and cross-project dependencies', () => {
     fs.writeFileSync(path.join(t.worktreePath!, '.agenthub', 'DONE'), 'done');
 
     ctx.taskRepo.update('checks-proj/failing-check-task', { status: 'review' });
+    ctx.taskRepo.insert({
+      id: 'checks-proj/failing-check-task-fix-test',
+      projectId: 'checks-proj',
+      slug: 'failing-check-task-fix-test',
+      title: 'Existing test fix',
+      status: 'queued',
+      sourceRef: JSON.stringify({ taskId: t.id, checkName: 'test', excerptHash: 'test' }),
+    });
 
     await expect(ctx.service.reviewTask('checks-proj/failing-check-task', {
       verdict: 'approved',
@@ -421,6 +429,8 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(afterHead).toBe(beforeHead);
     const status = execFileSync('git', ['-C', intPath, 'status', '--porcelain'], { encoding: 'utf8' }).trim();
     expect(status).toBe('');
+    expect(ctx.taskRepo.get('checks-proj/failing-check-task-fix-test')?.status).toBe('queued');
+    expect(ctx.taskRepo.getAll().filter((task) => task.slug.endsWith('-fix-merge'))).toHaveLength(1);
   });
 
   it('rejects invalid branch names and main/master collisions', () => {
