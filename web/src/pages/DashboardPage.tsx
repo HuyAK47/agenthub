@@ -32,6 +32,7 @@ import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { Profile, QuotaUsageItem, ProjectBrain } from '../types/api';
+import { formatReset, formatTimeTitle } from '../lib/time';
 import { GettingStartedChecklist } from '../components/GettingStartedChecklist';
 
 function providerUsage(profiles: Profile[], engine: Profile['engine']): QuotaUsageItem[] {
@@ -73,7 +74,7 @@ function RunningDuration({ startedAt }: { startedAt: string }) {
 }
 
 export const DashboardPage: React.FC = () => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const navigate = useNavigate();
   const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
   const [quickChatText, setQuickChatText] = useState('');
@@ -592,7 +593,7 @@ export const DashboardPage: React.FC = () => {
       </div>
       {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
-        <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p) => `${p.profileName}: ${p.status || t('extra.unknown')} (${p.source}, ${new Date(p.observedAt).toLocaleTimeString()})`).join(' · ') : `${claudeQuota.status || t('extra.unknown')}${claudeQuota.resetsAt ? ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}` : ''}`}</span>
+        <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p, index) => <React.Fragment key={p.profileName}><span title={formatTimeTitle(p.resetsAt, locale, p.source, p.observedAt)}>{p.profileName}: {p.status === 'allowed' ? t('extra.claudeQuotaAvailable') : p.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : p.limited ? t('extra.claudeQuotaRejected') : (p.status || t('extra.unknown'))}{p.resetsAt ? ` · ${formatReset(p.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {new Date(p.observedAt).toLocaleTimeString()}</span>{index < claudeQuota.profiles!.length - 1 ? ' · ' : ''}</React.Fragment>) : <span title={formatTimeTitle(claudeQuota.resetsAt, locale, '/usage', claudeQuota.observedAt || null)}>{claudeQuota.status === 'allowed' ? t('extra.claudeQuotaAvailable') : claudeQuota.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : claudeQuota.limited ? t('extra.claudeQuotaRejected') : (claudeQuota.status || t('extra.unknown'))}{claudeQuota.resetsAt ? ` · ${formatReset(claudeQuota.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {claudeQuota.observedAt ? new Date(claudeQuota.observedAt).toLocaleTimeString() : t('extra.unknown')}</span>}</span>
       </div>}
       {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
         <div className="flex items-center justify-between gap-4">

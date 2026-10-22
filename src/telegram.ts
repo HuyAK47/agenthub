@@ -22,6 +22,7 @@ import {
 import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
 import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permissions.js';
+import { formatReset } from './time-format.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -2216,7 +2217,7 @@ export class TelegramBotService {
     if (quotaMarks.length > 0) {
       text = text + '\n⏳ <b>Quota đang bị hạn chế:</b>\n';
       for (const q of quotaMarks) {
-        const untilStr = new Date(q.until * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const untilStr = formatReset(q.until, this.now(), 'vi');
         text = text + `• Hồ sơ ${q.profileName} (${q.family}): đến ${untilStr}\n`;
       }
     }
@@ -3312,7 +3313,7 @@ export class TelegramBotService {
 
       case 'chat.limit_waiting': {
         if (!notify.quota || !this.chatService || typeof p.sessionId !== 'string') return;
-        const resetAt = typeof p.resetAt === 'number' ? new Date(p.resetAt * 1000 + 60_000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sau khi reset';
+        const resetAt = typeof p.resetAt === 'number' ? formatReset(p.resetAt * 1000 + 60_000, this.now(), 'vi') : 'sau khi reset';
         this.broadcastMessage(`⏳ <b>Claude đạt giới hạn 5 giờ</b>\nTự gửi lại lúc <b>${resetAt}</b>.`, { inline_keyboard: [[{ text: '⏹ Huỷ', callback_data: `chatlimit:cancel:${p.sessionId}` }, { text: '▶️ Gửi lại ngay', callback_data: `chatlimit:now:${p.sessionId}` }]] });
         break;
       }
@@ -3633,10 +3634,7 @@ export class TelegramBotService {
     }
 
     if (epochSec !== undefined) {
-      const d = new Date(epochSec * 1000);
-      const hh = String(d.getHours()).padStart(2, '0');
-      const mm = String(d.getMinutes()).padStart(2, '0');
-      return `${hh}:${mm}`;
+      return formatReset(epochSec, this.now(), 'vi');
     }
 
     return '';
