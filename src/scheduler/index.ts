@@ -20,7 +20,7 @@ import {
   TaskNoteRepo,
 } from '../db/index.js';
 import { projectSettings } from '../projects/settings.js';
-import { projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
+import { isProjectWorktreeRootAccessible, projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
@@ -1290,7 +1290,7 @@ export class Scheduler {
     const stalledTask = this.taskRepo.get(taskId);
     if (stalledTask?.worktreePath) {
       const project = this.projectRepo.get(stalledTask.projectId);
-      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
     this.running.delete(taskId);
     if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
@@ -2533,8 +2533,13 @@ export class Scheduler {
     }
 
     const projectAccessible = isProjectAccessible(project.path);
+    const worktreeRootAccessible = isProjectWorktreeRootAccessible({
+      id: project.id,
+      path: project.path,
+      settings: project.settings,
+    });
     const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
-    if (!projectAccessible || !worktreeAccessible) {
+    if (!projectAccessible || !worktreeRootAccessible || !worktreeAccessible) {
       this.locks.release(profile.name, lockFile);
       this.markTaskWaitingForProject(task, project);
       return;
@@ -2567,6 +2572,10 @@ export class Scheduler {
           ensureIntegrationWorktree(project, this.config.hubHome);
         } catch (e) {
           this.locks.release(profile.name, lockFile);
+          if (!isProjectAccessible(project.path) || !isProjectWorktreeRootAccessible({ id: project.id, path: project.path, settings: project.settings })) {
+            this.markTaskWaitingForProject(task, project);
+            return;
+          }
           this.taskRepo.updateStatus(task.id, 'failed');
           this.eventBus.emit('task.failed', task.id, { error: String(e) });
           return;
@@ -2584,7 +2593,7 @@ export class Scheduler {
         });
       } catch (e) {
         this.locks.release(profile.name, lockFile);
-        if (!isProjectAccessible(project.path)) {
+        if (!isProjectAccessible(project.path) || !isProjectWorktreeRootAccessible({ id: project.id, path: project.path, settings: project.settings })) {
           this.markTaskWaitingForProject(task, project);
           return;
         }

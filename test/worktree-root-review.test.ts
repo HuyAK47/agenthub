@@ -74,6 +74,24 @@ describe('configured worktree root review regressions', () => {
     expect(fs.existsSync(path.join(fixture.configuredRoot, '.integration'))).toBe(false);
   });
 
+  it('does not create a configured worktree root when the mount is unavailable', () => {
+    const fixture = repoFixture();
+    const missingRoot = path.join(fixture.root, 'not-mounted');
+    const project = { ...fixture.project, settings: JSON.stringify({ worktree: { root: missingRoot } }) };
+    const service = new WorktreeService(fixture.config);
+    expect(() => service.create({
+      projectPath: fixture.repo,
+      projectId: project.id,
+      projectSettings: project.settings,
+      slug: 'waiting-task',
+      branch: 'agenthub/waiting-task',
+      baseRef: 'main',
+    })).toThrow(/root không truy cập được/);
+    expect(fs.existsSync(missingRoot)).toBe(false);
+    expect(() => ensureIntegrationWorktree({ ...project, defaultBranch: 'main' }, fixture.hubHome)).toThrow(/root không truy cập được/);
+    expect(fs.existsSync(missingRoot)).toBe(false);
+  });
+
   it('refuses to remove an integration symlink that escapes the configured root', () => {
     const fixture = repoFixture();
     const outside = path.join(fixture.root, 'outside');

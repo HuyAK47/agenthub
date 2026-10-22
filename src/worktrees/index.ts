@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AgentHubConfig } from '../config.js';
 import { reapSyncForWorktree } from '../reaper.js';
-import { projectWorktreeRoot, resolveProjectFile } from '../projects/paths.js';
+import { isProjectWorktreeRootAccessible, projectWorktreeRoot, projectWorktreeRoots, resolveProjectFile } from '../projects/paths.js';
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -129,8 +129,12 @@ export class WorktreeService {
     if (opts.slug === '.integration' || opts.slug === '.logs') {
       throw new Error(`Slug không được dùng tên dành riêng: ${opts.slug}`);
     }
+    const project = { id: opts.projectId, path: opts.projectPath, settings: opts.projectSettings };
+    if (!isProjectWorktreeRootAccessible(project)) {
+      throw new Error(`Project worktree root không truy cập được: ${projectWorktreeRoot(project, this.config.hubHome, this.config.worktreesDir)}`);
+    }
     const worktreePath = path.join(
-      projectWorktreeRoot({ id: opts.projectId, path: opts.projectPath, settings: opts.projectSettings }, this.config.hubHome, this.config.worktreesDir),
+      projectWorktreeRoot(project, this.config.hubHome, this.config.worktreesDir),
       opts.slug,
     );
 
@@ -142,7 +146,7 @@ export class WorktreeService {
 
     // Remove existing worktree if present
     if (fs.existsSync(worktreePath)) {
-      this.remove(opts.projectPath, worktreePath);
+      this.remove(opts.projectPath, worktreePath, undefined, projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir));
     }
 
     // Create worktree

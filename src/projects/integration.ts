@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { HttpError } from '../errors.js';
 import { projectSettings } from './settings.js';
-import { projectWorktreeRoot } from './paths.js';
+import { isProjectWorktreeRootAccessible, projectWorktreeRoot } from './paths.js';
 
 export interface IntegrationStatus {
   path: string;
@@ -155,6 +155,13 @@ export function ensureIntegrationWorktree(project: ProjectLike, hubHome: string)
   }
 
   const settings = projectSettings(project);
+  if (settings.worktree.root && !isProjectWorktreeRootAccessible({
+    id: project.id,
+    path: project.path || hubHome,
+    settings: project.settings,
+  })) {
+    throw new HttpError(503, 'unavailable', `Worktree root không truy cập được: ${settings.worktree.root}`);
+  }
   const branch = settings.integration.branch || 'agenthub/integration';
   const baseRef = settings.integration.baseRef || project.defaultBranch;
 

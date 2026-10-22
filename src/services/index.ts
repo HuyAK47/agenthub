@@ -1470,7 +1470,12 @@ export class AppService {
         warnings.push(`Giữ worktree ${task.worktreePath} vì có thay đổi chưa commit`);
         continue;
       }
-      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(proj.path, task.worktreePath, { projectId: id, taskId: task.id, slug: task.slug });
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(
+        proj.path,
+        task.worktreePath,
+        { projectId: id, taskId: task.id, slug: task.slug },
+        projectWorktreeRoots(proj, this.config.hubHome, this.config.worktreesDir),
+      );
       if (!removed) warnings.push(`Không thể gỡ worktree ${task.worktreePath}; đã giữ nguyên`);
     }
 

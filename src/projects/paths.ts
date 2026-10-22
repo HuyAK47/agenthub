@@ -43,6 +43,30 @@ export function projectWorktreeRoots(
   return current === legacy ? [current] : [current, legacy];
 }
 
+/** Return whether an explicitly configured root is currently mounted and writable. */
+export function isProjectWorktreeRootAccessible(project: WorktreeProjectPath): boolean {
+  const configured = project.settings ? projectSettingsRoot(project.settings) : undefined;
+  if (!configured) return true;
+  try {
+    fs.statSync(configured);
+    fs.accessSync(configured, fs.constants.R_OK | fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function projectSettingsRoot(raw: string): string | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { worktree?: { root?: unknown } };
+    return typeof parsed.worktree?.root === 'string' && path.isAbsolute(parsed.worktree.root)
+      ? path.resolve(parsed.worktree.root)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function validateProjectWorktreeRoot(root: string, projectPath: string, hubHome: string): void {
   if (!path.isAbsolute(root)) throw new Error('Worktree root phải là đường dẫn tuyệt đối');
   const resolved = path.resolve(root);
