@@ -2,6 +2,7 @@
 export const UI_Z_INDEX = {
   tour: 100,
   modal: 110,
+  modalTour: 115,
   popover: 120,
   toast: 130,
 } as const;

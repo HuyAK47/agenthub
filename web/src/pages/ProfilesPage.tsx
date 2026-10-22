@@ -948,10 +948,10 @@ export function AddProfileModal({
                   setMethod('terminal');
                   setCockpitError('');
                 }}
-                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                className={`rounded-md py-1.5 text-center text-xs font-semibold transition-all cursor-pointer ${
                   method === 'terminal'
-                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
-                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] border border-[var(--t-border)] shadow-xs'
+                    : 'text-[var(--t-text-2)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] border border-transparent'
                 }`}
               >
                 {t('profiles.tabTerminalLogin')}
@@ -962,10 +962,10 @@ export function AddProfileModal({
                   setMethod('cockpit');
                   setError('');
                 }}
-                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                className={`rounded-md py-1.5 text-center text-xs font-semibold transition-all cursor-pointer ${
                   method === 'cockpit'
-                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
-                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] border border-[var(--t-border)] shadow-xs'
+                    : 'text-[var(--t-text-2)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] border border-transparent'
                 }`}
               >
                 {t('profiles.tabImportCockpit')}
