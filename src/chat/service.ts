@@ -87,7 +87,7 @@ export interface RunningTurn {
 }
 
 const TOOL_OUTPUT_LIMIT = 4096;
-const SECRET_TOOL_PATH = /(?:^|[\\/\s'"])(?:auth\.json|\.?credentials?\.json|[^\\/\s'"]*token[^\\/\s'"]*\.json|keyring[^\\/\s'"]*|\.env)(?=$|[\\/\s'"])/i;
+const SECRET_TOOL_PATH = /(?:^|[\\/\s'"])(?:auth\.json|\.?credentials?\.json|[^\\/\s'"]*token[^\\/\s'"]*\.json|keyring[^\\/\s'"]*|\.env(?:\.[^\\/\s'"]+)?)(?=$|[\\/\s'"])/i;
 const SECRET_TOOL_DIRECTORY = /(?:~?[\\/]\.codex(?:[\\/]|$)|~?[\\/]\.agy-homes(?:[\\/]|$))/i;
 
 function isSecretToolInput(input?: Record<string, unknown>): boolean {

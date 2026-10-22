@@ -884,9 +884,11 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     const secretToolJson = JSON.stringify(secretInputMessages.filter((message: { role: string }) => message.role === 'tool'));
     expect(secretToolJson).not.toContain('SECRET_WRITE_VALUE');
     expect(secretToolJson).not.toContain('SECRET_BASH_VALUE');
+    expect(secretToolJson).not.toContain('SECRET_ENV_VALUE');
     expect(secretToolJson).toContain('[đã ẩn]');
     expect(JSON.stringify(secretInputEvents)).not.toContain('SECRET_WRITE_VALUE');
     expect(JSON.stringify(secretInputEvents)).not.toContain('SECRET_BASH_VALUE');
+    expect(JSON.stringify(secretInputEvents)).not.toContain('SECRET_ENV_VALUE');
 
     const tokenizerSession = await createSession();
     let tokenizerDone = false;

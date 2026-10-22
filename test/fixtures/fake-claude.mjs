@@ -78,9 +78,11 @@ async function handlePrompt(prompt) {
     console.log(JSON.stringify({ type: 'assistant', message: { content: [
       { type: 'tool_use', id: 'tool_secret_write', name: 'Write', input: { file_path: '/tmp/auth.json', content: 'SECRET_WRITE_VALUE' } },
       { type: 'tool_use', id: 'tool_secret_bash', name: 'Bash', input: { command: 'cat ~/.codex/auth.json' } },
+      { type: 'tool_use', id: 'tool_secret_env', name: 'Write', input: { file_path: '/tmp/.env.local', content: 'SECRET_ENV_VALUE' } },
     ] } }));
     console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_write', content: 'SECRET_WRITE_VALUE' }] } }));
     console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_bash', content: 'SECRET_BASH_VALUE' }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_env', content: 'SECRET_ENV_VALUE' }] } }));
     console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-secret-input-123', is_error: false, result: 'Đã xử lý.' }));
     return;
   }
