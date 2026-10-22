@@ -58,7 +58,7 @@ export const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <LocaleProvider>
+        <LocaleProvider appName={config?.branding?.name}>
           <BrandingProvider branding={config?.branding}>
           <AuthGate>
           <BrowserRouter>

@@ -3254,8 +3254,13 @@ export class AppService {
 
   // --- Config ---
   getConfig() {
+    const logoPath = this.config.branding.logo ? path.join(this.config.hubHome, 'branding', this.config.branding.logo) : null;
+    let logoVersion: number | undefined;
+    if (logoPath) {
+      try { logoVersion = fs.statSync(logoPath).mtimeMs; } catch { /* logo may be removed during update */ }
+    }
     return {
-      branding: this.config.branding,
+      branding: { ...this.config.branding, ...(logoVersion !== undefined ? { logoVersion } : {}) },
       modelChainHard: this.config.defaultModelChains.hard,
       modelChainEasy: this.config.defaultModelChains.easy,
       defaultTimeout: this.config.defaultTimeout,

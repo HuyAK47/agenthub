@@ -22,6 +22,11 @@ describe('branding', () => {
 
   it('rejects active SVG content and stores safe SVG under branding', () => {
     expect(() => sanitizeSvg('<svg><script>alert(1)</script></svg>')).toThrow();
+    expect(() => sanitizeSvg('<svg><foreignObject><iframe/></foreignObject></svg>')).toThrow();
+    expect(() => sanitizeSvg('<svg><use href="data:image/svg+xml;base64,abc"/></svg>')).toThrow();
+    expect(() => sanitizeSvg('<svg><use href="&#106;avascript:alert(1)"/></svg>')).toThrow();
+    expect(() => sanitizeSvg('<svg><style>.x{fill:url(https://evil.test/x)}</style></svg>')).toThrow();
+    expect(sanitizeSvg('<svg><use href="#safe-symbol"/></svg>')).toContain('href="#safe-symbol"');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-branding-'));
     tempDirs.push(dir);
     const file = saveBrandingLogo(dir, 'image/svg+xml', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><!-- x --><path/></svg>'));

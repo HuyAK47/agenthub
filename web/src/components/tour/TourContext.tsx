@@ -171,8 +171,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       || Object.values(pageTours).find((item) => item.id === activeId)
       || modalTourDefinitions.find((item) => item.id === activeId)
       || null;
-    if (!tour || !config?.branding?.name || config.branding.name === 'AgentHub') return tour;
-    return { ...tour, steps: tour.steps.map((step) => ({ ...step, title: step.title.replace(/AgentHub/g, config.branding!.name), content: step.content.replace(/AgentHub/g, config.branding!.name) })) };
+    return tour;
   }, [activeId, config?.branding?.name]);
 
   const markSeen = useCallback(async (id: string) => {

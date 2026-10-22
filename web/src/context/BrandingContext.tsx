@@ -4,6 +4,7 @@ export interface Branding {
   name: string;
   shortName: string;
   logo?: string;
+  logoVersion?: number;
   accentColor?: string;
   tagline?: string;
 }

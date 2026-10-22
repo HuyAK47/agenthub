@@ -484,7 +484,13 @@ export async function createServer(
     const logoPath = brandingLogoPath(config.hubHome);
     if (!logoPath) return reply.status(404).send({ error: 'not_found', message: 'Chưa cấu hình logo' });
     const mime = logoPath.endsWith('.svg') ? 'image/svg+xml' : 'image/png';
-    return reply.header('Cache-Control', 'public, max-age=300').type(mime).send(fs.createReadStream(logoPath));
+    return reply
+      .header('Cache-Control', 'public, max-age=300')
+      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Content-Disposition', `inline; filename="logo${mime === 'image/svg+xml' ? '.svg' : '.png'}"`)
+      .type(mime)
+      .send(fs.createReadStream(logoPath));
   });
 
   fastify.put('/api/branding/logo', async (req: FastifyRequest) => {

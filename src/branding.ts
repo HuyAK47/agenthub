@@ -51,8 +51,20 @@ export function brandingLogoPath(hubHome: string): string | null {
 }
 
 export function sanitizeSvg(input: string): string {
-  if (/<\s*script\b|\bon[a-z]+\s*=|javascript\s*:/i.test(input)) {
+  if (
+    /<\s*script\b|\bon[a-z]+\s*=|javascript\s*:/i.test(input)
+    || /<\s*foreignObject\b/i.test(input)
+    || /&#(?:x[0-9a-f]+|[0-9]+);/i.test(input)
+    || /<\s*style\b[\s\S]*?url\s*\(/i.test(input)
+  ) {
     throw new Error('SVG chứa script hoặc thuộc tính không an toàn');
+  }
+  const hrefPattern = /(?:href|xlink:href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  for (const match of input.matchAll(hrefPattern)) {
+    const href = match[1] ?? match[2] ?? match[3] ?? '';
+    if (!/^#[A-Za-z_][A-Za-z0-9_.:-]*$/.test(href)) {
+      throw new Error('SVG chứa liên kết không an toàn');
+    }
   }
   return input
     .replace(/<!DOCTYPE[^>]*>/gi, '')

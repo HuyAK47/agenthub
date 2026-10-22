@@ -22,7 +22,8 @@ const LocaleContext = createContext<LocaleContextType>(defaultContext);
 export const LocaleProvider: React.FC<{
   children: React.ReactNode;
   initialLocale?: Locale;
-}> = ({ children, initialLocale }) => {
+  appName?: string;
+}> = ({ children, initialLocale, appName = 'AgentHub' }) => {
   const [locale, setLocaleState] = useState<Locale>(() => {
     if (initialLocale) return initialLocale;
     if (typeof window !== 'undefined') {
@@ -55,7 +56,6 @@ export const LocaleProvider: React.FC<{
     setLocaleState((prev) => (prev === 'vi' ? 'en' : 'vi'));
   };
 
-  const appName = 'AgentHub';
   const t = (key: TranslationKey | string, params?: Record<string, string | number | undefined | null>) => {
     return translate(locale, key, { appName, ...params });
   };
