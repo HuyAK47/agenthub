@@ -182,6 +182,44 @@ release_checksum() {
   fi
 }
 
+# Find a Node binary of the given major version (the one the release's native modules were built
+# for). Uses `node` from PATH if it matches, otherwise nvm (installing nvm/Node after asking).
+# Prints the absolute path of the node binary.
+find_node_major() {
+  _want="$1"
+  _cur="$(command -v node 2>/dev/null || true)"
+  if [ -n "$_cur" ] && [ "$("$_cur" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" = "$_want" ]; then
+    printf '%s' "$_cur"; return 0
+  fi
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  # shellcheck source=/dev/null
+  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+  if ! command -v nvm >/dev/null 2>&1; then
+    echo "AgentHub cần Node $_want (máy đang có: ${_cur:+$("$_cur" -v)}${_cur:-không có Node})." >&2
+    if prompt_yes_no "Cài nvm để cài Node $_want riêng cho AgentHub (không đổi Node mặc định của bạn)?" "y"; then
+      curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash >&2
+      # shellcheck source=/dev/null
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+    fi
+  fi
+  if ! command -v nvm >/dev/null 2>&1; then
+    echo "Lỗi: cần Node $_want. Cài Node $_want hoặc nvm rồi chạy lại." >&2
+    return 1
+  fi
+  _path="$(nvm which "$_want" 2>/dev/null || true)"
+  if [ -z "$_path" ] || [ ! -x "$_path" ]; then
+    if prompt_yes_no "Cài Node $_want qua nvm cho AgentHub?" "y"; then
+      nvm install "$_want" >&2 || return 1
+      _path="$(nvm which "$_want" 2>/dev/null || true)"
+    fi
+  fi
+  if [ -z "$_path" ] || [ ! -x "$_path" ]; then
+    echo "Lỗi: không tìm được Node $_want." >&2
+    return 1
+  fi
+  printf '%s' "$_path"
+}
+
 install_from_release() {
   if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
     echo "Lỗi: --from-release cần curl và tar." >&2
@@ -240,6 +278,13 @@ install_from_release() {
   mkdir -p "$_release_stage"
   trap 'rm -rf "$_tmp" "$_release_stage"' EXIT HUP INT TERM
   tar -xzf "$_tmp/$_archive" -C "$_release_stage"
+  # Pin the Node major the bundled native modules were built for (see scripts/package.mjs).
+  _node_major="$(cat "$_release_stage/node-runtime" 2>/dev/null || echo 22)"
+  _node_bin="$(find_node_major "$_node_major")" || return 1
+  printf '%s\n' "$_node_bin" > "$_release_stage/.node-bin"
+  echo "✓ Dùng Node $("$_node_bin" -v) cho AgentHub ($_node_bin)"
+  PATH="$(dirname "$_node_bin"):$PATH"
+  export PATH
   if [ -d "$_release_stage/node_modules" ]; then
     echo "✓ Gói đã có sẵn node_modules production; bỏ qua npm ci."
   else

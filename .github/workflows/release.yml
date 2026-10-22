@@ -34,7 +34,20 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test -- --run
-      - run: npm run package
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: npm run package
+      # Linux archives ship prebuilt native modules (node-pty, better-sqlite3). Building them on the
+      # runner (Ubuntu 22.04, glibc 2.35) made pty.node require GLIBC_2.34 and fail on Ubuntu 20.04.
+      # Build inside Debian 11 (glibc 2.31) so the archive runs on Ubuntu 20.04+ / Debian 11+.
+      - name: Package (Linux, built on Debian 11 / glibc 2.31)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src node:22-bullseye sh -c 'npm ci && npm --prefix web ci && npm run package'
+          sudo chown -R "$(id -u):$(id -g)" .
+      - name: Native modules must not need glibc newer than 2.31
+        if: runner.os == 'Linux'
+        run: sh scripts/check-glibc.sh "$(find release -name 'agenthub-*-linux-*.tar.gz' -print -quit)" 2.31
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.os }}-${{ runner.arch }}
@@ -51,7 +64,10 @@ jobs:
           merge-multiple: true
           path: release
       - run: chmod +x scripts/smoke-install.sh
-      - run: scripts/smoke-install.sh "$(find release -name 'agenthub-*-linux-x64.tar.gz' -print -quit)"
+      - name: Smoke install on Debian 12
+        run: SMOKE_IMAGE=node:22-slim scripts/smoke-install.sh "$(find release -name 'agenthub-*-linux-x64.tar.gz' -print -quit)"
+      - name: Smoke install on Debian 11 (oldest supported glibc, 2.31)
+        run: SMOKE_IMAGE=node:22-bullseye-slim scripts/smoke-install.sh "$(find release -name 'agenthub-*-linux-x64.tar.gz' -print -quit)"
 
   smoke-macos:
     # Install the macOS archive natively on a clean runner and check /health.

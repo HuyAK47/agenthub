@@ -571,7 +571,7 @@ export class ChatService {
   private validateSessionOptions(body: {
     mode?: 'safe' | 'full';
     model?: string;
-    kind?: 'chat' | 'brain';
+    kind?: 'chat' | 'brain' | 'assistant';
   }): { mode: 'safe' | 'full'; model: string } {
     const mode = body.mode || 'safe';
     if (mode === 'full' && body.kind !== 'brain' && this.config.chat?.allowFullMode !== true) {

@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-# Load NVM and use Node 22 if available
-if [ -s "$HOME/.nvm/nvm.sh" ]; then
-  export NVM_DIR="$HOME/.nvm"
-  # shellcheck source=/dev/null
-  . "$NVM_DIR/nvm.sh"
-  nvm use 22 >/dev/null 2>&1 || true
-fi
-
 # Resolve symlink to get root directory
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SCRIPT_SOURCE" ]; do
@@ -24,4 +16,21 @@ if [ ! -f "$CLI_PATH" ]; then
   exit 1
 fi
 
-exec node "$CLI_PATH" "$@"
+# Release installs pin the Node their native modules were built for (written by install.sh).
+NODE_BIN=""
+if [ -f "$ROOT_DIR/.node-bin" ]; then
+  NODE_BIN="$(head -n 1 "$ROOT_DIR/.node-bin")"
+  [ -x "$NODE_BIN" ] || NODE_BIN=""
+fi
+if [ -z "$NODE_BIN" ]; then
+  # Source checkouts: prefer Node 22 through nvm when available.
+  if [ -s "$HOME/.nvm/nvm.sh" ]; then
+    export NVM_DIR="$HOME/.nvm"
+    # shellcheck source=/dev/null
+    . "$NVM_DIR/nvm.sh"
+    nvm use 22 >/dev/null 2>&1 || true
+  fi
+  NODE_BIN="node"
+fi
+
+exec "$NODE_BIN" "$CLI_PATH" "$@"
