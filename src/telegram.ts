@@ -22,6 +22,7 @@ import {
 import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
 import { commandPermissionLabel } from './chat/permissions.js';
+import { quotaLowText } from './quota/alerts.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -3233,6 +3234,12 @@ export class TelegramBotService {
           ? `⏳ <b>Hết Quota</b>\nHồ sơ <b>${name}</b> hết quota <code>${family}</code> đến ${resetStr}`
           : `⏳ <b>Hết Quota</b>\nHồ sơ <b>${name}</b> hết quota <code>${family}</code>`;
         this.broadcastMessage(text);
+        break;
+      }
+
+      case 'quota.low': {
+        if (!notify.quota) return;
+        this.broadcastMessage(`🔋 <b>Sắp hết quota</b>\n${this.escapeHtml(quotaLowText(p))}`);
         break;
       }
 

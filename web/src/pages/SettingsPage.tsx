@@ -34,6 +34,7 @@ export const SettingsPage: React.FC = () => {
   const [quietHoursEnabled, setQuietHoursEnabled] = useState<boolean>(false);
   const [quietHoursStart, setQuietHoursStart] = useState<string>('22:00');
   const [quietHoursEnd, setQuietHoursEnd] = useState<string>('07:00');
+  const [quotaLowPct, setQuotaLowPct] = useState<string>('20');
   const [digestEnabled, setDigestEnabled] = useState<boolean>(true);
   const [digestTime, setDigestTime] = useState<string>('18:00');
   const [apiKey, setApiKey] = useState('');
@@ -94,6 +95,7 @@ export const SettingsPage: React.FC = () => {
       setQuietHoursEnabled(Boolean(config.notifications?.quietHours?.enabled));
       setQuietHoursStart(config.notifications?.quietHours?.start || '22:00');
       setQuietHoursEnd(config.notifications?.quietHours?.end || '07:00');
+      setQuotaLowPct(String(config.notifications?.quotaLowPct ?? 20));
       setDigestEnabled(config.brain?.digest?.enabled ?? true);
       setDigestTime(config.brain?.digest?.time || '18:00');
     }
@@ -190,6 +192,7 @@ export const SettingsPage: React.FC = () => {
           start: quietHoursStart.trim() || '22:00',
           end: quietHoursEnd.trim() || '07:00',
         },
+        quotaLowPct: Math.min(95, Math.max(0, Math.round(Number(quotaLowPct) || 0))),
       },
       planning: {
         requireApproval: approvalMode === 'all',
@@ -644,6 +647,30 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 </div>
               )}
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] flex items-center justify-between gap-4">
+              <div>
+                <label htmlFor="quota-low-pct" className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('settings.quotaLowTitle')}
+                </label>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('settings.quotaLowHint')}
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  id="quota-low-pct"
+                  type="number"
+                  min={0}
+                  max={95}
+                  data-testid="quota-low-pct"
+                  value={quotaLowPct}
+                  onChange={(e) => setQuotaLowPct(e.target.value)}
+                  className="w-20 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"
+                />
+                <span className="text-sm text-[var(--t-text-3)]">%</span>
+              </div>
             </div>
 
             <div className="py-2 space-y-3">

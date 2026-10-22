@@ -408,6 +408,24 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(screen.getByTestId('profile-card-no_plan').querySelector('[data-testid="plan-badge"]')).toBeNull();
   });
 
+  it('9f. Lọc theo gói: chỉ hiện hồ sơ đúng gói, có số lượng', async () => {
+    vi.mocked(client.getProfiles).mockResolvedValue([
+      { ...mockProfiles[0], name: 'plus_acc', engine: 'codex', plan: 'plus' },
+      { ...mockProfiles[0], name: 'pro_acc', plan: 'pro' },
+      { ...mockProfiles[0], name: 'no_plan', plan: null },
+    ] as Profile[]);
+    renderPage();
+    expect(await screen.findByText('plus_acc')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'PRO (1)' }));
+    expect(screen.queryByTestId('profile-card-plus_acc')).toBeNull();
+    expect(screen.getByTestId('profile-card-pro_acc')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chưa rõ gói (1)' }));
+    expect(screen.getByTestId('profile-card-no_plan')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-card-pro_acc')).toBeNull();
+  });
+
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
     const profilesWithExpired: Profile[] = [
       {

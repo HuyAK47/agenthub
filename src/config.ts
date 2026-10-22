@@ -33,7 +33,11 @@ export interface QuietHoursConfig {
 export interface NotificationsConfig {
   desktop: boolean;
   quietHours?: QuietHoursConfig;
+  /** Báo `quota.low` khi quota một cửa sổ tụt xuống dưới ngưỡng (%); 0 = tắt. */
+  quotaLowPct?: number;
 }
+
+export const DEFAULT_QUOTA_LOW_PCT = 20;
 
 export const DEFAULT_QUIET_HOURS_CONFIG: QuietHoursConfig = {
   enabled: false,
@@ -300,6 +304,7 @@ export function saveConfig(
     notifications?: Partial<{
       desktop: boolean;
       quietHours?: Partial<QuietHoursConfig>;
+      quotaLowPct: number;
     }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
@@ -459,6 +464,7 @@ export function updateConfigInMemory(
     notifications?: Partial<{
       desktop: boolean;
       quietHours?: Partial<QuietHoursConfig>;
+      quotaLowPct: number;
     }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
@@ -548,6 +554,9 @@ export function updateConfigInMemory(
   if (patch.notifications) {
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
+    }
+    if (patch.notifications.quotaLowPct !== undefined) {
+      config.notifications.quotaLowPct = patch.notifications.quotaLowPct;
     }
     if (patch.notifications.quietHours) {
       config.notifications.quietHours = {
@@ -956,6 +965,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
         ? (userConfig.notifications as { desktop: boolean }).desktop
         : true,
+      quotaLowPct: (() => {
+        const raw = (userConfig.notifications as { quotaLowPct?: unknown } | undefined)?.quotaLowPct;
+        return typeof raw === 'number' && raw >= 0 && raw <= 95 ? Math.round(raw) : DEFAULT_QUOTA_LOW_PCT;
+      })(),
       ...(userConfig.notifications && typeof userConfig.notifications === 'object' && 'quietHours' in userConfig.notifications
         ? {
             quietHours: (() => {

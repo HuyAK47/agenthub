@@ -5,6 +5,7 @@ import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
 import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
+import { quotaLowText } from './quota/alerts.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -255,6 +256,11 @@ export class NotificationService {
           ? `Hồ sơ ${name} hết quota ${family} tới ${resetTimeStr}`
           : `Hồ sơ ${name} hết quota ${family}`;
         this.notify(msg, isAllExhausted ? 'critical' : 'normal');
+        break;
+      }
+
+      case 'quota.low': {
+        this.notify(quotaLowText(p), 'normal');
         break;
       }
 

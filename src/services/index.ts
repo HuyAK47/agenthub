@@ -427,6 +427,14 @@ export const UpdateConfigSchema = z.object({
   }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
+    // Trước đây thiếu nên zod bỏ quietHours: giờ yên lặng chỉnh trên web không được lưu.
+    quietHours: z.object({
+      enabled: z.boolean().optional(),
+      start: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+      end: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+    }).optional(),
+    /** Báo khi quota 5h/tuần của một tài khoản tụt xuống dưới ngưỡng này (%); 0 = tắt. */
+    quotaLowPct: z.number().int().min(0).max(95).optional(),
   }).optional(),
   savings: z
     .object({

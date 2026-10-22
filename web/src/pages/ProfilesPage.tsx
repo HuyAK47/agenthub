@@ -112,6 +112,8 @@ export const ProfilesPage: React.FC = () => {
   const [tokenLogin, setTokenLogin] = useState<Profile | null>(null);
   const [checking, setChecking] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
+  // 'all', 'none' (chưa biết gói) hoặc một id gói như 'pro'.
+  const [planFilter, setPlanFilter] = useState<string>('all');
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const toastSeq = useRef(0);
@@ -255,8 +257,9 @@ export const ProfilesPage: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-8">
+          <PlanFilter profiles={profiles} value={planFilter} onChange={setPlanFilter} />
           {providers.map((provider) => {
-            const grouped = profiles.filter((profile) => profile.engine === provider.id);
+            const grouped = profiles.filter((profile) => profile.engine === provider.id && matchesPlan(profile, planFilter));
             return (
               <section key={provider.id} aria-labelledby={`provider-${provider.id}`}>
                 <div className="mb-3 flex items-center gap-3">
@@ -451,6 +454,48 @@ const PLAN_LABELS: Record<string, string> = {
   free: 'FREE', plus: 'PLUS', pro: 'PRO', team: 'TEAM', business: 'BUSINESS', enterprise: 'ENTERPRISE',
   edu: 'EDU', max: 'MAX', max_5x: 'MAX 5X', max_20x: 'MAX 20X', ultra: 'ULTRA',
 };
+
+function matchesPlan(profile: Profile, filter: string): boolean {
+  if (filter === 'all') return true;
+  const plan = profile.plan && PLAN_LABELS[profile.plan] ? profile.plan : null;
+  return filter === 'none' ? plan === null : plan === filter;
+}
+
+/** Bộ lọc theo gói (FREE/PLUS/PRO…) kèm số hồ sơ; ẩn khi chưa hồ sơ nào biết gói. */
+function PlanFilter({ profiles, value, onChange }: { profiles: Profile[]; value: string; onChange: (value: string) => void }) {
+  const { t } = useLocale();
+  const counts = new Map<string, number>();
+  for (const profile of profiles) {
+    const key = profile.plan && PLAN_LABELS[profile.plan] ? profile.plan : 'none';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const known = Object.keys(PLAN_LABELS).filter((plan) => counts.has(plan));
+  if (known.length === 0) return null;
+  const options = [
+    { id: 'all', label: t('profiles.planAll'), count: profiles.length },
+    ...known.map((plan) => ({ id: plan, label: PLAN_LABELS[plan], count: counts.get(plan) ?? 0 })),
+    ...(counts.has('none') ? [{ id: 'none', label: t('profiles.planUnknown'), count: counts.get('none') ?? 0 }] : []),
+  ];
+  return (
+    <div role="group" aria-label={t('profiles.planFilterAria')} className="flex flex-wrap items-center gap-2">
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={value === option.id}
+          onClick={() => onChange(option.id)}
+          className={`rounded-full border px-3 py-1 text-xs font-medium ${
+            value === option.id
+              ? 'border-[var(--t-accent)] bg-[var(--t-accent-bg)] text-[var(--t-accent)]'
+              : 'border-[var(--t-border)] text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+          }`}
+        >
+          {option.label} <span className="opacity-70">({option.count})</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /** Tag gói tài khoản kiểu Cockpit: màu theo hạng, ẩn khi chưa biết gói. */
 function PlanBadge({ plan }: { plan?: string | null }) {

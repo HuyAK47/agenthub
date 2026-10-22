@@ -111,6 +111,30 @@ export class QuotaUsageService {
   configureClaude(opts: { bin: () => string | null; cwd: string }): void { this.claude = opts; }
   setEventBus(eventBus: UsageEventSink): void { this.eventBus = eventBus; }
 
+  private quotaLowPct: () => number = () => 0;
+  /** Ngưỡng (%) cho sự kiện quota.low; đọc lúc ghi để đổi trong Cài đặt có hiệu lực ngay. */
+  setQuotaLowThreshold(getter: () => number): void { this.quotaLowPct = getter; }
+
+  /**
+   * Ghi một cửa sổ quota; phát `quota.low` đúng một lần khi nó vừa tụt từ trên xuống dưới ngưỡng.
+   * Hết hẳn (0%) đã có quota.exhausted nên không báo thêm.
+   */
+  private store(row: QuotaUsageRow): void {
+    const previous = this.usage.getForProfile(row.profileName).find((u) => u.grp === row.grp && u.window === row.window);
+    this.usage.upsert(row);
+    const threshold = this.quotaLowPct();
+    if (threshold <= 0 || row.remainingPct <= 0 || row.remainingPct > threshold) return;
+    if (previous && previous.remainingPct <= threshold) return;
+    this.eventBus?.emit('quota.low', undefined, {
+      profile: row.profileName,
+      group: row.grp,
+      window: row.window,
+      remainingPct: row.remainingPct,
+      resetAt: row.resetAt,
+      threshold,
+    });
+  }
+
   getForProfile(name: string): QuotaUsageRow[] { return this.usage.getForProfile(name); }
   getAll(): QuotaUsageRow[] { return this.usage.getAll(); }
 
@@ -185,7 +209,7 @@ export class QuotaUsageService {
         resetAt: w.resetAt,
         fetchedAt,
       }));
-      for (const row of rows) this.usage.upsert(row);
+      for (const row of rows) this.store(row);
       const claudeRows = rows.filter((row) => row.grp.startsWith('Claude'));
       if (hasClaudeQuotaAvailable(claudeRows)) this.eventBus?.emit('claude.quota_available', undefined, { profileName: profile.name, observedAt: new Date(fetchedAt * 1000).toISOString(), remainingPct: Math.min(...claudeRows.map((row) => row.remainingPct)) });
       return rows;
@@ -214,7 +238,7 @@ export class QuotaUsageService {
     // Không để log phiên cũ đè lên số mới hơn (vd. vừa lấy qua API wham/usage).
     const newest = new Map(this.usage.getForProfile(profile.name).filter((u) => u.grp === 'Codex').map((u) => [u.window, u.fetchedAt]));
     for (const row of rows) {
-      if ((newest.get(row.window) ?? 0) <= row.fetchedAt) this.usage.upsert(row);
+      if ((newest.get(row.window) ?? 0) <= row.fetchedAt) this.store(row);
     }
     return rows;
   }
@@ -253,7 +277,7 @@ export class QuotaUsageService {
       resetAt: w.resetAt,
       fetchedAt: now,
     }));
-    for (const row of rows) this.usage.upsert(row);
+    for (const row of rows) this.store(row);
     const parts = [rows.length ? 'Đã cập nhật quota Codex' : 'ChatGPT không trả về hạn mức'];
     if (result.plan) parts.push(`Gói ${result.plan.toUpperCase()}`);
     return { rows, plan: result.plan, message: parts.join(' · ') };
@@ -282,7 +306,7 @@ export class QuotaUsageService {
   private saveEntries(profile: ProfileRow, entries: UsageEntry[], fetchedAt = Math.floor(Date.now() / 1000)): void {
     for (const entry of entries) {
       const row: QuotaUsageRow = { profileName: profile.name, grp: entry.group, window: entry.window, remainingPct: entry.remainingPct, resetAt: entry.resetAt, fetchedAt };
-      this.usage.upsert(row);
+      this.store(row);
       if (entry.remainingPct === 0) {
         for (const family of entry.families) {
           this.markForEmail(profile, family, entry.resetAt);

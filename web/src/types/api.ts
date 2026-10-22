@@ -612,6 +612,7 @@ export interface SystemConfig {
       start: string;
       end: string;
     };
+    quotaLowPct?: number;
   };
   load?: {
     enabled: boolean;
