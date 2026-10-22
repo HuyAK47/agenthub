@@ -3052,6 +3052,18 @@ export class AppService {
       reviewerEscalationReason: null,
     });
 
+    // Retry reuses the existing worktree. Old worker markers must not be
+    // mistaken for completion of the new run.
+    if (task.worktreePath) {
+      for (const marker of ['DONE', 'BLOCKED']) {
+        try {
+          fs.unlinkSync(path.join(task.worktreePath, '.agenthub', marker));
+        } catch {
+          // Marker is absent or already removed.
+        }
+      }
+    }
+
     this.scheduler.getEventBus().emit('task.queued', taskId, { reason: 'retry', note: parsed.note });
     this.scheduler.triggerTick();
 

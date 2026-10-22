@@ -507,6 +507,9 @@ export class Scheduler {
         if (!task || !this.projectRepo.get(task.projectId)) continue;
         if (this.recoverFinishedWork(run)) continue;
         this.runRepo.finish(run.id, 'crashed');
+        // Terminal tasks must remain terminal even when an old worker row is
+        // found during daemon recovery.
+        if (task.status === 'done' || task.status === 'cancelled') continue;
         this.taskRepo.update(run.taskId, { status: 'queued', resume: 1 });
         this.eventBus.emit('run.crashed', run.taskId, { runId: run.id });
         this.eventBus.emit('task.queued', run.taskId);
@@ -562,12 +565,6 @@ export class Scheduler {
       });
     }
 
-    // Re-check tasks that were in 'checking' status when daemon restarted
-    void this.recoverCheckingTasks().catch((error) => {
-      if (!this.stopped) {
-        console.error('[scheduler] recoverCheckingTasks failed:', error);
-      }
-    });
   }
 
   private markerForRun(task: TaskRow, startedAt: number): 'done' | 'blocked' | null {
@@ -579,6 +576,17 @@ export class Scheduler {
       } catch { /* marker absent */ }
     }
     return null;
+  }
+
+  private clearWorkerMarkers(worktreePath: string | null | undefined): void {
+    if (!worktreePath) return;
+    for (const marker of ['DONE', 'BLOCKED']) {
+      try {
+        fs.unlinkSync(path.join(worktreePath, '.agenthub', marker));
+      } catch {
+        // Marker is absent or already removed.
+      }
+    }
   }
 
   private hasCommitAfter(task: TaskRow, startedAt: number): boolean {
@@ -601,7 +609,15 @@ export class Scheduler {
   private recoverFinishedWork(run: { id: string; taskId: string; startedAt: string }): boolean {
     const task = this.taskRepo.get(run.taskId);
     if (!task) return false;
-    if (task.status === 'done' || task.status === 'cancelled') return false;
+    // Only a worker that was running when its process disappeared may hand its
+    // marker to the checker. In particular, never resurrect a queued/checking
+    // task from an old marker during daemon recovery.
+    const persistedRun = this.runRepo.get(run.id);
+    if (task.status !== 'running' || persistedRun?.kind !== 'worker') return false;
+    const activeWorkerRuns = this.runRepo
+      .getByTask(run.taskId)
+      .filter((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
+    if (activeWorkerRuns.length !== 1 || activeWorkerRuns[0].id !== run.id) return false;
     const parsedStartedAt = parseDbTime(run.startedAt);
     const startedAt = Number.isNaN(parsedStartedAt) ? 0 : parsedStartedAt;
     const marker = this.markerForRun(task, startedAt);
@@ -609,7 +625,7 @@ export class Scheduler {
       this.runRepo.finish(run.id, 'done');
       this.taskRepo.update(run.taskId, { status: 'checking' });
       this.eventBus.emit('task.checking', run.taskId, { reason: 'restart_marker' });
-      void this.recoverCheckingTasks().catch((error) => {
+      void this.recoverCheckingTasks(run.taskId, run.id).catch((error) => {
         if (!this.stopped) {
           console.error(`[scheduler] recoverCheckingTasks failed for ${run.taskId}:`, error);
         }
@@ -631,18 +647,18 @@ export class Scheduler {
     return false;
   }
 
-  async recoverCheckingTasks(): Promise<void> {
+  async recoverCheckingTasks(taskId?: string, runId?: string): Promise<void> {
     if (this.stopped) return;
+    // A checking task is not enough evidence to start checks. The only valid
+    // caller supplies the exact worker run that just finished and was marked
+    // done by recoverFinishedWork(). This prevents stale checking rows from
+    // being re-checked after a restart.
+    if (!taskId || !runId) return;
     try {
-      const checkingTasks = this.taskRepo.getByStatus('checking').filter((task) => task.status !== 'done' && task.status !== 'cancelled');
-      for (const task of checkingTasks) {
-        if (this.stopped) return;
-        const runs = this.runRepo.getByTask(task.id);
-        const runId = runs[runs.length - 1]?.id || 'recovered';
-        void this.runChecksForTask(task.id, runId, true).catch((error) => {
-          if (!this.stopped) console.error(`[scheduler] recoverCheckingTasks failed for ${task.id}:`, error);
-        });
-      }
+      const task = this.taskRepo.get(taskId);
+      const run = this.runRepo.get(runId);
+      if (!task || task.status !== 'checking' || run?.taskId !== taskId || run.kind !== 'worker' || run.outcome !== 'done') return;
+      await this.runChecksForTask(taskId, runId, true);
     } catch (error) {
       if (!this.stopped) {
         console.error('[scheduler] recoverCheckingTasks failed:', error);
@@ -756,12 +772,17 @@ export class Scheduler {
       if (this.stopped) return;
       this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
       if (this.reviewChainForTask(currentTask).length === 0) {
-        this.eventBus.emit('task.review_ready', taskId, { checksPassed: checks.passed, failed: checks.failed });
+        this.emitReviewReadyIfReview(taskId, { checksPassed: checks.passed, failed: checks.failed });
       } else {
         this.eventBus.emit('review.gate_started', taskId, { step: 0 });
       }
     }
     if (!this.stopped) this.triggerTick();
+  }
+
+  private emitReviewReadyIfReview(taskId: string, payload?: unknown): void {
+    const task = this.taskRepo.get(taskId);
+    if (task?.status === 'review') this.eventBus.emit('task.review_ready', taskId, payload);
   }
 
   /**
@@ -1737,7 +1758,7 @@ export class Scheduler {
       const step = chain[task.reviewStep ?? 0];
       if (chain.length > 0 && (!step || step.mode !== 'gate')) {
         if ((task.reviewStep ?? 0) >= chain.length) {
-          this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true });
+          this.emitReviewReadyIfReview(task.id, { reviewChainComplete: true });
         }
         continue;
       }
@@ -1797,7 +1818,7 @@ export class Scheduler {
     const nextStep = (task.reviewStep ?? 0) + 1;
     this.taskRepo.update(task.id, { reviewStep: nextStep, reviewerChangesRequested: 0 });
     if (nextStep >= chain.length || chain[nextStep]?.mode === 'final') {
-      this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true, reviewStep: nextStep, reason });
+      this.emitReviewReadyIfReview(task.id, { reviewChainComplete: true, reviewStep: nextStep, reason });
     } else {
       this.eventBus.emit('review.gate_completed', task.id, { reviewStep: nextStep, reason });
     }
@@ -2413,6 +2434,9 @@ export class Scheduler {
       prompt += '\n\nTask đã làm dở – kiểm tra git log/status rồi làm tiếp, không làm lại.';
     }
 
+    // A retry reuses the worktree. Remove any marker left by an earlier run
+    // before the new worker gets a chance to finish.
+    this.clearWorkerMarkers(worktreePath);
     this.writeTaskFiles({ ...task, worktreePath }, task.body || task.title, !!task.resume);
 
     // Create run record
