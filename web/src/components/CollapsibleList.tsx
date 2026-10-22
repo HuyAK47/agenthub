@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocale } from '../context/LocaleContext';
 
 export function useShowMore<T>(items: T[], initial: number, step: number, storageKey?: string) {
   const [visibleCount, setVisibleCount] = useState<number>(() => {
@@ -72,6 +73,7 @@ export function CollapsibleList<T>({
   className?: string;
   tableColSpan?: number;
 }) {
+  const { t } = useLocale();
   const list = useShowMore(items, initial, step, storageKey);
   const remaining = items.length - list.visibleItems.length;
   const controls = (list.hasMore || list.isExpanded) && (
@@ -80,18 +82,18 @@ export function CollapsibleList<T>({
         <button
           type="button"
           onClick={list.showMore}
-          className="text-xs font-medium text-[var(--t-accent)] hover:underline"
+          className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer"
         >
-          Xem thêm {Math.min(step, remaining)} (còn {remaining})
+          {t('common.showMoreRemaining', { count: Math.min(step, remaining), remaining })}
         </button>
       )}
       {list.isExpanded && (
         <button
           type="button"
           onClick={list.collapse}
-          className="text-xs text-[var(--t-text-2)] hover:underline"
+          className="text-xs text-[var(--t-text-2)] hover:underline cursor-pointer"
         >
-          Thu gọn
+          {t('common.collapseBtn')}
         </button>
       )}
     </div>

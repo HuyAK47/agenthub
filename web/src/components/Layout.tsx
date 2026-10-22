@@ -88,7 +88,7 @@ export const Layout: React.FC = () => {
     { to: '/', label: t('common.dashboard'), icon: Activity },
     { to: '/chat', label: 'Chat', icon: MessageSquare },
     { to: '/plans', label: t('common.plans'), icon: Layers },
-    { to: '/tasks', label: 'Task', icon: CheckSquare },
+    { to: '/tasks', label: t('common.tasks'), icon: CheckSquare },
     { to: '/savings', label: t('extra.pageSavings'), icon: TrendingUp },
     { to: '/profiles', label: t('common.profiles'), icon: Users },
     { to: '/projects', label: t('common.projects'), icon: FolderGit2 },
