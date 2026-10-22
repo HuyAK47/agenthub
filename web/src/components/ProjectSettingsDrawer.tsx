@@ -1,0 +1,1583 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  FolderGit2,
+  GitBranch,
+  ArrowUpDown,
+  CheckCircle2,
+  AlertCircle,
+  X,
+  Plus,
+  Trash2,
+  ChevronDown,
+  RotateCcw,
+  Sparkles,
+  Terminal,
+} from 'lucide-react';
+import {
+  Card,
+  Button,
+  Input,
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  StatTile,
+} from './ui';
+import { useLocale } from '../context/LocaleContext';
+import { Project, ProjectSettings, UpdateProjectInput } from '../types/api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  updateProject,
+  rerunProjectDeploy,
+  getProjectDeployStatus,
+  getConfig,
+} from '../api/client';
+
+export interface ProjectSettingsDrawerProps {
+  project: Project | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onSaved?: () => void;
+}
+
+export const defaultProjectSettings = (): NonNullable<Project['settings']> => ({
+  brain: { mode: 'inherit' },
+  worktree: { install: 'auto', gitHooks: 'run' },
+  integration: { enabled: false },
+  ci: {},
+  references: [],
+  notifications: { telegramContent: 'full' },
+});
+
+export function getProjectHooksString(proj: Project): string {
+  if (!proj.hooks) return '';
+  if (typeof proj.hooks === 'string') {
+    try {
+      const parsed = JSON.parse(proj.hooks);
+      return Array.isArray(parsed?.onWorktreeRemoved)
+        ? parsed.onWorktreeRemoved.join('\n')
+        : '';
+    } catch {
+      return '';
+    }
+  }
+  return Array.isArray(proj.hooks.onWorktreeRemoved)
+    ? proj.hooks.onWorktreeRemoved.join('\n')
+    : '';
+}
+
+export function changedSettings(
+  current: NonNullable<Project['settings']>,
+  original: NonNullable<Project['settings']>,
+): Partial<NonNullable<Project['settings']>> {
+  const result: Partial<NonNullable<Project['settings']>> = {};
+  const sections = [
+    'brain',
+    'worktree',
+    'integration',
+    'ci',
+    'references',
+    'notifications',
+  ] as const;
+  sections.forEach((section) => {
+    if (JSON.stringify(current[section]) !== JSON.stringify(original[section])) {
+      if (
+        section === 'brain' &&
+        current.brain.permissions === 'inherit' &&
+        !original.brain.permissions
+      ) {
+        const { permissions: _permissions, ...brain } = current.brain;
+        (result as Record<string, unknown>)[section] = brain;
+      } else {
+        (result as Record<string, unknown>)[section] = current[section];
+      }
+    }
+  });
+  return result;
+}
+
+function parsePositiveInt(val: string): number | undefined {
+  const trimmed = val.trim();
+  if (!trimmed) return undefined;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const num = parseInt(trimmed, 10);
+  return num > 0 && Number.isSafeInteger(num) ? num : undefined;
+}
+
+const SAMPLE_CHECKS = JSON.stringify(
+  [
+    {
+      name: 'lint',
+      cmd: ['npm', 'run', 'lint'],
+      timeoutSec: 120,
+    },
+  ],
+  null,
+  2,
+);
+
+const SAMPLE_REVIEW = JSON.stringify(
+  {
+    chain: [
+      { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
+      { reviewer: 'claude', mode: 'final' },
+    ],
+    maxRounds: 2,
+  },
+  null,
+  2,
+);
+
+const SAMPLE_ENV = JSON.stringify(
+  {
+    PORT: 3000,
+    DATABASE_URL: 'postgres://localhost:5432/db_{slot}',
+  },
+  null,
+  2,
+);
+
+export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
+  project,
+  isOpen,
+  onClose,
+  onSaved,
+}) => {
+  const { t } = useLocale();
+  const queryClient = useQueryClient();
+
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+    staleTime: 30_000,
+  });
+
+  const [draftSettings, setDraftSettings] = useState<ProjectSettings>(
+    defaultProjectSettings(),
+  );
+  const [draftChecks, setDraftChecks] = useState<string>('');
+  const [draftHooks, setDraftHooks] = useState<string>('');
+  const [draftReview, setDraftReview] = useState<string>('');
+  const [draftEnvTemplate, setDraftEnvTemplate] = useState<string>('');
+
+  const [checksError, setChecksError] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [envError, setEnvError] = useState<string | null>(null);
+  const [refErrors, setRefErrors] = useState<Record<number, string | null>>({});
+
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Initialize draft when project changes
+  useEffect(() => {
+    if (project) {
+      setDraftSettings(project.settings ? JSON.parse(JSON.stringify(project.settings)) : defaultProjectSettings());
+      setDraftChecks(
+        typeof project.checks === 'string'
+          ? project.checks
+          : project.checks
+          ? JSON.stringify(project.checks, null, 2)
+          : '',
+      );
+      setDraftHooks(getProjectHooksString(project));
+      setDraftReview(
+        typeof project.review === 'string'
+          ? project.review
+          : project.review
+          ? JSON.stringify(project.review, null, 2)
+          : '',
+      );
+      setDraftEnvTemplate(project.envTemplate ?? '');
+      setChecksError(null);
+      setReviewError(null);
+      setEnvError(null);
+      setRefErrors({});
+      setApiError(null);
+      setSectionErrors({});
+    }
+  }, [project, isOpen]);
+
+  // Validation functions
+  const handleChecksChange = (val: string) => {
+    setDraftChecks(val);
+    setApiError(null);
+    if (!val.trim()) {
+      setChecksError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(val);
+      if (!Array.isArray(parsed)) {
+        setChecksError('Checks must be a JSON array: [{ name, cmd }]');
+      } else {
+        setChecksError(null);
+      }
+    } catch (err: any) {
+      setChecksError(err.message);
+    }
+  };
+
+  const handleReviewChange = (val: string) => {
+    setDraftReview(val);
+    setApiError(null);
+    if (!val.trim()) {
+      setReviewError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(val);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        setReviewError('Review chain must be a JSON object: { chain, maxRounds }');
+      } else {
+        setReviewError(null);
+      }
+    } catch (err: any) {
+      setReviewError(err.message);
+    }
+  };
+
+  const handleEnvChange = (val: string) => {
+    setDraftEnvTemplate(val);
+    setApiError(null);
+    if (!val.trim()) {
+      setEnvError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(val);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        setEnvError('envTemplate must be a JSON object');
+      } else {
+        setEnvError(null);
+      }
+    } catch (err: any) {
+      setEnvError(err.message);
+    }
+  };
+
+  const handleRefNameChange = (name: string, index: number) => {
+    const updated = [...draftSettings.references];
+    updated[index] = { ...updated[index], name };
+    setDraftSettings((prev) => ({ ...prev, references: updated }));
+    setApiError(null);
+
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setRefErrors((prev) => ({ ...prev, [index]: t('projects.nameRequired') }));
+      return;
+    }
+    if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) {
+      setRefErrors((prev) => ({ ...prev, [index]: t('projects.invalidRefName') }));
+      return;
+    }
+    const isDuplicate = updated.some(
+      (r, i) => i !== index && r.name.trim() === trimmed,
+    );
+    if (isDuplicate) {
+      setRefErrors((prev) => ({ ...prev, [index]: t('projects.duplicateRefName') }));
+      return;
+    }
+    setRefErrors((prev) => ({ ...prev, [index]: null }));
+  };
+
+  const handleRefPathChange = (path: string, index: number) => {
+    const updated = [...draftSettings.references];
+    updated[index] = { ...updated[index], path };
+    setDraftSettings((prev) => ({ ...prev, references: updated }));
+    setApiError(null);
+  };
+
+  const handleRefInjectChange = (inject: boolean, index: number) => {
+    const updated = [...draftSettings.references];
+    updated[index] = { ...updated[index], inject };
+    setDraftSettings((prev) => ({ ...prev, references: updated }));
+    setApiError(null);
+  };
+
+  const handleAddRef = () => {
+    setDraftSettings((prev) => ({
+      ...prev,
+      references: [...prev.references, { name: '', path: '', inject: false }],
+    }));
+  };
+
+  const handleRemoveRef = (index: number) => {
+    setDraftSettings((prev) => ({
+      ...prev,
+      references: prev.references.filter((_, i) => i !== index),
+    }));
+    setRefErrors((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
+  };
+
+  // Change detection
+  const origSettings = useMemo(
+    () => project?.settings ?? defaultProjectSettings(),
+    [project],
+  );
+  const origChecks = useMemo(() => {
+    if (!project?.checks) return '';
+    return typeof project.checks === 'string'
+      ? project.checks
+      : JSON.stringify(project.checks, null, 2);
+  }, [project]);
+  const origHooks = useMemo(
+    () => (project ? getProjectHooksString(project) : ''),
+    [project],
+  );
+  const origReview = useMemo(() => {
+    if (!project?.review) return '';
+    return typeof project.review === 'string'
+      ? project.review
+      : JSON.stringify(project.review, null, 2);
+  }, [project]);
+  const origEnv = useMemo(() => project?.envTemplate ?? '', [project]);
+
+  const brainChanged = useMemo(
+    () =>
+      JSON.stringify(draftSettings.brain) !== JSON.stringify(origSettings.brain),
+    [draftSettings.brain, origSettings.brain],
+  );
+  const worktreeChanged = useMemo(
+    () =>
+      JSON.stringify(draftSettings.worktree) !==
+      JSON.stringify(origSettings.worktree),
+    [draftSettings.worktree, origSettings.worktree],
+  );
+  const integrationChanged = useMemo(
+    () =>
+      JSON.stringify(draftSettings.integration) !==
+      JSON.stringify(origSettings.integration),
+    [draftSettings.integration, origSettings.integration],
+  );
+  const referencesChanged = useMemo(
+    () =>
+      JSON.stringify(draftSettings.references) !==
+      JSON.stringify(origSettings.references),
+    [draftSettings.references, origSettings.references],
+  );
+  const notificationsChanged = useMemo(
+    () =>
+      JSON.stringify(draftSettings.notifications) !==
+      JSON.stringify(origSettings.notifications),
+    [draftSettings.notifications, origSettings.notifications],
+  );
+  const checksChanged = useMemo(
+    () => draftChecks.trim() !== origChecks.trim(),
+    [draftChecks, origChecks],
+  );
+  const hooksChanged = useMemo(
+    () => draftHooks.trim() !== origHooks.trim(),
+    [draftHooks, origHooks],
+  );
+  const reviewChanged = useMemo(
+    () => draftReview.trim() !== origReview.trim(),
+    [draftReview, origReview],
+  );
+  const envChanged = useMemo(
+    () => draftEnvTemplate.trim() !== origEnv.trim(),
+    [draftEnvTemplate, origEnv],
+  );
+
+  const changeCount = useMemo(() => {
+    let count = 0;
+    if (brainChanged) count++;
+    if (worktreeChanged) count++;
+    if (integrationChanged) count++;
+    if (referencesChanged) count++;
+    if (notificationsChanged) count++;
+    if (checksChanged) count++;
+    if (hooksChanged) count++;
+    if (reviewChanged) count++;
+    if (envChanged) count++;
+    return count;
+  }, [
+    brainChanged,
+    worktreeChanged,
+    integrationChanged,
+    referencesChanged,
+    notificationsChanged,
+    checksChanged,
+    hooksChanged,
+    reviewChanged,
+    envChanged,
+  ]);
+
+  const hasChanges = changeCount > 0;
+  const hasValidationError = Boolean(
+    checksError ||
+      reviewError ||
+      envError ||
+      Object.values(refErrors).some((err) => Boolean(err)),
+  );
+
+  // Deploy query
+  const deployQuery = useQuery({
+    queryKey: ['project-deploy', project?.id],
+    queryFn: () => getProjectDeployStatus(project!.id),
+    enabled: Boolean(isOpen && project?.id),
+  });
+
+  const deployMutation = useMutation({
+    mutationFn: () => rerunProjectDeploy(project!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['project-deploy', project?.id],
+      });
+      setToastMessage(t('projects.saveSuccessToast'));
+      setTimeout(() => setToastMessage(null), 3000);
+    },
+  });
+
+  // Save Mutation
+  const saveMutation = useMutation({
+    mutationFn: (payload: UpdateProjectInput) =>
+      updateProject(project!.id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      setToastMessage(t('projects.saveSuccessToast'));
+      setTimeout(() => setToastMessage(null), 3000);
+      setApiError(null);
+      setSectionErrors({});
+      onSaved?.();
+    },
+    onError: (err: any) => {
+      const msg = err.message || t('projects.saveSettingsError');
+      setApiError(msg);
+      if (
+        msg.toLowerCase().includes('nhánh') ||
+        msg.toLowerCase().includes('integration') ||
+        msg.toLowerCase().includes('trùng')
+      ) {
+        setSectionErrors((prev) => ({ ...prev, integration: msg }));
+      } else if (
+        msg.toLowerCase().includes('quyền') ||
+        msg.toLowerCase().includes('permission') ||
+        msg.toLowerCase().includes('confirm')
+      ) {
+        setSectionErrors((prev) => ({ ...prev, brain: msg }));
+      }
+    },
+  });
+
+  const handleDiscard = () => {
+    if (!project) return;
+    setDraftSettings(
+      project.settings
+        ? JSON.parse(JSON.stringify(project.settings))
+        : defaultProjectSettings(),
+    );
+    setDraftChecks(origChecks);
+    setDraftHooks(origHooks);
+    setDraftReview(origReview);
+    setDraftEnvTemplate(origEnv);
+    setChecksError(null);
+    setReviewError(null);
+    setEnvError(null);
+    setRefErrors({});
+    setApiError(null);
+    setSectionErrors({});
+  };
+
+  const handleSave = () => {
+    if (!project || hasValidationError || saveMutation.isPending) return;
+
+    const payload: UpdateProjectInput = {};
+
+    const partialSettings = changedSettings(draftSettings, origSettings);
+    if (Object.keys(partialSettings).length > 0) {
+      payload.settings = partialSettings;
+    }
+
+    if (checksChanged) {
+      payload.checks = draftChecks.trim() ? JSON.parse(draftChecks) : null;
+    }
+
+    if (hooksChanged) {
+      const lines = draftHooks
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      payload.hooks = lines.length > 0 ? { onWorktreeRemoved: lines } : null;
+    }
+
+    if (reviewChanged) {
+      payload.review = draftReview.trim() ? JSON.parse(draftReview) : null;
+    }
+
+    if (envChanged) {
+      payload.envTemplate = draftEnvTemplate.trim()
+        ? draftEnvTemplate.trim()
+        : null;
+    }
+
+    if (draftSettings.brain.permissions === 'full') {
+      payload.confirm = true;
+    }
+
+    saveMutation.mutate(payload);
+  };
+
+  if (!isOpen || !project) return null;
+
+  const brainModes = ['inherit', 'off', 'suggest', 'auto', 'external'] as const;
+  const brainPerms = ['inherit', 'standard', 'trusted', 'full'] as const;
+
+  const globalBudget = config?.brain?.dailyTokenBudget ?? 0;
+  const globalMaxTurns = config?.brain?.maxTurnsPerHour ?? 20;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 overflow-hidden"
+      data-testid="project-settings-drawer"
+    >
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div
+          role="status"
+          className="fixed top-5 right-5 z-60 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-white font-medium text-xs shadow-xl flex items-center gap-2"
+        >
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/40 backdrop-blur-xs transition-opacity"
+        onClick={onClose}
+      />
+
+      {/* Slide-over Drawer Panel */}
+      <div className="fixed inset-y-0 right-0 w-full md:max-w-3xl bg-[var(--t-surface)] border-l border-[var(--t-border)] shadow-2xl flex flex-col z-50">
+        {/* Drawer Header */}
+        <div
+          className={
+            'sticky top-0 px-6 py-4 z-20 flex items-start justify-between gap-4 ' +
+            'border-b border-[var(--t-border)] bg-[var(--t-surface)]/95 backdrop-blur-xs'
+          }
+        >
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-[var(--t-text)] flex items-center gap-2 truncate">
+              <FolderGit2 className="w-5 h-5 text-[var(--t-accent)] shrink-0" />
+              <span>{t('projects.settingsDrawerTitle', { name: project.name })}</span>
+              <span className="text-xs font-mono font-normal text-[var(--t-text-3)]">
+                ({project.id})
+              </span>
+            </h2>
+            <p className="text-xs font-mono text-[var(--t-text-3)] mt-0.5 truncate">
+              {project.path}
+            </p>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            aria-label={t('projects.closeSettings')}
+            className="shrink-0"
+          >
+            <X className="w-5 h-5" />
+          </Button>
+        </div>
+
+        {/* Scrollable Settings Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 pb-28">
+          {/* General API error banner */}
+          {apiError && (
+            <div
+              data-testid="settings-error-msg"
+              className={
+                'p-3.5 rounded-xl border border-[var(--t-crit)] text-[var(--t-crit)] ' +
+                'text-xs flex items-center gap-2 bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)]'
+              }
+            >
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{apiError}</span>
+            </div>
+          )}
+
+          {/* Section 1: Bộ não (Brain) */}
+          <Card className="p-5 space-y-5">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[var(--t-accent)]" />
+                <span>{t('projects.sectionBrainTitle')}</span>
+              </h3>
+              <p className="text-xs text-[var(--t-text-3)]">
+                {t('projects.sectionBrainDesc')}
+              </p>
+            </div>
+
+            {sectionErrors.brain && (
+              <div
+                data-testid="brain-error-msg"
+                className="p-2.5 rounded-lg bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] text-xs flex items-center gap-1.5"
+              >
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{sectionErrors.brain}</span>
+              </div>
+            )}
+
+            {/* Brain Mode Radio Cards */}
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-[var(--t-text)]">
+                {t('projects.brainMode')}
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {brainModes.map((mode) => {
+                  const isSelected = draftSettings.brain.mode === mode;
+                  const labelKey = `brain${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
+                  return (
+                    <label
+                      key={mode}
+                      className={`flex flex-col p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-[var(--t-accent)] bg-[var(--t-surface-2)] shadow-xs ring-1 ring-[var(--t-accent)]'
+                          : 'border-[var(--t-border)] hover:bg-[var(--t-hover)] bg-[var(--t-surface)]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-semibold text-[var(--t-text)] mb-1">
+                        <input
+                          type="radio"
+                          name="brainMode"
+                          value={mode}
+                          checked={isSelected}
+                          onChange={() => {
+                            setSectionErrors((prev) => ({ ...prev, brain: null }));
+                            setApiError(null);
+                            setDraftSettings((prev) => ({
+                              ...prev,
+                              brain: { ...prev.brain, mode },
+                            }));
+                          }}
+                          className="text-[var(--t-accent)] focus:ring-[var(--t-accent)]"
+                        />
+                        <span>{t(`projects.${labelKey}` as any)}</span>
+                      </div>
+                      <span className="text-[11px] text-[var(--t-text-3)] leading-relaxed pl-5">
+                        {t(`projects.brainDesc${mode}` as any)}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Brain Permissions Radio Cards */}
+            <div className="space-y-2 pt-2 border-t border-[var(--t-border)]">
+              <label className="text-xs font-semibold text-[var(--t-text)]">
+                {t('projects.brainPermissions')}
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                {brainPerms.map((perm) => {
+                  const currentPerm = draftSettings.brain.permissions ?? 'inherit';
+                  const isSelected = currentPerm === perm;
+                  const labelKey = `brainPermission${perm.charAt(0).toUpperCase() + perm.slice(1)}`;
+                  const isFull = perm === 'full';
+
+                  return (
+                    <label
+                      key={perm}
+                      className={`flex flex-col p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                        isSelected
+                          ? isFull
+                            ? 'border-[var(--t-crit)] bg-[color-mix(in_srgb,var(--t-crit)_8%,transparent)] ring-1 ring-[var(--t-crit)]'
+                            : 'border-[var(--t-accent)] bg-[var(--t-surface-2)] shadow-xs ring-1 ring-[var(--t-accent)]'
+                          : 'border-[var(--t-border)] hover:bg-[var(--t-hover)] bg-[var(--t-surface)]'
+                      }`}
+                    >
+                      <div
+                        className={`flex items-center gap-2 font-semibold mb-1 ${
+                          isFull ? 'text-[var(--t-crit)]' : 'text-[var(--t-text)]'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="brainPermissions"
+                          value={perm}
+                          checked={isSelected}
+                          onChange={() => {
+                            if (isFull && !window.confirm(t('extra.fullModeConfirm'))) {
+                              return;
+                            }
+                            setSectionErrors((prev) => ({ ...prev, brain: null }));
+                            setApiError(null);
+                            setDraftSettings((prev) => ({
+                              ...prev,
+                              brain: { ...prev.brain, permissions: perm },
+                            }));
+                          }}
+                          className={
+                            isFull
+                              ? 'text-[var(--t-crit)] focus:ring-[var(--t-crit)]'
+                              : 'text-[var(--t-accent)] focus:ring-[var(--t-accent)]'
+                          }
+                        />
+                        <span>{t(`projects.${labelKey}` as any)}</span>
+                      </div>
+                      <span className="text-[11px] text-[var(--t-text-3)] leading-relaxed pl-5">
+                        {t(`projects.brainPermissionDesc${perm}` as any)}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {draftSettings.brain.permissions === 'full' && (
+                <div
+                  role="alert"
+                  className={
+                    'p-3 rounded-lg border border-[var(--t-crit)] text-[var(--t-crit)] ' +
+                    'text-xs flex items-start gap-2 mt-2 bg-[color-mix(in_srgb,var(--t-crit)_12%,transparent)]'
+                  }
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{t('projects.fullPermissionWarning')}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Daily Token Budget & Max Turns Per Hour */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-[var(--t-border)]">
+              <div>
+                <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                  {t('projects.dailyTokenBudget')}
+                </label>
+                <div className="relative">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label={t('projects.dailyTokenBudget')}
+                    placeholder={
+                      globalBudget > 0
+                        ? String(globalBudget)
+                        : t('projects.unlimitedBudget')
+                    }
+                    value={draftSettings.brain.dailyTokenBudget ?? ''}
+                    onChange={(e) => {
+                      setApiError(null);
+                      setDraftSettings((prev) => ({
+                        ...prev,
+                        brain: {
+                          ...prev.brain,
+                          dailyTokenBudget: parsePositiveInt(e.target.value),
+                        },
+                      }));
+                    }}
+                    className="pr-24"
+                  />
+                  <span className="absolute right-3 top-2 text-xs text-[var(--t-text-3)] pointer-events-none">
+                    {t('projects.unitTokenPerDay')}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                  {t('projects.tokenBudgetHint', {
+                    value:
+                      globalBudget > 0
+                        ? `${globalBudget} tokens`
+                        : t('projects.unlimitedBudget'),
+                  })}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                  {t('projects.maxTurnsPerHour')}
+                </label>
+                <div className="relative">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label={t('projects.maxTurnsPerHour')}
+                    placeholder={String(globalMaxTurns)}
+                    value={draftSettings.brain.maxTurnsPerHour ?? ''}
+                    onChange={(e) => {
+                      setApiError(null);
+                      setDraftSettings((prev) => ({
+                        ...prev,
+                        brain: {
+                          ...prev.brain,
+                          maxTurnsPerHour: parsePositiveInt(e.target.value),
+                        },
+                      }));
+                    }}
+                    className="pr-24"
+                  />
+                  <span className="absolute right-3 top-2 text-xs text-[var(--t-text-3)] pointer-events-none">
+                    {t('projects.unitTurnsPerHour')}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                  {t('projects.maxTurnsHint', {
+                    value: `${globalMaxTurns} lượt`,
+                  })}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Section 2: Worktree */}
+          <Card className="p-5 space-y-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-[var(--t-accent)]" />
+                <span>{t('projects.sectionWorktreeTitle')}</span>
+              </h3>
+              <p className="text-xs text-[var(--t-text-3)]">
+                {t('projects.sectionWorktreeDesc')}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Dependency install */}
+              <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--t-text)]">
+                    {t('projects.worktreeInstall')}
+                  </span>
+                  <div className="inline-flex rounded-lg border border-[var(--t-border)] p-0.5 bg-[var(--t-surface)]">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftSettings((prev) => ({
+                          ...prev,
+                          worktree: { ...prev.worktree, install: 'auto' },
+                        }))
+                      }
+                      className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
+                        draftSettings.worktree.install === 'auto'
+                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
+                      }`}
+                    >
+                      {t('projects.worktreeAuto')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftSettings((prev) => ({
+                          ...prev,
+                          worktree: { ...prev.worktree, install: 'skip' },
+                        }))
+                      }
+                      className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
+                        draftSettings.worktree.install === 'skip'
+                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
+                      }`}
+                    >
+                      {t('projects.worktreeSkip')}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-[var(--t-text-3)] leading-relaxed">
+                  {t('projects.worktreeInstallDesc')}
+                </p>
+              </div>
+
+              {/* Git hooks */}
+              <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--t-text)]">
+                    {t('projects.gitHooks')}
+                  </span>
+                  <div className="inline-flex rounded-lg border border-[var(--t-border)] p-0.5 bg-[var(--t-surface)]">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftSettings((prev) => ({
+                          ...prev,
+                          worktree: { ...prev.worktree, gitHooks: 'run' },
+                        }))
+                      }
+                      className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
+                        draftSettings.worktree.gitHooks === 'run'
+                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
+                      }`}
+                    >
+                      {t('projects.gitHooksRun')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftSettings((prev) => ({
+                          ...prev,
+                          worktree: { ...prev.worktree, gitHooks: 'skip' },
+                        }))
+                      }
+                      className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
+                        draftSettings.worktree.gitHooks === 'skip'
+                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
+                      }`}
+                    >
+                      {t('projects.gitHooksSkip')}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-[var(--t-text-3)] leading-relaxed">
+                  {t('projects.gitHooksDesc')}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Section 3: Nhánh tích hợp (Integration Branch) */}
+          <Card className="p-5 space-y-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
+                <GitBranch className="w-4 h-4 text-[var(--t-accent)]" />
+                <span>{t('projects.sectionIntegrationTitle')}</span>
+              </h3>
+              <p className="text-xs text-[var(--t-text-3)]">
+                {t('projects.sectionIntegrationDesc')}
+              </p>
+            </div>
+
+            {sectionErrors.integration && (
+              <div
+                data-testid="integration-error-msg"
+                className="p-2.5 rounded-lg bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] text-xs flex items-center gap-1.5"
+              >
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{sectionErrors.integration}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <input
+                id="integration-toggle"
+                type="checkbox"
+                checked={draftSettings.integration.enabled}
+                onChange={(e) => {
+                  setSectionErrors((prev) => ({ ...prev, integration: null }));
+                  setApiError(null);
+                  setDraftSettings((prev) => ({
+                    ...prev,
+                    integration: {
+                      ...prev.integration,
+                      enabled: e.target.checked,
+                    },
+                  }));
+                }}
+                className="w-4 h-4 text-[var(--t-accent)] rounded border-[var(--t-border)]"
+              />
+              <label
+                htmlFor="integration-toggle"
+                className="text-xs font-semibold text-[var(--t-text)] cursor-pointer"
+              >
+                {t('projects.integrationEnabled')}
+              </label>
+            </div>
+
+            {draftSettings.integration.enabled && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                    {t('projects.integrationBranch')}
+                  </label>
+                  <Input
+                    placeholder="integration"
+                    value={draftSettings.integration.branch ?? ''}
+                    onChange={(e) => {
+                      setSectionErrors((prev) => ({ ...prev, integration: null }));
+                      setApiError(null);
+                      setDraftSettings((prev) => ({
+                        ...prev,
+                        integration: {
+                          ...prev.integration,
+                          branch: e.target.value || undefined,
+                        },
+                      }));
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                    {t('projects.integrationBaseRef')}
+                  </label>
+                  <Input
+                    placeholder="main"
+                    value={draftSettings.integration.baseRef ?? ''}
+                    onChange={(e) => {
+                      setSectionErrors((prev) => ({ ...prev, integration: null }));
+                      setApiError(null);
+                      setDraftSettings((prev) => ({
+                        ...prev,
+                        integration: {
+                          ...prev.integration,
+                          baseRef: e.target.value || undefined,
+                        },
+                      }));
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* integrationStatus StatTiles */}
+            <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
+              <span className="text-xs font-semibold text-[var(--t-text-3)] block">
+                {t('projects.integrationStatus')}
+              </span>
+              {project.integrationStatus ? (
+                <div
+                  data-testid="integration-status-tiles"
+                  className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+                >
+                  <StatTile
+                    label={t('projects.integrationWorktreePath')}
+                    value={
+                      <span className="text-sm font-mono truncate block">
+                        {project.integrationStatus.path}
+                      </span>
+                    }
+                    subtext={
+                      project.integrationStatus.exists
+                        ? t('projects.statusExists')
+                        : t('projects.statusNotExists')
+                    }
+                    icon={<FolderGit2 className="w-5 h-5" />}
+                  />
+                  <StatTile
+                    label={t('projects.integrationCurrentBranchLabel')}
+                    value={
+                      <span className="text-sm font-mono truncate block">
+                        {project.integrationStatus.currentBranch || '—'}
+                      </span>
+                    }
+                    subtext={t('projects.targetBranch', {
+                      branch: project.integrationStatus.branch,
+                    })}
+                    icon={<GitBranch className="w-5 h-5" />}
+                  />
+                  <StatTile
+                    label={t('projects.integrationAheadBehind')}
+                    value={`+${project.integrationStatus.ahead} / -${project.integrationStatus.behind}`}
+                    subtext={`${project.integrationStatus.ahead} ahead, ${project.integrationStatus.behind} behind`}
+                    icon={<ArrowUpDown className="w-5 h-5" />}
+                  />
+                  <StatTile
+                    label={t('projects.integrationCleanStatus')}
+                    value={
+                      project.integrationStatus.dirty
+                        ? t('projects.integrationDirty')
+                        : t('projects.integrationClean')
+                    }
+                    subtext={
+                      project.integrationStatus.dirty
+                        ? t('projects.dirtyHint')
+                        : t('projects.cleanHint')
+                    }
+                    iconColor={
+                      project.integrationStatus.dirty
+                        ? 'var(--t-warn)'
+                        : 'var(--t-ok)'
+                    }
+                    icon={
+                      project.integrationStatus.dirty ? (
+                        <AlertCircle className="w-5 h-5" />
+                      ) : (
+                        <CheckCircle2 className="w-5 h-5" />
+                      )
+                    }
+                  />
+                </div>
+              ) : (
+                <div className="text-xs text-[var(--t-text-3)] p-3 rounded-lg bg-[var(--t-surface-2)]">
+                  {t('projects.noIntegrationStatus')}
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* Section 4: Tham chiếu chỉ đọc (Read-only References) */}
+          <Card className="p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-[var(--t-text)]">
+                  {t('projects.sectionReferencesTitle')}
+                </h3>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('projects.sectionReferencesDesc')}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleAddRef}
+                className="gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{t('projects.addReference')}</span>
+              </Button>
+            </div>
+
+            {draftSettings.references.length === 0 ? (
+              <p className="text-xs text-[var(--t-text-3)] italic py-2">
+                {t('projects.noReferences')}
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-1/4">
+                      {t('projects.refNameHeader')}
+                    </TableHead>
+                    <TableHead className="w-1/2">
+                      {t('projects.refPathHeader')}
+                    </TableHead>
+                    <TableHead className="w-24 text-center">
+                      {t('projects.refInjectHeader')}
+                    </TableHead>
+                    <TableHead className="w-16 text-center">
+                      {t('projects.refActionsHeader')}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {draftSettings.references.map((ref, idx) => (
+                    <TableRow key={idx}>
+                      <TableCell className="align-top py-2">
+                        <Input
+                          placeholder={t('projects.refNamePlaceholder')}
+                          value={ref.name}
+                          onChange={(e) =>
+                            handleRefNameChange(e.target.value, idx)
+                          }
+                          aria-label={`${t('projects.referenceName')} ${idx + 1}`}
+                          className={`h-8 text-xs ${
+                            refErrors[idx] ? 'border-[var(--t-crit)]' : ''
+                          }`}
+                        />
+                        {refErrors[idx] && (
+                          <span className="text-[11px] text-[var(--t-crit)] block mt-1">
+                            {refErrors[idx]}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="align-top py-2">
+                        <Input
+                          placeholder={t('projects.refPathPlaceholder')}
+                          value={ref.path}
+                          onChange={(e) =>
+                            handleRefPathChange(e.target.value, idx)
+                          }
+                          aria-label={`${t('projects.referencePath')} ${idx + 1}`}
+                          className="h-8 text-xs"
+                        />
+                      </TableCell>
+                      <TableCell className="align-middle text-center py-2">
+                        <input
+                          type="checkbox"
+                          checked={ref.inject}
+                          onChange={(e) =>
+                            handleRefInjectChange(e.target.checked, idx)
+                          }
+                          className="w-4 h-4 text-[var(--t-accent)] rounded border-[var(--t-border)]"
+                        />
+                      </TableCell>
+                      <TableCell className="align-middle text-center py-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleRemoveRef(idx)}
+                          title={t('projects.deleteRef')}
+                          className="text-[var(--t-crit)] hover:bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] h-8 w-8 p-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+
+          {/* Section 5: Thông báo (Notifications) */}
+          <Card className="p-5 space-y-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-[var(--t-text)]">
+                {t('projects.sectionNotificationsTitle')}
+              </h3>
+              <p className="text-xs text-[var(--t-text-3)]">
+                {t('projects.sectionNotificationsDesc')}
+              </p>
+            </div>
+
+            <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-[var(--t-text)]">
+                  {t('projects.telegramContent')}
+                </span>
+                <div className="inline-flex rounded-lg border border-[var(--t-border)] p-0.5 bg-[var(--t-surface)]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setApiError(null);
+                      setDraftSettings((prev) => ({
+                        ...prev,
+                        notifications: {
+                          ...prev.notifications,
+                          telegramContent: 'full',
+                        },
+                      }));
+                    }}
+                    className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
+                      draftSettings.notifications.telegramContent === 'full'
+                        ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                        : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
+                    }`}
+                  >
+                    {t('projects.telegramFull')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setApiError(null);
+                      setDraftSettings((prev) => ({
+                        ...prev,
+                        notifications: {
+                          ...prev.notifications,
+                          telegramContent: 'minimal',
+                        },
+                      }));
+                    }}
+                    className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
+                      draftSettings.notifications.telegramContent === 'minimal'
+                        ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                        : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
+                    }`}
+                  >
+                    {t('projects.telegramMinimal')}
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-[var(--t-text-3)] leading-relaxed">
+                {t('projects.telegramContentDesc')}
+              </p>
+            </div>
+          </Card>
+
+          {/* Section 6: Kiểm tra & review (Advanced - Collapsed by default) */}
+          <details
+            data-testid="advanced-settings-section"
+            className="border border-[var(--t-border)] rounded-xl bg-[var(--t-surface)] p-5 group space-y-4"
+          >
+            <summary className="cursor-pointer select-none flex items-center justify-between">
+              <div className="space-y-0.5">
+                <h3 className="text-sm font-bold text-[var(--t-text)]">
+                  {t('projects.sectionAdvancedTitle')}
+                </h3>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('projects.sectionAdvancedDesc')}
+                </p>
+              </div>
+              <ChevronDown className="w-5 h-5 text-[var(--t-text-3)] transition-transform group-open:rotate-180 shrink-0 ml-2" />
+            </summary>
+
+            <div className="pt-4 space-y-5 border-t border-[var(--t-border)]">
+              {/* checks JSON */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-[var(--t-text)]">
+                    {t('extra.checks')}
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleChecksChange(SAMPLE_CHECKS)}
+                    className="h-6 px-2 text-[11px] text-[var(--t-accent)]"
+                  >
+                    {t('projects.insertExample')}
+                  </Button>
+                </div>
+                <textarea
+                  data-testid="checks-json-textarea"
+                  rows={4}
+                  value={draftChecks}
+                  onChange={(e) => handleChecksChange(e.target.value)}
+                  placeholder={'[{"name":"lint","cmd":["npm","run","lint"],"timeoutSec":120}]'}
+                  className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] ${
+                    checksError
+                      ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
+                      : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
+                  } focus:outline-hidden focus:ring-2`}
+                />
+                {checksError && (
+                  <p
+                    data-testid="checks-error-msg"
+                    className="text-xs text-[var(--t-crit)] flex items-center gap-1 mt-1"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{checksError}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* hooks multiline */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[var(--t-text)]">
+                  {t('extra.hooks')}
+                </label>
+                <textarea
+                  data-testid="hooks-textarea"
+                  rows={3}
+                  value={draftHooks}
+                  onChange={(e) => {
+                    setDraftHooks(e.target.value);
+                    setApiError(null);
+                  }}
+                  placeholder={'docker exec xfarm_postgres psql -U xfarm -d postgres -c "DROP DATABASE IF EXISTS xfarm_t_{slug_underscored}"'}
+                  className={
+                    'w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2.5 ' +
+                    'bg-[var(--t-surface-2)] text-[var(--t-text)] focus:ring-2 focus:ring-[var(--t-accent)]'
+                  }
+                />
+              </div>
+
+              {/* review chain JSON */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-[var(--t-text)]">
+                    {t('extra.reviewChainLabel')}
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleReviewChange(SAMPLE_REVIEW)}
+                    className="h-6 px-2 text-[11px] text-[var(--t-accent)]"
+                  >
+                    {t('projects.insertExample')}
+                  </Button>
+                </div>
+                <textarea
+                  data-testid="review-chain-textarea"
+                  rows={4}
+                  value={draftReview}
+                  onChange={(e) => handleReviewChange(e.target.value)}
+                  placeholder={'{"chain":[{"reviewer":"codex:gpt-5.6-luna","mode":"gate"},{"reviewer":"claude","mode":"final"}],"maxRounds":2}'}
+                  className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] ${
+                    reviewError
+                      ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
+                      : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
+                  } focus:outline-hidden focus:ring-2`}
+                />
+                {reviewError && (
+                  <p
+                    data-testid="review-error-msg"
+                    className="text-xs text-[var(--t-crit)] flex items-center gap-1 mt-1"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{reviewError}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* envTemplate JSON */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-[var(--t-text)]">
+                    {t('projects.envLabel')}
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleEnvChange(SAMPLE_ENV)}
+                    className="h-6 px-2 text-[11px] text-[var(--t-accent)]"
+                  >
+                    {t('projects.insertExample')}
+                  </Button>
+                </div>
+                <textarea
+                  data-testid="env-template-textarea"
+                  rows={4}
+                  value={draftEnvTemplate}
+                  onChange={(e) => handleEnvChange(e.target.value)}
+                  placeholder={'{\n  "PORT": 3000,\n  "DATABASE_URL": "postgres://..."\n}'}
+                  className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] ${
+                    envError
+                      ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
+                      : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
+                  } focus:outline-hidden focus:ring-2`}
+                />
+                {envError && (
+                  <p
+                    data-testid="env-error-msg"
+                    className="text-xs text-[var(--t-crit)] flex items-center gap-1 mt-1"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{envError}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+          </details>
+
+          {/* Section 7: Triển khai (Deploy - Read-only) */}
+          <Card className="p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-[var(--t-text)]">
+                  {t('projects.sectionDeployTitle')}
+                </h3>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('projects.sectionDeployDesc')}
+                </p>
+              </div>
+
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => deployMutation.mutate()}
+                loading={deployMutation.isPending}
+                className="gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>
+                  {deployMutation.isPending
+                    ? t('projects.deployingBtn')
+                    : t('projects.deployRerunBtn')}
+                </span>
+              </Button>
+            </div>
+
+            {/* afterMerge config */}
+            <div className="p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] space-y-2">
+              {project.afterMerge ? (
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[var(--t-text)]">
+                      {t('projects.deploySteps')}
+                    </span>
+                    <span className="text-[var(--t-text-3)] font-mono">
+                      {t('projects.deployTimeout', {
+                        sec: project.afterMerge.timeoutSec,
+                      })}
+                    </span>
+                  </div>
+                  <pre className="p-2 rounded bg-[var(--t-surface)] font-mono text-[11px] text-[var(--t-text)] overflow-x-auto">
+                    {project.afterMerge.steps
+                      .map((step) => step.join(' '))
+                      .join('\n')}
+                  </pre>
+                  <div className="flex items-center gap-4 text-[11px] text-[var(--t-text-3)] pt-1">
+                    <span>
+                      {t('projects.deployRestart', {
+                        val: project.afterMerge.restartHub
+                          ? t('common.yes')
+                          : t('common.no'),
+                      })}
+                    </span>
+                    {project.afterMerge.push && (
+                      <span>
+                        {t('projects.deployPush', {
+                          from: project.afterMerge.push.from,
+                          to: project.afterMerge.push.to,
+                          remote: project.afterMerge.push.remote,
+                        })}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--t-text-3)] italic">
+                  {t('projects.noDeployConfig')}
+                </p>
+              )}
+            </div>
+
+            {/* Latest Deploy Run Status */}
+            <div className="pt-2 border-t border-[var(--t-border)] space-y-1.5">
+              <span className="text-xs font-semibold text-[var(--t-text-3)]">
+                {t('projects.deployLatestStatus')}
+              </span>
+              {deployQuery.data ? (
+                <div className="flex items-center gap-2 text-xs">
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-semibold ${
+                      deployQuery.data.status === 'succeeded'
+                        ? 'bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border border-[var(--t-ok)]'
+                        : deployQuery.data.status === 'failed'
+                        ? 'bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-crit)] border border-[var(--t-crit)]'
+                        : 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border border-[var(--t-warn)]'
+                    }`}
+                  >
+                    {deployQuery.data.status}
+                  </span>
+                  {deployQuery.data.commit && (
+                    <span className="font-mono text-[var(--t-text-3)]">
+                      {deployQuery.data.commit.slice(0, 7)}
+                    </span>
+                  )}
+                  {deployQuery.data.error && (
+                    <span className="text-[var(--t-crit)] truncate">
+                      {deployQuery.data.error}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--t-text-3)] italic">
+                  {t('projects.deployNoRuns')}
+                </p>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* Fixed Bottom Save Bar (Appears when there are unsaved changes) */}
+        {hasChanges && (
+          <div
+            data-testid="unsaved-changes-bar"
+            className={
+              'absolute bottom-0 inset-x-0 border-t border-[var(--t-border)] px-6 py-3.5 ' +
+              'shadow-2xl z-40 flex items-center justify-between gap-4 animate-fade-in bg-[var(--t-surface)]'
+            }
+          >
+            <div className="flex items-center gap-2 text-xs text-[var(--t-text)] font-medium">
+              <span className="w-2 h-2 rounded-full bg-[var(--t-accent)] animate-pulse" />
+              <span>{t('projects.unsavedChangesBar', { count: changeCount })}</span>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleDiscard}
+                disabled={saveMutation.isPending}
+              >
+                {t('projects.discardChanges')}
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={handleSave}
+                loading={saveMutation.isPending}
+                disabled={hasValidationError || saveMutation.isPending}
+              >
+                {saveMutation.isPending
+                  ? t('projects.savingChanges')
+                  : t('projects.saveChanges')}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
