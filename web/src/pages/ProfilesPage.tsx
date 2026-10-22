@@ -1413,7 +1413,7 @@ function LoginWizard({
       ? 'Claude'
       : 'Antigravity';
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3">
+    <div className="fixed inset-0 flex items-center justify-center bg-black/75 p-3" style={{ zIndex: UI_Z_INDEX.modal }}>
       <div className="flex h-[90vh] w-[96vw] max-w-[1400px] flex-col overflow-hidden rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-2xl">
         <div className="border-b border-[var(--t-border)] p-4">
           <h2 className="text-lg font-semibold">
