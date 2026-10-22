@@ -238,12 +238,12 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect(updated.defaultTimeout).toBe(7200);
     expect(updated.slotsPerCodexProfile).toBe(3);
     expect(updated.watchdog).toEqual({ stallMinutes: 4, waitingMinutes: 2 });
-    expect(updated.notifications).toEqual({ desktop: false });
+    expect(updated.notifications).toEqual({ desktop: false, quotaLowPct: 20 });
 
     // 4. Verify in-memory config updated immediately
     expect(config.defaultModelChains.hard).toEqual(['claude-opus-4-6-thinking', 'gemini-3.8-flash-high']);
     expect(config.defaultTimeout).toBe(7200);
-    expect(config.notifications).toEqual({ desktop: false });
+    expect(config.notifications).toEqual({ desktop: false, quotaLowPct: 20 });
 
     // 5. Verify saved to config.json
     const diskConfig = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
