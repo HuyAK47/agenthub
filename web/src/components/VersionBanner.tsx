@@ -55,7 +55,7 @@ export const VersionBanner: React.FC = () => {
       data-tour="updates"
       role="alert"
       aria-live="polite"
-      className="fixed bottom-6 left-6 max-[1100px]:left-20 lg:left-[260px] z-50 select-none animate-in fade-in slide-in-from-bottom-4 duration-300"
+      className="fixed top-[68px] right-4 sm:right-6 z-50 select-none animate-in fade-in slide-in-from-top-4 duration-300"
     >
       <div className="flex items-center gap-3 rounded-2xl border border-[var(--t-border)] bg-[var(--t-surface)]/95 px-4 py-3 text-sm text-[var(--t-text)] shadow-2xl shadow-black/30 backdrop-blur-md ring-1 ring-[var(--t-accent)]/20 hover:border-[var(--t-accent)]/40 transition-all">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--t-accent)]/15 text-[var(--t-accent)]">
