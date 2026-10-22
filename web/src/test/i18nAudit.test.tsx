@@ -400,7 +400,7 @@ describe('i18n Audit & Parity', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Plan review')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Plans');
       });
 
       assertNoVietnameseText(container, 'PlansPage');
