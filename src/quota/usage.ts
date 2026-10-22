@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { readCodexRateLimits } from './codex-usage.js';
+import { fetchCodexUsage, readCodexAccessToken } from './codex-api.js';
 import { parseClaudeUsage, runClaudeUsage } from './claude-usage.js';
 import { promisify } from 'node:util';
 import { ProfileRepo, ProfileRow, QuotaMarkRepo, QuotaUsageRepo, QuotaUsageRow } from '../db/index.js';
@@ -210,8 +211,52 @@ export class QuotaUsageService {
       resetAt: w.resetAt,
       fetchedAt: limits.observedAt,
     }));
-    for (const row of rows) this.usage.upsert(row);
+    // Không để log phiên cũ đè lên số mới hơn (vd. vừa lấy qua API wham/usage).
+    const newest = new Map(this.usage.getForProfile(profile.name).filter((u) => u.grp === 'Codex').map((u) => [u.window, u.fetchedAt]));
+    for (const row of rows) {
+      if ((newest.get(row.window) ?? 0) <= row.fetchedAt) this.usage.upsert(row);
+    }
     return rows;
+  }
+
+  /**
+   * Quota và gói Codex qua `chatgpt.com/backend-api/wham/usage` (như Cockpit tools), không cần chạy Codex.
+   * Chỉ cho hồ sơ isolated (DEC-009). `message` giải thích kết quả, không bao giờ chứa token.
+   */
+  async collectCodexFromApi(profile: ProfileRow, now = Math.floor(Date.now() / 1000)): Promise<{ rows: QuotaUsageRow[]; plan: string | null; message: string }> {
+    if (profile.engine !== 'codex' || profile.kind !== 'isolated' || !profile.home) {
+      return { rows: [], plan: null, message: 'Quota Codex của hồ sơ này đọc từ log phiên' };
+    }
+    const token = readCodexAccessToken(profile.home);
+    if ('skip' in token) {
+      const reasons: Record<typeof token.skip, string> = {
+        no_auth_file: 'Chưa có auth.json, hãy đăng nhập Codex trước',
+        unreadable: 'auth.json không đúng định dạng JSON',
+        no_access_token: 'auth.json không có access_token',
+      };
+      return { rows: [], plan: null, message: reasons[token.skip] };
+    }
+    const result = await fetchCodexUsage(token.accessToken, token.accountId);
+    if (result.status !== 200) {
+      const message = result.status === 0
+        ? 'Không kết nối được tới ChatGPT'
+        : result.status === 401
+          ? 'ChatGPT báo access token hết hạn (HTTP 401); chạy một task Codex để Codex làm mới token'
+          : `ChatGPT trả lỗi HTTP ${result.status}`;
+      return { rows: [], plan: null, message };
+    }
+    const rows: QuotaUsageRow[] = result.windows.map((w) => ({
+      profileName: profile.name,
+      grp: 'Codex',
+      window: w.window,
+      remainingPct: w.resetAt > 0 && w.resetAt <= now ? 100 : Math.round(100 - w.usedPercent),
+      resetAt: w.resetAt,
+      fetchedAt: now,
+    }));
+    for (const row of rows) this.usage.upsert(row);
+    const parts = [rows.length ? 'Đã cập nhật quota Codex' : 'ChatGPT không trả về hạn mức'];
+    if (result.plan) parts.push(`Gói ${result.plan.toUpperCase()}`);
+    return { rows, plan: result.plan, message: parts.join(' · ') };
   }
 
   async collect(profile: ProfileRow): Promise<QuotaUsageRow[]> {

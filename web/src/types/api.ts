@@ -71,6 +71,8 @@ export interface Profile {
   plan?: string | null;
   /** Chỉ có trong phản hồi của nút Làm mới: kết quả lấy ảnh đại diện. */
   avatarMessage?: string;
+  /** Chỉ có trong phản hồi của nút Làm mới cho Codex: kết quả lấy quota/gói qua API. */
+  refreshMessage?: string;
   currentTask?: { id?: string; title?: string } | null;
 }
 

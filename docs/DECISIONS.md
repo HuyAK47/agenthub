@@ -88,3 +88,13 @@
   - `registerAll()` vẫn đếm cả hồ sơ đã xoá khi kiểm tra keyring, nên không tự tạo lại `agy-default`.
   - Hồ sơ `kind=system` (Claude) vẫn bị chặn như cũ.
 - **Hệ quả**: Popup xoá ẩn ô "Xoá cả thư mục dữ liệu đăng nhập" với hồ sơ keyring và giải thích chỉ ẩn hồ sơ.
+
+## DEC-009: Ngoại lệ hẹp — đọc `access_token` Codex để lấy quota và gói qua API
+
+- **Bối cảnh**: Quota Codex trước đây chỉ đọc từ log phiên của Codex CLI, nên hồ sơ mới nhập chưa có quota, và hồ sơ đăng nhập qua terminal không có gói. Cockpit tools lấy cả hai qua `GET https://chatgpt.com/backend-api/wham/usage`. Người dùng đồng ý làm giống (2026-10-22).
+- **Quyết định**: `readCodexAccessToken()` (`src/quota/codex-api.ts`) được đọc `auth.json`, với giới hạn:
+  - Chỉ hồ sơ `engine=codex`, `kind=isolated` (CODEX_HOME do hub quản lý); không đọc `~/.codex` thật.
+  - Chỉ lấy `tokens.access_token` và `tokens.account_id`; **không** dùng `refresh_token`/`id_token`, **không** tự làm mới token, **không** ghi lại file.
+  - Chỉ chạy khi người dùng bấm "Làm mới" quota (Check xong UI cũng gọi Làm mới); không chạy nền theo chu kỳ.
+  - Token chỉ gửi tới endpoint trên (kèm header `ChatGPT-Account-Id`), không log, không lưu DB, không trả qua API. Chỉ lưu quota và `plan_type` đã chuẩn hoá.
+- **Hệ quả**: Hồ sơ Codex có quota 5h/tuần và tag gói ngay sau lần Làm mới đầu tiên. Access token hết hạn thì báo HTTP 401 và để Codex tự làm mới khi chạy task. Quota từ log phiên không còn đè lên số mới hơn lấy từ API.

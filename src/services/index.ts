@@ -2093,7 +2093,13 @@ export class AppService {
   async refreshUsage(name: string) {
     const profile = this.profileRepo.get(name);
     if (!profile) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
-    if (profile.engine === 'codex') this.usageService.collectCodex(profile);
+    let codexMessage: string | null = null;
+    if (profile.engine === 'codex') {
+      this.usageService.collectCodex(profile);
+      const api = await this.usageService.collectCodexFromApi(profile).catch(() => null);
+      codexMessage = api?.message ?? null;
+      if (api?.plan && api.plan !== profile.plan) this.profileRepo.updatePlan(profile.name, api.plan);
+    }
     else if (profile.engine === 'claude') await this.usageService.collectClaude(profile, true);
     else await this.usageService.collect(profile);
     this.refreshProfileEmail(profile.name);
@@ -2101,7 +2107,9 @@ export class AppService {
       ? await this.syncAgyAvatarFromToken(profile.name).catch(() => ({ avatarUrl: null, message: 'Không lấy được ảnh đại diện' }))
       : null;
     const refreshed = this.listProfiles().find((p) => p.name === name);
-    return refreshed && avatar ? { ...refreshed, avatarMessage: avatar.message } : refreshed;
+    if (!refreshed) return refreshed;
+    if (avatar) return { ...refreshed, avatarMessage: avatar.message };
+    return codexMessage ? { ...refreshed, refreshMessage: codexMessage } : refreshed;
   }
 
   updateProfile(name: string, raw: unknown): ProfileRow {

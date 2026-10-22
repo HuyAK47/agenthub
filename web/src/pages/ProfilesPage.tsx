@@ -172,7 +172,8 @@ export const ProfilesPage: React.FC = () => {
     try {
       const updated = await refreshProfileUsage(profile.name);
       if (silent) return;
-      const avatarNote = updated?.avatarMessage ? ` · ${updated.avatarMessage}` : '';
+      const note = updated?.avatarMessage || updated?.refreshMessage;
+      const avatarNote = note ? ` · ${note}` : '';
       toast(`✓ ${t('profiles.refreshDone', { name: profile.label || profile.name })}${avatarNote}`);
     } catch (err: any) {
       toast(err?.message || t('profiles.refreshFailed'), true);
