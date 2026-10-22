@@ -1,19 +1,19 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
-import { apiFetch, rescanClaudeSessions } from '../api/client';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { apiFetch, getClaudeSessionsPage, rescanClaudeSessions, ClaudeSession } from '../api/client';
 import { Card, DataTable } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
 import { formatNumber } from '../utils/format';
 
 type TaskUsage = { taskId: string; effectiveTokens: number };
-type Session = { sessionId: string; cwd: string; title: string | null; model: string | null; messages: number; effectiveTokens: number; lastAt: string | null; active: boolean; topTasks: TaskUsage[]; limitResetAt?: number | null; autoResumeEnabled?: number };
+type Session = ClaudeSession;
 type Turn = { ts: string; turnId: string; effectiveTokens: number; input: number; output: number; tasks: TaskUsage[] };
 type SessionDetail = Session & { turns: Turn[] };
 const formatTokens = (value: number, locale: string) => formatNumber(value, { locale });
 const formatTaskId = (id: string, outsideLabel: string) => (id === '_general' ? outsideLabel : id);
 
-const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
+const SessionTable: React.FC<{ sessions: Session[]; page: number; pageSize: number; total: number; onPageChange: (page: number) => void; onPageSizeChange: (size: number) => void }> = ({ sessions, page, pageSize, total, onPageChange, onPageSizeChange }) => {
   const { t, locale } = useLocale();
   return (
     <DataTable
@@ -26,10 +26,11 @@ const SessionTable: React.FC<{ sessions: Session[] }> = ({ sessions }) => {
         { key: 'task', title: t('extra.task'), render: (session) => session.topTasks.length > 0 ? session.topTasks.map((task) => `${formatTaskId(task.taskId, t('claudeSessions.outsideTask'))} (${formatTokens(task.effectiveTokens, locale)})`).join(', ') : t('claudeSessions.outsideTask') },
         { key: 'lastAt', title: t('extra.lastActive'), sortable: true, sortValue: (session) => session.lastAt || '', render: (session) => session.lastAt ? new Date(session.lastAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US') : '' },
       ]}
-      page={1}
-      pageSize={sessions.length || 20}
-      total={sessions.length}
-      onPageChange={() => undefined}
+      page={page}
+      pageSize={pageSize}
+      total={total}
+      onPageChange={onPageChange}
+      onPageSizeChange={onPageSizeChange}
       emptyTitle={t('pagination.empty')}
     />
   );
@@ -121,7 +122,10 @@ export const ClaudeSessionsPage: React.FC = () => {
   const { t } = useLocale();
   const { sessionId } = useParams();
   const queryClient = useQueryClient();
-  const sessions = useQuery({ queryKey: ['claude-sessions'], queryFn: () => apiFetch<Session[]>('/api/claude/sessions') });
+  const [urlParams, setUrlParams] = useSearchParams();
+  const [page, setPage] = React.useState(Math.max(1, Number(urlParams.get('page') || 1)));
+  const [pageSize, setPageSize] = React.useState(Math.max(20, Number(urlParams.get('pageSize') || 20)));
+  const sessions = useQuery({ queryKey: ['claude-sessions', page, pageSize], queryFn: () => getClaudeSessionsPage({ limit: pageSize, offset: (page - 1) * pageSize }) });
   const detail = useQuery({ queryKey: ['claude-session', sessionId], queryFn: () => apiFetch<SessionDetail>(`/api/claude/sessions/${encodeURIComponent(sessionId!)}`), enabled: !!sessionId });
   const rescan = useMutation({ mutationFn: rescanClaudeSessions, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['claude-sessions'] }) });
 
@@ -142,7 +146,14 @@ export const ClaudeSessionsPage: React.FC = () => {
           {rescan.isPending ? '…' : t('extra.rescan')}
         </button>
       </div>
-      <SessionTable sessions={sessions.data || []} />
+      <SessionTable
+        sessions={sessions.data?.items || []}
+        page={page}
+        pageSize={pageSize}
+        total={sessions.data?.total || 0}
+        onPageChange={(nextPage) => { setPage(nextPage); setUrlParams((current) => { current.set('page', String(nextPage)); return current; }, { replace: true }); }}
+        onPageSizeChange={(nextSize) => { setPageSize(nextSize); setPage(1); setUrlParams((current) => { current.delete('page'); current.set('pageSize', String(nextSize)); return current; }, { replace: true }); }}
+      />
     </div>
   );
 };

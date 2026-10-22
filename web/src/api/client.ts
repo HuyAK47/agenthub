@@ -31,6 +31,20 @@ import {
   PerfReport,
 } from '../types/api';
 
+export interface ClaudeSession {
+  sessionId: string;
+  cwd: string;
+  title: string | null;
+  model: string | null;
+  messages: number;
+  effectiveTokens: number;
+  lastAt: string | null;
+  active: boolean;
+  topTasks: Array<{ taskId: string; effectiveTokens: number }>;
+  limitResetAt?: number | null;
+  autoResumeEnabled?: number;
+}
+
 export const getPerf = () => apiFetch<PerfReport>('/api/perf');
 
 export async function getModelOptions(): Promise<ModelOptions> {
@@ -486,6 +500,13 @@ export async function getTaskGraph(params?: {
   if (params?.includeDone !== undefined) query.set('includeDone', String(params.includeDone));
   const qStr = query.toString();
   return apiFetch<TaskGraphResponse>(`/api/tasks/graph${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getClaudeSessionsPage(params: { limit: number; offset?: number; cursor?: string; activeWithinMin?: number }): Promise<PageResponse<ClaudeSession>> {
+  const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset ?? 0) });
+  if (params.activeWithinMin !== undefined) query.set('activeWithinMin', String(params.activeWithinMin));
+  if (params.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<ClaudeSession>>(`/api/claude/sessions?${query.toString()}`);
 }
 
 export async function createTask(data: CreateTaskInput): Promise<Task> {
