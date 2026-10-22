@@ -35,6 +35,7 @@ import { DailyUsageTable } from '../components/DailyUsageTable';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { useLocale } from '../context/LocaleContext';
 import { Profile } from '../types/api';
+import { formatReset, formatTimeTitle } from '../lib/time';
 
 const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
@@ -97,7 +98,6 @@ function usageText(profile: Profile) {
     ? t('profiles.quotaUsage', { five: five ? `${five.remainingPct}% / 5h` : '—', week: week ? `${week.remainingPct}% / ${t('profiles.week')}` : '—' })
     : t('profiles.noQuotaData');
 }
-function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; }
 
 export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
@@ -480,7 +480,7 @@ function ProfileCard({
   onRefresh: (silent?: boolean) => void;
   onQuotaRemoved: (family: string) => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const logged = profile.loggedIn ?? Boolean(profile.email);
   const canLogin = profile.kind !== 'keyring' || profile.engine === 'claude';
   // Refresh token chỉ ghi được vào HOME riêng của hồ sơ agy isolated.
@@ -637,7 +637,7 @@ function ProfileCard({
         </div>
         {activeMarks.map((mark) => (
           <div key={mark.family} data-testid={`quota-mark-${mark.family}`} title={mark.reason || undefined} className="mt-2 flex items-center justify-between rounded border border-[var(--t-warn)] px-2 py-1 text-xs text-[var(--t-warn)]">
-            <span>{t('profiles.quotaLocked', { family: mark.family, time: formatHHMM(mark.until) })}</span>
+            <span title={formatTimeTitle(mark.until, locale, mark.reason || 'quota mark')}>{t('profiles.quotaLocked', { family: mark.family, time: formatReset(mark.until, Date.now(), locale) })}</span>
             <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(true); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
           </div>
         ))}
@@ -677,7 +677,7 @@ function ProfileCard({
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-1.5 text-[11px]">
                     <span className="text-[var(--t-warn)]">
-                      {t('profiles.resetsAt', { time: formatHHMM(session.limitResetAt) })}
+                      <span title={formatTimeTitle(session.limitResetAt, locale, 'Claude session limit')}>{t('profiles.resetsAt', { time: formatReset(session.limitResetAt, Date.now(), locale) })}</span>
                     </span>
                     <label className="flex items-center gap-1.5 cursor-pointer text-[var(--t-text-2)] hover:text-[var(--t-text)]">
                       <input

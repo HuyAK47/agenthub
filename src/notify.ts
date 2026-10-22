@@ -5,6 +5,7 @@ import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
 import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
+import { formatReset } from './time-format.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -362,10 +363,7 @@ export class NotificationService {
     }
 
     if (epochSec !== undefined) {
-      const d = new Date(epochSec * 1000);
-      const hh = String(d.getHours()).padStart(2, '0');
-      const mm = String(d.getMinutes()).padStart(2, '0');
-      return `${hh}:${mm}`;
+      return formatReset(epochSec, this.now(), 'vi');
     }
 
     return '';

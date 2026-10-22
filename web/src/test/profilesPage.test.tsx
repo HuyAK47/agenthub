@@ -283,7 +283,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     const badge = screen.getByTestId('quota-mark-gemini-2.5-pro');
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveAttribute('title', 'Daily token quota exceeded');
-    expect(badge).toHaveTextContent(/Đã khóa gemini-2.5-pro tới \d{2}:\d{2}/);
+    expect(badge).toHaveTextContent(/Đã khóa gemini-2.5-pro tới còn \d+ phút · \d{2}:\d{2} hôm nay/);
 
     // Có CountdownTimer đếm ngược
     const countdown = screen.getByTestId('countdown-timer');
@@ -418,7 +418,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
 
     const badge = screen.getByTestId('quota-mark-gemini-2.5-pro');
     expect(badge).toBeInTheDocument();
-    expect(badge).toHaveTextContent(/Locked gemini-2.5-pro until \d{2}:\d{2}/);
+    expect(badge).toHaveTextContent(/Locked gemini-2.5-pro until in \d+ minutes · \d{2}:\d{2} today/);
 
     const removeBtn = screen.getByRole('button', { name: /^Remove$/ });
     expect(removeBtn).toBeInTheDocument();
