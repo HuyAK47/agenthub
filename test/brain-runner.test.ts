@@ -181,4 +181,17 @@ describe('BrainRunner', () => {
     expect(waiting).toContainEqual({ reason: 'quota' });
     ctx.runner.stop();
   });
+
+  it('ensureSession switches idle session to full mode and leaves busy session unchanged', () => {
+    const ctx = setup('auto', { projectSettings: { p1: '{"brain":{"permissions":"full"}}', p2: '{"brain":{"permissions":"full"}}' } });
+    // p1 has an idle existing session with mode safe
+    ctx.sessions.insert({ id: 'brain:p1', projectId: 'p1', title: 'P1', kind: 'brain', mode: 'safe', busy: 0 });
+    const s1 = ctx.runner.ensureSession('p1');
+    expect(s1.mode).toBe('full');
+
+    // p2 has a busy existing session with mode safe
+    ctx.sessions.insert({ id: 'brain:p2', projectId: 'p2', title: 'P2', kind: 'brain', mode: 'safe', busy: 1 });
+    const s2 = ctx.runner.ensureSession('p2');
+    expect(s2.mode).toBe('safe');
+  });
 });

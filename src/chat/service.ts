@@ -556,12 +556,25 @@ export class ChatService {
     return this.chatSessionRepo.get(id)!;
   }
 
+  /** Apply a changed brain permission on the next turn. Running processes are closed safely. */
+  setSessionMode(id: string, mode: 'safe' | 'full'): ChatSessionRow {
+    const session = this.chatSessionRepo.get(id);
+    if (!session) throw new HttpError(404, 'not_found', `Phiên trò chuyện "${id}" không tồn tại`);
+    if (session.mode === mode) return session;
+    if (session.busy === 1 || this.runningTurns.has(id)) throw new HttpError(409, 'conflict', 'Không thể đổi quyền khi brain đang chạy');
+    const proc = this.persistentProcesses.get(id);
+    if (proc) this.closePersistentProcess(proc);
+    this.chatSessionRepo.updateMode(id, mode);
+    return this.chatSessionRepo.get(id)!;
+  }
+
   private validateSessionOptions(body: {
     mode?: 'safe' | 'full';
     model?: string;
+    kind?: 'chat' | 'brain';
   }): { mode: 'safe' | 'full'; model: string } {
     const mode = body.mode || 'safe';
-    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
+    if (mode === 'full' && body.kind !== 'brain' && this.config.chat?.allowFullMode !== true) {
       throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
     }
     const model = body.model ?? this.config.chat.model;
@@ -2009,15 +2022,14 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
 
   // POST /api/chat/sessions
   fastify.post('/api/chat/sessions', async (req: FastifyRequest, reply: FastifyReply) => {
-    const session = chatService.createSession(
-      (req.body && typeof req.body === 'object' ? req.body : {}) as {
-        projectId?: string | null;
-        title?: string;
-        mode?: 'safe' | 'full';
-        model?: string;
-        profileName?: string | null;
-      },
-    );
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const session = chatService.createSession({
+      ...(typeof body.projectId === 'string' || body.projectId === null ? { projectId: body.projectId } : {}),
+      ...(typeof body.title === 'string' ? { title: body.title } : {}),
+      ...(body.mode === 'safe' || body.mode === 'full' ? { mode: body.mode } : {}),
+      ...(typeof body.model === 'string' ? { model: body.model } : {}),
+      ...(typeof body.profileName === 'string' || body.profileName === null ? { profileName: body.profileName } : {}),
+    });
     return reply.status(201).send(session);
   });
 
