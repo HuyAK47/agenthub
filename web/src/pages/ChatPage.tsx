@@ -191,10 +191,28 @@ export const ChatPage: React.FC = () => {
         });
       } else if (type === 'chat.tool') {
         const { messageId, name, summary, input, output, status, durationMs, diff } = payload;
-        setToolStepCount((count) => count + 1);
+        if (status !== 'done' && status !== 'error') setToolStepCount((count) => count + 1);
         setCurrentTool(summary || name || null);
         setMessages((prev) => {
-          if (prev.some((m) => m.id === messageId)) return prev;
+          const existingIndex = prev.findIndex((message) => message.id === messageId);
+          if (existingIndex !== -1) {
+            const updated = [...prev];
+            updated[existingIndex] = {
+              ...updated[existingIndex],
+              content: summary || name || updated[existingIndex].content,
+              meta: {
+                ...updated[existingIndex].meta,
+                name,
+                summary,
+                ...(input !== undefined ? { input } : {}),
+                ...(output !== undefined ? { output } : {}),
+                ...(status !== undefined ? { status } : {}),
+                ...(durationMs !== undefined ? { durationMs } : {}),
+                ...(diff !== undefined ? { diff } : {}),
+              },
+            };
+            return updated;
+          }
           const toolMsg: ChatMessage = {
             id: messageId,
             role: 'tool',
