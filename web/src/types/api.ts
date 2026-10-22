@@ -127,6 +127,7 @@ export interface ProjectInspection {
   branches: string[];
   remoteHost: string | null;
   estimatedSizeBytes: number;
+  sizeTruncated: boolean;
   lockfiles: string[];
   monorepo: { detected: boolean; type: string | null };
   gitHooks: { husky: boolean; commitlint: boolean };
@@ -134,8 +135,9 @@ export interface ProjectInspection {
   projectFiles: string[];
   guidanceFiles: string[];
   mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
-  claudeSessions: { count: number; paths: string[] };
+  claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
   hasClaudeMemory: boolean;
+  memoryPreview: string | null;
   suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
 }
 
