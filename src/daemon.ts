@@ -310,6 +310,9 @@ export function createContext(
     const data = payload && typeof payload === 'object' ? payload as { reviewChainComplete?: unknown } : {};
     if (taskId && data.reviewChainComplete === true) void service.autoMergeReviewedTask(taskId);
   });
+  scheduler.getEventBus().on('review.escalated', (taskId, payload) => {
+    if (taskId) void service.retryEscalatedReview(taskId, (payload && typeof payload === 'object' ? payload : {}) as { reason?: unknown; feedback?: unknown });
+  });
   const perfCollector = new PerfCollector();
   service.setPerfCollector(perfCollector);
 

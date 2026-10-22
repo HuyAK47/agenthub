@@ -40,6 +40,7 @@ import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
+import { effectiveBrainMode } from '../brain/mode.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
 import type { BrainRunner } from '../brain/runner.js';
@@ -64,6 +65,7 @@ import type { PerfCollector } from '../perf.js';
 
 const execFileAsync = promisify(execFile);
 const CODEX_EMAIL_RECHECK_MS = 10 * 60 * 1000;
+const ESCALATION_MODEL = 'claude-opus-4-6-thinking';
 
 function apiProject(project: ProjectRow, hubHome?: string, ciRepo?: CiRepo): ProjectRow {
   let merge: unknown = null;
@@ -3026,6 +3028,8 @@ export class AppService {
     if (!settings.integration.autoMerge || (!settings.integration.enabled && !project.merge)) return;
     const last = this.reviewRepo.getByTask(taskId).at(-1);
     if (!last || last.actor !== 'codex-reviewer' || last.verdict !== 'approved') return;
+    // The ready event can arrive twice for one approval; the first call is already merging.
+    if (this.reviewingTasks.has(taskId)) return;
     try {
       await this.reviewTask(toRouteId(taskId), {
         verdict: 'approved',
@@ -3038,6 +3042,37 @@ export class AppService {
         actor: 'auto-merge',
         message: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Without an auto brain nobody picks up a Codex reviewer escalation, so the task would sit in
+   * review forever. Send it back once with the reviewer's feedback on the strongest model; a second
+   * escalation stays parked for a person (the review.escalated notification already went out).
+   */
+  async retryEscalatedReview(taskId: string, payload: { reason?: unknown; feedback?: unknown }): Promise<void> {
+    if (payload.reason !== 'reviewer_changes_limit') return;
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.status !== 'review' || !task.reviewerEscalated) return;
+    const project = this.projectRepo.get(task.projectId);
+    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return;
+    const escalations = this.eventRepo.getByTask(taskId)
+      .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit')).length;
+    if (escalations > 1) return;
+    let current: string[] = [];
+    try { current = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { current = []; }
+    if (current.length === 0) current = task.level === 'easy' ? this.config.defaultModelChains.easy : this.config.defaultModelChains.hard;
+    const chain = [ESCALATION_MODEL, ...current.filter((model) => model !== ESCALATION_MODEL)];
+    this.taskRepo.update(taskId, { modelChain: JSON.stringify(chain) });
+    const feedback = typeof payload.feedback === 'string' && payload.feedback.trim() ? payload.feedback : 'Reviewer yêu cầu sửa nhiều lần.';
+    try {
+      await this.reviewTask(toRouteId(taskId), {
+        verdict: 'changes_requested',
+        by: 'auto-escalation',
+        feedback: `${feedback}\n\n(Reviewer đã yêu cầu sửa quá số vòng cho phép; giao lại một lần với ${ESCALATION_MODEL}.)`,
+      });
+    } catch (error) {
+      console.error(`[review] auto-escalation retry failed for ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
