@@ -70,14 +70,14 @@ export function resolveReal(target: string): string {
  * remove` từ chối worktree chính và nhánh fallback rmSync đã xóa cả repo (kèm .git).
  */
 export function isDeletableWorktreePath(
-  worktreesDir: string,
+  worktreesDir: string | string[],
   target: string | null | undefined,
   protectedPaths: Array<string | null | undefined> = [],
 ): boolean {
   if (!target) return false;
-  const base = resolveReal(worktreesDir);
   const resolved = resolveReal(target);
-  if (!resolved.startsWith(base + path.sep)) return false;
+  const bases = (Array.isArray(worktreesDir) ? worktreesDir : [worktreesDir]).map(resolveReal);
+  if (!bases.some((base) => resolved.startsWith(base + path.sep))) return false;
   for (const p of protectedPaths) {
     if (!p) continue;
     const prot = resolveReal(p);
@@ -126,6 +126,9 @@ export class WorktreeService {
     branch: string;
     baseRef: string;
   }): string {
+    if (opts.slug === '.integration' || opts.slug === '.logs') {
+      throw new Error(`Slug không được dùng tên dành riêng: ${opts.slug}`);
+    }
     const worktreePath = path.join(
       projectWorktreeRoot({ id: opts.projectId, path: opts.projectPath, settings: opts.projectSettings }, this.config.hubHome, this.config.worktreesDir),
       opts.slug,
@@ -231,7 +234,7 @@ export class WorktreeService {
     projectPath: string | null | undefined,
     worktreePath: string,
     context?: WorktreeHookContext,
-    worktreeRoot = this.config.worktreesDir,
+    worktreeRoot: string | string[] = this.config.worktreesDir,
   ): boolean {
     if (!isDeletableWorktreePath(worktreeRoot, worktreePath, [projectPath, this.config.hubHome])) {
       console.error(`[worktree] REFUSED to remove ${worktreePath}: outside ${worktreeRoot} or a project root`);

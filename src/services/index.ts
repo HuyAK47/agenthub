@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
-import { projectWorktreeRoot, validateProjectWorktreeRoot } from '../projects/paths.js';
+import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../projects/paths.js';
 import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
@@ -1172,7 +1172,8 @@ export class AppService {
     const running = new Set(this.scheduler.getRunning().keys());
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
-    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths });
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const processes = listAllWorktreeProcesses({ worktreesDir: roots, protectedPaths });
     return processes
       .map((process) => {
         const cwd = process.cwd.replace(/ \(deleted\)$/, '');
@@ -1186,10 +1187,11 @@ export class AppService {
     const orphans = this.getOrphans();
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
     const reaped: number[] = [];
     for (const orphan of orphans) {
       reaped.push(...reapSyncForWorktree(orphan.cwd.replace(/ \(deleted\)$/, ''), {
-        worktreesDir: this.config.worktreesDir,
+        worktreesDir: roots,
         protectedPaths,
       }));
     }
@@ -3266,7 +3268,7 @@ export class AppService {
           taskId: task.id,
           hooks,
         },
-        project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir,
+        project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir,
       );
       if (!removed) {
         throw new HttpError(

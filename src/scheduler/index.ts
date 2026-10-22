@@ -20,7 +20,7 @@ import {
   TaskNoteRepo,
 } from '../db/index.js';
 import { projectSettings } from '../projects/settings.js';
-import { projectWorktreeRoot } from '../projects/paths.js';
+import { projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
@@ -998,7 +998,8 @@ export class Scheduler {
   /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
   reapOrphans(): void {
     const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
-    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    const roots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const processes = listAllWorktreeProcesses({ worktreesDir: roots, protectedPaths: [this.config.hubHome] });
     const activeWorktrees = new Set<string>();
     for (const run of this.running.values()) {
       const task = this.taskRepo.get(run.taskId);
@@ -1011,7 +1012,7 @@ export class Scheduler {
     for (const info of processes) {
       const dir = info.cwd.replace(/ \(deleted\)$/, '');
       if (info.cwd.endsWith(' (deleted)')) {
-        reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        reapSyncForWorktree(dir, { worktreesDir: roots, protectedPaths: [this.config.hubHome] });
         continue;
       }
 
@@ -1019,7 +1020,7 @@ export class Scheduler {
       const active = [...activeWorktrees].some((worktree) => processCwd === worktree || processCwd.startsWith(worktree + path.sep));
       if (active) continue;
       if (info.startedAt > oldProcessCutoff && !isOrphanProcess(info)) continue;
-      reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      reapSyncForWorktree(dir, { worktreesDir: roots, protectedPaths: [this.config.hubHome] });
     }
   }
 
@@ -1446,7 +1447,8 @@ export class Scheduler {
       }
 
       if (task.worktreePath) {
-        await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        const project = this.projectRepo.get(task.projectId);
+        await reap(task.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
       }
 
     // Read log tail for quota detection
@@ -2037,7 +2039,7 @@ export class Scheduler {
   private taskLogDir(task: TaskRow): string {
     const project = this.projectRepo.get(task.projectId);
     if (project && projectSettings(project).worktree.logsInRoot === true) {
-      return path.join(projectWorktreeRoot(project, this.config.hubHome), '.logs');
+      return path.join(projectWorktreeRoot(project, this.config.hubHome), '.logs', task.id.replace('/', '_'));
     }
     return path.join(this.config.logsDir, task.id.replace('/', '_'));
   }
@@ -2919,7 +2921,7 @@ export class Scheduler {
     const task = this.taskRepo.get(taskId);
     if (task?.worktreePath) {
       const project = this.projectRepo.get(task.projectId);
-      reapSyncForWorktree(task.worktreePath, { worktreesDir: project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      reapSyncForWorktree(task.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
 
     this.running.delete(taskId);
@@ -3109,7 +3111,7 @@ export class Scheduler {
             projectId: task.projectId,
             taskId: task.id,
             hooks,
-          });
+          }, project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir);
         } catch {
           // ignore
         }
