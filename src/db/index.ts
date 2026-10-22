@@ -1308,7 +1308,7 @@ export class TaskRepo {
       values.push(filter.status);
     }
     const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
-    return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY updatedAt DESC, id DESC`).all(...values) as TaskRow[];
+    return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
   }
 
   page(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string }): PageResult<TaskRow> {
