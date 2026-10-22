@@ -1,7 +1,7 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProjects, getStatus, getTasks } from '../api/client';
+import { getProjects, getStatus, getTasks, getTasksPage } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
@@ -238,7 +238,7 @@ export const TasksPage: React.FC = () => {
 
   const { data, isLoading: isPageLoading } = useQuery({
     queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor],
-    queryFn: () => getTasks({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor }),
+    queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor }),
     enabled: viewMode === 'list' && (page === 1 || Boolean(cursor)),
     refetchInterval: 5000,
     placeholderData: keepPreviousData,

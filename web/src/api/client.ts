@@ -434,17 +434,14 @@ export interface TaskQuery {
 
 export function getTasks(): Promise<Task[]>;
 export function getTasks(params: Omit<TaskQuery, 'limit'> & { limit?: undefined }): Promise<Task[]>;
-export function getTasks(params: TaskQuery & { limit: number }): Promise<PageResponse<Task>>;
-export async function getTasks(params?: TaskQuery): Promise<Task[] | PageResponse<Task>> {
+export async function getTasks(params?: Omit<TaskQuery, 'limit'> & { limit?: undefined }): Promise<Task[]> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.status) query.set('status', params.status);
   if (params?.search) query.set('search', params.search);
-  if (params?.limit) query.set('limit', String(params.limit));
   if (params?.cursor) query.set('cursor', params.cursor);
   const qStr = query.toString();
-  const result = await apiFetch<PageResponse<Task> | Task[]>(`/api/tasks${qStr ? `?${qStr}` : ''}`);
-  return result;
+  return apiFetch<Task[]>(`/api/tasks${qStr ? `?${qStr}` : ''}`);
 }
 
 export interface PageResponse<T> {
@@ -454,7 +451,13 @@ export interface PageResponse<T> {
 }
 
 export async function getTasksPage(params?: { project?: string; status?: string; search?: string; limit?: number; cursor?: string }): Promise<PageResponse<Task>> {
-  return getTasks({ ...params, limit: params?.limit ?? 20 });
+  const query = new URLSearchParams();
+  if (params?.project) query.set('project', params.project);
+  if (params?.status) query.set('status', params.status);
+  if (params?.search) query.set('search', params.search);
+  query.set('limit', String(params?.limit ?? 20));
+  if (params?.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<Task>>(`/api/tasks?${query.toString()}`);
 }
 
 export async function getTaskGraph(params?: {

@@ -63,13 +63,13 @@ describe('TasksPage & Kanban Long Lists', () => {
   it('view danh sách chỉ hiển thị trang hiện tại và gửi cursor khi chuyển trang', async () => {
     const firstPage = createDoneTasks(2);
     const secondPage = createDoneTasks(1).map((task) => ({ ...task, slug: 'page-two' }));
-    const getTasks = vi.spyOn(client, 'getTasks').mockImplementation(async (params?: client.TaskQuery) => {
+    const getTasks = vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) => {
       if (params?.limit) {
         return params.cursor
           ? { items: secondPage, total: 3, nextCursor: null }
           : { items: firstPage, total: 3, nextCursor: 'cursor-page-2' };
       }
-      return [];
+      return { items: [], total: 0, nextCursor: null };
     });
 
     renderPage('/tasks?view=list&pageSize=1&search=needle');
@@ -84,8 +84,8 @@ describe('TasksPage & Kanban Long Lists', () => {
   });
 
   it('khôi phục filter từ URL và reset về trang đầu khi filter đổi', async () => {
-    const getTasks = vi.spyOn(client, 'getTasks').mockImplementation(async (params?: client.TaskQuery) =>
-      params?.limit ? { items: createDoneTasks(1), total: 1, nextCursor: null } : [],
+    const getTasks = vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) =>
+      params?.limit ? { items: createDoneTasks(1), total: 1, nextCursor: null } : { items: [], total: 0, nextCursor: null },
     );
 
     renderPage('/tasks?view=list&page=3&status=review&search=alpha');
