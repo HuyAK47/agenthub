@@ -350,8 +350,9 @@ export async function createServer(
 
   // --- Tasks API ---
   fastify.get('/api/tasks', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; status?: string };
-    return service.listTasks(query);
+    const query = req.query as { project?: string; status?: string; search?: string; q?: string; limit?: string; cursor?: string };
+    if (query.limit === undefined) return service.listTasks(query);
+    return service.listTasksPage({ ...query, search: query.search ?? query.q });
   });
 
   fastify.get('/api/tasks/graph', async (req: FastifyRequest) => {

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { decodeCursor, encodeCursor, parsePageSize, PageResult } from '../pagination.js';
 
 export const MIGRATIONS: string[] = [
   // Migration 0: initial schema
@@ -1307,7 +1308,34 @@ export class TaskRepo {
       values.push(filter.status);
     }
     const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
-    return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
+    return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY updatedAt DESC, id DESC`).all(...values) as TaskRow[];
+  }
+
+  page(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string }): PageResult<TaskRow> {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (filter?.project && filter.project !== 'all') { conditions.push('projectId = ?'); values.push(filter.project); }
+    if (filter?.status && filter.status !== 'all') { conditions.push('status = ?'); values.push(filter.status); }
+    if (filter?.search?.trim()) {
+      const search = `%${filter.search.trim().replace(/[\\%_]/g, '\\$&')}%`;
+      conditions.push("(slug LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')");
+      values.push(search, search);
+    }
+    const cursor = decodeCursor(filter?.cursor);
+    if (cursor) {
+      conditions.push('(updatedAt < ? OR (updatedAt = ? AND id < ?))');
+      values.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = conditions.slice(0, cursor ? -1 : undefined);
+    const countValues = values.slice(0, cursor ? -3 : undefined);
+    const total = (this.db.prepare(`SELECT COUNT(*) as count FROM tasks${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
+    const limit = parsePageSize(filter?.limit);
+    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY updatedAt DESC, id DESC LIMIT ?`).all(...values, limit + 1) as TaskRow[];
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.updatedAt, last.id) : null };
   }
 
   getByProject(projectId: string): TaskRow[] {
