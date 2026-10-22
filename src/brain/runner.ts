@@ -162,10 +162,15 @@ export class BrainRunner {
     if (existing) {
       if (existing.mode !== mode && existing.busy !== 1) {
         const chatService = this.opts.chatService as ChatService & { setSessionMode?: (id: string, mode: 'safe' | 'full') => unknown };
-        if (typeof chatService.setSessionMode === 'function') {
-          chatService.setSessionMode(existing.id, mode);
-        } else {
-          this.opts.chatSessionRepo.updateMode(existing.id, mode);
+        try {
+          if (typeof chatService.setSessionMode === 'function') {
+            chatService.setSessionMode(existing.id, mode);
+          } else {
+            this.opts.chatSessionRepo.updateMode(existing.id, mode);
+          }
+        } catch {
+          // A running turn can outlive the session's busy flag. Keep the old
+          // mode and retry synchronization on the next runner event.
         }
       }
       return this.opts.chatSessionRepo.get(existing.id) || existing;
@@ -222,19 +227,21 @@ export class BrainRunner {
     this.opts.turnRepo.finish(active.id, { status: type === 'chat.done' ? 'done' : quota ? 'quota' : 'failed', summary: typeof data.message === 'string' ? data.message : undefined, inputTokens: typeof usage.inputTokens === 'number' ? usage.inputTokens : 0, outputTokens: typeof usage.outputTokens === 'number' ? usage.outputTokens : 0, error: type === 'chat.error' ? String(data.message || 'brain turn failed') : undefined });
     this.active.delete(sessionId);
     const session = this.opts.chatSessionRepo.get(sessionId);
-    if (session?.kind === 'brain') this.ensureSession(session.projectId);
     if (type === 'chat.done') for (const event of active.events) this.retryCounts.delete(event.id || '');
     if (quota) {
       this.pending.unshift(...active.events);
       this.opts.eventBus.emit('brain.waiting', sessionId === 'brain' ? undefined : sessionId.slice('brain:'.length), { reason: 'quota' });
       this.schedule();
+      if (session?.kind === 'brain') this.ensureSession(session.projectId);
       return;
     }
     if (type === 'chat.error') {
       this.retryFailedEvents(active, String(data.message || 'brain turn failed'));
+      if (session?.kind === 'brain') this.ensureSession(session.projectId);
       return;
     }
     this.flush();
+    if (session?.kind === 'brain') this.ensureSession(session.projectId);
   }
 
   private schedule(): void {
