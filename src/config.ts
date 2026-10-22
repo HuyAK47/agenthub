@@ -137,7 +137,12 @@ export interface DeployProjectConfig {
   steps: string[][];
   timeoutSec: number;
   restartHub: boolean;
+  restartMaxWaitMin?: number;
   push?: DeployPushConfig;
+}
+
+export interface ChecksConfig {
+  maxConcurrent: number;
 }
 
 export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
@@ -279,6 +284,7 @@ export interface AgentHubConfig {
   tools: ToolsConfig;
   workers: WorkersConfig;
   ui: UiConfig;
+  checks: ChecksConfig;
   deploy: Record<string, DeployProjectConfig>;
 }
 
@@ -836,6 +842,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   const workers: WorkersConfig = {
     codexSandbox: rawWorkers.codexSandbox === 'workspace-write' ? 'workspace-write' : DEFAULT_WORKERS_CONFIG.codexSandbox,
   };
+  const rawChecks = (userConfig.checks as Record<string, unknown>) || {};
+  const checks: ChecksConfig = {
+    maxConcurrent: typeof rawChecks.maxConcurrent === 'number' && rawChecks.maxConcurrent > 0
+      ? Math.floor(rawChecks.maxConcurrent)
+      : 2,
+  };
   const rawTools = (userConfig.tools as Record<string, unknown>) || {};
   const rawDeploy = (userConfig.deploy as Record<string, unknown>) || {};
   const rawProjectsConfig = (userConfig.projects as Record<string, unknown>) || {};
@@ -863,6 +875,9 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       steps,
       timeoutSec: typeof value.timeoutSec === 'number' && value.timeoutSec > 0 ? Math.floor(value.timeoutSec) : 900,
       restartHub: value.restartHub === true,
+      restartMaxWaitMin: typeof value.restartMaxWaitMin === 'number' && value.restartMaxWaitMin >= 0
+        ? Math.floor(value.restartMaxWaitMin)
+        : 20,
       ...(push ? { push } : {}),
     };
   }
@@ -1034,6 +1049,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     },
     workers,
     ui,
+    checks,
     deploy,
   };
 }

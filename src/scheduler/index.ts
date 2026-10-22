@@ -143,6 +143,13 @@ interface ReviewerRun {
   exitTimeout?: NodeJS.Timeout;
 }
 
+interface QueuedCheck {
+  taskId: string;
+  runId: string;
+  queuedAt: number;
+  resolve: () => void;
+}
+
 const STALL_NOTE = 'Lượt trước bị kẹt khi chờ tác vụ nền. Chạy lệnh trực tiếp với timeout.';
 
 export interface SchedulerOptions {
@@ -187,6 +194,11 @@ export class Scheduler {
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
   private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
   private usageService?: QuotaUsageService;
+  private checkingQueue: QueuedCheck[] = [];
+  private checkingActive = new Map<string, QueuedCheck>();
+  private checkingPromises = new Map<string, Promise<void>>();
+  private checkingRunIds = new Map<string, string>();
+  private checkingWorktrees = new Set<string>();
 
   constructor(
     private config: AgentHubConfig,
@@ -266,6 +278,13 @@ export class Scheduler {
   getReviewerStatus(): { active: boolean; running: string[]; waiting: number } {
     const active = this.failoverState?.snapshot().active === true;
     return { active, running: [...this.reviewerRuns.keys()], waiting: active ? Math.max(0, this.taskRepo.getByStatus('review').length - this.reviewerRuns.size) : 0 };
+  }
+
+  getRestartSnapshot(projectId?: string): { checks: number; editing: number; brain: boolean } {
+    const editing = projectId
+      ? [...this.running.values()].filter((running) => running.projectId === projectId).length
+      : this.running.size;
+    return { checks: this.checkingActive.size, editing, brain: false };
   }
 
   getEventBus(): EventBus {
@@ -444,6 +463,8 @@ export class Scheduler {
     }
     this.reviewerRuns.clear();
     this.locks.clearReservations();
+    for (const entry of this.checkingQueue.splice(0)) entry.resolve();
+    this.checkingPromises.clear();
   }
 
   cancelAll(): void {
@@ -608,18 +629,14 @@ export class Scheduler {
   async recoverCheckingTasks(): Promise<void> {
     if (this.stopped) return;
     try {
-      const checkingTasks = this.taskRepo.getByStatus('checking');
+      const checkingTasks = this.taskRepo.getByStatus('checking').filter((task) => task.status !== 'done' && task.status !== 'cancelled');
       for (const task of checkingTasks) {
         if (this.stopped) return;
         const runs = this.runRepo.getByTask(task.id);
         const runId = runs[runs.length - 1]?.id || 'recovered';
-        try {
-          await this.runChecksForTask(task.id, runId);
-        } catch (error) {
-          if (!this.stopped) {
-            console.error(`[scheduler] recoverCheckingTasks failed for ${task.id}:`, error);
-          }
-        }
+        void this.runChecksForTask(task.id, runId).catch((error) => {
+          if (!this.stopped) console.error(`[scheduler] recoverCheckingTasks failed for ${task.id}:`, error);
+        });
       }
     } catch (error) {
       if (!this.stopped) {
@@ -630,8 +647,55 @@ export class Scheduler {
 
   async runChecksForTask(taskId: string, runId: string): Promise<void> {
     if (this.stopped) return;
+    const existing = this.checkingPromises.get(taskId);
+    if (existing) return existing;
     const task = this.taskRepo.get(taskId);
     if (!task) return;
+    // A completed or cancelled task is terminal. In particular, a daemon
+    // restart must never resurrect it merely because an old marker remains.
+    if (task.status === 'done' || task.status === 'cancelled') return;
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    this.checkingPromises.set(taskId, promise);
+    this.checkingRunIds.set(taskId, runId);
+    this.checkingQueue.push({ taskId, runId, queuedAt: Date.now(), resolve });
+    this.pumpChecks();
+    return promise;
+  }
+
+  private pumpChecks(): void {
+    const limit = Math.max(1, this.config.checks?.maxConcurrent || 2);
+    while (!this.stopped && this.checkingActive.size < limit) {
+      const index = this.checkingQueue.findIndex((entry) => {
+        const task = this.taskRepo.get(entry.taskId);
+        const worktree = task?.worktreePath || `project:${task?.projectId || entry.taskId}`;
+        return !this.checkingWorktrees.has(worktree);
+      });
+      if (index < 0) return;
+      const entry = this.checkingQueue.splice(index, 1)[0];
+      const task = this.taskRepo.get(entry.taskId);
+      const worktree = task?.worktreePath || `project:${task?.projectId || entry.taskId}`;
+      this.checkingActive.set(entry.taskId, entry);
+      this.checkingWorktrees.add(worktree);
+      void this.executeChecksForTask(entry.taskId, entry.runId)
+        .catch((error) => {
+          if (!this.stopped) console.error(`[scheduler] checks failed for ${entry.taskId}:`, error);
+        })
+        .finally(() => {
+          this.checkingActive.delete(entry.taskId);
+          this.checkingPromises.delete(entry.taskId);
+          if (this.checkingRunIds.get(entry.taskId) === entry.runId) this.checkingRunIds.delete(entry.taskId);
+          this.checkingWorktrees.delete(worktree);
+          entry.resolve();
+          this.pumpChecks();
+        });
+    }
+  }
+
+  private async executeChecksForTask(taskId: string, runId: string): Promise<void> {
+    if (this.stopped) return;
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.status === 'done' || task.status === 'cancelled') return;
     this.taskRepo.update(taskId, { status: 'checking' });
     this.eventBus.emit('task.checking', taskId);
 
@@ -643,7 +707,7 @@ export class Scheduler {
     if (this.stopped) return;
     // Check if task status was changed (e.g. cancelled) during checks
     const currentTask = this.taskRepo.get(taskId);
-    if (!currentTask || currentTask.status !== 'checking') return;
+    if (!currentTask || currentTask.status !== 'checking' || this.checkingRunIds.get(taskId) !== runId) return;
 
     if (!checks.passed && this.config.autoFixOnFail && currentTask.checkFixAttempts < 2) {
       const feedback = checks.results

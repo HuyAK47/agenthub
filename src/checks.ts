@@ -11,6 +11,11 @@ const CONFLICT_MARKER_REGEX = /^(<{7}|={7}|>{7})( |$)/m;
 export interface CheckDefinition { name: string; cmd: string[]; timeoutSec?: number }
 export interface CheckResult { name: string; ok: boolean; exitCode: number | null; durationMs: number; outputTail: string; runId?: string; runStartedAt?: string }
 
+/** Release packaging is deliberately opt-in: it may run npm ci and rebuild the hub. */
+export function isHeavyReleaseCheck(check: CheckDefinition): boolean {
+  return check.name === 'package-release' || check.name === 'package' || check.name === 'release';
+}
+
 export function detectChecks(projectPath: string): CheckDefinition[] {
   const read = (file: string): Record<string, unknown> | null => { try { return JSON.parse(fs.readFileSync(path.join(projectPath, file), 'utf8')) as Record<string, unknown>; } catch { return null; } };
   const pkg = read('package.json');
@@ -128,8 +133,22 @@ export class CheckRunner {
     const repo = task.worktreePath || project.path; await this.prepare(repo, project.path, project);
     const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
     const configured = project.checks ? JSON.parse(project.checks) as CheckDefinition[] : detectChecks(repo);
+    const checks = [...configured, ...mandatoryChecks(repo, task, project)].filter((check) => !isHeavyReleaseCheck(check));
+    const existingRows = this.db.prepare('SELECT name, ok, exitCode, durationMs, outputTail FROM check_results WHERE taskId = ? AND runId = ?')
+      .all(task.id, runId) as Array<{ name: string; ok: number; exitCode: number | null; durationMs: number; outputTail: string }>;
+    const existing = new Map(existingRows.map((row) => [row.name, row] as const));
     const results: CheckResult[] = [];
-    for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await runOne(check, repo, hubHome, project); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
+    for (const check of checks) {
+      const saved = existing.get(check.name) as CheckResult | undefined;
+      if (saved) {
+        results.push({ ...saved, ok: Boolean(saved.ok) });
+        continue;
+      }
+      const result = await runOne(check, repo, hubHome, project);
+      results.push(result);
+      this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail);
+    }
     return { passed: results.every((r) => r.ok), failed: results.filter((r) => !r.ok).map((r) => r.name), results };
   }
   private async prepare(repo: string, projectPath?: string, project?: ProjectRow): Promise<void> {
