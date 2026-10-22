@@ -1096,6 +1096,9 @@ export const vi = {
     failedUpdateSession: 'Không thể cập nhật phiên trò chuyện',
     compactRequested: 'Đã gửi yêu cầu nén ngữ cảnh',
     failedCompact: 'Không thể nén ngữ cảnh', editMessage: 'Sửa tin nhắn',
+    permissionProject: 'Dự án: {project}', permissionSession: 'Phiên: {session}',
+    permissionNoProject: 'Không gắn dự án', permissionCwd: 'cwd', permissionFile: 'file',
+    toolRead: 'Đọc {path}', toolRun: 'Chạy `{command}`', toolDefault: 'Công cụ',
   },
   claudeSessions: {
     active: 'Đang hoạt động',

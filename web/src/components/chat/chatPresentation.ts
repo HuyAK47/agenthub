@@ -19,7 +19,7 @@ export function compactPath(value: string): string {
   return `…/${parts.slice(-3).join('/')}`;
 }
 
-export function summarizeTool(message: ChatMessage): string {
+export function summarizeTool(message: ChatMessage, labels?: { read: string; run: string; default: string }): string {
   const name = message.meta?.name || '';
   const summary = message.meta?.summary?.trim();
   if (summary) return summary;
@@ -27,13 +27,13 @@ export function summarizeTool(message: ChatMessage): string {
   const input = message.meta?.input;
   if (name.toLowerCase().includes('read') && typeof input === 'object' && input) {
     const path = (input as Record<string, unknown>).file_path || (input as Record<string, unknown>).path;
-    if (typeof path === 'string') return `Đọc ${compactPath(path)}`;
+    if (typeof path === 'string') return labels?.read.replace('{path}', compactPath(path)) || `Read ${compactPath(path)}`;
   }
   if (typeof input === 'object' && input) {
     const command = (input as Record<string, unknown>).command;
-    if (typeof command === 'string') return `Chạy \`${command.trim()}\``;
+    if (typeof command === 'string') return labels?.run.replace('{command}', command.trim()) || `Run \`${command.trim()}\``;
   }
-  return name || message.content || 'Công cụ';
+  return name || message.content || labels?.default || 'Tool';
 }
 
 export function formatToolDuration(durationMs?: number): string | null {

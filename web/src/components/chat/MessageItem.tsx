@@ -1,6 +1,7 @@
 import React, { memo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Link } from 'react-router-dom';
 import { ChatMessage } from '../../types/api';
 import { Check, Copy, AlertCircle } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
@@ -165,7 +166,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             components={{
               a({ href, children, ...props }: any) {
                 const taskMatch = typeof children?.[0] === 'string' ? children[0].match(/^agenthub\/(.+)$/) : null;
-                const target = taskMatch ? `/tasks/${encodeURIComponent(taskMatch[1].replace('/', '~'))}` : href;
+                const target = taskMatch ? `/tasks/agenthub~${encodeURIComponent(taskMatch[1])}` : href;
+                if (taskMatch) return <Link to={target} className="text-[var(--t-accent)] underline underline-offset-2" {...props}>{children}</Link>;
                 return <a href={target} className="text-[var(--t-accent)] underline underline-offset-2" {...props}>{children}</a>;
               },
               code({ node, inline, className, children, ...props }: any) {

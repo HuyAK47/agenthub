@@ -17,6 +17,7 @@ function statusIcon(message: ChatMessage, isRunning: boolean) {
 }
 
 export const ToolStepItem: React.FC<ToolStepProps & { isRunning?: boolean }> = ({ message, isRunning = false }) => {
+  const { t } = useLocale();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const Icon = ICONS[getToolKind(message.meta?.name)];
   const duration = formatToolDuration(message.meta?.durationMs);
@@ -26,7 +27,7 @@ export const ToolStepItem: React.FC<ToolStepProps & { isRunning?: boolean }> = (
     <div className="text-xs text-[var(--text-primary)]">
       <button type="button" onClick={() => hasDetails && setDetailsOpen((value) => !value)} className={`w-full flex items-center gap-2 text-left ${hasDetails ? 'cursor-pointer' : 'cursor-default'}`} aria-expanded={hasDetails ? detailsOpen : undefined}>
         <Icon className="w-3.5 h-3.5 shrink-0 text-[var(--text-secondary)]" />
-        <span className="min-w-0 flex-1 truncate font-medium">- {summarizeTool(message)}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">- {summarizeTool(message, { read: t('extra.toolRead'), run: t('extra.toolRun'), default: t('extra.toolDefault') })}</span>
         {duration && <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{duration}</span>}
         {statusIcon(message, isRunning)}
         {hasDetails && (detailsOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}
