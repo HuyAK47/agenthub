@@ -19,7 +19,7 @@ function highlightedCode(code: string, language: string) {
     const isComment = /^\/\//.test(part) || (language === 'python' && /^#/.test(part));
     const isString = /^("|')/.test(part);
     const isKeyword = /^(const|let|var|function|return|if|else|for|while|class|import|from|export|async|await|true|false|null)$/.test(part);
-    return <span key={`${index}-${part}`} className={isComment ? 'text-emerald-400' : isString ? 'text-amber-300' : isKeyword ? 'text-sky-300' : undefined}>{part}</span>;
+    return <span key={`${index}-${part}`} className={isComment ? 'text-[var(--t-ok)]' : isString ? 'text-[var(--t-warn)]' : isKeyword ? 'text-[var(--t-accent)]' : undefined}>{part}</span>;
   });
 }
 
