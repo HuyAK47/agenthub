@@ -136,6 +136,7 @@ export interface ProjectInspection {
   guidanceFiles: string[];
   mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
   claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
+  claudeSessionPreviews: Array<{ name: string; content: string }>;
   hasClaudeMemory: boolean;
   memoryPreview: string | null;
   suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
