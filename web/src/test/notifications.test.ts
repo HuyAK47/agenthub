@@ -27,20 +27,23 @@ describe('browser notification policy', () => {
 
   it('requires engine-wide quota exhaustion at important level', () => {
     expect(shouldNotifyBrowserEvent(event('quota.exhausted', { profile: 'g1' }), 'important')).toBe(false);
-    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { allExhausted: true }), 'important')).toBe(true);
+    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { allExhausted: true }), 'important')).toBe(false);
+    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { allExhausted: true, engine: 'agy', family: 'gemini' }), 'important')).toBe(true);
     expect(shouldNotifyBrowserEvent(event('quota.exhausted', { profile: 'g1' }), 'all')).toBe(false);
-    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { allExhausted: true }), 'all')).toBe(true);
+    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { allExhausted: true }), 'all')).toBe(false);
+    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { allExhausted: true, engine: 'agy', family: 'gemini' }), 'all')).toBe(true);
   });
 
   it('throttles changing disk messages by state for one hour', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
-    notifyBrowserEvent(event('disk.low', { freeGB: 1 }), 'all');
-    notifyBrowserEvent(event('disk.low', { freeGB: 0.5 }), 'all');
+    notifyBrowserEvent(event('disk.low', { freeGB: 1, minFreeGB: 3 }), 'all');
+    notifyBrowserEvent(event('disk.low', { freeGB: 0.5, minFreeGB: 3 }), 'all');
     expect(localStorage.length).toBe(1);
     now.mockRestore();
   });
 
   it('requires the disk hysteresis margin before browser recovery notification', () => {
+    expect(shouldNotifyBrowserEvent(event('disk.low', { freeGB: 4, minFreeGB: 3 }), 'all')).toBe(false);
     expect(shouldNotifyBrowserEvent(event('disk.ok', { freeGB: 3.5, minFreeGB: 3 }), 'all')).toBe(false);
     expect(shouldNotifyBrowserEvent(event('disk.ok', { freeGB: 4, minFreeGB: 3 }), 'all')).toBe(true);
   });

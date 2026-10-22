@@ -5,6 +5,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { register } from 'tsx/esm/api';
+
+// Reuse production policy helpers without starting the daemon or invoking a
+// notification transport.
+register();
+const [{ isQuietHours, areAllProfilesQuotaExhausted }, { NotificationDeduper }] = await Promise.all([
+  import('../src/brain/digest.ts'),
+  import('../src/notification-dedupe.ts'),
+]);
 
 const args = process.argv.slice(2);
 const valueAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
@@ -41,30 +50,27 @@ if (!fs.existsSync(dbPath)) {
     const webSeen = new Map();
     const diskSeen = new Map();
     const telegramDiskSeen = new Map();
+    let auditNow = 0;
+    const productionDeduper = new NotificationDeduper({ now: () => auditNow });
     let loadSummaryAt = 0;
     const payloadOf = (row) => { try { return row.payload ? JSON.parse(row.payload) : {}; } catch { return {}; } };
     const timeOf = (row) => { const n = Number(row.ts); return Number.isFinite(n) ? (n < 1e12 ? n * 1000 : n) : Date.parse(row.ts); };
     const inQuietHours = (at) => {
       const q = notifications.quietHours;
-      if (!q || q.enabled !== true) return false;
-      const [sh, sm] = String(q.start || '22:00').split(':').map(Number);
-      const [eh, em] = String(q.end || '07:00').split(':').map(Number);
-      const mins = new Date(at).getHours() * 60 + new Date(at).getMinutes();
-      const start = sh * 60 + sm;
-      const end = eh * 60 + em;
-      return start <= end ? mins >= start && mins < end : mins >= start || mins < end;
+      return isQuietHours(q, new Date(at));
     };
     const quotaAllForEngine = (payload, at) => {
       const profile = byName.get(payload.profile || payload.profileName || payload.worker);
       const family = payload.family || payload.model;
       const engine = payload.engine || profile?.engine;
-      // Prefer the database state over the producer's convenience flag. This
-      // also handles events emitted without a profile name but with engine and
-      // family context (the scheduler's normal quota event shape).
       if (!family || !engine) return payload.allExhausted === true;
-      const sameEngine = profiles.filter((p) => p.engine === engine);
-      if (sameEngine.length === 0) return false;
-      return sameEngine.length > 0 && sameEngine.every((p) => marks.some((m) => m.profileName === p.name && m.family === family && m.until * 1000 > at));
+      return areAllProfilesQuotaExhausted(
+        { getAll: () => profiles },
+        { getActive: () => marks },
+        at,
+        family,
+        engine,
+      );
     };
     const incident = (type, payload, at) => payload.level === 'incident' || payload.urgency === 'critical' || payload.critical === true
       || ['disk.low', 'disk.docker_low', 'claude.quota_exhausted', 'hub.restart_failed', 'system.error'].includes(type)
@@ -95,6 +101,7 @@ if (!fs.existsSync(dbPath)) {
     for (const row of rows) {
       const payload = payloadOf(row);
       const at = timeOf(row);
+      auditNow = at;
       const eventCount = counts.get(row.type) || { events: 0, desktopAll: 0, desktopImportant: 0, telegram: 0, web: 0 };
       eventCount.events++;
       counts.set(row.type, eventCount);
@@ -121,6 +128,9 @@ if (!fs.existsSync(dbPath)) {
         desktopAll = desktopAll && at - loadSummaryAt >= 15 * 60_000;
         desktopImportant = false;
         if (desktopAll) loadSummaryAt = at;
+      }
+      if (desktopAll) {
+        desktopAll = productionDeduper.shouldSend(row.type, row.taskId || payload.taskId, payload);
       }
       if (desktopAll) {
         const previous = desktopSeen.get(key) || 0;

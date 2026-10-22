@@ -36,14 +36,19 @@ export function shouldNotifyBrowserEvent(event: EventItem, level: 'all' | 'impor
   if (level === 'off' || !DESKTOP_EVENTS.has(event.type)) return false;
   if (level === 'important' && !IMPORTANT.has(event.type)) return false;
   const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
-  if (event.type === 'quota.exhausted') return payload.allExhausted === true;
+  if (event.type === 'quota.exhausted') {
+    return payload.allExhausted === true
+      && typeof payload.engine === 'string'
+      && typeof (payload.family || payload.model) === 'string';
+  }
   // The scheduler emits disk.ok only after the hysteresis margin is crossed.
   // Keep this guard here too because SSE can be replayed or produced by an
   // older scheduler, and such an event must not wake the browser.
-  if (event.type === 'disk.ok') {
+  if (event.type === 'disk.low' || event.type === 'disk.ok') {
     const freeGB = typeof payload.freeGB === 'number' ? payload.freeGB : NaN;
     const minFreeGB = typeof payload.minFreeGB === 'number' ? payload.minFreeGB : NaN;
-    if (!Number.isFinite(freeGB) || !Number.isFinite(minFreeGB) || freeGB < minFreeGB + 1) return false;
+    const valid = event.type === 'disk.low' ? freeGB < minFreeGB : freeGB >= minFreeGB + 1;
+    if (!Number.isFinite(freeGB) || !Number.isFinite(minFreeGB) || !valid) return false;
   }
   if (level !== 'critical') return true;
   return event.type === 'task.failed' || event.type === 'disk.docker_low' || (event.type === 'quota.exhausted' && payload.allExhausted === true);
@@ -52,7 +57,7 @@ export function shouldNotifyBrowserEvent(event: EventItem, level: 'all' | 'impor
 export function notifyBrowserEvent(event: EventItem, level: 'all' | 'important' | 'critical' | 'off' = 'important'): void {
   if (typeof window === 'undefined' || !shouldNotifyBrowserEvent(event, level) || !('Notification' in window) || Notification.permission !== 'granted') return;
   const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
-  if (event.type === 'quota.exhausted' && payload.allExhausted !== true) return;
+  if (event.type === 'quota.exhausted' && !shouldNotifyBrowserEvent(event, level)) return;
   const throttleWindow = event.type === 'disk.low' || event.type === 'disk.ok'
     ? DISK_WINDOW_MS
     : event.type === 'task.paused' || event.type === 'load.task_paused' || event.type === 'load.high'
