@@ -1,5 +1,7 @@
 # AgentHub
 
+**Public landing page:** [agenthub landing page](https://ducanh19020217.github.io/agenthub/)
+
 **English** | [Tiếng Việt](README.vi.md)
 
 > A local operating system for AI coding workers that coordinates Antigravity (Gemini) and OpenAI Codex CLI across isolated git worktrees, orchestrated by Claude Code via MCP, Web Chat, and Telegram.
