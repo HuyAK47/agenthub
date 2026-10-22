@@ -15,8 +15,8 @@ export const HelpPanel: React.FC<HelpPanelProps> = ({ open, onClose }) => {
     const unique = new Map<string, TourDefinition>();
     all.forEach((tour) => unique.set(tour.id, tour));
     const needle = query.trim().toLocaleLowerCase();
-    return Array.from(unique.values()).filter((tour) => !needle || `${tour.id} ${tour.steps.map((step) => `${step.title} ${step.content}`).join(' ')}`.toLocaleLowerCase().includes(needle));
-  }, [current, query]);
+    return Array.from(unique.values()).filter((tour) => !needle || `${tour.id} ${tour.steps.map((step) => `${t(step.title)} ${t(step.content)}`).join(' ')}`.toLocaleLowerCase().includes(needle));
+  }, [current, query, t]);
 
   if (!open) return null;
   return (
@@ -34,7 +34,7 @@ export const HelpPanel: React.FC<HelpPanelProps> = ({ open, onClose }) => {
         <div className="mt-5 space-y-2">
           {tours.map((tour) => (
             <button key={tour.id} type="button" onClick={() => { openTour(tour.id); onClose(); }} className="w-full rounded-lg border border-[var(--t-border)] p-3 text-left hover:bg-[var(--t-hover)]">
-              <span className="block text-sm font-semibold">{tour.steps[0]?.title || tour.id}</span>
+              <span className="block text-sm font-semibold">{tour.steps[0] ? t(tour.steps[0].title) : tour.id}</span>
               <span className="mt-1 block text-xs text-[var(--t-text-3)]">{t('tour.stepCount', { count: tour.steps.length })}</span>
             </button>
           ))}

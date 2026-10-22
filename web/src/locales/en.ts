@@ -426,7 +426,360 @@ export const en: typeof vi = {
     accountNameRequired: 'Please enter an account name.',
     creating: 'Creating…',
   },
-  tour: { help: 'Page guide', replay: 'Replay guide', close: 'Close guide', step: 'Step {current}/{total}', stepCount: '{count} steps', previous: 'Back', next: 'Next', skip: 'Skip', finish: 'Finish', panelTitle: 'Help center', panelDescription: 'Find tours and short guides for each page.', search: 'Search guides…', noResults: 'No matching guide found.', restartCurrent: 'Restart this tour' },
+  tour: { help: 'Page guide', replay: 'Replay guide', close: 'Close guide', step: 'Step {current}/{total}', stepCount: '{count} steps', previous: 'Back', next: 'Next', skip: 'Skip', finish: 'Finish', panelTitle: 'Help center', panelDescription: 'Find tours and short guides for each page.', search: 'Search guides…', noResults: 'No matching guide found.', restartCurrent: 'Restart this tour', steps: {
+  "intro": {
+    "overview": {
+      "title": "Overview",
+      "content": "This is overview. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "connection": {
+      "title": "Connection",
+      "content": "This is connection. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "resources": {
+      "title": "Machine load and disk",
+      "content": "This is machine load and disk. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain": {
+      "title": "Brain",
+      "content": "This is brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "assistant": {
+      "title": "Assistant",
+      "content": "This is assistant. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "projects": {
+      "title": "Project",
+      "content": "This is project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "tasks": {
+      "title": "Task",
+      "content": "This is task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "queue": {
+      "title": "Queue",
+      "content": "This is queue. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "plans": {
+      "title": "Plans",
+      "content": "This is plans. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "lifecycle": {
+      "title": "Task lifecycle",
+      "content": "This is task lifecycle. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "profiles": {
+      "title": "Accounts",
+      "content": "This is accounts. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "settings": {
+      "title": "System settings",
+      "content": "This is system settings. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "setup": {
+      "title": "Setup",
+      "content": "This is setup. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-dashboard": {
+    "overview": {
+      "title": "Overview",
+      "content": "This is overview. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "resources": {
+      "title": "Resources",
+      "content": "This is resources. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain": {
+      "title": "Brain",
+      "content": "This is brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "quotas": {
+      "title": "Provider quota",
+      "content": "This is provider quota. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "performance": {
+      "title": "Performance",
+      "content": "This is CPU/RSS grouped by process (daemon, worker, test, build…) with one-hour history. Use it to spot resource-heavy groups or a growing queue. Select a related task to inspect its log; the chart does not change configuration."
+    },
+    "checklist": {
+      "title": "Checklist",
+      "content": "This is checklist. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "workers": {
+      "title": "Running workers",
+      "content": "This is running workers. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-projects": {
+    "projects": {
+      "title": "Project list",
+      "content": "This is project list. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "register": {
+      "title": "Register project",
+      "content": "This is register project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "project-card": {
+      "title": "Project card",
+      "content": "This is project card. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain-settings": {
+      "title": "Project brain",
+      "content": "This is project brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "worktree": {
+      "title": "Worktree",
+      "content": "This is worktree. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "references": {
+      "title": "References",
+      "content": "This is references. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "checks": {
+      "title": "Checks and review",
+      "content": "Checks are a JSON array of commands after a worker changes code, for example [{\"name\":\"test\",\"cmd\":[\"npm\",\"test\"],\"timeoutSec\":600}]. Leave it empty for package.json auto-detection; invalid JSON will not run."
+    }
+  },
+  "page-settings": {
+    "settings": {
+      "title": "General settings",
+      "content": "This is general settings. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "model-chain": {
+      "title": "Model chain",
+      "content": "This is model chain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "planning-approval": {
+      "title": "Plan approval",
+      "content": "This is plan approval. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain-policy": {
+      "title": "Brain policy",
+      "content": "This is brain policy. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "notifications": {
+      "title": "Notifications",
+      "content": "This is notifications. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "telegram": {
+      "title": "Telegram",
+      "content": "This is telegram. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "accounts": {
+      "title": "Multiple accounts",
+      "content": "This is multiple accounts. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "updates": {
+      "title": "Updates",
+      "content": "This is updates. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-setup": {
+    "setup": {
+      "title": "Setup",
+      "content": "This is setup. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "tools": {
+      "title": "Tools",
+      "content": "This is tools. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "profiles": {
+      "title": "Login profiles",
+      "content": "This is login profiles. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "setup-result": {
+      "title": "Check result",
+      "content": "This is check result. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-profiles": {
+    "profiles": {
+      "title": "Accounts",
+      "content": "This is accounts. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "provider-quota": {
+      "title": "Quota",
+      "content": "This is quota. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "account-types": {
+      "title": "Account type",
+      "content": "This is account type. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "add-account": {
+      "title": "Add account",
+      "content": "This is add account. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "reauth": {
+      "title": "Re-authenticate",
+      "content": "This is re-authenticate. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-tasks": {
+    "tasks": {
+      "title": "Task",
+      "content": "This is task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "filters": {
+      "title": "Filters",
+      "content": "This is filters. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "views": {
+      "title": "Kanban and DAG",
+      "content": "This is kanban and dag. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "lifecycle": {
+      "title": "Statuses",
+      "content": "This is statuses. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "actions": {
+      "title": "Retry, cancel, pause",
+      "content": "This is retry, cancel, pause. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "columns": {
+      "title": "Columns",
+      "content": "This is columns. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-task-detail": {
+    "tasks": {
+      "title": "Task details",
+      "content": "This is task details. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "tabs": {
+      "title": "Log, diff, checks, review",
+      "content": "This is log, diff, checks, review. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "run-actions": {
+      "title": "Run controls",
+      "content": "This is run controls. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "review": {
+      "title": "Approve or return",
+      "content": "This is approve or return. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "capture": {
+      "title": "Create fix task from log",
+      "content": "This is create fix task from log. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "task-summary": {
+      "title": "Task summary",
+      "content": "This is task summary. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-chat": {
+    "chat": {
+      "title": "Chat",
+      "content": "This is chat. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "assistant": {
+      "title": "Assistant and brain",
+      "content": "This is assistant and brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "composer": {
+      "title": "Composer",
+      "content": "This is composer. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "new-session": {
+      "title": "New chat session",
+      "content": "This is new chat session. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "permissions": {
+      "title": "Permissions",
+      "content": "This is permissions. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "sessions": {
+      "title": "Sessions",
+      "content": "This is sessions. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-plans": {
+    "plans": {
+      "title": "Plans",
+      "content": "This is plans. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "filters": {
+      "title": "Plan filters",
+      "content": "This is plan filters. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "current": {
+      "title": "Current plan",
+      "content": "This is current plan. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "add-task": {
+      "title": "Add task",
+      "content": "This is add task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "approve-plan": {
+      "title": "Plan approval",
+      "content": "This is plan approval. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-add-account": {
+    "modal": {
+      "title": "Add account",
+      "content": "This is add account. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-register-project": {
+    "modal": {
+      "title": "Register project",
+      "content": "This is register project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-create-task": {
+    "modal": {
+      "title": "Tạo task",
+      "content": "This is tạo task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-new-session": {
+    "modal": {
+      "title": "New chat session",
+      "content": "This is new chat session. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-full-permission": {
+    "modal": {
+      "title": "Full access confirmation",
+      "content": "This is full access confirmation. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-delete-project": {
+    "modal": {
+      "title": "Delete project",
+      "content": "This is delete project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  }
+} },
   checklist: { title: 'Get started with AgentHub', subtitle: 'Complete a few steps to get to work.', hide: 'Hide checklist', cli: 'Install CLI', account: 'Sign in to a worker account', project: 'Add a project', telegram: 'Connect Telegram', task: 'Create your first task' },
   setup: {
     navLabel: 'Setup', loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
