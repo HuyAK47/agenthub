@@ -2299,6 +2299,11 @@ export class AppService {
 
     // Task history remains readable after its project is archived.
     const project = this.projectRepo.getIncludingArchived(task.projectId);
+    const settings = projectSettings(project);
+    let configuredMerge = settings.integration.enabled;
+    if (project?.merge) {
+      try { configuredMerge = configuredMerge || (JSON.parse(project.merge) as { enabled?: boolean }).enabled === true; } catch { /* handled by merge endpoint */ }
+    }
     const reviewSettings = project?.review ? (() => {
       try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
     })() : null;
@@ -2338,6 +2343,8 @@ export class AppService {
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
       reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
+      mergeAvailable: configuredMerge,
+      mergeUnavailableReason: configuredMerge ? null : 'Project chưa cấu hình merge tự động. Mở Cài đặt dự án → Integration để bật.',
       reviewStep: task.reviewStep ?? 0,
       reviewMaxRounds: reviewSettings?.maxRounds || 2,
       doneContent,
@@ -2985,7 +2992,7 @@ export class AppService {
         mergeResult = await mergeTaskIntoBase(task, project, { hubHome: this.config.hubHome });
       } catch (error) {
         if (error instanceof MergeError) {
-          this.createMergeFailureDraft(task, error.message);
+          if (!error.configuration) this.createMergeFailureDraft(task, error.message);
           throw new HttpError(error.statusCode, error.error, error.message);
         }
         throw error;
@@ -3081,6 +3088,10 @@ export class AppService {
   }
 
   private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
+    const existing = this.taskRepo.getDerivedFrom(source.id).find((task) =>
+      task.sourceRef && !['done', 'cancelled', 'failed', 'blocked'].includes(task.status),
+    );
+    if (existing) return existing;
     const slugBase = `${source.slug}-fix-merge`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
     let slug = slugBase;
     for (let index = 2; this.taskRepo.get(`${source.projectId}/${slug}`); index += 1) slug = `${slugBase}-${index}`;

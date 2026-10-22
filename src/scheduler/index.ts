@@ -23,7 +23,7 @@ import { projectSettings } from '../projects/settings.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
-import { ensureWorktreeNodeModules } from '../cache.js';
+import { ensureWorktreeNodeModules, nodeModulesCacheSummary, pruneNodeModulesCache } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { sameAccount } from '../profiles/account.js';
@@ -2423,7 +2423,10 @@ export class Scheduler {
           fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
         if (hasDependencyLock(worktreePath) || hasDependencyLock(path.join(worktreePath, 'web'))) {
           try {
-            await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir);
+            await ensureWorktreeNodeModules(worktreePath, project.path, this.config.cacheDir, undefined, {
+              maxEntries: this.config.cacheMaxEntries,
+              maxBytes: this.config.cacheMaxGB * 1024 ** 3,
+            });
           } catch (error) {
             this.eventBus.emit('worktree.install_failed', task.id, {
               error: `Failed to prepare node_modules before worker start: ${String(error)}`,
@@ -2831,10 +2834,16 @@ export class Scheduler {
   private markDiskLow(disk: MonitoredDisk): void {
     if (this.diskLow) return;
     this.diskLow = true;
+    const cache = nodeModulesCacheSummary(this.config.cacheDir);
+    pruneNodeModulesCache(this.config.cacheDir, { maxEntries: this.config.cacheMaxEntries, maxBytes: this.config.cacheMaxGB * 1024 ** 3 });
     this.eventBus.emit('disk.low', undefined, {
       label: disk.label,
       freeGB: disk.freeGB,
       minFreeGB: disk.minFreeGB,
+      cacheDir: cache.path,
+      cacheEntries: cache.entries,
+      cacheBytes: cache.bytes,
+      largestCacheEntry: cache.largest,
     });
   }
 
