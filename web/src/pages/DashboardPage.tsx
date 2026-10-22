@@ -642,11 +642,11 @@ export const DashboardPage: React.FC = () => {
       <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
         <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">Tiến trình mồ côi</h2>
-            <p className="text-xs text-[var(--text-secondary)]">Các tiến trình còn giữ cwd trong worktree đã dừng.</p>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('extra.orphanProcesses')}</h2>
+            <p className="text-xs text-[var(--text-secondary)]">{t('extra.orphanProcessesDesc')}</p>
           </div>
           <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
-            {isReaping ? 'Đang dọn…' : 'Dọn'} ({orphans.length})
+            {isReaping ? t('extra.cleanupRunning') : t('extra.cleanup')} ({orphans.length})
           </button>
         </div>
         {orphans.length > 0 && (

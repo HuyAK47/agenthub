@@ -1010,7 +1010,7 @@ export const ProjectsPage: React.FC = () => {
                       <Input
                         value={knowledgeDraft}
                         onChange={(e) => setKnowledgeDraft(e.target.value)}
-                        placeholder="Thêm ghi chú kiến thức..."
+                        placeholder={t('extra.addKnowledgePlaceholder')}
                         className="text-xs h-8"
                       />
                       <Button
@@ -1024,7 +1024,7 @@ export const ProjectsPage: React.FC = () => {
                         onClick={() => addKnowledgeMutation.mutate()}
                         className="h-8"
                       >
-                        Thêm
+                        {t('extra.knowledgeAdd')}
                       </Button>
                     </div>
                     {(knowledgeQuery.data || []).map((entry) => (
@@ -1034,7 +1034,7 @@ export const ProjectsPage: React.FC = () => {
                       >
                         <button
                           type="button"
-                          title="Ghim/bỏ ghim"
+                          title={t('extra.pinKnowledge')}
                           onClick={() =>
                             updateKnowledgeMutation.mutate({
                               id: entry.id,

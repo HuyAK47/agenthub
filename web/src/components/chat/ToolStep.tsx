@@ -41,7 +41,7 @@ export const ToolStep: React.FC<ToolStepGroupProps> = ({ messages, isRunning = f
         type="button"
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        title={`Đã dùng ${messages.length} công cụ`}
+        title={t('extra.toolUsed', { count: messages.length })}
         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] text-[var(--text-secondary)] border border-[var(--border-default)] shadow-xs transition-colors cursor-pointer"
       >
         <span>⚙</span>{' '}

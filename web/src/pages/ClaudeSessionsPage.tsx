@@ -87,8 +87,8 @@ const SessionDetail: React.FC<{ data: SessionDetail; sessionId: string }> = ({ d
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold">{data.title || (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId)}</h1>
           {data.active && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-ok)] animate-pulse" />
               {t('claudeSessions.active')}
             </span>
           )}

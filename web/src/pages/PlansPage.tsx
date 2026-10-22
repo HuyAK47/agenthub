@@ -41,11 +41,11 @@ const toArray = (val: string | string[] | null | undefined): string[] => {
 const BatchStatusBadge: React.FC<{ status: BatchStatus | 'working' | 'completed' | 'failed' }> = ({ status }) => {
   const { t } = useLocale();
   const styles = {
-    draft: 'bg-amber-500/15 text-amber-500 border-amber-500/30',
-    dispatched: 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30',
-    discarded: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
-    working: 'bg-blue-500/15 text-blue-500 border-blue-500/30',
-    completed: 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30',
+    draft: 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]',
+    dispatched: 'bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)]',
+    discarded: 'bg-[color-mix(in_srgb,var(--t-text-3)_15%,transparent)] text-[var(--t-text-3)] border-[color-mix(in_srgb,var(--t-text-3)_30%,transparent)]',
+    working: 'bg-[color-mix(in_srgb,var(--t-accent)_15%,transparent)] text-[var(--t-accent)] border-[color-mix(in_srgb,var(--t-accent)_30%,transparent)]',
+    completed: 'bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)]',
     failed: 'bg-rose-500/15 text-rose-500 border-rose-500/30',
   }[status];
 

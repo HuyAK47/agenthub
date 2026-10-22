@@ -18,9 +18,11 @@ interface LoginTerminalProps {
 type ConnState = 'connecting' | 'open' | 'closed' | 'error';
 
 export function getTerminalTheme(effectiveTheme: 'light' | 'dark') {
+  const styles = getComputedStyle(document.documentElement);
+  const token = (name: string) => styles.getPropertyValue(name).trim();
   return effectiveTheme === 'dark'
-    ? { background: '#1a1c23', foreground: '#dcdfe8', cursor: '#4d94ff', selectionBackground: '#001f4d' }
-    : { background: '#ffffff', foreground: '#21232c', cursor: '#0066ff', selectionBackground: '#e0edff' };
+    ? { background: token('--t-terminal-bg'), foreground: token('--t-terminal-text'), cursor: token('--t-terminal-cursor'), selectionBackground: token('--t-terminal-selection') }
+    : { background: token('--t-terminal-bg'), foreground: token('--t-terminal-text'), cursor: token('--t-terminal-cursor'), selectionBackground: token('--t-terminal-selection') };
 }
 
 // Strip ANSI/OSC sequences before extracting a URL from agy output.

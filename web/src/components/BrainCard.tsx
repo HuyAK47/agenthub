@@ -53,7 +53,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
   const timeAgoText = formatMinutesAgo(brain.updatedAt, Date.now(), t);
   const routeId = brain.taskId ? brain.taskId.replace('/', '~') : null;
   const quotaLimited = quota?.limited ?? (!!quota?.status && !/^allowed(?:$|[_-])/i.test(quota.status));
-  const stateLabel = (state: string) => state === 'waiting' ? 'chờ bạn trả lời' : state === 'working' ? 'đang làm' : 'không hoạt động';
+  const stateLabel = (state: string) => state === 'waiting' ? t('extra.brainStateWaiting') : state === 'working' ? t('extra.brainStateWorking') : t('extra.brainStateIdle');
 
   return (
     <div
@@ -79,7 +79,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
             <div className="flex items-center gap-2 flex-wrap">
               <span
                 className="text-xs font-semibold uppercase tracking-wider select-none"
-                style={{ color: '#d97757' }}
+                style={{ color: 'var(--t-claude)' }}
               >
                 {t('extra.coordinator')}
               </span>
@@ -148,9 +148,9 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
         {brain.sessions.map((session) => <div key={session.sessionId} className="text-xs text-[var(--text-secondary)]">
           <a href={session.link} className="font-medium text-[var(--t-accent)] hover:underline">{session.title}</a>
           <span className="ml-2">· {stateLabel(session.state)}</span>
-          {session.lastUserRequest && <div className="truncate" title={session.lastUserRequest}>Yêu cầu: {session.lastUserRequest}</div>}
-          {session.lastTool && <div className="truncate">Tool: {session.lastTool.name}{session.lastTool.summary ? ` — ${session.lastTool.summary}` : ''}</div>}
-          {session.tokens5h != null && <div>Token 5h: {Math.round(session.tokens5h).toLocaleString()}</div>}
+          {session.lastUserRequest && <div className="truncate" title={session.lastUserRequest}>{t('extra.requestLabel')}: {session.lastUserRequest}</div>}
+          {session.lastTool && <div className="truncate">{t('extra.toolLabel')}: {session.lastTool.name}{session.lastTool.summary ? ` — ${session.lastTool.summary}` : ''}</div>}
+          {session.tokens5h != null && <div>{t('extra.token')} 5h: {Math.round(session.tokens5h).toLocaleString()}</div>}
         </div>)}
       </div>}
     </div>

@@ -271,9 +271,9 @@ export const SettingsPage: React.FC = () => {
           </div>
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div className="space-y-2">
-              <label className="text-xs font-semibold">Quyền mặc định của bộ não</label>
-              <select value={brainPermissions} onChange={(e) => { const value = e.target.value as typeof brainPermissions; if (value === 'full' && !window.confirm(t('extra.fullModeConfirm'))) return; setBrainPermissions(value); }} className="block rounded border p-2 bg-[var(--t-surface-2)]"><option value="standard">Tiêu chuẩn</option><option value="trusted">Tin cậy</option><option value="full">Toàn quyền</option></select>
-              {brainPermissions === 'full' && <p className="text-xs text-[var(--t-crit)]">Claude có thể chạy mọi lệnh trên máy.</p>}
+              <label className="text-xs font-semibold">{t('projects.brainPermissions')}</label>
+              <select value={brainPermissions} onChange={(e) => { const value = e.target.value as typeof brainPermissions; if (value === 'full' && !window.confirm(t('extra.fullModeConfirm'))) return; setBrainPermissions(value); }} className="block rounded border p-2 bg-[var(--t-surface-2)]"><option value="standard">{t('projects.brainPermissionStandard')}</option><option value="trusted">{t('projects.brainPermissionTrusted')}</option><option value="full">{t('projects.brainPermissionFull')}</option></select>
+              {brainPermissions === 'full' && <p className="text-xs text-[var(--t-crit)]">{t('extra.fullModeWarning')}</p>}
             </div>
             {/* Info notice */}
             <div className="p-4 rounded-lg bg-[var(--t-accent-bg)] border border-[var(--t-accent)] text-[var(--t-accent)] text-xs flex items-start gap-2.5">
@@ -417,8 +417,8 @@ export const SettingsPage: React.FC = () => {
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">{t('extra.chatModel')}</label>
                 <input value={chatModel} onChange={(e) => setChatModel(e.target.value)} className="w-full max-w-sm text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-3 py-2 text-[var(--t-text)]" />
-                <p className="text-[11px] text-[var(--t-text-3)] mt-1">Model chat mặc định. Danh sách chọn: {chatModels.join(', ')}</p>
-                <input value={chatModels.join(', ')} onChange={(e) => setChatModels(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))} className="mt-2 w-full max-w-sm text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" aria-label="Danh sách model chat" />
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">{t('extra.defaultChatModel')} {chatModels.join(', ')}</p>
+                <input value={chatModels.join(', ')} onChange={(e) => setChatModels(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))} className="mt-2 w-full max-w-sm text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" aria-label={t('extra.chatModelsLabel')} />
               </div>
 
               {/* allowFullMode toggle */}
@@ -451,15 +451,15 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-2 shadow-xs">
-            <h2 className="text-base font-semibold text-[var(--t-text)]">Reviewer</h2>
-            <label className="block text-xs font-semibold text-[var(--t-text)]">Model reviewer</label>
+                <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
+            <label className="block text-xs font-semibold text-[var(--t-text)]">{t('extra.reviewerModel')}</label>
             <input value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
           </div>
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs">
             <div>
-              <h2 className="text-base font-semibold text-[var(--t-text)]">Claude fallback chain</h2>
-              <p className="text-xs text-[var(--t-text-3)]">Drag steps to reorder. The API key is write-only.</p>
+              <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.fallbackChain')}</h2>
+              <p className="text-xs text-[var(--t-text-3)]">{t('extra.fallbackHint')}</p>
             </div>
             {fallback.map((step, index) => (
               <div key={`${step.type}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const from = Number(event.dataTransfer.getData('text/plain')); if (!Number.isInteger(from) || from === index) return; const next = [...fallback]; const [moved] = next.splice(from, 1); next.splice(index, 0, moved); setFallback(next); }} className="flex items-center gap-2 p-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-grab">
@@ -470,30 +470,30 @@ export const SettingsPage: React.FC = () => {
                 {step.type === 'profile' && <input value={step.profile || ''} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, profile: event.target.value }; setFallback(next); }} placeholder="profile name" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
                 {step.type === 'model' && <input value={step.model} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, model: event.target.value }; setFallback(next); }} placeholder="sonnet" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
                 {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">Remove</button>
+                <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">{t('extra.remove')}</button>
               </div>
             ))}
-            <button type="button" onClick={() => setFallback([...fallback, { type: 'wait' }])} className="text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)]">Add step</button>
+            <button type="button" onClick={() => setFallback([...fallback, { type: 'wait' }])} className="text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)]">{t('extra.addStep')}</button>
             <div className="pt-3 border-t border-[var(--t-border)]">
-              <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">Anthropic API key</label>
-              <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={apiKeyConfigured ? 'Configured (enter to replace)' : 'sk-ant-…'} autoComplete="new-password" className="w-full text-xs font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-[var(--t-text)]" />
+              <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.apiKey')}</label>
+              <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={apiKeyConfigured ? t('extra.configuredReplace') : 'sk-ant-…'} autoComplete="new-password" className="w-full text-xs font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-[var(--t-text)]" />
             </div>
           </div>
 
           {/* Savings config block */}
-          <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 space-y-6 shadow-xs">
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div>
               <h2 className="text-base font-semibold text-[var(--text-primary)]">
                 {t('settings.savingsSectionTitle')}
               </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              <p className="text-xs text-[var(--t-text-3)] mt-0.5">
                 {t('extra.savingsSettings')}
               </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('settings.geminiBucketLabel')}
                 </label>
                 <input
@@ -502,15 +502,15 @@ export const SettingsPage: React.FC = () => {
                   step={100_000}
                   value={bucketGemini}
                   onChange={(e) => setBucketGemini(Number(e.target.value))}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.geminiBucketHint')}
                 </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('settings.claudeBucketLabel')}
                 </label>
                 <input
@@ -519,15 +519,15 @@ export const SettingsPage: React.FC = () => {
                   step={100_000}
                   value={bucketClaude}
                   onChange={(e) => setBucketClaude(Number(e.target.value))}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.claudeBucketHint')}
                 </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('extra.claudeFactor')}
                 </label>
                 <input
@@ -537,15 +537,15 @@ export const SettingsPage: React.FC = () => {
                   step={0.05}
                   value={claudeFactor}
                   onChange={(e) => setClaudeFactor(parseFloat(e.target.value) || 0.9)}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.claudeFactorHint')}
                 </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('extra.claudeOverhead')}
                 </label>
                 <input
@@ -554,9 +554,9 @@ export const SettingsPage: React.FC = () => {
                   step={5_000}
                   value={claudeOverhead}
                   onChange={(e) => setClaudeOverhead(Number(e.target.value) || 0)}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.claudeOverheadHint')}
                 </p>
               </div>
@@ -710,12 +710,12 @@ export const SettingsPage: React.FC = () => {
           <TelegramCard />
 
           <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
-            <h2 className="text-sm font-semibold">Quyền đã cấp</h2>
-            <p className="text-xs text-[var(--t-text-3)]">Các quy tắc được dùng để tự động cho phép công cụ.</p>
-            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">Chưa có quy tắc.</p> : permissionRules.data.map((rule) => (
+            <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
+            <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
+            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">{t('extra.noPermissionRules')}</p> : permissionRules.data.map((rule) => (
               <div key={rule.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs">
                 <code className="break-all">{rule.toolName} {rule.pattern}</code>
-                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">Xoá</button>
+                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button>
               </div>
             ))}
           </section>
