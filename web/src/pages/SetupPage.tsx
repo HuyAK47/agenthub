@@ -222,7 +222,7 @@ export const SetupActions: React.FC<SetupActionsProps> = ({
 export const SetupPage: React.FC = () => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['setup-status'],
     queryFn: getSetupStatus,
     refetchInterval: 3000,
@@ -397,11 +397,23 @@ export const SetupPage: React.FC = () => {
     return checks.filter((c) => c.ok).length;
   }, [checks]);
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center p-12 text-[var(--t-text-3)] text-sm">
         <Loader2 className="w-5 h-5 animate-spin mr-2" />
         <span>{t('setup.loading')}</span>
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <div className="p-8 text-center space-y-4 max-w-md mx-auto">
+        <AlertCircle className="w-8 h-8 text-[var(--t-crit)] mx-auto" />
+        <p className="text-sm text-[var(--t-text)]">{t('setup.loadError')}</p>
+        <Button variant="secondary" onClick={() => refetch()}>
+          {t('common.retry')}
+        </Button>
       </div>
     );
   }

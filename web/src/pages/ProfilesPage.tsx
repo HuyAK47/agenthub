@@ -257,8 +257,15 @@ export const ProfilesPage: React.FC = () => {
       {isLoading ? (
         <div className="p-12 text-center">{t('profiles.loading')}</div>
       ) : error ? (
-        <div className="p-8 text-center text-[var(--t-crit)]">
-          {t('profiles.loadError')}
+        <div className="p-8 text-center space-y-3 text-[var(--t-crit)]">
+          <p className="text-sm">{t('profiles.loadError')}</p>
+          <button
+            type="button"
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['profiles'] })}
+            className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] text-xs font-medium hover:bg-[var(--t-surface-2)] cursor-pointer text-[var(--t-text)]"
+          >
+            {t('common.retry')}
+          </button>
         </div>
       ) : (
         <div className="space-y-8">

@@ -860,8 +860,15 @@ export const ProjectsPage: React.FC = () => {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
           </div>
         ) : error ? (
-          <div className="col-span-2 p-8 text-center text-[var(--t-crit)] text-sm">
-            {t('projects.loadError')}
+          <div className="col-span-2 p-8 text-center space-y-3">
+            <p className="text-[var(--t-crit)] text-sm">{t('projects.loadError')}</p>
+            <button
+              type="button"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['projects'] })}
+              className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] text-xs font-medium hover:bg-[var(--t-surface-2)] cursor-pointer"
+            >
+              {t('common.retry')}
+            </button>
           </div>
         ) : projects.length === 0 ? (
           <div
