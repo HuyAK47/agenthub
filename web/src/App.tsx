@@ -5,10 +5,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { LocaleProvider } from './context/LocaleContext';
 import { AuthGate } from './components/AuthGate';
 import { Layout } from './components/Layout';
-import { SavingsPage } from './pages/SavingsPage';
 import { connectSSE } from './api/sse';
-import { ClaudeSessionsPage } from './pages/ClaudeSessionsPage';
-import { SetupPage } from './pages/SetupPage';
 import { useQuery } from '@tanstack/react-query';
 import { getSetupStatus } from './api/client';
 
@@ -21,6 +18,9 @@ const ChatPage = lazy(() => import('./pages/ChatPage').then((m) => ({ default: m
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 const PlansPage = lazy(() => import('./pages/PlansPage').then((m) => ({ default: m.PlansPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const SavingsPage = lazy(() => import('./pages/SavingsPage').then((m) => ({ default: m.SavingsPage })));
+const ClaudeSessionsPage = lazy(() => import('./pages/ClaudeSessionsPage').then((m) => ({ default: m.ClaudeSessionsPage })));
+const SetupPage = lazy(() => import('./pages/SetupPage').then((m) => ({ default: m.SetupPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {

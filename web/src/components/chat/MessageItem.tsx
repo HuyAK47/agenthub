@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { memo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChatMessage } from '../../types/api';
@@ -74,7 +74,7 @@ function formatStats(meta: ChatMessage['meta'] | undefined, secondLabel: string,
   return parts.join(' · ');
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({
+const MessageItemComponent: React.FC<MessageItemProps> = ({
   message,
   isStreaming = false,
   onRetry,
@@ -179,6 +179,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     </div>
   );
 };
+
+export const MessageItem = memo(MessageItemComponent);
 
 // Backwards compatibility alias
 export const ChatMessageItem = MessageItem;

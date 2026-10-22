@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -32,10 +32,11 @@ import {
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { DailyUsageTable } from '../components/DailyUsageTable';
-import { LoginTerminal } from '../components/LoginTerminal';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { useLocale } from '../context/LocaleContext';
 import { Profile } from '../types/api';
+
+const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
 type Provider = 'agy' | 'codex' | 'claude';
 const providers: Array<{ id: Provider; title: string; subtitleKey: string; color: string }> = [

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { getProjects, getStatus, getTasks } from '../api/client';
@@ -25,7 +25,7 @@ export interface KanbanColumnProps {
   search: string;
 }
 
-export const KanbanColumn: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
+const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
   const { t } = useLocale();
   // Dùng chung cache ['status'] giữa các cột, chỉ để hiện dung lượng đĩa trong nhãn "Chờ ổ đĩa".
   const { data: hubStatus } = useQuery({
@@ -214,6 +214,8 @@ export const KanbanColumn: React.FC<KanbanColumnProps> = ({ statusKey, tasks, se
   );
 };
 
+export const KanbanColumn = memo(KanbanColumnComponent);
+
 export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
@@ -234,7 +236,7 @@ export const TasksPage: React.FC = () => {
     refetchInterval: 5000,
   });
 
-  const grouped = groupTasksByStatus(tasks);
+  const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
 
   const dagTasks = useMemo(() => {
     let list = tasks;
