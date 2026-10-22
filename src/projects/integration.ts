@@ -307,7 +307,7 @@ export function getIntegrationStatus(project: ProjectLike, hubHome: string): Int
 /**
  * Remove integration worktree (without deleting the branch).
  */
-export function removeIntegrationWorktree(project: { id: string; path?: string | null }, hubHome: string): string | null {
+export function removeIntegrationWorktree(project: { id: string; path?: string | null; settings?: string | null }, hubHome: string): string | null {
   const integrationPath = getIntegrationPath({ ...project, defaultBranch: '' }, hubHome);
   if (!fs.existsSync(integrationPath)) return null;
   if (!isSafeIntegrationPath(integrationPath, hubHome, project)) {

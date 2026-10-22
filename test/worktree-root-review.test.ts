@@ -2,9 +2,10 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorktreeService } from '../src/worktrees/index.js';
-import { projectWorktreeRoots } from '../src/projects/paths.js';
+import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../src/projects/paths.js';
+import { ensureIntegrationWorktree, getIntegrationPath, removeIntegrationWorktree } from '../src/projects/integration.js';
 
 const dirs: string[] = [];
 
@@ -62,5 +63,46 @@ describe('configured worktree root review regressions', () => {
       branch: 'agenthub/logs',
       baseRef: 'main',
     })).toThrow(/tên dành riêng/);
+  });
+
+  it('creates and removes the integration worktree under a configured root', () => {
+    const fixture = repoFixture();
+    const project = { ...fixture.project, defaultBranch: 'main' };
+    expect(getIntegrationPath(project, fixture.hubHome)).toBe(path.join(fixture.configuredRoot, '.integration'));
+    expect(ensureIntegrationWorktree(project, fixture.hubHome)).toBe(path.join(fixture.configuredRoot, '.integration'));
+    expect(removeIntegrationWorktree(project, fixture.hubHome)).toBeNull();
+    expect(fs.existsSync(path.join(fixture.configuredRoot, '.integration'))).toBe(false);
+  });
+
+  it('refuses to remove an integration symlink that escapes the configured root', () => {
+    const fixture = repoFixture();
+    const outside = path.join(fixture.root, 'outside');
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(fixture.configuredRoot, '.integration'));
+    const project = { ...fixture.project, defaultBranch: 'main' };
+    expect(removeIntegrationWorktree(project, fixture.hubHome)).toMatch(/không an toàn/);
+    expect(fs.existsSync(outside)).toBe(true);
+  });
+
+  it('validates dangerous, unignored, and ignored roots without using the real HOME', () => {
+    const fixture = repoFixture();
+    const fakeHome = path.join(fixture.root, 'home');
+    fs.mkdirSync(fakeHome);
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    try {
+      const check = (root: string) => expect(() => validateProjectWorktreeRoot(root, fixture.repo, path.join(fixture.root, 'other-hub'))).toThrow();
+      check(fakeHome);
+      check(path.join(fixture.root, 'other-hub'));
+      check(path.parse(fixture.root).root);
+      check(fixture.root);
+      check(path.join(fixture.repo, 'unignored-root'));
+
+      fs.writeFileSync(path.join(fixture.repo, '.gitignore'), 'ignored-root/\n');
+      const ignoredRoot = path.join(fixture.repo, 'ignored-root');
+      fs.mkdirSync(ignoredRoot);
+      expect(() => validateProjectWorktreeRoot(ignoredRoot, fixture.repo, path.join(fixture.root, 'other-hub'))).not.toThrow();
+    } finally {
+      homedir.mockRestore();
+    }
   });
 });
