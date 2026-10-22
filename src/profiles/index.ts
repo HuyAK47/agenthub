@@ -369,9 +369,9 @@ export class ProfileService {
   /**
    * Mark quota for a profile and all profiles with the same email
    */
-  markQuota(profileName: string, family: string, resetSeconds: number, reason?: string): void {
+  markQuota(profileName: string, family: string, resetSeconds: number, reason?: string): boolean {
     const until = Math.floor(Date.now() / 1000) + resetSeconds;
-    this.quotaMarkRepo.mark(profileName, family, until, reason);
+    const shouldEmit = this.quotaMarkRepo.mark(profileName, family, until, reason);
 
     // Propagate to profiles with same email
     const profile = this.profileRepo.get(profileName);
@@ -383,6 +383,7 @@ export class ProfileService {
         }
       }
     }
+    return shouldEmit;
   }
 
   /**

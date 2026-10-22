@@ -19,9 +19,12 @@ function alive(pid: number): boolean {
 }
 
 describe('priority helpers', () => {
-  it('wraps commands with nice on linux', () => {
+  it('wraps commands with nice on linux and macos', () => {
     const [exe, args] = lowPriority('/bin/echo', ['hi']);
-    if (process.platform === 'linux' && fs.existsSync('/usr/bin/nice')) {
+    const usesNice =
+      (process.platform === 'linux' && fs.existsSync('/usr/bin/nice')) ||
+      (process.platform === 'darwin' && process.env.AGENTHUB_NO_NICE !== '1');
+    if (usesNice) {
       expect(exe).toMatch(/nice$/);
       expect(args).toContain('/bin/echo');
       expect(args.at(-1)).toBe('hi');

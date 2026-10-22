@@ -152,7 +152,11 @@ describe('profile locks', () => {
   it('detects an external flock-held slot', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-lock-'));
     const lock = path.join(dir, 'g1.lock');
-    const child = spawn('flock', [lock, 'sleep', '5'], { stdio: 'ignore' });
+    fs.writeFileSync(lock, '');
+    const [tool, args] = process.platform === 'darwin'
+      ? ['/usr/bin/lockf', ['-k', lock, 'sleep', '5']]
+      : ['flock', [lock, 'sleep', '5']];
+    const child = spawn(tool, args, { stdio: 'ignore' });
     const service = new ProfileLockService(dir);
     try {
       await vi.waitFor(() => {
@@ -160,7 +164,7 @@ describe('profile locks', () => {
         expect(slots).toMatchObject({ slotsUsed: 1, slotsTotal: 2, busy: false });
       }, { timeout: 3000 });
     } finally {
-      child.kill('SIGTERM');
+      try { child.kill('SIGTERM'); } catch { /* ignore */ }
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -13,6 +13,8 @@ Mỗi lần được đánh thức, bạn nhận **một sự kiện** kèm ản
 | `task.review_ready` | Duyệt task (mục 2). Đạt thì `hub_review approved, merge:true`. Chưa đạt thì `changes_requested` kèm nhận xét cụ thể. |
 | `task.failed` / `task.blocked` | Đọc log (`hub_task_log`). Lỗi tạm thời (mạng, quota, máy quá tải) thì `hub_retry`. Đề bài sai hoặc thiếu thì sửa đề (`hub_update_task`) rồi retry. Lỗi môi trường mà bạn không sửa được thì báo người dùng. |
 | `merge.conflict` / merge trả 409, 422 | Xem mục 3. |
+| `ci.failed` | Đọc annotation, so với task đang chạy (tránh trùng: nếu đã có task đang sửa đúng test đó thì ghi chú vào task đó), nếu chưa có thì tạo task sửa với đề bài kèm annotation; test chập chờn (đạt khi chạy lại) → tạo task ổn định test, không nới assert. |
+| `ci.passed` | Sau chuỗi đỏ → báo người dùng một dòng. |
 | Tin nhắn của người dùng | Trả lời. Nếu là yêu cầu việc mới thì lên kế hoạch (mục 4). |
 | `batch.dispatched`, hàng đợi trống | Không cần làm gì. Gửi bản tóm tắt nếu đã đến lịch. |
 | Hết quota, máy quá tải | Thường là không làm gì: hub tự xử lý. Chỉ báo người dùng khi kéo dài hơn 1 giờ. |

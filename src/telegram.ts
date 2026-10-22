@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo } from './db/index.js';
+import { BrainDirectiveRepo, TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo, CiRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 import { planningRule } from './chat/claude.js';
@@ -21,6 +21,7 @@ import {
 } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
+import { commandPermissionLabel } from './chat/permissions.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -128,6 +129,8 @@ export interface TelegramServiceOptions {
   tokenOverride?: string;
   chatService?: ChatService;
   brainSession?: boolean;
+  directiveRepo?: BrainDirectiveRepo;
+  ciRepo?: CiRepo;
 }
 
 export type PendingChatState =
@@ -224,6 +227,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'stop', description: 'Dừng câu trả lời đang chạy' },
   { command: 'compact', description: 'Nén ngữ cảnh phiên chat' },
   { command: 'help', description: 'Hướng dẫn sử dụng' },
+  { command: 'rules', description: 'Quy tắc quyền đã cấp: /rules · /rules del <số>' },
 ];
 
 export class TelegramBotService {
@@ -234,12 +238,15 @@ export class TelegramBotService {
   private projectRepo: ProjectRepo;
   private profileRepo?: ProfileRepo;
   private quotaMarkRepo?: QuotaMarkRepo;
+  private ciRepo?: CiRepo;
+  private lastSentCi = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
   private sleepFn: (ms: number) => Promise<void>;
   private execFileFn: GitDiffFn;
   private chatService?: ChatService;
   private brainSession: boolean;
+  private directiveRepo?: BrainDirectiveRepo;
   private decisionTracker = new DecisionTracker();
   private quietHoursQueue: Array<{ text: string; timestamp: number }> = [];
   private lastDigestDate = '';
@@ -274,6 +281,11 @@ export class TelegramBotService {
   private chatReplies = new Map<string, ChatReplyState>();
   /** Telegram messages waiting for a busy session; each gets the reply of its queued turn. */
   private queuedChatTurns = new Map<string, Array<{ chatId: number; messageId: number }>>();
+  private brainQuestions = new Map<string, Map<string, {
+    chatId: number;
+    userMessageId?: string;
+    assistantMessageId?: string;
+  }>>();
   private chatSessions = new Map<number, string>();
   private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string }>();
   /** Per-chat selected project (persisted in config.telegram.chats). */
@@ -287,12 +299,14 @@ export class TelegramBotService {
     this.projectRepo = opts.projectRepo;
     this.profileRepo = opts.profileRepo || (opts.service as unknown as { profileRepo?: ProfileRepo })?.profileRepo;
     this.quotaMarkRepo = opts.quotaMarkRepo;
+    this.ciRepo = opts.ciRepo;
     this.fetchFn = opts.fetch || globalThis.fetch;
     this.now = opts.now || (() => Date.now());
     this.sleepFn = opts.sleep || opts.sleepFn || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
     this.chatService = opts.chatService;
     this.brainSession = opts.brainSession === true;
+    this.directiveRepo = opts.directiveRepo;
 
     if (opts.tokenOverride) {
       this.token = opts.tokenOverride;
@@ -516,6 +530,7 @@ export class TelegramBotService {
       quotaMarkRepo: this.quotaMarkRepo,
       eventRepo: (this.service as unknown as { eventRepo?: EventRepo })?.eventRepo,
       decisionTracker: this.decisionTracker,
+      ciRepo: this.ciRepo,
       now: () => this.now(),
       accumulatedQuietHoursMessages: this.quietHoursQueue.map((q) => q.text),
       port: this.config.port,
@@ -698,7 +713,7 @@ export class TelegramBotService {
             await this.handleUpdate(update);
           }
         }
-      } catch (err: unknown) {
+      } catch (err) {
         if (!this.running || (err instanceof Error && err.name === 'AbortError')) {
           break;
         }
@@ -937,7 +952,9 @@ export class TelegramBotService {
           break;
         }
         {
-          const sessionId = `telegram:${chatId}:${crypto.randomUUID()}`;
+          const sessionId = this.brainSession && this.config.assistant.enabled
+            ? `assistant:${this.selectedProject.get(chatId) || 'global'}`
+            : `telegram:${chatId}:${crypto.randomUUID()}`;
           this.chatSessions.set(chatId, sessionId);
           this.chatService.getOrCreateSession(sessionId, { title: 'Cuộc trò chuyện Telegram' });
         }
@@ -956,6 +973,10 @@ export class TelegramBotService {
         await this.sendMessage(chatId, this.renderHelp());
         break;
 
+      case '/rules':
+        await this.handlePermissionRules(chatId, args);
+        break;
+
       case '/use':
         await this.handleUseCommand(chatId, argStr);
         break;
@@ -968,8 +989,16 @@ export class TelegramBotService {
         await this.handleDigestCommand(chatId);
         break;
 
+      case '/ci':
+        await this.handleCiCommand(chatId, argStr);
+        break;
+
       case '/brain':
         await this.handleBrainCommand(chatId, argStr);
+        break;
+
+      case '/directives':
+        await this.handleDirectivesCommand(chatId, argStr);
         break;
 
       case '/tasks':
@@ -1140,6 +1169,28 @@ export class TelegramBotService {
     await this.sendMessage(chatId, 'Cú pháp: /brain mode off|suggest|auto\nTheo dự án: /brain mode <dự án> off|suggest|auto|external|inherit');
   }
 
+  private async handleDirectivesCommand(chatId: number, argStr: string): Promise<void> {
+    if (!this.directiveRepo) { await this.sendMessage(chatId, 'Chỉ thị chưa khả dụng.'); return; }
+    const projectId = this.selectedProject.get(chatId) || null;
+    const parts = argStr.trim().split(/\s+/).filter(Boolean);
+    if (parts[0] === 'del' || parts[0] === 'remove') {
+      const id = parts[1];
+      if (!id || !this.directiveRepo.remove(id)) { await this.sendMessage(chatId, 'Không tìm thấy chỉ thị.'); return; }
+      await this.sendMessage(chatId, '✓ Đã xoá chỉ thị.');
+      return;
+    }
+    if (parts[0] === 'add') {
+      const text = argStr.slice(3).trim();
+      if (!text) { await this.sendMessage(chatId, 'Cú pháp: /directives add <nội dung>'); return; }
+      this.directiveRepo.add({ id: crypto.randomUUID(), projectId, text, createdBy: 'telegram' });
+      this.eventBus.emit('brain.directive_added', projectId || undefined, { projectId, text });
+      await this.sendMessage(chatId, '✓ Đã thêm chỉ thị cho bộ não.');
+      return;
+    }
+    const rows = this.directiveRepo.list(projectId);
+    await this.sendMessage(chatId, rows.length ? rows.map((row) => `• <code>${this.escapeHtml(row.id)}</code>: ${this.escapeHtml(row.text)}`).join('\n') : 'Chưa có chỉ thị. Dùng /directives add <nội dung>.');
+  }
+
   private async handleUseCommand(chatId: number, argStr: string): Promise<void> {
     const trimmed = argStr.trim();
     if (!trimmed) {
@@ -1243,8 +1294,17 @@ export class TelegramBotService {
   }
 
   private sessionIdForChat(chatId: number): string {
-    // If a project is selected via /use, route to that project's brain or chat session
+    // Assistant sessions are independent from resident brain turns, so user messages never queue behind events.
     const selectedProjectId = this.selectedProject.get(chatId);
+    if (this.brainSession && this.config.assistant.enabled) {
+      if (selectedProjectId) {
+        const project = this.projectRepo.get(selectedProjectId);
+        const mode = effectiveBrainMode(selectedProjectId, project, this.config.brain);
+        if (mode === 'external' || mode === 'off') return `telegram:${chatId}:${selectedProjectId}`;
+        return `assistant:${selectedProjectId}`;
+      }
+      return 'assistant';
+    }
     if (selectedProjectId) {
       const project = this.projectRepo.get(selectedProjectId);
       const mode = effectiveBrainMode(selectedProjectId, project, this.config.brain);
@@ -1281,13 +1341,23 @@ export class TelegramBotService {
     if (!this.chatService) throw new Error('Chat Claude chưa được bật.');
     const sessionId = this.sessionIdForChat(chatId);
     const isBrain = sessionId === 'brain' || sessionId.startsWith('brain:');
+    const isAssistant = sessionId === 'assistant' || sessionId.startsWith('assistant:');
     const selectedProjId = this.selectedProject.get(chatId);
-    const projectId = sessionId.startsWith('brain:')
-      ? sessionId.slice('brain:'.length)
+    const projectId = sessionId.startsWith('brain:') || sessionId.startsWith('assistant:')
+      ? sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length) === 'global'
+        ? null
+        : sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length)
       : (selectedProjId || null);
+    if (isAssistant) {
+      const brainId = projectId ? `brain:${projectId}` : 'brain';
+      this.chatService.getOrCreateSession(brainId, {
+        title: 'Bộ não', kind: 'brain', projectId, model: this.config.brain.model,
+      });
+    }
     this.chatService.getOrCreateSession(sessionId, {
-      title: isBrain ? 'Bộ não' : 'Cuộc trò chuyện Telegram',
-      kind: isBrain ? 'brain' : 'chat',
+      title: isBrain ? 'Bộ não' : isAssistant ? 'Trợ lý' : 'Cuộc trò chuyện Telegram',
+      kind: isBrain ? 'brain' : isAssistant ? 'assistant' : 'chat',
+      model: isAssistant ? this.config.assistant.model : undefined,
       projectId,
     });
     let initial: unknown;
@@ -1295,7 +1365,7 @@ export class TelegramBotService {
       initial = await this.sendMessage(chatId, placeholder);
       const messageId = this.telegramMessageId(initial);
       if (messageId === null) throw new Error('Telegram không trả về message_id');
-      const result = this.chatService.sendMessage(sessionId, text, { queueIfBusy: true });
+      const result = this.chatService.sendMessage(sessionId, text, { queueIfBusy: true, ...(isAssistant ? { telegramChatId: chatId } : {}) });
       if (result?.queued) {
         // The session (usually a brain busy with an event turn) answers this message right after the
         // current turn; keep the placeholder and attach the reply to it when the queued turn starts.
@@ -1331,7 +1401,26 @@ export class TelegramBotService {
     if (!this.chatService) return;
     const data = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId : taskId;
+    if (type === 'brain.question_asked' && typeof data.questionId === 'string' && typeof data.sourceChatId === 'number' && sessionId) {
+      const questions = this.brainQuestions.get(sessionId) || new Map();
+      questions.set(data.questionId, {
+        chatId: data.sourceChatId,
+        ...(typeof data.userMessageId === 'string' ? { userMessageId: data.userMessageId } : {}),
+        ...(typeof data.assistantMessageId === 'string' ? { assistantMessageId: data.assistantMessageId } : {}),
+      });
+      this.brainQuestions.set(sessionId, questions);
+      return;
+    }
     if (!sessionId) return;
+    if (type === 'chat.message' && data.role === 'user' && typeof data.content === 'string' && typeof data.messageId === 'string') {
+      const questionId = data.content.match(/CÂU HỎI TỪ TRỢ LÝ \[([^\]]+)\]/)?.[1];
+      const questions = questionId ? this.brainQuestions.get(sessionId) : undefined;
+      const question = questionId ? questions?.get(questionId) : undefined;
+      if (question) {
+        question.userMessageId = data.messageId;
+        if (typeof data.assistantMessageId === 'string') question.assistantMessageId = data.assistantMessageId;
+      }
+    }
     if (type === 'chat.message' && data.role === 'user' && data.fromQueue === true) {
       const next = this.queuedChatTurns.get(sessionId)?.shift();
       if (next) {
@@ -1344,6 +1433,19 @@ export class TelegramBotService {
     const reply = this.chatReplies.get(sessionId);
     const pending = this.pendingAutoTasks.get(sessionId);
     if (type === 'chat.done') {
+      const questions = this.brainQuestions.get(sessionId);
+      const questionEntry = typeof data.messageId === 'string'
+        ? [...(questions?.entries() || [])].find(([, question]) => question.assistantMessageId === data.messageId)
+        : undefined;
+      if (questionEntry) {
+        const [questionId, question] = questionEntry;
+        questions?.delete(questionId);
+        if (questions?.size === 0) this.brainQuestions.delete(sessionId);
+        try {
+          const answer = this.chatService.listMessages(sessionId, 5).messages.filter((m) => m.role === 'assistant').pop()?.content || 'Bộ não đã trả lời.';
+          void this.sendMessage(question.chatId, `🧠 <b>Bộ não trả lời</b>\n${this.escapeHtml(answer)}`);
+        } catch { /* best effort */ }
+      }
       this.pendingAutoTasks.delete(sessionId);
       if (reply) void this.finishChatReply(sessionId, false);
       return;
@@ -1445,13 +1547,42 @@ export class TelegramBotService {
     const id = typeof data.id === 'string' ? data.id : undefined;
     if (!id) return;
     const tool = typeof data.toolName === 'string' ? data.toolName : 'công cụ';
-    await this.sendMessage(chatId, `🔐 Claude cần quyền dùng <b>${this.escapeHtml(tool)}</b>.`, {
+    let input: Record<string, unknown> = {};
+    try { input = typeof data.input === 'string' ? JSON.parse(data.input) as Record<string, unknown> : (data.input as Record<string, unknown> || {}); } catch { /* malformed input is still shown as a generic request */ }
+    const command = typeof input.command === 'string' ? input.command : undefined;
+    const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+    const session = this.chatService?.listSessions().find((item) => item.id === sessionId);
+    const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
+    const label = command ? commandPermissionLabel(command) : tool;
+    const text = [
+      `🔐 <b>Dự án: ${this.escapeHtml(project ? `${project.name} (${project.id})` : 'Không gắn dự án')}</b>`,
+      `Phiên: <b>${this.escapeHtml(session ? `${session.title || 'Phiên chat'} (${session.id})` : sessionId || 'Phiên chat')}</b> — Claude cần quyền`,
+      `Công cụ: <b>${this.escapeHtml(tool)}</b>`,
+      command ? `<pre>${this.escapeHtml(command.slice(0, 500))}</pre>` : '',
+      typeof input.cwd === 'string' ? `Thư mục: <code>${this.escapeHtml(input.cwd)}</code>` : '',
+      typeof input.file_path === 'string' ? `Tệp: <code>${this.escapeHtml(input.file_path)}</code>` : '',
+    ].filter(Boolean).join('\n');
+    await this.sendMessage(chatId, text, {
       inline_keyboard: [[
         { text: 'Cho phép', callback_data: `permission:allow:${id}` },
-        { text: 'Luôn cho phép', callback_data: `permission:always:${id}` },
+        { text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` },
         { text: 'Từ chối', callback_data: `permission:deny:${id}` },
       ]],
     });
+  }
+
+  private async handlePermissionRules(chatId: number, args: string[]): Promise<void> {
+    if (!this.chatService) return;
+    const rules = this.chatService.listPermissionRules();
+    if (args[0]?.toLowerCase() === 'del') {
+      const index = Number(args[1]);
+      const rule = Number.isInteger(index) && index > 0 ? rules[index - 1] : undefined;
+      if (!rule || !this.chatService.deletePermissionRule(rule.id)) { await this.sendMessage(chatId, 'Không tìm thấy quy tắc. Dùng /rules để xem danh sách.'); return; }
+      await this.sendMessage(chatId, `🗑️ Đã xoá quy tắc #${index}.`); return;
+    }
+    if (!rules.length) { await this.sendMessage(chatId, 'Chưa có quyền luôn cho phép nào.'); return; }
+    const lines = rules.map((rule, i) => `${i + 1}. <code>${this.escapeHtml(rule.toolName)} ${this.escapeHtml(rule.pattern)}</code> (${rule.scope})`);
+    await this.sendMessage(chatId, `🔐 <b>Quyền đã cấp</b>\n${lines.join('\n')}\n\nDùng <code>/rules del &lt;số&gt;</code> để xoá.`);
   }
 
   private telegramMessageId(value: unknown): number | null {
@@ -1530,10 +1661,17 @@ export class TelegramBotService {
       try {
         this.chatService.decidePermission(taskIdOrParam, decision);
         await this.answerCallbackQuery(query.id, decision === 'deny' ? 'Đã từ chối.' : 'Đã cho phép.');
-        await this.sendMessage(chatId, decision === 'deny' ? '🚫 Đã từ chối quyền công cụ.' : '✅ Đã cấp quyền công cụ.');
-      } catch (err: unknown) {
+        if (query.message) {
+          const result = decision === 'deny' ? '🚫 Đã từ chối.' : decision === 'allow_always' ? '✅ Đã luôn cho phép.' : '✅ Đã cho phép.';
+          const previousText = this.escapeHtml(query.message.text || '');
+          await this.editMessage(chatId, query.message.message_id, `${previousText}\n\n<b>${result}</b>`, { inline_keyboard: [] });
+        }
+      } catch {
         await this.answerCallbackQuery(query.id, 'Yêu cầu đã hết hạn.');
-        await this.sendMessage(chatId, `⚠️ ${this.escapeHtml(err instanceof Error ? err.message : String(err))}`);
+        if (query.message) {
+          const previousText = this.escapeHtml(query.message.text || '');
+          await this.editMessage(chatId, query.message.message_id, `${previousText}\n\n⚠️ Yêu cầu đã hết hạn.`, { inline_keyboard: [] });
+        }
       }
       return;
     }
@@ -1999,6 +2137,143 @@ export class TelegramBotService {
       [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
     ];
     await this.sendMessage(chatId, digest.text, { inline_keyboard: keyboard });
+  }
+
+  private async handleCiCommand(chatId: number, argStr: string): Promise<void> {
+    const target = argStr.trim();
+    const projects = this.projectRepo.getAll();
+
+    if (!target) {
+      const selected = this.selectedProject.get(chatId);
+      if (selected) {
+        await this.renderProjectCiStatus(chatId, selected);
+        return;
+      }
+
+      // No argument and no selected project: list all projects
+      if (projects.length === 0) {
+        await this.sendMessage(chatId, 'ℹ️ Không có dự án nào trong hệ thống.');
+        return;
+      }
+
+      let msg = '🚦 <b>Trạng thái CI các dự án:</b>\n\n';
+      for (const p of projects) {
+        const run = this.ciRepo?.getLatest(p.id);
+        let icon = '⚪️';
+        let statusSummary = 'Chưa có dữ liệu';
+        if (run) {
+          if (run.status !== 'completed') {
+            icon = '🟡';
+            statusSummary = `Đang chạy (${run.workflow})`;
+          } else if (run.conclusion === 'success') {
+            icon = '🟢';
+            statusSummary = `Thành công (${run.workflow} @ ${run.sha.slice(0, 7)})`;
+          } else if (run.conclusion === 'failure') {
+            icon = '🔴';
+            statusSummary = `Thất bại (${run.workflow} @ ${run.sha.slice(0, 7)})`;
+          } else {
+            statusSummary = `${run.conclusion || run.status} (${run.workflow})`;
+          }
+        }
+        msg += `• <b>${this.escapeHtml(p.name)}</b> (<code>${p.id}</code>): ${icon} ${this.escapeHtml(statusSummary)}\n`;
+      }
+      msg += '\nGõ <code>/ci &lt;dự án&gt;</code> để xem chi tiết run và job lỗi.';
+      await this.sendMessage(chatId, msg);
+      return;
+    }
+
+    // Target provided
+    let proj = this.projectRepo.get(target);
+    if (!proj) {
+      proj = projects.find(
+        (p) =>
+          p.name.toLowerCase() === target.toLowerCase() ||
+          p.id.toLowerCase() === target.toLowerCase(),
+      );
+    }
+    if (!proj) {
+      await this.sendMessage(chatId, `❌ Không tìm thấy dự án <b>${this.escapeHtml(target)}</b>.`);
+      return;
+    }
+
+    await this.renderProjectCiStatus(chatId, proj.id);
+  }
+
+  private async renderProjectCiStatus(chatId: number, projectId: string): Promise<void> {
+    const proj = this.projectRepo.get(projectId);
+    if (!proj) {
+      await this.sendMessage(chatId, `❌ Không tìm thấy dự án <code>${this.escapeHtml(projectId)}</code>.`);
+      return;
+    }
+
+    const run = this.ciRepo?.getLatest(proj.id);
+    if (!run) {
+      await this.sendMessage(
+        chatId,
+        `ℹ️ Dự án <b>${this.escapeHtml(proj.name)}</b> (<code>${proj.id}</code>) chưa có dữ liệu CI nào được ghi nhận.`,
+      );
+      return;
+    }
+
+    let statusIcon = '⚪️';
+    let statusText = run.status;
+    if (run.status !== 'completed') {
+      statusIcon = '🟡';
+      statusText = 'Đang chạy';
+    } else if (run.conclusion === 'success') {
+      statusIcon = '🟢';
+      statusText = 'Thành công (Passed)';
+    } else if (run.conclusion === 'failure') {
+      statusIcon = '🔴';
+      statusText = 'Thất bại (Failed)';
+    } else {
+      statusText = run.conclusion || run.status;
+    }
+
+    let msg = `🚦 <b>Trạng thái CI · ${this.escapeHtml(proj.name)}</b> (<code>${proj.id}</code>)\n\n`;
+    msg += `• Trạng thái: ${statusIcon} <b>${this.escapeHtml(statusText)}</b>\n`;
+    msg += `• Workflow: <b>${this.escapeHtml(run.workflow)}</b>\n`;
+    if (run.sha) msg += `• Commit: <code>${this.escapeHtml(run.sha.slice(0, 7))}</code>\n`;
+    if (run.completedAt) msg += `• Thời gian: ${this.escapeHtml(run.completedAt)}\n`;
+
+    let jobs: Array<{
+      id?: number;
+      name?: string;
+      conclusion?: string;
+      annotations?: Array<{ message?: string; path?: string; start_line?: number }>;
+    }> = [];
+    try {
+      jobs = JSON.parse(run.jobs);
+    } catch {
+      jobs = [];
+    }
+
+    const failedJobs = jobs.filter(
+      (j) => j.conclusion === 'failure' || (j.annotations && j.annotations.length > 0),
+    );
+    if (failedJobs.length > 0) {
+      msg += `\n❌ <b>Job lỗi (${failedJobs.length}):</b>\n`;
+      for (const j of failedJobs) {
+        msg += `\n• <b>${this.escapeHtml(j.name || 'Job')}</b>:`;
+        if (j.annotations && j.annotations.length > 0) {
+          for (const a of j.annotations.slice(0, 5)) {
+            const loc = a.path ? ` (${this.escapeHtml(a.path)}${a.start_line ? `:${a.start_line}` : ''})` : '';
+            msg += `\n  - ${this.escapeHtml(a.message || 'Lỗi')}${loc}`;
+          }
+          if (j.annotations.length > 5) {
+            msg += `\n  <i>... và ${j.annotations.length - 5} chú thích lỗi khác.</i>`;
+          }
+        } else {
+          msg += ` Thất bại`;
+        }
+      }
+    }
+
+    const keyboard: InlineKeyboardButton[][] = [];
+    if (run.url) {
+      keyboard.push([{ text: '🔗 Xem run trên GitHub', url: run.url }]);
+    }
+    await this.sendMessage(chatId, msg, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
   }
 
   private brainLabel(value: { state?: string; stale?: boolean }): string {
@@ -2658,6 +2933,8 @@ export class TelegramBotService {
         type === 'claude.quota_exhausted' ||
         type === 'hub.restart_failed' ||
         type === 'system.error' ||
+        type === 'ci.failed' ||
+        type === 'ci.passed' ||
         allExhausted;
 
       if (!isAllowedInAuto) {
@@ -2968,6 +3245,72 @@ export class TelegramBotService {
         this.broadcastMessage(`🔑 <b>Tài khoản ${this.escapeHtml(name)}</b> cần đăng nhập lại.`);
         break;
       }
+
+      case 'ci.failed': {
+        const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || null;
+        const workflow = (typeof p.workflow === 'string' ? p.workflow : '') || 'CI';
+        const sha = typeof p.sha === 'string' ? p.sha.slice(0, 7) : '';
+        const throttleKey = `ci:${projId}:${workflow}`;
+        const last = this.lastSentCi.get(throttleKey) || 0;
+        if (now - last < 3600_000) {
+          break;
+        }
+        this.lastSentCi.set(throttleKey, now);
+
+        const prefix = this.projectPrefix(projId);
+        const jobs = Array.isArray(p.jobs)
+          ? (p.jobs as Array<{ name?: string; annotations?: Array<{ message?: string; path?: string; start_line?: number }> }>)
+          : [];
+        const annotations = Array.isArray(p.annotations)
+          ? (p.annotations as Array<{ message?: string; path?: string; start_line?: number }>)
+          : [];
+
+        let text = `${prefix}⚠️ <b>CI thất bại: ${this.escapeHtml(workflow)}</b>`;
+        if (sha) text += ` (<code>${this.escapeHtml(sha)}</code>)`;
+        if (jobs.length > 0) {
+          text += '\n\n<b>Job lỗi:</b>\n';
+          for (const j of jobs) {
+            text += `• <b>${this.escapeHtml(j.name || 'Job')}</b>\n`;
+          }
+        }
+        if (annotations.length > 0) {
+          text += '\n<b>Chi tiết lỗi:</b>\n';
+          for (const a of annotations.slice(0, 5)) {
+            const loc = a.path ? ` (${this.escapeHtml(a.path)}${a.start_line ? `:${a.start_line}` : ''})` : '';
+            text += `• ${this.escapeHtml(a.message || 'Lỗi')}${loc}\n`;
+          }
+          if (annotations.length > 5) {
+            text += `<i>... và ${annotations.length - 5} chú thích lỗi khác.</i>\n`;
+          }
+        }
+
+        const keyboard: InlineKeyboardButton[][] = [];
+        if (typeof p.url === 'string' && p.url) {
+          keyboard.push([{ text: '🔗 Xem trên GitHub', url: p.url }]);
+        }
+        this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
+        break;
+      }
+
+      case 'ci.passed': {
+        if (p.recoveredFromFailure !== true && p.previousConclusion !== 'failure') {
+          break;
+        }
+        const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || null;
+        const workflow = (typeof p.workflow === 'string' ? p.workflow : '') || 'CI';
+        const sha = typeof p.sha === 'string' ? p.sha.slice(0, 7) : '';
+        const prefix = this.projectPrefix(projId);
+
+        let text = `${prefix}🟢 <b>CI đã xanh: ${this.escapeHtml(workflow)}</b>`;
+        if (sha) text += ` (<code>${this.escapeHtml(sha)}</code>)`;
+
+        const keyboard: InlineKeyboardButton[][] = [];
+        if (typeof p.url === 'string' && p.url) {
+          keyboard.push([{ text: '🔗 Xem trên GitHub', url: p.url }]);
+        }
+        this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
+        break;
+      }
     }
   }
 
@@ -3228,6 +3571,10 @@ export class TelegramBotService {
         return minimal ? `${prefix}Task bị chặn` : `${prefix}Task ${this.resolveTaskTitle(taskId, p)} bị chặn`;
       case 'batch.created':
         return minimal ? `${prefix}Đợt task mới` : `${prefix}Đợt task mới: ${p?.title || 'Kế hoạch đề xuất'}`;
+      case 'ci.failed':
+        return minimal ? `${prefix}CI thất bại` : `${prefix}CI thất bại: ${p?.workflow || 'CI'}`;
+      case 'ci.passed':
+        return minimal ? `${prefix}CI đã xanh` : `${prefix}CI đã xanh: ${p?.workflow || 'CI'}`;
       case 'quota.exhausted':
         return `Hồ sơ ${p?.profile || p?.profileName || 'tài khoản'} hết quota ${p?.family || ''}`;
       default:
@@ -3241,6 +3588,7 @@ export class TelegramBotService {
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
+/ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi
 /brain - Xem Claude đang làm gì và bộ não từng dự án · /brain mode [dự án] off|suggest|auto|external|inherit
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard

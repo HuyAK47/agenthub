@@ -93,7 +93,8 @@ export const en: typeof vi = {
     loadNormal: 'Load normal',
     overlapWarningTitle: 'File Overlap Warnings',
     overlapWarningDesc: 'There are {count} file overlap warnings among running tasks:',
-    brains: 'Brains', brainMode: 'Mode', brainStatewaiting_limit: 'waiting for quota reset', brainStatewaiting_permission: 'waiting for your permission', brainMode_off: 'off', brainMode_suggest: 'suggest', brainMode_auto: 'auto', brainMode_external: 'external Claude', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
+    brains: 'Brains', assistant: 'Assistant', assistantWorking: 'answering', assistantReady: 'ready', openAssistantChat: 'Open assistant', brainMode: 'Mode', brainStatewaiting_limit: 'waiting for quota reset', brainStatewaiting_permission: 'waiting for your permission', brainMode_off: 'off', brainMode_suggest: 'suggest', brainMode_auto: 'auto', brainMode_external: 'external Claude', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
+    ciCardTitle: 'CI', ciCardSubtitle: 'Latest GitHub Actions CI status', ciCardNoData: 'No CI data recorded', ciPassed: 'Passed', ciFailed: 'Failed', ciRunning: 'Running',
   },
   tasks: {
     title: 'Task Management',
@@ -469,6 +470,7 @@ export const en: typeof vi = {
     checksHint: 'Automated checks before review (JSON array)',
     hooksHint: 'Commands executed after worktree removal (optional)',
     settings: 'Settings', saveSettings: 'Save settings', saveSettingsError: 'Failed to save project settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
+    ciLabel: 'GitHub Actions CI Watch', ciEnabled: 'Enable CI Watch', ciBranch: 'CI Branch', ciStatusPassed: 'CI: Passed', ciStatusFailed: 'CI: Failed', ciStatusRunning: 'CI: Running', ciViewRun: 'View run on GitHub', ciNoRun: 'No runs recorded',
   },
   settings: {
     title: 'System Settings',
@@ -556,7 +558,7 @@ export const en: typeof vi = {
     hasTokenBadge: 'Telegram token ready',
   },
   extra: {
-    claudeVersion: 'Claude version in use', systemBrain: 'System brain', projectBrains: 'Project brains',
+    claudeVersion: 'Claude version in use', systemBrain: 'System brain', projectBrains: 'Project brains', assistantChats: 'Assistant',
     connected: 'Connected', disconnected: 'Disconnected', connectionAria: 'Connection status', quickPrompts: 'Quick prompts:', claudeAnswering: 'Claude is answering...', chatPlaceholder: 'Type a message... (Enter to send, Shift+Enter for a new line)', stopResponse: 'Stop response', stop: 'Stop', sendMessage: 'Send message', newChat: 'New conversation', noChats: 'No conversations yet. Click the button above to start!', chat: 'Conversation', deleteSession: 'Delete session', busySession: 'Cannot delete a busy session', fullMode: 'Full', safeMode: 'Safe', answering: 'answering…', tool: 'Tool', toolCount: '{count} tool actions', stepsDone: '{count} steps completed', collapse: 'collapse', expand: 'click to expand', newMessages: 'New messages',
     timeout: 'timed out', loginFailed: 'Failed to open login session', error: 'Error', seconds: 'seconds', turns: 'turns',
     project: 'Project', fastest: 'fastest', fiveHours: '5 hours', week: 'Week', minutesAgo: '{count} minutes ago', hoursAgo: '{count} hours ago', quickPromptTasks: 'How are the tasks going?', quickPromptQuota: 'Which account has the most quota left?', quickPromptSplit: 'Split Phase 1 of XFarm into smaller tasks and dispatch them',

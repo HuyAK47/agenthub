@@ -726,9 +726,14 @@ export const ChatPage: React.FC = () => {
                 <div className="font-semibold text-[var(--text-primary)]">
                   {t('extra.permissionTitle', { tool: permission.toolName })}
                 </div>
+                <div className="text-xs text-[var(--text-muted)]">
+                  {`Dự án: ${permission.projectName ? `${permission.projectName} (${activeSession.projectId || ''})` : 'Không gắn dự án'} · Phiên: ${permission.sessionTitle || activeSession.title} (${permission.sessionId})`}
+                </div>
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)] font-mono">
-                  {JSON.stringify(permission.input, null, 2)}
+                  {typeof permission.input.command === 'string' ? permission.input.command.slice(0, 500) : JSON.stringify(permission.input, null, 2)}
                 </pre>
+                {typeof permission.input.cwd === 'string' && <div className="text-xs text-[var(--text-muted)]">cwd: <code>{permission.input.cwd}</code></div>}
+                {typeof permission.input.file_path === 'string' && <div className="text-xs text-[var(--text-muted)]">file: <code>{permission.input.file_path}</code></div>}
                 <div className="mt-2 flex gap-2">
                   <button
                     type="button"
@@ -742,7 +747,7 @@ export const ChatPage: React.FC = () => {
                     onClick={() => resolvePermission('allow_always')}
                     className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
                   >
-                    {t('extra.allowAlways')}
+                    {`${t('extra.allowAlways')} ${permission.permissionLabel || permission.toolName}`}
                   </button>
                   <button
                     type="button"

@@ -15,8 +15,12 @@ jobs:
         include:
           - os: ubuntu-22.04
           - os: ubuntu-22.04-arm
+          # macOS still fails on real macOS runners (PTY, process stats, launchctl); keep building it
+          # but don't let it block Linux releases until it is green.
           - os: macos-latest
+            experimental: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

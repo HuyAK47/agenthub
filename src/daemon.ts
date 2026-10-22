@@ -14,13 +14,17 @@ import {
   ChatSessionRepo,
   ChatMessageRepo,
   ChatPermissionRepo,
+  PermissionRuleRepo,
   ChatRetryRepo,
   RunMetricsRepo,
   TaskNoteRepo,
   KnowledgeRepo,
   TaskBatchRepo,
   BrainTurnRepo,
+  BrainDirectiveRepo,
+  CiRepo,
 } from './db/index.js';
+import { CiWatchService } from './ci.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
 import { Engine, AgyEngine, CodexEngine, FakeEngine } from './engines/index.js';
@@ -42,7 +46,7 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
-import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
+import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
@@ -80,7 +84,10 @@ export interface DaemonContext {
   usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
   brainRunner: BrainRunner;
+  directiveRepo: BrainDirectiveRepo;
   deployService: DeployService;
+  ciRepo: CiRepo;
+  ciService: CiWatchService;
 }
 
 export interface CreateContextOptions {
@@ -122,8 +129,10 @@ export function createContext(
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
   const chatPermissionRepo = new ChatPermissionRepo(db);
+  const permissionRuleRepo = new PermissionRuleRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
+  const directiveRepo = new BrainDirectiveRepo(db);
   chatPermissionRepo.expirePending();
   const systemBrainPolicy = new BrainPolicy({
     roots: [process.cwd(), config.hubHome, config.worktreesDir],
@@ -132,16 +141,22 @@ export function createContext(
     }),
     mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
   });
+  const systemAssistantPolicy = globalAssistantPolicy(config);
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
   }, (sessionId) => {
     const session = chatSessionRepo.get(sessionId);
+    if (session?.kind === 'assistant' && session.projectId) {
+      const project = projectRepo.get(session.projectId);
+      return project ? assistantPolicy(project, config) : systemAssistantPolicy;
+    }
+    if (session?.kind === 'assistant') return systemAssistantPolicy;
     if (!session?.projectId) return systemBrainPolicy;
     const project = projectRepo.get(session.projectId);
     if (!project) return systemBrainPolicy;
     return projectBrainPolicy(project, config);
-  }, chatSessionRepo);
+  }, chatSessionRepo, permissionRuleRepo, projectRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,
@@ -239,8 +254,10 @@ export function createContext(
     chatService,
     chatSessionRepo,
     profileRepo,
+    taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
+    directiveRepo,
   });
 
   const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());
@@ -280,8 +297,19 @@ export function createContext(
     taskBatchRepo,
     setupManager,
     brainRunner,
+    directiveRepo,
   );
   service.deployService = deployService;
+
+  const ciRepo = new CiRepo(db);
+  const ciService = new CiWatchService({
+    config,
+    projectRepo,
+    ciRepo,
+    eventBus: scheduler.getEventBus(),
+  });
+  service.ciRepo = ciRepo;
+  service.ciService = ciService;
 
   const notifier = new NotificationService({
     eventBus: scheduler.getEventBus(),
@@ -290,6 +318,7 @@ export function createContext(
     profileRepo,
     quotaMarkRepo,
     projectRepo,
+    ciRepo,
   });
 
   const telegramService = new TelegramBotService({
@@ -302,6 +331,8 @@ export function createContext(
     quotaMarkRepo,
     chatService,
     brainSession: true,
+    directiveRepo,
+    ciRepo,
   });
   service.setTelegramBotService(telegramService);
 
@@ -338,7 +369,10 @@ export function createContext(
     usageRepo,
     telegramService,
     brainRunner,
+    directiveRepo,
     deployService,
+    ciRepo,
+    ciService,
   };
 }
 
@@ -355,6 +389,11 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.bulletinService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    ctx.ciService?.stop();
   } catch {
     // ignore
   }
@@ -419,6 +458,7 @@ export async function startDaemon(
   ctx.claudeScanner.start();
   ctx.bulletinService.start();
   ctx.brainRunner.start();
+  ctx.ciService.start();
 
   // Start Telegram bot if enabled
   if (config.telegram?.enabled) {
