@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { hubVersion } from '../version.js';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ServerResponse } from 'node:http';
@@ -108,7 +109,7 @@ export async function createServer(
 
   // Health check (no token required)
   fastify.get('/health', async () => {
-    return { ok: true, version: '0.1.0' };
+    return { ok: true, version: hubVersion() };
   });
 
   fastify.get('/api/version', async () => {
@@ -213,7 +214,15 @@ export async function createServer(
 
   fastify.patch('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return service.updateProject(id, req.body);
+    const body = (req.body || {}) as { settings?: { brain?: { permissions?: string } }; confirm?: boolean };
+    if (body.settings?.brain?.permissions === 'full' && body.confirm !== true) {
+      throw new HttpError(409, 'confirmation_required', 'Cấp Toàn quyền cần confirm: true vì cho phép Claude chạy mọi lệnh');
+    }
+    const result = service.updateProject(id, req.body);
+    if (body.settings?.brain?.permissions) {
+      service.scheduler.getEventBus().emit('brain.trust_changed', undefined, { projectId: id, permissions: body.settings.brain.permissions });
+    }
+    return result;
   });
 
   fastify.delete('/api/projects/:id', async (req: FastifyRequest) => {
@@ -459,7 +468,15 @@ export async function createServer(
   });
 
   fastify.put('/api/config', async (req: FastifyRequest) => {
-    return service.updateConfig(req.body);
+    const body = (req.body || {}) as { brain?: { permissions?: string }; confirm?: boolean };
+    if (body.brain?.permissions === 'full' && body.confirm !== true) {
+      throw new HttpError(409, 'confirmation_required', 'Cấp Toàn quyền mặc định cần confirm: true');
+    }
+    const result = service.updateConfig(req.body);
+    if (body.brain?.permissions) {
+      service.scheduler.getEventBus().emit('brain.trust_changed', undefined, { projectId: null, permissions: body.brain.permissions });
+    }
+    return result;
   });
   fastify.get('/api/models', async () => service.getModelOptions());
 

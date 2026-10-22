@@ -53,6 +53,7 @@ export interface BrainConfig {
   claudeProfileExplicit?: boolean;
   model: string;
   mode: 'off' | 'suggest' | 'auto';
+  permissions: 'standard' | 'trusted' | 'full';
   maxConcurrent: number;
   maxTurnsPerHour: number;
   dailyTokenBudget: number;
@@ -528,6 +529,7 @@ export function updateConfigInMemory(
     if (patch.brain.claudeProfile !== undefined) config.brain.claudeProfile = patch.brain.claudeProfile;
     if (patch.brain.model !== undefined) config.brain.model = patch.brain.model;
     if (patch.brain.mode !== undefined) config.brain.mode = patch.brain.mode;
+    if (patch.brain.permissions !== undefined) config.brain.permissions = patch.brain.permissions;
     if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
@@ -895,6 +897,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
       mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
+      permissions: brainRaw.permissions === 'trusted' || brainRaw.permissions === 'full' ? brainRaw.permissions : 'standard',
       maxConcurrent: typeof brainRaw.maxConcurrent === 'number' && brainRaw.maxConcurrent > 0
         ? Math.floor(brainRaw.maxConcurrent)
         : 2,

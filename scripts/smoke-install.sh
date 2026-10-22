@@ -45,5 +45,7 @@ EOF
   done
   [ "$ready" = 1 ]
   AGENTHUB_HOME=/tmp/agenthub-home/data agenthub doctor --json || true
-  grep -q '"ok":true' /tmp/agenthub-health.json
+  # Inside this single-quoted script, use double quotes: single quotes would end the outer string.
+  grep -q "\"ok\":true" /tmp/agenthub-health.json
+  grep -q "\"version\":\"$VERSION\"" /tmp/agenthub-health.json
 '

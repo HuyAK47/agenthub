@@ -140,6 +140,7 @@ export function createContext(
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
     mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
+    permissions: config.brain.permissions,
   });
   const systemAssistantPolicy = globalAssistantPolicy(config);
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {

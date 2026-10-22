@@ -206,7 +206,7 @@ export function readTelegramToken(tokenPath: string): string | null {
 /** Shown by Telegram when the user types "/" (registered with setMyCommands on start). */
 export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: 'use', description: 'Chọn dự án: /use <dự án> · xem dự án đang chọn: /use' },
-  { command: 'brain', description: 'Bộ não: /brain · /brain mode [dự án] off|suggest|auto|external|inherit' },
+  { command: 'brain', description: 'Bộ não: /brain · /brain trust [dự án] standard|trusted|full|inherit' },
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
@@ -1089,6 +1089,30 @@ export class TelegramBotService {
   private async handleBrainCommand(chatId: number, argStr: string): Promise<void> {
     const current = this.config.brain;
     const parts = argStr.split(/\s+/).filter(Boolean);
+    if (parts[0] === 'trust') {
+      const projectId = parts[1];
+      const permission = parts[2];
+      if (!projectId) {
+        await this.sendMessage(chatId, `🧠 Quyền mặc định: <b>${this.config.brain.permissions}</b>\nDùng /brain trust &lt;dự án&gt; standard|trusted|full|inherit`);
+        return;
+      }
+      if (!permission || !['standard', 'trusted', 'full', 'inherit'].includes(permission)) {
+        await this.sendMessage(chatId, 'Cú pháp: /brain trust <dự án> standard|trusted|full|inherit');
+        return;
+      }
+      const project = this.projectRepo.get(projectId);
+      if (!project) { await this.sendMessage(chatId, `❌ Không tìm thấy dự án "${this.escapeHtml(projectId)}".`); return; }
+      if (permission === 'full' && parts[3] !== 'confirm') {
+        const keyboard = [[{ text: '⚠️ Xác nhận Toàn quyền', callback_data: `braintrust:full:${projectId}` }]];
+        await this.sendMessage(chatId, `⚠️ Toàn quyền cho <b>${this.escapeHtml(projectId)}</b> cho phép Claude chạy mọi lệnh. Gửi lại: <code>/brain trust ${this.escapeHtml(projectId)} full confirm</code> để xác nhận.`, { inline_keyboard: keyboard });
+        return;
+      }
+      const updated = mergeProjectSettings(projectSettings(project), { brain: { permissions: permission as 'standard' | 'trusted' | 'full' | 'inherit' } });
+      this.projectRepo.update(project.id, { settings: JSON.stringify(updated) });
+      this.eventBus.emit('brain.trust_changed', undefined, { projectId, permissions: permission, source: 'telegram' });
+      await this.sendMessage(chatId, `🧠 Đã đổi quyền bộ não dự án <b>${this.escapeHtml(projectId)}</b> sang <b>${permission}</b>.`);
+      return;
+    }
     if (parts[0] !== 'mode') {
       // /brain with no args: show overview listing per-project brains
       const brain = this.service.getStatus().brain;
@@ -1677,6 +1701,22 @@ export class TelegramBotService {
     }
 
     switch (domain) {
+      case 'braintrust': {
+        if (action === 'full') {
+          const project = this.projectRepo.get(taskIdOrParam);
+          if (!project) {
+            await this.answerCallbackQuery(query.id, 'Dự án không tồn tại.');
+            return;
+          }
+          const updated = mergeProjectSettings(projectSettings(project), { brain: { permissions: 'full' } });
+          this.projectRepo.update(project.id, { settings: JSON.stringify(updated) });
+          this.eventBus.emit('brain.trust_changed', undefined, { projectId: project.id, permissions: 'full', source: 'telegram' });
+          await this.answerCallbackQuery(query.id, 'Đã xác nhận Toàn quyền.');
+          await this.sendMessage(chatId, `🧠 Đã đổi quyền bộ não dự án <b>${this.escapeHtml(project.id)}</b> sang <b>full</b>.`);
+          return;
+        }
+        break;
+      }
       case 'use': {
         if (action === 'select') {
           const projectId = taskIdOrParam;

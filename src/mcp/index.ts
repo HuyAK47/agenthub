@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { hubVersion } from '../version.js';
 import { execFile } from 'node:child_process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -128,7 +129,7 @@ export interface McpServerOptions {
 export function createMcpServer(options?: McpServerOptions): McpServer {
   const server = new McpServer({
     name: 'agenthub',
-    version: '0.1.0',
+    version: hubVersion(),
   });
 
   const getPort = (): number => {
