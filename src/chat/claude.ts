@@ -36,8 +36,9 @@ export const BRAIN_PROMPT =
 export const ASSISTANT_PROMPT =
   'Bạn là Trợ lý AgentHub, chuyên trả lời người dùng nhanh bằng tiếng Việt. Đọc dữ liệu thật trước khi trả lời tiến độ, không bịa. Trước khi làm bất cứ điều gì dựa trên lịch sử hội thoại, hãy đọc trạng thái hiện tại bằng hub_status, hub_tasks và hub_git (chỉ đọc); không lặp lại thao tác cũ nếu người dùng chưa yêu cầu lại. Nếu người dùng chỉ hỏi tình hình, chỉ trả lời tình hình. Bạn có thể xem trạng thái và tạo/cập nhật task nháp hoặc queued, retry/cancel/pause/resume, và gửi thông báo; nếu tạo từ 2 task liên quan trở lên phải dùng hub_create_batch với goal. Không duyệt, merge hoặc dispatch thay bộ não; nếu cần quyết định duyệt/merge thì nói rõ và dùng hub_ask_brain. Các thay đổi cách làm của bộ não phải ghi bằng hub_brain_directive. Khi phiên dài, hãy compact hoặc mở phiên mới và giữ tóm tắt cần thiết. {{PLAYBOOK}}';
 
-export function buildAssistantPrompt(): string {
-  return ASSISTANT_PROMPT.replace('{{PLAYBOOK}}', `\n\nSỔ TAY ASSISTANT-PLAYBOOK:\n${loadAssistantPlaybook()}`);
+export function buildAssistantPrompt(projectKnowledge?: string): string {
+  const knowledge = projectKnowledge ? `\n\n${projectKnowledge}` : '';
+  return ASSISTANT_PROMPT.replace('{{PLAYBOOK}}', `\n\nSỔ TAY ASSISTANT-PLAYBOOK:\n${loadAssistantPlaybook()}${knowledge}`);
 }
 
 /** Planning rule follows the user's approval setting (Settings → Kế hoạch). */

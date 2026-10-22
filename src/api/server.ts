@@ -240,6 +240,11 @@ export async function createServer(
     return service.listKnowledge(id);
   });
 
+  fastify.get('/api/projects/:id/review-checklist/preview', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.reviewChecklistPreview(id);
+  });
+
   fastify.post('/api/projects/:id/knowledge', async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
     return reply.status(201).send(service.addKnowledge(id, req.body));

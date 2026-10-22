@@ -241,7 +241,7 @@ export function createContext(
     quotaMarkRepo,
     usageRepo,
     eventRepo,
-    { failoverState, retryRepo: chatRetryRepo },
+    { failoverState, retryRepo: chatRetryRepo, knowledgeRepo },
   );
   scheduler.getEventBus().on('claude.quota_available', (_taskId, payload) => {
     const data = payload && typeof payload === 'object' ? payload as { profileName?: unknown; observedAt?: unknown } : {};
@@ -259,6 +259,7 @@ export function createContext(
     turnRepo: brainTurnRepo,
     projectRepo,
     directiveRepo,
+    knowledgeRepo,
   });
 
   const deployService = new DeployService(config, projectRepo, scheduler.getEventBus());

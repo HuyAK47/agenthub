@@ -963,6 +963,17 @@ export class TelegramBotService {
 
     // 3. Command processing
     if (!rawText.startsWith('/')) {
+      const remember = rawText.match(/^ghi nhớ\s*:\s*(.+)$/is);
+      if (remember) {
+        const projectId = this.selectedProject.get(chatId);
+        if (!projectId) {
+          await this.sendMessage(chatId, 'Hãy chọn project trước bằng /use <dự án>.');
+        } else {
+          await this.service.addKnowledge(projectId, { content: remember[1].trim(), pinned: true });
+          await this.sendMessage(chatId, '📌 Đã ghim kiến thức cho project đang chọn.');
+        }
+        return;
+      }
       await this.handleChatMessage(chatId, rawText);
       return;
     }
@@ -1035,6 +1046,10 @@ export class TelegramBotService {
         await this.handleBrainCommand(chatId, argStr);
         break;
 
+      case '/knowledge':
+        await this.handleKnowledgeCommand(chatId);
+        break;
+
       case '/directives':
         await this.handleDirectivesCommand(chatId, argStr);
         break;
@@ -1101,6 +1116,27 @@ export class TelegramBotService {
         await this.sendMessage(chatId, `Lệnh không hợp lệ: ${cmd}. Gõ /help để xem hướng dẫn.`);
         break;
     }
+  }
+
+  private async handleKnowledgeCommand(chatId: number): Promise<void> {
+    const projectId = this.selectedProject.get(chatId);
+    if (!projectId) {
+      await this.sendMessage(chatId, 'Hãy chọn project trước bằng /use <dự án>.');
+      return;
+    }
+    const project = this.projectRepo.get(projectId);
+    const entries = this.service.listKnowledge(projectId).filter((entry) => entry.pinned === 1);
+    const checklist = project ? projectSettings(project).reviewChecklist : [];
+    const text = [
+      `🧠 <b>Kiến thức · ${this.escapeHtml(project?.name || projectId)}</b>`,
+      '',
+      '<b>Kiến thức ghim:</b>',
+      entries.length ? entries.map((entry) => `• ${this.escapeHtml(entry.content)}`).join('\n') : '• Không có',
+      '',
+      '<b>Checklist khi duyệt:</b>',
+      checklist.length ? checklist.map((item) => `• ${this.escapeHtml(item)}`).join('\n') : '• Không có',
+    ].join('\n');
+    await this.sendMessage(chatId, text);
   }
 
   private async handleDeployCommand(chatId: number, argStr: string): Promise<void> {
@@ -3682,6 +3718,7 @@ export class TelegramBotService {
 /plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi
 /brain - Xem Claude đang làm gì và bộ não từng dự án · /brain mode [dự án] off|suggest|auto|external|inherit
+/knowledge - Liệt kê kiến thức ghim và checklist của project đang chọn
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
 /task &lt;id&gt; - Xem chi tiết task, kết quả checks và link dashboard
 /newtask &lt;mô tả chung&gt; - Giao một yêu cầu mới cho Claude tự phân tích và tạo task

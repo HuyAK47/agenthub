@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import type { BrainConfig } from '../config.js';
-import { BrainDirectiveRepo, BrainTurnRepo, ChatSessionRepo, ProfileRepo, TaskRepo } from '../db/index.js';
+import { BrainDirectiveRepo, BrainTurnRepo, ChatSessionRepo, KnowledgeRepo, ProfileRepo, TaskRepo } from '../db/index.js';
 import { resolveClaudeProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
 import { effectiveBrainMode, effectiveBrainPermission, type EffectiveBrainMode } from './mode.js';
 import { projectSettings } from '../projects/settings.js';
+import { buildProjectKnowledgeContext } from '../projects/knowledge-context.js';
 
 const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high', 'brain.directive_added', 'ci.failed', 'brain.trust_changed', 'config.updated']);
 const SYSTEM_EVENTS = new Set(['quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
@@ -21,6 +22,7 @@ export interface BrainRunnerOptions {
   turnRepo: BrainTurnRepo;
   projectRepo?: { get(id: string): { id: string; name: string; path: string; settings?: string | null } | undefined; getAll?: () => Array<{ id: string }> };
   directiveRepo?: BrainDirectiveRepo;
+  knowledgeRepo?: KnowledgeRepo;
   debounceMs?: number;
   now?: () => number;
 }
@@ -40,6 +42,7 @@ export class BrainRunner {
   private retryCounts = new Map<string, number>();
   private roundRobinCursor = 0;
   private started = false;
+  private sentKnowledgeHash = new Map<string, string>();
   private bound = (type: string, taskId?: string, payload?: unknown) => this.onEvent(type, taskId, payload);
 
   constructor(private readonly opts: BrainRunnerOptions) {
@@ -263,7 +266,20 @@ export class BrainRunner {
       return true;
     }).slice(0, 30).map((event) => `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${event.payload ? ` ${JSON.stringify(event.payload).slice(0, 500)}` : ''}`);
     const directives = this.opts.directiveRepo?.list(projectId).map((directive) => `- ${directive.text}`).join('\n') || '- Không có';
-    return `${context}\nCHỈ THỊ CỦA NGƯỜI DÙNG (bắt buộc tuân theo):\n${directives}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
+    const settings = projectId ? this.projectSettings(projectId) : null;
+    const knowledge = projectId && this.opts.knowledgeRepo
+      ? buildProjectKnowledgeContext(this.opts.knowledgeRepo.getByProject(projectId), settings?.references || [])
+      : null;
+    const key = projectId || '__system__';
+    let knowledgePrompt = 'KIẾN THỨC DỰ ÁN không đổi; hãy tiếp tục áp dụng kiến thức đã nhận.';
+    if (knowledge && this.sentKnowledgeHash.get(key) !== knowledge.hash) {
+      this.sentKnowledgeHash.set(key, knowledge.hash);
+      knowledgePrompt = knowledge.text;
+    }
+    const checklist = settings?.reviewChecklist.length
+      ? `\nCHECKLIST KHI DUYỆT (BẮT BUỘC):\n${settings.reviewChecklist.map((item) => `- ${item}`).join('\n')}\nKhi review phải liệt kê mục vi phạm hoặc ghi rõ “đã đối chiếu checklist: không vi phạm”.`
+      : '';
+    return `${context}\n${knowledgePrompt}${checklist}\nCHỈ THỊ CỦA NGƯỜI DÙNG (bắt buộc tuân theo):\n${directives}\nSự kiện: ${lines.join('\n')}\n${mode === 'suggest' ? 'Chế độ suggest: chỉ đề xuất, chờ người dùng duyệt.' : 'Chế độ auto: làm theo BRAIN-PLAYBOOK khi an toàn.'}`;
   }
 
   private formatDirectiveAcknowledgement(event: BrainQueuedEvent, projectId: string | null): string {

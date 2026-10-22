@@ -3111,6 +3111,21 @@ export class AppService {
     return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
   }
 
+  reviewChecklistPreview(projectId: string) {
+    const project = this.projectRepo.get(projectId);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    return projectSettings(project).reviewChecklist.slice(0, 5).map((entry) => {
+      const filePath = path.isAbsolute(entry) ? entry : path.resolve(project.path, entry);
+      try {
+        const stat = fs.statSync(filePath);
+        const truncated = stat.size > 64 * 1024;
+        return { path: entry, resolvedPath: filePath, size: stat.size, truncated, content: truncated ? null : fs.readFileSync(filePath, 'utf8') };
+      } catch {
+        return { path: entry, resolvedPath: filePath, size: null, truncated: false, content: null, warning: 'Không thể đọc file' };
+      }
+    });
+  }
+
   addKnowledge(projectId: string, raw: unknown): KnowledgeEntryRow {
     if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     const parsed = CreateKnowledgeSchema.parse(raw);
