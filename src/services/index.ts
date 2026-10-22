@@ -1322,6 +1322,15 @@ export class AppService {
 
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
     if (effectiveSettings.worktree.root) {
+      const worktreeRoot = path.resolve(effectiveSettings.worktree.root);
+      const projectStorageRoot = path.join(path.dirname(resolvedPath), '.agenthub-worktrees');
+      if (worktreeRoot === projectStorageRoot && !fs.existsSync(worktreeRoot)) {
+        try {
+          fs.mkdirSync(worktreeRoot, { recursive: true, mode: 0o700 });
+        } catch (error) {
+          throw new HttpError(400, 'bad_request', `Không thể tạo thư mục worktree: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       try { validateProjectWorktreeRoot(effectiveSettings.worktree.root, resolvedPath, this.config.hubHome); }
       catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
     }
