@@ -37,6 +37,7 @@ import { QuotaUsage } from '../components/QuotaUsage';
 import { useLocale } from '../context/LocaleContext';
 import { Profile } from '../types/api';
 import { formatReset, formatTimeTitle } from '../lib/time';
+import { useTour } from '../components/tour/TourContext';
 
 const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
@@ -102,6 +103,7 @@ function usageText(profile: Profile) {
 
 export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
@@ -138,6 +140,9 @@ export const ProfilesPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const runningByProfile = new Map((status?.running || []).map((run) => [run.profileName, run]));
+  useEffect(() => {
+    if (showAdd) suggestModalTour('modal-add-account');
+  }, [showAdd, suggestModalTour]);
   const toast = (text: string, isError = false) => {
     const id = ++toastSeq.current;
     setToasts((old) => [...old, { id, text, error: isError }]);
@@ -313,6 +318,7 @@ export const ProfilesPage: React.FC = () => {
       )}
       <DailyUsageTable />
       {showAdd && (
+        <div data-tour="modal-add-account">
         <AddProfileModal
           onClose={() => {
             setShowAdd(false);
@@ -334,6 +340,7 @@ export const ProfilesPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
         />
+        </div>
       )}
       {editing && (
         <EditProfileModal

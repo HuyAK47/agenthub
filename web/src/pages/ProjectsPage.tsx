@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
+import { useTour } from '../components/tour/TourContext';
 import { Project } from '../types/api';
 import {
   ProjectSettingsDrawer,
@@ -50,6 +51,7 @@ function ProjectSettingsForm({
   compact?: boolean;
 }) {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) =>
     onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () =>
@@ -87,7 +89,7 @@ function ProjectSettingsForm({
               const permissions = e.target.value;
               if (
                 permissions === 'full' &&
-                !window.confirm(t('extra.fullModeConfirm'))
+                (suggestModalTour('modal-full-permission'), !window.confirm(t('extra.fullModeConfirm')))
               ) {
                 return;
               }
@@ -318,6 +320,7 @@ function ProjectSettingsForm({
 
 export const ProjectsPage: React.FC = () => {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { id: urlProjectId } = useParams<{ id: string }>();
@@ -344,6 +347,9 @@ export const ProjectsPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState('');
+  useEffect(() => {
+    if (showAddForm) suggestModalTour('modal-register-project');
+  }, [showAddForm, suggestModalTour]);
 
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
@@ -543,7 +549,7 @@ export const ProjectsPage: React.FC = () => {
 
       {/* Registration Form */}
       {showAddForm && (
-        <Card className="p-6 space-y-4">
+        <Card data-tour="modal-register-project" className="p-6 space-y-4">
           <h2 className="text-base font-bold">{t('projects.formTitle')}</h2>
 
           {formError && (

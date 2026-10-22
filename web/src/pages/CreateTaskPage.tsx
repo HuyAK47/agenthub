@@ -6,9 +6,11 @@ import { createTask, getProjects, getTasks, getConfig, getModelOptions } from '.
 import { TaskLevel } from '../types/api';
 import { ArrowLeft, Eye, Edit3, Plus } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { useTour } from '../components/tour/TourContext';
 
 export const CreateTaskPage: React.FC = () => {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -22,6 +24,9 @@ export const CreateTaskPage: React.FC = () => {
   const [modelChain, setModelChain] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'edit' | 'preview'>('edit');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  React.useEffect(() => {
+    suggestModalTour('modal-create-task');
+  }, [suggestModalTour]);
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -93,7 +98,7 @@ export const CreateTaskPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div data-tour="modal-create-task" className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
         <button
