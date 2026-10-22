@@ -325,6 +325,7 @@ export const en: typeof vi = {
     quotaUsage: '{five} · {week}',
     week: 'week',
     noQuotaData: 'No quota data',
+    noCodexQuotaYet: 'Available after the first Codex run',
     multiplePersonalWarning: 'Multiple personal accounts for this provider may violate provider terms and share quota.',
     emptyProvider: 'No {provider} accounts.',
     addDescription: 'Choose a provider and open its login wizard.',

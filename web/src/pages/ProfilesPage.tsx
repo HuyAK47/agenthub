@@ -94,7 +94,8 @@ function usageText(profile: Profile) {
   const week = profile.usage?.find((u) => u.window === 'week');
   return five || week
     ? t('profiles.quotaUsage', { five: five ? `${five.remainingPct}% / 5h` : '—', week: week ? `${week.remainingPct}% / ${t('profiles.week')}` : '—' })
-    : t('profiles.noQuotaData');
+    // Quota Codex đọc từ log phiên của Codex CLI, nên chỉ có sau lần chạy đầu tiên của hồ sơ.
+    : t(profile.engine === 'codex' ? 'profiles.noCodexQuotaYet' : 'profiles.noQuotaData');
 }
 function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; }
 

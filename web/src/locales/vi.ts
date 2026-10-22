@@ -323,6 +323,7 @@ export const vi = {
     quotaUsage: '{five} · {week}',
     week: 'tuần',
     noQuotaData: 'Chưa có dữ liệu quota',
+    noCodexQuotaYet: 'Có sau lần chạy Codex đầu tiên',
     multiplePersonalWarning: 'Nhiều tài khoản cá nhân cùng nhà cung cấp có thể vi phạm điều khoản và dùng chung quota.',
     emptyProvider: 'Chưa có tài khoản {provider}.',
     addDescription: 'Chọn nhà cung cấp và mở trình hướng dẫn đăng nhập.',
