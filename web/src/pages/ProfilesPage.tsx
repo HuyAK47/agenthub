@@ -216,7 +216,7 @@ export const ProfilesPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6" onClick={() => menu && setMenu(null)}>
+    <div className="space-y-6" onClick={() => menu && setMenu(null)} data-tour="account-types">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('profiles.title')}</h1>
@@ -226,6 +226,7 @@ export const ProfilesPage: React.FC = () => {
         </div>
         <button
           type="button"
+          data-tour="add-account"
           onClick={(e) => {
             e.stopPropagation();
             setShowAdd(true);
@@ -258,7 +259,7 @@ export const ProfilesPage: React.FC = () => {
           {providers.map((provider) => {
             const grouped = profiles.filter((profile) => profile.engine === provider.id);
             return (
-              <section key={provider.id} aria-labelledby={`provider-${provider.id}`}>
+              <section key={provider.id} aria-labelledby={`provider-${provider.id}`} data-tour="profile-quotas">
                 <div className="mb-3 flex items-center gap-3">
                   <div className="h-8 w-1 rounded-full" style={{ background: provider.color }} />
                   <div>

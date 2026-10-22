@@ -59,7 +59,7 @@ function ProjectSettingsForm({
     });
 
   return (
-    <div className="space-y-4" data-testid="project-settings-form">
+    <div className="space-y-4" data-testid="project-settings-form" data-tour="project-register">
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <label className="text-xs space-y-1">
           <span className="font-semibold">{t('projects.brainMode')}</span>
@@ -824,6 +824,7 @@ export const ProjectsPage: React.FC = () => {
               key={proj.id}
               className="p-5 flex flex-col justify-between gap-4 hover:border-[var(--t-border-focus)] transition-colors"
               data-testid={`project-card-${proj.id}`}
+              data-tour="project-card"
             >
               <div className="space-y-3">
                 {/* Header: Title + Path + Quick Action Buttons */}

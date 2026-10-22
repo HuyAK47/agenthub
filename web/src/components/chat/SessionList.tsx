@@ -182,13 +182,14 @@ export const SessionList: React.FC<SessionListProps> = ({
   }
 
   return (
-    <div className={`flex flex-col h-full bg-[var(--bg-surface)] border-r border-[var(--border-default)] ${className}`}>
+    <div data-tour="chat-sessions" className={`flex flex-col h-full bg-[var(--bg-surface)] border-r border-[var(--border-default)] ${className}`}>
       {/* Top Header / New Chat Button & Collapse Button */}
       <div className="p-3 border-b border-[var(--border-default)] space-y-2.5">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onNewSession}
+            data-tour="new-session"
             className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white font-medium text-xs shadow-xs transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />

@@ -24,7 +24,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { CircleHelp } from 'lucide-react';
-import { useTour } from './tour/TourContext';
+import { HelpPanel } from './tour/HelpPanel';
 
 const PlansBadgeInner: React.FC = () => {
   const { data: batches = [] } = useQuery({
@@ -60,6 +60,7 @@ export const Layout: React.FC = () => {
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
   const [sseConnected, setSseConnected] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -79,7 +80,6 @@ export const Layout: React.FC = () => {
   }, []);
 
   const connected = isOnline && sseConnected;
-  const { openTour, getPageTour } = useTour();
 
   const navItems = [
     { to: '/', label: t('common.dashboard'), icon: Activity },
@@ -186,16 +186,14 @@ export const Layout: React.FC = () => {
             <button
               type="button"
               data-tour="help"
-              onClick={() => {
-                const tour = getPageTour(location.pathname);
-                if (tour) openTour(tour.id);
-              }}
+              onClick={() => setHelpOpen(true)}
               title={t('tour.help')}
               aria-label={t('tour.help')}
               className="rounded-lg border border-[var(--t-border)] p-1.5 text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]"
             ><CircleHelp size={17} /></button>
             {/* Connection Status Indicator */}
             <div
+              data-tour="connection-status"
               title={connected ? t('extra.connected') : t('extra.disconnected')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
                 connected
@@ -290,6 +288,7 @@ export const Layout: React.FC = () => {
           <Outlet />
         </main>
       </div>
+      <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 };

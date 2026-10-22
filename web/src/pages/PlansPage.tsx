@@ -359,7 +359,7 @@ export const PlansPage: React.FC = () => {
         </div>
 
         {/* Global Filter Bar */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3" data-tour="plan-filters">
           <div className="flex items-center gap-2 text-xs">
             <FolderGit2 className="w-4 h-4 text-[var(--t-text-3)]" />
             <select
@@ -585,6 +585,7 @@ export const PlansPage: React.FC = () => {
                     <div className="flex items-center gap-2 flex-wrap">
                       <Button
                         data-testid="btn-add-task"
+                        data-tour="add-task"
                         variant="secondary"
                         size="sm"
                         onClick={() => {
@@ -610,6 +611,7 @@ export const PlansPage: React.FC = () => {
 
                       <Button
                         data-testid="btn-dispatch-batch"
+                        data-tour="approve-plan"
                         variant="primary"
                         size="sm"
                         onClick={() => dispatchMutation.mutate()}
