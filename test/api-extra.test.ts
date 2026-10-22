@@ -397,6 +397,22 @@ describe('AgentHub API Extra Endpoints', () => {
       expect(JSON.parse(deployRes.body)).toMatchObject({ projectId: 'proj-deploy-api', status: 'queued' });
       expect(rerun).toHaveBeenCalledWith('proj-deploy-api');
       rerun.mockRestore();
+
+      const pushSpy = vi.spyOn(ctx.service, 'pushDeployNow').mockResolvedValue({
+        projectId: 'proj-deploy-api',
+        status: 'succeeded',
+        pushStatus: 'push lúc 12:00',
+      });
+      const pushNowRes = await server.inject({
+        method: 'POST',
+        url: '/api/projects/proj-deploy-api/deploy',
+        headers: authHeaders(),
+        payload: { pushNow: true },
+      });
+      expect(pushNowRes.statusCode).toBe(200);
+      expect(JSON.parse(pushNowRes.body)).toMatchObject({ projectId: 'proj-deploy-api', status: 'succeeded', pushStatus: 'push lúc 12:00' });
+      expect(pushSpy).toHaveBeenCalledWith('proj-deploy-api');
+      pushSpy.mockRestore();
     });
 
     it('PATCH /api/projects/:id rejects invalid checks schema', async () => {

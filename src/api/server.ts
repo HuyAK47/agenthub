@@ -204,6 +204,11 @@ export async function createServer(
 
   fastify.post('/api/projects/:id/deploy', async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { pushNow?: boolean };
+    if (body.pushNow === true) {
+      const result = await service.pushDeployNow(id);
+      return reply.status(result.status === 'failed' ? 500 : 200).send(result);
+    }
     return reply.status(202).send(service.rerunDeploy(id));
   });
 

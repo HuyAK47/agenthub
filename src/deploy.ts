@@ -18,6 +18,9 @@ export interface DeployStatus {
   commit?: string;
   error?: string;
   logPath?: string;
+  pushStatus?: string;
+  lastPushedAt?: string;
+  nextPushAt?: string;
 }
 
 type GitRunner = (cwd: string, args: string[]) => Promise<{ code: number; output: string }>;
@@ -26,9 +29,31 @@ type RestartRunner = (command: string, args: string[]) => { on?: (event: string,
 
 const hubPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+export function formatTime(isoOrDate: string | Date | number): string {
+  const date = typeof isoOrDate === 'string' || typeof isoOrDate === 'number' ? new Date(isoOrDate) : isoOrDate;
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function cleanWorkerShims(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const p = (env.PATH || '')
+    .split(path.delimiter)
+    .filter((d) => !d.includes(`${path.sep}shims${path.sep}worker`))
+    .join(path.delimiter);
+  return { ...env, PATH: p };
+}
+
+interface ProjectPushState {
+  lastPushedAt?: string;
+  nextPushAt?: string;
+}
+
 export class DeployService {
   private pending = new Map<string, { commit?: string; timer?: NodeJS.Timeout }>();
   private latest = new Map<string, DeployStatus>();
+  private pushStates = new Map<string, ProjectPushState>();
+  private deferredPushes = new Map<string, { dueTime: number; timer?: NodeJS.Timeout }>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -37,7 +62,8 @@ export class DeployService {
     private eventBus: EventBus,
     private debounceMs = 60_000,
     private commandRunner: GitRunner = async (cwd, args) => {
-      const result = await runInProcessGroup('git', args, { cwd, env: process.env, timeoutMs: 120_000, maxOutput: 1024 * 1024 });
+      const env = cleanWorkerShims(process.env);
+      const result = await runInProcessGroup('git', args, { cwd, env, timeoutMs: 120_000, maxOutput: 1024 * 1024 });
       return { code: result.code ?? 1, output: result.output };
     },
     private processRunner: ProcessRunner = async (command, args, options) => {
@@ -53,12 +79,223 @@ export class DeployService {
 
   start(): void {
     this.restoreRestartState();
+    this.restorePushState();
     this.eventBus.on('task.merged', (_taskId, payload) => {
       const value = (payload && typeof payload === 'object' ? payload : {}) as { projectId?: string; mergeCommit?: string };
       const taskId = _taskId || '';
       const projectId = value.projectId || taskId.split('/')[0];
       if (projectId) this.schedule(projectId, value.mergeCommit);
     });
+  }
+
+  stop(): void {
+    for (const entry of this.pending.values()) {
+      if (entry.timer) clearTimeout(entry.timer);
+    }
+    this.pending.clear();
+    for (const entry of this.deferredPushes.values()) {
+      if (entry.timer) clearTimeout(entry.timer);
+    }
+    this.deferredPushes.clear();
+  }
+
+  private getPushStatePath(): string {
+    return path.join(this.config.hubHome, 'deploy-push-state.json');
+  }
+
+  private loadPushState(): void {
+    const statePath = this.getPushStatePath();
+    try {
+      if (!fs.existsSync(statePath)) return;
+      const data = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Record<string, ProjectPushState>;
+      if (!data || typeof data !== 'object') return;
+      for (const [projectId, state] of Object.entries(data)) {
+        if (state && typeof state === 'object') {
+          this.pushStates.set(projectId, {
+            lastPushedAt: typeof state.lastPushedAt === 'string' ? state.lastPushedAt : undefined,
+            nextPushAt: typeof state.nextPushAt === 'string' ? state.nextPushAt : undefined,
+          });
+        }
+      }
+    } catch {
+      // Malformed push state must not prevent daemon startup
+    }
+  }
+
+  private savePushState(): void {
+    const statePath = this.getPushStatePath();
+    try {
+      const data: Record<string, ProjectPushState> = {};
+      for (const [id, state] of this.pushStates.entries()) {
+        if (state.lastPushedAt || state.nextPushAt) {
+          data[id] = { lastPushedAt: state.lastPushedAt, nextPushAt: state.nextPushAt };
+        }
+      }
+      fs.writeFileSync(statePath, JSON.stringify(data, null, 2), 'utf8');
+    } catch (err) {
+      console.error('[deploy] Failed to save push state', err);
+    }
+  }
+
+  private restorePushState(): void {
+    this.loadPushState();
+    for (const [projectId, state] of this.pushStates.entries()) {
+      this.syncPushStatusToLatest(projectId);
+      if (state.nextPushAt) {
+        const dueTime = new Date(state.nextPushAt).getTime();
+        this.scheduleDeferredPush(projectId, dueTime);
+      }
+    }
+  }
+
+  private formatPushStatus(pushState: ProjectPushState): string | undefined {
+    if (pushState.nextPushAt) {
+      return `push đang chờ tới ${formatTime(pushState.nextPushAt)}`;
+    }
+    if (pushState.lastPushedAt) {
+      return `push lúc ${formatTime(pushState.lastPushedAt)}`;
+    }
+    return undefined;
+  }
+
+  private syncPushStatusToLatest(projectId: string): void {
+    const pushState = this.pushStates.get(projectId);
+    if (!pushState) return;
+    const existing = this.latest.get(projectId);
+    const pushStatus = this.formatPushStatus(pushState);
+    if (existing) {
+      existing.lastPushedAt = pushState.lastPushedAt;
+      existing.nextPushAt = pushState.nextPushAt;
+      if (pushStatus) existing.pushStatus = pushStatus;
+    } else if (pushStatus) {
+      this.latest.set(projectId, {
+        projectId,
+        status: 'succeeded',
+        pushStatus,
+        lastPushedAt: pushState.lastPushedAt,
+        nextPushAt: pushState.nextPushAt,
+      });
+    }
+  }
+
+  private scheduleDeferredPush(projectId: string, dueTime: number): void {
+    const existing = this.deferredPushes.get(projectId);
+    if (existing?.timer) clearTimeout(existing.timer);
+
+    const delay = Math.max(0, dueTime - Date.now());
+    const entry: { dueTime: number; timer?: NodeJS.Timeout } = { dueTime };
+    entry.timer = setTimeout(() => {
+      this.deferredPushes.delete(projectId);
+      const state = this.pushStates.get(projectId);
+      if (state) state.nextPushAt = undefined;
+      this.savePushState();
+      this.enqueuePush(projectId);
+    }, delay);
+    entry.timer.unref();
+    this.deferredPushes.set(projectId, entry);
+
+    const state = this.pushStates.get(projectId) || {};
+    state.nextPushAt = new Date(dueTime).toISOString();
+    this.pushStates.set(projectId, state);
+    this.savePushState();
+    this.syncPushStatusToLatest(projectId);
+  }
+
+  private cancelScheduledPush(projectId: string): void {
+    const existing = this.deferredPushes.get(projectId);
+    if (existing?.timer) clearTimeout(existing.timer);
+    this.deferredPushes.delete(projectId);
+    const state = this.pushStates.get(projectId);
+    if (state) {
+      state.nextPushAt = undefined;
+      this.savePushState();
+      this.syncPushStatusToLatest(projectId);
+    }
+  }
+
+  private enqueuePush(projectId: string): void {
+    this.queue = this.queue
+      .then(() => this.executePush(projectId))
+      .then(() => undefined)
+      .catch((error) => console.error(`[deploy] ${projectId} deferred push failed`, error));
+  }
+
+  async executePush(projectId: string): Promise<DeployStatus> {
+    const definition = this.definition(projectId);
+    const project = this.projectRepo.get(projectId);
+    if (!definition?.push || !project) {
+      return { projectId, status: 'skipped', error: 'Không có cấu hình deploy push' };
+    }
+    const worktree = this.resolveWorktree(project);
+    if (!worktree) {
+      return { projectId, status: 'skipped', error: 'Không có worktree đích tích hợp được cấu hình' };
+    }
+    if (!definition.push.ffOnly) throw new Error('push chỉ hỗ trợ ffOnly');
+
+    const logDir = path.join(this.config.logsDir, 'deploy', projectId);
+    const logPath = path.join(logDir, `${Date.now()}-push.log`);
+    const write = (line: string) => {
+      try {
+        fs.mkdirSync(logDir, { recursive: true });
+        fs.appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
+      } catch { /* best effort */ }
+    };
+
+    write(`push started project=${projectId}`);
+    const pushed = await this.commandRunner(worktree, ['push', definition.push.remote, `${definition.push.from}:refs/heads/${definition.push.to}`]);
+    write(`remote push ${definition.push.remote} ${definition.push.from}:refs/heads/${definition.push.to}\n${pushed.output}`);
+
+    if (pushed.code !== 0) {
+      const errorMsg = `git push thất bại (exit ${pushed.code})`;
+      write(`push failed: ${errorMsg}`);
+      const prev = this.latest.get(projectId) || { projectId, status: 'failed' };
+      const status: DeployStatus = {
+        ...prev,
+        error: errorMsg,
+        logPath,
+      };
+      this.latest.set(projectId, status);
+      this.eventBus.emit('deploy.failed', undefined, { projectId, logPath, error: errorMsg, level: 'incident' });
+      return status;
+    }
+
+    const nowIso = new Date().toISOString();
+    this.pushStates.set(projectId, { lastPushedAt: nowIso, nextPushAt: undefined });
+    this.savePushState();
+
+    const pushMsg = `push lúc ${formatTime(nowIso)}`;
+    write(`push succeeded: ${pushMsg}`);
+    const prev = this.latest.get(projectId) || { projectId, status: 'succeeded' };
+    const status: DeployStatus = {
+      ...prev,
+      status: prev.status === 'failed' ? 'succeeded' : prev.status,
+      pushStatus: pushMsg,
+      lastPushedAt: nowIso,
+      nextPushAt: undefined,
+      logPath: prev.logPath || logPath,
+    };
+    this.latest.set(projectId, status);
+    this.eventBus.emit('deploy.succeeded', undefined, { projectId, logPath, pushStatus: pushMsg });
+    return status;
+  }
+
+  async pushNow(projectId: string): Promise<DeployStatus> {
+    const definition = this.definition(projectId);
+    const project = this.projectRepo.get(projectId);
+    if (!definition || !project) return { projectId, status: 'skipped', error: 'Không tìm thấy cấu hình deploy' };
+    if (!definition.push) return { projectId, status: 'skipped', error: 'Dự án không cấu hình deploy push' };
+
+    this.cancelScheduledPush(projectId);
+
+    let result: DeployStatus | undefined;
+    const previous = this.queue;
+    this.queue = previous
+      .then(async () => {
+        result = await this.executePush(projectId);
+      })
+      .catch((error) => console.error(`[deploy] ${projectId} pushNow failed`, error));
+    await this.queue;
+    return result || this.getStatus(projectId) || { projectId, status: 'failed' };
   }
 
   private restoreRestartState(): void {
@@ -150,9 +387,33 @@ export class DeployService {
       }
       if (definition.push) {
         if (!definition.push.ffOnly) throw new Error('push chỉ hỗ trợ ffOnly');
-        const pushed = await this.commandRunner(worktree, ['push', definition.push.remote, `${definition.push.from}:refs/heads/${definition.push.to}`]);
-        write(`remote push ${definition.push.remote} ${definition.push.from}:refs/heads/${definition.push.to}\n${pushed.output}`);
-        if (pushed.code !== 0) throw new Error(`git push thất bại (exit ${pushed.code})`);
+        const minIntervalMin = definition.push.minIntervalMin ?? 30;
+        const minIntervalMs = minIntervalMin * 60_000;
+        const pushState = this.pushStates.get(projectId);
+        const lastPushedTime = pushState?.lastPushedAt ? new Date(pushState.lastPushedAt).getTime() : 0;
+        const now = Date.now();
+        const elapsed = lastPushedTime > 0 ? now - lastPushedTime : Infinity;
+
+        if (minIntervalMs <= 0 || elapsed >= minIntervalMs) {
+          this.cancelScheduledPush(projectId);
+          const pushed = await this.commandRunner(worktree, ['push', definition.push.remote, `${definition.push.from}:refs/heads/${definition.push.to}`]);
+          write(`remote push ${definition.push.remote} ${definition.push.from}:refs/heads/${definition.push.to}\n${pushed.output}`);
+          if (pushed.code !== 0) throw new Error(`git push thất bại (exit ${pushed.code})`);
+          const nowIso = new Date().toISOString();
+          this.pushStates.set(projectId, { lastPushedAt: nowIso, nextPushAt: undefined });
+          this.savePushState();
+          status.lastPushedAt = nowIso;
+          status.nextPushAt = undefined;
+          status.pushStatus = `push lúc ${formatTime(nowIso)}`;
+        } else {
+          const dueTime = lastPushedTime + minIntervalMs;
+          this.scheduleDeferredPush(projectId, dueTime);
+          const dueIso = new Date(dueTime).toISOString();
+          status.lastPushedAt = pushState?.lastPushedAt;
+          status.nextPushAt = dueIso;
+          status.pushStatus = `push đang chờ tới ${formatTime(dueTime)}`;
+          write(`remote push deferred: ${status.pushStatus}`);
+        }
       }
       status.status = definition.restartHub && this.isHubProject(project, worktree) ? 'restarting' : 'succeeded';
       status.finishedAt = new Date().toISOString();
@@ -221,8 +482,27 @@ export class DeployService {
     });
   }
 
-  getStatus(projectId: string): DeployStatus | null { return this.latest.get(projectId) || null; }
-  getAllStatus(): DeployStatus[] { return [...this.latest.values()]; }
+  getStatus(projectId: string): DeployStatus | null {
+    const status = this.latest.get(projectId);
+    if (!status) return null;
+    const pushState = this.pushStates.get(projectId);
+    if (pushState) {
+      status.lastPushedAt = pushState.lastPushedAt;
+      status.nextPushAt = pushState.nextPushAt;
+      const pushStatus = this.formatPushStatus(pushState);
+      if (pushStatus) status.pushStatus = pushStatus;
+    }
+    return status;
+  }
+
+  getAllStatus(): DeployStatus[] {
+    return [...this.latest.keys()].map((id) => this.getStatus(id)!).filter(Boolean);
+  }
+
+  async waitForQueue(): Promise<void> {
+    await this.queue;
+  }
+
   rerun(projectId: string): DeployStatus {
     if (!this.definition(projectId) || !this.projectRepo.get(projectId)) return { projectId, status: 'skipped' };
     return this.enqueue(projectId);

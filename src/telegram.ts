@@ -217,7 +217,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'plan', description: 'Lên kế hoạch: /plan <project> <mục tiêu>' },
   { command: 'drafts', description: 'Task/đợt nháp chờ giao' },
   { command: 'approve', description: 'Duyệt & merge: /approve <id>' },
-  { command: 'deploy', description: 'Chạy deploy gần nhất: /deploy <project>' },
+  { command: 'deploy', description: 'Chạy deploy gần nhất: /deploy <project> [push]' },
   { command: 'reject', description: 'Trả về: /reject <id> <nhận xét>' },
   { command: 'retry', description: 'Chạy lại task: /retry <id>' },
   { command: 'log', description: 'Xem log cuối của task: /log <id>' },
@@ -1103,15 +1103,29 @@ export class TelegramBotService {
   }
 
   private async handleDeployCommand(chatId: number, argStr: string): Promise<void> {
-    const projectId = argStr.trim();
-    if (!projectId) {
+    const trimmed = argStr.trim();
+    if (!trimmed) {
       const statuses = this.service.getDeployStatuses();
       await this.sendMessage(chatId, statuses.length
-        ? statuses.map((status) => `${this.escapeHtml(status.projectId)}: ${this.escapeHtml(status.status)}${status.error ? ` — ${this.escapeHtml(status.error)}` : ''}`).join('\n')
-        : 'Chưa có lượt deploy nào. Dùng: /deploy <project>');
+        ? statuses.map((status) => {
+            const pushInfo = status.pushStatus ? ` (${status.pushStatus})` : '';
+            return `${this.escapeHtml(status.projectId)}: ${this.escapeHtml(status.status)}${this.escapeHtml(pushInfo)}${status.error ? ` — ${this.escapeHtml(status.error)}` : ''}`;
+          }).join('\n')
+        : 'Chưa có lượt deploy nào. Dùng: /deploy <project> [push]');
       return;
     }
+    const parts = trimmed.split(/\s+/);
+    const isPush = parts.length > 1 && parts[parts.length - 1].toLowerCase() === 'push';
+    const projectId = isPush ? parts.slice(0, -1).join(' ') : trimmed;
+
     try {
+      if (isPush) {
+        const status = await this.service.pushDeployNow(projectId);
+        await this.sendMessage(chatId, status.status === 'succeeded'
+          ? `✅ Đã đẩy ${this.escapeHtml(projectId)} lên remote (${this.escapeHtml(status.pushStatus || 'thành công')}).`
+          : `❌ Đẩy ${this.escapeHtml(projectId)} thất bại: ${this.escapeHtml(status.error || status.status)}`);
+        return;
+      }
       const status = await this.service.rerunDeploy(projectId);
       await this.sendMessage(chatId, status.status === 'queued' || status.status === 'running'
         ? `⏳ Deploy ${this.escapeHtml(projectId)} đã vào hàng đợi.`

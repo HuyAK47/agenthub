@@ -21,8 +21,16 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+function cleanEnv(): NodeJS.ProcessEnv {
+  const p = (process.env.PATH || '')
+    .split(path.delimiter)
+    .filter((d) => !d.includes(`${path.sep}shims${path.sep}worker`))
+    .join(path.delimiter);
+  return { ...process.env, PATH: p };
+}
+
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  return execFileSync('git', args, { cwd, env: cleanEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 function initRepo(repo: string, remote?: string): string {
@@ -300,6 +308,252 @@ describe('DeployService', () => {
 
     fs.writeFileSync(path.join(f.root, 'deploy-restart.json'), '{broken');
     expect(() => new DeployService({ hubHome: f.root, logsDir: path.join(f.root, 'logs') } as never, { get: vi.fn() } as never, deployEventBus([]) as never).start()).not.toThrow();
+  });
+
+  it('defers push when within minIntervalMin and displays pending status', async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    const bare = path.join(f.root, 'remote.git');
+    fs.mkdirSync(bare);
+    git(bare, ['init', '--bare']);
+    const repo = path.join(f.root, 'repo');
+    const commit1 = initRepo(repo, bare);
+    git(repo, ['push', 'origin', 'main']);
+
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false, push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true, minIntervalMin: 30 } } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => ({ code: 0, output: '' }),
+    );
+
+    // First deploy -> pushes immediately because no prior push
+    const res1 = await service.run('demo', 'c1');
+    expect(res1.status).toBe('succeeded');
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit1);
+    expect(res1.pushStatus).toMatch(/^push lúc \d\d:\d\d$/);
+
+    // Make commit 2 in repo
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'second\n');
+    git(repo, ['add', 'file.txt']);
+    git(repo, ['commit', '-m', 'second']);
+
+    // Advance 5 minutes
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    // Second deploy runs -> should defer push
+    const res2 = await service.run('demo', 'c2');
+    expect(res2.status).toBe('succeeded');
+    expect(res2.pushStatus).toMatch(/^push đang chờ tới \d\d:\d\d$/);
+    // Remote release branch is STILL at commit1!
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit1);
+    service.stop();
+  });
+
+  it('automatically pushes when deferred timer expires without rebuilding', async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    const bare = path.join(f.root, 'remote.git');
+    fs.mkdirSync(bare);
+    git(bare, ['init', '--bare']);
+    const repo = path.join(f.root, 'repo');
+    const commit1 = initRepo(repo, bare);
+    git(repo, ['push', 'origin', 'main']);
+
+    let stepRuns = 0;
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false, push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true, minIntervalMin: 30 } } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => { stepRuns++; return { code: 0, output: '' }; },
+    );
+
+    await service.run('demo');
+    expect(stepRuns).toBe(1);
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit1);
+
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'second\n');
+    git(repo, ['add', 'file.txt']);
+    git(repo, ['commit', '-m', 'second']);
+    const commit2 = git(repo, ['rev-parse', 'HEAD']);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await service.run('demo');
+    expect(stepRuns).toBe(2);
+    // Remote still at commit1
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit1);
+
+    // Advance 25 minutes (to complete the 30 minute interval)
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    await service.waitForQueue();
+
+    // Remote should now be at commit2!
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit2);
+    // Steps were NOT re-run (still 2)!
+    expect(stepRuns).toBe(2);
+    expect(service.getStatus('demo')?.pushStatus).toMatch(/^push lúc \d\d:\d\d$/);
+    service.stop();
+  });
+
+  it('pushNow pushes immediately and cancels deferred schedule', async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    const bare = path.join(f.root, 'remote.git');
+    fs.mkdirSync(bare);
+    git(bare, ['init', '--bare']);
+    const repo = path.join(f.root, 'repo');
+    const commit1 = initRepo(repo, bare);
+    git(repo, ['push', 'origin', 'main']);
+
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false, push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true, minIntervalMin: 30 } } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => ({ code: 0, output: '' }),
+    );
+
+    await service.run('demo');
+
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'second\n');
+    git(repo, ['add', 'file.txt']);
+    git(repo, ['commit', '-m', 'second']);
+    const commit2 = git(repo, ['rev-parse', 'HEAD']);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await service.run('demo');
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit1);
+
+    // Call pushNow
+    const nowRes = await service.pushNow('demo');
+    expect(nowRes.status).toBe('succeeded');
+    expect(nowRes.pushStatus).toMatch(/^push lúc \d\d:\d\d$/);
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit2);
+
+    // Further timer advance does not cause error or extra push
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit2);
+    service.stop();
+  });
+
+  it('batches multiple merges within interval into a single push', async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    const bare = path.join(f.root, 'remote.git');
+    fs.mkdirSync(bare);
+    git(bare, ['init', '--bare']);
+    const repo = path.join(f.root, 'repo');
+    initRepo(repo, bare);
+    git(repo, ['push', 'origin', 'main']);
+
+    let pushCount = 0;
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false, push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true, minIntervalMin: 30 } } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      async () => {
+        pushCount++;
+        return { code: 0, output: '' };
+      },
+      async () => ({ code: 0, output: '' }),
+    );
+
+    // Initial deploy at T0
+    await service.run('demo');
+    expect(pushCount).toBe(1);
+
+    // Merge 1 at T+5m
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await service.run('demo');
+    expect(pushCount).toBe(1);
+
+    // Merge 2 at T+10m
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await service.run('demo');
+    expect(pushCount).toBe(1);
+
+    // Merge 3 at T+15m
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await service.run('demo');
+    expect(pushCount).toBe(1);
+
+    // Advance to T+30m: deferred timer fires once
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    await service.waitForQueue();
+    expect(pushCount).toBe(2);
+
+    // Further time advance -> no extra pushes
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(pushCount).toBe(2);
+    service.stop();
+  });
+
+  it('preserves scheduled push across service restarts', async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    const bare = path.join(f.root, 'remote.git');
+    fs.mkdirSync(bare);
+    git(bare, ['init', '--bare']);
+    const repo = path.join(f.root, 'repo');
+    const commit1 = initRepo(repo, bare);
+    git(repo, ['push', 'origin', 'main']);
+
+    const service1 = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false, push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true, minIntervalMin: 30 } } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => ({ code: 0, output: '' }),
+    );
+
+    await service1.run('demo');
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit1);
+
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'second\n');
+    git(repo, ['add', 'file.txt']);
+    git(repo, ['commit', '-m', 'second']);
+    const commit2 = git(repo, ['rev-parse', 'HEAD']);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await service1.run('demo');
+
+    // State file was written to disk
+    const stateFile = path.join(f.root, 'deploy-push-state.json');
+    expect(fs.existsSync(stateFile)).toBe(true);
+
+    // Stop service1
+    service1.stop();
+
+    // Start service2
+    const service2 = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false, push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true, minIntervalMin: 30 } } } } as never,
+      { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async () => ({ code: 0, output: '' }),
+    );
+    service2.start();
+
+    // Check status in service2 shows pending push
+    expect(service2.getStatus('demo')?.pushStatus).toMatch(/^push đang chờ tới \d\d:\d\d$/);
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit1);
+
+    // Advance 25 minutes
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    await service2.waitForQueue();
+
+    // service2 pushed commit2!
+    expect(git(bare, ['rev-parse', 'refs/heads/release'])).toBe(commit2);
+    expect(service2.getStatus('demo')?.pushStatus).toMatch(/^push lúc \d\d:\d\d$/);
+    service2.stop();
   });
 });
 

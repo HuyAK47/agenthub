@@ -1162,6 +1162,12 @@ export class AppService {
     return this.deployService.rerun(id);
   }
 
+  async pushDeployNow(id: string) {
+    this.getProject(id);
+    if (!this.deployService) throw new HttpError(503, 'unavailable', 'Deploy service chưa sẵn sàng');
+    return this.deployService.pushNow(id);
+  }
+
   createProject(raw: unknown): ProjectRow {
     const parsed = CreateProjectSchema.parse(raw);
     const id = parsed.id || parsed.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
