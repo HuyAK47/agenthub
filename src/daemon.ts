@@ -306,6 +306,10 @@ export function createContext(
     directiveRepo,
   );
   service.deployService = deployService;
+  scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {
+    const data = payload && typeof payload === 'object' ? payload as { reviewChainComplete?: unknown } : {};
+    if (taskId && data.reviewChainComplete === true) void service.autoMergeReviewedTask(taskId);
+  });
   const perfCollector = new PerfCollector();
   service.setPerfCollector(perfCollector);
 

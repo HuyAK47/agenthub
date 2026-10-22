@@ -1016,6 +1016,27 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
             </div>
 
             {draftSettings.integration.enabled && (
+              <div className="flex items-center gap-2">
+                <input
+                  id="integration-automerge"
+                  type="checkbox"
+                  checked={draftSettings.integration.autoMerge === true}
+                  onChange={(e) => {
+                    setApiError(null);
+                    setDraftSettings((prev) => ({
+                      ...prev,
+                      integration: { ...prev.integration, autoMerge: e.target.checked },
+                    }));
+                  }}
+                  className="w-4 h-4 text-[var(--t-accent)] rounded border-[var(--t-border)]"
+                />
+                <label htmlFor="integration-automerge" className="text-xs text-[var(--t-text)] cursor-pointer">
+                  {t('projects.integrationAutoMerge')}
+                </label>
+              </div>
+            )}
+
+            {draftSettings.integration.enabled && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">

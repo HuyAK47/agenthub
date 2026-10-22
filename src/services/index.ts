@@ -3013,6 +3013,34 @@ export class AppService {
     }
   }
 
+  /**
+   * Merges a task whose review chain finished on a Codex approval, when the project opted in with
+   * `integration.autoMerge`. A merged task then self-deploys through the usual task.merged hook.
+   */
+  async autoMergeReviewedTask(taskId: string): Promise<void> {
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.status !== 'review') return;
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return;
+    const settings = projectSettings(project);
+    if (!settings.integration.autoMerge || (!settings.integration.enabled && !project.merge)) return;
+    const last = this.reviewRepo.getByTask(taskId).at(-1);
+    if (!last || last.actor !== 'codex-reviewer' || last.verdict !== 'approved') return;
+    try {
+      await this.reviewTask(toRouteId(taskId), {
+        verdict: 'approved',
+        merge: true,
+        by: 'auto-merge',
+        feedback: 'Tự merge sau khi Codex reviewer chấp thuận.',
+      });
+    } catch (error) {
+      this.scheduler.getEventBus().emit('merge.failed', taskId, {
+        actor: 'auto-merge',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
     const slugBase = `${source.slug}-fix-merge`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
     let slug = slugBase;

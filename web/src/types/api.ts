@@ -161,7 +161,7 @@ export interface DeployStatus {
 export interface ProjectSettings {
   brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
   worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
-  integration: { enabled: boolean; branch?: string; baseRef?: string };
+  integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
   reviewChecklist?: string[];

@@ -1758,13 +1758,13 @@ export class Scheduler {
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
       if (codexProfiles.length === 0 || !task.worktreePath) continue;
       codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-      const profile = codexProfiles[0];
       const model = reviewerModel(step || { reviewer: this.config.reviewer?.model || 'codex:gpt-5.6-luna', mode: 'gate' }) || this.config.reviewer?.model || 'codex:gpt-5.6-luna';
-      const workerModel = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1)?.model;
-      if (chain.length > 0 && workerModel === model) {
-        this.advanceReviewStep(task, chain, 'reviewer_same_as_worker');
-        continue;
-      }
+      const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+      // Same model as the worker: still review, but from another Codex account in a fresh session.
+      const profile = lastWorker?.model === model
+        ? codexProfiles.find((p) => p.name !== lastWorker.profileName)
+        : codexProfiles[0];
+      if (!profile) continue;
       this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
     }
   }

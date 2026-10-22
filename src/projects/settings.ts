@@ -46,6 +46,8 @@ export const ProjectSettingsSchema = z.object({
     branch: z.string().min(1).max(200).optional(),
     /** Branch/ref the integration branch starts from; defaults to the project's defaultBranch. */
     baseRef: z.string().min(1).max(200).optional(),
+    /** Merge (and so self-deploy) on its own once a Codex reviewer approves the last review-chain step. */
+    autoMerge: z.boolean().default(false),
   }).default({}),
   ci: z.object({
     /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */

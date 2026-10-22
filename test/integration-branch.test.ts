@@ -310,6 +310,36 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(fs.existsSync(path.join(t2.worktreePath!, 'feat1.txt'))).toBe(true);
   });
 
+  it('auto-merges only after a Codex approval when the project opted in', async () => {
+    const repo = path.join(tmpDir, 'auto-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'auto-proj',
+      name: 'Auto merge',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { integration: { enabled: true, branch: 'agenthub/integration', autoMerge: true } },
+      merge: { enabled: true, worktrees: {}, checks: ['node -e "process.exit(0)"'], timeoutSec: 30 },
+    });
+    const intPath = path.join(tmpDir, 'integration', 'auto-proj');
+    ctx.service.createTask({ project: 'auto-proj', slug: 'feat', title: 'Feature', body: 'Do it', level: 'easy', start: true });
+    ctx.scheduler.tick();
+    const task = ctx.taskRepo.get('auto-proj/feat')!;
+    fs.writeFileSync(path.join(task.worktreePath!, 'auto.txt'), 'auto\n');
+    execFileSync('git', ['-C', task.worktreePath!, 'add', '.']);
+    execFileSync('git', ['-C', task.worktreePath!, 'commit', '-m', 'feat: auto']);
+    ctx.taskRepo.update(task.id, { status: 'review' });
+
+    // No Codex approval yet: nothing merges.
+    await ctx.service.autoMergeReviewedTask(task.id);
+    expect(ctx.taskRepo.get(task.id)!.status).toBe('review');
+
+    ctx.reviewRepo.insert({ id: 'codex-ok', taskId: task.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
+    await ctx.service.autoMergeReviewedTask(task.id);
+    expect(ctx.taskRepo.get(task.id)!.status).toBe('done');
+    expect(fs.existsSync(path.join(intPath, 'auto.txt'))).toBe(true);
+  });
+
   it('runs merge-time checks in integration worktree and rolls back on failure', async () => {
     const repo = path.join(tmpDir, 'checks-fail-repo');
     initGitRepo(repo, 'main');
