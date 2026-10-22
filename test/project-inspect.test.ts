@@ -114,14 +114,18 @@ describe('project inspection and creation at service level', () => {
     expect(fs.existsSync(target)).toBe(false);
   });
 
-  it('summarizes context and creates a tracking task for registered project', () => {
+  it('creates a tracking task and waits for the worker result before exposing a summary', async () => {
     const target = path.join(tmpDir, 'valid-repo');
     const created = ctx.service.createNewProject({ name: 'Summary Project', path: target, defaultBranch: 'main' });
     const result = ctx.service.summarizeProjectContext(created.id, { sessions: ['session-old.jsonl'] });
     expect(result.taskId).toBeTruthy();
-    expect(result.status).toBe('ready');
-    expect(result.summary).toContain('session-old.jsonl');
-    expect(result.summary).toContain('Kiến thức tóm tắt');
+    expect(['queued', 'waiting_quota']).toContain(result.status);
+    expect(result.summary).toBeNull();
+    expect(await ctx.service.getProjectContextSummary(created.id, result.taskId)).toMatchObject({
+      taskId: result.taskId,
+      status: result.status,
+      summary: null,
+    });
   });
 
   it('rejects summarizeProjectContext for non-existent project', () => {

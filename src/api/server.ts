@@ -209,6 +209,11 @@ export async function createServer(
     return service.summarizeProjectContext(id, req.body);
   });
 
+  fastify.get('/api/projects/:id/summarize-context/:taskId', async (req: FastifyRequest) => {
+    const { id, taskId } = req.params as { id: string; taskId: string };
+    return service.getProjectContextSummary(id, taskId);
+  });
+
   // Creating a repository is intentionally separate from registering an existing one.
   // Keep both spellings for clients that adopted the early wizard contract.
   for (const route of ['/api/projects/new', '/api/projects/create']) {

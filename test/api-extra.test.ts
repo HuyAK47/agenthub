@@ -1289,4 +1289,32 @@ describe('AgentHub API Extra Endpoints', () => {
       expect(reviewEvt.taskId).toBe('proj-status-a/t3');
     });
   });
+
+  describe('project wizard context API', () => {
+    it('returns bounded inspect metadata and exposes context task status without raw transcript content', async () => {
+      const repoPath = path.join(tmpDir, 'wizard-api-repo');
+      initGitRepo(repoPath);
+      ctx.projectRepo.insert({ id: 'wizard-api', name: 'Wizard API', path: repoPath, defaultBranch: 'main', maxParallel: 1 });
+
+      const inspect = await server.inject({ method: 'POST', url: '/api/projects/inspect', headers: authHeaders(), payload: { path: repoPath } });
+      expect(inspect.statusCode).toBe(200);
+      expect(JSON.parse(inspect.body)).toMatchObject({ path: repoPath, isGitRepo: true, sizeTruncated: false });
+
+      const start = await server.inject({
+        method: 'POST',
+        url: '/api/projects/wizard-api/summarize-context',
+        headers: authHeaders(),
+        payload: { sessions: ['old.jsonl'], selections: [{ session: 'old.jsonl', text: 'Use the stable API contract.' }] },
+      });
+      expect(start.statusCode).toBe(200);
+      const started = JSON.parse(start.body) as { taskId: string; status: string; summary: string | null };
+      expect(started.taskId).toContain('summarize-previous-context');
+      expect(started.summary).toBeNull();
+
+      const status = await server.inject({ method: 'GET', url: `/api/projects/wizard-api/summarize-context/${encodeURIComponent(started.taskId.replace('/', '~'))}`, headers: authHeaders() });
+      expect(status.statusCode).toBe(200);
+      expect(JSON.parse(status.body)).toMatchObject({ taskId: started.taskId, summary: null });
+      expect(status.body).not.toContain('Use the stable API contract.');
+    });
+  });
 });

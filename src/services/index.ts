@@ -1219,9 +1219,10 @@ export class AppService {
     return { ok: true };
   }
 
-  summarizeProjectContext(id: string, raw: unknown): { taskId: string; status: string; summary: string } {
+  summarizeProjectContext(id: string, raw: unknown): { taskId: string; status: string; summary: string | null } {
     const input = z.object({
       sessions: z.array(z.string().min(1)).min(1),
+      selections: z.array(z.object({ session: z.string().min(1), text: z.string().min(1).max(4_000) })).max(100).optional(),
       notes: z.string().optional(),
     }).parse(raw);
     const project = this.projectRepo.get(id);
@@ -1236,68 +1237,26 @@ export class AppService {
         '',
         'Selected sessions:',
         ...input.sessions,
+        ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
         ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
       ].join('\n'),
       level: 'easy',
       start: true,
     });
+    return { taskId: task.id, status: task.status, summary: null };
+  }
 
-    const home = process.env.HOME || os.homedir();
-    const encoded = project.path.replace(/[^a-zA-Z0-9]/g, '-');
-    const homeRoots = [
-      path.join(home, '.claude', 'projects', encoded),
-      path.join(os.homedir(), '.claude', 'projects', encoded),
-    ];
-
-    const extractedPoints: string[] = [];
-    for (const sessionName of input.sessions) {
-      if (sessionName.includes('..') || path.isAbsolute(sessionName)) continue;
-      for (const root of homeRoots) {
-        const filePath = path.join(root, sessionName);
-        try {
-          if (fs.existsSync(filePath)) {
-            const lines = fs.readFileSync(filePath, 'utf8').slice(0, 128_000).split('\n');
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const item = JSON.parse(line) as { message?: { content?: unknown } };
-                const val = item.message?.content;
-                const text = typeof val === 'string' ? val : Array.isArray(val) ? val.filter((p): p is { text: string } => Boolean(p && typeof p === 'object' && 'text' in p && typeof p.text === 'string')).map((p) => p.text).join(' ') : '';
-                if (text && text.length > 15) {
-                  const cleaned = text.replace(/\s+/g, ' ').trim().slice(0, 200);
-                  if (extractedPoints.length < 10 && !extractedPoints.includes(cleaned)) {
-                    extractedPoints.push(cleaned);
-                  }
-                }
-              } catch { /* skip non-json line */ }
-            }
-            break;
-          }
-        } catch { /* skip */ }
-      }
+  async getProjectContextSummary(projectId: string, taskIdParam: string) {
+    const project = this.projectRepo.get(projectId);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    const taskId = toTaskId(taskIdParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.projectId !== projectId || task.slug !== 'summarize-previous-context') {
+      throw new HttpError(404, 'not_found', 'Task tóm tắt không tồn tại');
     }
-
-    const summary = [
-      `# Kiến thức tóm tắt từ các phiên Claude Code trước đây (${project.name || id})`,
-      '',
-      '## Các phiên đã chọn',
-      ...input.sessions.map((s) => `- ${s}`),
-      '',
-      '## Kiến thức & Lưu ý chính',
-      ...(extractedPoints.length > 0
-        ? extractedPoints.map((p) => `- ${p}`)
-        : ['- Các quy ước và thông tin kiến trúc quan trọng từ phiên trước đã được tổng hợp để trợ lý tham khảo khi thực hiện nhiệm vụ.']),
-      ...(input.notes ? ['', '## Ghi chú bổ sung', input.notes] : []),
-      '',
-      '## Hướng dẫn cho Agent',
-      '- Tuân thủ các quy ước và kiến trúc dự án đã ghi nhận ở trên.',
-    ].join('\n');
-
-    return {
-      taskId: task.id,
-      status: 'ready',
-      summary,
-    };
+    const detail = await this.getTask(taskId);
+    const summary = detail.doneContent?.trim() || null;
+    return { taskId, status: task.status, summary };
   }
 
   createNewProject(raw: unknown): ProjectRow {
