@@ -285,7 +285,7 @@ export function registerBrainRoutes(
         projectId,
         projectName: project?.name || 'Hệ thống',
         mode: effectiveBrainMode(projectId, project, appService.config.brain),
-        engine: effectiveBrainEngine(project, appService.config.brain),
+        engine: appService.chatService?.getLastEngine(session?.id || (projectId ? `brain:${projectId}` : 'brain')) || effectiveBrainEngine(project, appService.config.brain),
         permissions: effectiveBrainPermission(project, appService.config.brain),
         sessionMode: session?.mode || (effectiveBrainPermission(project, appService.config.brain) === 'full' ? 'full' : 'safe'),
         sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),

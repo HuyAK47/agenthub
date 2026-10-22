@@ -29,6 +29,12 @@ describe('Integration branch and cross-project dependencies', () => {
     execFileSync('git', ['checkout', '-B', branch], { cwd: repoPath });
   }
 
+  function persistPassedCheck(taskId: string, suffix: string): void {
+    const runId = `check-${suffix}`;
+    ctx.runRepo.insert({ id: runId, taskId, engine: 'hub', model: 'checks', profileName: 'hub' });
+    ctx.db.prepare("INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, 'lint', 1, 0, 1, 'ok')").run(taskId, runId);
+  }
+
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-integration-test-'));
     process.env.AGENTHUB_HOME = tmpDir;
@@ -329,6 +335,7 @@ describe('Integration branch and cross-project dependencies', () => {
     execFileSync('git', ['-C', task.worktreePath!, 'add', '.']);
     execFileSync('git', ['-C', task.worktreePath!, 'commit', '-m', 'feat: auto']);
     ctx.taskRepo.update(task.id, { status: 'review' });
+    persistPassedCheck(task.id, 'auto');
 
     // No Codex approval yet: nothing merges.
     await ctx.service.autoMergeReviewedTask(task.id);
@@ -358,6 +365,7 @@ describe('Integration branch and cross-project dependencies', () => {
     execFileSync('git', ['-C', task1.worktreePath!, 'add', '.']);
     execFileSync('git', ['-C', task1.worktreePath!, 'commit', '-m', 'feat: 1']);
     ctx.taskRepo.update(task1.id, { status: 'review' });
+    persistPassedCheck(task1.id, 'review-1');
     ctx.reviewRepo.insert({ id: 'codex-ok-1', taskId: task1.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
 
     // 1. autoMerge is false: task stays in review
@@ -383,6 +391,7 @@ describe('Integration branch and cross-project dependencies', () => {
     execFileSync('git', ['-C', task2.worktreePath!, 'add', '.']);
     execFileSync('git', ['-C', task2.worktreePath!, 'commit', '-m', 'feat: conflict']);
     ctx.taskRepo.update(task2.id, { status: 'review' });
+    persistPassedCheck(task2.id, 'review-2');
     ctx.reviewRepo.insert({ id: 'codex-ok-2', taskId: task2.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
 
     const emitted: string[] = [];

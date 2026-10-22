@@ -169,6 +169,8 @@ export class ChatService {
   /** Messages people sent while the session was busy, delivered in order after the current turn. */
   private waitingUserMessages = new Map<string, WaitingUserMessage[]>();
   private runningTurns = new Map<string, RunningTurn>();
+  private lastEngines = new Map<string, 'claude' | 'codex'>();
+  private forceClaude = new Set<string>();
   private claudeBinOverride?: string;
   private codexBinOverride?: string;
   private persistentProcesses = new Map<string, PersistentProcess>();
@@ -434,6 +436,13 @@ export class ChatService {
     const step = snapshot.active ? snapshot.step : null;
     const session = this.chatSessionRepo.get(turn.sessionId);
     const project = turn.projectId ? this.projectRepo.get(turn.projectId) : undefined;
+    if (this.forceClaude.delete(turn.sessionId)) {
+      return {
+        engine: 'claude',
+        model: turn.model,
+        profileName: resolveClaudeProfile(this.profileRepo || { getAll: () => [] }, this.config.chat.claudeProfile, this.config.chat.claudeProfileExplicit),
+      };
+    }
     const requestedEngine = session?.kind === 'brain' ? effectiveBrainEngine(project, this.config.brain) : 'claude';
     const selectCodex = (configured?: string): string | null => {
       return resolveCodexProfile(
@@ -490,6 +499,10 @@ export class ChatService {
 
   setCodexBinOverride(bin?: string): void {
     this.codexBinOverride = bin;
+  }
+
+  getLastEngine(sessionId: string): 'claude' | 'codex' | undefined {
+    return this.lastEngines.get(sessionId);
   }
 
   stop(): void {
@@ -1399,6 +1412,7 @@ export class ChatService {
 
   private executeTurn(turn: QueuedTurn): void {
     const planned = this.failoverExecution(turn);
+    this.lastEngines.set(turn.sessionId, planned.engine);
     if (planned.pausedUntil) {
       const delay = Math.max(100, planned.pausedUntil * 1000 - Date.now());
       setTimeout(() => { this.queue.push(turn); this.processQueue(); }, delay);
@@ -1868,11 +1882,17 @@ export class ChatService {
       if (result?.isError || code !== 0) {
         const message = output || stderr.trim() || `Codex process exited with code ${code}`;
         const quota = new CodexEngine().detectQuota(`${output}\n${stderr}`);
-        if (quota.exhausted) {
+        const loginFailure = /(?:not logged in|login required|log in to codex|authentication|unauthori[sz]ed|未 đăng nhập)/i.test(`${message}\n${stderr}`);
+        if (quota.exhausted || loginFailure) {
           if (execution.profileName && this.quotaMarkRepo) {
-            this.quotaMarkRepo.mark(execution.profileName, 'codex', Math.floor(Date.now() / 1000) + 3600, 'codex_quota');
+            if (quota.exhausted) this.quotaMarkRepo.mark(execution.profileName, 'codex', Math.floor(Date.now() / 1000) + 3600, 'codex_quota');
           }
-          this.eventBus.emit('claude.fallback_changed', undefined, { reason: 'codex_quota', step: null });
+          this.eventBus.emit('claude.fallback_changed', undefined, { reason: quota.exhausted ? 'codex_quota' : 'codex_login', step: null });
+          this.forceClaude.add(turn.sessionId);
+          this.chatSessionRepo.setBusy(turn.sessionId, 0);
+          this.setSessionState(turn.sessionId, 'idle');
+          this.executeTurn(turn);
+          return;
         }
         this.setSessionState(turn.sessionId, 'error');
         this.emitChatError(turn.sessionId, turn.messageId, message);

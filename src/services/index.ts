@@ -3093,11 +3093,11 @@ export class AppService {
     const project = this.projectRepo.get(task.projectId);
     if (!project) return;
     const settings = projectSettings(project);
-    if (!(settings.review.autoMerge || settings.integration.autoMerge) || (!settings.integration.enabled && !project.merge)) return;
+    if (!(settings.review.autoMerge || settings.integration.autoMerge)) return;
     const last = this.reviewRepo.getByTask(taskId).at(-1);
     if (!last || (last.actor !== 'codex-reviewer' && last.actor !== 'claude-reviewer') || last.verdict !== 'approved') return;
     const checks = this.scheduler.getCheckResults(taskId);
-    if (checks.length > 0 && checks.some((c) => !c.ok)) return;
+    if (checks.length === 0 || checks.some((c) => !c.ok)) return;
     if (this.failedAutoMerges.has(taskId)) return;
     // The ready event can arrive twice for one approval; the first call is already merging.
     if (this.reviewingTasks.has(taskId)) return;
