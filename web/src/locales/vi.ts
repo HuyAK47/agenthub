@@ -977,6 +977,12 @@ export const vi = {
     cardCI: 'CI:',
     integrationDisabled: 'Tắt',
     integrationEnabledBadge: 'Bật ({branch})',
+    pinKnowledge: 'Ghim ghi chú',
+    unpinKnowledge: 'Bỏ ghim ghi chú',
+    knowledge: 'Kiến thức',
+    addKnowledgePlaceholder: 'Thêm ghi chú kiến thức...',
+    addKnowledgeBtn: 'Thêm',
+    redeployBtn: 'Deploy lại',
   },
   settings: {
     title: 'Cài đặt hệ thống',

@@ -725,6 +725,8 @@ export const ChatPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsModalOpen(true)}
+              aria-label={t('extra.newChat')}
+              title={t('extra.newChat')}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-surface-2)] hover:bg-[var(--t-hover)] border border-[var(--t-border)] text-[var(--t-text)] transition-colors cursor-pointer shrink-0"
             >
               <Plus className="w-3.5 h-3.5" />

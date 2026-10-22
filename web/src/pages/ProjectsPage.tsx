@@ -978,6 +978,7 @@ export const ProjectsPage: React.FC = () => {
                       variant="ghost"
                       size="sm"
                       title={t('extra.deleteProject')}
+                      aria-label={t('extra.deleteProject')}
                       onClick={() => {
                         if (window.confirm(t('projects.archiveConfirm', { name: proj.name }))) {
                           deleteMutation.mutate({ id: proj.id });
@@ -1129,7 +1130,7 @@ export const ProjectsPage: React.FC = () => {
                   className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] px-2 h-7"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
-                  <span>Kiến thức</span>
+                  <span>{t('projects.knowledge')}</span>
                 </Button>
 
                 {knowledgeProject === proj.id && (
@@ -1138,7 +1139,7 @@ export const ProjectsPage: React.FC = () => {
                       <Input
                         value={knowledgeDraft}
                         onChange={(e) => setKnowledgeDraft(e.target.value)}
-                        placeholder={t('extra.addKnowledgePlaceholder')}
+                        placeholder={t('projects.addKnowledgePlaceholder')}
                         className="text-xs h-8"
                       />
                       <Button
@@ -1152,7 +1153,7 @@ export const ProjectsPage: React.FC = () => {
                         onClick={() => addKnowledgeMutation.mutate()}
                         className="h-8"
                       >
-                        {t('extra.knowledgeAdd')}
+                        {t('projects.addKnowledgeBtn')}
                       </Button>
                     </div>
                     <DataTable
@@ -1172,18 +1173,27 @@ export const ProjectsPage: React.FC = () => {
                         render: (entry) => <div className="flex items-start gap-2 text-xs">
                         <button
                           type="button"
-                          title={t('extra.pinKnowledge')}
+                          title={
+                            entry.pinned
+                              ? t('projects.unpinKnowledge')
+                              : t('projects.pinKnowledge')
+                          }
+                          aria-label={
+                            entry.pinned
+                              ? t('projects.unpinKnowledge')
+                              : t('projects.pinKnowledge')
+                          }
                           onClick={() =>
                             updateKnowledgeMutation.mutate({
                               id: entry.id,
                               pinned: !entry.pinned,
                             })
                           }
-                          className={
+                          className={`cursor-pointer ${
                             entry.pinned
                               ? 'text-[var(--t-accent)]'
                               : 'text-[var(--t-text-3)]'
-                          }
+                          }`}
                         >
                           <Pin className="w-3.5 h-3.5 mt-0.5" />
                         </button>
@@ -1205,7 +1215,9 @@ export const ProjectsPage: React.FC = () => {
                           onClick={() =>
                             deleteKnowledgeMutation.mutate(entry.id)
                           }
-                          className="text-[var(--t-crit)]"
+                          aria-label={t('common.delete')}
+                          title={t('common.delete')}
+                          className="text-[var(--t-crit)] cursor-pointer"
                         >
                           ×
                         </button>

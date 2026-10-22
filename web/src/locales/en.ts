@@ -978,6 +978,12 @@ export const en: typeof vi = {
     cardCI: 'CI:',
     integrationDisabled: 'Disabled',
     integrationEnabledBadge: 'Enabled ({branch})',
+    pinKnowledge: 'Pin note',
+    unpinKnowledge: 'Unpin note',
+    knowledge: 'Knowledge',
+    addKnowledgePlaceholder: 'Add knowledge note...',
+    addKnowledgeBtn: 'Add',
+    redeployBtn: 'Redeploy',
   },
   settings: {
     title: 'System Settings',
