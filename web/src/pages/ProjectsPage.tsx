@@ -52,6 +52,7 @@ function ProjectSettingsForm({
 }) {
   const { t } = useLocale();
   const { suggestModalTour } = useTour();
+  const [confirmFullPermission, setConfirmFullPermission] = useState(false);
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) =>
     onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () =>
@@ -87,10 +88,9 @@ function ProjectSettingsForm({
             value={value.brain.permissions ?? 'inherit'}
             onChange={(e) => {
               const permissions = e.target.value;
-              if (
-                permissions === 'full' &&
-                (suggestModalTour('modal-full-permission'), !window.confirm(t('extra.fullModeConfirm')))
-              ) {
+              if (permissions === 'full') {
+                setConfirmFullPermission(true);
+                suggestModalTour('modal-full-permission');
                 return;
               }
               update('brain', { permissions });
@@ -313,6 +313,18 @@ function ProjectSettingsForm({
         <p className="text-[11px] text-[var(--t-text-3)]">
           {t('projects.settingsPartialHint')}
         </p>
+      )}
+      {confirmFullPermission && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" data-tour="modal-full-permission">
+          <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-2xl">
+            <h2 className="text-base font-semibold">{t('common.confirm')}</h2>
+            <p className="mt-2 text-sm text-[var(--t-text-2)]">{t('extra.fullModeConfirm')}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="button-secondary" onClick={() => setConfirmFullPermission(false)}>{t('common.cancel')}</button>
+              <button type="button" className="button-primary" onClick={() => { update('brain', { permissions: 'full' }); setConfirmFullPermission(false); }}>{t('common.confirm')}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -574,7 +586,6 @@ export const ProjectsPage: React.FC = () => {
                   {t('projects.nameHint')}
                 </p>
                 <Input
-                  data-tour="project-default-branch"
                   type="text"
                   placeholder={t('projects.namePlaceholder')}
                   value={name}
@@ -605,6 +616,7 @@ export const ProjectsPage: React.FC = () => {
                   {t('projects.branchHint')}
                 </p>
                 <Input
+                  data-tour="project-default-branch"
                   type="text"
                   placeholder="main"
                   value={defaultBranch}

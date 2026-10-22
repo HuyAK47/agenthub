@@ -131,9 +131,9 @@ export const pageTours: Record<string, TourDefinition> = {
 
 export const modalTourDefinitions: TourDefinition[] = [
   { id: 'modal-add-account', steps: [
-    { id: 'provider', selector: '[data-tour="modal-add-account"]', title: 'tour.steps.modal-add-account.provider.title', content: 'tour.steps.modal-add-account.provider.content' },
+    { id: 'provider', selector: '[data-tour="account-provider"]', title: 'tour.steps.modal-add-account.provider.title', content: 'tour.steps.modal-add-account.provider.content' },
     { id: 'login-method', selector: '[data-tour="account-login-method"]', title: 'tour.steps.modal-add-account.login-method.title', content: 'tour.steps.modal-add-account.login-method.content' },
-    { id: 'token', selector: '[data-tour="account-token"]', title: 'tour.steps.modal-add-account.token.title', content: 'tour.steps.modal-add-account.token.content' },
+    { id: 'account-name', selector: '[data-tour="account-name"]', title: 'tour.steps.modal-add-account.account-name.title', content: 'tour.steps.modal-add-account.account-name.content' },
   ] },
   { id: 'modal-register-project', steps: [
     { id: 'path', selector: '[data-tour="modal-register-project"]', title: 'tour.steps.modal-register-project.path.title', content: 'tour.steps.modal-register-project.path.content' },
@@ -143,13 +143,12 @@ export const modalTourDefinitions: TourDefinition[] = [
   { id: 'modal-create-task', steps: [
     { id: 'task', selector: '[data-tour="modal-create-task"]', title: 'tour.steps.modal-create-task.task.title', content: 'tour.steps.modal-create-task.task.content' },
     { id: 'difficulty', selector: '[data-tour="task-difficulty"]', title: 'tour.steps.modal-create-task.difficulty.title', content: 'tour.steps.modal-create-task.difficulty.content' },
-    { id: 'dependencies', selector: '[data-tour="task-dependencies"]', title: 'tour.steps.modal-create-task.dependencies.title', content: 'tour.steps.modal-create-task.dependencies.content' },
   ] },
   { id: 'modal-new-session', steps: [
     { id: 'project', selector: '[data-tour="modal-new-session"]', title: 'tour.steps.modal-new-session.project.title', content: 'tour.steps.modal-new-session.project.content' },
     { id: 'mode', selector: '[data-tour="session-mode"]', title: 'tour.steps.modal-new-session.mode.title', content: 'tour.steps.modal-new-session.mode.content' },
   ] },
-  { id: 'modal-full-permission', steps: [{ id: 'confirm', selector: '[data-tour="modal-full-permission"]', title: 'tour.steps.modal-full-permission.confirm.title', content: 'tour.steps.modal-full-permission.confirm.content', note: 'tour.steps.modal-full-permission.confirm.note' }] },
+  { id: 'modal-full-permission', steps: [{ id: 'confirm', selector: '[data-tour="modal-full-permission"]', title: 'tour.steps.modal-full-permission.confirm.title', content: 'tour.steps.modal-full-permission.confirm.content' }] },
 ];
 
 const noOpTourContext: TourContextValue = {

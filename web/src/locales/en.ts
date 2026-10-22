@@ -752,6 +752,10 @@ export const en: typeof vi = {
       "title": "Login method",
       "content": "Terminal starts an interactive login and is best when a browser is available; Refresh Token uses a token from the provider session. Select a method to change authentication, and never share the token."
     },
+    "account-name": {
+      "title": "Account name",
+      "content": "This is the local name for the profile, not a secret token. Use a clear name such as work-gemini or team-codex; creating it prepares the profile for login and quota tracking."
+    },
     "token": {
       "title": "Refresh Token",
       "content": "Use this field when you are not signing in through Terminal. Get the token from the provider's official authentication flow, then create the profile. It is secret, and profiles for one email still share quota."

@@ -7,6 +7,9 @@ import { TourProvider, modalTourDefinitions, pageTours, tourDefinitions, useTour
 import { translations, translate } from '../locales';
 import { HelpPanel } from '../components/tour/HelpPanel';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
+import { CreateTaskPage } from '../pages/CreateTaskPage';
+import { AddProfileModal } from '../pages/ProfilesPage';
+import { NewSessionModal } from '../components/chat/NewSessionModal';
 import * as client from '../api/client';
 
 function wrapper(children: React.ReactNode) {
@@ -79,5 +82,36 @@ describe('tour help and tooltips', () => {
     fireEvent.keyDown(button, { key: 'Enter' });
     fireEvent.click(button);
     expect(screen.getByRole('tooltip')).toHaveTextContent('Helpful context');
+  });
+
+  it('keeps modal tour selectors attached to the matching controls', async () => {
+    wrapper(<CreateTaskPage />);
+    await waitFor(() => expect(document.querySelector('[data-tour="modal-create-task"]')).toBeInTheDocument());
+    expect(document.querySelector('[data-tour="task-difficulty"]')?.textContent).toContain('Complexity');
+    expect(document.querySelector('[data-tour="task-dependencies"]')).toBeNull();
+
+    const { unmount } = wrapper(
+      <AddProfileModal onClose={vi.fn()} onCreated={vi.fn()} onImported={vi.fn()} />,
+    );
+    expect(document.querySelector('[data-tour="account-provider"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-tour="account-name"]')?.textContent).toContain('Account name');
+    fireEvent.click(screen.getByRole('button', { name: 'Import Refresh Token' }));
+    expect(document.querySelector('[data-tour="account-token"]')).toBeInTheDocument();
+    unmount();
+
+    wrapper(
+      <NewSessionModal isOpen onClose={vi.fn()} onSubmit={vi.fn()} />,
+    );
+    expect(document.querySelector('[data-tour="session-mode"]')?.textContent).toContain('Operation mode');
+    expect(document.querySelector('[data-tour="session-mode"]')?.textContent).not.toContain('Project (optional)');
+  });
+
+  it('has a concrete target for every modal tour step', () => {
+    for (const tour of modalTourDefinitions) {
+      for (const step of tour.steps) {
+        expect(step.selector).toMatch(/^\[data-tour="[^"]+"\]$/);
+        expect(step.note).toBeUndefined();
+      }
+    }
   });
 });

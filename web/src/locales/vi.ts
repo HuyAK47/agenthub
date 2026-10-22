@@ -751,6 +751,10 @@ export const vi = {
       "title": "Cách đăng nhập",
       "content": "Terminal mở luồng đăng nhập tương tác và phù hợp khi có trình duyệt; Refresh Token dùng token đã lấy từ phiên nhà cung cấp. Bấm phương thức để đổi cách xác thực; không chia sẻ token."
     },
+    "account-name": {
+      "title": "Tên tài khoản",
+      "content": "Đây là tên cục bộ của hồ sơ, không phải token bí mật. Dùng tên dễ nhận biết như work-gemini hoặc team-codex; bấm Tạo để chuẩn bị hồ sơ cho đăng nhập và theo dõi quota."
+    },
     "token": {
       "title": "Refresh Token",
       "content": "Trường này nhận refresh token khi không dùng Terminal. Dùng token lấy từ trang/CLI xác thực chính thức của nhà cung cấp; bấm Tạo để lưu hồ sơ. Token là bí mật và nhiều hồ sơ cùng email vẫn dùng chung quota."

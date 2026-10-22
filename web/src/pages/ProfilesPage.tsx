@@ -809,7 +809,7 @@ function Modal({
   );
 }
 
-function AddProfileModal({
+export function AddProfileModal({
   onClose,
   onCreated,
   onImported,
@@ -976,7 +976,7 @@ function AddProfileModal({
                 {error}
               </p>
             )}
-            <label data-tour="account-token" className="block text-sm">
+            <label data-tour="account-name" className="block text-sm">
               {t('profiles.accountName')}
               <input
                 autoFocus
@@ -1079,6 +1079,7 @@ function AddProfileModal({
                 <label className="block text-sm">
                   {t('profiles.cockpitJsonLabel')}
                   <textarea
+                    data-tour="account-token"
                     autoFocus
                     spellCheck={false}
                     autoComplete="off"
