@@ -172,6 +172,7 @@ export interface WorkerEnvOptions {
   project?: { settings?: string | null } | null;
   guards?: boolean;
   cwd?: string;
+  workerCount?: number;
 }
 
 const HUB_GIT_NAME = 'AgentHub';
@@ -194,6 +195,14 @@ export function workerEnvironment(
   options?: WorkerEnvOptions | { settings?: string | null } | null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, AGENTHUB_WORKER: '1' };
+  const workerCount = Math.max(1, Math.floor(options && 'workerCount' in options ? (options.workerCount || 1) : Number(env.AGENTHUB_WORKER_COUNT || 1)));
+  const threadLimit = Math.max(1, Math.floor(os.cpus().length / workerCount));
+  env.VITEST_MAX_THREADS = String(threadLimit);
+  env.VITEST_MIN_THREADS = '1';
+  env.VITEST_MAX_FORKS = String(threadLimit);
+  env.VITEST_MIN_FORKS = '1';
+  env.JEST_WORKERS = String(threadLimit);
+  env.UV_THREADPOOL_SIZE = String(Math.min(4, threadLimit));
   if (!hasGitIdentity(options && 'cwd' in options ? options.cwd : undefined, env)) {
     env.GIT_AUTHOR_NAME ??= HUB_GIT_NAME;
     env.GIT_AUTHOR_EMAIL ??= HUB_GIT_EMAIL;

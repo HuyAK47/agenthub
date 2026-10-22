@@ -19,6 +19,7 @@ import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLi
 import { findClaudeBin } from './chat/claude.js';
 import { getPlatform } from './platform/index.js';
 import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
+import { PerfCollector, formatPerfTable } from './perf.js';
 
 export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
 import { assertWorkerMayControlHub } from './worker-guard.js';
@@ -144,6 +145,18 @@ export async function cmdDoctor(
   return report;
 }
 
+export async function cmdPerf(extraArgs: string[] = []): Promise<void> {
+  const raw = extraArgs.find((arg) => arg.startsWith('--seconds='))?.slice('--seconds='.length)
+    || (extraArgs.includes('--seconds') ? extraArgs[extraArgs.indexOf('--seconds') + 1] : '60');
+  const seconds = Math.max(0, Math.min(3600, Number(raw) || 60));
+  const collector = new PerfCollector(Math.max(2, Math.ceil(seconds / 30) + 1));
+  collector.sample();
+  if (seconds > 0) await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+  const samples = collector.getSamples();
+  if (extraArgs.includes('--json')) console.log(JSON.stringify({ samples }, null, 2));
+  else console.log(formatPerfTable(samples));
+}
+
 export async function cmdRollback(extraArgs: string[] = [], projectRootOverride?: string): Promise<string> {
   const currentRoot = projectRootOverride || findProjectRoot();
   const appRoot = path.dirname(currentRoot);
@@ -256,6 +269,10 @@ async function main() {
       await cmdDoctor(config, args.slice(1));
       break;
 
+    case 'perf':
+      await cmdPerf(args.slice(1));
+      break;
+
     case 'status':
       await cmdStatus(config);
       break;
@@ -320,6 +337,7 @@ Cách dùng:
   agenthub mcp-install [--print]      Đăng ký MCP server với Claude Code
   agenthub link                       Tạo symlink vào ~/.local/bin/agenthub
   agenthub doctor [--json]            Kiểm tra môi trường và cấu hình hệ thống
+  agenthub perf [--seconds 60] [--json] Đo CPU/RSS theo nhóm tiến trình
   agenthub status                     Xem trạng thái
   agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
   agenthub usage                      Xem usage quota các hồ sơ

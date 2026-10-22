@@ -1,4 +1,5 @@
 import os from 'node:os';
+import fs from 'node:fs';
 import { getPlatform } from './platform/index.js';
 
 export interface LoadConfig {
@@ -19,12 +20,15 @@ export interface LoadSnapshot {
   recoveringSince: number | null;
   highSince?: number | null;
   autoPauseTriggered?: boolean;
+  pressure?: PressureSnapshot;
 }
+export interface PressureSnapshot { cpuSome: number | null; memorySome: number | null; ioSome: number | null; }
 
 export interface LoadGuardOptions {
   readLoad?: () => number;
   readFreeMemBytes?: () => number;
   now?: () => number;
+  readPressure?: () => PressureSnapshot;
 }
 
 export const DEFAULT_LOAD_CONFIG: LoadConfig = {
@@ -42,6 +46,13 @@ function readFreeMemBytes(): number {
   return getPlatform().freeMemoryBytes();
 }
 
+function readPressure(): PressureSnapshot {
+  const read = (name: string): number | null => {
+    try { const match = fs.readFileSync(`/proc/pressure/${name}`, 'utf8').match(/some\s+avg10=([\d.]+)/); return match ? Number(match[1]) : null; } catch { return null; }
+  };
+  return { cpuSome: read('cpu'), memorySome: read('memory'), ioSome: read('io') };
+}
+
 export class LoadGuard {
   private overloaded = false;
   private recoveringSince: number | null = null;
@@ -56,7 +67,12 @@ export class LoadGuard {
     const now = (this.options.now || Date.now)();
     const load1 = (this.options.readLoad || (() => os.loadavg()[0]))();
     const freeMemGB = (this.options.readFreeMemBytes || readFreeMemBytes)() / (1024 ** 3);
-    const high = load1 > this.config.high || freeMemGB < this.config.minFreeMemGB;
+    const pressure = (this.options.readPressure || readPressure)();
+    // Linux PSI reports percentages (not fractions). An injected reader is also
+    // honored when load/memory are mocked, which keeps pressure behavior testable.
+    const pressureHigh = (!this.options.readLoad || Boolean(this.options.readPressure))
+      && [pressure.cpuSome, pressure.memorySome, pressure.ioSome].some((value) => value !== null && value >= 20);
+    const high = load1 > this.config.high || freeMemGB < this.config.minFreeMemGB || pressureHigh;
     const ok = load1 < this.config.ok && freeMemGB > this.config.minFreeMemGB;
 
     if (!this.config.enabled) {
@@ -100,6 +116,7 @@ export class LoadGuard {
       recoveringSince: this.recoveringSince,
       highSince: this.highSince,
       autoPauseTriggered,
+      pressure,
     };
     return this.snapshot;
   }

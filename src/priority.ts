@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { getPlatform } from './platform/index.js';
 
 const processGroups = new Set<number>();
@@ -43,9 +44,17 @@ export function runInProcessGroup(
     let output = '';
     let timedOut = false;
     let settled = false;
+    const workerCount = Math.max(1, Number(opts.env.AGENTHUB_WORKER_COUNT || 1));
+    const threadLimit = Math.max(1, Math.floor(os.cpus().length / workerCount));
+    const limitedEnv = {
+      ...opts.env,
+      VITEST_MAX_THREADS: String(threadLimit), VITEST_MIN_THREADS: '1',
+      VITEST_MAX_FORKS: String(threadLimit), VITEST_MIN_FORKS: '1',
+      JEST_WORKERS: String(threadLimit), UV_THREADPOOL_SIZE: String(Math.min(4, threadLimit)),
+    };
     const child = spawn(exe, finalArgs, {
       cwd: opts.cwd,
-      env: { ...opts.env, ...LIMITED_TEST_ENV },
+      env: limitedEnv,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

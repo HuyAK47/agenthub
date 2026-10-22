@@ -11,6 +11,17 @@ const CONFLICT_MARKER_REGEX = /^(<{7}|={7}|>{7})( |$)/m;
 export interface CheckDefinition { name: string; cmd: string[]; timeoutSec?: number }
 export interface CheckResult { name: string; ok: boolean; exitCode: number | null; durationMs: number; outputTail: string; runId?: string; runStartedAt?: string }
 
+class CheckQueue {
+  private active = 0;
+  private pending: Array<() => void> = [];
+  async run<T>(job: () => Promise<T>): Promise<T> {
+    if (this.active >= 2) await new Promise<void>((resolve) => this.pending.push(resolve));
+    this.active++;
+    try { return await job(); } finally { this.active--; this.pending.shift()?.(); }
+  }
+}
+const checkQueue = new CheckQueue();
+
 export function detectChecks(projectPath: string): CheckDefinition[] {
   const read = (file: string): Record<string, unknown> | null => { try { return JSON.parse(fs.readFileSync(path.join(projectPath, file), 'utf8')) as Record<string, unknown>; } catch { return null; } };
   const pkg = read('package.json');
@@ -129,7 +140,7 @@ export class CheckRunner {
     const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
     const configured = project.checks ? JSON.parse(project.checks) as CheckDefinition[] : detectChecks(repo);
     const results: CheckResult[] = [];
-    for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await runOne(check, repo, hubHome, project); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
+    for (const check of [...configured, ...mandatoryChecks(repo, task, project)]) { const result = await checkQueue.run(() => runOne(check, repo, hubHome, project)); results.push(result); this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail); }
     return { passed: results.every((r) => r.ok), failed: results.filter((r) => !r.ok).map((r) => r.name), results };
   }
   private async prepare(repo: string, projectPath?: string, project?: ProjectRow): Promise<void> {
