@@ -1804,6 +1804,44 @@ export class ChatSessionRepo {
       .all(archived, pattern, pattern).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
   }
 
+  page(options?: {
+    search?: string;
+    archived?: number | null;
+    limit?: string | number;
+    cursor?: string;
+  }): PageResult<ChatSessionRow> {
+    const archived = options?.archived !== undefined ? options.archived : 0;
+    const search = options?.search?.trim();
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (archived !== null) {
+      conditions.push('s.archived = ?');
+      values.push(archived);
+    }
+    if (search) {
+      const escaped = search.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+      const pattern = `%${escaped}%`;
+      conditions.push("(s.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM chat_messages m WHERE m.sessionId = s.id AND m.content LIKE ? ESCAPE '\\'))");
+      values.push(pattern, pattern);
+    }
+    const cursor = decodeCursor(options?.cursor);
+    if (options?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    if (cursor) {
+      conditions.push('(s.updatedAt < ? OR (s.updatedAt = ? AND s.id < ?))');
+      values.push(cursor.value, cursor.value, cursor.id);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = cursor ? conditions.slice(0, -1) : conditions;
+    const countValues = cursor ? values.slice(0, -3) : values;
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM chat_sessions s${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
+    const limit = parsePageSize(options?.limit);
+    const rows = this.db.prepare(`SELECT s.* FROM chat_sessions s${where} ORDER BY s.updatedAt DESC, s.id DESC LIMIT ?`).all(...values, limit + 1) as ChatSessionRow[];
+    const hasMore = rows.length > limit;
+    const items = (hasMore ? rows.slice(0, limit) : rows).map((session) => this.normalizeAssistantSession(session));
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.updatedAt, last.id) : null };
+  }
+
   get(id: string): ChatSessionRow | undefined {
     const session = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined;
     return session ? this.normalizeAssistantSession(session) : undefined;

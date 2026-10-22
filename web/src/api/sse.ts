@@ -32,6 +32,31 @@ function patchTaskCaches(queryClient: QueryClient, taskId: string, payload: unkn
   return patched;
 }
 
+function patchChatSessionCaches(queryClient: QueryClient, sessionId: string, payload: unknown): boolean {
+  if (!sessionId) return false;
+  const data = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  let patched = false;
+  queryClient.setQueriesData<Array<Record<string, unknown>> | { items: Array<Record<string, unknown>> }>({ queryKey: ['chatSessions'] }, (current) => {
+    if (Array.isArray(current)) {
+      const index = current.findIndex((item) => item && typeof item === 'object' && (item as { id?: string }).id === sessionId);
+      if (index < 0) return current;
+      patched = true;
+      const next = [...current];
+      next[index] = { ...(next[index] as object), ...(data.state ? { state: data.state } : {}), ...(data.busy !== undefined ? { busy: data.busy } : {}) };
+      return next;
+    }
+    if (!current || typeof current !== 'object' || !Array.isArray((current as { items?: unknown[] }).items)) return current;
+    const page = current as { items: Array<{ id?: string }>; [key: string]: unknown };
+    const index = page.items.findIndex((item) => item.id === sessionId);
+    if (index < 0) return current;
+    patched = true;
+    const items = [...page.items];
+    items[index] = { ...items[index], ...(data.state ? { state: data.state } : {}), ...(data.busy !== undefined ? { busy: data.busy } : {}) };
+    return { ...page, items };
+  });
+  return patched;
+}
+
 export function isSSEConnected(): boolean {
   return isConnected;
 }
@@ -212,7 +237,12 @@ export function connectSSE(queryClient: QueryClient): () => void {
           queryClient.invalidateQueries({ queryKey: ['status'] });
           queryClient.invalidateQueries({ queryKey: ['brain'] });
         } else if (type.startsWith('chat.')) {
-          queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+          const sessionId = typeof eventItem.payload === 'object' && eventItem.payload
+            ? String((eventItem.payload as { sessionId?: string }).sessionId || '')
+            : '';
+          if (!patchChatSessionCaches(queryClient, sessionId, eventItem.payload)) {
+            queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+          }
         } else if (type.startsWith('batch.')) {
           queryClient.invalidateQueries({ queryKey: ['batches'] });
         }

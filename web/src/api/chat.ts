@@ -28,8 +28,25 @@ export function normalizeMessagesResponse(
   };
 }
 
-export async function getChatSessions(): Promise<ChatSession[]> {
-  return apiFetch<ChatSession[]>('/api/chat/sessions');
+export interface ChatSessionPage {
+  items: ChatSession[];
+  total: number;
+  nextCursor: string | null;
+}
+
+export function getChatSessions(): Promise<ChatSession[]>;
+export function getChatSessions(options: { search?: string; archived?: '0' | '1' | 'all'; limit: number; cursor?: string }): Promise<ChatSessionPage>;
+export function getChatSessions(options: { search?: string; archived?: '0' | '1' | 'all'; limit?: undefined; cursor?: string }): Promise<ChatSession[]>;
+export async function getChatSessions(options?: { search?: string; archived?: '0' | '1' | 'all'; limit?: number; cursor?: string }): Promise<ChatSession[] | ChatSessionPage> {
+  const query = new URLSearchParams();
+  if (options?.search) query.set('search', options.search);
+  if (options?.archived) query.set('archived', options.archived);
+  if (options?.limit) query.set('limit', String(options.limit));
+  if (options?.cursor) query.set('cursor', options.cursor);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return options?.limit
+    ? apiFetch<ChatSessionPage>(`/api/chat/sessions${suffix}`)
+    : apiFetch<ChatSession[]>(`/api/chat/sessions${suffix}`);
 }
 
 export async function decideChatPermission(

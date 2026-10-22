@@ -26,6 +26,7 @@ import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
 import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage, ClaudeQuotaSignal } from './parse.js';
 import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
+import { decodeCursor } from '../pagination.js';
 import {
   findClaudeBin,
   checkClaudePartialSupport,
@@ -503,6 +504,27 @@ export class ChatService {
     const sessions = search
       ? this.chatSessionRepo.search(search, { archived: archivedFilter })
       : this.chatSessionRepo.getAll({ archived: archivedFilter });
+    return this.mapSessions(sessions);
+  }
+
+  pageSessions(options?: { search?: string; archived?: string | number | boolean; limit?: string | number; cursor?: string }) {
+    const archivedParam = options?.archived;
+    const archivedFilter: number | null =
+      archivedParam === 'all'
+        ? null
+        : archivedParam === '1' || archivedParam === 1 || archivedParam === true
+        ? 1
+        : 0;
+    const page = this.chatSessionRepo.page({
+      search: options?.search,
+      archived: archivedFilter,
+      limit: options?.limit,
+      cursor: options?.cursor,
+    });
+    return { ...page, items: this.mapSessions(page.items) };
+  }
+
+  private mapSessions(sessions: ChatSessionRow[]) {
     return sessions.map((s) => {
       const last = this.chatMessageRepo.getLastBySession(s.id);
       const res: {
@@ -2114,7 +2136,11 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
 
   // GET /api/chat/sessions
   fastify.get('/api/chat/sessions', async (req: FastifyRequest) => {
-    const query = req.query as { search?: string; archived?: string };
+    const query = req.query as { search?: string; archived?: string; limit?: string; cursor?: string };
+    if (query.limit !== undefined) {
+      if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+      return chatService.pageSessions(query);
+    }
     return chatService.listSessions(query);
   });
 
