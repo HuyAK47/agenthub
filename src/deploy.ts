@@ -36,14 +36,6 @@ export function formatTime(isoOrDate: string | Date | number): string {
   return `${hours}:${minutes}`;
 }
 
-function cleanWorkerShims(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const p = (env.PATH || '')
-    .split(path.delimiter)
-    .filter((d) => !d.includes(`${path.sep}shims${path.sep}worker`))
-    .join(path.delimiter);
-  return { ...env, PATH: p };
-}
-
 interface ProjectPushState {
   lastPushedAt?: string;
   nextPushAt?: string;
@@ -62,8 +54,7 @@ export class DeployService {
     private eventBus: EventBus,
     private debounceMs = 60_000,
     private commandRunner: GitRunner = async (cwd, args) => {
-      const env = cleanWorkerShims(process.env);
-      const result = await runInProcessGroup('git', args, { cwd, env, timeoutMs: 120_000, maxOutput: 1024 * 1024 });
+      const result = await runInProcessGroup('git', args, { cwd, env: process.env, timeoutMs: 120_000, maxOutput: 1024 * 1024 });
       return { code: result.code ?? 1, output: result.output };
     },
     private processRunner: ProcessRunner = async (command, args, options) => {

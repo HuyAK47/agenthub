@@ -46,6 +46,16 @@ function initRepo(repo: string, remote?: string): string {
   return git(repo, ['rev-parse', 'HEAD']);
 }
 
+const testGitRunner = async (cwd: string, args: string[]) => {
+  try {
+    const output = git(cwd, args);
+    return { code: 0, output };
+  } catch (err: unknown) {
+    const error = err as { status?: number; message?: string };
+    return { code: error.status ?? 1, output: error.message ?? String(err) };
+  }
+};
+
 function deployEventBus(events: Array<{ type: string; payload: unknown }>) {
   return {
     emit: (type: string, _id?: string, payload?: unknown) => { events.push({ type, payload }); return true; },
@@ -354,7 +364,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
 
@@ -397,7 +407,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => { stepRuns++; return { code: 0, output: '' }; },
     );
 
@@ -443,7 +453,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
 
@@ -538,7 +548,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
 
@@ -566,7 +576,7 @@ describe('DeployService', () => {
       { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: repo } }) }) } as never,
       deployEventBus(f.events) as never,
       0,
-      undefined,
+      testGitRunner,
       async () => ({ code: 0, output: '' }),
     );
     service2.start();
