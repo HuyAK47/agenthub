@@ -50,6 +50,10 @@ sh /tmp/agenthub-install.sh --uninstall
 sh /tmp/agenthub-install.sh --uninstall --purge
 ```
 
+### What if installation fails?
+
+You do not need to clean anything by hand. If download, native-module validation, setup, the CLI link, or service installation fails, the installer removes its temporary directories and restores `current`, the CLI link, and the service to the previous release (when available). Detailed output is kept at `${TMPDIR:-/tmp}/agenthub-install-<time>.log`; include that file when asking for help. The previous release remains usable.
+
 ### Manual Setup:
 
 ```bash
