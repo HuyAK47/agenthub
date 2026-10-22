@@ -13,15 +13,15 @@ type SessionDetail = Session & { turns: Turn[] };
 const formatTokens = (value: number, locale: string) => formatNumber(value, { locale });
 const formatTaskId = (id: string, outsideLabel: string) => (id === '_general' ? outsideLabel : id);
 
-const SessionTable: React.FC<{ sessions: Session[]; page: number; pageSize: number; total: number; onPageChange: (page: number) => void; onPageSizeChange: (size: number) => void }> = ({ sessions, page, pageSize, total, onPageChange, onPageSizeChange }) => {
+const SessionTable: React.FC<{ sessions: Session[]; page: number; pageSize: number; total: number; sortKey: string; sortDirection: 'asc' | 'desc'; onPageChange: (page: number) => void; onPageSizeChange: (size: number) => void; onSortChange: (key: string, direction: 'asc' | 'desc') => void }> = ({ sessions, page, pageSize, total, sortKey, sortDirection, onPageChange, onPageSizeChange, onSortChange }) => {
   const { t, locale } = useLocale();
   return (
     <DataTable
       rows={sessions}
       columns={[
-        { key: 'session', title: t('extra.claudeSessions'), sortable: true, sortValue: (session) => session.title || session.sessionId, render: (session) => <div className="min-w-[260px]"><Link className="hover:text-[var(--t-accent)]" to={`/claude-sessions/${encodeURIComponent(session.sessionId)}`}><span className={`inline-block w-2 h-2 rounded-full mr-2 ${session.active ? 'bg-[var(--t-ok)]' : 'bg-[var(--t-text-3)]'}`} title={session.active ? t('claudeSessions.active') : ''} />{session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId)}</Link><div className="text-xs text-[var(--t-text-3)] truncate max-w-[320px]" title={session.cwd}>{session.cwd}</div></div> },
+        { key: 'title', title: t('extra.claudeSessions'), sortable: true, sortValue: (session) => session.title || session.sessionId, render: (session) => <div className="min-w-[260px]"><Link className="hover:text-[var(--t-accent)]" to={`/claude-sessions/${encodeURIComponent(session.sessionId)}`}><span className={`inline-block w-2 h-2 rounded-full mr-2 ${session.active ? 'bg-[var(--t-ok)]' : 'bg-[var(--t-text-3)]'}`} title={session.active ? t('claudeSessions.active') : ''} />{session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId)}</Link><div className="text-xs text-[var(--t-text-3)] truncate max-w-[320px]" title={session.cwd}>{session.cwd}</div></div> },
+        { key: 'messages', title: t('extra.messages'), sortable: true, sortValue: (session) => session.messages, render: (session) => session.messages },
         { key: 'model', title: t('extra.model'), render: (session) => session.model || t('extra.unknown') },
-        { key: 'messages', title: t('extra.messages'), render: (session) => session.messages },
         { key: 'tokens', title: t('extra.token'), render: (session) => formatTokens(session.effectiveTokens, locale) },
         { key: 'task', title: t('extra.task'), render: (session) => session.topTasks.length > 0 ? session.topTasks.map((task) => `${formatTaskId(task.taskId, t('claudeSessions.outsideTask'))} (${formatTokens(task.effectiveTokens, locale)})`).join(', ') : t('claudeSessions.outsideTask') },
         { key: 'lastAt', title: t('extra.lastActive'), sortable: true, sortValue: (session) => session.lastAt || '', render: (session) => session.lastAt ? new Date(session.lastAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US') : '' },
@@ -31,6 +31,9 @@ const SessionTable: React.FC<{ sessions: Session[]; page: number; pageSize: numb
       total={total}
       onPageChange={onPageChange}
       onPageSizeChange={onPageSizeChange}
+      sortKey={sortKey}
+      sortDirection={sortDirection}
+      onSortChange={onSortChange}
       emptyTitle={t('pagination.empty')}
     />
   );
@@ -125,7 +128,9 @@ export const ClaudeSessionsPage: React.FC = () => {
   const [urlParams, setUrlParams] = useSearchParams();
   const [page, setPage] = React.useState(Math.max(1, Number(urlParams.get('page') || 1)));
   const [pageSize, setPageSize] = React.useState(Math.max(20, Number(urlParams.get('pageSize') || 20)));
-  const sessions = useQuery({ queryKey: ['claude-sessions', page, pageSize], queryFn: () => getClaudeSessionsPage({ limit: pageSize, offset: (page - 1) * pageSize }) });
+  const [sortKey, setSortKey] = React.useState<'lastAt' | 'title' | 'messages' | 'effectiveTokens'>((urlParams.get('sort') as 'lastAt' | 'title' | 'messages' | 'effectiveTokens') || 'lastAt');
+  const [sortDirection, setSortDirection] = React.useState<'asc' | 'desc'>((urlParams.get('order') as 'asc' | 'desc') || 'desc');
+  const sessions = useQuery({ queryKey: ['claude-sessions', page, pageSize, sortKey, sortDirection], queryFn: () => getClaudeSessionsPage({ limit: pageSize, offset: (page - 1) * pageSize, sort: sortKey, order: sortDirection }) });
   const detail = useQuery({ queryKey: ['claude-session', sessionId], queryFn: () => apiFetch<SessionDetail>(`/api/claude/sessions/${encodeURIComponent(sessionId!)}`), enabled: !!sessionId });
   const rescan = useMutation({ mutationFn: rescanClaudeSessions, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['claude-sessions'] }) });
 
@@ -153,6 +158,9 @@ export const ClaudeSessionsPage: React.FC = () => {
         total={sessions.data?.total || 0}
         onPageChange={(nextPage) => { setPage(nextPage); setUrlParams((current) => { current.set('page', String(nextPage)); return current; }, { replace: true }); }}
         onPageSizeChange={(nextSize) => { setPageSize(nextSize); setPage(1); setUrlParams((current) => { current.delete('page'); current.set('pageSize', String(nextSize)); return current; }, { replace: true }); }}
+        sortKey={sortKey}
+        sortDirection={sortDirection}
+        onSortChange={(key, direction) => { setSortKey(key as typeof sortKey); setSortDirection(direction); setPage(1); setUrlParams((current) => { current.delete('page'); current.set('sort', key); current.set('order', direction); return current; }, { replace: true }); }}
       />
     </div>
   );

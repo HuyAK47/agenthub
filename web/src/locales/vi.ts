@@ -107,6 +107,8 @@ export const vi = {
     slug: 'Slug',
     status: 'Trạng thái',
     project: 'Project',
+    showMore: 'Xem thêm',
+    remaining: 'còn {count}',
   },
   pagination: {
     rowsPerPage: 'Số dòng/trang',

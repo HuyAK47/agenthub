@@ -832,13 +832,15 @@ export class AppService {
     if (!this.claudeSessionRepo) return [];
     return this.decorateClaudeSessions(this.claudeSessionRepo.list(), activeWithinMin);
   }
-  pageClaudeSessions(options?: { activeWithinMin?: number; limit?: string | number; offset?: string | number; cursor?: string }) {
+  pageClaudeSessions(options?: { activeWithinMin?: number; limit?: string | number; offset?: string | number; cursor?: string; sort?: string; order?: string }) {
     if (!this.claudeSessionRepo) return { items: [], total: 0, nextCursor: null };
     const rawLimit = typeof options?.limit === 'number' ? options.limit : Number(options?.limit);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(100, Math.floor(rawLimit)) : 20;
     const rawOffset = typeof options?.offset === 'number' ? options.offset : Number(options?.offset);
     const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
-    const page = this.claudeSessionRepo.page(limit, offset, options?.cursor);
+    const sort = options?.sort === 'title' || options?.sort === 'messages' || options?.sort === 'effectiveTokens' ? options.sort : 'lastAt';
+    const order = options?.order === 'asc' ? 'asc' : 'desc';
+    const page = this.claudeSessionRepo.page(limit, offset, options?.cursor, sort, order);
     return { ...page, items: this.decorateClaudeSessions(page.items, options?.activeWithinMin) };
   }
   getClaudeSession(id: string, activeWithinMin?: number) {

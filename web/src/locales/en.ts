@@ -109,6 +109,8 @@ export const en: typeof vi = {
     slug: 'Slug',
     status: 'Status',
     project: 'Project',
+    showMore: 'Show more',
+    remaining: '{count} remaining',
   },
   pagination: {
     rowsPerPage: 'Rows/page',

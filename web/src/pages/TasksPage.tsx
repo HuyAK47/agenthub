@@ -1,32 +1,24 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getAllTasksPaged, getProjects, getStatus, getTaskGraph, getTasksPage } from '../api/client';
+import { getProjects, getStatus, getTaskGraph, getTasksPage } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
-import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
+import { KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
 import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, List } from 'lucide-react';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { useLocale } from '../context/LocaleContext';
-import { useShowMore } from '../components/CollapsibleList';
 import { TaskDag } from '../components/dag';
 import { filterTasksForDag } from '../components/dag/dagUtils';
 import { DataTable } from '../components/ui';
 
-const normalizeText = (text: string): string =>
-  text
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[đĐ]/g, (c) => (c === 'đ' ? 'd' : 'D'))
-    .toLowerCase();
-
 export interface KanbanColumnProps {
   statusKey: (typeof KANBAN_STATUSES)[number];
-  tasks: Task[];
+  project: string;
   search: string;
 }
 
-const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
+const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project, search }) => {
   const { t } = useLocale();
   // Dùng chung cache ['status'] giữa các cột, chỉ để hiện dung lượng đĩa trong nhãn "Chờ ổ đĩa".
   const { data: hubStatus } = useQuery({
@@ -35,32 +27,33 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
     refetchInterval: 10_000,
   });
 
-  const filteredTasks = useMemo(() => {
-    const query = normalizeText(search.trim());
-    let list = tasks;
-    if (query) {
-      list = list.filter((task) => {
-        const slugMatch = normalizeText(task.slug).includes(query);
-        const titleMatch = normalizeText(task.title).includes(query);
-        return slugMatch || titleMatch;
-      });
+  const pageSize = statusKey === 'done' || statusKey === 'cancelled' ? 10 : 20;
+  const { data, isLoading } = useQuery({
+    queryKey: ['tasks-kanban', project, statusKey, search, pageSize],
+    queryFn: () => getTasksPage({ project, status: statusKey, search, limit: pageSize, sort: 'createdAt', order: 'desc' }),
+    refetchInterval: 5000,
+    placeholderData: keepPreviousData,
+  });
+  const [visibleItems, setVisibleItems] = useState<Task[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  useEffect(() => {
+    setVisibleItems(data?.items || []);
+    setNextCursor(data?.nextCursor || null);
+  }, [data]);
+  const showMore = async () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const next = await getTasksPage({ project, status: statusKey, search, limit: pageSize, cursor: nextCursor, sort: 'createdAt', order: 'desc' });
+      setVisibleItems((current) => [...current, ...next.items]);
+      setNextCursor(next.nextCursor);
+    } finally {
+      setIsLoadingMore(false);
     }
-    return [...list].sort((a, b) => {
-      const created = (b.createdAt || '').localeCompare(a.createdAt || '');
-      return created || b.id.localeCompare(a.id);
-    });
-  }, [tasks, search]);
-
-  const initialCount = statusKey === 'done' || statusKey === 'cancelled' ? 10 : 20;
-  const { visibleItems, hasMore, isExpanded, showMore, collapse } = useShowMore(
-    filteredTasks,
-    initialCount,
-    20,
-    `agenthub:tasks:${statusKey}`,
-  );
-
-  const remaining = filteredTasks.length - visibleItems.length;
-  const nextStep = Math.min(20, remaining);
+  };
+  const remaining = Math.max(0, (data?.total || 0) - visibleItems.length);
+  const nextStep = Math.min(pageSize, remaining);
 
   return (
     <div
@@ -84,13 +77,15 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
           <StatusBadge status={statusKey} size="sm" />
         </div>
         <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[var(--bg-surface)] border border-[var(--border-default)] text-[var(--text-primary)]">
-          {tasks.length}
+          {data?.total || 0}
         </span>
       </div>
 
       {/* Cards List */}
       <div className="space-y-2.5 flex-1 overflow-y-auto">
-        {filteredTasks.length === 0 ? (
+        {isLoading ? (
+          <div className="h-24 flex items-center justify-center text-xs text-[var(--text-muted)]">{t('pagination.loading')}</div>
+        ) : visibleItems.length === 0 ? (
           <div className="h-24 border border-dashed border-[var(--border-default)] rounded-lg flex items-center justify-center text-xs text-[var(--text-muted)] italic">
             {t('common.empty')}
           </div>
@@ -187,26 +182,11 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
           ))
         )}
 
-        {(hasMore || isExpanded) && (
+        {nextCursor && (
           <div className="flex items-center justify-center gap-3 pt-2">
-            {hasMore && (
-              <button
-                type="button"
-                onClick={showMore}
-                className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer"
-              >
-                Xem thêm {nextStep} (còn {remaining})
-              </button>
-            )}
-            {isExpanded && (
-              <button
-                type="button"
-                onClick={collapse}
-                className="text-xs text-[var(--text-secondary)] hover:underline cursor-pointer"
-              >
-                Thu gọn
-              </button>
-            )}
+            <button type="button" onClick={() => void showMore()} disabled={isLoadingMore} className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer disabled:opacity-50">
+              {isLoadingMore ? t('pagination.loading') : `${t('tasks.showMore')} ${nextStep} (${t('tasks.remaining', { count: remaining })})`}
+            </button>
           </div>
         )}
       </div>
@@ -241,17 +221,6 @@ export const TasksPage: React.FC = () => {
     queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor, sortKey, sortDirection],
     queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor, offset: cursor ? undefined : (page - 1) * pageSize, sort: sortKey, order: sortDirection }),
     enabled: viewMode === 'list',
-    refetchInterval: 5000,
-    placeholderData: keepPreviousData,
-  });
-  const { data: allTasks = [], isLoading: isAllTasksLoading } = useQuery({
-    queryKey: ['tasks-kanban', selectedProject, search],
-    queryFn: () => Promise.all(KANBAN_STATUSES.map((status) => getAllTasksPaged({ project: selectedProject, status, search }))).then((pages) => {
-      const unique = new Map<string, Task>();
-      for (const task of pages.flat()) unique.set(task.id, task);
-      return [...unique.values()];
-    }),
-    enabled: viewMode === 'kanban',
     refetchInterval: 5000,
     placeholderData: keepPreviousData,
   });
@@ -297,9 +266,7 @@ export const TasksPage: React.FC = () => {
       updatedAt: '',
     }));
   }, [taskGraph]);
-  const tasks = viewMode === 'dag' ? graphTasks : allTasks;
-
-  const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
+  const tasks = graphTasks;
 
   const dagTasks = useMemo(() => {
     return filterTasksForDag(tasks, {
@@ -491,7 +458,7 @@ export const TasksPage: React.FC = () => {
           sortDirection={sortDirection}
           onSortChange={(key, direction) => { setSortKey(key as typeof sortKey); setSortDirection(direction); setPage(1); setCursors({}); }}
         />
-      ) : (viewMode === 'kanban' ? isAllTasksLoading : isGraphLoading) ? (
+      ) : viewMode === 'dag' && isGraphLoading ? (
         <div className="flex items-center justify-center min-h-[40vh]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
         </div>
@@ -504,9 +471,9 @@ export const TasksPage: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-8" data-tour="task-columns">
           {KANBAN_STATUSES.map((statusKey) => (
             <KanbanColumn
-              key={statusKey}
+              key={`${statusKey}-${selectedProject}-${search}`}
               statusKey={statusKey}
-              tasks={grouped[statusKey] || []}
+              project={selectedProject}
               search={search}
             />
           ))}

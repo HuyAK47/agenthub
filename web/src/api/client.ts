@@ -502,10 +502,12 @@ export async function getTaskGraph(params?: {
   return apiFetch<TaskGraphResponse>(`/api/tasks/graph${qStr ? `?${qStr}` : ''}`);
 }
 
-export async function getClaudeSessionsPage(params: { limit: number; offset?: number; cursor?: string; activeWithinMin?: number }): Promise<PageResponse<ClaudeSession>> {
+export async function getClaudeSessionsPage(params: { limit: number; offset?: number; cursor?: string; activeWithinMin?: number; sort?: 'lastAt' | 'title' | 'messages' | 'effectiveTokens'; order?: 'asc' | 'desc' }): Promise<PageResponse<ClaudeSession>> {
   const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset ?? 0) });
   if (params.activeWithinMin !== undefined) query.set('activeWithinMin', String(params.activeWithinMin));
   if (params.cursor) query.set('cursor', params.cursor);
+  if (params.sort) query.set('sort', params.sort);
+  if (params.order) query.set('order', params.order);
   return apiFetch<PageResponse<ClaudeSession>>(`/api/claude/sessions?${query.toString()}`);
 }
 

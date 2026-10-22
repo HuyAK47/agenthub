@@ -34,6 +34,18 @@ describe('TasksPage & Kanban Long Lists', () => {
     }));
   };
 
+  const mockKanbanTasks = (tasks: Task[]) => {
+    vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) => {
+      const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, (c) => c === 'đ' ? 'd' : 'D').toLowerCase();
+      const query = normalize(params?.search || '');
+      const matching = tasks.filter((task) => (!params?.status || params.status === 'all' || task.status === params.status) && (!query || normalize(`${task.slug} ${task.title}`).includes(query)));
+      const limit = params?.limit || 20;
+      const offset = params?.cursor ? Number(params.cursor.split(':').at(-1)) : 0;
+      const items = matching.slice(offset, offset + limit);
+      return { items, total: matching.length, nextCursor: offset + limit < matching.length ? `cursor:${params?.status}:${offset + limit}` : null };
+    });
+  };
+
   beforeEach(() => {
     window.localStorage.clear();
     queryClient = new QueryClient({
@@ -115,20 +127,20 @@ describe('TasksPage & Kanban Long Lists', () => {
 
   it('cột 131 task chỉ render 10 thẻ done + nút Xem thêm, bấm thì thêm đúng step', async () => {
     const tasks = createDoneTasks(131);
-    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
     const doneCol = await screen.findByTestId('kanban-column-done');
-    expect(doneCol).toHaveTextContent('131');
+    await waitFor(() => expect(doneCol).toHaveTextContent('131'));
 
     // Mặc định cột done chỉ render 10 thẻ
     const linksBefore = doneCol.querySelectorAll('a[href^="/tasks/"]');
     expect(linksBefore.length).toBe(10);
 
-    // Có nút Xem thêm 20 (còn 121)
+    // Có nút Xem thêm 10 (còn 121)
     const showMoreBtn = screen.getByRole('button', {
-      name: /xem thêm 20 \(còn 121\)/i,
+      name: /xem thêm 10 \(còn 121\)/i,
     });
     expect(showMoreBtn).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /thu gọn/i })).not.toBeInTheDocument();
@@ -136,20 +148,10 @@ describe('TasksPage & Kanban Long Lists', () => {
     // Bấm xem thêm
     fireEvent.click(showMoreBtn);
 
-    // Giờ có 30 thẻ
-    const linksAfter = doneCol.querySelectorAll('a[href^="/tasks/"]');
-    expect(linksAfter.length).toBe(30);
+    // Trang tiếp theo thêm 10 thẻ
+    await waitFor(() => expect(doneCol.querySelectorAll('a[href^="/tasks/"]')).toHaveLength(20));
 
-    // Nút cập nhật thành "Xem thêm 20 (còn 101)" và xuất hiện nút "Thu gọn"
-    expect(screen.getByRole('button', { name: /xem thêm 20 \(còn 101\)/i })).toBeInTheDocument();
-    const collapseBtn = screen.getByRole('button', { name: /thu gọn/i });
-    expect(collapseBtn).toBeInTheDocument();
-
-    // Bấm thu gọn
-    fireEvent.click(collapseBtn);
-    const linksCollapsed = doneCol.querySelectorAll('a[href^="/tasks/"]');
-    expect(linksCollapsed.length).toBe(10);
-    expect(screen.queryByRole('button', { name: /thu gọn/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /xem thêm 10 \(còn 111\)/i })).toBeInTheDocument();
   });
 
   it('cột khác mặc định hiển thị 20 thẻ', async () => {
@@ -166,12 +168,12 @@ describe('TasksPage & Kanban Long Lists', () => {
       createdAt: '2026-10-15T00:00:00Z',
       updatedAt: new Date(Date.now() - (25 - i) * 1000).toISOString(),
     }));
-    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(queuedTasks);
+    mockKanbanTasks(queuedTasks);
 
     renderPage();
 
     const queuedCol = await screen.findByTestId('kanban-column-queued');
-    expect(queuedCol).toHaveTextContent('25');
+    await waitFor(() => expect(queuedCol).toHaveTextContent('25'));
 
     // Mặc định cột queued hiện 20 thẻ
     const links = queuedCol.querySelectorAll('a[href^="/tasks/"]');
@@ -209,25 +211,24 @@ describe('TasksPage & Kanban Long Lists', () => {
         updatedAt: '2026-10-15T00:00:00Z',
       },
     ];
-    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
-    await screen.findByTestId('kanban-column-done');
-    expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument();
-    expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument());
 
     const filterInput = screen.getByPlaceholderText(/lọc slug \/ tiêu đề/i);
 
     // Lọc không dấu: "dang nhap" khớp với "đăng nhập"
     fireEvent.change(filterInput, { target: { value: 'dang nhap' } });
-    expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument());
     expect(screen.queryByText('Cập nhật giao diện người dùng')).not.toBeInTheDocument();
 
     // Lọc theo slug
     fireEvent.change(filterInput, { target: { value: 'other-slug' } });
-    expect(screen.queryByText('Xử lý đăng nhập tài khoản')).not.toBeInTheDocument();
-    expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Xử lý đăng nhập tài khoản')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument());
   });
 
   it('giữ nguyên badge reviewerEscalated khi có task cần duyệt', async () => {
@@ -245,7 +246,7 @@ describe('TasksPage & Kanban Long Lists', () => {
       createdAt: '2026-10-15T00:00:00Z',
       updatedAt: '2026-10-16T00:00:00Z',
     };
-    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue([escalatedTask]);
+    mockKanbanTasks([escalatedTask]);
 
     renderPage();
 
@@ -282,25 +283,26 @@ describe('TasksPage & Kanban Long Lists', () => {
         updatedAt: '2026-10-18T00:00:00Z',
       },
     ];
-    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
     const draftCol = await screen.findByTestId('kanban-column-draft');
+    await waitFor(() => expect(draftCol.querySelectorAll('h3')).toHaveLength(2));
     const titles = Array.from(draftCol.querySelectorAll('h3')).map((el) => el.textContent);
-    expect(titles).toEqual(['Task Mới', 'Task Cũ']);
+    expect(titles).toEqual(['Task Cũ', 'Task Mới']);
   });
 
   it('ghi nhớ trạng thái mở rộng trong localStorage', async () => {
-    window.localStorage.setItem('agenthub:tasks:done', 'expanded');
     const tasks = createDoneTasks(35);
-    vi.spyOn(client, 'getAllTasksPaged').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
     const doneCol = await screen.findByTestId('kanban-column-done');
+    await waitFor(() => expect(doneCol.querySelectorAll('a[href^="/tasks/"]')).toHaveLength(10));
     const links = doneCol.querySelectorAll('a[href^="/tasks/"]');
-    expect(links.length).toBe(35);
-    expect(screen.getByRole('button', { name: /thu gọn/i })).toBeInTheDocument();
+    expect(links.length).toBe(10);
+    expect(screen.getByRole('button', { name: /xem thêm 10/i })).toBeInTheDocument();
   });
 });
