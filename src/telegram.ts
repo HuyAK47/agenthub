@@ -21,7 +21,7 @@ import {
 } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
-import { commandPermissionLabel } from './chat/permissions.js';
+import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permissions.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1629,6 +1629,8 @@ export class TelegramBotService {
     const session = this.chatService?.listSessions().find((item) => item.id === sessionId);
     const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
     const label = command ? commandPermissionLabel(command) : tool;
+    const isAssistantSession = sessionId === 'assistant' || sessionId.startsWith('assistant:');
+    const canAlwaysAllow = !isAssistantSession && (!command || canAlwaysAllowCommand(command));
     const text = [
       `🔐 <b>Dự án: ${this.escapeHtml(project ? `${project.name} (${project.id})` : 'Không gắn dự án')}</b>`,
       `Phiên: <b>${this.escapeHtml(session ? `${session.title || 'Phiên chat'} (${session.id})` : sessionId || 'Phiên chat')}</b> — Claude cần quyền`,
@@ -1640,7 +1642,7 @@ export class TelegramBotService {
     await this.sendMessage(chatId, text, {
       inline_keyboard: [[
         { text: 'Cho phép', callback_data: `permission:allow:${id}` },
-        { text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` },
+        ...(canAlwaysAllow ? [{ text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` }] : []),
         { text: 'Từ chối', callback_data: `permission:deny:${id}` },
       ]],
     });
