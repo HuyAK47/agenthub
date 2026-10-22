@@ -1067,7 +1067,7 @@ export const en: typeof vi = {
     failedHandlePermission: 'Failed to handle permission request',
     failedUpdateSession: 'Failed to update chat session',
     compactRequested: 'Context compaction requested',
-    failedCompact: 'Failed to compact context',
+    failedCompact: 'Failed to compact context', editMessage: 'Edit message',
   },
   claudeSessions: {
     active: 'Active',

@@ -1095,7 +1095,7 @@ export const vi = {
     failedHandlePermission: 'Không thể xử lý yêu cầu cấp quyền',
     failedUpdateSession: 'Không thể cập nhật phiên trò chuyện',
     compactRequested: 'Đã gửi yêu cầu nén ngữ cảnh',
-    failedCompact: 'Không thể nén ngữ cảnh',
+    failedCompact: 'Không thể nén ngữ cảnh', editMessage: 'Sửa tin nhắn',
   },
   claudeSessions: {
     active: 'Đang hoạt động',

@@ -50,6 +50,7 @@ export const ChatPage: React.FC = () => {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [isLocalBusy, setIsLocalBusy] = useState(false);
   const [permission, setPermission] = useState<ChatPermissionRequest | null>(null);
+  const [editText, setEditText] = useState<string | null>(null);
   const retryLimitMutation = useMutation({
     mutationFn: (id: string) => retryChatLimitNow(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chatSessions'] }),
@@ -189,7 +190,7 @@ export const ChatPage: React.FC = () => {
           return [...prev, newMsg];
         });
       } else if (type === 'chat.tool') {
-        const { messageId, name, summary } = payload;
+        const { messageId, name, summary, input, output, status, durationMs, diff } = payload;
         setToolStepCount((count) => count + 1);
         setCurrentTool(summary || name || null);
         setMessages((prev) => {
@@ -198,7 +199,7 @@ export const ChatPage: React.FC = () => {
             id: messageId,
             role: 'tool',
             content: summary || name,
-            meta: { name, summary },
+            meta: { name, summary, input, output, status, durationMs, diff },
             createdAt: new Date().toISOString(),
           };
           return [...prev, toolMsg];
@@ -416,6 +417,7 @@ export const ChatPage: React.FC = () => {
 
   const handleSendMessage = (text: string) => {
     if (!activeSession) return;
+    setEditText(null);
     sendMessageMutation.mutate({ sessId: activeSession.id, text });
   };
 
@@ -710,6 +712,7 @@ export const ChatPage: React.FC = () => {
             onLoadMore={handleLoadMore}
             onRetryMessage={handleRetryFromError}
             onNewSession={() => setIsModalOpen(true)}
+            onEditMessage={(message) => setEditText(message.content)}
           />
         )}
 
@@ -723,6 +726,11 @@ export const ChatPage: React.FC = () => {
                 className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm animate-fade-in"
                 role="dialog"
                 aria-label={t('extra.permissionAria')}
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') { event.preventDefault(); resolvePermission('allow'); }
+                  if (event.key === 'Escape') { event.preventDefault(); resolvePermission('deny'); }
+                }}
               >
                 <div className="font-semibold text-[var(--text-primary)]">
                   {t('extra.permissionTitle', { tool: permission.toolName })}
@@ -786,6 +794,8 @@ export const ChatPage: React.FC = () => {
               busy={isBusy}
               isEmpty={messages.length === 0}
               disabled={!activeSession}
+              sessionKey={activeSession.id}
+              editText={editText}
             />
           </>
         )}
