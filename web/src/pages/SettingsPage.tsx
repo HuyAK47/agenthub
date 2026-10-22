@@ -7,6 +7,7 @@ import { TelegramCard } from '../components/TelegramCard';
 import { deletePermissionRule, getPermissionRules } from '../api/chat';
 import { useTour } from '../components/tour/TourContext';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
+import { DataTable } from '../components/ui';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
@@ -756,12 +757,18 @@ export const SettingsPage: React.FC = () => {
           <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
             <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
-            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">{t('extra.noPermissionRules')}</p> : permissionRules.data.map((rule) => (
-              <div key={rule.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs">
-                <code className="break-all">{rule.toolName} {rule.pattern}</code>
-                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button>
-              </div>
-            ))}
+            <DataTable
+              rows={permissionRules.data || []}
+              emptyTitle={t('extra.noPermissionRules')}
+              columns={[
+                { key: 'tool', title: t('extra.permissionTool'), sortable: true, sortValue: (rule) => `${rule.toolName} ${rule.pattern}`, render: (rule) => <code className="break-all">{rule.toolName} {rule.pattern}</code> },
+                { key: 'scope', title: t('extra.permissionScope'), sortable: true, sortValue: (rule) => rule.scope, render: (rule) => <span>{rule.scope}</span> },
+                { key: 'actions', title: t('extra.actions'), render: (rule) => <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button> },
+              ]}
+              page={1}
+              pageSize={20}
+              total={permissionRules.data?.length || 0}
+            />
           </section>
 
           <div className="flex justify-end">

@@ -11,6 +11,27 @@ const connectionListeners = new Set<(connected: boolean) => void>();
 const runLogs = new Map<string, string>(); // runId -> accumulated log
 let isConnected = false;
 
+function patchTaskCaches(queryClient: QueryClient, taskId: string, payload: unknown): boolean {
+  const task = payload && typeof payload === 'object' && 'task' in payload
+    ? (payload as { task?: unknown }).task
+    : payload;
+  if (!task || typeof task !== 'object' || !('id' in task)) return false;
+  let patched = false;
+  queryClient.setQueriesData<{ items: Array<{ id: string }>; total: number; nextCursor: string | null }>(
+    { queryKey: ['tasks'] },
+    (current) => {
+      if (!current || !Array.isArray(current.items)) return current;
+      const index = current.items.findIndex((item) => item.id === taskId || item.id === (task as { id: string }).id);
+      if (index < 0) return current;
+      patched = true;
+      const items = [...current.items];
+      items[index] = { ...items[index], ...(task as object) };
+      return { ...current, items };
+    },
+  );
+  return patched;
+}
+
 export function isSSEConnected(): boolean {
   return isConnected;
 }
@@ -156,7 +177,9 @@ export function connectSSE(queryClient: QueryClient): () => void {
 
         // Cache invalidation based on event type
         if (type.startsWith('task.')) {
-          queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          if (!patchTaskCaches(queryClient, taskId || '', eventItem.payload)) {
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          }
           queryClient.invalidateQueries({ queryKey: ['status'] });
           if (taskId) {
             queryClient.invalidateQueries({ queryKey: ['task', taskId] });
