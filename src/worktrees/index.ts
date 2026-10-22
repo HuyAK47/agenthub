@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AgentHubConfig } from '../config.js';
 import { reapSyncForWorktree } from '../reaper.js';
-import { resolveProjectFile } from '../projects/paths.js';
+import { projectWorktreeRoot, resolveProjectFile } from '../projects/paths.js';
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -121,13 +121,13 @@ export class WorktreeService {
   create(opts: {
     projectPath: string;
     projectId: string;
+    projectSettings?: string | null;
     slug: string;
     branch: string;
     baseRef: string;
   }): string {
     const worktreePath = path.join(
-      this.config.worktreesDir,
-      opts.projectId,
+      projectWorktreeRoot({ id: opts.projectId, path: opts.projectPath, settings: opts.projectSettings }, this.config.hubHome, this.config.worktreesDir),
       opts.slug,
     );
 
@@ -231,13 +231,14 @@ export class WorktreeService {
     projectPath: string | null | undefined,
     worktreePath: string,
     context?: WorktreeHookContext,
+    worktreeRoot = this.config.worktreesDir,
   ): boolean {
-    if (!isDeletableWorktreePath(this.config.worktreesDir, worktreePath, [projectPath, this.config.hubHome])) {
-      console.error(`[worktree] REFUSED to remove ${worktreePath}: outside ${this.config.worktreesDir} or a project root`);
+    if (!isDeletableWorktreePath(worktreeRoot, worktreePath, [projectPath, this.config.hubHome])) {
+      console.error(`[worktree] REFUSED to remove ${worktreePath}: outside ${worktreeRoot} or a project root`);
       return false;
     }
     reapSyncForWorktree(worktreePath, {
-      worktreesDir: this.config.worktreesDir,
+      worktreesDir: worktreeRoot,
       protectedPaths: [projectPath, this.config.hubHome],
       graceMs: 5000,
     });

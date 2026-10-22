@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { z } from 'zod';
 import { isSafeProjectRelativePath } from './paths.js';
 
@@ -34,6 +35,10 @@ export const ProjectSettingsSchema = z.object({
     maxTurnsPerHour: z.number().int().positive().optional(),
   }).default({}),
   worktree: z.object({
+    /** Absolute parent directory for task worktrees. Each task is created as <root>/<slug>. */
+    root: z.string().min(1).refine((value) => path.isAbsolute(value), 'phải là đường dẫn tuyệt đối').optional(),
+    /** Store task logs in <worktree root>/.logs instead of the hub home. */
+    logsInRoot: z.boolean().optional(),
     /** auto: prepare node_modules when a lockfile exists (previous behaviour); skip: never install. */
     install: z.enum(['auto', 'skip']).default('auto'),
     /** run: git hooks (husky, commitlint…) run on worker commits; skip: workers commit with hooks disabled. */

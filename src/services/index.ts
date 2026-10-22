@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
+import { projectWorktreeRoot, validateProjectWorktreeRoot } from '../projects/paths.js';
 import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
@@ -1248,6 +1249,10 @@ export class AppService {
     }
 
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
+    if (effectiveSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(effectiveSettings.worktree.root, resolvedPath, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
     if (effectiveSettings.integration.enabled || effectiveSettings.integration.branch) {
       validateIntegrationBranch(effectiveSettings.integration.branch || 'agenthub/integration', parsed.defaultBranch);
     }
@@ -1347,6 +1352,11 @@ export class AppService {
     const mergedSettings = parsed.settings === undefined
       ? projectSettings(current)
       : mergeProjectSettings(projectSettings(current), parsed.settings);
+
+    if (mergedSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(mergedSettings.worktree.root, current.path, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
 
     if (mergedSettings.integration.enabled || mergedSettings.integration.branch) {
       validateIntegrationBranch(mergedSettings.integration.branch || 'agenthub/integration', effectiveDefaultBranch);
@@ -3256,6 +3266,7 @@ export class AppService {
           taskId: task.id,
           hooks,
         },
+        project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir,
       );
       if (!removed) {
         throw new HttpError(

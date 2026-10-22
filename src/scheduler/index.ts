@@ -20,6 +20,7 @@ import {
   TaskNoteRepo,
 } from '../db/index.js';
 import { projectSettings } from '../projects/settings.js';
+import { projectWorktreeRoot } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
@@ -1287,7 +1288,8 @@ export class Scheduler {
     this.killProcessGroup(rt.pid);
     const stalledTask = this.taskRepo.get(taskId);
     if (stalledTask?.worktreePath) {
-      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      const project = this.projectRepo.get(stalledTask.projectId);
+      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
     this.running.delete(taskId);
     if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
@@ -2032,6 +2034,14 @@ export class Scheduler {
     return [...this.reviewerRuns.values()].some((run) => run.profileName === profileName);
   }
 
+  private taskLogDir(task: TaskRow): string {
+    const project = this.projectRepo.get(task.projectId);
+    if (project && projectSettings(project).worktree.logsInRoot === true) {
+      return path.join(projectWorktreeRoot(project, this.config.hubHome), '.logs');
+    }
+    return path.join(this.config.logsDir, task.id.replace('/', '_'));
+  }
+
   private startReview(task: TaskRow, profileName: string, engine: Engine, reviewerModel: string, reviewerActor = 'codex-reviewer'): void {
     const actor: ReviewerActor = engine.id === 'claude' ? 'claude-reviewer' : 'codex-reviewer';
     const profile = this.profileRepo.get(profileName);
@@ -2041,7 +2051,7 @@ export class Scheduler {
     const lockFile = this.locks.lockPath(profile, lockSlot);
     this.locks.reserve(profile.name, lockFile);
     const runId = crypto.randomUUID();
-    const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
+    const logDir = this.taskLogDir(task);
     const logPath = path.join(logDir, `${runId}.log`);
     const outputPath = path.join(logDir, `${runId}.final.json`);
     this.runRepo.insert({ id: runId, taskId: task.id, engine: engine.id, model: reviewerModel, profileName, logPath, kind: 'reviewer' });
@@ -2565,6 +2575,7 @@ export class Scheduler {
         worktreePath = this.worktreeService.create({
           projectPath: project.path,
           projectId: project.id,
+          projectSettings: project.settings,
           slug: task.slug,
           branch,
           baseRef,
@@ -2658,7 +2669,7 @@ export class Scheduler {
 
     // Create run record
     const runId = crypto.randomUUID();
-    const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
+    const logDir = this.taskLogDir(task);
     const logPath = path.join(logDir, `${runId}.log`);
 
     let usageBefore: number | null = null;
@@ -2907,7 +2918,8 @@ export class Scheduler {
     this.killProcessGroup(rt.pid);
     const task = this.taskRepo.get(taskId);
     if (task?.worktreePath) {
-      reapSyncForWorktree(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      const project = this.projectRepo.get(task.projectId);
+      reapSyncForWorktree(task.worktreePath, { worktreesDir: project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
 
     this.running.delete(taskId);
