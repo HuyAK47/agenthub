@@ -130,6 +130,7 @@ export interface DeployPushConfig {
   from: string;
   to: string;
   ffOnly: boolean;
+  minIntervalMin?: number;
 }
 
 export interface DeployProjectConfig {
@@ -841,8 +842,11 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       : [];
     if (steps.length === 0) continue;
     const pushRaw = value.push as Record<string, unknown> | undefined;
+    const minIntervalMin = typeof pushRaw?.minIntervalMin === 'number' && pushRaw.minIntervalMin >= 0
+      ? Math.floor(pushRaw.minIntervalMin)
+      : 30;
     const push = pushRaw && typeof pushRaw.remote === 'string' && typeof pushRaw.from === 'string' && typeof pushRaw.to === 'string'
-      ? { remote: pushRaw.remote, from: pushRaw.from, to: pushRaw.to, ffOnly: pushRaw.ffOnly !== false }
+      ? { remote: pushRaw.remote, from: pushRaw.from, to: pushRaw.to, ffOnly: pushRaw.ffOnly !== false, minIntervalMin }
       : undefined;
     deploy[projectId] = {
       steps,
