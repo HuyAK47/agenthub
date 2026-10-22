@@ -306,7 +306,7 @@ export const ProfilesPage: React.FC = () => {
                     {t('profiles.emptyProvider', { provider: provider.title })}
                   </div>
                 ) : (
-                  <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="grid gap-3.5 sm:gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {grouped.map((profile) => (
                       <div key={profile.name} id={`profile-${profile.name}`}>
                       <ProfileCard
@@ -467,7 +467,7 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
           alt={profile.label || profile.name}
           referrerPolicy="no-referrer"
           onError={() => setImgError(true)}
-          className="h-10 w-10 rounded-xl object-cover shadow-xs ring-1 ring-[var(--t-border)]"
+          className="h-9 w-9 rounded-xl object-cover shadow-xs ring-1 ring-[var(--t-border)]"
         />
       </div>
     );
@@ -479,17 +479,17 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
   if (initial) {
     return (
       <div
-        className="flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
+        className="flex h-9 w-9 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
         style={{ background: getAvatarGradient(profile.email || profile.name) }}
       >
-        <span className="text-base tracking-wider drop-shadow-xs">{initial}</span>
+        <span className="text-sm tracking-wider drop-shadow-xs">{initial}</span>
       </div>
     );
   }
 
   return (
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--t-surface-2)] text-[var(--t-accent)] shadow-xs ring-1 ring-[var(--t-border)]">
-      <UserRound className="h-5 w-5" />
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--t-surface-2)] text-[var(--t-accent)] shadow-xs ring-1 ring-[var(--t-border)]">
+      <UserRound className="h-4.5 w-4.5" />
     </div>
   );
 }
@@ -609,17 +609,17 @@ function ProfileCard({
   const activeMarks = (profile.quotaMarks || []).filter((mark) => mark.until > Math.floor(Date.now() / 1000));
   return (
     <article
-      className="relative rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-xs"
+      className="relative rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-3.5 sm:p-4 shadow-xs hover:border-[var(--t-border-strong)] transition-colors"
       data-testid={`profile-card-${profile.name}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
+      <div className="flex items-start justify-between gap-2.5">
+        <div className="flex min-w-0 items-start gap-2.5">
           <ProfileAvatar profile={profile} />
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="truncate font-semibold">{profile.label || profile.name}</h3>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <h3 className="truncate text-sm font-semibold leading-tight">{profile.label || profile.name}</h3>
               {profile.label && (
-                <span className="font-mono text-xs text-[var(--t-text-3)]">({profile.name})</span>
+                <span className="font-mono text-[11px] text-[var(--t-text-3)]">({profile.name})</span>
               )}
               <PlanBadge plan={profile.plan} />
               {busy && (
@@ -628,14 +628,14 @@ function ProfileCard({
                 </span>
               )}
             </div>
-            <p className="truncate text-sm text-[var(--t-text-3)]">
+            <p className="truncate text-xs text-[var(--t-text-3)] mt-0.5" title={logged ? (profile.email || '') : ''}>
               {logged
                 ? profile.email || (profile.engine === 'codex' ? 'Codex (ChatGPT)' : t('profiles.authenticated'))
                 : t('profiles.noEmail')}
             </p>
           </div>
         </div>
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
             type="button"
             aria-label={t('profiles.actionsAria', { name: profile.name })}
@@ -643,7 +643,7 @@ function ProfileCard({
               e.stopPropagation();
               setMenu(menu === profile.name ? null : profile.name);
             }}
-            className="rounded-lg p-2 text-[var(--t-text-3)] hover:bg-[var(--t-surface-2)]"
+            className="rounded-lg p-1.5 text-[var(--t-text-3)] hover:bg-[var(--t-surface-2)]"
           >
             <MoreVertical className="h-4 w-4" />
           </button>
@@ -733,17 +733,17 @@ function ProfileCard({
           )}
         </div>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <StatusBadge profile={profile} />
         {profile.duplicateWarning && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[11px] font-semibold text-[var(--t-crit)]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[10px] font-semibold text-[var(--t-crit)]">
             <AlertTriangle className="h-3 w-3" />
             {t('profiles.duplicateEmail')}
             {profile.duplicateEmailWith?.length ? `: ${profile.duplicateEmailWith.join(', ')}` : ''}
           </span>
         )}
-        <span className="text-xs text-[var(--t-text-3)]">{t('profiles.priority', { value: profile.priority ?? 0 })}</span>
-        <span className="rounded-full bg-[var(--t-surface-2)] px-2 py-0.5 text-[11px] text-[var(--t-text-3)]">
+        <span className="text-[11px] text-[var(--t-text-3)]">{t('profiles.priority', { value: profile.priority ?? 0 })}</span>
+        <span className="rounded-full bg-[var(--t-surface-2)] px-2 py-0.5 text-[10px] text-[var(--t-text-3)]">
           {t(`profiles.accountTypes.${profile.accountType || 'personal'}`)}
         </span>
       </div>
@@ -752,7 +752,7 @@ function ProfileCard({
           href={profile.verifyUrl}
           target="_blank"
           rel="noopener"
-          className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--t-warn)] hover:underline"
+          className="mt-1.5 inline-flex items-center gap-1 text-xs text-[var(--t-warn)] hover:underline"
         >
           <ExternalLink className="h-3 w-3" />
           {t('profiles.openVerification')}
@@ -761,12 +761,12 @@ function ProfileCard({
       {profile.authState === 'needs_verification' && (
         <p className="mt-1 text-xs text-[var(--t-text-3)]">{t('profiles.verificationTip')}</p>
       )}
-      <div className="mt-4 rounded-lg bg-[var(--t-surface-2)] p-3">
+      <div className="mt-2.5 rounded-lg bg-[var(--t-surface-2)] p-2.5">
         <div className="flex items-center justify-between text-xs">
-          <span className="font-medium">{t('profiles.quotaTitle')}</span>
-          <span className="text-[var(--t-text-3)]">{usageText(profile)}</span>
+          <span className="font-medium text-[11px] text-[var(--t-text-2)]">{t('profiles.quotaTitle')}</span>
+          <span className="text-[11px] text-[var(--t-text-3)]">{usageText(profile)}</span>
         </div>
-        <div className="mt-2">
+        <div className="mt-1.5">
           <QuotaUsage usage={profile.usage} onRefresh={() => onRefresh()} refreshing={refreshing} />
         </div>
         {activeMarks.map((mark) => (
@@ -841,54 +841,53 @@ function ProfileCard({
           )}
         </div>
       )}
-      <div className="mt-3 flex items-center gap-2 text-xs text-[var(--t-text-3)]">
+      <div className="mt-2.5 flex items-center gap-1.5 text-xs text-[var(--t-text-3)]">
         {run ? (
           <>
-            <span className="h-2 w-2 rounded-full bg-[var(--t-ok)]" />
-            {t('profiles.runningTask')}:{' '}
-            <span className="truncate text-[var(--t-text)]">{run.title || run.taskId}</span>
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--t-ok)] shrink-0" />
+            <span className="truncate">{t('profiles.runningTask')}: <strong className="font-medium text-[var(--t-text)]">{run.title || run.taskId}</strong></span>
           </>
         ) : (
           <>
-            <span className="h-2 w-2 rounded-full bg-[var(--t-text-3)]" />
-            {t('profiles.idleTask')}
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--t-text-3)] shrink-0" />
+            <span>{t('profiles.idleTask')}</span>
           </>
         )}
       </div>
       {profile.notes && (
-        <p className="mt-2 border-l-2 border-[var(--t-border)] pl-2 text-xs text-[var(--t-text-3)]">
+        <p className="mt-1.5 border-l-2 border-[var(--t-border)] pl-2 text-xs text-[var(--t-text-3)] line-clamp-2">
           {profile.notes}
         </p>
       )}
-      <div className="mt-4 flex items-center justify-between border-t border-[var(--t-border)] pt-3">
-        <label className="flex items-center gap-2 text-xs text-[var(--t-text-3)]">
-          <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-5 w-9 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'}`}>
-            <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-4' : ''}`} />
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-2.5">
+        <label className="flex items-center gap-1.5 text-xs text-[var(--t-text-3)] cursor-pointer select-none">
+          <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-4.5 w-8 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'} transition-colors cursor-pointer`}>
+            <span className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-3.5' : ''}`} />
           </button>
-          {t('profiles.enable')}
+          <span>{t('profiles.enable')}</span>
         </label>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => onCheck(profile.name)}
             disabled={checking}
-            className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2.5 py-1 text-xs disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2 py-1 text-xs hover:bg-[var(--t-hover)] transition-colors disabled:opacity-50 cursor-pointer"
           >
             {checking ? (
               <RefreshCw className="h-3 w-3 animate-spin" />
             ) : (
               <Check className="h-3 w-3" />
             )}
-            {checking ? t('profiles.checkingBtn') : t('profiles.checkBtn')}
+            <span>{checking ? t('profiles.checkingBtn') : t('profiles.checkBtn')}</span>
           </button>
           {canTokenLogin && (
             <button
               type="button"
               onClick={() => onTokenLogin(profile)}
-              className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2.5 py-1 text-xs"
+              className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2 py-1 text-xs hover:bg-[var(--t-hover)] transition-colors cursor-pointer"
             >
               <KeyRound className="h-3 w-3" />
-              {t('profiles.tokenLoginShort')}
+              <span>{t('profiles.tokenLoginShort')}</span>
             </button>
           )}
           {canLogin && (
@@ -896,7 +895,7 @@ function ProfileCard({
               type="button"
               aria-label={logged ? t('extra.reLogin') : t('profiles.loginBtn')}
               onClick={() => onLogin(profile.name, profile.engine)}
-              className="rounded bg-[var(--t-accent-bg)] px-2.5 py-1 text-xs font-medium text-[var(--t-accent)]"
+              className="rounded bg-[var(--t-accent-bg)] px-2 py-1 text-xs font-medium text-[var(--t-accent)] hover:opacity-90 transition-opacity cursor-pointer"
             >
               {logged ? t('extra.reLogin') : t('profiles.loginNow')}
             </button>
