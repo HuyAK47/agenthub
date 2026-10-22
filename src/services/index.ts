@@ -437,6 +437,9 @@ export const UpdateConfigSchema = z.object({
     timeoutSec: z.number().int().positive().optional(),
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
+    claudeFallback: z.boolean().optional(),
+    claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
+    claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
   }).optional(),
   brain: z.object({
     fallback: z.array(z.discriminatedUnion('type', [
@@ -3028,7 +3031,7 @@ export class AppService {
     const settings = projectSettings(project);
     if (!settings.integration.autoMerge || (!settings.integration.enabled && !project.merge)) return;
     const last = this.reviewRepo.getByTask(taskId).at(-1);
-    if (!last || last.actor !== 'codex-reviewer' || last.verdict !== 'approved') return;
+    if (!last || (last.actor !== 'codex-reviewer' && last.actor !== 'claude-reviewer') || last.verdict !== 'approved') return;
     // The ready event can arrive twice for one approval; the first call is already merging.
     if (this.reviewingTasks.has(taskId)) return;
     try {

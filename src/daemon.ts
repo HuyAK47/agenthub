@@ -46,6 +46,7 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
+import { ClaudeReviewEngine, CLAUDE_REVIEW_ENGINE_KEY } from './engines/claude-review.js';
 import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
@@ -201,6 +202,7 @@ export function createContext(
     if (codexPath) {
       engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
+    engines.set(CLAUDE_REVIEW_ENGINE_KEY, new ClaudeReviewEngine(config.chat.claudeBin || 'claude'));
   }
 
   const scheduler = new Scheduler(

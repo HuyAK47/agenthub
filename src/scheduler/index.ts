@@ -37,6 +37,7 @@ const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
+import { CLAUDE_REVIEW_ENGINE_KEY } from '../engines/claude-review.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
@@ -129,12 +130,20 @@ interface StartingTask {
   profileName: string;
 }
 
+type ReviewerActor = 'codex-reviewer' | 'claude-reviewer';
+
+/** Automated reviewers whose verdicts drive gates, round limits and auto-merge. */
+function isAutoReviewer(by: string | undefined): by is ReviewerActor {
+  return by === 'codex-reviewer' || by === 'claude-reviewer';
+}
+
 interface ReviewerRun {
   taskId: string;
   runId: string;
   pid: number;
   profileName: string;
   engine: Engine;
+  actor: ReviewerActor;
   outputPath: string;
   lockSlot: number;
   lockFile?: string;
@@ -1761,7 +1770,12 @@ export class Scheduler {
       const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex' &&
         !this.quotaService.isExhausted(p.name, 'codex') &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
-      if (codexProfiles.length === 0 || !task.worktreePath) continue;
+      if (!task.worktreePath) continue;
+      if (codexProfiles.length === 0) {
+        // Every Codex account out of quota or logged out (not merely busy): review with Claude instead.
+        if (this.codexReviewUnavailable()) this.startClaudeFallbackReview(task);
+        continue;
+      }
       codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
       const model = reviewerModel(step || { reviewer: this.config.reviewer?.model || 'codex:gpt-5.6-luna', mode: 'gate' }) || this.config.reviewer?.model || 'codex:gpt-5.6-luna';
       const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
@@ -1811,10 +1825,32 @@ export class Scheduler {
     }
   }
 
+  private codexReviewUnavailable(): boolean {
+    const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex');
+    return codexProfiles.every((p) => this.quotaService.isExhausted(p.name, 'codex') || (p.authState != null && p.authState !== 'ok'));
+  }
+
+  private startClaudeFallbackReview(task: TaskRow): void {
+    const engine = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
+    if (!engine || this.config.reviewer?.claudeFallback === false) return;
+    const preferred = this.config.reviewer?.claudeProfiles ?? [];
+    const rank = (name: string) => (preferred.includes(name) ? preferred.indexOf(name) : preferred.length);
+    const candidates = this.profileRepo.getEnabled()
+      .filter((p) => p.engine === 'claude' && (p.authState == null || p.authState === 'ok') &&
+        (preferred.length === 0 || preferred.includes(p.name)) &&
+        !this.quotaService.isExhausted(p.name, 'claude') &&
+        !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null)
+      .sort((a, b) => rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
+    const profile = candidates[0];
+    if (!profile) return;
+    this.eventBus.emit('review.fallback', task.id, { from: 'codex', to: 'claude', profile: profile.name });
+    this.startReview(task, profile.name, engine, `claude:${this.config.reviewer?.claudeModel || 'sonnet'}`, 'claude-reviewer');
+  }
+
   private skippedCodexGate(task: TaskRow, chain: ReviewChainStep[]): boolean {
     if (!chain.some((step) => step.mode === 'gate' && step.reviewer.startsWith('codex:'))) return false;
     const last = this.reviewRepo?.getByTask(task.id).at(-1);
-    return !last || last.actor !== 'codex-reviewer' || last.verdict !== 'approved';
+    return !last || !isAutoReviewer(last.actor) || last.verdict !== 'approved';
   }
 
   /**
@@ -1833,6 +1869,7 @@ export class Scheduler {
   }
 
   private startReview(task: TaskRow, profileName: string, engine: Engine, reviewerModel: string, reviewerActor = 'codex-reviewer'): void {
+    const actor: ReviewerActor = engine.id === 'claude' ? 'claude-reviewer' : 'codex-reviewer';
     const profile = this.profileRepo.get(profileName);
     if (!profile || !task.worktreePath || this.reviewerRuns.has(task.id)) return;
     const lockSlot = this.locks.findFreeSlotSync(profile);
@@ -1843,7 +1880,7 @@ export class Scheduler {
     const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
     const logPath = path.join(logDir, `${runId}.log`);
     const outputPath = path.join(logDir, `${runId}.final.json`);
-    this.runRepo.insert({ id: runId, taskId: task.id, engine: 'codex', model: reviewerModel, profileName, logPath, kind: 'reviewer' });
+    this.runRepo.insert({ id: runId, taskId: task.id, engine: engine.id, model: reviewerModel, profileName, logPath, kind: 'reviewer' });
     let child;
     try {
       const checks = this.getCheckResults(task.id).map((check) => ({
@@ -1874,7 +1911,7 @@ export class Scheduler {
     } catch (error) {
       this.locks.release(profile.name, lockFile);
       this.runRepo.finish(runId, 'crashed', undefined, String(error));
-      this.eventBus.emit('review.failed', task.id, { actor: 'codex-reviewer', reason: 'spawn_failed' });
+      this.eventBus.emit('review.failed', task.id, { actor, reason: 'spawn_failed' });
       return;
     }
     const timeout = setTimeout(() => {
@@ -1882,7 +1919,7 @@ export class Scheduler {
       this.killProcessGroup(child.pid!);
       this.finishReview(task.id, runId, profileName, 'timeout');
     }, (this.config.reviewer?.timeoutSec || 900) * 1000);
-    this.reviewerRuns.set(task.id, { taskId: task.id, runId, pid: child.pid, profileName, engine, outputPath, lockSlot, lockFile, startedAt: Date.now(), timeout });
+    this.reviewerRuns.set(task.id, { taskId: task.id, runId, pid: child.pid, profileName, engine, actor, outputPath, lockSlot, lockFile, startedAt: Date.now(), timeout });
     this.locks.invalidate(profileName);
     child.unref();
     this.eventBus.emit('review.started', task.id, { actor: reviewerActor, model: reviewerModel, profile: profileName, runId });
@@ -1920,13 +1957,13 @@ export class Scheduler {
     const isLockBusy = duration < 3000 && logOutput.trim() === '' && Boolean(active.lockFile) && exitCode === 1;
     if (isLockBusy) {
       this.runRepo.finish(runId, 'crashed', undefined, 'lock_busy');
-      this.eventBus.emit('review.waiting', taskId, { actor: 'codex-reviewer', reason: 'lock_busy' });
+      this.eventBus.emit('review.waiting', taskId, { actor: active.actor, reason: 'lock_busy' });
       return;
     }
     if (reason === 'timeout' || reason === 'error' || exitCode !== 0 || quota) {
       this.runRepo.finish(runId, quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crashed');
-      if (quota) this.quotaService.mark(profileName, 'codex', this.config.reviewer?.failoverSec || 5 * 60 * 60, 'codex reviewer quota');
-      this.eventBus.emit('review.waiting', taskId, { actor: 'codex-reviewer', reason: quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crash' });
+      if (quota) this.quotaService.mark(profileName, active.actor === 'claude-reviewer' ? 'claude' : 'codex', this.config.reviewer?.failoverSec || 5 * 60 * 60, `${active.actor} quota`);
+      this.eventBus.emit('review.waiting', taskId, { actor: active.actor, reason: quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crash' });
       return;
     }
     const task = this.taskRepo.get(taskId);
@@ -1939,7 +1976,7 @@ export class Scheduler {
     const result = parseReviewerOutput(output);
     if (!result) {
       this.runRepo.finish(runId, 'crashed', undefined, 'malformed reviewer output');
-      this.eventBus.emit('review.failed', taskId, { actor: 'codex-reviewer', reason: 'malformed_output' });
+      this.eventBus.emit('review.failed', taskId, { actor: active.actor, reason: 'malformed_output' });
       return;
     }
     if (this.isReadOnlyEnvironmentFeedback(result.verdict, result.feedback)) {
@@ -1952,18 +1989,18 @@ export class Scheduler {
         const status = execFileSync('git', ['-C', task.worktreePath, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }).trim();
         if (status) {
           this.runRepo.finish(runId, 'crashed', undefined, 'uncommitted changes');
-          this.eventBus.emit('review.failed', taskId, { actor: 'codex-reviewer', reason: 'uncommitted_changes' });
+          this.eventBus.emit('review.failed', taskId, { actor: active.actor, reason: 'uncommitted_changes' });
           return;
         }
       } catch {
         this.runRepo.finish(runId, 'crashed', undefined, 'unable to read git status');
-        this.eventBus.emit('review.failed', taskId, { actor: 'codex-reviewer', reason: 'git_unreadable' });
+        this.eventBus.emit('review.failed', taskId, { actor: active.actor, reason: 'git_unreadable' });
         return;
       }
     }
     this.runRepo.finish(runId, 'done');
-    this.reviewTask(taskId, result.verdict, result.feedback, 'codex-reviewer');
-    this.eventBus.emit('review.completed', taskId, { actor: 'codex-reviewer', verdict: result.verdict, model: run?.model || this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
+    this.reviewTask(taskId, result.verdict, result.feedback, active.actor);
+    this.eventBus.emit('review.completed', taskId, { actor: active.actor, verdict: result.verdict, model: run?.model || this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
     if (!this.stopped) this.triggerTick();
   }
 
@@ -2615,13 +2652,13 @@ export class Scheduler {
     const step = chain[task.reviewStep ?? 0];
 
     if (verdict === 'approved') {
-      if (by === 'codex-reviewer' && (!feedback || feedback.trim() === '')) return;
-      if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback: feedback || null, actor: by });
-      if ((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') {
+      if (isAutoReviewer(by) && (!feedback || feedback.trim() === '')) return;
+      if (isAutoReviewer(by) && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback: feedback || null, actor: by });
+      if ((isAutoReviewer(by) || by === 'claude-review') && step?.mode === 'gate') {
         this.advanceReviewStep(task, chain, 'approved');
         return;
       }
-      if (by !== 'codex-reviewer') this.resetReviewerEscalation(taskId);
+      if (!isAutoReviewer(by)) this.resetReviewerEscalation(taskId);
       this.taskRepo.updateStatus(taskId, 'done');
       if (this.runMetricsRepo) {
         recalculateTaskLines(
@@ -2637,8 +2674,8 @@ export class Scheduler {
       if (!feedback || feedback.trim() === '') {
         throw new Error('Feedback is required when requesting changes');
       }
-      if (by === 'codex-reviewer' && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback, actor: by });
-      if (((by === 'codex-reviewer' || by === 'claude-review') && step?.mode === 'gate') || (by === 'codex-reviewer' && chain.length === 0)) {
+      if (isAutoReviewer(by) && this.reviewRepo) this.reviewRepo.insert({ id: crypto.randomUUID(), taskId, verdict, feedback, actor: by });
+      if (((isAutoReviewer(by) || by === 'claude-review') && step?.mode === 'gate') || (isAutoReviewer(by) && chain.length === 0)) {
         const count = (task.reviewerChangesRequested || 0) + 1;
         const max = this.reviewMaxRoundsForTask(task);
         if (count > max) {
