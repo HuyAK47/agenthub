@@ -67,6 +67,8 @@ export interface Profile {
   notes?: string | null;
   priority?: number;
   avatarUrl?: string | null;
+  /** Gói tài khoản đã chuẩn hoá: free, plus, pro, team, max_20x… (null khi chưa biết). */
+  plan?: string | null;
   /** Chỉ có trong phản hồi của nút Làm mới: kết quả lấy ảnh đại diện. */
   avatarMessage?: string;
   currentTask?: { id?: string; title?: string } | null;

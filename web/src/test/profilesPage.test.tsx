@@ -396,6 +396,18 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(await screen.findByText(/Kết quả nhập/)).toBeInTheDocument();
   });
 
+  it('9e. Hiện tag gói tài khoản khi biết gói, ẩn khi chưa biết', async () => {
+    vi.mocked(client.getProfiles).mockResolvedValue([
+      { ...mockProfiles[0], name: 'plus_acc', engine: 'codex', plan: 'plus' },
+      { ...mockProfiles[0], name: 'no_plan', plan: null },
+    ] as Profile[]);
+    renderPage();
+    expect(await screen.findByText('plus_acc')).toBeInTheDocument();
+
+    expect(screen.getByTestId('profile-card-plus_acc').querySelector('[data-testid="plan-badge"]')?.textContent).toBe('PLUS');
+    expect(screen.getByTestId('profile-card-no_plan').querySelector('[data-testid="plan-badge"]')).toBeNull();
+  });
+
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
     const profilesWithExpired: Profile[] = [
       {

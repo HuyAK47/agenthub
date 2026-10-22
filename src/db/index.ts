@@ -677,9 +677,10 @@ function repairForkAvatarMigration(db: Database.Database, currentVersion: number
   return 40;
 }
 
-/** Cột avatarUrl nằm ngoài danh sách MIGRATIONS để không giành số migration với upstream. */
+/** Cột riêng của bản fork (avatarUrl, plan) nằm ngoài MIGRATIONS để không giành số migration với upstream. */
 function ensureProfileAvatarColumn(db: Database.Database): void {
   if (!hasColumn(db, 'profiles', 'avatarUrl')) db.exec('ALTER TABLE profiles ADD COLUMN avatarUrl TEXT');
+  if (!hasColumn(db, 'profiles', 'plan')) db.exec('ALTER TABLE profiles ADD COLUMN plan TEXT');
 }
 
 // Repository helpers
@@ -731,6 +732,8 @@ export interface ProfileRow {
   priority?: number;
   accountType?: 'personal' | 'team' | 'api';
   avatarUrl?: string | null;
+  /** Gói tài khoản đã chuẩn hoá (free, plus, pro, team, max_20x…); xem src/profiles/plan.ts. */
+  plan?: string | null;
   deletedAt?: string | null;
 }
 
@@ -938,6 +941,10 @@ export class ProfileRepo {
         row.accountType ?? 'personal',
         row.avatarUrl ?? null,
       );
+  }
+
+  updatePlan(name: string, plan: string | null): void {
+    this.db.prepare('UPDATE profiles SET plan = ? WHERE name = ?').run(plan, name);
   }
 
   updateAvatarUrl(name: string, avatarUrl: string | null): void {

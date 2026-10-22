@@ -119,6 +119,7 @@ function apiProfile(profile: ProfileRow): ProfileRow {
     authMessage: profile.authMessage ?? null,
     verifyUrl: profile.verifyUrl ?? null,
     avatarUrl: profile.avatarUrl ?? null,
+    plan: profile.plan ?? null,
   };
 }
 
@@ -1459,6 +1460,7 @@ export class AppService {
         } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
+        plan: p.engine === 'claude' ? claudeAccount?.planId ?? null : p.plan ?? null,
       };
     });
   }
@@ -1647,6 +1649,7 @@ export class AppService {
       const current = this.profileRepo.get(targetName)!;
       writeCodexAuthFile(current.home || path.join(this.config.hubHome, 'codex-homes', targetName), parsed);
       this.profileRepo.upsert({ ...current, email });
+      this.profileRepo.updatePlan(targetName, parsed.plan);
       this.profileRepo.updateAuthState(targetName, 'ok', 'Đã nhập token Codex', null);
 
       if (action === 'created') {
@@ -1900,6 +1903,8 @@ export class AppService {
       const parsed = parseCodexLoginStatus(res);
       if (parsed.email && parsed.email !== profile.email) {
         this.profileRepo.upsert({ ...profile, email: parsed.email });
+        // Gói đã lưu thuộc tài khoản cũ.
+        this.profileRepo.updatePlan(profile.name, null);
         return parsed.email;
       }
     } catch {
@@ -1996,6 +2001,7 @@ export class AppService {
               message = parsed.plan ? `Đã đăng nhập (${parsed.plan})` : 'Đã đăng nhập';
               if (parsed.email) {
                 email = parsed.email;
+                if (parsed.email !== profile.email) this.profileRepo.updatePlan(profile.name, null);
                 this.profileRepo.upsert({ ...profile, email: parsed.email });
               }
               this.profileRepo.updateAuthState(profile.name, 'ok', null, null);

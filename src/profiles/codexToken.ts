@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { normalizePlan } from './plan.js';
 
 export interface CodexTokenData {
   idToken: string;
@@ -8,6 +9,8 @@ export interface CodexTokenData {
   accountId: string | null;
   lastRefresh: string;
   email: string | null;
+  /** chatgpt_plan_type trong id_token, đã chuẩn hoá (free, plus, pro, team…). */
+  plan: string | null;
 }
 
 /** Đọc payload của JWT (không kiểm chữ ký): chỉ dùng để lấy email/account id hiển thị. */
@@ -44,7 +47,8 @@ export function parseCodexTokenItem(item: Record<string, unknown>): CodexTokenDa
 
   const claims = decodeJwtPayload(idToken);
   const auth = claims?.['https://api.openai.com/auth'];
-  const claimAccountId = auth && typeof auth === 'object' ? str((auth as Record<string, unknown>).chatgpt_account_id) : '';
+  const authClaims = auth && typeof auth === 'object' ? (auth as Record<string, unknown>) : {};
+  const claimAccountId = str(authClaims.chatgpt_account_id);
   const email = (str(item.email) || str(claims?.email)).toLowerCase() || null;
   const lastRefresh = str(item.last_refresh ?? item.lastRefresh);
 
@@ -55,6 +59,7 @@ export function parseCodexTokenItem(item: Record<string, unknown>): CodexTokenDa
     accountId: str(tokens.account_id ?? tokens.accountId ?? item.account_id) || claimAccountId || null,
     lastRefresh: Number.isFinite(Date.parse(lastRefresh)) ? lastRefresh : new Date().toISOString(),
     email: email && email.includes('@') ? email : null,
+    plan: normalizePlan(str(authClaims.chatgpt_plan_type), str(item.plan_type ?? item.plan)),
   };
 }
 

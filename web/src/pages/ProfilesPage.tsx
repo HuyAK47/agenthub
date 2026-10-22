@@ -446,6 +446,34 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
   );
 }
 
+const PLAN_LABELS: Record<string, string> = {
+  free: 'FREE', plus: 'PLUS', pro: 'PRO', team: 'TEAM', business: 'BUSINESS', enterprise: 'ENTERPRISE',
+  edu: 'EDU', max: 'MAX', max_5x: 'MAX 5X', max_20x: 'MAX 20X', ultra: 'ULTRA',
+};
+
+/** Tag gói tài khoản kiểu Cockpit: màu theo hạng, ẩn khi chưa biết gói. */
+function PlanBadge({ plan }: { plan?: string | null }) {
+  if (!plan || !PLAN_LABELS[plan]) return null;
+  const color = plan === 'free'
+    ? 'var(--t-text-3)'
+    : plan === 'plus'
+      ? 'var(--t-ok)'
+      : plan === 'pro'
+        ? 'var(--t-accent)'
+        : plan.startsWith('max') || plan === 'ultra'
+          ? 'var(--t-purple)'
+          : 'var(--t-warn)';
+  return (
+    <span
+      data-testid="plan-badge"
+      className="rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide"
+      style={{ color, borderColor: color }}
+    >
+      {PLAN_LABELS[plan]}
+    </span>
+  );
+}
+
 function ProfileCard({
   profile,
   run,
@@ -501,6 +529,7 @@ function ProfileCard({
               {profile.label && (
                 <span className="font-mono text-xs text-[var(--t-text-3)]">({profile.name})</span>
               )}
+              <PlanBadge plan={profile.plan} />
               {busy && (
                 <span className="rounded bg-[var(--t-accent-bg)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--t-accent)]">
                   {t('profiles.busyTag')}

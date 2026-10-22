@@ -11,7 +11,7 @@ function jwt(payload: Record<string, unknown>): string {
   return `${part({ alg: 'none' })}.${part(payload)}.sig`;
 }
 
-const ID_TOKEN = jwt({ email: 'Coder@Example.com', 'https://api.openai.com/auth': { chatgpt_account_id: 'acc-from-jwt' } });
+const ID_TOKEN = jwt({ email: 'Coder@Example.com', 'https://api.openai.com/auth': { chatgpt_account_id: 'acc-from-jwt', chatgpt_plan_type: 'plus' } });
 
 function exportItem(overrides: Record<string, unknown> = {}) {
   return {
@@ -77,6 +77,9 @@ describe('Codex token import', () => {
 
     await waitForChecks();
     expect(ctx.profileRepo.get('coder')?.authState).toBe('ok');
+    // Gói lấy từ chatgpt_plan_type trong id_token, trả qua API để UI gắn tag.
+    expect(ctx.profileRepo.get('coder')?.plan).toBe('plus');
+    expect(ctx.service.listProfiles().find((p) => p.name === 'coder')?.plan).toBe('plus');
   });
 
   it('updates the codex profile that already has the email instead of creating another', async () => {
