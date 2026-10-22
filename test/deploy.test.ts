@@ -92,6 +92,46 @@ describe('DeployService', () => {
     }
   });
 
+  it('waits for checks and workers before restart, then emits the waiting status', async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    let busy = true;
+    const restarts: string[][] = [];
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: {} } as never,
+      {} as never,
+      deployEventBus(f.events) as never,
+      0, undefined, undefined,
+      (command, args) => { restarts.push([command, ...args]); },
+      { snapshot: () => busy ? { checks: 2, editing: 1 } : { checks: 0, editing: 0 } },
+    );
+    const restarting = (service as unknown as { restartHub: (status: unknown) => Promise<void> }).restartHub({ projectId: 'demo', commit: 'abc' });
+    await vi.advanceTimersByTimeAsync(1000);
+    busy = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    await restarting;
+    expect(restarts).toHaveLength(1);
+    expect(f.events).toContainEqual(expect.objectContaining({
+      type: 'deploy.restart_waiting',
+      payload: expect.objectContaining({ checks: 2, editing: 1, message: expect.stringContaining('2 lượt kiểm tra, 1 worker') }),
+    }));
+  });
+
+  it('restarts after restartMaxWaitMin even if a worker remains busy', async () => {
+    const f = setup();
+    const restarts: string[][] = [];
+    const service = new DeployService(
+      { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: true, restartMaxWaitMin: 0 } } } as never,
+      {} as never,
+      deployEventBus(f.events) as never,
+      0, undefined, undefined,
+      (command, args) => { restarts.push([command, ...args]); },
+      { snapshot: () => ({ checks: 1, editing: 1 }) },
+    );
+    await (service as unknown as { restartHub: (status: unknown) => Promise<void> }).restartHub({ projectId: 'demo', commit: 'abc' });
+    expect(restarts).toHaveLength(1);
+  });
+
   it('runs configured argv steps in order, logs them, and emits success', async () => {
     const f = setup();
     const calls: string[] = [];
