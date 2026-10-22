@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
 import { TourDefinition, tourDefinitions, modalTourDefinitions, useTour } from './TourContext';
+import { UI_Z_INDEX } from '../ui/layers';
 
 type HelpPanelProps = { open: boolean; onClose: () => void };
 
@@ -20,7 +21,7 @@ export const HelpPanel: React.FC<HelpPanelProps> = ({ open, onClose }) => {
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[65]" role="dialog" aria-modal="true" aria-label={t('tour.panelTitle')}>
+    <div className="fixed inset-0" style={{ zIndex: UI_Z_INDEX.tour }} role="dialog" aria-modal="true" aria-label={t('tour.panelTitle')}>
       <button type="button" aria-label={t('tour.close')} className="absolute inset-0 bg-black/45" onClick={onClose} />
       <aside className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--t-border)] bg-[var(--t-surface)] p-5 text-[var(--t-text)] shadow-2xl">
         <div className="flex items-center justify-between gap-3">

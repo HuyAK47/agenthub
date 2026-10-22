@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { useLocale } from '../../context/LocaleContext';
 import { useTour } from './TourContext';
+import { UI_Z_INDEX } from '../ui/layers';
 
 type Rect = { top: number; left: number; width: number; height: number };
 
@@ -23,7 +24,7 @@ export const TourOverlay: React.FC = () => {
       if (cancelled) return;
       const target = document.querySelector(step.selector) as HTMLElement | null;
       if (target) {
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        target.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
         const update = () => {
           const box = target.getBoundingClientRect();
           setRect({ top: box.top, left: box.left, width: box.width, height: box.height });
@@ -53,6 +54,8 @@ export const TourOverlay: React.FC = () => {
   }, [active, closeTour, next, previous]);
 
   if (!active || !step || !rect) return null;
+  const target = document.querySelector(step.selector);
+  const targetIsInModal = target instanceof HTMLElement && Boolean(target.closest('[role="dialog"]'));
   const gap = 14;
   const bubbleWidth = Math.min(360, window.innerWidth - 24);
   const placement = step.placement || 'bottom';
@@ -68,10 +71,10 @@ export const TourOverlay: React.FC = () => {
   const safeStyle: React.CSSProperties = { top, left: safeLeft, width: bubbleWidth, transform: preferred.transform };
 
   return (
-    <div className="fixed inset-0 z-[70]" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="absolute inset-0 bg-black/55" />
+    <div className="pointer-events-none fixed inset-0" style={{ zIndex: UI_Z_INDEX.tour }} role="dialog" aria-modal="true" aria-label={title}>
+      {!targetIsInModal && <div className="absolute inset-0 bg-black/55" />}
       <div className="absolute rounded-xl pointer-events-none border-2 border-[var(--t-accent)] shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" style={{ top: rect.top - 4, left: rect.left - 4, width: rect.width + 8, height: rect.height + 8 }} />
-      <section className="absolute rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-2xl text-[var(--t-text)] max-sm:!left-3 max-sm:!right-3 max-sm:!bottom-3 max-sm:!top-auto max-sm:!transform-none max-sm:!w-auto" style={safeStyle}>
+      <section className="pointer-events-auto absolute rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-2xl text-[var(--t-text)] max-sm:!left-3 max-sm:!right-3 max-sm:!bottom-3 max-sm:!top-auto max-sm:!transform-none max-sm:!w-auto" style={safeStyle}>
         <button type="button" onClick={() => closeTour(false)} aria-label={t('tour.close')} className="absolute right-2 top-2 rounded p-1 text-[var(--t-text-3)] hover:bg-[var(--t-hover)]"><X size={16} /></button>
         <h2 className="pr-6 text-base font-semibold">{title}</h2>
         <p className="mt-2 text-sm text-[var(--t-text-2)]">{content}</p>

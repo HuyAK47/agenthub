@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { useEffect } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LocaleProvider } from '../context/LocaleContext';
 import { TourProvider, modalTourDefinitions, pageTours, tourDefinitions, useTour } from '../components/tour/TourContext';
+import { TourOverlay } from '../components/tour/TourOverlay';
 import { translations, translate } from '../locales';
 import { HelpPanel } from '../components/tour/HelpPanel';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
@@ -20,7 +22,10 @@ function wrapper(children: React.ReactNode) {
     <LocaleProvider initialLocale="en">
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={['/']}>
-          <TourProvider>{children}</TourProvider>
+          <TourProvider>
+            {children}
+            <TourOverlay />
+          </TourProvider>
         </MemoryRouter>
       </QueryClientProvider>
     </LocaleProvider>,
@@ -104,6 +109,25 @@ describe('tour help and tooltips', () => {
     );
     expect(document.querySelector('[data-tour="session-mode"]')?.textContent).toContain('Operation mode');
     expect(document.querySelector('[data-tour="session-mode"]')?.textContent).not.toContain('Project (optional)');
+  });
+
+  it('keeps an account modal readable while its modal tour is active', async () => {
+    localStorage.clear();
+    const OpenModalTour = () => {
+      const { openTour } = useTour();
+      useEffect(() => openTour('modal-add-account'), [openTour]);
+      return <AddProfileModal onClose={vi.fn()} onCreated={vi.fn()} onImported={vi.fn()} />;
+    };
+    wrapper(<OpenModalTour />);
+
+    await waitFor(() => expect(document.querySelector('[data-tour="account-provider"]')).toBeInTheDocument());
+    const modal = screen.getByText('Add Account').closest('[role="dialog"]');
+    const tour = screen.getByRole('dialog', { name: 'Provider and account type' });
+
+    expect(modal).toHaveStyle({ zIndex: '110' });
+    expect(tour).toHaveStyle({ zIndex: '100' });
+    expect(tour.querySelector('[class~="bg-black/55"]')).toBeNull();
+    expect(document.querySelector('[data-tour="account-provider"]')).toBeVisible();
   });
 
   it('has a concrete target for every modal tour step', () => {

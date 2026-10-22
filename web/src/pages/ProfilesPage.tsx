@@ -38,6 +38,7 @@ import { useLocale } from '../context/LocaleContext';
 import { Profile } from '../types/api';
 import { formatReset, formatTimeTitle } from '../lib/time';
 import { useTour } from '../components/tour/TourContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 
 const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
@@ -242,7 +243,7 @@ export const ProfilesPage: React.FC = () => {
           {t('profiles.addBtn')}
         </button>
       </div>
-      <div className="fixed bottom-5 right-5 z-[60] space-y-2">
+      <div className="fixed bottom-5 right-5 space-y-2" style={{ zIndex: UI_Z_INDEX.toast }}>
         {toasts.map((item) => (
           <div
             key={item.id}
@@ -538,7 +539,8 @@ function ProfileCard({
           {menu === profile.name && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="absolute right-0 top-10 z-20 w-44 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-1 shadow-xl"
+              className="absolute right-0 top-10 w-44 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-1 shadow-xl"
+              style={{ zIndex: UI_Z_INDEX.popover }}
             >
               <button
                 type="button"
@@ -611,10 +613,11 @@ function ProfileCard({
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <StatusBadge profile={profile} />
         {profile.duplicateWarning && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[11px] font-semibold text-[var(--t-crit)]">
+          <span title={t('profiles.duplicateTip')} className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[11px] font-semibold text-[var(--t-crit)]">
             <AlertTriangle className="h-3 w-3" />
-            {t('profiles.duplicateEmail')}
-            {profile.duplicateEmailWith?.length ? `: ${profile.duplicateEmailWith.join(', ')}` : ''}
+            {profile.duplicateEmailWith?.length
+              ? t('profiles.duplicateEmail', { emails: profile.duplicateEmailWith.join(', ') })
+              : t('profiles.duplicateEmailNoProfiles')}
           </span>
         )}
         <span className="text-xs text-[var(--t-text-3)]">{t('profiles.priority', { value: profile.priority ?? 0 })}</span>
@@ -795,7 +798,12 @@ function Modal({
 }) {
   const { t } = useLocale();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div
+      className="fixed inset-0 flex items-center justify-center bg-black/60 p-4"
+      style={{ zIndex: UI_Z_INDEX.modal }}
+      role="dialog"
+      aria-modal="true"
+    >
       <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
