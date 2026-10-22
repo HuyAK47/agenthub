@@ -36,6 +36,7 @@ import { DailyUsageTable } from '../components/DailyUsageTable';
 import { LoginTerminal } from '../components/LoginTerminal';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { useLocale } from '../context/LocaleContext';
+import { ToastViewport, useToasts, type ToastKind } from '../components/ui/Toast';
 import { Profile } from '../types/api';
 
 type Provider = 'agy' | 'codex' | 'claude';
@@ -115,9 +116,7 @@ export const ProfilesPage: React.FC = () => {
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
   // 'all', 'none' (chưa biết gói) hoặc một id gói như 'pro'.
   const [planFilter, setPlanFilter] = useState<string>('all');
-  const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const toastSeq = useRef(0);
   const scrolledHash = useRef<string | null>(null);
   const {
     data: profiles = [],
@@ -140,11 +139,9 @@ export const ProfilesPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const runningByProfile = new Map((status?.running || []).map((run) => [run.profileName, run]));
-  const toast = (text: string, isError = false) => {
-    const id = ++toastSeq.current;
-    setToasts((old) => [...old, { id, text, error: isError }]);
-    setTimeout(() => setToasts((old) => old.filter((item) => item.id !== id)), 6000);
-  };
+  const { toasts, push: pushToast, update: updateToast, dismiss: dismissToast } = useToasts();
+  /** Thông báo ngắn: tiêu đề + chi tiết tuỳ chọn. */
+  const toast = (title: string, kind: ToastKind = 'success', message?: string) => pushToast({ title, kind, message });
   useEffect(
     () =>
       subscribeToEvents((event) => {
@@ -154,10 +151,9 @@ export const ProfilesPage: React.FC = () => {
         clearTimeout(checkTimers.current[name]);
         setChecking((old) => ({ ...old, [name]: false }));
         const ok = Boolean((event.payload as any)?.ok);
-        toast(
-          `${ok ? '✓' : '✗'} ${(event.payload as any)?.message || (ok ? 'Kiểm tra thành công' : 'Kiểm tra thất bại')}${(event.payload as any)?.durationMs ? ` (${(event.payload as any).durationMs}ms)` : ''}`,
-          !ok,
-        );
+        const detail = (event.payload as any)?.message || (ok ? 'Kiểm tra thành công' : 'Kiểm tra thất bại');
+        const duration = (event.payload as any)?.durationMs ? ` · ${(event.payload as any).durationMs}ms` : '';
+        toast(t(ok ? 'profiles.checkOkTitle' : 'profiles.checkFailTitle', { name }), ok ? 'success' : 'error', `${detail}${duration}`);
         queryClient.invalidateQueries({ queryKey: ['profiles'] });
         void refreshProfileUsage(name);
       }),
@@ -167,7 +163,7 @@ export const ProfilesPage: React.FC = () => {
     try {
       setActiveLogin({ name, engine, sessionId: (await loginProfile(name)).sessionId });
     } catch (err: any) {
-      toast(err?.message || 'Không thể mở trình đăng nhập', true);
+      toast(t('profiles.loginOpenFailed'), 'error', err?.message);
     }
   };
   const runRefresh = async (profile: Profile, silent = false) => {
@@ -176,10 +172,9 @@ export const ProfilesPage: React.FC = () => {
       const updated = await refreshProfileUsage(profile.name);
       if (silent) return;
       const note = updated?.avatarMessage || updated?.refreshMessage;
-      const avatarNote = note ? ` · ${note}` : '';
-      toast(`✓ ${t('profiles.refreshDone', { name: profile.label || profile.name })}${avatarNote}`);
+      toast(t('profiles.refreshDone', { name: profile.label || profile.name }), 'success', note || undefined);
     } catch (err: any) {
-      toast(err?.message || t('profiles.refreshFailed'), true);
+      toast(t('profiles.refreshFailed'), 'error', err?.message);
     } finally {
       setRefreshing((old) => ({ ...old, [profile.name]: false }));
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
@@ -187,17 +182,17 @@ export const ProfilesPage: React.FC = () => {
   };
   const runWakeup = async (profile: Profile) => {
     const label = profile.label || profile.name;
-    toast(t('profiles.wakeupStarted', { name: label }));
+    const id = pushToast({ kind: 'loading', title: t('profiles.wakeupStarted', { name: label }), message: t('profiles.wakeupStartedHint') });
     try {
       const result = await wakeupProfile(profile.name);
       if (result.skipped) {
-        toast(t('profiles.wakeupSkipped', { name: label, reason: result.skipped }), true);
+        updateToast(id, { kind: 'warning', title: t('profiles.wakeupSkipped', { name: label }), message: result.skipped });
       } else {
-        const detail = result.results.map((item) => `${item.target}: ${item.ok ? '✓' : '✗'}`).join(', ');
-        toast(`${result.ok ? '✓' : '✗'} ${t(result.ok ? 'profiles.wakeupDone' : 'profiles.wakeupFailed', { name: label })} (${detail})`, !result.ok);
+        const detail = result.results.map((item) => `${item.ok ? '✓' : '✗'} ${item.target}`).join(' · ');
+        updateToast(id, { kind: result.ok ? 'success' : 'error', title: t(result.ok ? 'profiles.wakeupDone' : 'profiles.wakeupFailed', { name: label }), message: detail });
       }
     } catch (err: any) {
-      toast(err?.message || t('profiles.wakeupFailed', { name: label }), true);
+      updateToast(id, { kind: 'error', title: t('profiles.wakeupFailed', { name: label }), message: err?.message });
     } finally {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
     }
@@ -207,7 +202,7 @@ export const ProfilesPage: React.FC = () => {
       await updateProfile(profile.name, { enabled });
       toast(t(enabled ? 'profiles.toggledOn' : 'profiles.toggledOff', { name: profile.label || profile.name }));
     } catch (err: any) {
-      toast(err?.message || t('profiles.toggleFailed'), true);
+      toast(t('profiles.toggleFailed'), 'error', err?.message);
     } finally {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
     }
@@ -219,7 +214,7 @@ export const ProfilesPage: React.FC = () => {
     checkTimers.current[name] = setTimeout(
       () => {
         setChecking((old) => ({ ...old, [name]: false }));
-        toast(t('profiles.checkTimeout'), true);
+        toast(t('profiles.checkTimeout'), 'warning');
       },
       75_000,
     );
@@ -231,7 +226,8 @@ export const ProfilesPage: React.FC = () => {
     } catch (err: any) {
       clearTimeout(checkTimers.current[name]);
       setChecking((old) => ({ ...old, [name]: false }));
-      toast(err?.status === 409 ? t('profiles.checkAlreadyRunning') : err?.message || 'Kiểm tra thất bại', true);
+      if (err?.status === 409) toast(t('profiles.checkAlreadyRunning'), 'warning');
+      else toast(t('profiles.checkFailTitle', { name }), 'error', err?.message);
     }
   };
 
@@ -256,17 +252,7 @@ export const ProfilesPage: React.FC = () => {
           {t('profiles.addBtn')}
         </button>
       </div>
-      <div className="fixed bottom-5 right-5 z-[60] space-y-2">
-        {toasts.map((item) => (
-          <div
-            key={item.id}
-            role="alert"
-            className={`rounded-lg border px-4 py-3 text-sm shadow-lg ${item.error ? 'border-[var(--t-crit)] text-[var(--t-crit)]' : 'border-[var(--t-ok)] text-[var(--t-ok)]'} bg-[var(--t-surface)]`}
-          >
-            {item.text}
-          </div>
-        ))}
-      </div>
+      <ToastViewport toasts={toasts} onDismiss={dismissToast} closeLabel={t('common.close')} />
       {isLoading ? (
         <div className="p-12 text-center">{t('profiles.loading')}</div>
       ) : error ? (
@@ -348,7 +334,8 @@ export const ProfilesPage: React.FC = () => {
           onImported={(result) => {
             toast(
               t('profiles.importDone', { success: result.successCount, total: result.total }),
-              result.successCount === 0,
+              result.successCount === 0 ? 'error' : result.failedCount > 0 ? 'warning' : 'success',
+              result.successCount > 0 ? t('profiles.importCheckingHint') : undefined,
             );
             // Backend tự chạy Check bằng agy cho các tài khoản vừa nhập.
             result.results.filter((item) => item.status === 'ok').forEach((item) => watchCheck(item.name));
@@ -395,7 +382,7 @@ export const ProfilesPage: React.FC = () => {
           onClose={() => setTokenLogin(null)}
           onDone={(email) => {
             setTokenLogin(null);
-            toast(t('profiles.tokenLoginSuccess', { name: tokenLogin.name, email }));
+            toast(t('profiles.tokenLoginSuccess', { name: tokenLogin.name }), 'success', `${email} · ${t('profiles.importCheckingHint')}`);
             watchCheck(tokenLogin.name);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}

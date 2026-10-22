@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProfilesPage } from '../pages/ProfilesPage';
@@ -219,9 +219,9 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     });
 
     // Toast hiển thị icon ✓ và thời gian thực thi
-    const toast = screen.getByRole('alert');
-    expect(toast).toHaveTextContent('✓');
-    expect(toast).toHaveTextContent('Tài khoản hoạt động tốt (420ms)');
+    const toast = document.querySelector('[data-kind="success"]')!;
+    expect(toast).toHaveTextContent('Kiểm tra g1 thành công');
+    expect(toast).toHaveTextContent('Tài khoản hoạt động tốt · 420ms');
 
     // Invalidate queries và refresh usage
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profiles'] });
@@ -260,8 +260,9 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
 
     // Toast hiển thị icon ✗ và message lỗi
     const toast = screen.getByRole('alert');
-    expect(toast).toHaveTextContent('✗');
-    expect(toast).toHaveTextContent('Token hết hạn (150ms)');
+    expect(toast).toHaveAttribute('data-kind', 'error');
+    expect(toast).toHaveTextContent('Kiểm tra g1 thất bại');
+    expect(toast).toHaveTextContent('Token hết hạn · 150ms');
   });
 
   it('6. Quota mark API: deleteQuota gọi đúng API DELETE /api/profiles/:name/quota?family=:family', async () => {
@@ -332,7 +333,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profiles'] });
 
     // Hiển thị toast thông báo thành công
-    const toast = screen.getByRole('alert');
+    const toast = document.querySelector('[data-kind="success"]')!;
     expect(toast).toHaveTextContent(/Đã gỡ khóa quota/i);
   });
 
@@ -348,7 +349,9 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     });
 
     expect(client.refreshProfileUsage).toHaveBeenCalledWith('g1');
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Đã làm mới g1 · Đã cập nhật ảnh đại diện/);
+    const toast = (await screen.findByText('Đã làm mới g1')).closest('[data-kind]')!;
+    expect(toast).toHaveAttribute('data-kind', 'success');
+    expect(toast).toHaveTextContent('Đã cập nhật ảnh đại diện');
   });
 
   it('9c. Dùng token: nhập xong thì thẻ tự chuyển sang đang kiểm tra, không cần bấm Check', async () => {
@@ -371,7 +374,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
       tokens: [{ name: 'g1', email: 'g1@example.com', refresh_token: '1//rt' }],
       accountType: undefined,
     });
-    expect(await screen.findByText(/Đang kiểm tra/)).toBeInTheDocument();
+    expect(await within(card).findByText(/Đang kiểm tra…/)).toBeInTheDocument();
     expect(checkSpy).not.toHaveBeenCalled();
   });
 
@@ -440,7 +443,11 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     });
 
     expect(wakeSpy).toHaveBeenCalledWith('g1');
-    expect(await screen.findByText(/✓ Đã đánh thức g1 \(gemini-3.8-flash-low: ✓\)/)).toBeInTheDocument();
+    // Toast "đang đánh thức" được cập nhật thành kết quả, không hiện thêm toast mới.
+    const toast = (await screen.findByText('Đã đánh thức g1')).closest('[data-kind]')!;
+    expect(toast).toHaveAttribute('data-kind', 'success');
+    expect(toast).toHaveTextContent('✓ gemini-3.8-flash-low');
+    expect(screen.queryByText(/Đang đánh thức g1/)).toBeNull();
   });
 
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
