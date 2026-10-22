@@ -1285,7 +1285,7 @@ describe('Checking after worker completion', () => {
       model: 'gemini-3.8-flash-medium',
       profileName: 'p1',
       projectId: 'test-project',
-      startTime: Date.now(),
+      startTime: Date.now() - 5000,
       timeoutMs: 60000,
       timeoutAt: Date.now() + 60000,
       retryCount: 0,
@@ -1329,6 +1329,8 @@ describe('Checking after worker completion', () => {
         scheduler.stop();
         throw new Error('simulated check error');
       });
+      taskRepo.update('test-project/t1', { status: 'running' });
+      db.prepare("UPDATE runs SET outcome = NULL WHERE id = 'run-1'").run();
       schedulerInternal.running.set('test-project/t1', fakeRt);
       await schedulerInternal.checkRunningTasks();
       await vi.waitFor(() => {
@@ -1341,6 +1343,259 @@ describe('Checking after worker completion', () => {
       scheduler.stop();
       errorSpy.mockRestore();
     }
+  });
+
+  it('does not re-check queued task when an old worker finishes after changes_requested until a new worker completes', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-live-changes');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+
+    taskRepo.insert({
+      id: 'test-project/live-changes',
+      projectId: 'test-project',
+      slug: 'live-changes',
+      title: 'Live Changes',
+      body: 'Task body',
+      status: 'review',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-old',
+      taskId: 'test-project/live-changes',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const checkSpy = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run: checkSpy };
+
+    // 1. Reviewer rejects task: changes_requested -> queued
+    scheduler.reviewTask('test-project/live-changes', 'changes_requested', 'Please fix issues');
+    expect(taskRepo.get('test-project/live-changes')?.status).toBe('queued');
+
+    // 2. Old worker process now completes and writes DONE
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'old worker done');
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+      running: Map<string, unknown>;
+    };
+    const fakeRtOld = {
+      runId: 'run-old',
+      taskId: 'test-project/live-changes',
+      pid: 999991,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }), detectAuthError: () => ({ expired: false }), detectTransientError: () => false },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 10000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+
+    await schedulerInternal.handleRunCompletion('test-project/live-changes', fakeRtOld);
+
+    // Verify: Task MUST REMAIN queued, checks MUST NOT run, no review_ready event
+    expect(taskRepo.get('test-project/live-changes')?.status).toBe('queued');
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-changes' && (e.type === 'task.review_ready' || e.type === 'task.checking'))).toHaveLength(0);
+    expect(runRepo.get('run-old')?.outcome).toBe('crashed');
+
+    // 3. Now a new worker run starts for the queued task
+    taskRepo.update('test-project/live-changes', { status: 'running' });
+    runRepo.insert({
+      id: 'run-new',
+      taskId: 'test-project/live-changes',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+    const fakeRtNew = {
+      ...fakeRtOld,
+      runId: 'run-new',
+      pid: 999992,
+      startTime: Date.now() - 2000,
+    };
+    schedulerInternal.running.set('test-project/live-changes', fakeRtNew);
+    // Write fresh DONE marker
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'new worker done');
+
+    await schedulerInternal.handleRunCompletion('test-project/live-changes', fakeRtNew);
+
+    // Verify: Now checks run, task goes to review, review_ready is emitted
+    expect(taskRepo.get('test-project/live-changes')?.status).toBe('review');
+    expect(checkSpy).toHaveBeenCalledTimes(1);
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-changes' && e.type === 'task.review_ready')).toHaveLength(1);
+    expect(runRepo.get('run-new')?.outcome).toBe('done');
+
+    scheduler.stop();
+  });
+
+  it('does not check or emit review_ready when an older worker finishes while a newer worker is actively running', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-live-overlap');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+
+    taskRepo.insert({
+      id: 'test-project/live-overlap',
+      projectId: 'test-project',
+      slug: 'live-overlap',
+      title: 'Live Overlap',
+      status: 'running',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-old-overlap',
+      taskId: 'test-project/live-overlap',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+    runRepo.insert({
+      id: 'run-active-overlap',
+      taskId: 'test-project/live-overlap',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const checkSpy = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run: checkSpy };
+
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+      running: Map<string, unknown>;
+    };
+
+    const fakeRtActive = {
+      runId: 'run-active-overlap',
+      taskId: 'test-project/live-overlap',
+      pid: 999994,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }), detectAuthError: () => ({ expired: false }), detectTransientError: () => false },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 1000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+    // The newer worker is registered as running in scheduler
+    schedulerInternal.running.set('test-project/live-overlap', fakeRtActive);
+
+    const fakeRtOld = {
+      ...fakeRtActive,
+      runId: 'run-old-overlap',
+      pid: 999993,
+      startTime: Date.now() - 10000,
+    };
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'done');
+
+    // Old worker finishes
+    await schedulerInternal.handleRunCompletion('test-project/live-overlap', fakeRtOld);
+
+    // Verify: Task remains running, the active worker is NOT deleted from running map, checks do not run
+    expect(taskRepo.get('test-project/live-overlap')?.status).toBe('running');
+    expect(schedulerInternal.running.get('test-project/live-overlap')).toBe(fakeRtActive);
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-overlap' && e.type === 'task.review_ready')).toHaveLength(0);
+    expect(runRepo.get('run-old-overlap')?.outcome).toBe('crashed');
+    expect(runRepo.get('run-active-overlap')?.outcome).toBeNull();
+
+    scheduler.stop();
+  });
+
+  it('does not check or emit review_ready when worker finishes on a done task during live execution', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-live-done');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'done');
+
+    taskRepo.insert({
+      id: 'test-project/live-done',
+      projectId: 'test-project',
+      slug: 'live-done',
+      title: 'Live Done',
+      status: 'done',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-done-live',
+      taskId: 'test-project/live-done',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const checkSpy = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run: checkSpy };
+
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+      running: Map<string, unknown>;
+    };
+
+    const fakeRt = {
+      runId: 'run-done-live',
+      taskId: 'test-project/live-done',
+      pid: 999995,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }), detectAuthError: () => ({ expired: false }), detectTransientError: () => false },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 5000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+
+    await schedulerInternal.handleRunCompletion('test-project/live-done', fakeRt);
+
+    expect(taskRepo.get('test-project/live-done')?.status).toBe('done');
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-done' && e.type === 'task.review_ready')).toHaveLength(0);
+
+    scheduler.stop();
   });
 });
 

@@ -670,9 +670,14 @@ export class Scheduler {
     if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
     if (!task) return;
-    // A completed or cancelled task is terminal. In particular, a daemon
-    // restart must never resurrect it merely because an old marker remains.
-    if (task.status === 'done' || task.status === 'cancelled') return;
+    // A completed, cancelled, or queued task must never enter the checking queue.
+    if (task.status === 'done' || task.status === 'cancelled' || task.status === 'queued') return;
+    const runningTask = this.running.get(taskId);
+    if (runningTask && runningTask.runId !== runId) return;
+    const activeWorkerRuns = this.runRepo
+      .getByTask(taskId)
+      .filter((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
+    if (activeWorkerRuns.some((candidate) => candidate.id !== runId)) return;
     const currentRunId = this.checkingRunIds.get(taskId);
     const existing = this.checkingPromises.get(taskId);
     if (existing && currentRunId === runId) return existing;
@@ -719,10 +724,19 @@ export class Scheduler {
   private async executeChecksForTask(taskId: string, runId: string, reuseSavedResults: boolean): Promise<void> {
     if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
-    if (!task || task.status === 'done' || task.status === 'cancelled') return;
+    if (!task || task.status === 'done' || task.status === 'cancelled' || task.status === 'queued') return;
     if (this.checkingRunIds.get(taskId) !== runId) return;
-    this.taskRepo.update(taskId, { status: 'checking' });
-    this.eventBus.emit('task.checking', taskId);
+    const runningTask = this.running.get(taskId);
+    if (runningTask && runningTask.runId !== runId) return;
+    const activeWorkerRuns = this.runRepo
+      .getByTask(taskId)
+      .filter((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
+    if (activeWorkerRuns.some((candidate) => candidate.id !== runId)) return;
+
+    if (task.status !== 'checking') {
+      this.taskRepo.update(taskId, { status: 'checking' });
+      this.eventBus.emit('task.checking', taskId);
+    }
 
     const project = this.projectRepo.get(task.projectId);
     const checks = this.checkRunner && project
@@ -733,6 +747,11 @@ export class Scheduler {
     // Check if task status was changed (e.g. cancelled) during checks
     const currentTask = this.taskRepo.get(taskId);
     if (!currentTask || currentTask.status !== 'checking' || this.checkingRunIds.get(taskId) !== runId) return;
+    if (this.running.has(taskId)) return;
+    const stillActiveWorker = this.runRepo
+      .getByTask(taskId)
+      .some((candidate) => candidate.id !== runId && candidate.kind === 'worker' && candidate.outcome === null);
+    if (stillActiveWorker) return;
 
     if (!checks.passed && this.config.autoFixOnFail && currentTask.checkFixAttempts < 2) {
       const feedback = checks.results
@@ -747,8 +766,7 @@ export class Scheduler {
         body: newBody,
       });
       if (currentTask.worktreePath) {
-        const donePath = path.join(currentTask.worktreePath, '.agenthub', 'DONE');
-        if (fs.existsSync(donePath)) fs.unlinkSync(donePath);
+        this.clearWorkerMarkers(currentTask.worktreePath);
         this.writeTaskFiles(currentTask, newBody, true, feedback);
       }
       this.eventBus.emit('task.queued', taskId, { reason: 'checks_failed_autofix', failed: checks.failed });
@@ -782,7 +800,12 @@ export class Scheduler {
 
   private emitReviewReadyIfReview(taskId: string, payload?: unknown): void {
     const task = this.taskRepo.get(taskId);
-    if (task?.status === 'review') this.eventBus.emit('task.review_ready', taskId, payload);
+    const hasActiveWorker = this.runRepo
+      .getByTask(taskId)
+      .some((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
+    if (task?.status === 'review' && !this.running.has(taskId) && !hasActiveWorker) {
+      this.eventBus.emit('task.review_ready', taskId, payload);
+    }
   }
 
   /**
@@ -1370,7 +1393,9 @@ export class Scheduler {
   }
 
   private async handleRunCompletion(taskId: string, rt: RunningTask): Promise<void> {
-    this.running.delete(taskId);
+    if (this.running.get(taskId)?.runId === rt.runId) {
+      this.running.delete(taskId);
+    }
     if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
     try {
       this.locks.invalidate(rt.profileName);
@@ -1414,40 +1439,6 @@ export class Scheduler {
     let markers = { done: false, blocked: false, doneContent: '', blockedContent: '' };
     if (task.worktreePath) {
       markers = this.worktreeService.checkMarkers(task.worktreePath) as typeof markers;
-    }
-
-    // Persist dependency context while the marker and branch are still available.
-    if (markers.done) {
-      let diffStat: string | null = null;
-      const project = this.projectRepo.get(task.projectId);
-      const baseRef = task.baseRef || project?.defaultBranch || 'main';
-      const branch = task.branch || `agenthub/${task.slug}`;
-      if (project?.path) {
-        try {
-          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
-            cwd: project.path,
-            timeout: 30_000,
-          });
-          diffStat = stdout.trim() || null;
-        } catch {
-          // The branch may not be available yet; the context can still include DONE.
-        }
-      }
-      if (!diffStat && task.worktreePath && fs.existsSync(task.worktreePath)) {
-        try {
-          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
-            cwd: task.worktreePath,
-            timeout: 10_000,
-          });
-          diffStat = stdout.trim() || null;
-        } catch {
-          // ignore
-        }
-      }
-      this.taskRepo.update(taskId, {
-        doneReport: markers.doneContent || task.doneReport,
-        diffStat: diffStat ?? task.diffStat,
-      });
     }
 
     // Measure diff stats for run metrics.
@@ -1520,19 +1511,77 @@ export class Scheduler {
       }
     }
 
-    // A worker may have exited while the daemon was still alive. Preserve completed work exactly
-    // as startup recovery does — but only after the run's metrics (tokens, lines, duration) are
-    // recorded: returning earlier dropped token usage for every finished run.
-    const persistedRun = this.runRepo.get(rt.runId);
-    if (persistedRun && this.recoverFinishedWork(persistedRun)) return;
+    const currentTask = this.taskRepo.get(taskId);
+    if (!currentTask) {
+      this.runRepo.finish(rt.runId, 'crashed', undefined, 'task_missing');
+      return;
+    }
 
-    if (markers.done) {
+    // 1. Task status gate: only a task currently in 'running' status can accept completion from a worker run.
+    if (currentTask.status !== 'running') {
+      this.runRepo.finish(rt.runId, 'crashed', undefined, 'stale_worker');
+      return;
+    }
+
+    // 2. Overlapping worker gate: rt.runId must be the sole active worker run for this task.
+    const runningTask = this.running.get(taskId);
+    if (runningTask && runningTask.runId !== rt.runId) {
+      this.runRepo.finish(rt.runId, 'crashed', undefined, 'overlapping_worker');
+      return;
+    }
+    const activeWorkerRuns = this.runRepo
+      .getByTask(taskId)
+      .filter((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
+    if (activeWorkerRuns.length !== 1 || activeWorkerRuns[0].id !== rt.runId) {
+      this.runRepo.finish(rt.runId, 'crashed', undefined, 'overlapping_worker');
+      return;
+    }
+
+    // 3. Marker evaluation: only fresh markers created after this run started are accepted.
+    const marker = this.markerForRun(currentTask, rt.startTime);
+    if (marker === 'done') {
+      let diffStat: string | null = null;
+      const project = this.projectRepo.get(currentTask.projectId);
+      const baseRef = currentTask.baseRef || project?.defaultBranch || 'main';
+      const branch = currentTask.branch || `agenthub/${currentTask.slug}`;
+      if (project?.path) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: project.path,
+            timeout: 30_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // The branch may not be available yet; the context can still include DONE.
+        }
+      }
+      if (!diffStat && currentTask.worktreePath && fs.existsSync(currentTask.worktreePath)) {
+        try {
+          const { stdout } = await execFileAsync('git', ['diff', '--stat', `${baseRef}...${branch}`], {
+            cwd: currentTask.worktreePath,
+            timeout: 10_000,
+          });
+          diffStat = stdout.trim() || null;
+        } catch {
+          // ignore
+        }
+      }
       this.runRepo.finish(rt.runId, 'done');
+      this.taskRepo.update(taskId, {
+        status: 'checking',
+        doneReport: markers.doneContent || currentTask.doneReport,
+        diffStat: diffStat ?? currentTask.diffStat,
+      });
+      this.eventBus.emit('task.checking', taskId);
       await this.runChecksForTask(taskId, rt.runId);
-    } else if (markers.blocked) {
+    } else if (marker === 'blocked') {
       this.runRepo.finish(rt.runId, 'blocked');
       this.taskRepo.update(taskId, { status: 'blocked', transientRetries: 0, notBefore: null });
       this.eventBus.emit('task.blocked', taskId);
+    } else if (this.hasCommitAfter(currentTask, rt.startTime)) {
+      this.runRepo.finish(rt.runId, 'crashed', undefined, 'resume_after_progress');
+      this.taskRepo.update(taskId, { status: 'queued', resume: 1 });
+      this.eventBus.emit('task.queued', taskId, { reason: 'resume_after_progress' });
     } else {
       const exitCode = rt.exitCode ?? rt.child?.exitCode ?? null;
       const isLockBusy = durationMs < 3000 && fullLog.trim() === '' && Boolean(rt.lockFile) && exitCode === 1;
