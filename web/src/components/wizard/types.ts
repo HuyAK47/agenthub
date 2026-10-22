@@ -23,6 +23,7 @@ export interface WizardDraft {
   references: Reference[];
   /** Selected Claude sessions for context import */
   selectedSessions: string[];
+  selectedContextItems: Array<{ session: string; text: string }>;
   /** User has approved pinning the selected memory/sessions */
   contextApproved: boolean;
   agentsContent: string;
@@ -65,6 +66,7 @@ export function emptyDraft(): WizardDraft {
     agentsDraft: false,
     references: [],
     selectedSessions: [],
+    selectedContextItems: [],
     contextApproved: false,
     agentsContent:
       '# AgentHub project guidance\n\n## Conventions\n- Keep changes focused and use Conventional Commits.\n\n## Checks\n- Run the project checks before committing.\n',

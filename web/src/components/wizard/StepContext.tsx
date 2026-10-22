@@ -17,6 +17,15 @@ export function StepContext({
         : [...draft.selectedSessions, name],
     });
 
+  const toggleItem = (session: string, text: string) => {
+    const exists = draft.selectedContextItems.some((item) => item.session === session && item.text === text);
+    update({
+      selectedContextItems: exists
+        ? draft.selectedContextItems.filter((item) => !(item.session === session && item.text === text))
+        : [...draft.selectedContextItems, { session, text }],
+    });
+  };
+
   const addReference = () =>
     update({
       references: [...draft.references, { name: '', path: '', inject: false }],
@@ -200,11 +209,20 @@ export function StepContext({
                 </div>
                 <details className="text-xs">
                   <summary className="cursor-pointer text-[var(--t-accent)]">{t('projects.wizardViewSession')}</summary>
-                  <pre className="mt-1 max-h-32 max-w-full overflow-auto whitespace-pre-wrap rounded bg-[var(--t-surface-2)] p-2">
-                    {inspection?.claudeSessionPreviews.find(
-                      (preview) => preview.name === session.name,
-                    )?.content || t('projects.wizardNoSessionPreview')}
-                  </pre>
+                  {(() => {
+                    const preview = inspection?.claudeSessionPreviews.find((item) => item.name === session.name)?.content;
+                    const items = (preview || '').split(/\n+/).map((item) => item.trim()).filter((item) => item.length > 15).slice(0, 20);
+                    return items.length ? (
+                      <div className="mt-1 max-h-32 space-y-1 overflow-auto rounded bg-[var(--t-surface-2)] p-2">
+                        {items.map((item) => (
+                          <label key={item} className="flex gap-2 whitespace-pre-wrap">
+                            <input type="checkbox" aria-label={`Chọn nội dung ${item.slice(0, 40)}`} checked={draft.selectedContextItems.some((selected) => selected.session === session.name && selected.text === item)} onChange={() => toggleItem(session.name, item)} />
+                            <span>{item}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-[var(--t-surface-2)] p-2">{preview || t('projects.wizardNoSessionPreview')}</pre>;
+                  })()}
                 </details>
               </li>
             ))}

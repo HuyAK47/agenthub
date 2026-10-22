@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addProjectKnowledge,
   createNewProject,
   createProject,
   inspectProject,
+  getProjectContextSummary,
   summarizeProjectContext,
   writeProjectGuidance,
 } from '../api/client';
@@ -35,6 +36,7 @@ function restoredDraft(): WizardDraft {
 }
 
 function projectSettings(draft: WizardDraft): ProjectSettings {
+  const projectRoot = draft.path.replace(/\/[^/]+\/?$/, '') || draft.path;
   return {
     ...draft.settings,
     brain: draft.sensitive
@@ -43,6 +45,7 @@ function projectSettings(draft: WizardDraft): ProjectSettings {
     worktree: {
       ...draft.settings.worktree,
       ...(draft.sensitive ? { logsInRoot: true } : {}),
+      ...(draft.sensitive ? { root: `${projectRoot}/.agenthub-worktrees` } : {}),
       install: draft.skipInstall ? 'skip' : 'auto',
       gitHooks: draft.skipHooks ? 'skip' : 'run',
     },
@@ -71,6 +74,7 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
   const [createdProject, setCreatedProject] = useState<Project | null>(null);
   const [summaryPhase, setSummaryPhase] = useState<'idle' | 'summarizing' | 'review'>('idle');
   const [contextSummary, setContextSummary] = useState('');
+  const [summaryTaskId, setSummaryTaskId] = useState<string | null>(null);
 
   const update = (patch: Partial<WizardDraft>) => {
     setError(null);
@@ -96,18 +100,42 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
   });
 
   const summarizeMutation = useMutation({
-    mutationFn: async (params: { projectId: string; sessions: string[] }) => {
-      return summarizeProjectContext(params.projectId, { sessions: params.sessions });
+    mutationFn: async (params: { projectId: string; sessions: string[]; selections: WizardDraft['selectedContextItems'] }) => {
+      return summarizeProjectContext(params.projectId, {
+        sessions: params.sessions,
+        ...(params.selections.length ? { selections: params.selections } : {}),
+      });
     },
     onSuccess: (result) => {
-      setContextSummary(result.summary);
-      setSummaryPhase('review');
+      setSummaryTaskId(result.taskId);
+      if (result.summary) {
+        setContextSummary(result.summary);
+        setSummaryPhase('review');
+      }
     },
     onError: (cause: Error) => {
       setError(cause.message);
       setSummaryPhase('idle');
     },
   });
+
+  const summaryQuery = useQuery({
+    queryKey: ['project-context-summary', createdProject?.id, summaryTaskId],
+    queryFn: () => getProjectContextSummary(createdProject!.id, summaryTaskId!),
+    enabled: summaryPhase === 'summarizing' && Boolean(createdProject?.id && summaryTaskId),
+    refetchInterval: 1000,
+  });
+
+  useEffect(() => {
+    if (summaryPhase !== 'summarizing' || !summaryQuery.data) return;
+    if (summaryQuery.data.summary) {
+      setContextSummary(summaryQuery.data.summary);
+      setSummaryPhase('review');
+    } else if (['failed', 'blocked', 'cancelled'].includes(summaryQuery.data.status)) {
+      setError(`Task tóm tắt kết thúc với trạng thái ${summaryQuery.data.status}`);
+      setSummaryPhase('idle');
+    }
+  }, [summaryPhase, summaryQuery.data]);
 
   const pinSummaryMutation = useMutation({
     mutationFn: async (params: { projectId: string; content: string }) => {
@@ -144,7 +172,7 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       }
       if (draft.contextApproved && draft.selectedSessions.length > 0) {
         setSummaryPhase('summarizing');
-        summarizeMutation.mutate({ projectId: project.id, sessions: draft.selectedSessions });
+        summarizeMutation.mutate({ projectId: project.id, sessions: draft.selectedSessions, selections: draft.selectedContextItems });
       } else {
         localStorage.removeItem(DRAFT_KEY);
         queryClient.invalidateQueries({ queryKey: ['projects'] });

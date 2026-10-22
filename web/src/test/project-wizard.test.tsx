@@ -216,7 +216,7 @@ describe('ProjectWizard', () => {
     await waitFor(() => expect(createSpy).toHaveBeenCalled());
     expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
       settings: expect.objectContaining({
-        worktree: { logsInRoot: true, install: 'skip', gitHooks: 'skip' },
+        worktree: expect.objectContaining({ logsInRoot: true, root: '/media/.agenthub-worktrees', install: 'skip', gitHooks: 'skip' }),
         notifications: { telegramContent: 'minimal' },
         brain: expect.objectContaining({ permissions: 'standard' }),
         integration: expect.objectContaining({ enabled: true, baseRef: 'main' }),
