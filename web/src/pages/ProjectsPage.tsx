@@ -850,7 +850,6 @@ export const ProjectsPage: React.FC = () => {
                         navigate(`/projects/${proj.id}/settings`);
                       }}
                       className="gap-1.5"
-                      aria-label={`${t('projects.settings')} ${proj.name}`}
                     >
                       <Settings2 className="w-3.5 h-3.5" />
                       <span>{t('projects.settings')}</span>
