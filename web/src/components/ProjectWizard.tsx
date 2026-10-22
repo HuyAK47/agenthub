@@ -34,10 +34,7 @@ function restoredDraft(): WizardDraft {
   }
 }
 
-function projectSettings(draft: WizardDraft, inspection: ProjectInspection | null): ProjectSettings {
-  const sensitiveRoot = draft.sensitive && inspection?.mount.mountpoint
-    ? inspection.mount.mountpoint
-    : draft.settings.worktree.root;
+function projectSettings(draft: WizardDraft): ProjectSettings {
   return {
     ...draft.settings,
     brain: draft.sensitive
@@ -45,7 +42,7 @@ function projectSettings(draft: WizardDraft, inspection: ProjectInspection | nul
       : draft.settings.brain,
     worktree: {
       ...draft.settings.worktree,
-      ...(sensitiveRoot ? { root: sensitiveRoot, logsInRoot: true } : {}),
+      ...(draft.sensitive ? { logsInRoot: true } : {}),
       install: draft.skipInstall ? 'skip' : 'auto',
       gitHooks: draft.skipHooks ? 'skip' : 'run',
     },
@@ -131,7 +128,7 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
         path: draft.path,
         defaultBranch: draft.branch,
         checks: draft.checks,
-        settings: projectSettings(draft, inspection),
+        settings: projectSettings(draft),
       };
       return draft.mode === 'new' ? createNewProject(input) : createProject(input);
     },
