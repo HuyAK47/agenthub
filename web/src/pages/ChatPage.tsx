@@ -621,7 +621,7 @@ export const ChatPage: React.FC = () => {
               <>
                 {/* Context Meter */}
                 <select
-                  aria-label="Model chat"
+                  aria-label={t('extra.modelChatAria')}
                   value={activeSession.model || systemConfig?.chat?.model || 'sonnet'}
                   disabled={isBusy || updateSessionMutation.isPending}
                   onChange={(event) => updateSessionMutation.mutate({ id: activeSession.id, data: { model: event.target.value } })}

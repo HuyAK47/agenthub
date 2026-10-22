@@ -785,12 +785,13 @@ function Modal({
   children: React.ReactNode;
   maxWidth?: string;
 }) {
+  const { t } = useLocale();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Đóng">
+          <button type="button" onClick={onClose} aria-label={t('extra.closeProfile')}>
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -1205,13 +1206,14 @@ function EditProfileModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useLocale();
   const [label, setLabel] = useState(profile.label || '');
   const [notes, setNotes] = useState(profile.notes || '');
   const [priority, setPriority] = useState(String(profile.priority ?? 0));
   const [enabled, setEnabled] = useState(Boolean(profile.enabled));
   const [error, setError] = useState('');
   return (
-    <Modal title={`Sửa hồ sơ ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.editProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -1225,16 +1227,16 @@ function EditProfileModal({
             });
             onSaved();
           } catch (err: any) {
-            setError(err?.message || 'Không thể lưu hồ sơ');
+            setError(err?.message || t('extra.saveProfileError'));
           }
         }}
       >
         <label className="block text-sm">
-          Tên hiển thị
+          {t('extra.displayName')}
           <input className="field mt-1" value={label} onChange={(e) => setLabel(e.target.value)} />
         </label>
         <label className="block text-sm">
-          Ghi chú
+          {t('extra.notes')}
           <textarea
             className="field mt-1"
             rows={3}
@@ -1243,7 +1245,7 @@ function EditProfileModal({
           />
         </label>
         <label className="block text-sm">
-          Ưu tiên
+          {t('extra.priority')}
           <input
             className="field mt-1"
             type="number"
@@ -1253,14 +1255,14 @@ function EditProfileModal({
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Bật hồ sơ
+          {t('extra.enableProfile')}
         </label>
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('extra.cancel')}
           </button>
-          <button className="button-primary">Lưu</button>
+          <button className="button-primary">{t('extra.save')}</button>
         </div>
       </form>
     </Modal>
@@ -1275,10 +1277,11 @@ function RenameModal({
   onClose: () => void;
   onSaved: (newName: string) => void;
 }) {
+  const { t } = useLocale();
   const [name, setName] = useState(profile.name);
   const [error, setError] = useState('');
   return (
-    <Modal title={`Đổi tên ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.renameProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -1287,12 +1290,12 @@ function RenameModal({
             await renameProfile(profile.name, name.trim());
             onSaved(name.trim());
           } catch (err: any) {
-            setError(err?.message || 'Không thể đổi tên');
+            setError(err?.message || t('extra.renameError'));
           }
         }}
       >
         <label className="block text-sm">
-          Tên mới
+          {t('extra.displayName')}
           <input
             className="field mt-1"
             value={name}
@@ -1303,9 +1306,9 @@ function RenameModal({
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('extra.cancel')}
           </button>
-          <button className="button-primary">Đổi tên</button>
+          <button className="button-primary">{t('extra.rename')}</button>
         </div>
       </form>
     </Modal>
@@ -1325,20 +1328,20 @@ function DeleteModal({
   const [purge, setPurge] = useState(false);
   const [error, setError] = useState('');
   return (
-    <Modal title={`Xoá hồ sơ ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.deleteProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-4"
         onSubmit={async (e) => {
           e.preventDefault();
           if (typed !== profile.name) {
-            setError('Tên nhập lại chưa khớp');
+            setError(t('extra.nameMismatch'));
             return;
           }
           try {
             await deleteProfile(profile.name, purge && profile.kind !== 'keyring');
             onDeleted();
           } catch (err: any) {
-            setError(err?.message || 'Không thể xoá hồ sơ');
+            setError(err?.message || t('extra.deleteError'));
           }
         }}
       >

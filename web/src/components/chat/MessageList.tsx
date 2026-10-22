@@ -244,7 +244,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             className="flex items-center justify-center gap-2 py-3 text-xs text-[var(--text-muted)] animate-pulse"
           >
             <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--t-accent)]" />
-            <span>Đang tải thêm tin nhắn cũ…</span>
+            <span>{t('extra.loadingOlderMessages')}</span>
           </div>
         )}
 

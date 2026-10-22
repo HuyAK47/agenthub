@@ -162,8 +162,8 @@ export const SessionList: React.FC<SessionListProps> = ({
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="Mở rộng danh sách"
-          aria-label="Mở rộng danh sách"
+          title={t('extra.expandSessions')}
+          aria-label={t('extra.expandSessions')}
           className="p-2 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] cursor-pointer"
         >
           <ChevronRight className="w-5 h-5" />
@@ -198,8 +198,8 @@ export const SessionList: React.FC<SessionListProps> = ({
             <button
               type="button"
               onClick={onToggleCollapse}
-              title="Thu gọn danh sách"
-              aria-label="Thu gọn danh sách"
+              title={t('extra.collapseSessions')}
+              aria-label={t('extra.collapseSessions')}
               className="p-2 rounded-xl border border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] cursor-pointer shrink-0"
             >
               <ChevronLeft className="w-4 h-4" />

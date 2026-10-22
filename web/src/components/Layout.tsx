@@ -39,7 +39,7 @@ const PlansBadgeInner: React.FC = () => {
   return (
     <span
       data-testid="plans-sidebar-badge"
-      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/30 leading-none"
+      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-[color-mix(in_srgb,var(--t-warn)_20%,transparent)] text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)] leading-none"
     >
       {draftCount}
     </span>
@@ -118,7 +118,7 @@ export const Layout: React.FC = () => {
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--t-surface)] focus:text-[var(--t-accent)] focus:border focus:border-[var(--t-border)] focus:shadow-lg focus:font-medium focus:text-sm focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]"
       >
-        {locale === 'en' ? 'Skip to content' : 'Bỏ qua tới nội dung'}
+        {t('extra.skipToContent')}
       </a>
 
       {/* Sidebar (240px wide on >=1100px, 68px icon-only on <1100px) */}
