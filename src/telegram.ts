@@ -208,6 +208,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'use', description: 'Chọn dự án: /use <dự án> · xem dự án đang chọn: /use' },
   { command: 'brain', description: 'Bộ não: /brain · /brain trust [dự án] standard|trusted|full|inherit' },
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
+  { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
@@ -523,7 +524,7 @@ export class TelegramBotService {
   }
 
   buildCurrentDigest(): DigestData {
-    return generateDigest({
+    const digest = generateDigest({
       taskRepo: this.taskRepo,
       projectRepo: this.projectRepo,
       profileRepo: this.profileRepo,
@@ -534,6 +535,38 @@ export class TelegramBotService {
       now: () => this.now(),
       accumulatedQuietHoursMessages: this.quietHoursQueue.map((q) => q.text),
       port: this.config.port,
+    });
+    const plans = this.buildPlansSummary();
+    if (plans) digest.text += `\n\n${plans}`;
+    return digest;
+  }
+
+  private buildPlansSummary(): string {
+    const batches = this.service.listBatches().filter((batch) => batch.status !== 'discarded');
+    const active = batches.filter((batch) => batch.progress.total > 0 && batch.progress.done < batch.progress.total && batch.progress.failed === 0).slice(0, 5);
+    if (active.length === 0) return '';
+    const lines = active.map((batch) => `• ${this.escapeHtml(batch.title)} — ${batch.progress.done}/${batch.progress.total} xong`);
+    return `📦 <b>Kế hoạch đang làm</b>\n${lines.join('\n')}`;
+  }
+
+  private async handlePlansCommand(chatId: number): Promise<void> {
+    const batches = this.service.listBatches().filter((batch) => batch.status !== 'discarded').slice(0, 5);
+    if (batches.length === 0) {
+      await this.sendMessage(chatId, '📦 Chưa có kế hoạch nào. Khi Claude chia một việc thành nhiều task, kế hoạch sẽ hiện ở đây.');
+      return;
+    }
+    const lines = batches.map((batch) => {
+      const state = batch.status === 'draft'
+        ? 'Nháp chờ duyệt'
+        : batch.progress.failed > 0
+          ? 'Có lỗi'
+          : batch.progress.total > 0 && batch.progress.done === batch.progress.total
+            ? 'Hoàn thành'
+            : 'Đang làm';
+      return `• <b>${this.escapeHtml(batch.title)}</b> — ${state} (${batch.progress.done}/${batch.progress.total} xong)`;
+    });
+    await this.sendMessage(chatId, `📦 <b>5 kế hoạch gần nhất</b>\n${lines.join('\n')}`, {
+      inline_keyboard: [[{ text: '🌐 Xem trên dashboard', url: this.getDashboardUrl('#/plans') }]],
     });
   }
 
@@ -987,6 +1020,10 @@ export class TelegramBotService {
 
       case '/digest':
         await this.handleDigestCommand(chatId);
+        break;
+
+      case '/plans':
+        await this.handlePlansCommand(chatId);
         break;
 
       case '/ci':
@@ -3628,6 +3665,7 @@ export class TelegramBotService {
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
+/plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi
 /brain - Xem Claude đang làm gì và bộ não từng dự án · /brain mode [dự án] off|suggest|auto|external|inherit
 /tasks [trạng thái] - Xem danh sách task (vd: /tasks review, /tasks running)
