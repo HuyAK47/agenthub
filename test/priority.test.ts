@@ -41,14 +41,24 @@ describe('priority helpers', () => {
   it('passes vitest worker limits to the child', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-prio-'));
     dirs.push(dir);
+    const env = { ...process.env };
+    delete env.AGENTHUB_WORKER_COUNT;
     const r = await runInProcessGroup(process.execPath, ['-e', 'process.stdout.write(process.env.VITEST_MAX_THREADS || "")'], {
       cwd: dir,
-      env: process.env,
+      env,
       timeoutMs: 10_000,
     });
     expect(r.code).toBe(0);
     const expected = String(testThreadLimit(Number(process.env.AGENTHUB_WORKER_COUNT || 1)));
     expect(r.output).toBe(expected);
+
+    const rScaled = await runInProcessGroup(process.execPath, ['-e', 'process.stdout.write(process.env.VITEST_MAX_THREADS || "")'], {
+      cwd: dir,
+      env: { ...process.env, AGENTHUB_WORKER_COUNT: '20' },
+      timeoutMs: 10_000,
+    });
+    expect(rScaled.code).toBe(0);
+    expect(rScaled.output).toBe(String(testThreadLimit(20)));
   });
 
   it('kills grandchildren left behind after the main command exits', async () => {
