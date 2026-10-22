@@ -39,7 +39,7 @@ describe('reaper', () => {
   });
 
   it('terminates a detached process in a worktree', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-'));
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-')));
     const worktreesDir = path.join(root, 'worktrees');
     const worktree = path.join(worktreesDir, 'project', 'task');
     fs.mkdirSync(worktree, { recursive: true });
@@ -54,7 +54,7 @@ describe('reaper', () => {
   });
 
   it('does not touch a process outside the worktrees directory or the project root', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-'));
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-')));
     const worktreesDir = path.join(root, 'worktrees');
     const projectRoot = path.join(root, 'project');
     const outside = path.join(root, 'outside');
@@ -71,7 +71,7 @@ describe('reaper', () => {
   });
 
   it('returns immediately when scheduling escalation', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-'));
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-')));
     const worktreesDir = path.join(root, 'worktrees');
     const worktree = path.join(worktreesDir, 'project', 'task');
     fs.mkdirSync(worktree, { recursive: true });

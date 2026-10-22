@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { isDeletableWorktreePath, resolveReal } from './worktrees/index.js';
 import { getPlatform } from './platform/index.js';
 
@@ -53,6 +54,14 @@ export function processAncestors(): Set<number> {
 }
 
 export function processIds(): number[] {
+  if (process.platform === 'darwin') {
+    try {
+      const output = execFileSync('ps', ['-axo', 'pid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return output.split('\n').map((line) => Number(line.trim())).filter((n) => Number.isFinite(n) && n > 0);
+    } catch {
+      return [];
+    }
+  }
   try {
     return fs.readdirSync('/proc').filter((entry) => /^\d+$/.test(entry)).map(Number);
   } catch {
