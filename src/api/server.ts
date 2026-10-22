@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { hubVersion } from '../version.js';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ServerResponse } from 'node:http';
@@ -108,7 +109,7 @@ export async function createServer(
 
   // Health check (no token required)
   fastify.get('/health', async () => {
-    return { ok: true, version: '0.1.0' };
+    return { ok: true, version: hubVersion() };
   });
 
   fastify.get('/api/version', async () => {

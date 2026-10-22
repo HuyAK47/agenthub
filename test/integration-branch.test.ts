@@ -56,7 +56,9 @@ describe('Integration branch and cross-project dependencies', () => {
   });
 
   afterEach(() => {
+    delete process.env.FAKE_MODE;
     ctx.scheduler.stop();
+    ctx.scheduler.cancelAll();
     ctx.db.close();
     delete process.env.AGENTHUB_HOME;
     delete process.env.AGENTHUB_AGY_HOMES;
@@ -102,6 +104,10 @@ describe('Integration branch and cross-project dependencies', () => {
       dependsOn: ['be/api-v1'],
       start: true,
     });
+
+    // The test simulates the BE worker finishing (commit + DONE below); keep the fake worker from
+    // finishing on its own, or the hub may record its own DONE first and the assertions race.
+    process.env.FAKE_MODE = 'sleep-loop';
 
     // 1st tick: BE task should start, FE task must wait
     ctx.scheduler.tick();

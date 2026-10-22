@@ -53,6 +53,24 @@ jobs:
       - run: chmod +x scripts/smoke-install.sh
       - run: scripts/smoke-install.sh "$(find release -name 'agenthub-*-linux-x64.tar.gz' -print -quit)"
 
+  smoke-macos:
+    # Install the macOS archive natively on a clean runner and check /health.
+    needs: package
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-macos-*
+          merge-multiple: true
+          path: release
+      - run: ls -la release
+      - run: sh scripts/smoke-install-native.sh "$(find release -name 'agenthub-*-macos-*.tar.gz' -print -quit)"
+
   publish:
     needs: [package, smoke]
     runs-on: ubuntu-latest
