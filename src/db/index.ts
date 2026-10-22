@@ -627,6 +627,12 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_brain_directives_project_active ON brain_directives(projectId, active, createdAt);
   `,
+  // Migration 47: preserve the Claude session and original goal for standalone task history grouping.
+  `
+  ALTER TABLE tasks ADD COLUMN creationSessionId TEXT;
+  ALTER TABLE tasks ADD COLUMN creationGoal TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_creation_session ON tasks(projectId, creationSessionId, createdAt);
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -781,6 +787,8 @@ export interface TaskRow {
   diffStat?: string | null;
   slot: number | null;
   batchId?: string | null;
+  creationSessionId?: string | null;
+  creationGoal?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1157,13 +1165,15 @@ export class TaskRepo {
     diffStat?: string | null;
     sourceRef?: string | null;
     batchId?: string | null;
+    creationSessionId?: string | null;
+    creationGoal?: string | null;
     skipDeps?: boolean;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -1183,6 +1193,8 @@ export class TaskRepo {
         row.diffStat || null,
         row.sourceRef || null,
         row.batchId || null,
+        row.creationSessionId || null,
+        row.creationGoal || null,
       );
 
     // Populate task_deps

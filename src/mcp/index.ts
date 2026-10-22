@@ -154,7 +154,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
   const scopedProject = (): string | undefined => options?.projectId || process.env.AGENTHUB_MCP_PROJECT || undefined;
   const assistantSession = (): boolean => (process.env.AGENTHUB_CHAT_KIND || '') === 'assistant';
   const assertAssistantAllowed = (toolName: string): void => {
-    if (assistantSession() && ['hub_review', 'hub_create_batch', 'hub_dispatch_batch'].includes(toolName)) {
+    if (assistantSession() && ['hub_review', 'hub_dispatch_batch'].includes(toolName)) {
       throw new Error(`Trợ lý không được gọi ${toolName}; việc này thuộc về bộ não`);
     }
   };
@@ -546,11 +546,16 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
       branch: z.string().optional().describe('Git branch cho task'),
       modelChain: z.array(z.string()).optional().describe('Chuỗi model chỉ định'),
       start: z.boolean().optional().describe('Đưa thẳng vào hàng đợi để chạy ngay'),
+      goal: z.string().optional().describe('Mục tiêu người dùng của nhóm task'),
     },
     async (args) => {
       try {
         assertProject(args.project, 'Tạo task');
-        const res = await callApi<{ id: string; status: string; title: string }>('POST', '/api/tasks', { ...args, fromClaude: true });
+        const res = await callApi<{ id: string; status: string; title: string }>('POST', '/api/tasks', {
+          ...args,
+          fromClaude: true,
+          sessionId: options?.chatSessionId || process.env.AGENTHUB_CHAT_SESSION_ID,
+        });
         try {
           await callApi('PUT', '/api/brain', {
             activity: 'dispatching',
@@ -604,11 +609,12 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
   // hub_create_batch
   server.tool(
     'hub_create_batch',
-    'Tạo đợt task mới (batch) với mọi task ở trạng thái draft chờ duyệt. Dùng cho kế hoạch >= 3 task.',
+    'Tạo đợt task mới (batch). Dùng cho mọi kế hoạch có từ 2 task liên quan; có thể giao ngay bằng dispatch=true khi không cần duyệt.',
     {
       project: z.string().describe('ID của project'),
       title: z.string().describe('Tiêu đề của đợt lên kế hoạch'),
       goal: z.string().optional().describe('Mục tiêu tổng quát của đợt'),
+      dispatch: z.boolean().optional().describe('Giao ngay sau khi tạo, vẫn kiểm tra vòng phụ thuộc'),
       tasks: z
         .array(
           z.object({
@@ -634,7 +640,12 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           goal?: string;
           status: string;
           tasks: Array<{ id: string; slug: string; title: string; status: string; dependsOn: string | string[] }>;
-        }>('POST', '/api/batches', { ...args, createdBy: 'claude' });
+        }>('POST', '/api/batches', {
+          ...args,
+          dispatch: assistantSession() ? false : args.dispatch,
+          createdBy: assistantSession() ? 'assistant' : 'claude',
+          sessionId: options?.chatSessionId || process.env.AGENTHUB_CHAT_SESSION_ID,
+        });
 
         const taskLines = res.tasks
           .map((t) => `  - ${t.id} [${t.status}]: ${t.title}`)
@@ -643,7 +654,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           content: [
             {
               type: 'text',
-              text: `✓ Đã tạo đợt "${res.id}" [${res.status}]: "${res.title}" gồm ${res.tasks.length} task (chờ duyệt):\n${taskLines}`,
+              text: `✓ Đã tạo đợt "${res.id}" [${res.status}]: "${res.title}" gồm ${res.tasks.length} task${res.status === 'draft' ? ' (chờ duyệt)' : ' (đã giao)'}:\n${taskLines}`,
             },
           ],
         };

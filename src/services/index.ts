@@ -148,6 +148,23 @@ export function apiBatch(batch: TaskBatchRow): TaskBatchRow {
   };
 }
 
+export interface BatchProgress {
+  total: number;
+  done: number;
+  running: number;
+  failed: number;
+  waiting: number;
+  pending: number;
+}
+
+function batchProgress(tasks: TaskRow[]): BatchProgress {
+  const done = tasks.filter((task) => task.status === 'done').length;
+  const running = tasks.filter((task) => ['running', 'checking', 'review'].includes(task.status)).length;
+  const failed = tasks.filter((task) => ['failed', 'blocked', 'cancelled'].includes(task.status)).length;
+  const waiting = tasks.filter((task) => ['waiting_quota', 'draft'].includes(task.status)).length;
+  return { total: tasks.length, done, running, failed, waiting, pending: Math.max(0, tasks.length - done - running - failed - waiting) };
+}
+
 export function extractKnowledgeSection(doneContent: string): string | null {
   const heading = /^##\s+Ghi chú cho task sau\s*$/m.exec(doneContent);
   if (!heading) return null;
@@ -255,6 +272,8 @@ export const CreateTaskSchema = z.object({
   start: z.boolean().optional(),
   fromClaude: z.boolean().optional(),
   batchId: z.string().optional(),
+  sessionId: z.string().optional(),
+  goal: z.string().optional(),
 });
 
 export const BatchTaskInputSchema = z.object({
@@ -272,6 +291,8 @@ export const CreateBatchSchema = z.object({
   goal: z.string().optional(),
   tasks: z.array(BatchTaskInputSchema).min(1),
   createdBy: z.string().optional(),
+  dispatch: z.boolean().optional(),
+  sessionId: z.string().optional(),
 });
 
 export const UpdateBatchSchema = z.object({
@@ -2187,6 +2208,37 @@ export class AppService {
     let initialStatus = parsed.start ? 'queued' : 'draft';
     let batchId = parsed.batchId || null;
 
+    if (parsed.fromClaude && !batchId && !this.config.planning?.requireApproval && this.taskBatchRepo) {
+      initialStatus = 'queued';
+      const sessionId = parsed.sessionId || null;
+      const recent = sessionId
+        ? this.taskBatchRepo.list(parsed.project, 'dispatched').find((batch) => {
+            if (batch.createdBy !== 'claude-auto' || !batch.goal) return false;
+            const tasks = this.taskRepo.getByBatch(batch.id);
+            return tasks.some((task) => task.creationSessionId === sessionId &&
+              Math.abs(Date.parse(task.createdAt.replace(' ', 'T') + 'Z') - Date.now()) <= 30 * 60 * 1000);
+          })
+        : undefined;
+      const goal = parsed.goal?.trim() || parsed.title;
+      if (recent) {
+        batchId = recent.id;
+      } else {
+        const newBatchId = `batch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+        this.taskBatchRepo.create({
+          id: newBatchId,
+          projectId: parsed.project,
+          title: goal.length > 100 ? `${goal.slice(0, 97)}...` : goal,
+          goal,
+          status: 'dispatched',
+          createdBy: 'claude-auto',
+        });
+        batchId = newBatchId;
+        const payload = { batchId: newBatchId, projectId: parsed.project, title: goal, goal, taskCount: 0, createdBy: 'claude-auto' };
+        this.eventRepo.insert('batch.created', undefined, payload);
+        this.scheduler.getEventBus().emit('batch.created', undefined, payload);
+      }
+    }
+
     if (parsed.fromClaude && this.config.planning?.requireApproval) {
       initialStatus = 'draft';
       if (!batchId && this.taskBatchRepo) {
@@ -2232,6 +2284,8 @@ export class AppService {
       status: initialStatus,
       sourceRef: parsed.sourceRef ? JSON.stringify(parsed.sourceRef) : null,
       batchId,
+      creationSessionId: parsed.fromClaude ? parsed.sessionId || null : null,
+      creationGoal: parsed.fromClaude ? parsed.goal || null : null,
     });
 
     if (initialStatus === 'queued') {
@@ -2434,7 +2488,7 @@ export class AppService {
     return updatedTask;
   }
 
-  createBatch(raw: unknown): TaskBatchRow & { tasks: TaskRow[] } {
+  createBatch(raw: unknown): TaskBatchRow & { tasks: TaskRow[]; progress: BatchProgress } {
     const parsed = CreateBatchSchema.parse(raw);
     const project = this.projectRepo.get(parsed.project);
     if (!project) {
@@ -2512,11 +2566,14 @@ export class AppService {
     this.eventRepo.insert('batch.created', undefined, payload);
     this.scheduler.getEventBus().emit('batch.created', undefined, payload);
 
+    if (parsed.dispatch) this.dispatchBatch(batchId);
+
     const batchRow = apiBatch(this.taskBatchRepo.get(batchId)!);
-    return { ...batchRow, tasks: createdTasks };
+    const tasks = this.taskRepo.getByBatch(batchId).map(apiTask);
+    return { ...batchRow, tasks, progress: batchProgress(tasks) };
   }
 
-  getBatch(id: string): TaskBatchRow & { tasks: TaskRow[] } {
+  getBatch(id: string): TaskBatchRow & { tasks: TaskRow[]; progress: BatchProgress } {
     if (!this.taskBatchRepo) {
       throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
     }
@@ -2525,12 +2582,15 @@ export class AppService {
       throw new HttpError(404, 'not_found', `Đợt "${id}" không tồn tại`);
     }
     const tasks = this.taskRepo.getByBatch(id).map(apiTask);
-    return { ...apiBatch(batch), tasks };
+    return { ...apiBatch(batch), tasks, progress: batchProgress(tasks) };
   }
 
-  listBatches(params?: { project?: string; status?: string }): TaskBatchRow[] {
+  listBatches(params?: { project?: string; status?: string }): Array<TaskBatchRow & { progress: BatchProgress }> {
     if (!this.taskBatchRepo) return [];
-    return this.taskBatchRepo.list(params?.project, params?.status).map(apiBatch);
+    return this.taskBatchRepo.list(params?.project, params?.status).map((batch) => ({
+      ...apiBatch(batch),
+      progress: batchProgress(this.taskRepo.getByBatch(batch.id)),
+    }));
   }
 
   dispatchBatch(id: string): { ok: boolean; batchId: string; dispatchedCount: number } {
