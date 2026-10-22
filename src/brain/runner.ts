@@ -66,6 +66,16 @@ export class BrainRunner {
     this.timer = undefined;
   }
 
+  stopProject(projectId: string): void {
+    this.pending = this.pending.filter((event) => (event.projectId ?? null) !== projectId);
+    const sessionId = this.sessionIdFor(projectId);
+    const turn = this.active.get(sessionId);
+    if (turn?.timer) clearTimeout(turn.timer);
+    this.active.delete(sessionId);
+    this.userBusy.delete(sessionId);
+    this.retryCounts.delete(sessionId);
+  }
+
   getQueuedEvents(): BrainQueuedEvent[] { return [...this.pending]; }
   isQueued(projectId: string | null): boolean { return this.pending.some((event) => (event.projectId ?? null) === projectId); }
   getUsage(projectId: string | null): { queued: boolean; lastTurnAt: string | null; tokensToday: number } {

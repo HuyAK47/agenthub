@@ -648,6 +648,8 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE check_results ADD COLUMN head TEXT;
   `,
+  // Migration 50: soft-deleted projects remain restorable with their history.
+  `ALTER TABLE projects ADD COLUMN archivedAt TEXT;`,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -732,6 +734,19 @@ export interface ProjectRow {
     behind: number;
   } | null;
   createdAt: string;
+  archivedAt?: string | null;
+}
+
+export interface ProjectDeleteTask {
+  id: string;
+  projectId: string;
+  slug: string;
+  worktreePath: string | null;
+}
+
+export interface ProjectDeleteData {
+  tasks: ProjectDeleteTask[];
+  counts: Record<string, number>;
 }
 
 export type ProfileAuthState = 'ok' | 'not_logged_in' | 'needs_verification' | 'error';
@@ -849,10 +864,18 @@ export class ProjectRepo {
   constructor(private db: Database.Database) {}
 
   getAll(): ProjectRow[] {
+    return this.db.prepare('SELECT * FROM projects WHERE archivedAt IS NULL ORDER BY id').all() as ProjectRow[];
+  }
+
+  getAllIncludingArchived(): ProjectRow[] {
     return this.db.prepare('SELECT * FROM projects ORDER BY id').all() as ProjectRow[];
   }
 
   get(id: string): ProjectRow | undefined {
+    return this.db.prepare('SELECT * FROM projects WHERE id = ? AND archivedAt IS NULL').get(id) as ProjectRow | undefined;
+  }
+
+  getIncludingArchived(id: string): ProjectRow | undefined {
     return this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined;
   }
 
@@ -888,7 +911,7 @@ export class ProjectRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings' | 'archivedAt'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -905,6 +928,81 @@ export class ProjectRepo {
 
   delete(id: string): void {
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  }
+
+  archive(id: string): void {
+    this.db.prepare("UPDATE projects SET archivedAt = datetime('now') WHERE id = ?").run(id);
+  }
+
+  restore(id: string): void {
+    this.db.prepare('UPDATE projects SET archivedAt = NULL WHERE id = ?').run(id);
+  }
+
+  getDeleteData(id: string): ProjectDeleteData {
+    const tasks = this.db.prepare('SELECT id, projectId, slug, worktreePath FROM tasks WHERE projectId = ?').all(id) as ProjectDeleteTask[];
+    const count = (table: string, where: string, value: string | null = id): number => {
+      const row = this.db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get(value) as { count: number };
+      return row.count;
+    };
+    const taskIds = tasks.map((task) => task.id);
+    const taskCount = (table: string, column: string): number => {
+      if (taskIds.length === 0) return 0;
+      const placeholders = taskIds.map(() => '?').join(',');
+      const row = this.db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} IN (${placeholders})`).get(...taskIds) as { count: number };
+      return row.count;
+    };
+    return {
+      tasks,
+      counts: {
+        tasks: tasks.length,
+        runs: taskCount('runs', 'taskId'),
+        reviews: taskCount('reviews', 'taskId'),
+        runMetrics: taskCount('run_metrics', 'taskId'),
+        claudeTaskUsage: taskCount('claude_task_usage', 'taskId'),
+        taskNotes: count('task_notes', 'projectId = ?'),
+        knowledgeEntries: count('knowledge_entries', 'projectId = ?'),
+        taskBatches: count('task_batches', 'projectId = ?'),
+        chatSessions: count('chat_sessions', 'projectId = ?'),
+        brainTurns: count('brain_turns', 'projectId = ?'),
+        permissionRules: (this.db.prepare('SELECT COUNT(*) AS count FROM permission_rules WHERE projectId = ? OR sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').get(id, id) as { count: number }).count,
+        ciRuns: count('ci_runs', 'projectId = ?'),
+        brainDirectives: count('brain_directives', 'projectId = ?'),
+      },
+    };
+  }
+
+  purge(id: string): void {
+    const transaction = this.db.transaction(() => {
+      const tasks = this.db.prepare('SELECT id FROM tasks WHERE projectId = ?').all(id) as Array<{ id: string }>;
+      const taskIds = tasks.map((task) => task.id);
+      const deleteByTasks = (table: string, column: string) => {
+        if (taskIds.length === 0) return;
+        const placeholders = taskIds.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM ${table} WHERE ${column} IN (${placeholders})`).run(...taskIds);
+      };
+      deleteByTasks('check_results', 'taskId');
+      deleteByTasks('run_metrics', 'taskId');
+      deleteByTasks('claude_task_usage', 'taskId');
+      deleteByTasks('reviews', 'taskId');
+      deleteByTasks('task_notes', 'taskId');
+      deleteByTasks('runs', 'taskId');
+      deleteByTasks('events', 'taskId');
+      this.db.prepare('DELETE FROM task_notes WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM knowledge_entries WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM task_deps WHERE taskId IN (SELECT id FROM tasks WHERE projectId = ?) OR dependsOnId IN (SELECT id FROM tasks WHERE projectId = ?)').run(id, id);
+      this.db.prepare('DELETE FROM tasks WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM task_batches WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM permission_rules WHERE projectId = ? OR sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id, id);
+      this.db.prepare('DELETE FROM chat_permissions WHERE sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id);
+      this.db.prepare('DELETE FROM chat_retries WHERE sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id);
+      this.db.prepare('DELETE FROM chat_messages WHERE sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id);
+      this.db.prepare('DELETE FROM chat_sessions WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM brain_turns WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM ci_runs WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM brain_directives WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    });
+    transaction();
   }
 }
 

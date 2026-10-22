@@ -1310,6 +1310,11 @@ export class TelegramBotService {
       const current = this.selectedProject.get(chatId);
       if (current) {
         const proj = this.projectRepo.get(current);
+        if (proj?.archivedAt) {
+          this.selectedProject.delete(chatId);
+          await this.sendMessage(chatId, '📁 Dự án đã ẩn và không còn được chọn.');
+          return;
+        }
         const name = proj?.name ? `${proj.name} (${current})` : current;
         await this.sendMessage(chatId, `📁 Dự án đang chọn: <b>${this.escapeHtml(name)}</b>\n\nGõ <code>/use &lt;dự án&gt;</code> để đổi, hoặc <code>/use none</code> để bỏ chọn.`);
       } else {
@@ -1332,7 +1337,7 @@ export class TelegramBotService {
       return;
     }
     const project = this.projectRepo.get(trimmed);
-    if (!project) {
+    if (!project || project.archivedAt) {
       await this.sendMessage(chatId, `❌ Không tìm thấy dự án "${this.escapeHtml(trimmed)}".`);
       return;
     }

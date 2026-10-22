@@ -1150,8 +1150,9 @@ export class AppService {
   }
 
   // --- Projects ---
-  listProjects(): ProjectRow[] {
-    return this.projectRepo.getAll().map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
+  listProjects(includeArchived = false): ProjectRow[] {
+    const projects = includeArchived ? this.projectRepo.getAllIncludingArchived() : this.projectRepo.getAll();
+    return projects.map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
   }
 
   getProject(id: string): ProjectRow {
@@ -1186,7 +1187,8 @@ export class AppService {
   createProject(raw: unknown): ProjectRow {
     const parsed = CreateProjectSchema.parse(raw);
     const id = parsed.id || parsed.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-    if (this.projectRepo.get(id)) {
+    const existing = this.projectRepo.getIncludingArchived(id);
+    if (existing && !existing.archivedAt) {
       throw new HttpError(409, 'conflict', `Project ID "${id}" đã tồn tại`);
     }
 
@@ -1245,6 +1247,24 @@ export class AppService {
     }
     if (!branchExists) {
       throw new HttpError(400, 'bad_request', `Nhánh mặc định "${parsed.defaultBranch}" không tồn tại trong repository`);
+    }
+
+    const archived = this.projectRepo.getAllIncludingArchived().find(
+      (project) => project.archivedAt && path.resolve(project.path) === resolvedPath,
+    );
+    if (existing?.archivedAt && !archived) {
+      throw new HttpError(409, 'conflict', `Project ID "${id}" đã tồn tại dưới dạng dự án đã ẩn; hãy dùng đúng đường dẫn để khôi phục`);
+    }
+    if (archived) {
+      this.projectRepo.restore(archived.id);
+      this.projectRepo.update(archived.id, {
+        name: parsed.name,
+        defaultBranch: parsed.defaultBranch,
+        envTemplate: parsed.envTemplate || null,
+        maxParallel: parsed.maxParallel,
+      });
+      this.invalidateOutOfScopeClaudeScanStates();
+      return this.getProject(archived.id);
     }
 
     this.projectRepo.insert({
@@ -1306,24 +1326,85 @@ export class AppService {
     return this.getProject(id);
   }
 
-  deleteProject(id: string): { ok: boolean; warnings?: string[] } {
+  restoreProject(id: string): ProjectRow {
+    const project = this.projectRepo.getIncludingArchived(id);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+    this.projectRepo.restore(id);
+    this.brainRunner?.stopProject(id);
+    this.invalidateOutOfScopeClaudeScanStates();
+    return this.getProject(id);
+  }
+
+  deleteProject(id: string, options?: { purge?: boolean; confirm?: string }): { ok: boolean; archived?: boolean; counts?: Record<string, number>; warnings?: string[] } {
     const proj = this.projectRepo.get(id);
     if (!proj) {
       throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
     }
 
-    // Check if any task in this project is currently running
+    const projectTasks = this.taskRepo.getAll().filter((task) => task.projectId === id);
     const runningMap = this.scheduler.getRunning();
-    const hasRunningTask = Array.from(runningMap.values()).some((r) => r.projectId === id);
-    if (hasRunningTask) {
-      throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy`);
+    const runningTasks = projectTasks.filter((task) => ['running', 'checking'].includes(task.status));
+    for (const running of runningMap.values()) {
+      if (running.projectId === id && !runningTasks.some((task) => task.id === running.taskId)) {
+        const task = this.taskRepo.get(running.taskId);
+        if (task) runningTasks.push({ ...task, status: 'running' });
+        else throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy: ${running.taskId}`);
+      }
+    }
+    if (runningTasks.length > 0) {
+      throw new HttpError(409, 'conflict', `Không thể xóa project khi còn task đang chạy (running/checking): ${runningTasks.map((task) => task.id).join(', ')}`);
     }
 
-    const warning = removeIntegrationWorktree(proj, this.config.hubHome);
+    const deleteData = this.projectRepo.getDeleteData(id);
+    if (!options?.purge) {
+      this.projectRepo.archive(id);
+      this.brainRunner?.stopProject(id);
+      const warning = removeIntegrationWorktree(proj, this.config.hubHome);
+      this.invalidateOutOfScopeClaudeScanStates();
+      const hasData = Object.values(deleteData.counts).some((count) => count > 0);
+      return warning
+        ? { ok: true, ...(hasData ? { archived: true, counts: deleteData.counts } : {}), warnings: [warning] }
+        : { ok: true, ...(hasData ? { archived: true, counts: deleteData.counts } : {}) };
+    }
 
-    this.projectRepo.delete(id);
+    if (options.confirm !== id) {
+      throw new HttpError(400, 'bad_request', `Xóa vĩnh viễn cần confirm đúng tên định danh: ${id}`);
+    }
+
+    const warnings: string[] = [];
+    const integrationWarning = removeIntegrationWorktree(proj, this.config.hubHome);
+    if (integrationWarning) warnings.push(integrationWarning);
+    for (const task of deleteData.tasks) {
+      if (!task.worktreePath || !fs.existsSync(task.worktreePath)) continue;
+      let dirty = true;
+      try {
+        dirty = execFileSync('git', ['-C', task.worktreePath, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }).trim().length > 0;
+      } catch { /* keep dirty=true when status cannot be checked */ }
+      if (dirty) {
+        warnings.push(`Giữ worktree ${task.worktreePath} vì có thay đổi chưa commit`);
+        continue;
+      }
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(proj.path, task.worktreePath, { projectId: id, taskId: task.id, slug: task.slug });
+      if (!removed) warnings.push(`Không thể gỡ worktree ${task.worktreePath}; đã giữ nguyên`);
+    }
+
+    const logRoot = path.resolve(this.config.logsDir);
+    for (const task of deleteData.tasks) {
+      const logPath = path.resolve(logRoot, task.id);
+      const relative = path.relative(logRoot, logPath);
+      if (relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && fs.existsSync(logPath)) {
+        try { fs.rmSync(logPath, { recursive: true, force: true }); } catch { warnings.push(`Không thể dọn log ${logPath}`); }
+      }
+    }
+
+    try {
+      this.projectRepo.purge(id);
+    } catch {
+      throw new HttpError(409, 'conflict', 'Không thể xóa dữ liệu dự án vì còn liên kết dữ liệu; không có dữ liệu nào bị xóa');
+    }
+    this.brainRunner?.stopProject(id);
     this.invalidateOutOfScopeClaudeScanStates();
-    return warning ? { ok: true, warnings: [warning] } : { ok: true };
+    return { ok: true, counts: deleteData.counts, ...(warnings.length > 0 ? { warnings } : {}) };
   }
 
   private invalidateOutOfScopeClaudeScanStates() {
