@@ -11,6 +11,7 @@ describe('normalizePlan', () => {
     ['default_claude_max_5x', 'max_5x'],
     ['claude_pro', 'pro'],
     ['enterprise', 'enterprise'],
+    ['default_claude_ai', 'free'],
   ])('%s -> %s', (raw, expected) => {
     expect(normalizePlan(raw)).toBe(expected);
   });

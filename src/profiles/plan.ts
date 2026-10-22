@@ -16,7 +16,8 @@ export function normalizePlan(...sources: Array<string | null | undefined>): str
     if (/\bedu\b|education/.test(value)) return 'edu';
     if (/\bpro\b|_pro/.test(value)) return 'pro';
     if (/\bplus\b/.test(value)) return 'plus';
-    if (/\bfree\b|free_tier|free-tier/.test(value)) return 'free';
+    // Claude: tier mặc định của claude.ai là gói miễn phí (Cockpit tools cũng hiểu như vậy).
+    if (/\bfree\b|free_tier|free-tier|^default_claude_ai$/.test(value)) return 'free';
   }
   return null;
 }
