@@ -26,7 +26,6 @@ import {
 } from 'lucide-react';
 import { CircleHelp } from 'lucide-react';
 import { HelpPanel } from './tour/HelpPanel';
-import { useTour } from './tour/TourContext';
 
 const PlansBadgeInner: React.FC = () => {
   const { data: batches = [] } = useQuery({
@@ -82,10 +81,7 @@ export const Layout: React.FC = () => {
   }, []);
 
   const connected = isOnline && sseConnected;
-  const { openTour, getPageTour } = useTour();
   const branding = useBranding();
-  void openTour;
-  void getPageTour;
 
   const navItems = [
     { to: '/', label: t('common.dashboard'), icon: Activity },
