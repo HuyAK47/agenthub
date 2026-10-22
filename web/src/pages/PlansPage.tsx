@@ -5,6 +5,7 @@ import {
   getBatches,
   getBatch,
   getProjects,
+  getConfig,
   dispatchBatch,
   discardBatch,
   addTaskToBatch,
@@ -93,6 +94,25 @@ export const PlansPage: React.FC = () => {
   const [editFormError, setEditFormError] = useState<string | null>(null);
 
   // Queries
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+  });
+
+  const planningConfig = config?.planning;
+  const isRequireAll = Boolean(planningConfig?.requireApproval);
+  const minTasks = planningConfig?.approvalMinTasks ?? 0;
+
+  const planningSettingText = useMemo(() => {
+    if (isRequireAll) {
+      return t('plans.settingAll');
+    }
+    if (minTasks > 0) {
+      return t('plans.settingMinTasks', { count: minTasks });
+    }
+    return t('plans.settingNone');
+  }, [isRequireAll, minTasks, t]);
+
   const formatBatchTime = (value: string | number) => {
     try {
       const ts =
@@ -403,10 +423,27 @@ export const PlansPage: React.FC = () => {
                   </p>
                 </div>
 
-                <Link to="/settings" className="inline-flex items-center gap-1 text-[var(--t-accent)] hover:underline font-medium text-xs">
-                  {t('plans.settingsLink')}
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Link>
+                <div className="p-3.5 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] space-y-2">
+                  <div className="font-semibold text-[var(--t-text)]">
+                    {t('plans.emptyCurrentSetting')}
+                  </div>
+                  <p
+                    data-testid="planning-current-setting"
+                    className="text-[var(--t-text-2)] font-medium"
+                  >
+                    {planningSettingText}
+                  </p>
+                  <div>
+                    <Link
+                      to="/settings"
+                      data-testid="link-to-settings-planning"
+                      className="inline-flex items-center gap-1 text-[var(--t-accent)] hover:underline font-medium text-xs mt-0.5"
+                    >
+                      {t('plans.settingsLink')}
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </Link>
+                  </div>
+                </div>
               </div>
             ) : (
               batches.map((batch) => {
