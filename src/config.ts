@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
 import type { ExtraDiskPath } from './disk.js';
 import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
+import { DEFAULT_WAKEUP_CONFIG, type WakeupConfig } from './quota/wakeup.js';
+import { BrandingConfig, parseBranding } from './branding.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -33,7 +35,11 @@ export interface QuietHoursConfig {
 export interface NotificationsConfig {
   desktop: boolean;
   quietHours?: QuietHoursConfig;
+  /** Báo `quota.low` khi quota một cửa sổ tụt xuống dưới ngưỡng (%); 0 = tắt. */
+  quotaLowPct?: number;
 }
+
+export const DEFAULT_QUOTA_LOW_PCT = 20;
 
 export const DEFAULT_QUIET_HOURS_CONFIG: QuietHoursConfig = {
   enabled: false,
@@ -53,11 +59,18 @@ export interface BrainConfig {
   claudeProfileExplicit?: boolean;
   model: string;
   mode: 'off' | 'suggest' | 'auto';
+  permissions: 'standard' | 'trusted' | 'full';
   maxConcurrent: number;
   maxTurnsPerHour: number;
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
   digest: BrainDigestConfig;
+}
+
+export interface AssistantConfig {
+  enabled: boolean;
+  model: string;
+  policy: string[];
 }
 
 export interface ClaudeSessionsConfig {
@@ -105,6 +118,9 @@ export interface TelegramChat {
   id: number;
   name: string;
   username?: string;
+  /** Optional: associate this chat entry with a project for /use routing. */
+  kind?: 'chat';
+  projectId?: string;
 }
 
 export interface TelegramConfig {
@@ -113,6 +129,26 @@ export interface TelegramConfig {
   allowedChatIds: number[];
   chats: TelegramChat[];
   notify: TelegramNotifyConfig;
+}
+
+export interface DeployPushConfig {
+  remote: string;
+  from: string;
+  to: string;
+  ffOnly: boolean;
+  minIntervalMin?: number;
+}
+
+export interface DeployProjectConfig {
+  steps: string[][];
+  timeoutSec: number;
+  restartHub: boolean;
+  restartMaxWaitMin?: number;
+  push?: DeployPushConfig;
+}
+
+export interface ChecksConfig {
+  maxConcurrent: number;
 }
 
 export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
@@ -187,6 +223,31 @@ export const DEFAULT_UPDATES_CONFIG: UpdatesConfig = {
   repo: 'ducanh19020217/agenthub',
 };
 
+export interface WorkersConfig {
+  codexSandbox: 'off' | 'workspace-write';
+}
+
+export interface UiConfig {
+  tours: Record<string, boolean>;
+}
+
+export const DEFAULT_WORKERS_CONFIG: WorkersConfig = {
+  codexSandbox: 'off',
+};
+
+/** Đọc cấu hình đánh thức quota, bỏ giá trị sai và dùng mặc định cho phần thiếu. */
+export function parseWakeupConfig(raw: unknown): WakeupConfig {
+  const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const strings = (input: unknown, valid: (item: string) => boolean): string[] | null =>
+    Array.isArray(input) ? input.filter((item): item is string => typeof item === 'string' && valid(item.trim())).map((item) => item.trim()) : null;
+  return {
+    enabled: typeof value.enabled === 'boolean' ? value.enabled : DEFAULT_WAKEUP_CONFIG.enabled,
+    times: strings(value.times, (t) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) ?? [...DEFAULT_WAKEUP_CONFIG.times],
+    profiles: strings(value.profiles, (n) => /^[a-zA-Z0-9_-]+$/.test(n)) ?? [],
+    agyModels: strings(value.agyModels, (m) => m.length > 0) ?? [...DEFAULT_WAKEUP_CONFIG.agyModels],
+  };
+}
+
 export interface AgentHubConfig {
   hubHome: string;
   agyHomesDir: string;
@@ -213,6 +274,7 @@ export interface AgentHubConfig {
   autoFixOnFail: boolean;
   chat: ChatConfig;
   brain: BrainConfig;
+  assistant: AssistantConfig;
   claudeSessions: ClaudeSessionsConfig;
   reviewer: {
     enabled: boolean;
@@ -222,6 +284,8 @@ export interface AgentHubConfig {
     maxChangesRequested: number;
   };
   notifications: NotificationsConfig;
+  /** Đánh thức quota theo giờ hẹn (src/quota/wakeup.ts). */
+  wakeup: WakeupConfig;
   disk: {
     minFreeGB: number;
     extraPaths: ExtraDiskPath[];
@@ -239,6 +303,11 @@ export interface AgentHubConfig {
   telegram: TelegramConfig;
   updates: UpdatesConfig;
   tools: ToolsConfig;
+  workers: WorkersConfig;
+  ui: UiConfig;
+  checks: ChecksConfig;
+  branding: BrandingConfig;
+  deploy: Record<string, DeployProjectConfig>;
 }
 
 const DEFAULT_MODEL_CHAINS = {
@@ -260,11 +329,14 @@ export function saveConfig(
     autoFixOnFail?: boolean;
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
+    assistant?: Partial<AssistantConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
       quietHours?: Partial<QuietHoursConfig>;
+      quotaLowPct: number;
     }>;
+    wakeup?: Partial<WakeupConfig>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
@@ -282,6 +354,9 @@ export function saveConfig(
       chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
+    workers?: Partial<WorkersConfig>;
+    ui?: Partial<UiConfig>;
+    branding?: Partial<BrandingConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -302,6 +377,9 @@ export function saveConfig(
   const updated = {
     ...current,
     ...patch,
+    ...(patch.branding && typeof patch.branding === 'object'
+      ? { branding: { ...((current.branding as Record<string, unknown>) || {}), ...patch.branding } }
+      : {}),
     ...(patch.chat && typeof patch.chat === 'object'
       ? { chat: { ...((current.chat as Record<string, unknown>) || {}), ...patch.chat } }
       : {}),
@@ -320,6 +398,9 @@ export function saveConfig(
               : {}),
           },
         }
+      : {}),
+    ...(patch.assistant && typeof patch.assistant === 'object'
+      ? { assistant: { ...((current.assistant as Record<string, unknown>) || {}), ...patch.assistant } }
       : {}),
     ...(patch.notifications && typeof patch.notifications === 'object'
       ? {
@@ -355,6 +436,17 @@ export function saveConfig(
             ...patch.updates,
           },
         }
+      : {}),
+    ...(patch.workers && typeof patch.workers === 'object'
+      ? {
+          workers: {
+            ...((current.workers as Record<string, unknown>) || {}),
+            ...patch.workers,
+          },
+        }
+      : {}),
+    ...(patch.ui && typeof patch.ui === 'object'
+      ? { ui: { ...((current.ui as Record<string, unknown>) || {}), ...patch.ui, ...(patch.ui.tours ? { tours: { ...(((current.ui as Record<string, unknown>)?.tours as Record<string, unknown>) || {}), ...patch.ui.tours } } : {}) } }
       : {}),
     ...(patch.tools ? { tools: { ...((current.tools as Record<string, unknown>) || {}), ...patch.tools, ...(patch.tools.installers ? { installers: { ...(((current.tools as Record<string, unknown>)?.installers as Record<string, unknown>) || {}), ...patch.tools.installers } } : {}) } } : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
@@ -406,11 +498,14 @@ export function updateConfigInMemory(
     autoFixOnFail: boolean;
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
+    assistant?: Partial<AssistantConfig>;
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
       quietHours?: Partial<QuietHoursConfig>;
+      quotaLowPct: number;
     }>;
+    wakeup?: Partial<WakeupConfig>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
@@ -428,6 +523,9 @@ export function updateConfigInMemory(
       chats?: TelegramChat[];
       notify?: Partial<TelegramNotifyConfig>;
     }>;
+    workers?: Partial<WorkersConfig>;
+    ui?: Partial<UiConfig>;
+    branding?: Partial<BrandingConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -479,6 +577,7 @@ export function updateConfigInMemory(
     if (patch.brain.claudeProfile !== undefined) config.brain.claudeProfile = patch.brain.claudeProfile;
     if (patch.brain.model !== undefined) config.brain.model = patch.brain.model;
     if (patch.brain.mode !== undefined) config.brain.mode = patch.brain.mode;
+    if (patch.brain.permissions !== undefined) config.brain.permissions = patch.brain.permissions;
     if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
@@ -490,10 +589,16 @@ export function updateConfigInMemory(
       };
     }
   }
+  if (patch.assistant) {
+    config.assistant = { ...config.assistant, ...patch.assistant };
+  }
   if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
   if (patch.notifications) {
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
+    }
+    if (patch.notifications.quotaLowPct !== undefined) {
+      config.notifications.quotaLowPct = patch.notifications.quotaLowPct;
     }
     if (patch.notifications.quietHours) {
       config.notifications.quietHours = {
@@ -502,6 +607,9 @@ export function updateConfigInMemory(
         end: patch.notifications.quietHours.end ?? config.notifications.quietHours?.end ?? DEFAULT_QUIET_HOURS_CONFIG.end,
       };
     }
+  }
+  if (patch.wakeup) {
+    config.wakeup = parseWakeupConfig({ ...config.wakeup, ...patch.wakeup });
   }
   if (patch.disk?.minFreeGB !== undefined) {
     config.disk.minFreeGB = patch.disk.minFreeGB;
@@ -574,6 +682,14 @@ export function updateConfigInMemory(
   if (patch.updates) {
     config.updates = { ...config.updates, ...patch.updates };
   }
+  if (patch.workers) {
+    config.workers = {
+      ...(config.workers || DEFAULT_WORKERS_CONFIG),
+      ...patch.workers,
+    };
+  }
+  if (patch.ui?.tours) config.ui = { ...config.ui, tours: { ...config.ui.tours, ...patch.ui.tours } };
+  if (patch.branding) config.branding = parseBranding({ ...config.branding, ...patch.branding });
   if (patch.tools?.installers) {
     for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
       if (!value) continue;
@@ -656,6 +772,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   };
   const reviewerRaw = (userConfig.reviewer as Record<string, unknown>) || {};
   const brainRaw = (userConfig.brain as Record<string, unknown>) || {};
+  const assistantRaw = (userConfig.assistant as Record<string, unknown>) || {};
 
   const userDisk = (userConfig.disk as { minFreeGB?: number; extraPaths?: unknown } | undefined);
   const userCleanup = (userConfig.cleanup as { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number } | undefined);
@@ -759,12 +876,61 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       ? rawUpdates.repo.trim()
       : DEFAULT_UPDATES_CONFIG.repo,
   };
+  const rawWorkers = (userConfig.workers as Record<string, unknown>) || {};
+  const workers: WorkersConfig = {
+    codexSandbox: rawWorkers.codexSandbox === 'workspace-write' ? 'workspace-write' : DEFAULT_WORKERS_CONFIG.codexSandbox,
+  };
+  const rawChecks = (userConfig.checks as Record<string, unknown>) || {};
+  const checks: ChecksConfig = {
+    maxConcurrent: typeof rawChecks.maxConcurrent === 'number' && rawChecks.maxConcurrent > 0
+      ? Math.floor(rawChecks.maxConcurrent)
+      : 2,
+  };
   const rawTools = (userConfig.tools as Record<string, unknown>) || {};
+  const rawDeploy = (userConfig.deploy as Record<string, unknown>) || {};
+  const rawProjectsConfig = (userConfig.projects as Record<string, unknown>) || {};
+  for (const [projectId, rawProject] of Object.entries(rawProjectsConfig)) {
+    if (rawProject && typeof rawProject === 'object' && (rawProject as Record<string, unknown>).afterMerge) {
+      rawDeploy[projectId] = (rawProject as Record<string, unknown>).afterMerge;
+    }
+  }
+  const deploy: Record<string, DeployProjectConfig> = {};
+  for (const [projectId, raw] of Object.entries(rawDeploy)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const value = raw as Record<string, unknown>;
+    const steps = Array.isArray(value.steps)
+      ? value.steps.filter((step): step is string[] => Array.isArray(step) && step.length > 0 && step.every((arg) => typeof arg === 'string'))
+      : [];
+    if (steps.length === 0) continue;
+    const pushRaw = value.push as Record<string, unknown> | undefined;
+    const minIntervalMin = typeof pushRaw?.minIntervalMin === 'number' && pushRaw.minIntervalMin >= 0
+      ? Math.floor(pushRaw.minIntervalMin)
+      : 30;
+    const push = pushRaw && typeof pushRaw.remote === 'string' && typeof pushRaw.from === 'string' && typeof pushRaw.to === 'string'
+      ? { remote: pushRaw.remote, from: pushRaw.from, to: pushRaw.to, ffOnly: pushRaw.ffOnly !== false, minIntervalMin }
+      : undefined;
+    deploy[projectId] = {
+      steps,
+      timeoutSec: typeof value.timeoutSec === 'number' && value.timeoutSec > 0 ? Math.floor(value.timeoutSec) : 900,
+      restartHub: value.restartHub === true,
+      restartMaxWaitMin: typeof value.restartMaxWaitMin === 'number' && value.restartMaxWaitMin >= 0
+        ? Math.floor(value.restartMaxWaitMin)
+        : 20,
+      ...(push ? { push } : {}),
+    };
+  }
   const rawInstallers = (rawTools.installers as Record<string, unknown>) || {};
   const installer = (name: string, fallback: ToolInstaller): ToolInstaller => {
     const value = rawInstallers[name];
     return value && typeof value === 'object' ? { ...fallback, ...(value as ToolInstaller) } : fallback;
   };
+  const rawUi = (userConfig.ui as Record<string, unknown>) || {};
+  const ui: UiConfig = {
+    tours: rawUi.tours && typeof rawUi.tours === 'object'
+      ? Object.fromEntries(Object.entries(rawUi.tours).filter(([, value]) => typeof value === 'boolean'))
+      : {},
+  };
+  const branding = parseBranding(userConfig.branding);
 
   return {
     hubHome,
@@ -780,7 +946,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
-    multiplePerProvider: userConfig.multiplePerProvider === true,
+    multiplePerProvider: userConfig.multiplePerProvider !== false,
     multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,
     slotsPerCodexProfile: (userConfig.slotsPerCodexProfile as number) || 2,
@@ -806,6 +972,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
       mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
+      permissions: brainRaw.permissions === 'trusted' || brainRaw.permissions === 'full' ? brainRaw.permissions : 'standard',
       maxConcurrent: typeof brainRaw.maxConcurrent === 'number' && brainRaw.maxConcurrent > 0
         ? Math.floor(brainRaw.maxConcurrent)
         : 2,
@@ -828,6 +995,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
               : DEFAULT_BRAIN_DIGEST_CONFIG.time,
           }
         : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
+    },
+    assistant: {
+      enabled: assistantRaw.enabled !== false,
+      model: typeof assistantRaw.model === 'string' && assistantRaw.model.trim() ? assistantRaw.model.trim() : 'sonnet',
+      policy: Array.isArray(assistantRaw.policy)
+        ? assistantRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
+        : [],
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
@@ -853,10 +1027,15 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       failoverSec: typeof reviewerRaw.failoverSec === 'number' ? reviewerRaw.failoverSec : 5 * 60 * 60,
       maxChangesRequested: typeof reviewerRaw.maxChangesRequested === 'number' ? reviewerRaw.maxChangesRequested : 2,
     },
+    wakeup: parseWakeupConfig(userConfig.wakeup),
     notifications: {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
         ? (userConfig.notifications as { desktop: boolean }).desktop
         : true,
+      quotaLowPct: (() => {
+        const raw = (userConfig.notifications as { quotaLowPct?: unknown } | undefined)?.quotaLowPct;
+        return typeof raw === 'number' && raw >= 0 && raw <= 95 ? Math.round(raw) : DEFAULT_QUOTA_LOW_PCT;
+      })(),
       ...(userConfig.notifications && typeof userConfig.notifications === 'object' && 'quietHours' in userConfig.notifications
         ? {
             quietHours: (() => {
@@ -887,6 +1066,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       enabled: typeof rawLoad.enabled === 'boolean' ? rawLoad.enabled : DEFAULT_LOAD_CONFIG.enabled,
       high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
+      pressureHigh: typeof rawLoad.pressureHigh === 'number' ? rawLoad.pressureHigh : DEFAULT_LOAD_CONFIG.pressureHigh,
+      pressureOk: typeof rawLoad.pressureOk === 'number' ? rawLoad.pressureOk : DEFAULT_LOAD_CONFIG.pressureOk,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
       pausePolicy: rawLoad.pausePolicy === 'rss' || rawLoad.pausePolicy === 'recent' ? rawLoad.pausePolicy : DEFAULT_LOAD_CONFIG.pausePolicy,
@@ -912,5 +1093,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
       },
     },
+    workers,
+    ui,
+    checks,
+    branding,
+    deploy,
   };
 }

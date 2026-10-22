@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain } from '../api/client';
-import { getChatSessions, createChatSession, sendChatMessage } from '../api/chat';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf } from '../api/client';
+import { getChatSessions, createChatSession, sendChatMessage, retryChatLimitNow } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
 import { parseApiTime, formatTimeAgo } from '../lib/time';
@@ -19,6 +19,9 @@ import {
   HardDrive,
   Play,
   Pause,
+  ExternalLink,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 import { BrainCard } from '../components/BrainCard';
 import { ReviewQueue } from '../components/ReviewQueue';
@@ -29,6 +32,8 @@ import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { Profile, QuotaUsageItem, ProjectBrain } from '../types/api';
+import { formatReset, formatTimeTitle } from '../lib/time';
+import { GettingStartedChecklist } from '../components/GettingStartedChecklist';
 
 function providerUsage(profiles: Profile[], engine: Profile['engine']): QuotaUsageItem[] {
   const rows = profiles.filter((profile) => profile.engine === engine).flatMap((profile) => profile.usage || []);
@@ -69,7 +74,7 @@ function RunningDuration({ startedAt }: { startedAt: string }) {
 }
 
 export const DashboardPage: React.FC = () => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const navigate = useNavigate();
   const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
   const [quickChatText, setQuickChatText] = useState('');
@@ -91,6 +96,8 @@ export const DashboardPage: React.FC = () => {
   const { data: claudeFailover } = useQuery({ queryKey: ['claude-failover'], queryFn: getClaudeFailover, refetchInterval: 5000 });
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
+  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: getProjects, refetchInterval: 30_000 });
+  const { data: perf } = useQuery({ queryKey: ['perf'], queryFn: getPerf, refetchInterval: 30_000 });
 
   const queryClient = useQueryClient();
   const pauseMutation = useMutation({
@@ -214,7 +221,7 @@ export const DashboardPage: React.FC = () => {
       {/* Page Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">{t('dashboard.title')}</h1>
+          <h1 data-tour="overview" className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">{t('dashboard.title')}</h1>
           <p className="text-sm text-[var(--text-secondary)]">
             {t('dashboard.subtitle')}
           </p>
@@ -222,6 +229,7 @@ export const DashboardPage: React.FC = () => {
         <div className="flex items-center gap-3 shrink-0">
           {status.disk && (
             <div
+              data-tour="resource-status"
               data-testid="disk-status"
               className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border transition-colors ${
                 (status.disk.minFreeGB !== undefined ? status.disk.freeGB < status.disk.minFreeGB : status.disk.freeGB < 5)
@@ -239,6 +247,7 @@ export const DashboardPage: React.FC = () => {
           )}
           {status.load && (
             <div
+              data-tour="performance"
               data-testid="load-status"
               className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border ${
                 status.load.overloaded
@@ -258,6 +267,14 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
+      <GettingStartedChecklist />
+
+      <section data-testid="perf-card" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-4">
+        <div className="flex items-center justify-between"><div><h2 className="text-base font-semibold">Hiệu năng</h2><p className="text-xs text-[var(--text-secondary)]">CPU/RSS theo nhóm tiến trình · vòng 1 giờ gần nhất</p></div><Cpu className="w-5 h-5 text-[var(--t-accent)]" /></div>
+        {perf?.latest ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{Object.entries(perf.latest.groups).filter(([, value]) => value.processes > 0).sort((a, b) => b[1].cpuPercent - a[1].cpuPercent).map(([name, value]) => <div key={name} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2"><div className="flex justify-between text-xs"><span className="font-medium">{name}</span><span>{value.cpuPercent.toFixed(1)}% CPU</span></div><div className="mt-1 text-xs text-[var(--text-secondary)]">{(value.rssBytes / 1024 ** 3).toFixed(2)} GB · {value.processes} process</div></div>)}</div> : <p className="text-xs text-[var(--text-secondary)]">Chưa có mẫu đo.</p>}
+        {perf?.samples?.length ? <div className="flex h-8 items-end gap-0.5" aria-label="Biểu đồ CPU 1 giờ">{perf.samples.map((sample, index) => <span key={`${sample.at}-${index}`} className="flex-1 rounded-t bg-[var(--t-accent)] opacity-70" style={{ height: `${Math.max(4, Math.min(100, Object.values(sample.groups).reduce((sum, group) => sum + group.cpuPercent, 0) / Math.max(1, sample.cpuCount)))}%` }} />)}</div> : null}
+      </section>
+
       {status.disks && status.disks.length > 0 && (
         <div data-testid="monitored-disks" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {status.disks.map((disk) => (
@@ -275,14 +292,84 @@ export const DashboardPage: React.FC = () => {
       )}
 
       {/* Brain Card */}
-      {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} />}
-      {brainOverview?.brains && <div data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+      {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} />}
+      {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
         <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
         {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
-          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div></div>
+          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('projects.brainPermissions')}: {brain.permissions} · Mode phiên: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--text-secondary)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
           <div className="flex items-center gap-3 text-xs"><span>{t('dashboard.brainTokens')}: {brain.tokensToday.toLocaleString()}</span><Link to={`/chat/${encodeURIComponent(brain.sessionId)}`} className="text-[var(--t-accent)] hover:underline">{t('dashboard.openBrainChat')}</Link></div>
         </div>)}
+        {brainOverview.assistants?.map((assistant) => <div key={`assistant-${assistant.projectId || 'system'}`} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3" data-testid={`assistant-row-${assistant.projectId || 'system'}`}>
+          <div><div className="font-medium text-sm">{t('dashboard.assistant')} · {assistant.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{assistant.busy ? t('dashboard.assistantWorking') : t('dashboard.assistantReady')}</div></div>
+          <Link to={`/chat/${encodeURIComponent(assistant.sessionId)}`} className="text-xs text-[var(--t-accent)] hover:underline">{t('dashboard.openAssistantChat')}</Link>
+        </div>)}
       </div>}
+
+      {/* CI Card */}
+      <div data-testid="dashboard-ci" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity className="w-5 h-5 text-[var(--t-accent)]" />
+            <h2 className="text-base font-semibold">{t('dashboard.ciCardTitle')}</h2>
+          </div>
+          <span className="text-xs text-[var(--text-secondary)]">{t('dashboard.ciCardSubtitle')}</span>
+        </div>
+        {projects.length === 0 ? (
+          <p className="text-xs text-[var(--text-secondary)]">{t('dashboard.ciCardNoData')}</p>
+        ) : (
+          <div className="space-y-2">
+            {projects.map((proj) => {
+              const ci = proj.ciStatus;
+              return (
+                <div
+                  key={proj.id}
+                  data-testid={`dashboard-ci-${proj.id}`}
+                  className="flex items-center justify-between border-t border-[var(--t-border)] pt-2.5 first:border-0 first:pt-0 text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm">{proj.name}</span>
+                    <span className="font-mono text-[var(--text-secondary)]">({proj.id})</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!ci ? (
+                      <span className="text-[var(--text-secondary)] italic">{t('projects.ciNoRun')}</span>
+                    ) : ci.status !== 'completed' ? (
+                      <span className="inline-flex items-center gap-1 text-[var(--t-warn)] font-medium">
+                        <Clock className="w-3.5 h-3.5 animate-spin" />
+                        <span>{t('dashboard.ciRunning')}</span>
+                        {ci.sha && <span className="font-mono">({ci.sha.slice(0, 7)})</span>}
+                      </span>
+                    ) : ci.conclusion === 'success' ? (
+                      <span className="inline-flex items-center gap-1 text-[var(--t-ok)] font-medium">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{t('dashboard.ciPassed')}</span>
+                        {ci.sha && <span className="font-mono">({ci.sha.slice(0, 7)})</span>}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[var(--t-crit)] font-medium">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>{t('dashboard.ciFailed')}</span>
+                        {ci.sha && <span className="font-mono">({ci.sha.slice(0, 7)})</span>}
+                      </span>
+                    )}
+                    {ci?.url && (
+                      <a
+                        href={ci.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[var(--t-accent)] hover:underline ml-2"
+                        title={t('projects.ciViewRun')}
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
@@ -313,7 +400,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* Running workers */}
-      <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
+      <div data-tour="workers" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
         <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Cpu className="w-5 h-5 text-[var(--t-accent)]" />
@@ -490,7 +577,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
-      <div data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
+      <div data-tour="provider-quotas" data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
         {([
           ['agy', 'Antigravity'],
           ['codex', 'Codex'],
@@ -515,7 +602,7 @@ export const DashboardPage: React.FC = () => {
       </div>
       {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
-        <span className="text-sm">{claudeQuota.status || t('extra.unknown')}{claudeQuota.resetsAt && ` · ${new Date(claudeQuota.resetsAt * 1000).toLocaleTimeString()}`}</span>
+        <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p, index) => <React.Fragment key={p.profileName}><span title={formatTimeTitle(p.resetsAt, locale, p.source, p.observedAt)}>{p.profileName}: {p.status === 'allowed' ? t('extra.claudeQuotaAvailable') : p.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : p.limited ? t('extra.claudeQuotaRejected') : (p.status || t('extra.unknown'))}{p.resetsAt ? ` · ${formatReset(p.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {new Date(p.observedAt).toLocaleTimeString()}</span>{index < claudeQuota.profiles!.length - 1 ? ' · ' : ''}</React.Fragment>) : <span title={formatTimeTitle(claudeQuota.resetsAt, locale, '/usage', claudeQuota.observedAt || null)}>{claudeQuota.status === 'allowed' ? t('extra.claudeQuotaAvailable') : claudeQuota.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : claudeQuota.limited ? t('extra.claudeQuotaRejected') : (claudeQuota.status || t('extra.unknown'))}{claudeQuota.resetsAt ? ` · ${formatReset(claudeQuota.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {claudeQuota.observedAt ? new Date(claudeQuota.observedAt).toLocaleTimeString() : t('extra.unknown')}</span>}</span>
       </div>}
       {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
         <div className="flex items-center justify-between gap-4">
@@ -564,11 +651,11 @@ export const DashboardPage: React.FC = () => {
       <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
         <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">Tiến trình mồ côi</h2>
-            <p className="text-xs text-[var(--text-secondary)]">Các tiến trình còn giữ cwd trong worktree đã dừng.</p>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('extra.orphanProcesses')}</h2>
+            <p className="text-xs text-[var(--text-secondary)]">{t('extra.orphanProcessesDesc')}</p>
           </div>
           <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
-            {isReaping ? 'Đang dọn…' : 'Dọn'} ({orphans.length})
+            {isReaping ? t('extra.cleanupRunning') : t('extra.cleanup')} ({orphans.length})
           </button>
         </div>
         {orphans.length > 0 && (

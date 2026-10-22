@@ -122,6 +122,14 @@
   --t-purple: hsl(277, 72%, 50%);
   --t-checking: #14b8a6;
   --t-claude: #d97757;
+  --t-overlay: rgba(0, 0, 0, 0.6);
+  --t-terminal-bg: #f6f7f8;
+  --t-terminal-text: #21232c;
+  --t-terminal-cursor: #0066ff;
+  --t-terminal-selection: #e0edff;
+  --t-log-bg: #f6f7f8;
+  --t-log-text: #21232c;
+  --t-log-muted: #6c7393;
 
   /* Backward Compatibility Aliases */
   --bg: var(--t-bg);
@@ -262,6 +270,14 @@
   --t-checking: #2dd4bf;
   --t-claude: #d97757;
   color-scheme: dark;
+  --t-overlay: rgba(0, 0, 0, 0.72);
+  --t-terminal-bg: #1a1c23;
+  --t-terminal-text: #dcdfe8;
+  --t-terminal-cursor: #4d94ff;
+  --t-terminal-selection: #001f4d;
+  --t-log-bg: #0b0d12;
+  --t-log-text: #e6e8ee;
+  --t-log-muted: #8b93a7;
 
   /* Backward Compatibility Aliases */
   --bg: var(--t-bg);
@@ -521,4 +537,20 @@ em,
   background-color: var(--t-surface-2);
   border: 1px solid var(--t-border);
   color: var(--t-text-2);
+}
+
+/* Toast (components/ui/Toast.tsx) */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes toast-progress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+.toast-enter { animation: toast-in 180ms ease-out; }
+.toast-progress { width: 0%; animation-name: toast-progress; animation-timing-function: linear; animation-fill-mode: forwards; opacity: 0.6; }
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter { animation: none; }
+  .toast-progress { animation: none; display: none; }
 }

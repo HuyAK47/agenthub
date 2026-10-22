@@ -4,9 +4,23 @@ import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import type { PlatformApi, PlatformProcessInfo, ServiceRestartResult, ServiceUninstallResult } from './types.js';
 
-function command(args: string[]): string { try { return execFileSync(args[0], args.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } }
+function command(args: string[]): string {
+  try {
+    return execFileSync(args[0], args.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (error) {
+    if (error && typeof error === 'object' && 'stdout' in error && typeof error.stdout === 'string') {
+      return error.stdout;
+    }
+    return '';
+  }
+}
 
 const TRACKED_NAMES = /^(?:node|agy|codex|claude|vitest|npm|pnpm)$/i;
+
+function commandName(raw: string): string {
+  const first = raw.trim().split(/\s+/)[0] || '';
+  return path.basename(first);
+}
 
 type ProcessRow = PlatformProcessInfo & { name: string };
 
@@ -42,7 +56,7 @@ function parseCwds(output: string): Map<number, string> {
 function listProcesses(): PlatformProcessInfo[] {
   const processes = parseProcessRows(command(['ps', '-axo', 'pid=,ppid=,rss=,%cpu=,lstart=,comm=']));
   const byPid = new Map(processes.map((processInfo) => [processInfo.pid, processInfo]));
-  const relevant = new Set<number>(processes.filter((processInfo) => TRACKED_NAMES.test(processInfo.name)).map((processInfo) => processInfo.pid));
+  const relevant = new Set<number>(processes.filter((processInfo) => TRACKED_NAMES.test(commandName(processInfo.name))).map((processInfo) => processInfo.pid));
   let changed = true;
   while (changed) {
     changed = false;
@@ -61,12 +75,49 @@ function listProcesses(): PlatformProcessInfo[] {
   const cwds = parseCwds(cwdOutput);
   return processes.map(({ name: _name, ...processInfo }) => ({
     ...processInfo,
-    parentName: byPid.get(processInfo.ppid)?.name || '',
+    parentName: commandName(byPid.get(processInfo.ppid)?.name || '') || byPid.get(processInfo.ppid)?.name || '',
     cwd: cwds.get(processInfo.pid) || '',
   } satisfies PlatformProcessInfo));
 }
 
 function parentPid(pid: number): number | null { const row = command(['ps', '-o', 'ppid=', '-p', String(pid)]).trim(); return row ? Number(row) || null : null; }
+
+function measureProcessTree(rootPid: number): { rss: number; cpu: number; totalTicks: number; measuredAt: number; pids: number[]; states: Record<number, string> } {
+  const measuredAt = Date.now();
+  // Unlike Linux, macOS has no /proc. A single ps snapshot includes PPID, so it
+  // is sufficient to construct the complete descendant tree without shelling
+  // out once per child (and without depending on pgrep being installed).
+  // worktreePath is intentionally ignored: processes reparented to PID 1 cannot
+  // be attributed safely without /proc/cwd, so only the root's process tree counts.
+  const rows = command(['ps', '-axo', 'pid=,ppid=,rss=,%cpu=,stat=']).split('\n').flatMap((line) => {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 5) return [];
+    const [pid, ppid, rssKb, cpu, stat] = fields;
+    const parsed = [Number(pid), Number(ppid), Number(rssKb), Number(cpu)];
+    if (!parsed.every(Number.isFinite)) return [];
+    return [{ pid: parsed[0], ppid: parsed[1], rss: parsed[2] * 1024, cpu: parsed[3], stat }];
+  });
+  const children = new Map<number, number[]>();
+  for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) || []), row.pid]);
+  const pids = new Set<number>([rootPid]);
+  const queue = [rootPid];
+  while (queue.length > 0) {
+    for (const child of children.get(queue.shift()!) || []) {
+      if (!pids.has(child)) { pids.add(child); queue.push(child); }
+    }
+  }
+  const selected = rows.filter((row) => pids.has(row.pid));
+  return {
+    rss: selected.reduce((sum, row) => sum + row.rss, 0),
+    cpu: Math.round(selected.reduce((sum, row) => sum + row.cpu, 0) * 10) / 10,
+    // Keep the scheduler's delta field monotonic while the actual CPU value
+    // comes directly from macOS's ps percentage.
+    totalTicks: Math.round(selected.reduce((sum, row) => sum + row.cpu, 0) * 100),
+    measuredAt,
+    pids: [...pids],
+    states: Object.fromEntries(selected.map((row) => [row.pid, row.stat])),
+  };
+}
 function freeMemoryBytes(): number { return os.freemem(); }
 function lowPriority(executable: string, args: string[]): [string, string[]] { return process.env.AGENTHUB_NO_NICE === '1' ? [executable, args] : ['/usr/bin/nice', ['-n', '10', executable, ...args]]; }
 function openBrowser(url: string, openFn?: (file: string, args: string[], callback?: (err: Error | null) => void) => void): void { if (openFn) return openFn('open', [url]); execFile('open', [url], () => {}); }
@@ -112,4 +163,4 @@ function uninstallService(opts?: { homeDir?: string; exec?: (command: string, op
   return { uninstalled: true, file, message: 'Đã gỡ LaunchAgent dev.agenthub' };
 }
 
-export const darwinPlatform: PlatformApi = { process: { listProcesses, parentPid }, freeMemoryBytes, lowPriority, openBrowser, installService, restartService, uninstallService, serviceCheck: () => ({ id: 'service', name: 'Service nền tảng', status: 'skip', message: 'macOS dùng LaunchAgent; systemd không được hỗ trợ. Chạy agenthub install-service để tạo ~/Library/LaunchAgents/dev.agenthub.plist.', suggestion: 'LaunchAgent được nạp bằng launchctl bootstrap khi cài đặt.', details: { platform: 'darwin', limited: ['ionice', 'systemd'] } }) };
+export const darwinPlatform: PlatformApi = { process: { listProcesses, parentPid }, measureProcessTree, freeMemoryBytes, lowPriority, openBrowser, installService, restartService, uninstallService, serviceCheck: () => ({ id: 'service', name: 'Service nền tảng', status: 'skip', message: 'macOS dùng LaunchAgent; systemd không được hỗ trợ. Chạy agenthub install-service để tạo ~/Library/LaunchAgents/dev.agenthub.plist.', suggestion: 'LaunchAgent được nạp bằng launchctl bootstrap khi cài đặt.', details: { platform: 'darwin', limited: ['ionice', 'systemd'] } }) };

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isSafeProjectRelativePath } from './paths.js';
 
 /**
  * Per-project behaviour switches, stored as JSON in `projects.settings`.
@@ -27,6 +28,7 @@ export const ProjectSettingsSchema = z.object({
      *   ignores this project's events and only notifies.
      */
     mode: z.enum(['inherit', 'off', 'suggest', 'auto', 'external']).default('inherit'),
+    permissions: z.enum(['inherit', 'standard', 'trusted', 'full']).default('inherit'),
     /** Overrides the global limits for this project's brain; unset = global value. */
     dailyTokenBudget: z.number().int().min(0).optional(),
     maxTurnsPerHour: z.number().int().positive().optional(),
@@ -45,8 +47,16 @@ export const ProjectSettingsSchema = z.object({
     /** Branch/ref the integration branch starts from; defaults to the project's defaultBranch. */
     baseRef: z.string().min(1).max(200).optional(),
   }).default({}),
+  ci: z.object({
+    /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */
+    enabled: z.boolean().optional(),
+    /** Branch to monitor; defaults to the project's defaultBranch or pushed branch. */
+    branch: z.string().min(1).max(200).optional(),
+  }).default({}),
   /** Read-only material workers may consult (another repo, shared data, glossary). */
   references: z.array(ReferenceSchema).max(20).default([]),
+  /** Files the brain must check against every review (at most five project-local paths). */
+  reviewChecklist: z.array(z.string().min(1).max(500).refine(isSafeProjectRelativePath, 'phải là đường dẫn tương đối trong project, không được chứa ..')).max(5).default([]),
   notifications: z.object({
     /** full: task titles and summaries in Telegram; minimal: only counts and links, no content. */
     telegramContent: z.enum(['full', 'minimal']).default('full'),
@@ -60,7 +70,9 @@ export const ProjectSettingsInputSchema = z.object({
   brain: ProjectSettingsSchema.shape.brain.removeDefault().partial().optional(),
   worktree: ProjectSettingsSchema.shape.worktree.removeDefault().partial().optional(),
   integration: ProjectSettingsSchema.shape.integration.removeDefault().partial().optional(),
+  ci: ProjectSettingsSchema.shape.ci.removeDefault().partial().optional(),
   references: z.array(ReferenceSchema).max(20).optional(),
+  reviewChecklist: z.array(z.string().min(1).max(500).refine(isSafeProjectRelativePath, 'phải là đường dẫn tương đối trong project, không được chứa ..')).max(5).optional(),
   notifications: ProjectSettingsSchema.shape.notifications.removeDefault().partial().optional(),
 });
 
@@ -90,7 +102,9 @@ export function mergeProjectSettings(current: ProjectSettings, input: ProjectSet
     brain: { ...current.brain, ...input.brain },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },
+    ci: { ...current.ci, ...input.ci },
     references: input.references ?? current.references,
+    reviewChecklist: input.reviewChecklist ?? current.reviewChecklist,
     notifications: { ...current.notifications, ...input.notifications },
   });
 }

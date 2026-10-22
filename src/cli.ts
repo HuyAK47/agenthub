@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { fileURLToPath } from 'node:url';
-import { loadConfig, AgentHubConfig } from './config.js';
+import { loadConfig, saveConfig, AgentHubConfig } from './config.js';
 import { createContext, closeContext, startDaemon } from './daemon.js';
 import { runMcpServer } from './mcp/index.js';
 import { getOrCreateToken, getTokenPath, readExistingToken } from './auth.js';
@@ -17,8 +17,10 @@ import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
 import { findClaudeBin } from './chat/claude.js';
+import { mcpAddArgs, runMcpInstall } from './tools/mcp-install.js';
 import { getPlatform } from './platform/index.js';
 import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
+import { PerfCollector, formatPerfTable } from './perf.js';
 
 export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
 import { assertWorkerMayControlHub } from './worker-guard.js';
@@ -92,16 +94,20 @@ export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
   const projectRoot = findProjectRoot();
   const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
   const nodePath = process.execPath;
-
-  const command = `claude mcp add --scope user agenthub -- ${nodePath} ${cliPath} mcp`;
+  // Claude có thể nằm trong Node khác (nvm) so với Node đang chạy AgentHub: dùng đường dẫn tuyệt đối.
+  const claudeBin = findClaudeBin(process.env.AGENTHUB_CLAUDE_BIN);
+  const command = `${claudeBin ?? 'claude'} ${mcpAddArgs(nodePath, cliPath).join(' ')}`;
 
   if (isPrint) {
     console.log(`Lệnh đăng ký MCP:\n  ${command}`);
     return command;
   }
+  if (!claudeBin) {
+    throw new Error('Không tìm thấy Claude Code. Hãy cài Claude Code rồi chạy lại `agenthub mcp-install`.');
+  }
 
-  const { execSync } = await import('node:child_process');
-  execSync(command, { stdio: 'inherit' });
+  const output = await runMcpInstall({ claudeBin, nodePath, cliPath });
+  if (output.trim()) console.log(output.trim());
   console.log('✓ Đã đăng ký MCP server với Claude Code');
   return command;
 }
@@ -142,6 +148,18 @@ export async function cmdDoctor(
     process.exitCode = 1;
   }
   return report;
+}
+
+export async function cmdPerf(extraArgs: string[] = []): Promise<void> {
+  const raw = extraArgs.find((arg) => arg.startsWith('--seconds='))?.slice('--seconds='.length)
+    || (extraArgs.includes('--seconds') ? extraArgs[extraArgs.indexOf('--seconds') + 1] : '60');
+  const seconds = Math.max(0, Math.min(3600, Number(raw) || 60));
+  const collector = new PerfCollector(Math.max(2, Math.ceil(seconds / 30) + 1));
+  collector.sample();
+  if (seconds > 0) await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+  const samples = collector.getSamples();
+  if (extraArgs.includes('--json')) console.log(JSON.stringify({ samples }, null, 2));
+  else console.log(formatPerfTable(samples));
 }
 
 export async function cmdRollback(extraArgs: string[] = [], projectRootOverride?: string): Promise<string> {
@@ -256,8 +274,16 @@ async function main() {
       await cmdDoctor(config, args.slice(1));
       break;
 
+    case 'perf':
+      await cmdPerf(args.slice(1));
+      break;
+
     case 'status':
       await cmdStatus(config);
+      break;
+
+    case 'config':
+      await cmdConfig(config, subcommand, args.slice(2));
       break;
 
     case 'clean':
@@ -320,6 +346,7 @@ Cách dùng:
   agenthub mcp-install [--print]      Đăng ký MCP server với Claude Code
   agenthub link                       Tạo symlink vào ~/.local/bin/agenthub
   agenthub doctor [--json]            Kiểm tra môi trường và cấu hình hệ thống
+  agenthub perf [--seconds 60] [--json] Đo CPU/RSS theo nhóm tiến trình
   agenthub status                     Xem trạng thái
   agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
   agenthub usage                      Xem usage quota các hồ sơ
@@ -355,6 +382,18 @@ async function cmdClaudeFailover(config: ReturnType<typeof loadConfig>, extraArg
   } finally {
     ctx.db.close();
   }
+}
+
+async function cmdConfig(config: AgentHubConfig, action: string | undefined, values: string[]): Promise<void> {
+  if (action !== 'set' || values[0] !== 'branding.name' || !values.slice(1).join(' ').trim()) {
+    console.log('Cách dùng: agenthub config set branding.name "Tên hiển thị"');
+    return;
+  }
+  const name = values.slice(1).join(' ').trim();
+  if (name.length > 80) throw new Error('Tên thương hiệu tối đa 80 ký tự');
+  saveConfig(config.hubHome, { branding: { name } });
+  config.branding.name = name;
+  console.log(`✓ Đã đổi tên hiển thị thành ${name}`);
 }
 
 async function cmdClaudeSessions(config: ReturnType<typeof loadConfig>, extraArgs: string[]): Promise<void> {
@@ -714,9 +753,11 @@ export async function cmdProfile(
       const sourceArg = extraArgs[0];
       const accountTypeArg = extraArgs.find((arg) => arg.startsWith('--account-type='))?.split('=')[1]
         || (extraArgs.includes('--account-type') ? extraArgs[extraArgs.indexOf('--account-type') + 1] : 'personal');
+      const engineArg = extraArgs.find((arg) => arg.startsWith('--engine='))?.split('=')[1]
+        || (extraArgs.includes('--engine') ? extraArgs[extraArgs.indexOf('--engine') + 1] : 'agy');
 
       if (!sourceArg) {
-        console.error('Cách dùng: agenthub profile import-tokens <đường_dẫn_file_json | chuỗi_json> [--account-type personal|team|api]');
+        console.error('Cách dùng: agenthub profile import-tokens <đường_dẫn_file_json | chuỗi_json> [--engine agy|codex] [--account-type personal|team|api]');
         process.exitCode = 1;
         break;
       }
@@ -740,9 +781,10 @@ export async function cmdProfile(
         }
       }
 
-      console.log('Đang kiểm tra và nhập tài khoản Antigravity từ Cockpit token...');
+      console.log(engineArg === 'codex' ? 'Đang nhập tài khoản Codex từ token...' : 'Đang kiểm tra và nhập tài khoản Antigravity từ Cockpit token...');
       try {
-        const result = await ctx.service.importAgyTokens({
+        const result = await ctx.service.importTokens({
+          engine: engineArg,
           tokens: payloadRaw,
           accountType: accountTypeArg,
         }, { verify: false });

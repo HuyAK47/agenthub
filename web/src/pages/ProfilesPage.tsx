@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -29,13 +29,20 @@ import {
   refreshProfileUsage,
   renameProfile,
   updateProfile,
+  wakeupProfile,
+  updateConfig,
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { DailyUsageTable } from '../components/DailyUsageTable';
-import { LoginTerminal } from '../components/LoginTerminal';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { useLocale } from '../context/LocaleContext';
+import { ToastViewport, useToasts, type ToastKind } from '../components/ui/Toast';
 import { Profile } from '../types/api';
+import { formatReset, formatTimeTitle } from '../lib/time';
+import { useTour } from '../components/tour/TourContext';
+import { AgentIcon } from '../components/AgentIcon';
+
+const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
 type Provider = 'agy' | 'codex' | 'claude';
 const providers: Array<{ id: Provider; title: string; subtitleKey: string; color: string }> = [
@@ -94,12 +101,13 @@ function usageText(profile: Profile) {
   const week = profile.usage?.find((u) => u.window === 'week');
   return five || week
     ? t('profiles.quotaUsage', { five: five ? `${five.remainingPct}% / 5h` : '—', week: week ? `${week.remainingPct}% / ${t('profiles.week')}` : '—' })
-    : t('profiles.noQuotaData');
+    // Quota Codex đọc từ log phiên của Codex CLI, nên chỉ có sau lần chạy đầu tiên của hồ sơ.
+    : t(profile.engine === 'codex' ? 'profiles.noCodexQuotaYet' : 'profiles.noQuotaData');
 }
-function formatHHMM(epoch: number) { const date = new Date(epoch * 1000); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; }
 
 export const ProfilesPage: React.FC = () => {
   const { t } = useLocale();
+  const { suggestModalTour } = useTour();
   const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
@@ -111,10 +119,20 @@ export const ProfilesPage: React.FC = () => {
   const [tokenLogin, setTokenLogin] = useState<Profile | null>(null);
   const [checking, setChecking] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
-  const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([]);
+  // 'all', 'none' (chưa biết gói) hoặc một id gói như 'pro'.
+  const [planFilter, setPlanFilter] = useState<string>('all');
   const checkTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const toastSeq = useRef(0);
   const scrolledHash = useRef<string | null>(null);
+  const [showFab, setShowFab] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowFab(window.scrollY > 120);
+    };
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
   const {
     data: profiles = [],
     isLoading,
@@ -136,11 +154,12 @@ export const ProfilesPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const runningByProfile = new Map((status?.running || []).map((run) => [run.profileName, run]));
-  const toast = (text: string, isError = false) => {
-    const id = ++toastSeq.current;
-    setToasts((old) => [...old, { id, text, error: isError }]);
-    setTimeout(() => setToasts((old) => old.filter((item) => item.id !== id)), 6000);
-  };
+  useEffect(() => {
+    if (showAdd) suggestModalTour('modal-add-account');
+  }, [showAdd, suggestModalTour]);
+  const { toasts, push: pushToast, update: updateToast, dismiss: dismissToast } = useToasts();
+  /** Thông báo ngắn: tiêu đề + chi tiết tuỳ chọn. */
+  const toast = (title: string, kind: ToastKind = 'success', message?: string) => pushToast({ title, kind, message });
   useEffect(
     () =>
       subscribeToEvents((event) => {
@@ -150,10 +169,9 @@ export const ProfilesPage: React.FC = () => {
         clearTimeout(checkTimers.current[name]);
         setChecking((old) => ({ ...old, [name]: false }));
         const ok = Boolean((event.payload as any)?.ok);
-        toast(
-          `${ok ? '✓' : '✗'} ${(event.payload as any)?.message || (ok ? 'Kiểm tra thành công' : 'Kiểm tra thất bại')}${(event.payload as any)?.durationMs ? ` (${(event.payload as any).durationMs}ms)` : ''}`,
-          !ok,
-        );
+        const detail = (event.payload as any)?.message || (ok ? 'Kiểm tra thành công' : 'Kiểm tra thất bại');
+        const duration = (event.payload as any)?.durationMs ? ` · ${(event.payload as any).durationMs}ms` : '';
+        toast(t(ok ? 'profiles.checkOkTitle' : 'profiles.checkFailTitle', { name }), ok ? 'success' : 'error', `${detail}${duration}`);
         queryClient.invalidateQueries({ queryKey: ['profiles'] });
         void refreshProfileUsage(name);
       }),
@@ -163,7 +181,7 @@ export const ProfilesPage: React.FC = () => {
     try {
       setActiveLogin({ name, engine, sessionId: (await loginProfile(name)).sessionId });
     } catch (err: any) {
-      toast(err?.message || 'Không thể mở trình đăng nhập', true);
+      toast(t('profiles.loginOpenFailed'), 'error', err?.message);
     }
   };
   const runRefresh = async (profile: Profile, silent = false) => {
@@ -171,12 +189,29 @@ export const ProfilesPage: React.FC = () => {
     try {
       const updated = await refreshProfileUsage(profile.name);
       if (silent) return;
-      const avatarNote = updated?.avatarMessage ? ` · ${updated.avatarMessage}` : '';
-      toast(`✓ ${t('profiles.refreshDone', { name: profile.label || profile.name })}${avatarNote}`);
+      const note = updated?.avatarMessage || updated?.refreshMessage;
+      toast(t('profiles.refreshDone', { name: profile.label || profile.name }), 'success', note || undefined);
     } catch (err: any) {
-      toast(err?.message || t('profiles.refreshFailed'), true);
+      toast(t('profiles.refreshFailed'), 'error', err?.message);
     } finally {
       setRefreshing((old) => ({ ...old, [profile.name]: false }));
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+    }
+  };
+  const runWakeup = async (profile: Profile) => {
+    const label = profile.label || profile.name;
+    const id = pushToast({ kind: 'loading', title: t('profiles.wakeupStarted', { name: label }), message: t('profiles.wakeupStartedHint') });
+    try {
+      const result = await wakeupProfile(profile.name);
+      if (result.skipped) {
+        updateToast(id, { kind: 'warning', title: t('profiles.wakeupSkipped', { name: label }), message: result.skipped });
+      } else {
+        const detail = result.results.map((item) => `${item.ok ? '✓' : '✗'} ${item.target}`).join(' · ');
+        updateToast(id, { kind: result.ok ? 'success' : 'error', title: t(result.ok ? 'profiles.wakeupDone' : 'profiles.wakeupFailed', { name: label }), message: detail });
+      }
+    } catch (err: any) {
+      updateToast(id, { kind: 'error', title: t('profiles.wakeupFailed', { name: label }), message: err?.message });
+    } finally {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
     }
   };
@@ -185,7 +220,7 @@ export const ProfilesPage: React.FC = () => {
       await updateProfile(profile.name, { enabled });
       toast(t(enabled ? 'profiles.toggledOn' : 'profiles.toggledOff', { name: profile.label || profile.name }));
     } catch (err: any) {
-      toast(err?.message || t('profiles.toggleFailed'), true);
+      toast(t('profiles.toggleFailed'), 'error', err?.message);
     } finally {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
     }
@@ -197,7 +232,7 @@ export const ProfilesPage: React.FC = () => {
     checkTimers.current[name] = setTimeout(
       () => {
         setChecking((old) => ({ ...old, [name]: false }));
-        toast(t('profiles.checkTimeout'), true);
+        toast(t('profiles.checkTimeout'), 'warning');
       },
       75_000,
     );
@@ -209,12 +244,13 @@ export const ProfilesPage: React.FC = () => {
     } catch (err: any) {
       clearTimeout(checkTimers.current[name]);
       setChecking((old) => ({ ...old, [name]: false }));
-      toast(err?.status === 409 ? t('profiles.checkAlreadyRunning') : err?.message || 'Kiểm tra thất bại', true);
+      if (err?.status === 409) toast(t('profiles.checkAlreadyRunning'), 'warning');
+      else toast(t('profiles.checkFailTitle', { name }), 'error', err?.message);
     }
   };
 
   return (
-    <div className="space-y-6" onClick={() => menu && setMenu(null)}>
+    <div className="space-y-6" onClick={() => menu && setMenu(null)} data-tour="account-types">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('profiles.title')}</h1>
@@ -224,6 +260,7 @@ export const ProfilesPage: React.FC = () => {
         </div>
         <button
           type="button"
+          data-tour="add-account"
           onClick={(e) => {
             e.stopPropagation();
             setShowAdd(true);
@@ -234,17 +271,7 @@ export const ProfilesPage: React.FC = () => {
           {t('profiles.addBtn')}
         </button>
       </div>
-      <div className="fixed bottom-5 right-5 z-[60] space-y-2">
-        {toasts.map((item) => (
-          <div
-            key={item.id}
-            role="alert"
-            className={`rounded-lg border px-4 py-3 text-sm shadow-lg ${item.error ? 'border-[var(--t-crit)] text-[var(--t-crit)]' : 'border-[var(--t-ok)] text-[var(--t-ok)]'} bg-[var(--t-surface)]`}
-          >
-            {item.text}
-          </div>
-        ))}
-      </div>
+      <ToastViewport toasts={toasts} onDismiss={dismissToast} closeLabel={t('common.close')} />
       {isLoading ? (
         <div className="p-12 text-center">{t('profiles.loading')}</div>
       ) : error ? (
@@ -253,15 +280,17 @@ export const ProfilesPage: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-8">
+          <PlanFilter profiles={profiles} value={planFilter} onChange={setPlanFilter} />
           {providers.map((provider) => {
-            const grouped = profiles.filter((profile) => profile.engine === provider.id);
+            const grouped = profiles.filter((profile) => profile.engine === provider.id && matchesPlan(profile, planFilter));
             return (
-              <section key={provider.id} aria-labelledby={`provider-${provider.id}`}>
+              <section key={provider.id} aria-labelledby={`provider-${provider.id}`} data-tour="profile-quotas">
                 <div className="mb-3 flex items-center gap-3">
                   <div className="h-8 w-1 rounded-full" style={{ background: provider.color }} />
                   <div>
-                    <h2 id={`provider-${provider.id}`} className="text-lg font-semibold">
-                      {provider.title}
+                    <h2 id={`provider-${provider.id}`} className="text-lg font-semibold flex items-center gap-2">
+                      <AgentIcon provider={provider.id} className="h-5 w-5 shrink-0" />
+                      <span>{provider.title}</span>
                     </h2>
                     <p className="text-xs text-[var(--t-text-3)]">{t(provider.subtitleKey)}</p>
                   </div>
@@ -279,7 +308,7 @@ export const ProfilesPage: React.FC = () => {
                     {t('profiles.emptyProvider', { provider: provider.title })}
                   </div>
                 ) : (
-                  <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="grid gap-3.5 sm:gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {grouped.map((profile) => (
                       <div key={profile.name} id={`profile-${profile.name}`}>
                       <ProfileCard
@@ -291,6 +320,7 @@ export const ProfilesPage: React.FC = () => {
                         refreshing={Boolean(refreshing[profile.name])}
                         onLogin={runLogin}
                         onTokenLogin={setTokenLogin}
+                        onWakeup={runWakeup}
                         onCheck={runCheck}
                         onEdit={setEditing}
                         onRename={setRenaming}
@@ -310,6 +340,7 @@ export const ProfilesPage: React.FC = () => {
       )}
       <DailyUsageTable />
       {showAdd && (
+        <div data-tour="modal-add-account">
         <AddProfileModal
           onClose={() => {
             setShowAdd(false);
@@ -324,13 +355,15 @@ export const ProfilesPage: React.FC = () => {
           onImported={(result) => {
             toast(
               t('profiles.importDone', { success: result.successCount, total: result.total }),
-              result.successCount === 0,
+              result.successCount === 0 ? 'error' : result.failedCount > 0 ? 'warning' : 'success',
+              result.successCount > 0 ? t('profiles.importCheckingHint') : undefined,
             );
             // Backend tự chạy Check bằng agy cho các tài khoản vừa nhập.
             result.results.filter((item) => item.status === 'ok').forEach((item) => watchCheck(item.name));
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
         />
+        </div>
       )}
       {editing && (
         <EditProfileModal
@@ -371,7 +404,7 @@ export const ProfilesPage: React.FC = () => {
           onClose={() => setTokenLogin(null)}
           onDone={(email) => {
             setTokenLogin(null);
-            toast(t('profiles.tokenLoginSuccess', { name: tokenLogin.name, email }));
+            toast(t('profiles.tokenLoginSuccess', { name: tokenLogin.name }), 'success', `${email} · ${t('profiles.importCheckingHint')}`);
             watchCheck(tokenLogin.name);
             queryClient.invalidateQueries({ queryKey: ['profiles'] });
           }}
@@ -388,6 +421,24 @@ export const ProfilesPage: React.FC = () => {
           }}
         />
       )}
+      {/* Floating Action Button (FAB) khi cuộn trang */}
+      <button
+        type="button"
+        data-testid="fab-add-account"
+        aria-label={t('profiles.addBtn')}
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowAdd(true);
+        }}
+        className={`fixed bottom-8 right-8 z-30 flex items-center gap-2 rounded-full bg-[var(--t-accent)] p-3 sm:px-4 sm:py-3 text-sm font-semibold text-white shadow-xl shadow-[var(--t-accent)]/30 ring-1 ring-white/20 transition-all duration-300 ease-out hover:scale-105 hover:shadow-2xl hover:shadow-[var(--t-accent)]/45 active:scale-95 cursor-pointer ${
+          showFab
+            ? 'translate-y-0 opacity-100 pointer-events-auto'
+            : 'translate-y-6 opacity-0 pointer-events-none'
+        }`}
+      >
+        <Plus className="h-5 w-5" />
+        <span className="hidden sm:inline">{t('profiles.addBtn')}</span>
+      </button>
     </div>
   );
 };
@@ -418,7 +469,7 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
           alt={profile.label || profile.name}
           referrerPolicy="no-referrer"
           onError={() => setImgError(true)}
-          className="h-10 w-10 rounded-xl object-cover shadow-xs ring-1 ring-[var(--t-border)]"
+          className="h-9 w-9 rounded-xl object-cover shadow-xs ring-1 ring-[var(--t-border)]"
         />
       </div>
     );
@@ -430,18 +481,88 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
   if (initial) {
     return (
       <div
-        className="flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
+        className="flex h-9 w-9 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
         style={{ background: getAvatarGradient(profile.email || profile.name) }}
       >
-        <span className="text-base tracking-wider drop-shadow-xs">{initial}</span>
+        <span className="text-sm tracking-wider drop-shadow-xs">{initial}</span>
       </div>
     );
   }
 
   return (
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--t-surface-2)] text-[var(--t-accent)] shadow-xs ring-1 ring-[var(--t-border)]">
-      <UserRound className="h-5 w-5" />
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--t-surface-2)] text-[var(--t-accent)] shadow-xs ring-1 ring-[var(--t-border)]">
+      <UserRound className="h-4.5 w-4.5" />
     </div>
+  );
+}
+
+const PLAN_LABELS: Record<string, string> = {
+  free: 'FREE', plus: 'PLUS', pro: 'PRO', team: 'TEAM', business: 'BUSINESS', enterprise: 'ENTERPRISE',
+  edu: 'EDU', max: 'MAX', max_5x: 'MAX 5X', max_20x: 'MAX 20X', ultra: 'ULTRA',
+};
+
+function matchesPlan(profile: Profile, filter: string): boolean {
+  if (filter === 'all') return true;
+  const plan = profile.plan && PLAN_LABELS[profile.plan] ? profile.plan : null;
+  return filter === 'none' ? plan === null : plan === filter;
+}
+
+/** Bộ lọc theo gói (FREE/PLUS/PRO…) kèm số hồ sơ; ẩn khi chưa hồ sơ nào biết gói. */
+function PlanFilter({ profiles, value, onChange }: { profiles: Profile[]; value: string; onChange: (value: string) => void }) {
+  const { t } = useLocale();
+  const counts = new Map<string, number>();
+  for (const profile of profiles) {
+    const key = profile.plan && PLAN_LABELS[profile.plan] ? profile.plan : 'none';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const known = Object.keys(PLAN_LABELS).filter((plan) => counts.has(plan));
+  if (known.length === 0) return null;
+  const options = [
+    { id: 'all', label: t('profiles.planAll'), count: profiles.length },
+    ...known.map((plan) => ({ id: plan, label: PLAN_LABELS[plan], count: counts.get(plan) ?? 0 })),
+    ...(counts.has('none') ? [{ id: 'none', label: t('profiles.planUnknown'), count: counts.get('none') ?? 0 }] : []),
+  ];
+  return (
+    <div role="group" aria-label={t('profiles.planFilterAria')} className="flex flex-wrap items-center gap-2">
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={value === option.id}
+          onClick={() => onChange(option.id)}
+          className={`rounded-full border px-3 py-1 text-xs font-medium ${
+            value === option.id
+              ? 'border-[var(--t-accent)] bg-[var(--t-accent-bg)] text-[var(--t-accent)]'
+              : 'border-[var(--t-border)] text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+          }`}
+        >
+          {option.label} <span className="opacity-70">({option.count})</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Tag gói tài khoản kiểu Cockpit: màu theo hạng, ẩn khi chưa biết gói. */
+function PlanBadge({ plan }: { plan?: string | null }) {
+  if (!plan || !PLAN_LABELS[plan]) return null;
+  const color = plan === 'free'
+    ? 'var(--t-text-3)'
+    : plan === 'plus'
+      ? 'var(--t-ok)'
+      : plan === 'pro'
+        ? 'var(--t-accent)'
+        : plan.startsWith('max') || plan === 'ultra'
+          ? 'var(--t-purple)'
+          : 'var(--t-warn)';
+  return (
+    <span
+      data-testid="plan-badge"
+      className="rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide"
+      style={{ color, borderColor: color }}
+    >
+      {PLAN_LABELS[plan]}
+    </span>
   );
 }
 
@@ -454,6 +575,7 @@ function ProfileCard({
   refreshing,
   onLogin,
   onTokenLogin,
+  onWakeup,
   onCheck,
   onEdit,
   onRename,
@@ -470,6 +592,7 @@ function ProfileCard({
   refreshing: boolean;
   onLogin: (name: string, engine: Provider) => void;
   onTokenLogin: (profile: Profile) => void;
+  onWakeup: (profile: Profile) => void;
   onCheck: (name: string) => void;
   onEdit: (profile: Profile) => void;
   onRename: (profile: Profile) => void;
@@ -479,7 +602,7 @@ function ProfileCard({
   onRefresh: (silent?: boolean) => void;
   onQuotaRemoved: (family: string) => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const logged = profile.loggedIn ?? Boolean(profile.email);
   const canLogin = profile.kind !== 'keyring' || profile.engine === 'claude';
   // Refresh token chỉ ghi được vào HOME riêng của hồ sơ agy isolated.
@@ -488,32 +611,33 @@ function ProfileCard({
   const activeMarks = (profile.quotaMarks || []).filter((mark) => mark.until > Math.floor(Date.now() / 1000));
   return (
     <article
-      className="relative rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-xs"
+      className="relative rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-3.5 sm:p-4 shadow-xs hover:border-[var(--t-border-strong)] transition-colors"
       data-testid={`profile-card-${profile.name}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
+      <div className="flex items-start justify-between gap-2.5">
+        <div className="flex min-w-0 items-start gap-2.5">
           <ProfileAvatar profile={profile} />
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="truncate font-semibold">{profile.label || profile.name}</h3>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <h3 className="truncate text-sm font-semibold leading-tight">{profile.label || profile.name}</h3>
               {profile.label && (
-                <span className="font-mono text-xs text-[var(--t-text-3)]">({profile.name})</span>
+                <span className="font-mono text-[11px] text-[var(--t-text-3)]">({profile.name})</span>
               )}
+              <PlanBadge plan={profile.plan} />
               {busy && (
                 <span className="rounded bg-[var(--t-accent-bg)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--t-accent)]">
                   {t('profiles.busyTag')}
                 </span>
               )}
             </div>
-            <p className="truncate text-sm text-[var(--t-text-3)]">
+            <p className="truncate text-xs text-[var(--t-text-3)] mt-0.5" title={logged ? (profile.email || '') : ''}>
               {logged
                 ? profile.email || (profile.engine === 'codex' ? 'Codex (ChatGPT)' : t('profiles.authenticated'))
                 : t('profiles.noEmail')}
             </p>
           </div>
         </div>
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
             type="button"
             aria-label={t('profiles.actionsAria', { name: profile.name })}
@@ -521,7 +645,7 @@ function ProfileCard({
               e.stopPropagation();
               setMenu(menu === profile.name ? null : profile.name);
             }}
-            className="rounded-lg p-2 text-[var(--t-text-3)] hover:bg-[var(--t-surface-2)]"
+            className="rounded-lg p-1.5 text-[var(--t-text-3)] hover:bg-[var(--t-surface-2)]"
           >
             <MoreVertical className="h-4 w-4" />
           </button>
@@ -562,6 +686,19 @@ function ProfileCard({
               >
                 {t('profiles.checkBtn')}
               </button>
+              {['agy', 'codex', 'claude'].includes(profile.engine) && logged && (
+                <button
+                  type="button"
+                  className="menu-item"
+                  title={t('profiles.wakeupTip')}
+                  onClick={() => {
+                    setMenu(null);
+                    onWakeup(profile);
+                  }}
+                >
+                  {t('profiles.wakeupBtn')}
+                </button>
+              )}
               <button
                 type="button"
                 className="menu-item"
@@ -598,17 +735,17 @@ function ProfileCard({
           )}
         </div>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <StatusBadge profile={profile} />
         {profile.duplicateWarning && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[11px] font-semibold text-[var(--t-crit)]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[10px] font-semibold text-[var(--t-crit)]">
             <AlertTriangle className="h-3 w-3" />
             {t('profiles.duplicateEmail')}
             {profile.duplicateEmailWith?.length ? `: ${profile.duplicateEmailWith.join(', ')}` : ''}
           </span>
         )}
-        <span className="text-xs text-[var(--t-text-3)]">{t('profiles.priority', { value: profile.priority ?? 0 })}</span>
-        <span className="rounded-full bg-[var(--t-surface-2)] px-2 py-0.5 text-[11px] text-[var(--t-text-3)]">
+        <span className="text-[11px] text-[var(--t-text-3)]">{t('profiles.priority', { value: profile.priority ?? 0 })}</span>
+        <span className="rounded-full bg-[var(--t-surface-2)] px-2 py-0.5 text-[10px] text-[var(--t-text-3)]">
           {t(`profiles.accountTypes.${profile.accountType || 'personal'}`)}
         </span>
       </div>
@@ -617,7 +754,7 @@ function ProfileCard({
           href={profile.verifyUrl}
           target="_blank"
           rel="noopener"
-          className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--t-warn)] hover:underline"
+          className="mt-1.5 inline-flex items-center gap-1 text-xs text-[var(--t-warn)] hover:underline"
         >
           <ExternalLink className="h-3 w-3" />
           {t('profiles.openVerification')}
@@ -626,17 +763,17 @@ function ProfileCard({
       {profile.authState === 'needs_verification' && (
         <p className="mt-1 text-xs text-[var(--t-text-3)]">{t('profiles.verificationTip')}</p>
       )}
-      <div className="mt-4 rounded-lg bg-[var(--t-surface-2)] p-3">
+      <div className="mt-2.5 rounded-lg bg-[var(--t-surface-2)] p-2.5">
         <div className="flex items-center justify-between text-xs">
-          <span className="font-medium">{t('profiles.quotaTitle')}</span>
-          <span className="text-[var(--t-text-3)]">{usageText(profile)}</span>
+          <span className="font-medium text-[11px] text-[var(--t-text-2)]">{t('profiles.quotaTitle')}</span>
+          <span className="text-[11px] text-[var(--t-text-3)]">{usageText(profile)}</span>
         </div>
-        <div className="mt-2">
+        <div className="mt-1.5">
           <QuotaUsage usage={profile.usage} onRefresh={() => onRefresh()} refreshing={refreshing} />
         </div>
         {activeMarks.map((mark) => (
           <div key={mark.family} data-testid={`quota-mark-${mark.family}`} title={mark.reason || undefined} className="mt-2 flex items-center justify-between rounded border border-[var(--t-warn)] px-2 py-1 text-xs text-[var(--t-warn)]">
-            <span>{t('profiles.quotaLocked', { family: mark.family, time: formatHHMM(mark.until) })}</span>
+            <span title={formatTimeTitle(mark.until, locale, mark.reason || 'quota mark')}>{t('profiles.quotaLocked', { family: mark.family, time: formatReset(mark.until, Date.now(), locale) })}</span>
             <button type="button" onClick={() => { if (window.confirm(t('profiles.confirmRemoveQuota', { family: mark.family, name: profile.name }))) void deleteQuota(profile.name, mark.family).then(() => { onRefresh(true); onQuotaRemoved(mark.family); }); }} className="ml-2 underline">{t('profiles.removeQuota')}</button>
           </div>
         ))}
@@ -676,7 +813,7 @@ function ProfileCard({
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-1.5 text-[11px]">
                     <span className="text-[var(--t-warn)]">
-                      {t('profiles.resetsAt', { time: formatHHMM(session.limitResetAt) })}
+                      <span title={formatTimeTitle(session.limitResetAt, locale, 'Claude session limit')}>{t('profiles.resetsAt', { time: formatReset(session.limitResetAt, Date.now(), locale) })}</span>
                     </span>
                     <label className="flex items-center gap-1.5 cursor-pointer text-[var(--t-text-2)] hover:text-[var(--t-text)]">
                       <input
@@ -706,54 +843,53 @@ function ProfileCard({
           )}
         </div>
       )}
-      <div className="mt-3 flex items-center gap-2 text-xs text-[var(--t-text-3)]">
+      <div className="mt-2.5 flex items-center gap-1.5 text-xs text-[var(--t-text-3)]">
         {run ? (
           <>
-            <span className="h-2 w-2 rounded-full bg-[var(--t-ok)]" />
-            {t('profiles.runningTask')}:{' '}
-            <span className="truncate text-[var(--t-text)]">{run.title || run.taskId}</span>
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--t-ok)] shrink-0" />
+            <span className="truncate">{t('profiles.runningTask')}: <strong className="font-medium text-[var(--t-text)]">{run.title || run.taskId}</strong></span>
           </>
         ) : (
           <>
-            <span className="h-2 w-2 rounded-full bg-[var(--t-text-3)]" />
-            {t('profiles.idleTask')}
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--t-text-3)] shrink-0" />
+            <span>{t('profiles.idleTask')}</span>
           </>
         )}
       </div>
       {profile.notes && (
-        <p className="mt-2 border-l-2 border-[var(--t-border)] pl-2 text-xs text-[var(--t-text-3)]">
+        <p className="mt-1.5 border-l-2 border-[var(--t-border)] pl-2 text-xs text-[var(--t-text-3)] line-clamp-2">
           {profile.notes}
         </p>
       )}
-      <div className="mt-4 flex items-center justify-between border-t border-[var(--t-border)] pt-3">
-        <label className="flex items-center gap-2 text-xs text-[var(--t-text-3)]">
-          <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-5 w-9 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'}`}>
-            <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-4' : ''}`} />
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-2.5">
+        <label className="flex items-center gap-1.5 text-xs text-[var(--t-text-3)] cursor-pointer select-none">
+          <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-4.5 w-8 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'} transition-colors cursor-pointer`}>
+            <span className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-3.5' : ''}`} />
           </button>
-          {t('profiles.enable')}
+          <span>{t('profiles.enable')}</span>
         </label>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => onCheck(profile.name)}
             disabled={checking}
-            className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2.5 py-1 text-xs disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2 py-1 text-xs hover:bg-[var(--t-hover)] transition-colors disabled:opacity-50 cursor-pointer"
           >
             {checking ? (
               <RefreshCw className="h-3 w-3 animate-spin" />
             ) : (
               <Check className="h-3 w-3" />
             )}
-            {checking ? t('profiles.checkingBtn') : t('profiles.checkBtn')}
+            <span>{checking ? t('profiles.checkingBtn') : t('profiles.checkBtn')}</span>
           </button>
           {canTokenLogin && (
             <button
               type="button"
               onClick={() => onTokenLogin(profile)}
-              className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2.5 py-1 text-xs"
+              className="inline-flex items-center gap-1 rounded border border-[var(--t-border)] px-2 py-1 text-xs hover:bg-[var(--t-hover)] transition-colors cursor-pointer"
             >
               <KeyRound className="h-3 w-3" />
-              {t('profiles.tokenLoginShort')}
+              <span>{t('profiles.tokenLoginShort')}</span>
             </button>
           )}
           {canLogin && (
@@ -761,7 +897,7 @@ function ProfileCard({
               type="button"
               aria-label={logged ? t('extra.reLogin') : t('profiles.loginBtn')}
               onClick={() => onLogin(profile.name, profile.engine)}
-              className="rounded bg-[var(--t-accent-bg)] px-2.5 py-1 text-xs font-medium text-[var(--t-accent)]"
+              className="rounded bg-[var(--t-accent-bg)] px-2 py-1 text-xs font-medium text-[var(--t-accent)] hover:opacity-90 transition-opacity cursor-pointer"
             >
               {logged ? t('extra.reLogin') : t('profiles.loginNow')}
             </button>
@@ -783,12 +919,13 @@ function Modal({
   children: React.ReactNode;
   maxWidth?: string;
 }) {
+  const { t } = useLocale();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Đóng">
+          <button type="button" onClick={onClose} aria-label={t('extra.closeProfile')}>
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -810,6 +947,8 @@ function AddProfileModal({
   const { t } = useLocale();
   const [engine, setEngine] = useState<Provider>('agy');
   const [method, setMethod] = useState<'terminal' | 'cockpit'>('terminal');
+  // Nhập token có cho Antigravity (refresh token kiểu Cockpit) và Codex (JSON id/access/refresh token).
+  const supportsTokenImport = engine === 'agy' || engine === 'codex';
 
   // Terminal state
   const [name, setName] = useState('');
@@ -859,11 +998,29 @@ function AddProfileModal({
     setCockpitError('');
     try {
       const result = await importAgyTokens({
+        engine: engine === 'codex' ? 'codex' : 'agy',
         tokens: parsed,
         accountType: cockpitAccountType,
       });
       setCockpitResult(result);
       // Không giữ refresh token trong state khi đã nhập xong; giữ lại để sửa nếu có mục lỗi.
+      if (result.failedCount === 0) setCockpitJson('');
+      onImported(result);
+    } catch (err: any) {
+      setCockpitError(err?.message || t('profiles.importFailed'));
+    } finally {
+      setCockpitLoading(false);
+    }
+  };
+
+  const enableAndRetryImport = async () => {
+    setCockpitLoading(true);
+    setCockpitError('');
+    try {
+      const parsed = JSON.parse(cockpitJson);
+      await updateConfig({ multiplePerProvider: true });
+      const result = await importAgyTokens({ tokens: parsed, accountType: cockpitAccountType });
+      setCockpitResult(result);
       if (result.failedCount === 0) setCockpitJson('');
       onImported(result);
     } catch (err: any) {
@@ -887,9 +1044,13 @@ function AddProfileModal({
             onChange={(e) => {
               const next = e.target.value as Provider;
               setEngine(next);
-              if (next !== 'agy') {
+              if (next !== 'agy' && next !== 'codex') {
                 setMethod('terminal');
               }
+              // Dữ liệu token của engine này không dùng được cho engine khác.
+              setCockpitJson('');
+              setCockpitResult(null);
+              setCockpitError('');
             }}
             className="field mt-1"
           >
@@ -899,7 +1060,7 @@ function AddProfileModal({
           </select>
         </label>
 
-        {engine === 'agy' && (
+        {supportsTokenImport && (
           <div>
             <span className="block text-xs font-medium text-[var(--t-text-3)] mb-1.5">
               {t('profiles.authMethod')}
@@ -931,13 +1092,13 @@ function AddProfileModal({
                     : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
                 }`}
               >
-                {t('profiles.tabImportCockpit')}
+                {t(engine === 'codex' ? 'profiles.tabImportCodex' : 'profiles.tabImportCockpit')}
               </button>
             </div>
           </div>
         )}
 
-        {engine !== 'agy' || method === 'terminal' ? (
+        {!supportsTokenImport || method === 'terminal' ? (
           <form onSubmit={handleCreateTerminal} className="space-y-4">
             <p className="text-xs text-[var(--t-text-3)]">
               {t('profiles.addDescription')}
@@ -1023,6 +1184,11 @@ function AddProfileModal({
                       {t('profiles.importBack')}
                     </button>
                   )}
+                  {cockpitResult.results.some((item) => item.status === 'error' && item.message?.includes('Cho phép nhiều tài khoản')) && (
+                    <button type="button" disabled={cockpitLoading} onClick={enableAndRetryImport} className="button-secondary">
+                      {cockpitLoading ? t('profiles.importingTokens') : t('profiles.enableMultipleAndRetry')}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onClose}
@@ -1035,7 +1201,7 @@ function AddProfileModal({
             ) : (
               <form onSubmit={handleImportCockpit} className="space-y-4">
                 <p className="text-xs text-[var(--t-text-3)]">
-                  {t('profiles.cockpitImportDesc')}
+                  {t(engine === 'codex' ? 'profiles.codexImportDesc' : 'profiles.cockpitImportDesc')}
                 </p>
                 {cockpitError && (
                   <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">
@@ -1050,7 +1216,7 @@ function AddProfileModal({
                     autoComplete="off"
                     value={cockpitJson}
                     onChange={(e) => setCockpitJson(e.target.value)}
-                    placeholder={t('profiles.cockpitJsonPlaceholder')}
+                    placeholder={t(engine === 'codex' ? 'profiles.codexJsonPlaceholder' : 'profiles.cockpitJsonPlaceholder')}
                     rows={6}
                     className="field mt-1 font-mono text-xs leading-relaxed"
                   />
@@ -1181,13 +1347,14 @@ function EditProfileModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useLocale();
   const [label, setLabel] = useState(profile.label || '');
   const [notes, setNotes] = useState(profile.notes || '');
   const [priority, setPriority] = useState(String(profile.priority ?? 0));
   const [enabled, setEnabled] = useState(Boolean(profile.enabled));
   const [error, setError] = useState('');
   return (
-    <Modal title={`Sửa hồ sơ ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.editProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -1201,16 +1368,16 @@ function EditProfileModal({
             });
             onSaved();
           } catch (err: any) {
-            setError(err?.message || 'Không thể lưu hồ sơ');
+            setError(err?.message || t('extra.saveProfileError'));
           }
         }}
       >
         <label className="block text-sm">
-          Tên hiển thị
+          {t('extra.displayName')}
           <input className="field mt-1" value={label} onChange={(e) => setLabel(e.target.value)} />
         </label>
         <label className="block text-sm">
-          Ghi chú
+          {t('extra.notes')}
           <textarea
             className="field mt-1"
             rows={3}
@@ -1219,7 +1386,7 @@ function EditProfileModal({
           />
         </label>
         <label className="block text-sm">
-          Ưu tiên
+          {t('extra.priority')}
           <input
             className="field mt-1"
             type="number"
@@ -1229,14 +1396,14 @@ function EditProfileModal({
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Bật hồ sơ
+          {t('extra.enableProfile')}
         </label>
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('extra.cancel')}
           </button>
-          <button className="button-primary">Lưu</button>
+          <button className="button-primary">{t('extra.save')}</button>
         </div>
       </form>
     </Modal>
@@ -1251,10 +1418,11 @@ function RenameModal({
   onClose: () => void;
   onSaved: (newName: string) => void;
 }) {
+  const { t } = useLocale();
   const [name, setName] = useState(profile.name);
   const [error, setError] = useState('');
   return (
-    <Modal title={`Đổi tên ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.renameProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -1263,12 +1431,12 @@ function RenameModal({
             await renameProfile(profile.name, name.trim());
             onSaved(name.trim());
           } catch (err: any) {
-            setError(err?.message || 'Không thể đổi tên');
+            setError(err?.message || t('extra.renameError'));
           }
         }}
       >
         <label className="block text-sm">
-          Tên mới
+          {t('extra.displayName')}
           <input
             className="field mt-1"
             value={name}
@@ -1279,9 +1447,9 @@ function RenameModal({
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('extra.cancel')}
           </button>
-          <button className="button-primary">Đổi tên</button>
+          <button className="button-primary">{t('extra.rename')}</button>
         </div>
       </form>
     </Modal>
@@ -1301,20 +1469,20 @@ function DeleteModal({
   const [purge, setPurge] = useState(false);
   const [error, setError] = useState('');
   return (
-    <Modal title={`Xoá hồ sơ ${profile.name}`} onClose={onClose}>
+    <Modal title={t('extra.deleteProfileTitle', { name: profile.name })} onClose={onClose}>
       <form
         className="space-y-4"
         onSubmit={async (e) => {
           e.preventDefault();
           if (typed !== profile.name) {
-            setError('Tên nhập lại chưa khớp');
+            setError(t('extra.nameMismatch'));
             return;
           }
           try {
             await deleteProfile(profile.name, purge && profile.kind !== 'keyring');
             onDeleted();
           } catch (err: any) {
-            setError(err?.message || 'Không thể xoá hồ sơ');
+            setError(err?.message || t('extra.deleteError'));
           }
         }}
       >

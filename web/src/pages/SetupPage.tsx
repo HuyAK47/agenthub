@@ -406,7 +406,7 @@ export const SetupPage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-4xl space-y-6" data-tour="setup">
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -448,7 +448,7 @@ export const SetupPage: React.FC = () => {
       />
 
       {/* Environment & Tools Checks */}
-      <Card className="overflow-hidden">
+      <div data-tour="setup-tools"><Card className="overflow-hidden">
         <div className="divide-y divide-[var(--t-border)]">
           {checks.map((item) => (
             <SetupCheckRow
@@ -459,10 +459,10 @@ export const SetupPage: React.FC = () => {
             />
           ))}
         </div>
-      </Card>
+      </Card></div>
 
       {/* Accounts */}
-      <SetupAccountsCard profiles={data.profiles} />
+      <div data-tour="setup-profiles"><SetupAccountsCard profiles={data.profiles} /></div>
 
       {/* Bottom Actions */}
       <SetupActions

@@ -6,6 +6,7 @@ import { useLocale } from '../context/LocaleContext';
 import { VersionBanner } from './VersionBanner';
 import { subscribeConnectionState } from '../api/sse';
 import { getBatches } from '../api/client';
+import { useBranding } from '../context/BrandingContext';
 import {
   Activity,
   CheckSquare,
@@ -23,6 +24,8 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import { CircleHelp } from 'lucide-react';
+import { HelpPanel } from './tour/HelpPanel';
 
 const PlansBadgeInner: React.FC = () => {
   const { data: batches = [] } = useQuery({
@@ -37,7 +40,7 @@ const PlansBadgeInner: React.FC = () => {
   return (
     <span
       data-testid="plans-sidebar-badge"
-      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/30 leading-none"
+      className="ml-auto max-[1100px]:absolute max-[1100px]:top-1 max-[1100px]:right-2 px-1.5 py-0.5 text-[11px] font-semibold rounded-full bg-[color-mix(in_srgb,var(--t-warn)_20%,transparent)] text-[var(--t-warn)] border border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)] leading-none"
     >
       {draftCount}
     </span>
@@ -58,6 +61,7 @@ export const Layout: React.FC = () => {
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
   const [sseConnected, setSseConnected] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -77,6 +81,7 @@ export const Layout: React.FC = () => {
   }, []);
 
   const connected = isOnline && sseConnected;
+  const branding = useBranding();
 
   const navItems = [
     { to: '/', label: t('common.dashboard'), icon: Activity },
@@ -108,6 +113,12 @@ export const Layout: React.FC = () => {
 
   const pageTitle = getPageTitle(location.pathname);
 
+  useEffect(() => {
+    document.title = `${pageTitle} · ${branding.name}`;
+    if (branding.accentColor) document.documentElement.style.setProperty('--t-accent', branding.accentColor);
+    else document.documentElement.style.removeProperty('--t-accent');
+  }, [branding.accentColor, branding.name, pageTitle]);
+
   return (
     <div className="min-h-screen bg-[var(--t-bg)] text-[var(--t-text)] flex font-sans transition-colors duration-150">
       {/* Skip to main content link for keyboard users */}
@@ -115,7 +126,7 @@ export const Layout: React.FC = () => {
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--t-surface)] focus:text-[var(--t-accent)] focus:border focus:border-[var(--t-border)] focus:shadow-lg focus:font-medium focus:text-sm focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]"
       >
-        {locale === 'en' ? 'Skip to content' : 'Bỏ qua tới nội dung'}
+        {t('extra.skipToContent')}
       </a>
 
       {/* Sidebar (240px wide on >=1100px, 68px icon-only on <1100px) */}
@@ -127,16 +138,17 @@ export const Layout: React.FC = () => {
           <NavLink
             to="/"
             end
-            title="AgentHub"
-            aria-label="AgentHub"
+            title={branding.name}
+            aria-label={branding.name}
             className="flex items-center gap-3 overflow-hidden rounded-lg focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--t-surface)]"
           >
             <div className="w-8 h-8 rounded-lg bg-[var(--t-accent)] flex items-center justify-center text-white shrink-0 shadow-xs">
-              <Bot size={18} />
+              {branding.logo ? <img src={`/api/branding/logo?v=${branding.logoVersion ?? encodeURIComponent(branding.logo)}`} alt="" className="w-full h-full rounded-lg object-contain" /> : <Bot size={18} />}
             </div>
             <span className="font-bold text-base tracking-tight text-[var(--t-text)] max-[1100px]:hidden truncate">
-              AgentHub
+              {branding.name}
             </span>
+            <span className="sr-only max-[1100px]:not-sr-only font-bold text-sm">{branding.shortName}</span>
           </NavLink>
         </div>
 
@@ -151,6 +163,7 @@ export const Layout: React.FC = () => {
                 end={item.to === '/'}
                 title={item.label}
                 aria-label={item.label}
+                data-tour={item.to === '/' ? 'overview' : item.to.slice(1).split('/')[0]}
                 className={({ isActive }) =>
                   `relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors max-[1100px]:justify-center max-[1100px]:px-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--t-surface)] ${
                     isActive
@@ -179,8 +192,17 @@ export const Layout: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              data-tour="help"
+              onClick={() => setHelpOpen(true)}
+              title={t('tour.help')}
+              aria-label={t('tour.help')}
+              className="rounded-lg border border-[var(--t-border)] p-1.5 text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]"
+            ><CircleHelp size={17} /></button>
             {/* Connection Status Indicator */}
             <div
+              data-tour="connection-status"
               title={connected ? t('extra.connected') : t('extra.disconnected')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
                 connected
@@ -270,11 +292,12 @@ export const Layout: React.FC = () => {
           </div>
         </header>
 
-        {/* Content (max-width: 1440px, padding: 24px = p-6) */}
-        <main id="main-content" tabIndex={-1} className="flex-1 max-w-[1440px] w-full mx-auto p-6 min-w-0 focus:outline-hidden">
+        {/* Content (max-width: 1440px on laptop, 1680px on 2xl/FullHD desktop, padding: 24px = p-6) */}
+        <main id="main-content" tabIndex={-1} className="flex-1 max-w-[1440px] 2xl:max-w-[1680px] w-full mx-auto p-4 sm:p-6 min-w-0 focus:outline-hidden">
           <Outlet />
         </main>
       </div>
+      <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 };

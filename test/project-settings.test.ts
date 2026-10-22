@@ -16,10 +16,12 @@ import {
 describe('project settings parsing', () => {
   it('defaults reproduce the behaviour from before settings existed', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
-      brain: { mode: 'inherit' },
+      brain: { mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
       integration: { enabled: false },
+      ci: {},
       references: [],
+      reviewChecklist: [],
       notifications: { telegramContent: 'full' },
     });
     expect(projectSettings(undefined)).toEqual(DEFAULT_PROJECT_SETTINGS);
@@ -45,9 +47,21 @@ describe('project settings parsing', () => {
       brain: { dailyTokenBudget: 5000 },
       references: [{ name: 'glossary', path: '/data/glossary.md', inject: true }],
     });
-    expect(next.brain).toEqual({ mode: 'auto', dailyTokenBudget: 5000 });
+    expect(next.brain).toEqual({ mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
     expect(next.references).toEqual([{ name: 'glossary', path: '/data/glossary.md', inject: true }]);
     expect(next.worktree).toEqual(DEFAULT_PROJECT_SETTINGS.worktree);
+  });
+
+  it('merges ci settings and preserves unset fields', () => {
+    const updated = mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, {
+      ci: { enabled: true, branch: 'develop' },
+    });
+    expect(updated.ci).toEqual({ enabled: true, branch: 'develop' });
+
+    const partial = mergeProjectSettings(updated, {
+      ci: { branch: 'staging' },
+    });
+    expect(partial.ci).toEqual({ enabled: true, branch: 'staging' });
   });
 });
 
@@ -113,6 +127,16 @@ describe('project settings through the service', () => {
       name: 'bad2',
       path: path.join(tmpDir, 'repo'),
       settings: { references: [{ name: 'has space', path: '/x' }] },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad3',
+      path: path.join(tmpDir, 'repo'),
+      settings: { reviewChecklist: ['/etc/passwd'] },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad4',
+      path: path.join(tmpDir, 'repo'),
+      settings: { reviewChecklist: ['docs/../secret.md'] },
     })).toThrow();
   });
 });

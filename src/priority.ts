@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { getPlatform } from './platform/index.js';
 
 const processGroups = new Set<number>();
@@ -13,6 +14,10 @@ export const LIMITED_TEST_ENV: Record<string, string> = {
   VITEST_MAX_FORKS: '2',
   VITEST_MIN_FORKS: '1',
 };
+
+export function testThreadLimit(workerCount = 1, cpuCount = os.cpus().length): number {
+  return Math.min(2, Math.max(1, Math.floor(cpuCount / Math.max(1, Math.floor(workerCount || 1)))));
+}
 
 /**
  * Chạy lệnh với độ ưu tiên thấp để IDE và trình duyệt của người dùng luôn được ưu tiên.
@@ -43,9 +48,16 @@ export function runInProcessGroup(
     let output = '';
     let timedOut = false;
     let settled = false;
+    const threadLimit = testThreadLimit(Number(opts.env.AGENTHUB_WORKER_COUNT || 1));
+    const limitedEnv = {
+      ...opts.env,
+      VITEST_MAX_THREADS: String(threadLimit), VITEST_MIN_THREADS: '1',
+      VITEST_MAX_FORKS: String(threadLimit), VITEST_MIN_FORKS: '1',
+      JEST_WORKERS: String(threadLimit), UV_THREADPOOL_SIZE: String(Math.min(4, threadLimit)),
+    };
     const child = spawn(exe, finalArgs, {
       cwd: opts.cwd,
-      env: { ...opts.env, ...LIMITED_TEST_ENV },
+      env: limitedEnv,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

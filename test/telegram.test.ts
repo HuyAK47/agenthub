@@ -7,6 +7,7 @@ import { createContext, closeContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
+import { DeployService } from '../src/deploy.js';
 import {
   TelegramBotService,
   readTelegramToken,
@@ -820,6 +821,92 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[0].body?.text).toContain('Đã đưa task p1/task-fail vào hàng đợi');
     });
+
+    it('/deploy without arguments lists deploy statuses including pushStatus', async () => {
+      const getStatusSpy = vi.spyOn(ctx.service, 'getDeployStatuses').mockReturnValue([
+        { projectId: 'p1', status: 'succeeded', pushStatus: 'push lúc 14:00' },
+      ]);
+      await bot.handleUpdate({
+        update_id: 24,
+        message: {
+          message_id: 24,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/deploy',
+        },
+      });
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[0].body?.text).toContain('p1: succeeded (push lúc 14:00)');
+      getStatusSpy.mockRestore();
+    });
+
+    it('/deploy <project> push invokes pushDeployNow and reports result', async () => {
+      const pushSpy = vi.spyOn(ctx.service, 'pushDeployNow').mockResolvedValue({
+        projectId: 'p1',
+        status: 'succeeded',
+        pushStatus: 'push lúc 14:30',
+      });
+      await bot.handleUpdate({
+        update_id: 25,
+        message: {
+          message_id: 25,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/deploy p1 push',
+        },
+      });
+      expect(pushSpy).toHaveBeenCalledWith('p1');
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls[0].body?.text).toContain('Đã đẩy p1 lên remote (push lúc 14:30)');
+      pushSpy.mockRestore();
+    });
+
+    it('/deploy <project> push reports ❌ when commandRunner fails with code!=0', async () => {
+      ctx.projectRepo.update('p1', {
+        merge: JSON.stringify({ enabled: true, worktrees: { main: tmpDir } }),
+      });
+      config.deploy = {
+        p1: {
+          steps: [],
+          timeoutSec: 2,
+          restartHub: false,
+          push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true },
+        },
+      };
+
+      const failingRunner = vi.fn(async () => ({ code: 1, output: 'push rejected: failed' }));
+      const deployService = new DeployService(
+        config,
+        ctx.projectRepo,
+        ctx.scheduler.getEventBus(),
+        0,
+        failingRunner,
+      );
+      (deployService as unknown as { latest: Map<string, unknown> }).latest.set('p1', {
+        projectId: 'p1',
+        status: 'succeeded',
+      });
+      ctx.service.deployService = deployService;
+
+      recordedCalls = [];
+      await bot.handleUpdate({
+        update_id: 26,
+        message: {
+          message_id: 26,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/deploy p1 push',
+        },
+      });
+      expect(failingRunner).toHaveBeenCalled();
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls.length).toBeGreaterThan(0);
+      const text = String(calls[calls.length - 1].body?.text);
+      expect(text).toContain('❌');
+      expect(text).toContain('Đẩy p1 thất bại');
+      expect(text).toContain('exit 1');
+      expect(text).not.toContain('✅');
+    });
   });
 
   describe('4. Inline button callbacks', () => {
@@ -1030,6 +1117,32 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(recordedCalls.some((call) => call.body?.text === '⏹ Đã dừng lượt chat hiện tại.')).toBe(true);
     });
 
+    it('queues a message for a busy session and answers it in the same Telegram message afterwards', async () => {
+      ctx.chatService.setClaudeBinOverride(fakeClaudeBin);
+      const bot = createTestBotService({ allowedChatIds: [321], chatService: ctx.chatService });
+      // Start a long turn so the session is busy.
+      await bot.handleUpdate({ update_id: 1100, message: {
+        message_id: 1100, date: 1, chat: { id: 321, type: 'private' }, text: 'sleep',
+      } });
+      await vi.waitFor(() => expect(ctx.chatSessionRepo.get('telegram:321')?.busy).toBe(1), { timeout: 5_000 });
+
+      await bot.handleUpdate({ update_id: 1101, message: {
+        message_id: 1101, date: 1, chat: { id: 321, type: 'private' }, text: 'Tình hình thế nào?',
+      } });
+      await vi.waitFor(() => expect(recordedCalls.some((call) => typeof call.body?.text === 'string'
+        && (call.body.text as string).includes('xếp hàng (thứ 1)'))).toBe(true));
+      const queuedEdit = recordedCalls.find((call) => typeof call.body?.text === 'string' && (call.body.text as string).includes('xếp hàng'));
+      const queuedMessageId = queuedEdit?.body?.message_id;
+      expect(queuedMessageId).toBeDefined();
+
+      // When the queued turn starts, its reply is attached to that placeholder message.
+      const handleChatEvent = (type: string, payload: unknown) => (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void }).handleChatEvent(type, undefined, payload);
+      handleChatEvent('chat.message', { sessionId: 'telegram:321', role: 'user', fromQueue: true, content: 'Tình hình thế nào?' });
+      const replies = (bot as unknown as { chatReplies: Map<string, { messageId: number }> }).chatReplies;
+      expect(replies.get('telegram:321')?.messageId).toBe(queuedMessageId);
+      ctx.chatService.cancelSession('telegram:321');
+    });
+
     it('keeps newlines, rate-limits progress edits, and splits long final replies', async () => {
       const bot = createTestBotService({ allowedChatIds: [321], chatService: ctx.chatService });
       const botAny = bot as unknown as { chatProgressText(text: string): string };
@@ -1078,9 +1191,12 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       })).toBe(true), { timeout: 5_000 });
 
       await bot.handleUpdate({ update_id: 1021, callback_query: {
-        id: 'callback-1', from: { id: 321 }, message: { message_id: 1, chat: { id: 321 } }, data: `permission:allow:${permissionId}`,
+        id: 'callback-1', from: { id: 321 }, message: { message_id: 1, chat: { id: 321 }, text: 'echo x > file & <tag>' }, data: `permission:allow:${permissionId}`,
       } });
       expect(ctx.chatService.permissionBroker.get(permissionId)?.status).toBe('allow');
+      const edited = recordedCalls.find((call) => call.url.includes('/editMessageText'));
+      expect(edited?.body?.parse_mode).toBe('HTML');
+      expect(edited?.body?.text).toContain('echo x &gt; file &amp; &lt;tag&gt;');
       ctx.chatService.stop();
       await pendingPermission;
     });
@@ -1413,7 +1529,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         text: '/newtask Sửa checkout trong proj-shop',
       } });
 
-      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('Sửa checkout trong proj-shop'));
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('Sửa checkout trong proj-shop'), { queueIfBusy: true });
       expect(sendMessage.mock.calls[0][1]).toContain('project "proj-shop"');
     });
 
@@ -1462,7 +1578,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         id: 'cb-ambiguous-project', from: { id: CHAT_ID },
         message: { message_id: 51, chat: { id: CHAT_ID } }, data: 'newtask:proj:proj-api',
       } });
-      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-api"'));
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-api"'), { queueIfBusy: true });
       calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[calls.length - 1].body?.text).toContain('Đang nhờ Claude');
     });
@@ -1486,7 +1602,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       await bot.handleUpdate({ update_id: 56, message: {
         message_id: 56, date: 1, chat: { id: CHAT_ID, type: 'private' }, text: 'Cập nhật luồng thanh toán',
       } });
-      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-shop"'));
+      expect(sendMessage).toHaveBeenCalledWith('telegram:555', expect.stringContaining('project "proj-shop"'), { queueIfBusy: true });
     });
 
     it('falls back to a word-bounded draft when Claude is unavailable', async () => {
@@ -1799,6 +1915,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     const engines = new Map<string, Engine>([['agy', fakeEngine]]);
     ctx = createContext(config, engines);
     ctx.scheduler.stop();
+    ctx.chatService.setClaudeBinOverride(fakeClaudeBin);
     currentTime = new Date('2026-10-21T10:00:00Z').getTime();
 
     recordedCalls = [];
@@ -1831,6 +1948,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
   });
 
   afterEach(() => {
+    ctx.chatService.stop();
     closeContext(ctx);
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1997,6 +2115,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       'brain',
       'Người dùng trả lời quyết định dec-123 («Bạn có đồng ý merge đợt task này không?»): Đồng ý',
+      { queueIfBusy: true },
     );
 
     // Tracker marks decision as answered
@@ -2344,5 +2463,563 @@ describe('Menu lệnh Telegram', () => {
       expect(description.length).toBeLessThanOrEqual(256);
       expect(src).toContain(`case '/${command}'`);
     }
+  });
+});
+
+describe('Telegram theo dự án (b3-telegram-per-project)', () => {
+  let tmpDir: string;
+  let ctx: ReturnType<typeof createContext>;
+  let config: ReturnType<typeof loadConfig>;
+  let recordedCalls: Array<{ url: string; body?: Record<string, unknown> }>;
+  let fakeFetch: typeof fetch;
+  const CHAT_ID = 88888;
+  let currentTime = 1_000_000;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-telegram-proj-test-'));
+    process.env.AGENTHUB_HOME = tmpDir;
+    process.env.AGENTHUB_AGY_HOMES = path.join(tmpDir, 'agy-homes');
+    fs.mkdirSync(process.env.AGENTHUB_AGY_HOMES, { recursive: true });
+    config = loadConfig(tmpDir);
+    config.telegram.enabled = true;
+    config.telegram.allowedChatIds = [CHAT_ID];
+    config.port = 4321;
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const engines = new Map<string, Engine>([['agy', fakeEngine]]);
+    ctx = createContext(config, engines);
+    ctx.scheduler.stop();
+    ctx.chatService.setClaudeBinOverride(fakeClaudeBin);
+    currentTime = new Date('2026-10-21T10:00:00Z').getTime();
+
+    recordedCalls = [];
+    fakeFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      let bodyObj: Record<string, unknown> | undefined;
+      if (init?.body && typeof init.body === 'string') {
+        try {
+          bodyObj = JSON.parse(init.body);
+        } catch {
+          // ignore
+        }
+      }
+      recordedCalls.push({ url: urlStr, body: bodyObj });
+
+      if (urlStr.includes('/getMe')) {
+        return new Response(JSON.stringify({ ok: true, result: { id: 123456, is_bot: true, first_name: 'AgentHubBot', username: 'agenthub_bot' } }));
+      }
+      if (urlStr.includes('/sendMessage')) {
+        return new Response(JSON.stringify({ ok: true, result: { message_id: recordedCalls.length, chat: { id: CHAT_ID } } }));
+      }
+      if (urlStr.includes('/editMessageText')) {
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 123, chat: { id: CHAT_ID } } }));
+      }
+      if (urlStr.includes('/answerCallbackQuery')) {
+        return new Response(JSON.stringify({ ok: true, result: true }));
+      }
+      return new Response(JSON.stringify({ ok: true, result: {} }));
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    ctx.chatService.stop();
+    closeContext(ctx);
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    delete process.env.AGENTHUB_HOME;
+    delete process.env.AGENTHUB_AGY_HOMES;
+  });
+
+  function createProject(id: string, name: string, brainMode: string = 'inherit', telegramContent: string = 'full') {
+    ctx.projectRepo.insert({
+      id,
+      name,
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+      settings: JSON.stringify({
+        brain: { mode: brainMode },
+        notifications: { telegramContent },
+      }),
+    });
+  }
+
+  function createProjectBot(brainMode: 'off' | 'suggest' | 'auto' = 'suggest') {
+    config.brain.mode = brainMode;
+    config.telegram.allowedChatIds = [CHAT_ID];
+    return new TelegramBotService({
+      config,
+      service: ctx.service,
+      eventBus: ctx.scheduler.getEventBus(),
+      taskRepo: ctx.taskRepo,
+      projectRepo: ctx.projectRepo,
+      profileRepo: ctx.profileRepo,
+      quotaMarkRepo: ctx.quotaMarkRepo,
+      fetch: fakeFetch,
+      now: () => currentTime,
+      sleep: async () => {},
+      sleepFn: async () => {},
+      tokenOverride: 'test-token',
+      chatService: ctx.chatService,
+      brainSession: true,
+    });
+  }
+
+  it('1. /use va dinh tuyen phien dung che do cua du an', async () => {
+    createProject('p-suggest', 'Project Suggest', 'suggest', 'full');
+    createProject('p-external', 'Project External', 'external', 'full');
+    createProject('p-off', 'Project Off', 'off', 'full');
+
+    const bot = createProjectBot('suggest');
+
+    // /use without args when no project selected
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const lastSend1 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastSend1?.body?.text).toContain('Chưa chọn dự án nào');
+    const keyboard = lastSend1?.body?.reply_markup as { inline_keyboard: Array<Array<{ callback_data: string }>> };
+    expect(keyboard.inline_keyboard.some((row) => row.some((btn) => btn.callback_data === 'use:select:p-suggest'))).toBe(true);
+
+    // Select project via callback
+    await bot.handleUpdate({
+      update_id: 2,
+      callback_query: {
+        id: 'cb-1',
+        from: { id: CHAT_ID, first_name: 'Tester', is_bot: false },
+        message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000) },
+        data: 'use:select:p-suggest',
+      },
+    });
+    await bot.flushQueue(CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-suggest');
+
+    // /use without args now shows selected project
+    await bot.handleUpdate({
+      update_id: 3,
+      message: { message_id: 2, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const lastSend3 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastSend3?.body?.text).toContain('Project Suggest (p-suggest)');
+
+    // Ordinary chat message routes to brain:p-suggest (kind: 'brain', projectId: 'p-suggest')
+    await bot.handleUpdate({
+      update_id: 4,
+      message: { message_id: 3, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: 'Xin chao' },
+    });
+    const brainSession = ctx.chatService?.chatSessionRepo.get('brain:p-suggest');
+    expect(brainSession).toBeDefined();
+    expect(brainSession?.kind).toBe('brain');
+    expect(brainSession?.projectId).toBe('p-suggest');
+
+    // Switch to external project via /use p-external
+    await bot.handleUpdate({
+      update_id: 5,
+      message: { message_id: 4, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use p-external' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-external');
+
+    // Ordinary message routes to telegram:chatId:p-external (kind: 'chat', projectId: 'p-external')
+    await bot.handleUpdate({
+      update_id: 6,
+      message: { message_id: 5, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: 'Cau hoi cho external' },
+    });
+    const externalSession = ctx.chatService?.chatSessionRepo.get(`telegram:${CHAT_ID}:p-external`);
+    expect(externalSession).toBeDefined();
+    expect(externalSession?.kind).toBe('chat');
+    expect(externalSession?.projectId).toBe('p-external');
+
+    // Switch to off project via /use p-off
+    await bot.handleUpdate({
+      update_id: 7,
+      message: { message_id: 6, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use p-off' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-off');
+
+    // Ordinary message routes to telegram:chatId:p-off (kind: 'chat', projectId: 'p-off')
+    await bot.handleUpdate({
+      update_id: 8,
+      message: { message_id: 7, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: 'Cau hoi cho off' },
+    });
+    const offSession = ctx.chatService?.chatSessionRepo.get(`telegram:${CHAT_ID}:p-off`);
+    expect(offSession).toBeDefined();
+    expect(offSession?.kind).toBe('chat');
+    expect(offSession?.projectId).toBe('p-off');
+
+    // Persistence: new bot restores selected project
+    const restoredBot = createProjectBot('suggest');
+    expect(restoredBot.getSelectedProject(CHAT_ID)).toBe('p-off');
+
+    // /use none resets project selection and routes to global brain
+    await bot.handleUpdate({
+      update_id: 9,
+      message: { message_id: 8, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use none' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBeUndefined();
+
+    await bot.handleUpdate({
+      update_id: 10,
+      message: { message_id: 9, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: 'Tin he thong' },
+    });
+    const sysBrainSession = ctx.chatService?.chatSessionRepo.get('brain');
+    expect(sysBrainSession).toBeDefined();
+    expect(sysBrainSession?.kind).toBe('brain');
+  });
+
+  it('2. /newtask dung du an dang chon lam mac dinh', async () => {
+    createProject('p-alpha', 'Project Alpha', 'suggest', 'full');
+    createProject('p-beta', 'Project Beta', 'suggest', 'full');
+
+    const bot = createProjectBot('suggest');
+
+    // Select p-alpha
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use p-alpha' },
+    });
+    await bot.flushQueue(CHAT_ID);
+
+    // /newtask without args prompts with pre-selected project
+    await bot.handleUpdate({
+      update_id: 2,
+      message: { message_id: 2, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/newtask' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const sendNewtask = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(sendNewtask?.body?.text).toContain('Project Alpha (p-alpha)');
+
+    // Sending next message uses p-alpha directly without asking for project
+    await bot.handleUpdate({
+      update_id: 3,
+      message: { message_id: 3, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: 'Tạo tính năng thanh toán thẻ' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    // Does not send the "Mô tả chưa nói rõ project" prompt
+    const sentTexts = recordedCalls.filter((c) => c.url.includes('/sendMessage')).map((c) => c.body?.text as string);
+    expect(sentTexts.some((t) => t && t.includes('Mô tả chưa nói rõ project'))).toBe(false);
+
+    // /newtask <mô tả> directly uses p-alpha without asking
+    await bot.handleUpdate({
+      update_id: 4,
+      message: { message_id: 4, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/newtask Tối ưu hiệu năng truy vấn' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const sentTexts2 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).map((c) => c.body?.text as string);
+    expect(sentTexts2.some((t) => t && t.includes('Mô tả chưa nói rõ project'))).toBe(false);
+
+    // /newtask_detail skips project selection and directly asks for title
+    await bot.handleUpdate({
+      update_id: 5,
+      message: { message_id: 5, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/newtask_detail' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const lastDetail = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastDetail?.body?.text).toContain('Vui lòng nhập <b>tiêu đề</b>');
+    expect(lastDetail?.body?.text).toContain('Project Alpha (p-alpha)');
+  });
+
+  it('3. thong bao task/batch co tien to [<ten du an>]', async () => {
+    createProject('p-prefix', 'Prefix App', 'suggest', 'full');
+    ctx.taskRepo.insert({
+      id: 'p-prefix/task-1',
+      projectId: 'p-prefix',
+      slug: 'task-1',
+      title: 'Tích hợp webhook',
+      status: 'review',
+    });
+
+    const bot = createProjectBot('suggest');
+
+    // 1. task.review_ready
+    bot.handleEvent('task.review_ready', 'p-prefix/task-1');
+    await bot.flushQueue(CHAT_ID);
+    let lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastMsg?.body?.text).toContain('[Prefix App] ');
+    expect(lastMsg?.body?.text).toContain('Task chờ review');
+
+    currentTime += 15_000;
+
+    // 2. task.failed
+    bot.handleEvent('task.failed', 'p-prefix/task-1');
+    await bot.flushQueue(CHAT_ID);
+    lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastMsg?.body?.text).toContain('[Prefix App] ❌ <b>Task thất bại</b>');
+
+    currentTime += 15_000;
+
+    // 3. task.blocked
+    bot.handleEvent('task.blocked', 'p-prefix/task-1');
+    await bot.flushQueue(CHAT_ID);
+    lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastMsg?.body?.text).toContain('[Prefix App] ⚠️ <b>Task bị chặn</b>');
+
+    currentTime += 15_000;
+
+    // 4. batch.created
+    bot.handleEvent('batch.created', undefined, { projectId: 'p-prefix', title: 'Đợt nâng cấp v2', taskCount: 2 });
+    await bot.flushQueue(CHAT_ID);
+    lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastMsg?.body?.text).toContain('[Prefix App] 📦');
+
+    currentTime += 15_000;
+
+    // 5. brain.notify
+    bot.handleEvent('brain.notify', 'p-prefix/task-1', { projectId: 'p-prefix', text: 'Cần xác nhận triển khai', level: 'decision', decisionId: 'dec-1' });
+    await bot.flushQueue(CHAT_ID);
+    lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastMsg?.body?.text).toContain('[Prefix App] 📌');
+
+    currentTime += 15_000;
+
+    // 6. Project name with HTML special chars: A<B & C> -> [A&lt;B &amp; C&gt;]
+    createProject('p-html-esc', 'A<B & C>', 'suggest', 'full');
+    ctx.taskRepo.insert({
+      id: 'p-html-esc/task-esc',
+      projectId: 'p-html-esc',
+      slug: 'task-esc',
+      title: 'Kiểm tra escape HTML',
+      status: 'review',
+    });
+    bot.handleEvent('task.review_ready', 'p-html-esc/task-esc');
+    await bot.flushQueue(CHAT_ID);
+    lastMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(lastMsg?.body?.text).toContain('[A&lt;B &amp; C&gt;]');
+  });
+
+  it('4. telegramContent = minimal khong lo tieu de trong moi duong gui', async () => {
+    createProject('p-min', 'Secured Project', 'suggest', 'minimal');
+    ctx.taskRepo.insert({
+      id: 'p-min/secret-task',
+      projectId: 'p-min',
+      slug: 'secret-task',
+      title: 'Bí mật kinh doanh: Thay đổi giá cả',
+      status: 'review',
+    });
+
+    const bot = createProjectBot('suggest');
+
+    // 1. task.review_ready: chỉ "[Dự án] 1 task cần duyệt" + link dashboard, không diff
+    bot.handleEvent('task.review_ready', 'p-min/secret-task');
+    await bot.flushQueue(CHAT_ID);
+    const reviewMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(reviewMsg?.body?.text).toBe('[Secured Project] 1 task cần duyệt');
+    expect(reviewMsg?.body?.text).not.toContain('Bí mật kinh doanh');
+    const kb = reviewMsg?.body?.reply_markup as { inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>> };
+    expect(kb.inline_keyboard[0][0].text).toContain('Xem dashboard');
+    expect(kb.inline_keyboard.some((r) => r.some((b) => b.callback_data?.includes('diff')))).toBe(false);
+
+    currentTime += 15_000;
+
+    // 2. task.failed: không lộ tiêu đề
+    bot.handleEvent('task.failed', 'p-min/secret-task');
+    await bot.flushQueue(CHAT_ID);
+    const failMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(failMsg?.body?.text).toContain('[Secured Project] ❌ <b>Task thất bại</b>');
+    expect(failMsg?.body?.text).not.toContain('Bí mật kinh doanh');
+
+    currentTime += 15_000;
+
+    // 3. /task p-min/secret-task trả lời ẩn nội dung
+    await bot.handleUpdate({
+      update_id: 100,
+      message: { message_id: 100, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/task p-min/secret-task' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const taskCmdMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(taskCmdMsg?.body?.text).toBe('Dự án này ẩn nội dung trên Telegram, xem trên dashboard');
+
+    // 4. /log p-min/secret-task trả lời ẩn nội dung
+    await bot.handleUpdate({
+      update_id: 101,
+      message: { message_id: 101, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/log p-min/secret-task' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const logCmdMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(logCmdMsg?.body?.text).toBe('Dự án này ẩn nội dung trên Telegram, xem trên dashboard');
+
+    // 5. Callback task:diff và task:log trả lời ẩn nội dung
+    await bot.handleUpdate({
+      update_id: 102,
+      callback_query: {
+        id: 'cb-diff',
+        from: { id: CHAT_ID, first_name: 'Tester', is_bot: false },
+        message: { message_id: 100, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000) },
+        data: 'task:diff:p-min/secret-task',
+      },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const diffCbMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(diffCbMsg?.body?.text).toBe('Dự án này ẩn nội dung trên Telegram, xem trên dashboard');
+
+    // 6. batch.created: không lộ tiêu đề task
+    currentTime += 15_000;
+    bot.handleEvent('batch.created', undefined, { projectId: 'p-min', title: 'Kế hoạch tuyệt mật', taskCount: 3 });
+    await bot.flushQueue(CHAT_ID);
+    const batchMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(batchMsg?.body?.text).toContain('[Secured Project] 📦 <b>Đợt task mới: 3 task</b>');
+    expect(batchMsg?.body?.text).not.toContain('Kế hoạch tuyệt mật');
+
+    // 7. /digest: tóm tắt theo từng dự án + một dòng tổng; dự án minimal chỉ hiện số
+    currentTime += 15_000;
+    await bot.handleUpdate({
+      update_id: 103,
+      message: { message_id: 103, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/digest' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const digestMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(digestMsg).toContain('TÓM TẮT HỆ THỐNG AGENTHUB');
+    expect(digestMsg).toContain('[Secured Project]');
+    expect(digestMsg).toContain('Tổng cộng');
+    expect(digestMsg).not.toContain('Bí mật kinh doanh');
+
+    // 8. Trả lời bộ não chuyển tiếp (finish chat reply): chỉ báo "Bộ não đã trả lời, xem dashboard"
+    (bot as unknown as { chatReplies: Map<string, unknown> }).chatReplies.set('brain:p-min', {
+      chatId: CHAT_ID,
+      messageId: 105,
+      text: '⏳ Đang xử lý…',
+      lastEditAt: currentTime,
+      editing: false,
+    });
+    (bot as unknown as { handleChatEvent(type: string, taskId?: string, payload?: unknown): void })
+      .handleChatEvent('chat.done', undefined, { sessionId: 'brain:p-min' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const edits = recordedCalls.filter((c) => c.url.includes('/editMessageText'));
+    const lastEdit = edits.at(-1)?.body?.text as string;
+    expect(lastEdit).toBe('Bộ não đã trả lời, xem dashboard');
+    const lastEditMarkup = edits.at(-1)?.body?.reply_markup as { inline_keyboard: Array<Array<{ text: string; url: string }>> };
+    expect(lastEditMarkup.inline_keyboard[0][0].text).toContain('Xem dashboard');
+  });
+
+  it('5. /brain liet ke bo nao tung du an va /brain mode theo du an hoac toan cuc', async () => {
+    createProject('p-one', 'Project 1', 'suggest', 'full');
+    createProject('p-two', 'Project 2', 'inherit', 'full');
+
+    const bot = createProjectBot('suggest');
+
+    // /brain shows overview and per-project brain modes
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/brain' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const brainMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(brainMsg).toContain('Bộ não toàn cục: <b>suggest</b>');
+    expect(brainMsg).toContain('Bộ não từng dự án:');
+    expect(brainMsg).toContain('<code>p-one</code>: chế độ <b>suggest</b> · trạng thái <b>sẵn sàng</b>');
+    expect(brainMsg).toContain('<code>p-two</code>: chế độ <b>suggest (inherit)</b> · trạng thái <b>sẵn sàng</b>');
+
+    // /brain mode <dự án> <mode> changes project settings
+    await bot.handleUpdate({
+      update_id: 2,
+      message: { message_id: 2, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/brain mode p-two external' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const modeProjectMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(modeProjectMsg).toContain('Đã chuyển bộ não dự án <b>p-two</b> sang chế độ <b>external</b>');
+
+    const updatedProj = ctx.projectRepo.get('p-two');
+    const settings = JSON.parse(updatedProj?.settings || '{}');
+    expect(settings.brain.mode).toBe('external');
+
+    // /brain mode <mode> changes global mode
+    await bot.handleUpdate({
+      update_id: 3,
+      message: { message_id: 3, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/brain mode auto' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const modeGlobalMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(modeGlobalMsg).toContain('Đã chuyển bộ não toàn cục sang chế độ <b>auto</b>');
+    expect(config.brain.mode).toBe('auto');
+
+    // /help lists /use and updated /brain
+    await bot.handleUpdate({
+      update_id: 4,
+      message: { message_id: 4, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/help' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const helpMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(helpMsg).toContain('/use');
+    expect(helpMsg).toContain('/brain');
+  });
+
+  it('/brain trust changes permission with confirmation and emits event', async () => {
+    createProject('p-trust', 'Project Trust', 'suggest', 'standard');
+    const bot = createProjectBot('suggest');
+
+    const trustEvents: unknown[] = [];
+    ctx.scheduler.getEventBus().on('brain.trust_changed', (_taskId, payload) => trustEvents.push(payload));
+
+    // /brain trust p-trust full without confirm -> does not change
+    await bot.handleUpdate({
+      update_id: 10,
+      message: { message_id: 10, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/brain trust p-trust full' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const warnCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+    expect(warnCall?.body?.text as string).toContain('Toàn quyền');
+    const projBefore = ctx.projectRepo.get('p-trust');
+    const settingsBefore = JSON.parse(projBefore?.settings || '{}');
+    expect(settingsBefore.brain?.permissions ?? 'standard').not.toBe('full');
+    expect(trustEvents).toHaveLength(0);
+
+    // /brain trust p-trust full confirm -> changes to full and emits event
+    await bot.handleUpdate({
+      update_id: 11,
+      message: { message_id: 11, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/brain trust p-trust full confirm' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const confirmMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(confirmMsg).toContain('Đã đổi quyền bộ não dự án <b>p-trust</b> sang <b>full</b>');
+    const projAfter = ctx.projectRepo.get('p-trust');
+    const settingsAfter = JSON.parse(projAfter?.settings || '{}');
+    expect(settingsAfter.brain.permissions).toBe('full');
+    expect(trustEvents).toContainEqual(expect.objectContaining({ projectId: 'p-trust', permissions: 'full' }));
+  });
+
+  it('6. addAllowedChatId (pairing lai) giu lai projectId va kind cua entry cu', async () => {
+    createProject('p-keep', 'Project Keep', 'suggest', 'full');
+    const bot = createProjectBot('suggest');
+
+    // User selects project via /use
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/use p-keep' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-keep');
+
+    const chatBefore = (config.telegram.chats || []).find((c) => c.id === CHAT_ID);
+    expect(chatBefore?.projectId).toBe('p-keep');
+    expect(chatBefore?.kind).toBe('chat');
+
+    // Re-pairing: addAllowedChatId with new name/username but no projectId/kind
+    bot.addAllowedChatId(CHAT_ID, {
+      id: CHAT_ID,
+      name: 'Re-paired Tester (@tester)',
+      username: 'tester',
+    });
+
+    const chatAfter = (config.telegram.chats || []).find((c) => c.id === CHAT_ID);
+    expect(chatAfter?.id).toBe(CHAT_ID);
+    expect(chatAfter?.name).toBe('Re-paired Tester (@tester)');
+    expect(chatAfter?.username).toBe('tester');
+    expect(chatAfter?.projectId).toBe('p-keep');
+    expect(chatAfter?.kind).toBe('chat');
+
+    // Selected project is preserved in memory and restored on restart
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-keep');
+    const newBot = createProjectBot('suggest');
+    expect(newBot.getSelectedProject(CHAT_ID)).toBe('p-keep');
   });
 });

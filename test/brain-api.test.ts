@@ -347,6 +347,7 @@ describe('Brain API Endpoints (/api/brain)', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       'brain',
       'Người dùng trả lời quyết định dec-api-1 («Xác nhận xóa tài nguyên tạm?»): Đồng ý',
+      { queueIfBusy: true },
     );
 
     // Answering again should fail with 404 "Quyết định đã hết hạn hoặc đã trả lời"
@@ -402,6 +403,64 @@ describe('Brain API Endpoints (/api/brain)', () => {
 
     expect(response.statusCode).toBe(200);
     expect(getOrCreateSpy).toHaveBeenCalledWith('brain:p1', { title: 'Bộ não · p1', kind: 'brain', projectId: 'p1' });
-    expect(sendSpy).toHaveBeenCalledWith('brain:p1', expect.stringContaining('Không'));
+    expect(sendSpy).toHaveBeenCalledWith('brain:p1', expect.stringContaining('Không'), { queueIfBusy: true });
+  });
+
+  it('PATCH /api/projects/:id with permissions=full requires confirm and emits event', async () => {
+    ctx.projectRepo.insert({
+      id: 'p-full',
+      name: 'Project Full',
+      path: tmpDir,
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    const trustEvents: unknown[] = [];
+    ctx.scheduler.getEventBus().on('brain.trust_changed', (_taskId, payload) => trustEvents.push(payload));
+
+    // Without confirm -> 409
+    const resNoConfirm = await server.inject({
+      method: 'PATCH',
+      url: '/api/projects/p-full',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      payload: { settings: { brain: { permissions: 'full' } } },
+    });
+    expect(resNoConfirm.statusCode).toBe(409);
+    expect(trustEvents).toHaveLength(0);
+
+    // With confirm -> 200 + event
+    const resConfirm = await server.inject({
+      method: 'PATCH',
+      url: '/api/projects/p-full',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      payload: { settings: { brain: { permissions: 'full' } }, confirm: true },
+    });
+    expect(resConfirm.statusCode).toBe(200);
+    expect(trustEvents).toContainEqual(expect.objectContaining({ projectId: 'p-full', permissions: 'full' }));
+  });
+
+  it('PUT /api/config with brain.permissions=full requires confirm and emits event', async () => {
+    const trustEvents: unknown[] = [];
+    ctx.scheduler.getEventBus().on('brain.trust_changed', (_taskId, payload) => trustEvents.push(payload));
+
+    // Without confirm -> 409
+    const resNoConfirm = await server.inject({
+      method: 'PUT',
+      url: '/api/config',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      payload: { brain: { permissions: 'full' } },
+    });
+    expect(resNoConfirm.statusCode).toBe(409);
+    expect(trustEvents).toHaveLength(0);
+
+    // With confirm -> 200 + event
+    const resConfirm = await server.inject({
+      method: 'PUT',
+      url: '/api/config',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      payload: { brain: { permissions: 'full' }, confirm: true },
+    });
+    expect(resConfirm.statusCode).toBe(200);
+    expect(trustEvents).toContainEqual(expect.objectContaining({ projectId: null, permissions: 'full' }));
   });
 });

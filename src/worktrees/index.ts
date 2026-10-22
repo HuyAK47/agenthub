@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AgentHubConfig } from '../config.js';
 import { reapSyncForWorktree } from '../reaper.js';
+import { resolveProjectFile } from '../projects/paths.js';
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -37,11 +38,26 @@ export interface KnowledgeContext {
   createdAt: string;
 }
 
-function resolveReal(target: string): string {
+export function resolveReal(target: string): string {
   const resolved = path.resolve(target);
   try {
     return fs.realpathSync(resolved);
   } catch {
+    // If target does not exist, walk up to find the nearest existing ancestor,
+    // resolve its real path, and append the non-existent relative segments.
+    // Handles macOS symlinked temp directories (e.g. /var -> /private/var).
+    let cur = resolved;
+    const parts: string[] = [];
+    while (cur !== path.dirname(cur)) {
+      parts.unshift(path.basename(cur));
+      cur = path.dirname(cur);
+      try {
+        const realParent = fs.realpathSync(cur);
+        return path.join(realParent, ...parts);
+      } catch {
+        // Continue walking up
+      }
+    }
     return resolved;
   }
 }
@@ -388,6 +404,9 @@ export class WorktreeService {
     depsMaxChars = 16000,
     knowledge: KnowledgeContext[] = [],
     knowledgeMaxChars = 12000,
+    references: Array<{ name: string; path: string; inject?: boolean }> = [],
+    projectPath?: string,
+    reviewChecklist: string[] = [],
   ): void {
     const agentHubDir = path.join(worktreePath, '.agenthub');
     if (!fs.existsSync(agentHubDir)) {
@@ -400,6 +419,48 @@ export class WorktreeService {
       fs.writeFileSync(knowledgePath, this.buildKnowledgeContext(knowledge, knowledgeMaxChars), 'utf-8');
     } else if (fs.existsSync(knowledgePath)) {
       fs.rmSync(knowledgePath, { force: true });
+    }
+
+    const referencesPath = path.join(agentHubDir, 'context', 'references.md');
+    if (references.length > 0) {
+      fs.mkdirSync(path.dirname(referencesPath), { recursive: true });
+      fs.writeFileSync(referencesPath, this.buildReferencesContext(references), 'utf-8');
+    } else if (fs.existsSync(referencesPath)) {
+      fs.rmSync(referencesPath, { force: true });
+    }
+
+    const checklistPath = path.join(agentHubDir, 'context', 'review-checklist.md');
+    if (reviewChecklist.length > 0) {
+      fs.mkdirSync(path.dirname(checklistPath), { recursive: true });
+      fs.writeFileSync(checklistPath, this.buildReviewChecklistContext(reviewChecklist, projectPath), 'utf-8');
+    } else if (fs.existsSync(checklistPath)) {
+      fs.rmSync(checklistPath, { force: true });
+    }
+
+    // Copy AGENTS.md if present in worktree or project root (<= 32KB)
+    const contextAgentsPath = path.join(agentHubDir, 'context', 'AGENTS.md');
+    const possibleAgents = [
+      path.join(worktreePath, 'AGENTS.md'),
+      ...(projectPath ? [path.join(projectPath, 'AGENTS.md')] : []),
+    ];
+    let agentsCopied = false;
+    for (const p of possibleAgents) {
+      if (fs.existsSync(p)) {
+        try {
+          const stat = fs.statSync(p);
+          if (stat.isFile() && stat.size <= 32 * 1024) {
+            fs.mkdirSync(path.dirname(contextAgentsPath), { recursive: true });
+            fs.writeFileSync(contextAgentsPath, fs.readFileSync(p, 'utf-8'), 'utf-8');
+            agentsCopied = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    if (!agentsCopied && fs.existsSync(contextAgentsPath)) {
+      fs.rmSync(contextAgentsPath, { force: true });
     }
 
     let content = body;
@@ -474,6 +535,100 @@ export class WorktreeService {
     const full = ['# Sổ kiến thức dự án', '', ...entries.map((entry) => `- ${entry.content} _(task: ${entry.taskId})`)].join('\n');
     if (full.length <= limit) return full;
     return full.slice(0, limit);
+  }
+
+  private buildReferencesContext(references: Array<{ name: string; path: string; inject?: boolean }>): string {
+    const lines: string[] = [
+      '# Tài liệu tham chiếu (References)',
+      '',
+      'QUY TẮC BẮT BUỘC: CHỈ ĐỌC, không sửa, không commit các tài liệu tham chiếu này.',
+      'Mọi hành vi sửa đổi tài liệu tham chiếu sẽ khiến task bị chặn (BLOCKED).',
+      '',
+    ];
+
+    for (const ref of references) {
+      const envName = `AGENTHUB_REF_${ref.name.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
+      lines.push(`## ${ref.name}`);
+      lines.push(`- Đường dẫn: \`${ref.path}\``);
+      lines.push(`- Biến môi trường: \`${envName}\``);
+
+      if (!fs.existsSync(ref.path)) {
+        lines.push(`> ⚠️ CẢNH BÁO: Đường dẫn tham chiếu không tồn tại: ${ref.path}`);
+        console.warn(`[references] Reference '${ref.name}' path does not exist: ${ref.path}`);
+        lines.push('');
+        continue;
+      }
+
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(ref.path);
+      } catch (err) {
+        lines.push(`> ⚠️ CẢNH BÁO: Không thể đọc thông tin đường dẫn: ${String(err)}`);
+        lines.push('');
+        continue;
+      }
+
+      if (ref.inject) {
+        if (stat.isFile()) {
+          const MAX_INJECT_SIZE = 64 * 1024; // 64KB
+          if (stat.size <= MAX_INJECT_SIZE) {
+            try {
+              const fileContent = fs.readFileSync(ref.path, 'utf-8');
+              lines.push('');
+              lines.push('### Nội dung:');
+              lines.push('```');
+              lines.push(fileContent);
+              lines.push('```');
+            } catch (err) {
+              lines.push(`> ⚠️ CẢNH BÁO: Không thể đọc nội dung file: ${String(err)}`);
+            }
+          } else {
+            lines.push(`> ⚠️ CẢNH BÁO: File tham chiếu vượt quá giới hạn 64KB (${stat.size} bytes), không tự động inject nội dung.`);
+            console.warn(`[references] Reference '${ref.name}' exceeds 64KB (${stat.size} bytes), skipping content injection: ${ref.path}`);
+          }
+        } else {
+          lines.push('> ⚠️ CẢNH BÁO: Tham chiếu là thư mục, không tự động inject nội dung.');
+          console.warn(`[references] Reference '${ref.name}' is a directory, skipping content injection: ${ref.path}`);
+        }
+      }
+
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  private buildReviewChecklistContext(checklist: string[], projectPath?: string): string {
+    const lines = [
+      '# CHECKLIST KHI DUYỆT',
+      '',
+      'Bộ não và worker bắt buộc đối chiếu thay đổi với từng file dưới đây khi duyệt task.',
+      'Đây là tài liệu chỉ đọc; không sửa hoặc commit các file checklist.',
+      '',
+    ];
+    for (const entry of checklist.slice(0, 5)) {
+      const resolved = projectPath ? resolveProjectFile(projectPath, entry) : null;
+      lines.push(`## ${entry}`, `- Đường dẫn: ${resolved}`);
+      if (!resolved) {
+        lines.push('- CẢNH BÁO: đường dẫn không hợp lệ hoặc nằm ngoài project.');
+        lines.push('');
+        continue;
+      }
+      try {
+        const stat = fs.statSync(resolved);
+        if (!stat.isFile()) {
+          lines.push('- CẢNH BÁO: không phải file.');
+        } else if (stat.size > 64 * 1024) {
+          lines.push(`- CẢNH BÁO: file vượt giới hạn 64KB (${stat.size} bytes), hãy tự đọc khi cần.`);
+        } else {
+          lines.push('', '```', fs.readFileSync(resolved, 'utf8'), '```');
+        }
+      } catch {
+        lines.push('- CẢNH BÁO: không thể đọc file, hãy tự kiểm tra đường dẫn khi cần.');
+      }
+      lines.push('');
+    }
+    return lines.join('\n');
   }
 
   /**

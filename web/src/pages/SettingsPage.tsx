@@ -1,17 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, getClaudeApiKeyStatus, setClaudeApiKey } from '../api/client';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
+import { deletePermissionRule, getPermissionRules } from '../api/chat';
+import { useTour } from '../components/tour/TourContext';
+import { InfoTooltip } from '../components/tour/InfoTooltip';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
+  const { openTour } = useTour();
   const queryClient = useQueryClient();
+  const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
+  const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
 
   const [hardChain, setHardChain] = useState<string>('');
   const [easyChain, setEasyChain] = useState<string>('');
   const [timeoutHours, setTimeoutHours] = useState<number>(3);
+  const [multiplePerProvider, setMultiplePerProvider] = useState<boolean>(true);
   const [claudeBin, setClaudeBin] = useState<string>('claude');
   const [allowFullMode, setAllowFullMode] = useState<boolean>(false);
   const [chatModel, setChatModel] = useState<string>('sonnet');
@@ -26,10 +33,14 @@ export const SettingsPage: React.FC = () => {
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
+  const [brainPermissions, setBrainPermissions] = useState<'standard' | 'trusted' | 'full'>('standard');
   const [brainMaxConcurrent, setBrainMaxConcurrent] = useState<number>(2);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState<boolean>(false);
   const [quietHoursStart, setQuietHoursStart] = useState<string>('22:00');
   const [quietHoursEnd, setQuietHoursEnd] = useState<string>('07:00');
+  const [quotaLowPct, setQuotaLowPct] = useState<string>('20');
+  const [wakeupEnabled, setWakeupEnabled] = useState(false);
+  const [wakeupTimes, setWakeupTimes] = useState<string>('06:00');
   const [digestEnabled, setDigestEnabled] = useState<boolean>(true);
   const [digestTime, setDigestTime] = useState<string>('18:00');
   const [apiKey, setApiKey] = useState('');
@@ -39,6 +50,11 @@ export const SettingsPage: React.FC = () => {
   const [approvalMinTasks, setApprovalMinTasks] = useState<number>(5);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [brandingName, setBrandingName] = useState('AgentHub');
+  const [brandingShortName, setBrandingShortName] = useState('AH');
+  const [brandingTagline, setBrandingTagline] = useState('');
+  const [brandingAccent, setBrandingAccent] = useState('');
+  const [brandingLogoError, setBrandingLogoError] = useState<string | null>(null);
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['config'],
@@ -47,6 +63,10 @@ export const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     if (config) {
+      setBrandingName(config.branding?.name || 'AgentHub');
+      setBrandingShortName(config.branding?.shortName || 'AH');
+      setBrandingTagline(config.branding?.tagline || '');
+      setBrandingAccent(config.branding?.accentColor || '');
       const hardList = config.modelChainHard || config.modelChains?.hard || [];
       const easyList = config.modelChainEasy || config.modelChains?.easy || [];
       const timeoutSec =
@@ -58,6 +78,7 @@ export const SettingsPage: React.FC = () => {
       setHardChain(hardList.join('\n'));
       setEasyChain(easyList.join('\n'));
       setTimeoutHours(Math.max(1, Math.round(timeoutSec / 3600)));
+      setMultiplePerProvider(config.multiplePerProvider !== false);
       setClaudeBin(config.chat?.claudeBin || 'claude');
       setAllowFullMode(Boolean(config.chat?.allowFullMode));
       setChatModel(config.chat?.model || 'sonnet');
@@ -85,10 +106,14 @@ export const SettingsPage: React.FC = () => {
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
       setBrainMode(config.brain?.mode ?? 'suggest');
+      setBrainPermissions(config.brain?.permissions ?? 'standard');
       setBrainMaxConcurrent(config.brain?.maxConcurrent ?? 2);
       setQuietHoursEnabled(Boolean(config.notifications?.quietHours?.enabled));
       setQuietHoursStart(config.notifications?.quietHours?.start || '22:00');
       setQuietHoursEnd(config.notifications?.quietHours?.end || '07:00');
+      setQuotaLowPct(String(config.notifications?.quotaLowPct ?? 20));
+      setWakeupEnabled(Boolean(config.wakeup?.enabled));
+      setWakeupTimes((config.wakeup?.times ?? ['06:00']).join(', '));
       setDigestEnabled(config.brain?.digest?.enabled ?? true);
       setDigestTime(config.brain?.digest?.time || '18:00');
     }
@@ -145,6 +170,7 @@ export const SettingsPage: React.FC = () => {
       modelChainHard: hardModels,
       modelChainEasy: easyModels,
       defaultTimeout,
+      multiplePerProvider,
       modelChains: {
         hard: hardModels,
         easy: easyModels,
@@ -169,6 +195,7 @@ export const SettingsPage: React.FC = () => {
       },
       brain: {
         mode: brainMode,
+        permissions: brainPermissions,
         maxConcurrent: Number(brainMaxConcurrent) || 2,
         digest: {
           enabled: digestEnabled,
@@ -176,6 +203,7 @@ export const SettingsPage: React.FC = () => {
         },
         fallback,
       },
+      ...(brainPermissions === 'full' ? { confirm: true } : {}),
       notifications: {
         desktop: desktopNotify,
         quietHours: {
@@ -183,12 +211,35 @@ export const SettingsPage: React.FC = () => {
           start: quietHoursStart.trim() || '22:00',
           end: quietHoursEnd.trim() || '07:00',
         },
+        quotaLowPct: Math.min(95, Math.max(0, Math.round(Number(quotaLowPct) || 0))),
+      },
+      wakeup: {
+        enabled: wakeupEnabled,
+        // Bỏ giờ sai định dạng thay vì làm hỏng cả lần lưu.
+        times: wakeupTimes.split(/[,\s]+/).map((time) => time.trim()).filter((time) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(time)),
       },
       planning: {
         requireApproval: approvalMode === 'all',
         approvalMinTasks: approvalMode === 'large' ? Math.max(1, Number(approvalMinTasks) || 5) : 0,
       },
+      branding: {
+        name: brandingName.trim() || 'AgentHub',
+        shortName: brandingShortName.trim() || 'AH',
+        ...(brandingTagline.trim() ? { tagline: brandingTagline.trim() } : {}),
+        ...(brandingAccent.trim() ? { accentColor: brandingAccent.trim() } : {}),
+      },
     });
+  };
+
+  const handleBrandingLogo = async (file: File | undefined) => {
+    if (!file) return;
+    setBrandingLogoError(null);
+    try {
+      await uploadBrandingLogo(file);
+      await queryClient.invalidateQueries({ queryKey: ['config'] });
+    } catch (error) {
+      setBrandingLogoError(error instanceof Error ? error.message : t('settings.brandingLogoError'));
+    }
   };
 
   const handleToggleFullMode = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -208,14 +259,32 @@ export const SettingsPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl space-y-6" data-tour="settings">
       {/* Header */}
-      <div>
+      <div className="flex items-start justify-between gap-3">
+        <div>
         <h1 className="text-2xl font-bold tracking-tight">{t('settings.title')}</h1>
         <p className="text-sm text-[var(--t-text-3)]">
           {t('extra.settingsSubtitle')}
         </p>
+        </div>
+        <button type="button" onClick={() => openTour('intro')} className="rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs text-[var(--t-text-2)] hover:bg-[var(--t-hover)]">{t('tour.replay')}</button>
       </div>
+
+      <section className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold">{t('settings.brandingTitle')}</h2>
+          <p className="text-sm text-[var(--t-text-3)]">{t('settings.brandingDescription')}</p>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <label className="text-sm space-y-1"><span>{t('settings.brandingName')}</span><input value={brandingName} onChange={(e) => setBrandingName(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingShortName')}</span><input value={brandingShortName} onChange={(e) => setBrandingShortName(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingTagline')}</span><input value={brandingTagline} onChange={(e) => setBrandingTagline(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingAccent')}</span><input value={brandingAccent} onChange={(e) => setBrandingAccent(e.target.value)} className="w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2" /></label>
+          <label className="text-sm space-y-1"><span>{t('settings.brandingLogo')}</span><input type="file" accept="image/png,image/svg+xml" onChange={(e) => void handleBrandingLogo(e.target.files?.[0])} className="w-full text-sm" /><span className="block text-xs text-[var(--t-text-3)]">{t('settings.brandingLogoHint')}</span></label>
+        </div>
+        {brandingLogoError && <p className="text-sm text-[var(--t-crit)]">{brandingLogoError}</p>}
+      </section>
 
       {saveSuccess && (
         <div className="p-4 rounded-xl bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] border border-[var(--t-ok)] text-[var(--t-ok)] text-sm flex items-center gap-2">
@@ -239,7 +308,7 @@ export const SettingsPage: React.FC = () => {
         <div className="p-8 text-center text-[var(--t-crit)] text-sm">{t('settings.loadError')}</div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div id="planning-approval" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3 shadow-xs" data-testid="planning-approval">
+          <div id="planning-approval" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3 shadow-xs" data-testid="planning-approval" data-tour="planning-approval">
             <h2 className="text-sm font-semibold">{t('extra.planningApprovalTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.planningApprovalHint')}</p>
             {(['none', 'large', 'all'] as const).map((mode) => (
@@ -254,7 +323,12 @@ export const SettingsPage: React.FC = () => {
               </label>
             ))}
           </div>
-          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs" data-tour="brain-policy">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold">{t('projects.brainPermissions')}</label>
+              <select value={brainPermissions} onChange={(e) => { const value = e.target.value as typeof brainPermissions; if (value === 'full' && !window.confirm(t('extra.fullModeConfirm'))) return; setBrainPermissions(value); }} className="block rounded border p-2 bg-[var(--t-surface-2)]"><option value="standard">{t('projects.brainPermissionStandard')}</option><option value="trusted">{t('projects.brainPermissionTrusted')}</option><option value="full">{t('projects.brainPermissionFull')}</option></select>
+              {brainPermissions === 'full' && <p className="text-xs text-[var(--t-crit)]">{t('extra.fullModeWarning')}</p>}
+            </div>
             {/* Info notice */}
             <div className="p-4 rounded-lg bg-[var(--t-accent-bg)] border border-[var(--t-accent)] text-[var(--t-accent)] text-xs flex items-start gap-2.5">
               <Info className="w-4 h-4 shrink-0 mt-0.5" />
@@ -264,9 +338,10 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             {/* Hard chain */}
-            <div>
+            <div data-tour="model-chain">
               <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                 {t('settings.hardChainLabel')}
+                <InfoTooltip text="Thứ tự model khó dùng trước rồi mới fallback xuống model dễ; ví dụ opus → sonnet → haiku." label={t('settings.hardChainLabel')} />
               </label>
               <textarea
                 rows={4}
@@ -309,6 +384,26 @@ export const SettingsPage: React.FC = () => {
                 value={timeoutHours}
                 onChange={(e) => setTimeoutHours(parseInt(e.target.value, 10) || 1)}
                 className="w-32 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+              />
+            </div>
+
+            <div className="flex items-start justify-between gap-4 border-t border-[var(--t-border)] pt-4">
+              <div>
+                <label htmlFor="multiple-per-provider" className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('settings.multiplePerProviderLabel')}
+                </label>
+                <p className="mt-1 text-xs text-[var(--t-text-3)]">
+                  {t('settings.multiplePerProviderHint')}
+                </p>
+              </div>
+              <input
+                id="multiple-per-provider"
+                data-testid="multiple-per-provider-toggle"
+                data-tour="multiple-accounts"
+                type="checkbox"
+                checked={multiplePerProvider}
+                onChange={(e) => setMultiplePerProvider(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-[var(--t-border)]"
               />
             </div>
 
@@ -378,8 +473,8 @@ export const SettingsPage: React.FC = () => {
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">{t('extra.chatModel')}</label>
                 <input value={chatModel} onChange={(e) => setChatModel(e.target.value)} className="w-full max-w-sm text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-3 py-2 text-[var(--t-text)]" />
-                <p className="text-[11px] text-[var(--t-text-3)] mt-1">Model chat mặc định. Danh sách chọn: {chatModels.join(', ')}</p>
-                <input value={chatModels.join(', ')} onChange={(e) => setChatModels(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))} className="mt-2 w-full max-w-sm text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" aria-label="Danh sách model chat" />
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">{t('extra.defaultChatModel')} {chatModels.join(', ')}</p>
+                <input value={chatModels.join(', ')} onChange={(e) => setChatModels(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))} className="mt-2 w-full max-w-sm text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" aria-label={t('extra.chatModelsLabel')} />
               </div>
 
               {/* allowFullMode toggle */}
@@ -412,15 +507,15 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-2 shadow-xs">
-            <h2 className="text-base font-semibold text-[var(--t-text)]">Reviewer</h2>
-            <label className="block text-xs font-semibold text-[var(--t-text)]">Model reviewer</label>
+                <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
+            <label className="block text-xs font-semibold text-[var(--t-text)]">{t('extra.reviewerModel')}</label>
             <input value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
           </div>
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs">
             <div>
-              <h2 className="text-base font-semibold text-[var(--t-text)]">Claude fallback chain</h2>
-              <p className="text-xs text-[var(--t-text-3)]">Drag steps to reorder. The API key is write-only.</p>
+              <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.fallbackChain')}</h2>
+              <p className="text-xs text-[var(--t-text-3)]">{t('extra.fallbackHint')}</p>
             </div>
             {fallback.map((step, index) => (
               <div key={`${step.type}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const from = Number(event.dataTransfer.getData('text/plain')); if (!Number.isInteger(from) || from === index) return; const next = [...fallback]; const [moved] = next.splice(from, 1); next.splice(index, 0, moved); setFallback(next); }} className="flex items-center gap-2 p-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-grab">
@@ -431,30 +526,30 @@ export const SettingsPage: React.FC = () => {
                 {step.type === 'profile' && <input value={step.profile || ''} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, profile: event.target.value }; setFallback(next); }} placeholder="profile name" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
                 {step.type === 'model' && <input value={step.model} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, model: event.target.value }; setFallback(next); }} placeholder="sonnet" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
                 {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">Remove</button>
+                <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">{t('extra.remove')}</button>
               </div>
             ))}
-            <button type="button" onClick={() => setFallback([...fallback, { type: 'wait' }])} className="text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)]">Add step</button>
+            <button type="button" onClick={() => setFallback([...fallback, { type: 'wait' }])} className="text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)]">{t('extra.addStep')}</button>
             <div className="pt-3 border-t border-[var(--t-border)]">
-              <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">Anthropic API key</label>
-              <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={apiKeyConfigured ? 'Configured (enter to replace)' : 'sk-ant-…'} autoComplete="new-password" className="w-full text-xs font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-[var(--t-text)]" />
+              <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.apiKey')}</label>
+              <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={apiKeyConfigured ? t('extra.configuredReplace') : 'sk-ant-…'} autoComplete="new-password" className="w-full text-xs font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-[var(--t-text)]" />
             </div>
           </div>
 
           {/* Savings config block */}
-          <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 space-y-6 shadow-xs">
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div>
               <h2 className="text-base font-semibold text-[var(--text-primary)]">
                 {t('settings.savingsSectionTitle')}
               </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              <p className="text-xs text-[var(--t-text-3)] mt-0.5">
                 {t('extra.savingsSettings')}
               </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('settings.geminiBucketLabel')}
                 </label>
                 <input
@@ -463,15 +558,15 @@ export const SettingsPage: React.FC = () => {
                   step={100_000}
                   value={bucketGemini}
                   onChange={(e) => setBucketGemini(Number(e.target.value))}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.geminiBucketHint')}
                 </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('settings.claudeBucketLabel')}
                 </label>
                 <input
@@ -480,15 +575,15 @@ export const SettingsPage: React.FC = () => {
                   step={100_000}
                   value={bucketClaude}
                   onChange={(e) => setBucketClaude(Number(e.target.value))}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.claudeBucketHint')}
                 </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('extra.claudeFactor')}
                 </label>
                 <input
@@ -498,15 +593,15 @@ export const SettingsPage: React.FC = () => {
                   step={0.05}
                   value={claudeFactor}
                   onChange={(e) => setClaudeFactor(parseFloat(e.target.value) || 0.9)}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.claudeFactorHint')}
                 </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('extra.claudeOverhead')}
                 </label>
                 <input
@@ -515,16 +610,16 @@ export const SettingsPage: React.FC = () => {
                   step={5_000}
                   value={claudeOverhead}
                   onChange={(e) => setClaudeOverhead(Number(e.target.value) || 0)}
-                  className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] font-mono"
                 />
-                <p className="text-[11px] text-gray-400 mt-1">
+                <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('extra.claudeOverheadHint')}
                 </p>
               </div>
             </div>
           </div>
 
-          <section data-testid="notifications-settings" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
+          <section data-testid="notifications-settings" data-tour="notifications" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-[color-mix(in_srgb,var(--t-accent)_15%,transparent)] text-[var(--t-accent)]">
@@ -634,6 +729,66 @@ export const SettingsPage: React.FC = () => {
               )}
             </div>
 
+            <div className="py-2 border-b border-[var(--t-border)] flex items-center justify-between gap-4">
+              <div>
+                <label htmlFor="quota-low-pct" className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('settings.quotaLowTitle')}
+                </label>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('settings.quotaLowHint')}
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  id="quota-low-pct"
+                  type="number"
+                  min={0}
+                  max={95}
+                  data-testid="quota-low-pct"
+                  value={quotaLowPct}
+                  onChange={(e) => setQuotaLowPct(e.target.value)}
+                  className="w-20 text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"
+                />
+                <span className="text-sm text-[var(--t-text-3)]">%</span>
+              </div>
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label htmlFor="wakeup-toggle" className="text-sm font-semibold text-[var(--t-text)]">
+                    {t('settings.wakeupTitle')}
+                  </label>
+                  <p className="text-xs text-[var(--t-text-3)]">
+                    {t('settings.wakeupHint')}
+                  </p>
+                </div>
+                <input
+                  id="wakeup-toggle"
+                  type="checkbox"
+                  data-testid="wakeup-toggle"
+                  checked={wakeupEnabled}
+                  onChange={(e) => setWakeupEnabled(e.target.checked)}
+                  className="rounded border-[var(--t-border)]"
+                />
+              </div>
+              {wakeupEnabled && (
+                <div>
+                  <label htmlFor="wakeup-times" className="block text-xs font-semibold text-[var(--t-text-2)] mb-1">
+                    {t('settings.wakeupTimes')}
+                  </label>
+                  <input
+                    id="wakeup-times"
+                    data-testid="wakeup-times"
+                    value={wakeupTimes}
+                    onChange={(e) => setWakeupTimes(e.target.value)}
+                    placeholder="06:00, 13:00"
+                    className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"
+                  />
+                </div>
+              )}
+            </div>
+
             <div className="py-2 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
@@ -669,6 +824,17 @@ export const SettingsPage: React.FC = () => {
           </section>
 
           <TelegramCard />
+
+          <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
+            <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
+            <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
+            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">{t('extra.noPermissionRules')}</p> : permissionRules.data.map((rule) => (
+              <div key={rule.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs">
+                <code className="break-all">{rule.toolName} {rule.pattern}</code>
+                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button>
+              </div>
+            ))}
+          </section>
 
           <div className="flex justify-end">
             <button

@@ -15,6 +15,7 @@ import {
   compactChatSession,
   forkSummaryChatSession,
   normalizeMessagesResponse,
+  retryChatLimitNow,
 } from '../api/chat';
 import { getConfig } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
@@ -28,12 +29,12 @@ import { useLocale } from '../context/LocaleContext';
 import {
   Menu,
   X,
-  AlertCircle,
   Plus,
   Bot,
   Square,
   RotateCcw,
 } from 'lucide-react';
+import { ToastViewport, useToasts, type ToastKind } from '../components/ui/Toast';
 
 const EMPTY_SESSIONS: ChatSession[] = [];
 
@@ -45,17 +46,16 @@ export const ChatPage: React.FC = () => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+  const setToastMessage = (title: string, kind: ToastKind = 'error') => pushToast({ title, kind, duration: kind === 'error' ? 6000 : 3500 });
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [isLocalBusy, setIsLocalBusy] = useState(false);
   const [permission, setPermission] = useState<ChatPermissionRequest | null>(null);
-
-  // Auto-dismiss toast
-  useEffect(() => {
-    if (!toastMessage) return;
-    const timer = setTimeout(() => setToastMessage(null), 3000);
-    return () => clearTimeout(timer);
-  }, [toastMessage]);
+  const [editText, setEditText] = useState<string | null>(null);
+  const retryLimitMutation = useMutation({
+    mutationFn: (id: string) => retryChatLimitNow(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chatSessions'] }),
+  });
 
   // Fetch chat sessions
   const {
@@ -184,16 +184,35 @@ export const ChatPage: React.FC = () => {
           return [...prev, newMsg];
         });
       } else if (type === 'chat.tool') {
-        const { messageId, name, summary } = payload;
-        setToolStepCount((count) => count + 1);
+        const { messageId, toolMessageId, toolUseId, name, summary, input, output, status, durationMs, diff } = payload;
+        const toolId = toolMessageId || `tool-${toolUseId || messageId}`;
+        if (status !== 'done' && status !== 'error') setToolStepCount((count) => count + 1);
         setCurrentTool(summary || name || null);
         setMessages((prev) => {
-          if (prev.some((m) => m.id === messageId)) return prev;
+          const existingIndex = prev.findIndex((message) => message.id === toolId);
+          if (existingIndex !== -1) {
+            const updated = [...prev];
+            updated[existingIndex] = {
+              ...updated[existingIndex],
+              content: summary || name || updated[existingIndex].content,
+              meta: {
+                ...updated[existingIndex].meta,
+                name,
+                summary,
+                ...(input !== undefined ? { input } : {}),
+                ...(output !== undefined ? { output } : {}),
+                ...(status !== undefined ? { status } : {}),
+                ...(durationMs !== undefined ? { durationMs } : {}),
+                ...(diff !== undefined ? { diff } : {}),
+              },
+            };
+            return updated;
+          }
           const toolMsg: ChatMessage = {
-            id: messageId,
+            id: toolId,
             role: 'tool',
             content: summary || name,
-            meta: { name, summary },
+            meta: { name, summary, input, output, status, durationMs, diff },
             createdAt: new Date().toISOString(),
           };
           return [...prev, toolMsg];
@@ -241,7 +260,7 @@ export const ChatPage: React.FC = () => {
 
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       } else if (type === 'chat.compacted') {
-        setToastMessage(t('extra.compacted'));
+        setToastMessage(t('extra.compacted'), 'success');
         queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession?.id] });
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       } else if (type === 'chat.status') {
@@ -365,7 +384,7 @@ export const ChatPage: React.FC = () => {
         err.message?.includes('busy') ||
         err.message?.includes('answering')
       ) {
-        setToastMessage(t('extra.claudeAnswering'));
+        setToastMessage(t('extra.claudeAnswering'), 'warning');
       } else {
         setToastMessage(err.message || t('extra.sendError'));
       }
@@ -387,7 +406,7 @@ export const ChatPage: React.FC = () => {
   const compactMutation = useMutation({
     mutationFn: compactChatSession,
     onSuccess: () => {
-      setToastMessage(t('extra.compactRequested'));
+      setToastMessage(t('extra.compactRequested'), 'info');
       queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       if (activeSession?.id) {
         queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession.id] });
@@ -411,6 +430,7 @@ export const ChatPage: React.FC = () => {
 
   const handleSendMessage = (text: string) => {
     if (!activeSession) return;
+    setEditText(null);
     sendMessageMutation.mutate({ sessId: activeSession.id, text });
   };
 
@@ -456,16 +476,7 @@ export const ChatPage: React.FC = () => {
 
   return (
     <div className="relative h-[calc(100vh-8.5rem)] flex rounded-2xl border border-[var(--border-default)] bg-[var(--bg-app)] overflow-hidden shadow-xs">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div
-          role="alert"
-          className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-[var(--t-warn)] text-white font-medium text-xs shadow-xl flex items-center gap-2 animate-fade-in"
-        >
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+      <ToastViewport toasts={toasts} onDismiss={dismissToast} closeLabel={t('common.close')} />
 
       {/* Desktop Left Column (Session List) >= 900px */}
       <aside className="hidden min-[900px]:block w-72 lg:w-80 shrink-0 h-full">
@@ -542,7 +553,7 @@ export const ChatPage: React.FC = () => {
             </button>
 
             {activeSession ? (
-              <div className="min-w-0 flex items-center gap-2.5 flex-1">
+              <div className="min-w-0 flex items-center gap-2.5 flex-1" data-tour="assistant-chat">
                 <div className="w-7 h-7 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shrink-0">
                   C
                 </div>
@@ -616,7 +627,7 @@ export const ChatPage: React.FC = () => {
               <>
                 {/* Context Meter */}
                 <select
-                  aria-label="Model chat"
+                  aria-label={t('extra.modelChatAria')}
                   value={activeSession.model || systemConfig?.chat?.model || 'sonnet'}
                   disabled={isBusy || updateSessionMutation.isPending}
                   onChange={(event) => updateSessionMutation.mutate({ id: activeSession.id, data: { model: event.target.value } })}
@@ -658,6 +669,9 @@ export const ChatPage: React.FC = () => {
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>{t('common.retry')}</span>
                   </button>
+                )}
+                {sessionState === 'waiting_limit' && (
+                  <button type="button" onClick={() => retryLimitMutation.mutate(activeSession.id)} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-warn)]/15 text-[var(--t-warn)] border border-[var(--t-warn)]/30">{t('extra.retryLimit')}</button>
                 )}
               </>
             )}
@@ -702,6 +716,7 @@ export const ChatPage: React.FC = () => {
             onLoadMore={handleLoadMore}
             onRetryMessage={handleRetryFromError}
             onNewSession={() => setIsModalOpen(true)}
+            onEditMessage={(message) => setEditText(message.content)}
           />
         )}
 
@@ -711,16 +726,28 @@ export const ChatPage: React.FC = () => {
             {/* Permission Request Dialog */}
             {permission && (
               <div
+                data-tour="chat-permissions"
                 className="mx-5 mb-2 rounded-xl border border-[var(--t-warn)] bg-[var(--t-warn)]/10 p-3 text-sm animate-fade-in"
                 role="dialog"
                 aria-label={t('extra.permissionAria')}
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === 'Enter') { event.preventDefault(); resolvePermission('allow'); }
+                  if (event.key === 'Escape') { event.preventDefault(); resolvePermission('deny'); }
+                }}
               >
                 <div className="font-semibold text-[var(--text-primary)]">
                   {t('extra.permissionTitle', { tool: permission.toolName })}
                 </div>
+                <div className="text-xs text-[var(--text-muted)]">
+                  {`${t(permission.projectName ? 'extra.permissionProject' : 'extra.permissionNoProject', { project: permission.projectName ? `${permission.projectName} (${activeSession.projectId || ''})` : undefined })} · ${t('extra.permissionSession', { session: `${permission.sessionTitle || activeSession.title} (${permission.sessionId})` })}`}
+                </div>
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)] font-mono">
-                  {JSON.stringify(permission.input, null, 2)}
+                  {typeof permission.input.command === 'string' ? permission.input.command.slice(0, 500) : JSON.stringify(permission.input, null, 2)}
                 </pre>
+                {typeof permission.input.cwd === 'string' && <div className="text-xs text-[var(--text-muted)]">{t('extra.permissionCwd')}: <code>{permission.input.cwd}</code></div>}
+                {typeof permission.input.file_path === 'string' && <div className="text-xs text-[var(--text-muted)]">{t('extra.permissionFile')}: <code>{permission.input.file_path}</code></div>}
                 <div className="mt-2 flex gap-2">
                   <button
                     type="button"
@@ -729,13 +756,13 @@ export const ChatPage: React.FC = () => {
                   >
                     {t('extra.allow')}
                   </button>
-                  <button
+                  {permission.canAlwaysAllow !== false && <button
                     type="button"
                     onClick={() => resolvePermission('allow_always')}
                     className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
                   >
-                    {t('extra.allowAlways')}
-                  </button>
+                    {`${t('extra.allowAlways')} ${permission.permissionLabel || permission.toolName}`}
+                  </button>}
                   <button
                     type="button"
                     onClick={() => resolvePermission('deny')}
@@ -772,6 +799,8 @@ export const ChatPage: React.FC = () => {
               busy={isBusy}
               isEmpty={messages.length === 0}
               disabled={!activeSession}
+              sessionKey={activeSession.id}
+              editText={editText}
             />
           </>
         )}

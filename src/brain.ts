@@ -1,11 +1,12 @@
 import Database from 'better-sqlite3';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { AgentHubConfig } from './config.js';
 import { openDatabase, EventRepo } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
-import { effectiveBrainMode } from './brain/mode.js';
+import { effectiveBrainMode, effectiveBrainPermission } from './brain/mode.js';
 import { readExistingToken, getTokenPath } from './auth.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { generateDigest, forwardDecisionToBrain, DigestData } from './brain/digest.js';
@@ -259,6 +260,7 @@ export function buildBrainDigest(appService: AppService): DigestData {
       quotaMarkRepo: appService.quotaMarkRepo,
       eventRepo: appService.eventRepo,
       decisionTracker: appService.telegramBotService?.getDecisionTracker(),
+      ciRepo: appService.ciRepo,
       port: appService.config.port,
     })
   );
@@ -282,14 +284,27 @@ export function registerBrainRoutes(
         projectId,
         projectName: project?.name || 'Hệ thống',
         mode: effectiveBrainMode(projectId, project, appService.config.brain),
+        permissions: effectiveBrainPermission(project, appService.config.brain),
+        sessionMode: session?.mode || (effectiveBrainPermission(project, appService.config.brain) === 'full' ? 'full' : 'safe'),
         sessionId: session?.id || (projectId ? `brain:${projectId}` : 'brain'),
         state: session?.state || 'idle',
         queued: usage?.queued || false,
         lastTurnAt: usage?.lastTurnAt || session?.lastMessageAt || null,
         tokensToday: usage?.tokensToday || 0,
+        directives: appService.directiveRepo?.list(projectId) || [],
       };
     });
-    return { ...status, brains };
+    const assistants = [null, ...projects.map((project) => project.id)].map((projectId) => {
+      const session = sessions?.get(projectId ? `assistant:${projectId}` : 'assistant');
+      return {
+        projectId,
+        projectName: projectId ? projects.find((project) => project.id === projectId)?.name || projectId : 'Hệ thống',
+        sessionId: session?.id || (projectId ? `assistant:${projectId}` : 'assistant'),
+        state: session?.state || 'idle',
+        busy: Boolean(session?.busy),
+      };
+    });
+    return { ...status, brains, assistants };
   });
 
   fastify.put('/api/brain', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -297,6 +312,52 @@ export function registerBrainRoutes(
     return reply.status(200).send(result);
   });
   fastify.post('/api/brain/notify', async (req: FastifyRequest) => brainService.notify(req.body));
+
+  fastify.get('/api/brain/directives', async (req: FastifyRequest) => {
+    if (!appService?.directiveRepo) return [];
+    const projectId = (req.query as { projectId?: string }).projectId;
+    return appService.directiveRepo.list(projectId || null);
+  });
+
+  fastify.post('/api/brain/directives', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!appService?.directiveRepo) throw new HttpError(503, 'unavailable', 'Directive service chưa sẵn sàng');
+    const body = (req.body || {}) as { projectId?: string | null; text?: string; createdBy?: string };
+    if (!body.text?.trim()) throw new HttpError(400, 'bad_request', 'text là bắt buộc');
+    const directive = appService.directiveRepo.add({ id: crypto.randomUUID(), projectId: body.projectId || null, text: body.text.trim(), createdBy: body.createdBy || 'user' });
+    appService.scheduler.getEventBus().emit('brain.directive_added', directive.projectId || undefined, directive);
+    return reply.status(201).send(directive);
+  });
+
+  fastify.delete('/api/brain/directives/:id', async (req: FastifyRequest) => {
+    if (!appService?.directiveRepo) throw new HttpError(503, 'unavailable', 'Directive service chưa sẵn sàng');
+    const id = (req.params as { id: string }).id;
+    const directive = appService.directiveRepo.get(id);
+    const projectId = (req.query as { projectId?: string }).projectId;
+    if (!directive || (projectId !== undefined && directive.projectId !== projectId)) throw new HttpError(404, 'not_found', 'Chỉ thị không tồn tại');
+    if (!appService.directiveRepo.remove(id)) throw new HttpError(404, 'not_found', 'Chỉ thị không tồn tại');
+    return { ok: true };
+  });
+
+  fastify.post('/api/brain/ask', async (req: FastifyRequest) => {
+    if (!appService?.chatService) throw new HttpError(503, 'unavailable', 'Chat service chưa sẵn sàng');
+    const body = (req.body || {}) as { question?: string; projectId?: string | null; sourceSessionId?: string };
+    if (!body.question?.trim()) throw new HttpError(400, 'bad_request', 'question là bắt buộc');
+    const sessionId = body.projectId ? `brain:${body.projectId}` : 'brain';
+    const project = body.projectId ? appService.projectRepo.get(body.projectId) : undefined;
+    const permission = effectiveBrainPermission(project, appService.config.brain);
+    appService.chatService.getOrCreateSession(sessionId, { title: body.projectId ? `Bộ não · ${body.projectId}` : 'Bộ não', kind: 'brain', projectId: body.projectId || null, mode: permission === 'full' ? 'full' : 'safe', model: appService.config.brain.model });
+    const sourceChatId = body.sourceSessionId ? appService.chatService.getTelegramChat(body.sourceSessionId) : undefined;
+    const questionId = crypto.randomUUID();
+    const result = appService.chatService.sendMessage(sessionId, `CÂU HỎI TỪ TRỢ LÝ [${questionId}] (cần quyết định): ${body.question.trim()}`, { queueIfBusy: true });
+    appService.scheduler.getEventBus().emit('brain.question_asked', sessionId, {
+      questionId,
+      sourceChatId,
+      userMessageId: result.userMessageId || undefined,
+      assistantMessageId: result.assistantMessageId || undefined,
+      projectId: body.projectId || null,
+    });
+    return result;
+  });
 
   fastify.get('/api/brain/digest', async () => {
     if (!appService) {

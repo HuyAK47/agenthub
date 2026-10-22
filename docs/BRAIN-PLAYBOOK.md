@@ -13,6 +13,8 @@ Mỗi lần được đánh thức, bạn nhận **một sự kiện** kèm ản
 | `task.review_ready` | Duyệt task (mục 2). Đạt thì `hub_review approved, merge:true`. Chưa đạt thì `changes_requested` kèm nhận xét cụ thể. |
 | `task.failed` / `task.blocked` | Đọc log (`hub_task_log`). Lỗi tạm thời (mạng, quota, máy quá tải) thì `hub_retry`. Đề bài sai hoặc thiếu thì sửa đề (`hub_update_task`) rồi retry. Lỗi môi trường mà bạn không sửa được thì báo người dùng. |
 | `merge.conflict` / merge trả 409, 422 | Xem mục 3. |
+| `ci.failed` | Đọc annotation, so với task đang chạy (tránh trùng: nếu đã có task đang sửa đúng test đó thì ghi chú vào task đó), nếu chưa có thì tạo task sửa với đề bài kèm annotation; test chập chờn (đạt khi chạy lại) → tạo task ổn định test, không nới assert. |
+| `ci.passed` | Sau chuỗi đỏ → báo người dùng một dòng. |
 | Tin nhắn của người dùng | Trả lời. Nếu là yêu cầu việc mới thì lên kế hoạch (mục 4). |
 | `batch.dispatched`, hàng đợi trống | Không cần làm gì. Gửi bản tóm tắt nếu đã đến lịch. |
 | Hết quota, máy quá tải | Thường là không làm gì: hub tự xử lý. Chỉ báo người dùng khi kéo dài hơn 1 giờ. |
@@ -24,20 +26,21 @@ Sau mỗi lần xử lý, cập nhật trạng thái bằng `hub_brain` (hoặc 
 Luôn xem diff thật (`hub_git diff <baseRef>...<branch>`), đừng chỉ đọc báo cáo DONE của worker.
 
 1. **Phạm vi:** task làm đúng đề bài, không sửa lan sang chỗ khác.
-2. **Không xoá tính năng của task khác.** Đếm số dòng bị xoá. Lần merge `integration` của worker từng làm mất khoảng 390 dòng (PermissionBroker, profileName). Thấy nhiều dòng bị xoá trong file dùng chung (`src/chat/service.ts`, `src/scheduler/index.ts`, `src/db/index.ts`…) thì trả về.
-3. **Migration DB:**
+2. **Checklist dự án:** nếu có `settings.reviewChecklist`, đọc từng file và đối chiếu diff. Feedback phải liệt kê mục vi phạm; nếu không có, ghi rõ `đã đối chiếu checklist: không vi phạm`.
+3. **Không xoá tính năng của task khác.** Đếm số dòng bị xoá. Lần merge `integration` của worker từng làm mất khoảng 390 dòng (PermissionBroker, profileName). Thấy nhiều dòng bị xoá trong file dùng chung (`src/chat/service.ts`, `src/scheduler/index.ts`, `src/db/index.ts`…) thì trả về.
+4. **Migration DB:**
    - Chỉ được thêm vào **cuối** mảng `MIGRATIONS`, không bao giờ chèn vào giữa. Chèn vào giữa làm DB đang chạy hỏng khi khởi động lại.
    - Các nhánh chạy song song hay trùng số migration. Khi merge, đánh lại số sau migration cuối của `integration`.
    - Cập nhật `test/fixtures/migrations.lock` bằng cách **chỉ thêm dòng**. Test `migrations-append-only` sẽ báo lỗi nếu làm sai.
    - Migration dựng lại bảng (`CREATE TABLE …_new` / `DROP` / `RENAME`) phải chép đủ mọi cột hiện có. Chạy thử trên một bản sao DB thật trước khi cài.
-4. **Test:** phải có test cho hành vi mới. Task nào thiếu test thì trả về và nêu cụ thể các trường hợp cần test.
-5. **i18n:** chuỗi giao diện mới phải nằm trong `web/src/locales/vi.ts` và `en.ts`. Test `i18nAudit` sẽ báo lỗi nếu còn chuỗi tiếng Việt viết thẳng trong code.
-6. **Bảo mật:**
+5. **Test:** phải có test cho hành vi mới. Task nào thiếu test thì trả về và nêu cụ thể các trường hợp cần test.
+6. **i18n:** chuỗi giao diện mới phải nằm trong `web/src/locales/vi.ts` và `en.ts`. Test `i18nAudit` sẽ báo lỗi nếu còn chuỗi tiếng Việt viết thẳng trong code.
+7. **Bảo mật:**
    - Không chạy lệnh tuỳ ý lấy từ API hoặc từ config sửa được qua API.
    - Không ghi hay in token, email.
    - Mọi lệnh xoá thư mục phải kiểm tra `realpath` nằm trong đúng thư mục gốc được phép, không phải `/` hay `$HOME`, và có file đánh dấu nếu là thư mục do hub tạo.
-7. **Không commit file `.agenthub/`** (DONE, BLOCKED, context) vào repo.
-8. Lỗi cùng một kiểu xuất hiện nhiều lần thì đưa thành test hoặc thành quy tắc trong sổ tay này.
+8. **Không commit file `.agenthub/`** (DONE, BLOCKED, context) vào repo.
+9. Lỗi cùng một kiểu xuất hiện nhiều lần thì đưa thành test hoặc thành quy tắc trong sổ tay này.
 
 ## 3. Merge
 
@@ -50,7 +53,7 @@ Luôn xem diff thật (`hub_git diff <baseRef>...<branch>`), đừng chỉ đọ
 
 - Chia việc nhỏ, mỗi task 30–90 phút, sao cho nhiều worker chạy song song được.
 - Việc nặng hoặc nằm trên đường găng giao Codex trước (`modelChain: ["codex:…", "gemini-…"]`). Việc lá, giao diện, tài liệu giao Gemini.
-- Duyệt kế hoạch theo cài đặt của người dùng (Settings → "Duyệt kế hoạch của Claude", `planning.requireApproval` / `planning.approvalMinTasks`). Mặc định **không cần duyệt**: giao thẳng rồi báo ngắn gọn. Chỉ tạo đợt nháp chờ duyệt khi cài đặt yêu cầu, hoặc khi việc có rủi ro cao (xoá dữ liệu, đổi kiến trúc lớn).
+- Mọi mục tiêu được chia thành từ 2 task liên quan trở lên phải dùng `hub_create_batch` với `goal`. Khi `planning.requireApproval=false` và không bị yêu cầu chờ duyệt, truyền `dispatch=true` để giao ngay; nếu cần duyệt thì để batch ở trạng thái draft. Task đơn lẻ mới dùng `hub_create_task` với `start=true`. Các task lẻ Claude cũ sẽ được hệ thống tự gom theo phiên trong cửa sổ 30 phút để giữ lịch sử kế hoạch.
 - Hai task cùng sửa một file dùng chung thì cho chạy nối tiếp bằng `dependsOn`. Nếu không thì chốt giao diện chung vào `integration` trước.
 - Mỗi đề bài phải nêu rõ:
   - nhánh gốc (`integration`);
@@ -84,3 +87,9 @@ Không nhắn mỗi lần một task được merge. Gom lại vào bản tóm t
 
 - Quyết định và bài học dài hạn ghi vào sổ kiến thức của dự án (`hub_knowledge`) hoặc vào sổ tay này, qua một task sửa tài liệu.
 - Phiên dài thì để hub tự nén ngữ cảnh. Khi mở phiên mới, đọc lại sổ tay này và các ghi chú đã ghim.
+
+## 8. Quy trình phát hành (Release)
+
+Khi chuẩn bị tạo tag phát hành mới (ví dụ `v*`):
+- Trước khi tạo tag phát hành, **bắt buộc phải kích hoạt `pushNow`** (qua `POST /api/projects/:id/deploy` với `{"pushNow": true}` hoặc lệnh Telegram `/deploy <dự án> push`) để đẩy ngay lập tức các commit từ `integration` sang `main`.
+- **Xác nhận `main == integration`** (cùng trỏ vào commit hash mới nhất) trước khi gắn tag phát hành. Điều này tránh tình trạng tag phát hành trỏ vào commit cũ do cơ chế gom push (`minIntervalMin`) chưa tới hạn đẩy tự động.

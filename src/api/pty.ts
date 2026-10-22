@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import pty from 'node-pty';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket } from 'ws';
@@ -9,6 +10,69 @@ import { AppService, HttpError } from '../services/index.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { CodexEngine } from '../engines/index.js';
 import { accountKey, isProfileLoggedIn } from '../profiles/index.js';
+
+const require = createRequire(import.meta.url);
+
+let spawnHelperChecked = false;
+
+/**
+ * Cấp quyền thực thi (+x) cho các file binary spawn-helper nếu thiếu bit thực thi.
+ */
+export function fixSpawnHelperPermissions(candidates: string[]): void {
+  for (const file of candidates) {
+    if (fs.existsSync(file)) {
+      try {
+        const stat = fs.statSync(file);
+        if ((stat.mode & 0o111) === 0) {
+          fs.chmodSync(file, stat.mode | 0o755);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+/**
+ * Trên macOS, node-pty gọi binary 'spawn-helper' qua posix_spawnp.
+ * Các file prebuild từ npm thường thiếu quyền thực thi (+x), dẫn đến lỗi
+ * 'posix_spawnp failed' / 503 pty_unavailable.
+ *
+ * Chỉ chạy một lần trên darwin; hỗ trợ nhận ptyDir hoặc danh sách đường dẫn phục vụ test.
+ */
+export function ensureSpawnHelperExecutable(target?: string | string[]): void {
+  if (Array.isArray(target)) {
+    fixSpawnHelperPermissions(target);
+    return;
+  }
+  if (typeof target === 'string') {
+    const candidates = [
+      path.join(target, 'build', 'Release', 'spawn-helper'),
+      path.join(target, 'build', 'Debug', 'spawn-helper'),
+      path.join(target, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
+    ];
+    fixSpawnHelperPermissions(candidates);
+    return;
+  }
+
+  if (process.platform !== 'darwin' || spawnHelperChecked) {
+    return;
+  }
+  spawnHelperChecked = true;
+
+  try {
+    const ptyPackageJson = require.resolve('node-pty/package.json');
+    const ptyDir = path.dirname(ptyPackageJson);
+    const candidates = [
+      path.join(ptyDir, 'build', 'Release', 'spawn-helper'),
+      path.join(ptyDir, 'build', 'Debug', 'spawn-helper'),
+      path.join(ptyDir, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
+    ];
+    fixSpawnHelperPermissions(candidates);
+  } catch {
+    // ignore
+  }
+}
 
 interface PtySession {
   id: string;
@@ -20,6 +84,7 @@ interface PtySession {
   loginMenuAnswered?: boolean;
   /** agy đã đăng nhập thì vào thẳng chat; hub phải tự gửi /login để lấy link mới. */
   agyRelogin?: 'waiting_prompt' | 'login_sent';
+  exitDisposable?: { dispose: () => void };
 }
 
 // eslint-disable-next-line no-control-regex -- strips terminal escape sequences
@@ -55,13 +120,19 @@ const BROWSER_OPENERS = [
  * để CLI vẫn coi là mở thành công và tiếp tục chờ mã xác thực.
  * Đặt AGENTHUB_LOGIN_OPEN_BROWSER=1 để bật lại hành vi cũ.
  */
-export function applyNoBrowserEnv(env: Record<string, string>, hubHome: string): void {
+export function applyNoBrowserEnv(env: Record<string, string>, hubHome?: string): void {
   if (process.env.AGENTHUB_LOGIN_OPEN_BROWSER === '1') return;
-  const shimDir = path.join(hubHome, 'no-browser-bin');
-  fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
-  for (const name of BROWSER_OPENERS) {
-    const file = path.join(shimDir, name);
-    if (!fs.existsSync(file)) fs.writeFileSync(file, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const base = hubHome || process.env.AGENTHUB_HOME || path.join(os.tmpdir(), 'agenthub-no-browser');
+  const shimDir = path.join(base, 'no-browser-bin');
+  try {
+    fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
+    for (const name of BROWSER_OPENERS) {
+      const file = path.join(shimDir, name);
+      if (!fs.existsSync(file)) fs.writeFileSync(file, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+  } catch {
+    // Không tạo được shim thì CLI có thể tự mở tab; không được chặn việc đăng nhập.
+    return;
   }
   env.BROWSER = path.join(shimDir, 'xdg-open');
   env.PATH = env.PATH ? `${shimDir}${path.delimiter}${env.PATH}` : shimDir;
@@ -115,13 +186,23 @@ export class PtyManager {
     }
     if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
 
-    const ptyProcess = pty.spawn(command, args, {
-      name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
-      cwd: fs.existsSync(home) ? home : os.homedir(),
-      env,
-    });
+    if (process.platform === 'darwin' && !spawnHelperChecked) {
+      ensureSpawnHelperExecutable();
+    }
+
+    let ptyProcess: pty.IPty;
+    try {
+      ptyProcess = pty.spawn(command, args, {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 24,
+        cwd: fs.existsSync(home) ? home : os.homedir(),
+        env,
+      });
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new HttpError(503, 'pty_unavailable', `Không thể khởi tạo PTY trên ${process.platform}: ${detail}. Kiểm tra binary node-pty/spawn-helper và quyền thực thi.`);
+    }
 
     // Auto-close session after 15 minutes (PLAN 4)
     const timer = setTimeout(() => {
@@ -176,9 +257,10 @@ export class PtyManager {
       }
     });
 
-    ptyProcess.onExit(() => {
+    const exitDisposable = ptyProcess.onExit(() => {
       this.handleProcessExit(sessionId, profileName, home);
     });
+    session.exitDisposable = exitDisposable;
 
     this.sessions.set(sessionId, session);
     this.profileToSession.set(profileName, sessionId);
@@ -199,6 +281,8 @@ export class PtyManager {
     }
     this.emailRefreshTimers.clear();
     for (const sessionId of [...this.sessions.keys()]) {
+      const session = this.sessions.get(sessionId);
+      session?.exitDisposable?.dispose();
       this.closeSession(sessionId, 1001, 'Going Away');
     }
   }
@@ -207,28 +291,43 @@ export class PtyManager {
     return this.sessions.get(sessionId);
   }
 
-  private scheduleEmailRefresh(profileName: string): void {
-    if (this.stopped) return;
-    const profile = this.service.profileRepo.get(profileName);
-    if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
-      this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);
-    }
-    this.service.refreshProfileEmail(profileName);
+  private isDatabaseOpen(): boolean {
+    const db = this.service.scheduler.getDatabase();
+    return db ? db.open : true;
+  }
 
-    const timer = setTimeout(() => {
-      this.emailRefreshTimers.delete(timer);
+  private scheduleEmailRefresh(profileName: string): void {
+    if (this.stopped || !this.isDatabaseOpen()) return;
+    try {
+      const profile = this.service.profileRepo.get(profileName);
+      if (profile && profile.authState === 'not_logged_in' && isProfileLoggedIn(profile)) {
+        this.service.profileRepo.updateAuthState(profileName, 'ok', null, null);
+      }
       this.service.refreshProfileEmail(profileName);
-      // Đăng nhập agy qua terminal xong thì lấy luôn ảnh Google (DEC-007), không đợi bấm Làm mới.
-      if (profile?.engine === 'agy') void this.service.syncAgyAvatarFromToken(profileName).catch(() => null);
-    }, 2000);
-    timer.unref?.();
-    this.emailRefreshTimers.add(timer);
+
+      const timer = setTimeout(() => {
+        this.emailRefreshTimers.delete(timer);
+        if (this.stopped || !this.isDatabaseOpen()) return;
+        try {
+          this.service.refreshProfileEmail(profileName);
+          // Đăng nhập agy qua terminal xong thì lấy luôn ảnh Google (DEC-007), không đợi bấm Làm mới.
+          if (profile?.engine === 'agy') void this.service.syncAgyAvatarFromToken(profileName).catch(() => null);
+        } catch {
+          // Database connection may have closed
+        }
+      }, 2000);
+      timer.unref?.();
+      this.emailRefreshTimers.add(timer);
+    } catch {
+      // Database connection may have closed
+    }
   }
 
   closeSession(sessionId: string, closeCode = 1000, closeReason = 'Session closed'): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
+    session.exitDisposable?.dispose();
     clearTimeout(session.timer);
     try {
       session.process.kill();
@@ -253,8 +352,10 @@ export class PtyManager {
   }
 
   private handleProcessExit(sessionId: string, profileName: string, _home: string): void {
+    if (this.stopped) return;
     const session = this.sessions.get(sessionId);
     if (session) {
+      session.exitDisposable?.dispose();
       clearTimeout(session.timer);
       for (const socket of session.sockets) {
         try {
@@ -267,20 +368,26 @@ export class PtyManager {
       this.profileToSession.delete(profileName);
     }
 
-    this.scheduleEmailRefresh(profileName);
+    if (!this.isDatabaseOpen()) return;
 
-    const profile = this.service.profileRepo.get(profileName);
-    const dupes = this.service.coreProfileService.getDuplicateEmails();
-    const duplicateWarning = profile ? dupes.has(accountKey(profile) || '') : false;
+    try {
+      this.scheduleEmailRefresh(profileName);
 
-    this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
-      name: profileName,
-      email: profile?.email || null,
-      duplicateWarning,
-    });
+      const profile = this.service.profileRepo.get(profileName);
+      const dupes = this.service.coreProfileService.getDuplicateEmails();
+      const duplicateWarning = profile ? dupes.has(accountKey(profile) || '') : false;
 
-    // Move waiting_quota tasks to queued
-    this.service.scheduler.wakeWaitingQuotaTasks('profile_login');
+      this.service.scheduler.getEventBus().emit('profile.updated', undefined, {
+        name: profileName,
+        email: profile?.email || null,
+        duplicateWarning,
+      });
+
+      // Move waiting_quota tasks to queued
+      this.service.scheduler.wakeWaitingQuotaTasks('profile_login');
+    } catch {
+      // Database connection may have closed during process exit
+    }
   }
 
   attachSocket(sessionId: string, socket: WebSocket): void {

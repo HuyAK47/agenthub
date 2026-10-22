@@ -36,6 +36,16 @@ describe('Profile import from ~/.agy-homes', () => {
     profileService = new ProfileService(config, profileRepo, quotaMarkRepo);
   });
 
+  it('reports quota transitions only for a new mark or a reset extension over ten minutes', () => {
+    const now = Math.floor(Date.now() / 1000);
+    profileRepo.upsert({ name: 'profile', engine: 'agy', kind: 'isolated', home: null, email: null, enabled: 1 });
+    expect(quotaMarkRepo.mark('profile', 'claude', now + 3600)).toBe(true);
+    for (let i = 1; i < 20; i += 1) {
+      expect(quotaMarkRepo.mark('profile', 'claude', now + 3600 + i * 30)).toBe(false);
+    }
+    expect(quotaMarkRepo.mark('profile', 'claude', now + 3600 + 21 * 60)).toBe(true);
+  });
+
   it('reads Claude oauthAccount metadata and login state without accepting legacy files', () => {
     const home = path.join(config.hubHome, 'claude-homes', 'alice');
     fs.mkdirSync(home, { recursive: true });
@@ -50,7 +60,7 @@ describe('Profile import from ~/.agy-homes', () => {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(home, '.claude', 'config.json'), JSON.stringify({ email: 'wrong@example.com' }));
 
-    expect(profileService.readClaudeAccount(home)).toEqual({ email: 'alice@example.com', plan: 'max' });
+    expect(profileService.readClaudeAccount(home)).toEqual({ email: 'alice@example.com', plan: 'max', planId: 'max' });
     profileRepo.upsert({ name: 'alice', engine: 'claude', kind: 'isolated', home, email: null, enabled: 1 });
     expect(isProfileLoggedIn(profileRepo.get('alice')!)).toBe(true);
   });

@@ -11,6 +11,7 @@ import {
   ProfileRepo,
   ProjectRepo,
   RunRow,
+  RunMetricsRow,
 } from './db/index.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { getModelFamily } from './quota/index.js';
@@ -163,29 +164,34 @@ export async function recalculateTaskLines(
     return null;
   }
 
-  const runs = runRepo.getByTask(taskId);
-  const targetRun = runs[runs.length - 1];
-  if (targetRun) {
-    const existing = runMetricsRepo.get(targetRun.id);
-    if (existing) {
-      runMetricsRepo.updateLines(targetRun.id, stats.linesAdded, stats.linesDeleted, stats.filesChanged);
-    } else {
-      runMetricsRepo.upsert({
-        runId: targetRun.id,
-        taskId: task.id,
-        engine: targetRun.engine,
-        model: targetRun.model,
-        profileName: targetRun.profileName,
-        tokensUsed: null,
-        usageBefore: null,
-        usageAfter: null,
-        linesAdded: stats.linesAdded,
-        linesDeleted: stats.linesDeleted,
-        filesChanged: stats.filesChanged,
-        durationMs: null,
-      });
+  try {
+    const runs = runRepo.getByTask(taskId);
+    const targetRun = runs[runs.length - 1];
+    if (targetRun) {
+      const existing = runMetricsRepo.get(targetRun.id);
+      if (existing) {
+        runMetricsRepo.updateLines(targetRun.id, stats.linesAdded, stats.linesDeleted, stats.filesChanged);
+      } else {
+        runMetricsRepo.upsert({
+          runId: targetRun.id,
+          taskId: task.id,
+          engine: targetRun.engine,
+          model: targetRun.model,
+          profileName: targetRun.profileName,
+          tokensUsed: null,
+          usageBefore: null,
+          usageAfter: null,
+          linesAdded: stats.linesAdded,
+          linesDeleted: stats.linesDeleted,
+          filesChanged: stats.filesChanged,
+          durationMs: null,
+        });
+      }
+      runMetricsRepo.clearOtherRunsLines(taskId, targetRun.id);
     }
-    runMetricsRepo.clearOtherRunsLines(taskId, targetRun.id);
+  } catch (error) {
+    console.warn('[savings] recalculateTaskLines failed:', error);
+    return null;
   }
 
   return stats;
@@ -325,9 +331,29 @@ export class SavingsService {
    * Generates the savings report, optionally filtered by project and date.
    */
   getSavings(query?: { project?: string; since?: string }): SavingsReport {
-    // One pass over all runs for concurrency estimates (avoids re-reading every run per run).
-    const allRunsForConcurrency = this.taskRepo.getAll().flatMap((t) => this.runRepo.getByTask(t.id));
-    let tasks = this.taskRepo.getAll();
+    // Load each history table once. The savings endpoint is a dashboard hot path and
+    // repeatedly querying runs/metrics/reviews per task becomes quadratic at scale.
+    const allTasks = this.taskRepo.getAll();
+    const allRunsForConcurrency = this.runRepo.getAll();
+    const runsByTask = new Map<string, RunRow[]>();
+    for (const run of allRunsForConcurrency) {
+      const runs = runsByTask.get(run.taskId) || [];
+      runs.push(run);
+      runsByTask.set(run.taskId, runs);
+    }
+    const metricsByTask = new Map<string, RunMetricsRow[]>();
+    for (const metric of this.runMetricsRepo.getAll()) {
+      const metrics = metricsByTask.get(metric.taskId) || [];
+      metrics.push(metric);
+      metricsByTask.set(metric.taskId, metrics);
+    }
+    const reviewsByTask = new Map<string, ReturnType<ReviewRepo['getAll']>>();
+    for (const review of this.reviewRepo.getAll()) {
+      const reviews = reviewsByTask.get(review.taskId) || [];
+      reviews.push(review);
+      reviewsByTask.set(review.taskId, reviews);
+    }
+    let tasks = allTasks;
     if (query?.project) {
       tasks = tasks.filter((t) => t.projectId === query.project);
     }
@@ -365,9 +391,9 @@ export class SavingsService {
     const byDayMap: Map<string, { geminiTokens: number; codexTokens: number }> = new Map();
 
     for (const task of tasks) {
-      const runs = this.runRepo.getByTask(task.id);
-      const metricsList = this.runMetricsRepo.getByTask(task.id);
-      const reviews = this.reviewRepo.getByTask(task.id);
+      const runs = runsByTask.get(task.id) || [];
+      const metricsList = metricsByTask.get(task.id) || [];
+      const reviews = reviewsByTask.get(task.id) || [];
       const reviewRounds = reviews.filter((r) => r.verdict === 'changes_requested').length;
 
       let taskTokens = 0;

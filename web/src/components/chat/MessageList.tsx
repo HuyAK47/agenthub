@@ -19,6 +19,7 @@ export interface MessageListProps {
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
   onRetryMessage?: (message: ChatMessage) => void;
+  onEditMessage?: (message: ChatMessage) => void;
   onNewSession?: () => void;
   className?: string;
 }
@@ -35,6 +36,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   isLoadingMore = false,
   onLoadMore,
   onRetryMessage,
+  onEditMessage,
   onNewSession,
   className = '',
 }) => {
@@ -244,7 +246,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             className="flex items-center justify-center gap-2 py-3 text-xs text-[var(--text-muted)] animate-pulse"
           >
             <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--t-accent)]" />
-            <span>Đang tải thêm tin nhắn cũ…</span>
+            <span>{t('extra.loadingOlderMessages')}</span>
           </div>
         )}
 
@@ -329,6 +331,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                         ? () => onRetryMessage(msg)
                         : undefined
                     }
+                    onEdit={msg.role === 'user' && onEditMessage ? () => onEditMessage(msg) : undefined}
                   />
                 </div>
               );

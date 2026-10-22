@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ProfileRow } from '../db/index.js';
 import { LIMITED_TEST_ENV, lowPriority } from '../priority.js';
 import { workerEnvironment } from '../worker-guard.js';
+import { lockCommand } from '../profiles/locks.js';
 
 export interface SpawnOpts {
   profile: ProfileRow;
@@ -20,6 +21,8 @@ export interface SpawnOpts {
   hubHome?: string;
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null };
+  codexSandbox?: 'off' | 'workspace-write';
+  workerCount?: number;
 }
 
 export interface QuotaDetection {
@@ -144,12 +147,11 @@ export class AgyEngine implements Engine {
       workerEnvironment(
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         env,
-        { gitHooks: opts.gitHooks, project: opts.project },
+        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount },
       ),
     );
     const [agyExe, agyArgs] = lowPriority(this.agyPath, args);
-    const command = opts.lockFile ? ['-n', opts.lockFile, agyExe, ...agyArgs] : agyArgs;
-    const executable = opts.lockFile ? 'flock' : agyExe;
+    const [executable, command] = opts.lockFile ? lockCommand(opts.lockFile, [agyExe, ...agyArgs]) : [agyExe, agyArgs];
     const child = spawn(executable, command, {
       cwd: opts.cwd,
       env,
@@ -202,9 +204,11 @@ export class CodexEngine implements Engine {
   id = 'codex' as const;
 
   private codexPath: string | null;
+  private codexSandbox: 'off' | 'workspace-write';
 
-  constructor(codexPath?: string) {
+  constructor(codexPath?: string, codexSandbox: 'off' | 'workspace-write' = 'off') {
     this.codexPath = codexPath || null;
+    this.codexSandbox = codexSandbox;
   }
 
   static findCodexPath(): string | null {
@@ -258,8 +262,11 @@ export class CodexEngine implements Engine {
       opts.cwd,
       opts.prompt,
     ];
+    const sandboxMode = opts.codexSandbox ?? this.codexSandbox;
     if (opts.readOnly) {
       args.splice(2, 0, '--sandbox', 'read-only');
+    } else if (sandboxMode === 'workspace-write') {
+      args.splice(2, 0, '--sandbox', 'workspace-write');
     } else {
       args.splice(2, 0, '--dangerously-bypass-approvals-and-sandbox');
     }
@@ -287,13 +294,12 @@ export class CodexEngine implements Engine {
       workerEnvironment(
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         env,
-        { gitHooks: opts.gitHooks, project: opts.project },
+        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount },
       ),
     );
 
     const [codexExe, codexArgs] = lowPriority(codexPath, args);
-    const command = opts.lockFile ? ['-n', opts.lockFile, codexExe, ...codexArgs] : codexArgs;
-    const executable = opts.lockFile ? 'flock' : codexExe;
+    const [executable, command] = opts.lockFile ? lockCommand(opts.lockFile, [codexExe, ...codexArgs]) : [codexExe, codexArgs];
     const child = spawn(executable, command, {
       cwd: opts.cwd,
       env,
@@ -370,6 +376,16 @@ export class FakeEngine implements Engine {
       FAKE_OUTPUT_PATH: opts.outputPath || '',
       ...(opts.env || {}),
     };
+    if (opts.hubHome || opts.project) {
+      Object.assign(
+        env,
+        workerEnvironment(
+          opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+          env,
+          { gitHooks: opts.gitHooks, project: opts.project, workerCount: opts.workerCount },
+        ),
+      );
+    }
 
     const command = process.env.FAKE_MODE === 'reviewer-error' ? '/definitely-missing-agenthub-fixture' : process.execPath;
     const args = command === process.execPath ? [this.scriptPath] : [];
@@ -378,8 +394,7 @@ export class FakeEngine implements Engine {
     if (opts.lockFile) {
       try { fs.mkdirSync(path.dirname(opts.lockFile), { recursive: true }); } catch { /* ignore */ }
     }
-    const executable = useFlock ? 'flock' : command;
-    const spawnArgs = useFlock ? ['-n', opts.lockFile!, command, ...args] : args;
+    const [executable, spawnArgs] = useFlock ? lockCommand(opts.lockFile!, [command, ...args]) : [command, args];
 
     const child = spawn(executable, spawnArgs, {
       cwd: opts.cwd,

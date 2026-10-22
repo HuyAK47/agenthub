@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { BrainStatus, BrainActivity, ClaudeQuota } from '../types/api';
 import { AlertCircle, ExternalLink } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { formatReset } from '../lib/time';
 
 export const BRAIN_ACTIVITY_LABELS: Record<BrainActivity, string> = {
   planning: 'extra.brainPlanning', dispatching: 'extra.brainDispatching', reviewing: 'extra.brainReviewing', merging: 'extra.brainMerging',
@@ -30,15 +31,16 @@ export function formatMinutesAgo(updatedAt?: string, now = Date.now(), translate
 export interface BrainCardProps {
   brain?: BrainStatus | null;
   quota?: ClaudeQuota | null;
+  onRetryLimit?: () => void;
 }
 
-export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
-  const { t } = useLocale();
+export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit }) => {
+  const { t, locale } = useLocale();
   const [, setTick] = useState(0);
 
   // Re-render periodically to update the relative-time label.
   useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), 30000);
+    const timer = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(timer);
   }, []);
 
@@ -50,9 +52,8 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
   const activityLabel = t(BRAIN_ACTIVITY_LABELS[brain.activity] || 'extra.brainIdle');
   const timeAgoText = formatMinutesAgo(brain.updatedAt, Date.now(), t);
   const routeId = brain.taskId ? brain.taskId.replace('/', '~') : null;
-  const resetSeconds = quota?.resetsAt ? Math.max(0, quota.resetsAt - Math.floor(Date.now() / 1000)) : 0;
   const quotaLimited = quota?.limited ?? (!!quota?.status && !/^allowed(?:$|[_-])/i.test(quota.status));
-  const stateLabel = (state: string) => state === 'waiting' ? 'chờ bạn trả lời' : state === 'working' ? 'đang làm' : 'không hoạt động';
+  const stateLabel = (state: string) => state === 'waiting' ? t('extra.brainStateWaiting') : state === 'working' ? t('extra.brainStateWorking') : t('extra.brainStateIdle');
 
   return (
     <div
@@ -78,7 +79,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
             <div className="flex items-center gap-2 flex-wrap">
               <span
                 className="text-xs font-semibold uppercase tracking-wider select-none"
-                style={{ color: '#d97757' }}
+                style={{ color: 'var(--t-claude)' }}
               >
                 {t('extra.coordinator')}
               </span>
@@ -139,16 +140,17 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota }) => {
       {quota && <div className="mt-4 pt-3 border-t border-[var(--t-border)] text-xs flex items-center justify-between gap-3">
         <span className="text-[var(--t-text-2)]">{t('extra.claudeQuota')}</span>
         <span className={quotaLimited ? 'text-[var(--t-crit)]' : 'text-[var(--t-ok)]'}>
-          {quota.status || t('extra.unknown')} {resetSeconds > 0 && `· ${Math.floor(resetSeconds / 3600)}h ${Math.floor((resetSeconds % 3600) / 60)}m`}
+          {quota.status === 'allowed' ? t('extra.claudeQuotaAvailable') : quota.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : quotaLimited ? t('extra.claudeQuotaRejected') : (quota.status || t('extra.unknown'))} {quota.resetsAt && `· ${formatReset(quota.resetsAt, Date.now(), locale)}`}
         </span>
       </div>}
+      {brain.state === 'waiting' && onRetryLimit && <button type="button" onClick={onRetryLimit} className="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-warn)]/15 text-[var(--t-warn)] border border-[var(--t-warn)]/30">{t('extra.retryLimit')}</button>}
       {brain.sessions && brain.sessions.length > 0 && <div className="mt-4 pt-3 border-t border-[var(--t-border)] space-y-2" data-testid="brain-sessions">
         {brain.sessions.map((session) => <div key={session.sessionId} className="text-xs text-[var(--text-secondary)]">
           <a href={session.link} className="font-medium text-[var(--t-accent)] hover:underline">{session.title}</a>
           <span className="ml-2">· {stateLabel(session.state)}</span>
-          {session.lastUserRequest && <div className="truncate" title={session.lastUserRequest}>Yêu cầu: {session.lastUserRequest}</div>}
-          {session.lastTool && <div className="truncate">Tool: {session.lastTool.name}{session.lastTool.summary ? ` — ${session.lastTool.summary}` : ''}</div>}
-          {session.tokens5h != null && <div>Token 5h: {Math.round(session.tokens5h).toLocaleString()}</div>}
+          {session.lastUserRequest && <div className="truncate" title={session.lastUserRequest}>{t('extra.requestLabel')}: {session.lastUserRequest}</div>}
+          {session.lastTool && <div className="truncate">{t('extra.toolLabel')}: {session.lastTool.name}{session.lastTool.summary ? ` — ${session.lastTool.summary}` : ''}</div>}
+          {session.tokens5h != null && <div>{t('extra.token')} 5h: {Math.round(session.tokens5h).toLocaleString()}</div>}
         </div>)}
       </div>}
     </div>

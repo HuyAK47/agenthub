@@ -19,8 +19,27 @@ function loadBrainPlaybook(): string {
   return 'BRAIN-PLAYBOOK không có sẵn; chỉ điều phối qua MCP, review trước merge và hỏi người dùng khi có rủi ro.';
 }
 
+function loadAssistantPlaybook(): string {
+  const candidates = [
+    path.resolve(path.dirname(new URL('.', import.meta.url).pathname), '../../docs/ASSISTANT-PLAYBOOK.md'),
+    path.resolve(process.env.AGENTHUB_INSTALL_DIR || '', 'docs/ASSISTANT-PLAYBOOK.md'),
+  ];
+  for (const candidate of candidates) {
+    try { if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf8'); } catch { /* optional */ }
+  }
+  return 'Trả lời ngắn bằng tiếng Việt; đọc dữ liệu thật trước khi kết luận; việc duyệt/merge thuộc về bộ não.';
+}
+
 export const BRAIN_PROMPT =
   'Bạn là Claude, bộ não điều phối của AgentHub. Người dùng chat với bạn qua dashboard. Dùng trực tiếp các tool mcp__agenthub__hub_status, mcp__agenthub__hub_projects, mcp__agenthub__hub_register_project, mcp__agenthub__hub_profiles, mcp__agenthub__hub_create_task, mcp__agenthub__hub_update_task, mcp__agenthub__hub_create_batch, mcp__agenthub__hub_batch, mcp__agenthub__hub_dispatch_batch, mcp__agenthub__hub_tasks, mcp__agenthub__hub_task, mcp__agenthub__hub_task_log, mcp__agenthub__hub_review, mcp__agenthub__hub_retry, mcp__agenthub__hub_cancel, mcp__agenthub__hub_wait, mcp__agenthub__hub_mark_quota, mcp__agenthub__hub_git (git status/log/diff/show an toàn); không cần tìm tool. Số % trong hub_profiles là phần CÒN LẠI. Ảnh chụp hub ở trên là mới nhất; KHÔNG gọi lại hub_status/hub_projects/hub_tasks/git log để tìm hiểu lại trừ khi cần chi tiết cụ thể. Trước khi khám phá nhiều bước, viết 1–2 câu cho người dùng biết bạn sẽ làm gì; sau mỗi khoảng 5 tool call, viết 1 câu báo tiến độ. {{PLANNING_RULE}}Trả lời ngắn gọn bằng tiếng Việt. Không tự viết code tính năng: hãy chia việc thành task nhỏ cho worker (Gemini/Codex) qua hub_create_task hoặc hub_create_batch, sau đó review.' + `\n\nSỔ TAY BRAIN-PLAYBOOK:\n${loadBrainPlaybook()}`;
+
+export const ASSISTANT_PROMPT =
+  'Bạn là Trợ lý AgentHub, chuyên trả lời người dùng nhanh bằng tiếng Việt. Đọc dữ liệu thật trước khi trả lời tiến độ, không bịa. Trước khi làm bất cứ điều gì dựa trên lịch sử hội thoại, hãy đọc trạng thái hiện tại bằng hub_status, hub_tasks và hub_git (chỉ đọc); không lặp lại thao tác cũ nếu người dùng chưa yêu cầu lại. Nếu người dùng chỉ hỏi tình hình, chỉ trả lời tình hình. Bạn có thể xem trạng thái và tạo/cập nhật task nháp hoặc queued, retry/cancel/pause/resume, và gửi thông báo; nếu tạo từ 2 task liên quan trở lên phải dùng hub_create_batch với goal. Không duyệt, merge hoặc dispatch thay bộ não; nếu cần quyết định duyệt/merge thì nói rõ và dùng hub_ask_brain. Các thay đổi cách làm của bộ não phải ghi bằng hub_brain_directive. Khi phiên dài, hãy compact hoặc mở phiên mới và giữ tóm tắt cần thiết. {{PLAYBOOK}}';
+
+export function buildAssistantPrompt(projectKnowledge?: string): string {
+  const knowledge = projectKnowledge ? `\n\n${projectKnowledge}` : '';
+  return ASSISTANT_PROMPT.replace('{{PLAYBOOK}}', `\n\nSỔ TAY ASSISTANT-PLAYBOOK:\n${loadAssistantPlaybook()}${knowledge}`);
+}
 
 /** Planning rule follows the user's approval setting (Settings → Kế hoạch). */
 export function planningRule(planning?: { requireApproval?: boolean; approvalMinTasks?: number }): string {
@@ -31,7 +50,7 @@ export function planningRule(planning?: { requireApproval?: boolean; approvalMin
   if (min > 0) {
     return `Kế hoạch từ ${min} task trở lên: dùng hub_create_batch (đợt nháp) và chờ người dùng duyệt, trừ khi họ bảo giao ngay; kế hoạch nhỏ hơn thì giao thẳng (hub_create_task với start=true). `;
   }
-  return 'Người dùng không cần duyệt kế hoạch: giao thẳng các task (hub_create_task với start=true hoặc hub_create_batch rồi hub_dispatch_batch ngay), sau đó báo ngắn gọn đã giao những gì. ';
+  return 'Người dùng không cần duyệt kế hoạch: mọi lần tạo từ 2 task liên quan trở lên bắt buộc dùng hub_create_batch với goal và dispatch=true; chỉ task đơn lẻ mới dùng hub_create_task với start=true. Sau đó báo ngắn gọn đã giao những gì. ';
 }
 
 export function buildBrainPrompt(planning?: { requireApproval?: boolean; approvalMinTasks?: number }): string {
@@ -251,7 +270,7 @@ export function chatMcpConfigPath(hubHome?: string, sessionId?: string): string 
   return path.join(targetHome, `chat-mcp${suffix}.json`);
 }
 
-export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number, projectId?: string | null): string {
+export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?: number, permissionTimeoutSec?: number, projectId?: string | null, kind?: string): string {
   const targetHome = hubHome || path.join(os.homedir(), '.agenthub');
   const mcpConfigFile = chatMcpConfigPath(targetHome, sessionId);
 
@@ -271,6 +290,7 @@ export function ensureChatMcpConfig(hubHome?: string, sessionId?: string, port?:
         env: {
           ...(sessionId ? { AGENTHUB_CHAT_SESSION_ID: sessionId } : {}),
           ...(projectId ? { AGENTHUB_MCP_PROJECT: projectId } : {}),
+          ...(kind ? { AGENTHUB_CHAT_KIND: kind } : {}),
           AGENTHUB_PORT: String(port || process.env.AGENTHUB_PORT || 7700),
           AGENTHUB_PERMISSION_TIMEOUT_SEC: String(permissionTimeoutSec || process.env.AGENTHUB_PERMISSION_TIMEOUT_SEC || 600),
         },
@@ -293,6 +313,7 @@ export interface BuildClaudeArgsOptions {
   model?: string | null;
   hubSnapshot?: string;
   planning?: { requireApproval?: boolean; approvalMinTasks?: number };
+  systemPrompt?: string;
 }
 
 export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
@@ -315,7 +336,7 @@ export function buildClaudeArgs(opts: BuildClaudeArgsOptions): string[] {
 
   if (opts.model) args.push('--model', opts.model);
 
-  args.push('--append-system-prompt', buildBrainPrompt(opts.planning));
+  args.push('--append-system-prompt', opts.systemPrompt || buildBrainPrompt(opts.planning));
   if (opts.hubSnapshot) args.push('--append-system-prompt', opts.hubSnapshot);
   args.push('--mcp-config', opts.mcpConfigPath);
 
@@ -340,7 +361,7 @@ export function spawnClaude(
   args: string[],
   cwd: string,
   stdinText?: string,
-  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number; claudeConfigDir?: string; env?: Record<string, string> } = {},
+  options: { disableToolSearch?: boolean; chatSessionId?: string; port?: number; claudeConfigDir?: string; chatKind?: string; env?: Record<string, string> } = {},
 ): ChildProcess {
   const child = spawn(claudeBin, args, {
     cwd,
@@ -350,6 +371,7 @@ export function spawnClaude(
       ...(options.claudeConfigDir ? { CLAUDE_CONFIG_DIR: options.claudeConfigDir } : {}),
       ...(options.disableToolSearch !== false ? { ENABLE_TOOL_SEARCH: 'false' } : {}),
       ...(options.chatSessionId ? { AGENTHUB_CHAT_SESSION_ID: options.chatSessionId } : {}),
+      ...(options.chatKind ? { AGENTHUB_CHAT_KIND: options.chatKind } : {}),
       ...(options.port ? { AGENTHUB_PORT: String(options.port) } : {}),
       ...(options.env || {}),
     },

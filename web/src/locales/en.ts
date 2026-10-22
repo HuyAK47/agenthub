@@ -6,7 +6,7 @@ export const en: typeof vi = {
     tasks: 'Tasks',
     profiles: 'Profiles',
     projects: 'Projects',
-    plans: 'Plan review',
+    plans: 'Plans',
     settings: 'Settings',
     toggleTheme: 'Toggle theme',
     language: 'Language',
@@ -23,6 +23,8 @@ export const en: typeof vi = {
     loading: 'Loading...',
     retry: 'Retry',
     confirm: 'Confirm',
+    yes: 'Yes',
+    no: 'No',
     empty: 'Empty',
     details: 'Details',
     view: 'View',
@@ -93,7 +95,8 @@ export const en: typeof vi = {
     loadNormal: 'Load normal',
     overlapWarningTitle: 'File Overlap Warnings',
     overlapWarningDesc: 'There are {count} file overlap warnings among running tasks:',
-    brains: 'Brains', brainMode: 'Mode', brainStatewaiting_limit: 'waiting for quota reset', brainStatewaiting_permission: 'waiting for your permission', brainMode_off: 'off', brainMode_suggest: 'suggest', brainMode_auto: 'auto', brainMode_external: 'external Claude', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
+    brains: 'Brains', assistant: 'Assistant', assistantWorking: 'answering', assistantReady: 'ready', openAssistantChat: 'Open assistant', brainMode: 'Mode', brainStatewaiting_limit: 'waiting for quota reset', brainStatewaiting_permission: 'waiting for your permission', brainMode_off: 'off', brainMode_suggest: 'suggest', brainMode_auto: 'auto', brainMode_external: 'external Claude', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
+    ciCardTitle: 'CI', ciCardSubtitle: 'Latest GitHub Actions CI status', ciCardNoData: 'No CI data recorded', ciPassed: 'Passed', ciFailed: 'Failed', ciRunning: 'Running',
   },
   tasks: {
     title: 'Task Management',
@@ -130,28 +133,33 @@ export const en: typeof vi = {
     allStatuses: 'All statuses',
   },
   plans: {
-    title: 'Plan review',
-    subtitle: 'Claude groups proposed tasks into draft batches. Review, edit, and click Dispatch batch for workers to start.',
+    title: 'Plans',
+    subtitle: 'View Claude task batches, progress, and dependency graphs.',
     batchList: 'Batch List',
-    noBatches: 'No plan batches yet',
+    noBatches: 'No plans yet',
     selectBatch: 'Select a batch to view details',
     selectBatchHint: 'Select a batch from the list on the left to start reviewing.',
-    emptyWhenTitle: 'When draft batches appear:',
-    emptyWhenDesc: '/plan command on Telegram / chat, or when settings require approval.',
+    emptyWhenTitle: 'When will plans appear?',
+    emptyWhenDesc: 'When Claude splits a request into multiple tasks, the plan will appear here.',
     emptyCurrentSetting: 'Current setting:',
-    settingNone: 'Claude currently dispatches work immediately without approval',
+    settingNone: 'Claude dispatches work immediately without approval',
     settingMinTasks: 'Plans with {count} or more tasks require approval',
     settingAll: 'All tasks require approval',
-    settingsLink: 'Settings (Plan review)',
+    settingsLink: 'Plan settings',
     stepsTitle: '3 steps:',
     step1: 'Select batch',
     step2: 'Edit or remove tasks',
     step3: 'Dispatch batch',
     allProjects: 'All projects',
     allStatuses: 'All statuses',
-    draft: 'Draft',
+    draft: 'Draft pending approval',
     dispatched: 'Dispatched',
     discarded: 'Discarded',
+    working: 'In progress',
+    completed: 'Completed',
+    failed: 'Has errors',
+    progress: '{done}/{total} done',
+    auto: 'Automatic',
     dispatchBatch: 'Dispatch batch',
     discardBatch: 'Discard batch',
     addTask: 'Add task',
@@ -324,6 +332,21 @@ export const en: typeof vi = {
     quotaUsage: '{five} · {week}',
     week: 'week',
     noQuotaData: 'No quota data',
+    wakeupBtn: 'Wake up quota',
+    wakeupTip: 'Send a tiny prompt so the 5-hour quota window starts now and resets sooner',
+    wakeupStarted: 'Waking up {name}…',
+    wakeupDone: 'Woke up {name}',
+    wakeupFailed: 'Could not wake up {name}',
+    wakeupSkipped: 'Skipped {name}',
+    wakeupStartedHint: 'Sending a tiny prompt…',
+    checkOkTitle: 'Check passed for {name}',
+    checkFailTitle: 'Check failed for {name}',
+    loginOpenFailed: 'Could not open the login terminal',
+    importCheckingHint: 'Verifying with the CLI…',
+    planAll: 'All',
+    planUnknown: 'Unknown plan',
+    planFilterAria: 'Filter by account plan',
+    noCodexQuotaYet: 'Available after the first Codex run',
     multiplePersonalWarning: 'Multiple personal accounts for this provider may violate provider terms and share quota.',
     emptyProvider: 'No {provider} accounts.',
     addDescription: 'Choose a provider and open its login wizard.',
@@ -385,6 +408,9 @@ export const en: typeof vi = {
     authMethod: 'Authentication Method',
     tabTerminalLogin: 'Terminal Login',
     tabImportCockpit: 'Import Refresh Token',
+    tabImportCodex: 'Import tokens (JSON)',
+    codexImportDesc: 'Paste Codex accounts as JSON (id_token, access_token, refresh_token, email…) or the contents of auth.json. The hub writes auth.json for each profile and verifies it with the Codex CLI; accounts with an existing email get their token updated.',
+    codexJsonPlaceholder: '[\n  {\n    \"email\": \"user@example.com\",\n    \"id_token\": \"eyJ...\",\n    \"access_token\": \"eyJ...\",\n    \"refresh_token\": \"rt_...\",\n    \"account_id\": \"...\",\n    \"type\": \"codex\"\n  }\n]',
     cockpitImportDesc: 'Paste the account list exported from Cockpit tools (JSON with email and refresh_token). Tokens are verified with Google before saving; accounts with an existing email get their token updated instead of a new profile.',
     cockpitJsonPlaceholder: '[\n  {\n    "email": "user@gmail.com",\n    "refresh_token": "1//..."\n  }\n]',
     importTokensBtn: 'Import Accounts',
@@ -395,6 +421,7 @@ export const en: typeof vi = {
     cockpitJsonRequired: 'Please paste the JSON containing refresh tokens.',
     importFailed: 'Could not import accounts.',
     importBack: 'Edit data',
+    enableMultipleAndRetry: 'Enable and retry',
     tokenLogin: 'Sign in with refresh token',
     tokenLoginShort: 'Use token',
     tokenLoginTitle: 'Sign in {name} with a refresh token',
@@ -402,7 +429,7 @@ export const en: typeof vi = {
     tokenLoginRequired: 'Please enter the email and refresh token.',
     tokenLoginBtn: 'Sign in',
     tokenLoginVerifying: 'Verifying token…',
-    tokenLoginSuccess: 'Saved the token for {name} ({email}), checking with agy…',
+    tokenLoginSuccess: 'Saved the token for {name}',
     refreshDone: 'Refreshed {name}',
     refreshFailed: 'Refresh failed',
     toggledOn: 'Enabled profile {name}',
@@ -417,6 +444,361 @@ export const en: typeof vi = {
     accountNameRequired: 'Please enter an account name.',
     creating: 'Creating…',
   },
+  tour: { help: 'Page guide', replay: 'Replay guide', close: 'Close guide', step: 'Step {current}/{total}', stepCount: '{count} steps', previous: 'Back', next: 'Next', skip: 'Skip', finish: 'Finish', panelTitle: 'Help center', panelDescription: 'Find tours and short guides for each page.', search: 'Search guides…', noResults: 'No matching guide found.', restartCurrent: 'Restart this tour', steps: {
+  "intro": {
+    "overview": {
+      "title": "Overview",
+      "content": "This is overview. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "connection": {
+      "title": "Connection",
+      "content": "This is connection. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "resources": {
+      "title": "Machine load and disk",
+      "content": "This is machine load and disk. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain": {
+      "title": "Brain",
+      "content": "This is brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "assistant": {
+      "title": "Assistant",
+      "content": "This is assistant. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "projects": {
+      "title": "Project",
+      "content": "This is project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "tasks": {
+      "title": "Task",
+      "content": "This is task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "queue": {
+      "title": "Queue",
+      "content": "This is queue. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "plans": {
+      "title": "Plans",
+      "content": "This is plans. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "lifecycle": {
+      "title": "Task lifecycle",
+      "content": "This is task lifecycle. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "profiles": {
+      "title": "Accounts",
+      "content": "This is accounts. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "settings": {
+      "title": "System settings",
+      "content": "This is system settings. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "setup": {
+      "title": "Setup",
+      "content": "This is setup. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-dashboard": {
+    "overview": {
+      "title": "Overview",
+      "content": "This is overview. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "resources": {
+      "title": "Resources",
+      "content": "This is resources. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain": {
+      "title": "Brain",
+      "content": "This is brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "quotas": {
+      "title": "Provider quota",
+      "content": "This is provider quota. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "performance": {
+      "title": "Performance",
+      "content": "This is CPU/RSS grouped by process (daemon, worker, test, build…) with one-hour history. Use it to spot resource-heavy groups or a growing queue. Select a related task to inspect its log; the chart does not change configuration."
+    },
+    "checklist": {
+      "title": "Checklist",
+      "content": "This is checklist. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "workers": {
+      "title": "Running workers",
+      "content": "This is running workers. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-projects": {
+    "projects": {
+      "title": "Project list",
+      "content": "This is project list. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "register": {
+      "title": "Register project",
+      "content": "This is register project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "project-card": {
+      "title": "Project card",
+      "content": "This is project card. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain-settings": {
+      "title": "Project brain",
+      "content": "This is project brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "worktree": {
+      "title": "Worktree",
+      "content": "This is worktree. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "references": {
+      "title": "References",
+      "content": "This is references. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "checks": {
+      "title": "Checks and review",
+      "content": "Checks are a JSON array of commands after a worker changes code, for example [{\"name\":\"test\",\"cmd\":[\"npm\",\"test\"],\"timeoutSec\":600}]. Leave it empty for package.json auto-detection; invalid JSON will not run."
+    }
+  },
+  "page-settings": {
+    "settings": {
+      "title": "General settings",
+      "content": "This is general settings. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "model-chain": {
+      "title": "Model chain",
+      "content": "This is model chain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "planning-approval": {
+      "title": "Plan approval",
+      "content": "This is plan approval. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "brain-policy": {
+      "title": "Brain policy",
+      "content": "This is brain policy. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "notifications": {
+      "title": "Notifications",
+      "content": "This is notifications. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "telegram": {
+      "title": "Telegram",
+      "content": "This is telegram. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "accounts": {
+      "title": "Multiple accounts",
+      "content": "This is multiple accounts. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "updates": {
+      "title": "Updates",
+      "content": "This is updates. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-setup": {
+    "setup": {
+      "title": "Setup",
+      "content": "This is setup. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "tools": {
+      "title": "Tools",
+      "content": "This is tools. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "profiles": {
+      "title": "Login profiles",
+      "content": "This is login profiles. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "setup-result": {
+      "title": "Check result",
+      "content": "This is check result. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-profiles": {
+    "profiles": {
+      "title": "Accounts",
+      "content": "This is accounts. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "provider-quota": {
+      "title": "Quota",
+      "content": "This is quota. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "account-types": {
+      "title": "Account type",
+      "content": "This is account type. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "add-account": {
+      "title": "Add account",
+      "content": "This is add account. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "reauth": {
+      "title": "Re-authenticate",
+      "content": "This is re-authenticate. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-tasks": {
+    "tasks": {
+      "title": "Task",
+      "content": "This is task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "filters": {
+      "title": "Filters",
+      "content": "This is filters. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "views": {
+      "title": "Kanban and DAG",
+      "content": "This is kanban and dag. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "lifecycle": {
+      "title": "Statuses",
+      "content": "This is statuses. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "actions": {
+      "title": "Retry, cancel, pause",
+      "content": "This is retry, cancel, pause. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "columns": {
+      "title": "Columns",
+      "content": "This is columns. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-task-detail": {
+    "tasks": {
+      "title": "Task details",
+      "content": "This is task details. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "tabs": {
+      "title": "Log, diff, checks, review",
+      "content": "This is log, diff, checks, review. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "run-actions": {
+      "title": "Run controls",
+      "content": "This is run controls. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "review": {
+      "title": "Approve or return",
+      "content": "This is approve or return. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "capture": {
+      "title": "Create fix task from log",
+      "content": "This is create fix task from log. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "task-summary": {
+      "title": "Task summary",
+      "content": "This is task summary. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-chat": {
+    "chat": {
+      "title": "Chat",
+      "content": "This is chat. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "assistant": {
+      "title": "Assistant and brain",
+      "content": "This is assistant and brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "composer": {
+      "title": "Composer",
+      "content": "This is composer. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "new-session": {
+      "title": "New chat session",
+      "content": "This is new chat session. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "permissions": {
+      "title": "Permissions",
+      "content": "This is permissions. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "sessions": {
+      "title": "Sessions",
+      "content": "This is sessions. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "page-plans": {
+    "plans": {
+      "title": "Plans",
+      "content": "This is plans. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "filters": {
+      "title": "Plan filters",
+      "content": "This is plan filters. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "current": {
+      "title": "Current plan",
+      "content": "This is current plan. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "add-task": {
+      "title": "Add task",
+      "content": "This is add task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "approve-plan": {
+      "title": "Plan approval",
+      "content": "This is plan approval. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    },
+    "help": {
+      "title": "Help",
+      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-add-account": {
+    "modal": {
+      "title": "Add account",
+      "content": "This is add account. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-register-project": {
+    "modal": {
+      "title": "Register project",
+      "content": "This is register project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-create-task": {
+    "modal": {
+      "title": "Tạo task",
+      "content": "This is tạo task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-new-session": {
+    "modal": {
+      "title": "New chat session",
+      "content": "This is new chat session. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-full-permission": {
+    "modal": {
+      "title": "Full access confirmation",
+      "content": "This is full access confirmation. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  },
+  "modal-delete-project": {
+    "modal": {
+      "title": "Delete project",
+      "content": "This is delete project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    }
+  }
+} },
+  checklist: { title: 'Get started with AgentHub', subtitle: 'Complete a few steps to get to work.', hide: 'Hide checklist', cli: 'Install CLI', account: 'Sign in to a worker account', project: 'Add a project', telegram: 'Connect Telegram', task: 'Create your first task' },
   setup: {
     navLabel: 'Setup', loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
     progress: 'Readiness progress', progressSummary: '{ready}/{total} items ready',
@@ -468,10 +850,93 @@ export const en: typeof vi = {
     envHint: 'Optional, e.g. dedicated port/DB for each worktree with {slot}',
     checksHint: 'Automated checks before review (JSON array)',
     hooksHint: 'Commands executed after worktree removal (optional)',
-    settings: 'Settings', saveSettings: 'Save settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
+    brainPermissions: 'Brain permissions', brainPermissionInherit: 'Inherit global', brainPermissionStandard: 'Standard', brainPermissionTrusted: 'Trusted', brainPermissionFull: 'Full access', brainPermissionDescinherit: 'Use the global default.', brainPermissionDescstandard: 'Safe reads and approved commands.', brainPermissionDesctrusted: 'May edit and run project commands.', brainPermissionDescfull: 'No permission prompts; use with care.',
+    settings: 'Settings', saveSettings: 'Save settings', saveSettingsError: 'Failed to save project settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
+    ciLabel: 'GitHub Actions CI Watch', ciEnabled: 'Enable CI Watch', ciBranch: 'CI Branch', ciStatusPassed: 'CI: Passed', ciStatusFailed: 'CI: Failed', ciStatusRunning: 'CI: Running', ciViewRun: 'View run on GitHub', ciNoRun: 'No runs recorded',
+    knowledgeChecklistTitle: 'Knowledge & checklist', knowledgeChecklistHint: 'Choose up to 5 paths; each file is limited to 64KB. The brain must check them during review.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Review checklist', checklistUnreadable: 'unreadable', checklistTooLarge: 'Warning: file exceeds 64KB; content was not injected.', suggestAutomaticChecks: 'Suggest automatic checks', draftChecksCreated: 'Draft task created to suggest automatic checks.',
+    sectionBrainTitle: 'Brain',
+    sectionBrainDesc: 'Configure automated agent permissions and token quota limits for this project.',
+    sectionWorktreeTitle: 'Worktree',
+    sectionWorktreeDesc: 'Manage environment initialization and hooks in isolated worktrees.',
+    sectionIntegrationTitle: 'Integration Branch',
+    sectionIntegrationDesc: 'Automatically merge task branches into an integration branch for end-to-end testing.',
+    sectionReferencesTitle: 'Read-only References',
+    sectionReferencesDesc: 'Declare auxiliary documentation or repositories for additional Claude context.',
+    sectionNotificationsTitle: 'Notifications',
+    sectionNotificationsDesc: 'Customize notification format sent to Telegram when tasks update.',
+    sectionAdvancedTitle: 'Checks & Review (Advanced)',
+    sectionAdvancedDesc: 'Configure automated checks, post-cleanup hooks, review chains, and environment templates.',
+    sectionDeployTitle: 'Deployment',
+    sectionDeployDesc: 'Monitor deploy status and re-trigger deployment after branch merge.',
+    settingsDrawerTitle: 'Settings: {name}',
+    settingsDrawerSubtitle: 'Detailed operational configuration for this project.',
+    closeSettings: 'Close settings',
+    unsavedChangesBar: 'You have {count} unsaved changes',
+    discardChanges: 'Cancel',
+    saveChanges: 'Save',
+    savingChanges: 'Saving…',
+    saveSuccessToast: 'Project settings saved successfully!',
+    unlimitedBudget: 'Unlimited',
+    unitTokenPerDay: 'tokens / day',
+    unitTurnsPerHour: 'turns / hour',
+    tokenBudgetPlaceholder: 'Follows global ({value})',
+    maxTurnsPlaceholder: 'Follows global ({value})',
+    tokenBudgetHint: 'Leave empty to use global setting ({value}).',
+    maxTurnsHint: 'Leave empty to use global setting ({value}).',
+    fullPermissionWarning: 'Warning: Full access allows Claude to run arbitrary commands on the system without prompt. Use with caution!',
+    worktreeInstallDesc: 'Disable when project has no package.json or large dependencies to speed up worktree creation.',
+    gitHooksDesc: 'Skip when git hooks (pre-commit/linter) take too long or depend on external host tools.',
+    integrationWorktreePath: 'Worktree path',
+    integrationCurrentBranchLabel: 'Current branch',
+    integrationAheadBehind: 'Commit delta',
+    integrationCleanStatus: 'Working tree state',
+    integrationClean: 'Clean',
+    integrationDirty: 'Dirty',
+    noIntegrationStatus: 'No integration worktree status available.',
+    statusExists: 'Exists',
+    statusNotExists: 'Not created',
+    targetBranch: 'Target: {branch}',
+    dirtyHint: 'Uncommitted changes present in worktree',
+    cleanHint: 'Working directory is clean',
+    invalidRefName: 'Name must contain only letters, numbers, hyphens (-) or underscores (_).',
+    duplicateRefName: 'Reference names must be unique.',
+    refNamePlaceholder: 'e.g. docs-api, schema',
+    refPathPlaceholder: 'e.g. /opt/docs or ../shared-api',
+    refNameHeader: 'Name',
+    refPathHeader: 'Path',
+    refInjectHeader: 'Context',
+    refActionsHeader: 'Actions',
+    noReferences: 'No read-only references declared yet. Click below to add one.',
+    deleteRef: 'Delete row',
+    telegramContentDesc: 'Minimal mode hides task titles and content details to protect privacy.',
+    insertExample: 'Insert sample',
+    jsonSyntaxError: 'Invalid JSON syntax: {error}',
+    deploySteps: 'Execution steps',
+    deployTimeout: 'Timeout: {sec}s',
+    deployRestart: 'Restart hub: {val}',
+    deployPush: 'Push branch: {from} → {to} ({remote})',
+    noDeployConfig: 'No post-merge deploy configuration found (afterMerge).',
+    deployLatestStatus: 'Latest run',
+    deployStatusQueued: 'Queued',
+    deployStatusRunning: 'Deploying',
+    deployStatusRestarting: 'Restarting hub',
+    deployStatusSucceeded: 'Succeeded',
+    deployStatusFailed: 'Failed: {error}',
+    deployStatusSkipped: 'Skipped',
+    deployNoRuns: 'No deployment runs recorded yet.',
+    deployNowBtn: 'Push now',
+    deployRerunBtn: 'Rerun deploy',
+    deployingBtn: 'Deploying…',
+    cardBranch: 'Branch:',
+    cardIntegration: 'Integration:',
+    cardBrain: 'Brain:',
+    cardCI: 'CI:',
+    integrationDisabled: 'Disabled',
+    integrationEnabledBadge: 'Enabled ({branch})',
   },
   settings: {
     title: 'System Settings',
+    brandingTitle: 'Application name', brandingDescription: 'Only the display name changes; technical CLI commands, services, directories, and environment variables stay the same.', brandingName: 'Display name', brandingShortName: 'Short name', brandingTagline: 'Tagline (optional)', brandingAccent: 'Accent color (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, up to 256KB', brandingLogoError: 'Could not upload logo',
     subtitle: 'Configure preferred model chains and maximum run timeout (DEC-001).',
     saveSuccess: 'System settings updated successfully!',
     saveError: 'Failed to save settings',
@@ -486,6 +951,8 @@ export const en: typeof vi = {
     easyChainHint: 'Default: gemini-3.8-flash-medium, codex:gpt-5.6-luna',
     easyChainRequired: 'Easy model chain must have at least 1 model',
     timeoutLabel: 'Maximum timeout per run (hours)',
+    multiplePerProviderLabel: 'Allow multiple accounts from the same provider',
+    multiplePerProviderHint: 'When off: each provider allows one personal account; Team/API accounts can still be added.',
     saveConfigBtn: 'Save Configuration',
     savingConfigBtn: 'Saving...',
     savingsSectionTitle: 'Delegation Savings',
@@ -503,6 +970,11 @@ export const en: typeof vi = {
       suggest: 'Suggest',
       auto: 'Auto',
     },
+    wakeupTitle: 'Scheduled quota wake-up',
+    wakeupHint: 'At these times, send a tiny prompt to idle accounts so their 5-hour quota window starts early and resets before you need it. Uses a little quota each time.',
+    wakeupTimes: 'Wake-up times (comma separated)',
+    quotaLowTitle: 'Low quota alert',
+    quotaLowHint: 'Notify when an account\'s 5-hour or weekly quota drops below this level. Set 0 to turn off.',
     quietHoursTitle: 'Quiet Hours',
     quietHoursHint: 'During quiet hours, only critical incidents are delivered; other notices are deferred to the digest.',
     quietHoursStart: 'Start time',
@@ -556,25 +1028,26 @@ export const en: typeof vi = {
     hasTokenBadge: 'Telegram token ready',
   },
   extra: {
-    claudeVersion: 'Claude version in use', systemBrain: 'System brain', projectBrains: 'Project brains',
+    claudeVersion: 'Claude version in use', systemBrain: 'System brain', projectBrains: 'Project brains', assistantChats: 'Assistant',
     connected: 'Connected', disconnected: 'Disconnected', connectionAria: 'Connection status', quickPrompts: 'Quick prompts:', claudeAnswering: 'Claude is answering...', chatPlaceholder: 'Type a message... (Enter to send, Shift+Enter for a new line)', stopResponse: 'Stop response', stop: 'Stop', sendMessage: 'Send message', newChat: 'New conversation', noChats: 'No conversations yet. Click the button above to start!', chat: 'Conversation', deleteSession: 'Delete session', busySession: 'Cannot delete a busy session', fullMode: 'Full', safeMode: 'Safe', answering: 'answering…', tool: 'Tool', toolCount: '{count} tool actions', stepsDone: '{count} steps completed', collapse: 'collapse', expand: 'click to expand', newMessages: 'New messages',
     timeout: 'timed out', loginFailed: 'Failed to open login session', error: 'Error', seconds: 'seconds', turns: 'turns',
     project: 'Project', fastest: 'fastest', fiveHours: '5 hours', week: 'Week', minutesAgo: '{count} minutes ago', hoursAgo: '{count} hours ago', quickPromptTasks: 'How are the tasks going?', quickPromptQuota: 'Which account has the most quota left?', quickPromptSplit: 'Split Phase 1 of XFarm into smaller tasks and dispatch them',
     settingsSubtitle: 'Configure preferred model chains, maximum run timeout, and delegation savings factors.', fullModeConfirm: 'Warning: Full mode allows Claude to run ANY command on the server without sandbox limits. Are you sure you want to enable it?', chatSettings: 'Claude Chat settings', claudeBin: 'Claude CLI executable path (claudeBin)', claudeBinHint: 'Default: claude (found in PATH)', maxConcurrent: 'Maximum concurrent chat sessions (maxConcurrent)', chatModel: 'Claude chat model', allowFullMode: 'Allow Full mode (allowFullMode)', enabled: 'ENABLED', savingsSettings: 'Configure estimated bucket capacity for the 5-hour window and Claude conversion factors.', geminiBucketHint: 'Estimated Gemini token capacity for the 5-hour window (default: 5,000,000)', claudeBucketHint: 'Estimated Claude token capacity for the 5-hour window (default: 5,000,000)', claudeFactor: 'Claude Factor', claudeFactorHint: 'Claude savings tokens = workerTokens × claudeFactor (default: 0.9)', claudeOverhead: 'Claude overhead per task (tokens)', claudeOverheadHint: 'Delegation and review cost = overhead × (1 + review count) (default: 40,000)',
     processingError: 'An error occurred while processing.', createChatError: 'Failed to create chat session', deleteChatError: 'Failed to delete chat session', sendError: 'Failed to send message', stopError: 'Failed to stop response', chatList: 'Conversation list', openSessions: 'Open sessions', mode: 'Mode', chatWithClaude: 'Chat with Claude Code', chatWelcome: 'Welcome to Chat with Claude!', chatWelcomeDesc: 'Interact directly with Claude Code to review source code, coordinate tasks, and dispatch work to agents.', startChat: 'Start a new conversation', emptyChat: 'This conversation has no messages yet.', emptyChatDesc: 'Ask a question below or choose a quick prompt to start talking with Claude.', runningTool: 'Running {tool}', progress: 'Working: {tool} · step {step} · {time}', thinking: 'Claude is thinking… {seconds} seconds',
     projectOptional: 'Project (optional)', noProject: 'No project', chatTitle: 'Conversation title', chatTitlePlaceholder: 'e.g. Ask about system architecture, split tasks...', claudeModel: 'Claude model', claudeDefault: 'Claude Code default', operationMode: 'Operation mode', safeModeDesc: 'Claude can read code, inspect git, run tests, and dispatch through AgentHub; it cannot edit files.', enabledInSettings: 'enable in Settings', fullModeWarning: 'Warning: Claude can run ANY command on the machine.', createChat: 'Create conversation',
-    resetIn: 'resets in {time}', fast: 'fast',
+    resetIn: 'resets in {time}', fast: 'fast', locale: 'en', updatedAt: 'updated at', claudeQuotaAvailable: 'Quota available', claudeQuotaWarning: 'Quota running low', claudeQuotaRejected: 'Quota exhausted (temporarily locked)',
     themeAria: 'Theme mode', dark: 'Dark', light: 'Light', system: 'System', default: 'Default',
     sidebarAria: 'Sidebar navigation', pageTaskCreate: 'Create task', pageTaskDetail: 'Task details', pageSavings: 'Savings', pagePlans: 'Plan review', pageAgentHub: 'AgentHub', claudeQuota: 'Claude quota', unknown: 'unknown', claudeSessions: 'Claude sessions', tokensOverTime: 'Tokens over time', token: 'Token', task: 'Task', messages: 'messages', model: 'Model', lastActive: 'Last active', rescan: 'Rescan',
     checking: 'Checking', stuck: 'stalled', waitingApprover: 'Waiting for reviewer', retryReviewer: 'Retry reviewer', quickChatError: 'Quick chat error', diskFree: 'Disk: {free} / {total} GB free',
     diskFreeWithMin: 'Disk: {free} / {total} GB free (min {min} GB)',
     waitingQueue: 'Waiting Queue', waitingCount: '{count} task(s) waiting', noWaitingTasks: 'No tasks waiting.',
     quickChat: 'Quick chat with Claude:', quickChatPlaceholder: 'Ask a question... (e.g. How are the tasks going?)', send: 'Send', sending: 'Sending...', workersExecuting: '{count} worker(s) running', noWorkers: 'No workers are currently executing tasks.', eventStream: 'Event stream', realtime: 'Real-time', noEvents: 'No events recorded yet.', checkPassed: 'Check passed', checkFailed: 'Check failed',
-    reviewQueue: 'Review queue', reviewCount: '{count} task(s) waiting for review', noReview: 'No tasks waiting for review.', claudeReviewing: 'Claude is reviewing', waitingReview: 'waiting for Claude review', view: 'View', authClose: 'Close notice', noProfiles: 'No profiles in the system.', duplicateWarning: 'Warning: Duplicate email with another profile!', duplicateTip: 'Tip: Log in again with another Google account!', busy: 'BUSY', idle: 'Idle', executing: 'Running {used}/{total}', loggedIn: 'Logged in', needVerification: 'Account verification required', openVerification: 'Open verification page', verificationTip: 'Open the link with the matching Google account, complete verification, then click Check', addProfileTitle: 'Add new isolated agy account', addProfileDesc: 'The system will create an isolated HOME directory and open a terminal for Google authentication.', closeNotice: 'Close', profileName: 'Profile Name *', cancel: 'Cancel', createLogin: 'Create & Login', taskEmpty: 'Empty', taskFilter: 'Filter by project', allProjects: 'All projects', createTask: 'New Task', checks: 'checks (JSON, blank = auto-detect)', saveChecks: 'Save checks', deleteProject: 'Delete project', hooks: 'hooks (onWorktreeRemoved - one command per line)', saveHooks: 'Save hooks', noProjects: 'No projects registered yet.', loadProjectsError: 'Failed to load projects list.', defaultBranch: 'Default branch: ', maxParallel: 'Max parallel: ', validJson: 'Valid JSON', invalidJson: 'Invalid JSON syntax: {error}', updateAvailable: 'A new dashboard version is available', reload: 'Reload', silent: 'silent for {minutes} minutes', noData: 'No data', refresh: 'Refresh', checkResults: 'Check results', rerunCheck: 'Run checks again', noCheckResults: 'No check results yet.', noOutput: '(no output)', reviewChainLabel: 'Review chain (JSON)', saveReviewChain: 'Save review chain', planningApprovalTitle: "Approve Claude's plans", planningApprovalHint: 'Choose when Claude must wait for your approval before dispatching work to agents.', planningApprovalNone: 'No approval — Claude dispatches right away and reports back', planningApprovalLarge: 'Only approve large plans, from this many tasks:', planningApprovalAll: 'Approve every task Claude creates', planningApprovalMinTasks: 'Minimum tasks that need approval', captureFix: 'Create fix task', captureFromSelection: 'Create fix task from selected log', captureFromSelectionTip: 'Highlight an error in the log, then click to give an agent a new fix task with that excerpt as evidence', captureFromSelectionHint: 'Highlight an error in the log above to enable this button', captureSelectedChars: '{count} characters selected', captureDesc: 'A new task will be given to an agent to fix this error, with the log excerpt below and a link to the current task.', captureFieldTitle: 'Title', captureSubmit: 'Create task', captureTitle: 'Create bug-fix task', reLogin: 'Log in again', reLoginTip: 'Log in again when the session expired or to switch account', deleteProfile: 'Delete', deleteProfileTip: 'Remove this profile from the hub (run history is kept)', deleteBusyTip: 'This profile is running a task; wait until it finishes', deleteConfirm: 'Delete profile "{name}"?', deleteClaudeNote: 'The profile and its Claude config directory will be removed.', deleteSoftNote: 'The profile will be hidden and no longer receive tasks. Its login directory and run history are kept.', deleteFailed: 'Failed to delete profile', brainPlanning: 'Planning', brainDispatching: 'Dispatching', brainReviewing: 'Reviewing', brainMerging: 'Merging code', brainDeploying: 'Deploying', brainWaiting: 'Waiting for worker', brainIdle: 'Idle', brainTalking: 'Talking with you', justNow: 'just now', updatedMinutes: 'updated {count} minutes ago', updatedHours: 'updated {count} hours ago', updatedDays: 'updated {count} days ago', coordinator: 'Claude · Coordinator', staleBrain: 'Claude has not updated for 15 minutes', loginTitle: 'Google login for profile “{name}”', loginClose: 'Close', loginOpen: 'Open login page', copy: 'Copy', copied: 'Copied', loginWaiting: 'Waiting for agy to show the login link…', pasteCode: 'Paste the verification code or login URL here, then click Send', reconnect: 'Reconnect', finish: 'Finish', silentRun: 'silent for {minutes} minutes', statusChecking: 'Checking', noCommit: 'No commit for {minutes}m', looping: 'Looping',
+    reviewQueue: 'Review queue', reviewCount: '{count} task(s) waiting for review', noReview: 'No tasks waiting for review.', claudeReviewing: 'Claude is reviewing', waitingReview: 'waiting for Claude review', view: 'View', authClose: 'Close notice', noProfiles: 'No profiles in the system.', duplicateWarning: 'Warning: Duplicate email with another profile!', duplicateTip: 'Tip: Log in again with another Google account!', busy: 'BUSY', idle: 'Idle', executing: 'Running {used}/{total}', loggedIn: 'Logged in', needVerification: 'Account verification required', openVerification: 'Open verification page', verificationTip: 'Open the link with the matching Google account, complete verification, then click Check', addProfileTitle: 'Add new isolated agy account', addProfileDesc: 'The system will create an isolated HOME directory and open a terminal for Google authentication.', closeNotice: 'Close', profileName: 'Profile Name *', cancel: 'Cancel', createLogin: 'Create & Login', taskEmpty: 'Empty', taskFilter: 'Filter by project', allProjects: 'All projects', createTask: 'New Task', checks: 'checks (JSON, blank = auto-detect)', saveChecks: 'Save checks', deleteProject: 'Delete project', hooks: 'hooks (onWorktreeRemoved - one command per line)', saveHooks: 'Save hooks', noProjects: 'No projects registered yet.', loadProjectsError: 'Failed to load projects list.', defaultBranch: 'Default branch: ', maxParallel: 'Max parallel: ', validJson: 'Valid JSON', invalidJson: 'Invalid JSON syntax: {error}', updateAvailable: 'A new dashboard version is available', reload: 'Reload', updateHint: 'Reload page to apply the latest update', silent: 'silent for {minutes} minutes', noData: 'No data', refresh: 'Refresh', checkResults: 'Check results', rerunCheck: 'Run checks again', noCheckResults: 'No check results yet.', noOutput: '(no output)', reviewChainLabel: 'Review chain (JSON)', saveReviewChain: 'Save review chain', planningApprovalTitle: "Approve Claude's plans", planningApprovalHint: 'Choose when Claude must wait for your approval before dispatching work to agents.', planningApprovalNone: 'No approval — Claude dispatches right away and reports back', planningApprovalLarge: 'Only approve large plans, from this many tasks:', planningApprovalAll: 'Approve every task Claude creates', planningApprovalMinTasks: 'Minimum tasks that need approval', captureFix: 'Create fix task', captureFromSelection: 'Create fix task from selected log', captureFromSelectionTip: 'Highlight an error in the log, then click to give an agent a new fix task with that excerpt as evidence', captureFromSelectionHint: 'Highlight an error in the log above to enable this button', captureSelectedChars: '{count} characters selected', captureDesc: 'A new task will be given to an agent to fix this error, with the log excerpt below and a link to the current task.', captureFieldTitle: 'Title', captureSubmit: 'Create task', captureTitle: 'Create bug-fix task', reLogin: 'Log in again', reLoginTip: 'Log in again when the session expired or to switch account', deleteProfile: 'Delete', deleteProfileTip: 'Remove this profile from the hub (run history is kept)', deleteBusyTip: 'This profile is running a task; wait until it finishes', deleteConfirm: 'Delete profile "{name}"?', deleteClaudeNote: 'The profile and its Claude config directory will be removed.', deleteSoftNote: 'The profile will be hidden and no longer receive tasks. Its login directory and run history are kept.', deleteFailed: 'Failed to delete profile', brainPlanning: 'Planning', brainDispatching: 'Dispatching', brainReviewing: 'Reviewing', brainMerging: 'Merging code', brainDeploying: 'Deploying', brainWaiting: 'Waiting for worker', brainIdle: 'Idle', brainTalking: 'Talking with you', justNow: 'just now', updatedMinutes: 'updated {count} minutes ago', updatedHours: 'updated {count} hours ago', updatedDays: 'updated {count} days ago', coordinator: 'Claude · Coordinator', staleBrain: 'Claude has not updated for 15 minutes', loginTitle: 'Google login for profile “{name}”', loginClose: 'Close', loginOpen: 'Open login page', copy: 'Copy', copied: 'Copied', loginWaiting: 'Waiting for agy to show the login link…', pasteCode: 'Paste the verification code or login URL here, then click Send', reconnect: 'Reconnect', finish: 'Finish', silentRun: 'silent for {minutes} minutes', statusChecking: 'Checking', noCommit: 'No commit for {minutes}m', looping: 'Looping',
     compact: 'Compact',
     compactTooltip: 'Compact context for this session',
     compacted: 'Context compacted',
     compactError: 'Failed to compact context',
+    skipToContent: 'Skip to content', brainStateWaiting: 'waiting for your reply', brainStateWorking: 'working', brainStateIdle: 'inactive', requestLabel: 'Request', toolLabel: 'Tool', toolUsed: '{count} tools used', expandSessions: 'Expand list', collapseSessions: 'Collapse list', addKnowledgePlaceholder: 'Add knowledge note...', pinKnowledge: 'Pin/unpin', closeProfile: 'Close', editProfileTitle: 'Edit profile {name}', renameProfileTitle: 'Rename {name}', deleteProfileTitle: 'Delete profile {name}', displayName: 'Display name', notes: 'Notes', priority: 'Priority', enableProfile: 'Enable profile', nameMismatch: 'The repeated name does not match', saveProfileError: 'Unable to save profile', renameError: 'Unable to rename', deleteError: 'Unable to delete profile', modelChatAria: 'Chat model', chatModelsLabel: 'Chat model list', defaultChatModel: 'Default chat model. Available choices:', reviewer: 'Reviewer', reviewerModel: 'Reviewer model', fallbackChain: 'Claude fallback chain', fallbackHint: 'Drag steps to reorder. The API key is write-only.', remove: 'Remove', addStep: 'Add step', apiKey: 'Anthropic API key', configuredReplace: 'Configured (enter to replace)', knowledgeAdd: 'Add', linkedTasks: 'Linked tasks', generatedFrom: 'Generated from', generatedTask: 'Generated task', orphanProcesses: 'Orphaned processes', orphanProcessesDesc: 'Processes that still held a cwd in a stopped worktree.', loadingOlderMessages: 'Loading older messages…', grantedPermissions: 'Granted permissions', grantedPermissionsDesc: 'Rules used to automatically allow tools.', noPermissionRules: 'No rules yet.', cleanup: 'Clean up', cleanupRunning: 'Cleaning…',
     forkSummary: 'Open new session with summary',
     forkSummaryTooltip: 'Summarize and fork to new session',
     forkSummaryError: 'Failed to fork session',
@@ -606,6 +1079,7 @@ export const en: typeof vi = {
     saveName: 'Save name',
     newNameAria: 'New session title',
     retryLastTurn: 'Retry last turn',
+    retryLimit: 'Retry now',
     permissionTitle: 'Claude requires permission: {tool}',
     permissionAria: 'Tool permission request',
     allow: 'Allow',
@@ -617,7 +1091,10 @@ export const en: typeof vi = {
     failedHandlePermission: 'Failed to handle permission request',
     failedUpdateSession: 'Failed to update chat session',
     compactRequested: 'Context compaction requested',
-    failedCompact: 'Failed to compact context',
+    failedCompact: 'Failed to compact context', editMessage: 'Edit message',
+    permissionProject: 'Project: {project}', permissionSession: 'Session: {session}',
+    permissionNoProject: 'No project attached', permissionCwd: 'cwd', permissionFile: 'file',
+    toolRead: 'Read {path}', toolRun: 'Run `{command}`', toolDefault: 'Tool',
   },
   claudeSessions: {
     active: 'Active',

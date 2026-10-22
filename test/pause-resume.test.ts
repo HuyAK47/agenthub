@@ -38,7 +38,17 @@ function getProcessState(pid: number): string | null {
   try {
     const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
     const m = status.match(/^State:\s+([A-Z])/m);
-    return m ? m[1] : null;
+    if (m) return m[1];
+  } catch {
+    // /proc is not available on macOS
+  }
+  try {
+    const out = execFileSync('ps', ['-o', 'state=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const firstChar = out.charAt(0).toUpperCase();
+    return firstChar || null;
   } catch {
     return null;
   }
@@ -285,6 +295,12 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
     const t2 = ctx.scheduler.getRunning().get('p-test/t2')!;
     const t3 = ctx.scheduler.getRunning().get('p-test/t3')!;
 
+    // Keep this policy test independent from worker startup/exit timing. The workers are
+    // cleaned up by afterEach; this test only exercises the scheduler's load decisions.
+    vi.spyOn(ctx.scheduler as unknown as { isProcessAlive: (pid: number | null, pidStart?: number | null) => boolean }, 'isProcessAlive')
+      .mockReturnValue(true);
+    for (const task of [t1, t2, t3]) task.lastCommitCheckAt = Date.now();
+
     t1.startTime = 1000;
     t2.startTime = 2000;
     t3.startTime = 3000; // Most recent
@@ -295,12 +311,21 @@ describe('Task Pause and Resume (c-pause-resume)', () => {
 
     const loadGuard = (ctx.scheduler as unknown as { loadGuard: LoadGuard }).loadGuard;
     expect(loadGuard).toBeDefined();
+    vi.spyOn(loadGuard, 'update').mockImplementation(() => ({
+      load1: 0,
+      freeMemGB: 16,
+      overloaded: loadGuard.isOverloaded(),
+      recoveringSince: null,
+      highSince: null,
+      autoPauseTriggered: loadGuard.isAutoPauseTriggered(),
+    }));
 
     // 4.1 Chính sách 'recent': task gần nhất (t3) bị pause trước
     ctx.config.load.enabled = true;
     ctx.config.load.pausePolicy = 'recent';
     ctx.config.load.maxAutoPaused = 1;
     vi.spyOn(loadGuard, 'isAutoPauseTriggered').mockReturnValue(true);
+    vi.spyOn(loadGuard, 'isOverloaded').mockReturnValue(true);
 
     ctx.scheduler.tick();
 

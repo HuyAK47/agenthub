@@ -38,7 +38,7 @@ export const Modal: React.FC<ModalProps> = ({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+      style={{ backgroundColor: 'var(--t-overlay)' }}
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}

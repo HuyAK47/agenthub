@@ -2,6 +2,16 @@
 
 [English](en/GETTING-STARTED.md) | **Tiếng Việt**
 
+## Đổi tên ứng dụng
+
+Vào **Cài đặt → Tên ứng dụng** để đổi tên, tên ngắn, slogan và màu nhấn hiển thị. Có thể đổi nhanh bằng CLI:
+
+```bash
+agenthub config set branding.name "Tên mới"
+```
+
+Việc này chỉ đổi tên hiển thị. Lệnh `agenthub`, service, thư mục `~/.agenthub`, MCP server, biến môi trường `AGENTHUB_*` và tên gói release vẫn giữ nguyên. Logo PNG/SVG có thể tải lên trong Cài đặt; logo tối đa 256KB và SVG được kiểm tra an toàn.
+
 Hướng dẫn cho người mới: cài AgentHub, kết nối tài khoản AI và giao việc cho các worker.
 
 AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các worker AI (Gemini qua Antigravity CLI, Codex CLI). Mỗi task chạy trong một git worktree riêng. Hub theo dõi quota, tải máy, dung lượng ổ đĩa và tự chạy kiểm tra (lint, test…) khi worker làm xong. **Claude Code** đóng vai trò "bộ não": lên kế hoạch, giao việc, review và merge.
@@ -56,6 +66,10 @@ agenthub setup
 ```
 
 Installer kiểm tra `SHA256SUMS`, cài dependencies production theo máy hiện tại, và giữ lại hai bản cũ trong `~/.agenthub-app/` để rollback qua symlink `current`.
+
+### Cài lỗi thì sao?
+
+Không cần dọn thủ công. Nếu tải, kiểm tra native module, `setup`, symlink hoặc service thất bại, bộ cài tự xoá thư mục tạm và hoàn tác `current`, CLI cùng service về bản trước (nếu có). Chi tiết lỗi được giữ tại `${TMPDIR:-/tmp}/agenthub-install-<time>.log`; hãy gửi file này khi cần hỗ trợ. Bản trước vẫn hoạt động.
 
 ```bash
 git clone https://github.com/ducanh19020217/agenthub.git ~/agenthub
@@ -421,3 +435,37 @@ Worker và lệnh kiểm tra chạy với ưu tiên thấp (`nice`/`ionice` trê
 | Telegram bot không phản hồi | Kiểm tra token trong `secrets/telegram.token` và xác thực ghép đôi trên Dashboard |
 
 Xem thêm: [USAGE.md](USAGE.md) (quy trình chi tiết), [FEATURES.md](FEATURES.md) (danh sách tính năng), [PLAN.md](PLAN.md) (kiến trúc).
+
+## 14. Tự triển khai sau merge
+
+Các bước deploy chỉ được khai báo trong `~/.agenthub/config.json`, không qua API/MCP. Ví dụ cho chính repo AgentHub:
+
+```json
+{
+  "deploy": {
+    "agenthub": {
+      "steps": [["npm", "run", "build"], ["npm", "run", "build:web"], ["node", "scripts/install-web.mjs"]],
+      "timeoutSec": 900,
+      "restartHub": true,
+      "push": {
+        "remote": "origin",
+        "from": "integration",
+        "to": "main",
+        "ffOnly": true,
+        "minIntervalMin": 30
+      }
+    }
+  }
+}
+```
+
+Mỗi bước chạy bằng argv trong worktree tích hợp, có log tại `~/.agenthub/logs/deploy/<project>/<time>.log`. `push` mặc định tắt; khi bật chỉ fast-forward.
+
+Để tránh gây quá tải cho CI khi merge liên tục, hub hỗ trợ **gom lượt push** bằng tuỳ chọn `minIntervalMin` (mặc định 30 phút):
+- Sau mỗi lượt deploy thành công, hub chỉ push nếu khoảng cách từ lần push trước đó ≥ `minIntervalMin`.
+- Nếu chưa đủ thời gian, hub sẽ tự động lên lịch hẹn push hoãn lại (deferred push, không cần build lại) khi đủ thời gian, gom tất cả các lần merge ở giữa vào 1 lượt push duy nhất. Lịch hẹn và thời điểm push gần nhất được lưu bền vững qua các lần khởi động lại daemon.
+- Trạng thái deploy hiển thị thông tin dạng `push lúc HH:MM` hoặc `push đang chờ tới HH:MM`.
+- Để đẩy code ngay lập tức (bỏ qua hẹn giờ), gọi `POST /api/projects/:id/deploy` kèm `{"pushNow": true}` hoặc gửi lệnh Telegram `/deploy <dự án> push`.
+- **Lưu ý khi phát hành:** Trước khi tạo tag phát hành (release tag), bắt buộc phải chạy `pushNow` và xác nhận nhánh `main == integration` để đảm bảo bản phát hành mang đầy đủ các commit mới nhất.
+
+Có thể chạy lại toàn bộ quy trình deploy bằng nút Deploy trên trang Projects hoặc `/deploy <project>` trong Telegram; `/deploy` không có tham số hiển thị trạng thái gần nhất.

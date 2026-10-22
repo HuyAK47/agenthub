@@ -69,14 +69,14 @@
 
 
 
-## DEC-007: Ngoại lệ hẹp cho PLAN 2.1 — đọc `access_token` của agy để lấy ảnh đại diện
+## DEC-007: Ngoại lệ hẹp cho PLAN 2.1 — đọc `access_token` của agy để lấy ảnh đại diện và gói tài khoản
 
 - **Bối cảnh**: PLAN 2.1 cấm đọc nội dung file `antigravity-oauth-token`. Hồ sơ đăng nhập bằng refresh token lấy được ảnh Google lúc nhập, còn hồ sơ đăng nhập qua terminal thì không có cách nào khác để lấy ảnh. Người dùng đã đồng ý mở ngoại lệ (2026-10-21).
 - **Quyết định**: Cho phép `readAgyAccessToken()` (`src/profiles/agyToken.ts`) đọc file token, với giới hạn:
   - Chỉ hồ sơ `engine=agy`, `kind=isolated`; không bao giờ chạm keyring hay HOME thật.
   - Chỉ lấy trường `access_token`, và chỉ khi `expiry` còn hạn. **Không** dùng `refresh_token`, **không** tự đổi token, **không** ghi lại file token.
   - Chỉ chạy khi người dùng bấm "Kiểm tra" hồ sơ (`runProfileCheck`) hoặc nút "Làm mới" quota (`refreshUsage`), hoặc ngay khi phiên đăng nhập terminal của hồ sơ đó kết thúc; không chạy nền theo chu kỳ.
-  - Access token chỉ được gửi tới `https://www.googleapis.com/oauth2/v3/userinfo`, không log, không lưu DB, không trả qua API.
+  - Access token chỉ được gửi tới `https://www.googleapis.com/oauth2/v3/userinfo` (ảnh đại diện) và `https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` (gói Google AI: `paidTier.id`/`currentTier.id`, cách Cockpit tools dùng); không log, không lưu DB, không trả qua API. Chỉ lưu kết quả đã chuẩn hoá (`free`/`pro`/`ultra`) vào `profiles.plan`.
   - Nếu email Google trả về khác email của hồ sơ thì bỏ qua ảnh.
 - **Hệ quả**: Hồ sơ terminal có ảnh sau lần "Kiểm tra" hoặc "Làm mới" đầu tiên khi token còn hạn (agy làm mới token mỗi lần chạy). Token hết hạn thì giữ ảnh cũ hoặc ảnh chữ cái. Mọi quy tắc khác của PLAN 2.1 giữ nguyên.
 
@@ -88,3 +88,13 @@
   - `registerAll()` vẫn đếm cả hồ sơ đã xoá khi kiểm tra keyring, nên không tự tạo lại `agy-default`.
   - Hồ sơ `kind=system` (Claude) vẫn bị chặn như cũ.
 - **Hệ quả**: Popup xoá ẩn ô "Xoá cả thư mục dữ liệu đăng nhập" với hồ sơ keyring và giải thích chỉ ẩn hồ sơ.
+
+## DEC-009: Ngoại lệ hẹp — đọc `access_token` Codex để lấy quota và gói qua API
+
+- **Bối cảnh**: Quota Codex trước đây chỉ đọc từ log phiên của Codex CLI, nên hồ sơ mới nhập chưa có quota, và hồ sơ đăng nhập qua terminal không có gói. Cockpit tools lấy cả hai qua `GET https://chatgpt.com/backend-api/wham/usage`. Người dùng đồng ý làm giống (2026-10-22).
+- **Quyết định**: `readCodexAccessToken()` (`src/quota/codex-api.ts`) được đọc `auth.json`, với giới hạn:
+  - Chỉ hồ sơ `engine=codex`, `kind=isolated` (CODEX_HOME do hub quản lý); không đọc `~/.codex` thật.
+  - Chỉ lấy `tokens.access_token` và `tokens.account_id`; **không** dùng `refresh_token`/`id_token`, **không** tự làm mới token, **không** ghi lại file.
+  - Chỉ chạy khi người dùng bấm "Làm mới" quota (Check xong UI cũng gọi Làm mới); không chạy nền theo chu kỳ.
+  - Token chỉ gửi tới endpoint trên (kèm header `ChatGPT-Account-Id`), không log, không lưu DB, không trả qua API. Chỉ lưu quota và `plan_type` đã chuẩn hoá.
+- **Hệ quả**: Hồ sơ Codex có quota 5h/tuần và tag gói ngay sau lần Làm mới đầu tiên. Access token hết hạn thì báo HTTP 401 và để Codex tự làm mới khi chạy task. Quota từ log phiên không còn đè lên số mới hơn lấy từ API.

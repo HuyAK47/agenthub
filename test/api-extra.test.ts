@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,6 +8,7 @@ import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
+import { DeployService } from '../src/deploy.js';
 
 let tmpDir: string;
 let config: ReturnType<typeof loadConfig>;
@@ -291,6 +292,25 @@ describe('AgentHub API Extra Endpoints', () => {
     });
   });
 
+  describe('branding logo security headers', () => {
+    it('serves sanitized SVG with a restrictive policy and inline disposition', async () => {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path/></svg>';
+      const upload = await server.inject({
+        method: 'PUT',
+        url: '/api/branding/logo',
+        headers: authHeaders(),
+        payload: { mimeType: 'image/svg+xml', data: Buffer.from(svg).toString('base64') },
+      });
+      expect(upload.statusCode).toBe(200);
+
+      const response = await server.inject({ method: 'GET', url: '/api/branding/logo', headers: authHeaders() });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'; img-src data:");
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['content-disposition']).toBe('inline; filename="logo.svg"');
+    });
+  });
+
   // =========================================================================
   // 2. PATCH /api/projects/:id (checks validation) & DELETE /api/projects/:id (409)
   // =========================================================================
@@ -362,6 +382,108 @@ describe('AgentHub API Extra Endpoints', () => {
       const updated = JSON.parse(res.body);
       expect(updated.maxParallel).toBe(5);
       expect(JSON.parse(updated.checks!)).toEqual(checks);
+    });
+
+    it('does not accept deploy configuration through PATCH and returns a queued deploy immediately', async () => {
+      const repoPath = path.join(tmpDir, 'repo-deploy-api');
+      initGitRepo(repoPath);
+      ctx.projectRepo.insert({
+        id: 'proj-deploy-api',
+        name: 'Project Deploy API',
+        path: repoPath,
+        defaultBranch: 'main',
+        maxParallel: 2,
+      });
+      config.deploy = {
+        'proj-deploy-api': { steps: [['never-run']], timeoutSec: 2, restartHub: false },
+      };
+
+      const patchRes = await server.inject({
+        method: 'PATCH',
+        url: '/api/projects/proj-deploy-api',
+        headers: authHeaders(),
+        payload: { deploy: { steps: [['attacker-command']] }, afterMerge: { steps: [['attacker-command']] } },
+      });
+      expect(patchRes.statusCode).toBe(200);
+      expect(JSON.parse(patchRes.body).afterMerge).toEqual(config.deploy['proj-deploy-api']);
+
+      const rerun = vi.spyOn(ctx.service, 'rerunDeploy');
+      const deployRes = await server.inject({
+        method: 'POST',
+        url: '/api/projects/proj-deploy-api/deploy',
+        headers: authHeaders(),
+      });
+      expect(deployRes.statusCode).toBe(202);
+      expect(JSON.parse(deployRes.body)).toMatchObject({ projectId: 'proj-deploy-api', status: 'queued' });
+      expect(rerun).toHaveBeenCalledWith('proj-deploy-api');
+      rerun.mockRestore();
+
+      const pushSpy = vi.spyOn(ctx.service, 'pushDeployNow').mockResolvedValue({
+        projectId: 'proj-deploy-api',
+        status: 'succeeded',
+        pushStatus: 'push lúc 12:00',
+      });
+      const pushNowRes = await server.inject({
+        method: 'POST',
+        url: '/api/projects/proj-deploy-api/deploy',
+        headers: authHeaders(),
+        payload: { pushNow: true },
+      });
+      expect(pushNowRes.statusCode).toBe(200);
+      expect(JSON.parse(pushNowRes.body)).toMatchObject({ projectId: 'proj-deploy-api', status: 'succeeded', pushStatus: 'push lúc 12:00' });
+      expect(pushSpy).toHaveBeenCalledWith('proj-deploy-api');
+      pushSpy.mockRestore();
+    });
+
+    it('POST /api/projects/:id/deploy {pushNow: true} returns 500 when commandRunner fails with code!=0', async () => {
+      const repoPath = path.join(tmpDir, 'repo-deploy-fail');
+      initGitRepo(repoPath);
+      ctx.projectRepo.insert({
+        id: 'proj-deploy-fail',
+        name: 'Project Deploy Fail',
+        path: repoPath,
+        defaultBranch: 'main',
+        maxParallel: 2,
+        merge: JSON.stringify({ enabled: true, worktrees: { main: repoPath } }),
+      });
+      config.deploy = {
+        'proj-deploy-fail': {
+          steps: [],
+          timeoutSec: 2,
+          restartHub: false,
+          push: { remote: 'origin', from: 'main', to: 'release', ffOnly: true },
+        },
+      };
+
+      const failingRunner = vi.fn(async () => ({ code: 1, output: 'push rejected' }));
+      const deployService = new DeployService(
+        config,
+        ctx.projectRepo,
+        ctx.scheduler.getEventBus(),
+        0,
+        failingRunner,
+      );
+      (deployService as unknown as { latest: Map<string, unknown> }).latest.set('proj-deploy-fail', {
+        projectId: 'proj-deploy-fail',
+        status: 'succeeded',
+        finishedAt: new Date().toISOString(),
+      });
+      ctx.service.deployService = deployService;
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/api/projects/proj-deploy-fail/deploy',
+        headers: authHeaders(),
+        payload: { pushNow: true },
+      });
+      expect(res.statusCode).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({
+        projectId: 'proj-deploy-fail',
+        status: 'failed',
+        error: expect.stringContaining('exit 1'),
+      });
+      expect(failingRunner).toHaveBeenCalled();
     });
 
     it('PATCH /api/projects/:id rejects invalid checks schema', async () => {

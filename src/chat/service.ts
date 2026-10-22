@@ -18,8 +18,9 @@ import {
   ChatSessionRow,
   ChatRetryRepo,
   ChatRetryRow,
+  KnowledgeRepo,
 } from '../db/index.js';
-import { PermissionBroker } from './permissions.js';
+import { PermissionBroker, canAlwaysAllowCommand, commandPermissionLabel } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
@@ -39,7 +40,10 @@ import {
   buildHubSnapshot,
   readHubSnapshotFiles,
   FORK_SUMMARY_PROMPT,
+  buildAssistantPrompt,
 } from './claude.js';
+import { buildProjectKnowledgeContext } from '../projects/knowledge-context.js';
+import { projectSettings } from '../projects/settings.js';
 
 async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
   try {
@@ -78,7 +82,60 @@ export interface RunningTurn {
   isCompact?: boolean;
   isForkSummary?: boolean;
   accumulatedText?: string;
+  toolExecutions?: Map<string, { messageId: string; startedAt: number; name: string; summary: string; input?: Record<string, unknown> }>;
   onFinish?: (err?: Error, result?: { contextTokens?: number; summary?: string }) => void;
+}
+
+const TOOL_OUTPUT_LIMIT = 4096;
+const SECRET_TOOL_PATH = /(?:^|[\\/\s'"])(?:auth\.json|\.?credentials?\.json|[^\\/\s'"]*token[^\\/\s'"]*\.json|keyring[^\\/\s'"]*|\.env(?:\.[^\\/\s'"]+)?)(?=$|[\\/\s'"])/i;
+const SECRET_TOOL_DIRECTORY = /(?:~?[\\/]\.codex(?:[\\/]|$)|~?[\\/]\.agy-homes(?:[\\/]|$))/i;
+
+function isSecretToolInput(input?: Record<string, unknown>): boolean {
+  if (!input) return false;
+  const values = ['file_path', 'path', 'file', 'cwd', 'command']
+    .map((key) => input[key])
+    .filter((value): value is string => typeof value === 'string');
+  return values.some((value) => SECRET_TOOL_PATH.test(value) || SECRET_TOOL_DIRECTORY.test(value));
+}
+
+function boundedToolOutput(output: string | undefined, input?: Record<string, unknown>): string | undefined {
+  if (output === undefined || isSecretToolInput(input)) return undefined;
+  return output.length > TOOL_OUTPUT_LIMIT ? `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n…` : output;
+}
+
+function boundedToolInput(input: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = isSecretToolInput(input)
+    ? Object.fromEntries(Object.entries(input).map(([key, value]) => (
+      ['content', 'new_string', 'old_string'].includes(key) && typeof value === 'string'
+        ? [key, '[đã ẩn]']
+        : [key, value]
+    )))
+    : input;
+  const compact = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      return value.length > 2000 ? `${value.slice(0, 2000)}\n…` : value;
+    }
+    if (Array.isArray(value)) return value.map(compact);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, compact(child)]));
+    }
+    return value;
+  };
+  const compacted = compact(sanitized) as Record<string, unknown>;
+  const serialized = JSON.stringify(compacted);
+  if (serialized.length <= TOOL_OUTPUT_LIMIT) return compacted;
+  return { truncated: true, preview: `${serialized.slice(0, TOOL_OUTPUT_LIMIT - 1)}…` };
+}
+
+function toolDiff(name: string, input?: Record<string, unknown>): string | undefined {
+  if (!/(?:edit|write|multiedit|notebookedit)/i.test(name) || !input || isSecretToolInput(input)) return undefined;
+  const oldText = typeof input.old_string === 'string' ? input.old_string : '';
+  const newText = typeof input.new_string === 'string' ? input.new_string : typeof input.content === 'string' ? input.content : '';
+  if (!oldText && !newText) return undefined;
+  return [
+    ...oldText.split('\n').filter(Boolean).map((line) => `- ${line}`),
+    ...newText.split('\n').filter(Boolean).map((line) => `+ ${line}`),
+  ].join('\n');
 }
 
 interface PersistentProcess {
@@ -95,14 +152,27 @@ interface PersistentProcess {
   limitResetSeconds?: number;
 }
 
+interface WaitingUserMessage {
+  text: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
+const MAX_WAITING_USER_MESSAGES = 10;
+
 export class ChatService {
   private queue: QueuedTurn[] = [];
+  /** Messages people sent while the session was busy, delivered in order after the current turn. */
+  private waitingUserMessages = new Map<string, WaitingUserMessage[]>();
   private runningTurns = new Map<string, RunningTurn>();
   private claudeBinOverride?: string;
   private persistentProcesses = new Map<string, PersistentProcess>();
   private snapshotAt = new Map<string, number>();
   private snapshotEventAt = new Map<string, number>();
   private retryTimers = new Map<string, NodeJS.Timeout>();
+  private telegramChatBySession = new Map<string, number>();
+  private earlyRetryAt = new Map<string, number>();
+  private lastClaudeQuotaEventUntil?: number;
 
   constructor(
     public config: AgentHubConfig,
@@ -117,7 +187,7 @@ export class ChatService {
     public quotaMarkRepo?: QuotaMarkRepo,
     public quotaUsageRepo?: QuotaUsageRepo,
     public eventRepo?: EventRepo,
-    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo },
+    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo; knowledgeRepo?: KnowledgeRepo },
   ) {
     if (options?.claudeBin) {
       this.claudeBinOverride = options.claudeBin;
@@ -126,11 +196,21 @@ export class ChatService {
     // Daemon khởi động lại thì reset busy=0 cho mọi phiên
     this.chatSessionRepo.resetAllBusy();
     this.retryRepo = options?.retryRepo;
+    this.knowledgeRepo = options?.knowledgeRepo;
     for (const retry of this.retryRepo?.getPending() || []) this.armRetry(retry);
   }
 
   private failoverState: ClaudeFailoverState;
   private retryRepo?: ChatRetryRepo;
+  private knowledgeRepo?: KnowledgeRepo;
+
+  private assistantPrompt(session: ChatSessionRow): string {
+    const project = session.projectId ? this.projectRepo.get(session.projectId) : undefined;
+    const context = project && this.knowledgeRepo
+      ? buildProjectKnowledgeContext(this.knowledgeRepo.getByProject(project.id), projectSettings(project).references, undefined, project.path).text
+      : undefined;
+    return buildAssistantPrompt(context);
+  }
 
   private hubSnapshot(session: ChatSessionRow, refresh = false): string {
     const project = session.projectId ? this.projectRepo.get(session.projectId) : undefined;
@@ -174,15 +254,36 @@ export class ChatService {
     this.failoverState.setApiKey(value);
   }
 
+  setTelegramChat(sessionId: string, chatId: number): void { this.telegramChatBySession.set(sessionId, chatId); }
+  getTelegramChat(sessionId: string): number | undefined { return this.telegramChatBySession.get(sessionId); }
+
   configureFailoverSteps(steps: ClaudeFallbackStep[]): void {
     this.failoverState.configureSteps(steps);
   }
 
   listPermissions(sessionId?: string) {
-    return this.permissionBroker.listPending(sessionId).map((row) => ({
-      ...row,
-      input: JSON.parse(row.input) as Record<string, unknown>,
-    }));
+    return this.permissionBroker.listPending(sessionId).map((row) => {
+      const session = this.chatSessionRepo.get(row.sessionId);
+      const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
+      const input = JSON.parse(row.input) as Record<string, unknown>;
+      return {
+        ...row,
+        input,
+        sessionTitle: session?.title || null,
+        projectName: project?.name || null,
+        permissionLabel: typeof input.command === 'string' ? commandPermissionLabel(input.command) : row.toolName,
+        canAlwaysAllow: session?.kind !== 'assistant' && (typeof input.command !== 'string' || canAlwaysAllowCommand(input.command)),
+      };
+    });
+  }
+
+  listPermissionRules() { return this.permissionBroker.listRules(); }
+
+  getPermission(id: string) { return this.permissionBroker.get(id); }
+
+  deletePermissionRule(id: string): { ok: boolean } {
+    if (!this.permissionBroker.deleteRule(id)) throw new HttpError(404, 'not_found', 'Quy tắc không tồn tại');
+    return { ok: true };
   }
 
   decidePermission(id: string, decision: 'allow' | 'deny' | 'allow_always', message?: string): { ok: boolean } {
@@ -229,10 +330,13 @@ export class ChatService {
     const snapshot = this.failoverState.snapshot().active
       ? this.failoverState.advance('claude_usage_limit')
       : this.failoverState.activate(result.resetSeconds || this.config.reviewer.failoverSec, 'claude_usage_limit');
-    this.eventBus.emit('claude.quota_exhausted', undefined, {
-      until: snapshot.until,
-      reason: snapshot.reason,
-    });
+    if (snapshot.until === null || this.lastClaudeQuotaEventUntil === undefined || snapshot.until - this.lastClaudeQuotaEventUntil > 10 * 60) {
+      if (snapshot.until !== null) this.lastClaudeQuotaEventUntil = snapshot.until;
+      this.eventBus.emit('claude.quota_exhausted', undefined, {
+        until: snapshot.until,
+        reason: snapshot.reason,
+      });
+    }
     this.eventBus.emit('claude.fallback_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });
     this.eventBus.emit('claude.failover_enabled', undefined, { until: snapshot.until, step: snapshot.step });
     return result;
@@ -301,6 +405,20 @@ export class ChatService {
     this.retryRepo?.defer(retry.messageId, Math.floor(Date.now() / 1000) - 1);
     this.runRetry(retry.messageId);
     return { ok: true };
+  }
+
+  retryWaitingForProfile(profileName: string): number {
+    const now = Date.now();
+    let retried = 0;
+    for (const retry of this.retryRepo?.getPending() || []) {
+      const session = this.chatSessionRepo.get(retry.sessionId);
+      if (!session || session.profileName !== profileName) continue;
+      const last = this.earlyRetryAt.get(retry.sessionId) || 0;
+      if (now - last < 15 * 60_000) continue;
+      this.earlyRetryAt.set(retry.sessionId, now);
+      if (this.retryLimitNow(retry.sessionId).ok) retried++;
+    }
+    return retried;
   }
 
   private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string>; pausedUntil?: number } {
@@ -404,6 +522,7 @@ export class ChatService {
         contextTokens: number;
         createdAt: string;
         updatedAt: string;
+        kind: ChatSessionRow['kind'];
         lastMessage?: {
           id: string;
           role: string;
@@ -427,6 +546,7 @@ export class ChatService {
         contextTokens: s.contextTokens ?? 0,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
+        kind: s.kind,
       };
       if (last) {
         res.lastMessage = {
@@ -446,7 +566,7 @@ export class ChatService {
     mode?: 'safe' | 'full';
     model?: string;
     profileName?: string | null;
-    kind?: 'chat' | 'brain';
+    kind?: 'chat' | 'brain' | 'assistant';
   }): ChatSessionRow {
     const { mode, model } = this.validateSessionOptions(body);
 
@@ -481,7 +601,7 @@ export class ChatService {
     mode?: 'safe' | 'full';
     model?: string;
     profileName?: string | null;
-    kind?: 'chat' | 'brain';
+    kind?: 'chat' | 'brain' | 'assistant';
   }): ChatSessionRow {
     const existing = this.chatSessionRepo.get(id);
     if (existing) return existing;
@@ -503,12 +623,25 @@ export class ChatService {
     return this.chatSessionRepo.get(id)!;
   }
 
+  /** Apply a changed brain permission on the next turn. Running processes are closed safely. */
+  setSessionMode(id: string, mode: 'safe' | 'full'): ChatSessionRow {
+    const session = this.chatSessionRepo.get(id);
+    if (!session) throw new HttpError(404, 'not_found', `Phiên trò chuyện "${id}" không tồn tại`);
+    if (session.mode === mode) return session;
+    if (session.busy === 1 || this.runningTurns.has(id)) throw new HttpError(409, 'conflict', 'Không thể đổi quyền khi brain đang chạy');
+    const proc = this.persistentProcesses.get(id);
+    if (proc) this.closePersistentProcess(proc);
+    this.chatSessionRepo.updateMode(id, mode);
+    return this.chatSessionRepo.get(id)!;
+  }
+
   private validateSessionOptions(body: {
     mode?: 'safe' | 'full';
     model?: string;
+    kind?: 'chat' | 'brain' | 'assistant';
   }): { mode: 'safe' | 'full'; model: string } {
     const mode = body.mode || 'safe';
-    if (mode === 'full' && this.config.chat?.allowFullMode !== true) {
+    if (mode === 'full' && body.kind !== 'brain' && this.config.chat?.allowFullMode !== true) {
       throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
     }
     const model = body.model ?? this.config.chat.model;
@@ -686,7 +819,13 @@ export class ChatService {
   sendMessage(
     sessionId: string,
     text: string,
-  ): { userMessageId: string; assistantMessageId: string } {
+    opts: {
+      queueIfBusy?: boolean;
+      fromQueue?: boolean;
+      telegramChatId?: number;
+      messageIds?: { userMessageId: string; assistantMessageId: string };
+    } = {},
+  ): { userMessageId: string; assistantMessageId: string; queued?: boolean; position?: number } {
     if (typeof text !== 'string' || text.trim().length === 0) {
       throw new HttpError(400, 'bad_request', 'Nội dung tin nhắn không được để trống');
     }
@@ -698,15 +837,28 @@ export class ChatService {
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
     }
+    if (opts.telegramChatId !== undefined) this.setTelegramChat(sessionId, opts.telegramChatId);
+
+    const userMessageId = opts.messageIds?.userMessageId || crypto.randomUUID();
+    const assistantMessageId = opts.messageIds?.assistantMessageId || crypto.randomUUID();
 
     if (session.busy === 1 || this.runningTurns.has(sessionId)) {
+      // A person writing to a busy session (typically a brain in the middle of an event turn) is
+      // queued instead of rejected; the message runs as soon as the current turn finishes.
+      if (opts.queueIfBusy) {
+        const waiting = this.waitingUserMessages.get(sessionId) ?? [];
+        if (waiting.length >= MAX_WAITING_USER_MESSAGES) {
+          throw new HttpError(409, 'conflict', 'Phiên đang bận và hàng đợi đã đầy');
+        }
+        waiting.push({ text, userMessageId, assistantMessageId });
+        this.waitingUserMessages.set(sessionId, waiting);
+        this.emitEvent('chat.queued', { sessionId, position: waiting.length });
+        return { userMessageId, assistantMessageId, queued: true, position: waiting.length };
+      }
       throw new HttpError(409, 'conflict', 'Phiên đang bận');
     }
 
     this.failoverState.noteActivity();
-
-    const userMessageId = crypto.randomUUID();
-    const assistantMessageId = crypto.randomUUID();
 
     // Auto set title from first user message (cut to 60 chars) if not yet set
     const isFirstMessage = this.chatMessageRepo.getBySession(sessionId, 1).length === 0;
@@ -731,8 +883,10 @@ export class ChatService {
     this.emitEvent('chat.message', {
       sessionId,
       messageId: userMessageId,
+      assistantMessageId,
       role: 'user',
       content: text,
+      ...(opts.fromQueue ? { fromQueue: true } : {}),
     });
 
     // Mark session busy
@@ -767,6 +921,8 @@ export class ChatService {
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
     }
+    // Stopping a session also drops messages queued behind the cancelled turn.
+    this.waitingUserMessages.delete(sessionId);
 
     // Check if in queue
     const queuedIndex = this.queue.findIndex((t) => t.sessionId === sessionId);
@@ -908,6 +1064,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
           session.projectId,
+          session.kind,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: '/compact',
@@ -915,6 +1072,7 @@ export class ChatService {
           mode: session.mode,
           mcpConfigPath,
           model: session.model,
+          systemPrompt: session.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
         });
 
         let child: ChildProcess;
@@ -1090,6 +1248,7 @@ export class ChatService {
           this.config.port,
           this.config.chat.permissionTimeoutSec,
           session.projectId,
+          session.kind,
         );
         const args = buildClaudeArgs({ planning: this.config.planning,
           text: FORK_SUMMARY_PROMPT,
@@ -1097,6 +1256,7 @@ export class ChatService {
           mode: session.mode,
           mcpConfigPath,
           model: session.model,
+          systemPrompt: session.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
         });
 
         let child: ChildProcess;
@@ -1227,10 +1387,9 @@ export class ChatService {
       }
     }
 
-    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId);
-    const supportsPartial = checkClaudePartialSupport(claudeBin);
-
     const session = this.chatSessionRepo.get(turn.sessionId);
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId, session?.kind);
+    const supportsPartial = checkClaudePartialSupport(claudeBin);
     const execution = this.failoverExecution(turn);
     const profile = execution.profileName && this.profileRepo ? this.profileRepo.get(execution.profileName) : undefined;
     const args = buildClaudeArgs({ planning: this.config.planning,
@@ -1240,6 +1399,7 @@ export class ChatService {
       mcpConfigPath,
       supportsPartial,
       model: execution.model,
+      systemPrompt: session?.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
       hubSnapshot: session ? this.hubSnapshot(session) : undefined,
     });
 
@@ -1247,7 +1407,7 @@ export class ChatService {
 
     let child: ChildProcess;
     try {
-      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: turn.sessionId, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
+      child = spawnClaude(claudeBin, args, cwd, turn.text, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: turn.sessionId, chatKind: session?.kind, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     } catch (err: unknown) {
       this.chatSessionRepo.setBusy(turn.sessionId, 0);
       this.setSessionState(turn.sessionId, 'error');
@@ -1335,20 +1495,14 @@ export class ChatService {
           }
           runningTurn.pendingToolUse = true;
           this.pauseTurnWatchdog(runningTurn);
-          this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
-          this.chatMessageRepo.insert({
-            id: crypto.randomUUID(),
-            sessionId: turn.sessionId,
-            role: 'tool',
-            content: ev.summary,
-            meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
-          });
+          this.recordToolStart(runningTurn, ev);
         } else if (ev.type === 'permission_request') {
           runningTurn.waitingPermission = true;
           this.pauseTurnWatchdog(runningTurn);
           this.setSessionState(turn.sessionId, 'waiting_permission');
           this.emitEvent('chat.permission', { sessionId: turn.sessionId, messageId: turn.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
         } else if (ev.type === 'tool_result') {
+          this.recordToolResult(runningTurn, ev);
           runningTurn.pendingToolUse = false;
           runningTurn.waitingPermission = false;
           this.resetTurnWatchdog(runningTurn);
@@ -1453,15 +1607,9 @@ export class ChatService {
           }
           runningTurn.pendingToolUse = true;
           this.pauseTurnWatchdog(runningTurn);
-          this.emitChatTool(turn.sessionId, turn.messageId, ev.name, ev.summary);
-          this.chatMessageRepo.insert({
-            id: crypto.randomUUID(),
-            sessionId: turn.sessionId,
-            role: 'tool',
-            content: ev.summary,
-            meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }),
-          });
+          this.recordToolStart(runningTurn, ev);
         } else if (ev.type === 'tool_result') {
+          this.recordToolResult(runningTurn, ev);
           runningTurn.pendingToolUse = false;
           runningTurn.waitingPermission = false;
           this.resetTurnWatchdog(runningTurn);
@@ -1553,12 +1701,13 @@ export class ChatService {
     const proc = spawnClaude(claudeBin, buildClaudeArgs({ planning: this.config.planning,
       mode: session.mode,
       claudeSessionId: session.claudeSessionId,
-      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec, session.projectId),
+      mcpConfigPath: ensureChatMcpConfig(this.config.hubHome, session.id, this.config.port, this.config.chat.permissionTimeoutSec, session.projectId, session.kind),
       supportsPartial: checkClaudePartialSupport(claudeBin),
       persistent: true,
       model: execution.model,
       hubSnapshot: this.hubSnapshot(session, (this.snapshotAt.get(session.id) || 0) > 0 && Date.now() - (this.snapshotAt.get(session.id) || 0) > 10 * 60 * 1000),
-    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: session.id, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
+      systemPrompt: session.kind === 'assistant' ? this.assistantPrompt(session) : undefined,
+    }), cwd, undefined, { disableToolSearch: this.config.chat.disableToolSearch, chatSessionId: session.id, chatKind: session.kind, port: this.config.port, claudeConfigDir: profile?.kind === 'isolated' ? profile.home || undefined : undefined, env: execution.env });
     const state: PersistentProcess = { sessionId: session.id, child: proc, parser: new StreamChunkParser(), lastUsedAt: Date.now(), model: session.model, profileName: session.profileName, stderrOutput: '' };
     this.persistentProcesses.set(session.id, state);
     proc.stdout?.on('data', (chunk: Buffer) => this.handlePersistentOutput(state, chunk));
@@ -1580,14 +1729,14 @@ export class ChatService {
         if (ev.usage) proc.lastAssistantUsage = ev.usage;
         proc.active.pendingToolUse = true;
         this.pauseTurnWatchdog(proc.active);
-        this.emitChatTool(proc.sessionId, proc.active.messageId, ev.name, ev.summary);
-        this.chatMessageRepo.insert({ id: crypto.randomUUID(), sessionId: proc.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify({ name: ev.name, input: ev.input, id: ev.id }) });
+        this.recordToolStart(proc.active, ev);
       } else if (ev.type === 'permission_request' && proc.active) {
         proc.active.waitingPermission = true;
         this.pauseTurnWatchdog(proc.active);
         this.setSessionState(proc.sessionId, 'waiting_permission');
         this.emitEvent('chat.permission', { sessionId: proc.sessionId, messageId: proc.active.messageId, message: ev.message || 'Claude cần bạn cấp quyền công cụ' });
       } else if (ev.type === 'tool_result' && proc.active) {
+        this.recordToolResult(proc.active, ev);
         proc.active.pendingToolUse = false;
         proc.active.waitingPermission = false;
         this.resetTurnWatchdog(proc.active);
@@ -1767,10 +1916,47 @@ export class ChatService {
   private emitChatTool(
     sessionId: string,
     messageId: string,
+    toolMessageId: string,
+    toolUseId: string,
     name: string,
     summary: string,
+    data: { input?: Record<string, unknown>; output?: string; status: 'running' | 'done' | 'error'; durationMs?: number; diff?: string; } = { status: 'running' },
   ): void {
-    this.emitEvent('chat.tool', { sessionId, messageId, name, summary });
+    this.emitEvent('chat.tool', {
+      sessionId, messageId, toolMessageId, toolUseId, name, summary,
+      ...(data.input !== undefined ? { input: data.input } : {}),
+      ...(data.output !== undefined ? { output: data.output } : {}),
+      status: data.status,
+      ...(data.durationMs !== undefined ? { durationMs: data.durationMs } : {}),
+      ...(data.diff !== undefined ? { diff: data.diff } : {}),
+    });
+  }
+
+  private recordToolStart(turn: RunningTurn, ev: Extract<ParsedStreamEvent, { type: 'tool_use' }>): void {
+    const id = ev.id || crypto.randomUUID();
+    const toolMessageId = crypto.randomUUID();
+    const input = boundedToolInput(ev.input || {});
+    const meta = { name: ev.name, summary: ev.summary, input, status: 'running' as const, diff: toolDiff(ev.name, input), id };
+    if (!turn.toolExecutions) turn.toolExecutions = new Map();
+    turn.toolExecutions.set(id, { messageId: toolMessageId, startedAt: Date.now(), name: ev.name, summary: ev.summary, input });
+    this.chatMessageRepo.insert({ id: toolMessageId, sessionId: turn.sessionId, role: 'tool', content: ev.summary, meta: JSON.stringify(meta) });
+    this.emitChatTool(turn.sessionId, turn.messageId, toolMessageId, id, ev.name, ev.summary, { input, status: 'running', diff: meta.diff });
+  }
+
+  private recordToolResult(turn: RunningTurn, ev: Extract<ParsedStreamEvent, { type: 'tool_result' }>): void {
+    const executions = turn.toolExecutions;
+    if (!executions || executions.size === 0) return;
+    const id = ev.toolUseId && executions.has(ev.toolUseId) ? ev.toolUseId : [...executions.keys()].at(-1);
+    if (!id) return;
+    const execution = executions.get(id);
+    if (!execution) return;
+    const output = boundedToolOutput(ev.output, execution.input);
+    const status = ev.isError ? 'error' as const : 'done' as const;
+    const durationMs = Date.now() - execution.startedAt;
+    const meta = { name: execution.name, summary: execution.summary, input: execution.input, output, status, durationMs, diff: toolDiff(execution.name, execution.input), id };
+    this.chatMessageRepo.upsert({ id: execution.messageId, sessionId: turn.sessionId, role: 'tool', content: execution.summary, meta: JSON.stringify(meta) });
+    this.emitChatTool(turn.sessionId, turn.messageId, execution.messageId, id, execution.name, execution.summary, { input: execution.input, output, status, durationMs, diff: meta.diff });
+    executions.delete(id);
   }
 
   private emitChatDone(
@@ -1832,6 +2018,37 @@ export class ChatService {
     }
   }
 
+  /** Start the next queued user message of a session once its current turn has finished. */
+  private drainWaitingUserMessages(sessionId: string): void {
+    const waiting = this.waitingUserMessages.get(sessionId);
+    if (!waiting || waiting.length === 0) return;
+    const session = this.chatSessionRepo.get(sessionId);
+    if (!session) {
+      this.waitingUserMessages.delete(sessionId);
+      return;
+    }
+    // The finishing turn may not have released the session yet (busy is cleared right after
+    // chat.done), or another turn slipped in: check again shortly until the session is free.
+    if (session.busy === 1 || this.runningTurns.has(sessionId)) {
+      const timer = setTimeout(() => this.drainWaitingUserMessages(sessionId), 300);
+      timer.unref?.();
+      return;
+    }
+    const next = waiting.shift()!;
+    if (waiting.length === 0) this.waitingUserMessages.delete(sessionId);
+    try {
+      this.sendMessage(sessionId, next.text, {
+        fromQueue: true,
+        messageIds: {
+          userMessageId: next.userMessageId,
+          assistantMessageId: next.assistantMessageId,
+        },
+      });
+    } catch (error) {
+      console.error(`[chat] queued message for ${sessionId} failed:`, error);
+    }
+  }
+
   private emitEvent(type: string, payload: unknown): void {
     if (typeof (this.eventBus as unknown as { emitEphemeral?: (t: string, tid?: string, p?: unknown) => boolean }).emitEphemeral === 'function') {
       (this.eventBus as unknown as { emitEphemeral: (t: string, tid?: string, p?: unknown) => boolean }).emitEphemeral(
@@ -1841,6 +2058,12 @@ export class ChatService {
       );
     } else {
       this.eventBus.emit(type, undefined, payload);
+    }
+    if (type === 'chat.done' || type === 'chat.error') {
+      const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId;
+      if (typeof sessionId === 'string' && this.waitingUserMessages.has(sessionId)) {
+        setImmediate(() => this.drainWaitingUserMessages(sessionId));
+      }
     }
   }
 }
@@ -1868,6 +2091,12 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
     return chatService.listPermissions(sessionId);
   });
 
+  fastify.get('/api/chat/permission-rules', async () => chatService.listPermissionRules());
+  fastify.delete('/api/chat/permission-rules/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return chatService.deletePermissionRule(id);
+  });
+
   fastify.post('/api/chat/permissions/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { decision?: string; message?: string };
@@ -1885,15 +2114,14 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
 
   // POST /api/chat/sessions
   fastify.post('/api/chat/sessions', async (req: FastifyRequest, reply: FastifyReply) => {
-    const session = chatService.createSession(
-      (req.body && typeof req.body === 'object' ? req.body : {}) as {
-        projectId?: string | null;
-        title?: string;
-        mode?: 'safe' | 'full';
-        model?: string;
-        profileName?: string | null;
-      },
-    );
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const session = chatService.createSession({
+      ...(typeof body.projectId === 'string' || body.projectId === null ? { projectId: body.projectId } : {}),
+      ...(typeof body.title === 'string' ? { title: body.title } : {}),
+      ...(body.mode === 'safe' || body.mode === 'full' ? { mode: body.mode } : {}),
+      ...(typeof body.model === 'string' ? { model: body.model } : {}),
+      ...(typeof body.profileName === 'string' || body.profileName === null ? { profileName: body.profileName } : {}),
+    });
     return reply.status(201).send(session);
   });
 
@@ -1942,7 +2170,7 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
   fastify.post('/api/chat/sessions/:id/messages', async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { text?: unknown };
-    const result = chatService.sendMessage(id, body.text as string);
+    const result = chatService.sendMessage(id, body.text as string, { queueIfBusy: true });
     return reply.status(202).send(result);
   });
 

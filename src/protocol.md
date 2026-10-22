@@ -18,6 +18,8 @@ Bạn là một AI worker trong hệ thống AgentHub.
 9. Không sửa `.agenthub/task.md`. Không commit `.agenthub/` vào git.
 10. Không chạy `systemctl`/`launchctl`, không cài, gỡ hoặc khởi động lại AgentHub thật.
 11. Đọc `.agenthub/context/knowledge.md` (nếu có) trước khi bắt đầu: kiến thức chung của dự án từ các task trước.
+12. Đọc `.agenthub/context/references.md` (nếu có): danh sách tài liệu tham chiếu CHỈ ĐỌC (không sửa, không commit).
+13. Đọc `.agenthub/context/review-checklist.md` (nếu có): checklist bắt buộc đối chiếu khi duyệt thay đổi.
 
 ## Context dependency
 
@@ -25,3 +27,11 @@ Khi task có task phụ thuộc, AgentHub tạo `.agenthub/context/deps.md` tron
 File này chứa tóm tắt DONE, review cuối và diff stat của các task phụ thuộc. Đọc file
 này trước khi bắt đầu để nắm được context đã hoàn tất; file có thể bị cắt theo giới hạn
 cấu hình.
+
+## Context tham chiếu
+
+Khi dự án có cấu hình tham chiếu (`settings.references`), AgentHub tạo `.agenthub/context/references.md` trong worktree.
+File này liệt kê các tài liệu tham chiếu và nội dung được inject (nếu có, áp dụng cho file văn bản ≤ 64KB).
+Mọi tài liệu tham chiếu là CHỈ ĐỌC; nếu bị sửa đổi, task sẽ bị chuyển sang trạng thái `blocked`.
+Ngoài ra, biến môi trường `AGENTHUB_REF_<NAME>` được thiết lập cho từng tham chiếu.
+Nội dung `AGENTS.md` của repo (≤ 32KB) cũng được chép vào `.agenthub/context/AGENTS.md` để worker không bỏ sót.

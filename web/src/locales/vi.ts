@@ -4,7 +4,7 @@ export const vi = {
     tasks: 'Task',
     profiles: 'Tài khoản',
     projects: 'Project',
-    plans: 'Duyệt kế hoạch',
+    plans: 'Kế hoạch',
     settings: 'Cài đặt',
     toggleTheme: 'Chuyển chế độ sáng/tối',
     language: 'Ngôn ngữ',
@@ -21,6 +21,8 @@ export const vi = {
     loading: 'Đang tải...',
     retry: 'Thử lại',
     confirm: 'Xác nhận',
+    yes: 'Có',
+    no: 'Không',
     empty: 'Trống',
     details: 'Chi tiết',
     view: 'Xem',
@@ -91,7 +93,8 @@ export const vi = {
     loadNormal: 'Tải máy bình thường',
     overlapWarningTitle: 'Cảnh báo trùng file',
     overlapWarningDesc: 'Có {count} cảnh báo sửa trùng file giữa các task đang chạy:',
-    brains: 'Bộ não', brainMode: 'Chế độ', brainStatewaiting_limit: 'chờ hết giới hạn quota', brainStatewaiting_permission: 'chờ bạn cấp quyền', brainMode_off: 'tắt', brainMode_suggest: 'gợi ý', brainMode_auto: 'tự động', brainMode_external: 'Claude ngoài điều phối', brainStateidle: 'rảnh', brainStaterunning: 'đang chạy', brainStatewaiting: 'đang chờ', brainStateerror: 'lỗi', brainQueued: 'đang xếp hàng', brainTokens: 'Token hôm nay', openBrainChat: 'Mở phiên chat',
+    brains: 'Bộ não', assistant: 'Trợ lý', assistantWorking: 'đang trả lời', assistantReady: 'sẵn sàng', openAssistantChat: 'Mở Trợ lý', brainMode: 'Chế độ', brainStatewaiting_limit: 'chờ hết giới hạn quota', brainStatewaiting_permission: 'chờ bạn cấp quyền', brainMode_off: 'tắt', brainMode_suggest: 'gợi ý', brainMode_auto: 'tự động', brainMode_external: 'Claude ngoài điều phối', brainStateidle: 'rảnh', brainStaterunning: 'đang chạy', brainStatewaiting: 'đang chờ', brainStateerror: 'lỗi', brainQueued: 'đang xếp hàng', brainTokens: 'Token hôm nay', openBrainChat: 'Mở phiên chat',
+    ciCardTitle: 'CI', ciCardSubtitle: 'Trạng thái CI GitHub Actions gần nhất', ciCardNoData: 'Chưa có dữ liệu CI', ciPassed: 'Thành công', ciFailed: 'Thất bại', ciRunning: 'Đang chạy',
   },
   tasks: {
     title: 'Quản lý Task',
@@ -128,28 +131,33 @@ export const vi = {
     allStatuses: 'Tất cả trạng thái',
   },
   plans: {
-    title: 'Duyệt kế hoạch',
-    subtitle: 'Claude gom các task đề xuất thành từng đợt nháp. Xem, sửa rồi bấm Giao cả đợt để worker bắt đầu làm.',
+    title: 'Kế hoạch',
+    subtitle: 'Xem các đợt task, tiến độ và sơ đồ phụ thuộc của Claude.',
     batchList: 'Danh sách đợt',
-    noBatches: 'Chưa có đợt kế hoạch nào',
+    noBatches: 'Chưa có kế hoạch nào',
     selectBatch: 'Chọn một đợt để xem chi tiết',
     selectBatchHint: 'Chọn một đợt từ danh sách bên trái để bắt đầu xem và duyệt.',
-    emptyWhenTitle: 'Đợt nháp xuất hiện khi nào:',
-    emptyWhenDesc: 'Lệnh /plan trên Telegram / chat, hoặc khi cài đặt yêu cầu duyệt.',
+    emptyWhenTitle: 'Kế hoạch sẽ xuất hiện khi nào?',
+    emptyWhenDesc: 'Khi Claude chia một việc thành nhiều task, kế hoạch sẽ hiện ở đây.',
     emptyCurrentSetting: 'Cài đặt hiện tại:',
-    settingNone: 'Hiện Claude giao việc ngay, không cần duyệt',
+    settingNone: 'Claude giao việc ngay, không cần duyệt',
     settingMinTasks: 'Kế hoạch từ {count} task cần duyệt',
     settingAll: 'Mọi task cần duyệt',
-    settingsLink: 'Cài đặt (mục Duyệt kế hoạch)',
+    settingsLink: 'Cài đặt kế hoạch',
     stepsTitle: '3 bước xử lý đợt:',
     step1: 'Chọn đợt',
     step2: 'Sửa/bỏ task',
     step3: 'Giao cả đợt',
     allProjects: 'Tất cả project',
     allStatuses: 'Tất cả trạng thái',
-    draft: 'Bản nháp',
+    draft: 'Nháp chờ duyệt',
     dispatched: 'Đã giao',
     discarded: 'Đã huỷ',
+    working: 'Đang làm',
+    completed: 'Hoàn thành',
+    failed: 'Có lỗi',
+    progress: '{done}/{total} xong',
+    auto: 'Tự động',
     dispatchBatch: 'Giao cả đợt',
     discardBatch: 'Huỷ đợt',
     addTask: 'Thêm task',
@@ -322,6 +330,21 @@ export const vi = {
     quotaUsage: '{five} · {week}',
     week: 'tuần',
     noQuotaData: 'Chưa có dữ liệu quota',
+    wakeupBtn: 'Đánh thức quota',
+    wakeupTip: 'Gửi một prompt rất ngắn để cửa sổ quota 5 giờ bắt đầu ngay, nhờ vậy reset sớm hơn',
+    wakeupStarted: 'Đang đánh thức {name}…',
+    wakeupDone: 'Đã đánh thức {name}',
+    wakeupFailed: 'Đánh thức {name} thất bại',
+    wakeupSkipped: 'Bỏ qua {name}',
+    wakeupStartedHint: 'Đang gửi một prompt rất ngắn…',
+    checkOkTitle: 'Kiểm tra {name} thành công',
+    checkFailTitle: 'Kiểm tra {name} thất bại',
+    loginOpenFailed: 'Không mở được trình đăng nhập',
+    importCheckingHint: 'Đang kiểm tra lại bằng CLI…',
+    planAll: 'Tất cả',
+    planUnknown: 'Chưa rõ gói',
+    planFilterAria: 'Lọc theo gói tài khoản',
+    noCodexQuotaYet: 'Có sau lần chạy Codex đầu tiên',
     multiplePersonalWarning: 'Nhiều tài khoản cá nhân cùng nhà cung cấp có thể vi phạm điều khoản và dùng chung quota.',
     emptyProvider: 'Chưa có tài khoản {provider}.',
     addDescription: 'Chọn nhà cung cấp và mở trình hướng dẫn đăng nhập.',
@@ -384,6 +407,9 @@ export const vi = {
     authMethod: 'Phương thức xác thực',
     tabTerminalLogin: 'Đăng nhập Terminal',
     tabImportCockpit: 'Nhập Refresh Token',
+    tabImportCodex: 'Nhập token (JSON)',
+    codexImportDesc: 'Dán danh sách tài khoản Codex dạng JSON (id_token, access_token, refresh_token, email…) hoặc nội dung auth.json. Hub ghi auth.json cho từng hồ sơ rồi tự kiểm tra bằng Codex CLI; tài khoản trùng email sẽ được cập nhật token.',
+    codexJsonPlaceholder: '[\n  {\n    \"email\": \"user@example.com\",\n    \"id_token\": \"eyJ...\",\n    \"access_token\": \"eyJ...\",\n    \"refresh_token\": \"rt_...\",\n    \"account_id\": \"...\",\n    \"type\": \"codex\"\n  }\n]',
     cockpitImportDesc: 'Dán danh sách tài khoản export từ Cockpit tools (JSON gồm email và refresh_token). Token được kiểm tra với Google trước khi lưu; tài khoản trùng email sẽ được cập nhật token thay vì tạo hồ sơ mới.',
     cockpitJsonPlaceholder: '[\n  {\n    "email": "user@gmail.com",\n    "refresh_token": "1//..."\n  }\n]',
     importTokensBtn: 'Nhập tài khoản',
@@ -394,6 +420,7 @@ export const vi = {
     cockpitJsonRequired: 'Vui lòng dán dữ liệu JSON chứa refresh token.',
     importFailed: 'Không thể nhập tài khoản.',
     importBack: 'Sửa dữ liệu',
+    enableMultipleAndRetry: 'Bật và thử lại',
     tokenLogin: 'Đăng nhập bằng refresh token',
     tokenLoginShort: 'Dùng token',
     tokenLoginTitle: 'Đăng nhập {name} bằng refresh token',
@@ -401,7 +428,7 @@ export const vi = {
     tokenLoginRequired: 'Vui lòng nhập email và refresh token.',
     tokenLoginBtn: 'Đăng nhập',
     tokenLoginVerifying: 'Đang kiểm tra token…',
-    tokenLoginSuccess: 'Đã lưu token cho {name} ({email}), đang kiểm tra với agy…',
+    tokenLoginSuccess: 'Đã lưu token cho {name}',
     refreshDone: 'Đã làm mới {name}',
     refreshFailed: 'Làm mới thất bại',
     toggledOn: 'Đã bật hồ sơ {name}',
@@ -416,6 +443,361 @@ export const vi = {
     accountNameRequired: 'Vui lòng nhập tên tài khoản.',
     creating: 'Đang tạo…',
   },
+  tour: { help: 'Hướng dẫn trang này', replay: 'Xem lại hướng dẫn', close: 'Đóng hướng dẫn', step: 'Bước {current}/{total}', stepCount: '{count} bước', previous: 'Quay lại', next: 'Tiếp', skip: 'Bỏ qua', finish: 'Kết thúc', panelTitle: 'Trung tâm trợ giúp', panelDescription: 'Tìm tour và bài hướng dẫn ngắn theo từng trang.', search: 'Tìm trong hướng dẫn…', noResults: 'Không tìm thấy hướng dẫn phù hợp.', restartCurrent: 'Bắt đầu lại tour này', steps: {
+  "intro": {
+    "overview": {
+      "title": "Tổng quan",
+      "content": "Đây là trang nhìn nhanh sức khỏe AgentHub. Dùng khi cần biết worker, quota và tài nguyên máy trước khi giao việc. Bấm thẻ để mở phần chi tiết; số quota là phần còn lại đến giờ reset."
+    },
+    "connection": {
+      "title": "Kết nối",
+      "content": "Đây là trạng thái kết nối thời gian thực với hub. Dùng để biết dữ liệu có đang cập nhật không. Khi mất kết nối, thao tác mới có thể chờ gửi lại; hãy kiểm tra hub trước khi bấm lại."
+    },
+    "resources": {
+      "title": "Tải máy và ổ đĩa",
+      "content": "Đây là tải CPU, bộ nhớ và dung lượng trống. Dùng để tránh chạy quá nhiều worker trên máy yếu. Khi cảnh báo đỏ, task mới có thể bị giảm tốc hoặc chặn; dọn ổ đĩa trước khi tăng song song."
+    },
+    "brain": {
+      "title": "Bộ não",
+      "content": "Bộ não là bộ điều phối, chia việc và theo dõi worker. Dùng khi muốn giao một mục tiêu lớn để hệ thống tự lập kế hoạch. Nó khác Trợ lý ở chỗ bộ não chạy quy trình task, còn Trợ lý trả lời hội thoại."
+    },
+    "assistant": {
+      "title": "Trợ lý",
+      "content": "Trợ lý là cuộc trò chuyện nhanh để hỏi, khám phá và tạo task. Dùng khi chưa cần quy trình điều phối đầy đủ. Bấm gửi để nhận câu trả lời; nội dung chưa tự trở thành task nếu bạn không yêu cầu."
+    },
+    "projects": {
+      "title": "Project",
+      "content": "Project là cấu hình một kho mã, nhánh và chính sách chạy. Dùng để AgentHub biết sửa đúng thư mục. Bấm một project để mở cài đặt; kiểm tra đường dẫn trước khi bật quyền toàn phần."
+    },
+    "tasks": {
+      "title": "Task",
+      "content": "Task là một việc cụ thể được xếp hàng cho worker. Dùng để theo dõi trạng thái, log và kết quả. Bấm task để xem chi tiết; Huỷ có thể dừng lần chạy hiện tại."
+    },
+    "queue": {
+      "title": "Hàng đợi",
+      "content": "Đây là bộ lọc và các cột vòng đời task. Dùng để tìm việc đang chờ, đang chạy hoặc cần duyệt. Chọn trạng thái để thu hẹp danh sách; bộ lọc không xoá task."
+    },
+    "plans": {
+      "title": "Kế hoạch",
+      "content": "Kế hoạch là danh sách bước do bộ não đề xuất trước khi chạy. Dùng để xem, sửa và duyệt phạm vi công việc. Bấm Duyệt để cho phép dispatch; hãy kiểm tra phụ thuộc trước."
+    },
+    "lifecycle": {
+      "title": "Vòng đời task",
+      "content": "Task đi qua xếp hàng → chạy → kiểm tra → chờ duyệt → merge → deploy. Dùng chuỗi này để biết đang chờ ở đâu. Bấm chi tiết để xem lý do; không phải trạng thái nào cũng tự chuyển tiếp."
+    },
+    "profiles": {
+      "title": "Tài khoản",
+      "content": "Tài khoản là kết nối tới nhà cung cấp model. Dùng nhiều tài khoản để phân bổ quota và dự phòng. Bấm Đăng nhập lại khi phiên hết hạn; không chia sẻ refresh token."
+    },
+    "settings": {
+      "title": "Cài đặt hệ thống",
+      "content": "Cài đặt hệ thống điều khiển model, quyền, thông báo và giới hạn chạy. Dùng khi muốn đổi chính sách chung. Bấm Lưu để áp dụng; thay đổi có thể ảnh hưởng task mới."
+    },
+    "setup": {
+      "title": "Thiết lập",
+      "content": "Thiết lập kiểm tra CLI, MCP và hồ sơ cần thiết. Dùng lần đầu hoặc sau khi đổi máy. Bấm kiểm tra/cài đặt để sửa mục thiếu; không cần chạy lại nếu mọi mục đều xanh."
+    },
+    "help": {
+      "title": "Trợ giúp",
+      "content": "Panel trợ giúp chứa mục lục các tour và bài ngắn theo trang. Dùng khi quên ý nghĩa một trường hoặc nút. Bấm ? để tìm kiếm và bắt đầu lại tour; nội dung có cả Việt và Anh."
+    }
+  },
+  "page-dashboard": {
+    "overview": {
+      "title": "Tổng quan",
+      "content": "Đây là trang tóm tắt sức khỏe hub. Dùng trước khi giao việc để biết hệ thống sẵn sàng chưa. Bấm thẻ để đi tới chi tiết; dữ liệu cập nhật theo thời gian thực."
+    },
+    "resources": {
+      "title": "Tài nguyên",
+      "content": "Đây là tải máy và ổ đĩa. Dùng để quyết định có nên tăng số worker không. Bấm vào cảnh báo để xử lý; thiếu dung lượng có thể làm task thất bại."
+    },
+    "brain": {
+      "title": "Bộ não",
+      "content": "Đây là trạng thái bộ não và Trợ lý theo project. Dùng để biết ai đang điều phối hoặc trả lời. Bấm liên kết chat để xem phiên; quota model vẫn được tính."
+    },
+    "quotas": {
+      "title": "Quota nhà cung cấp",
+      "content": "Đây là quota theo họ model và thời điểm reset. Dùng phần trăm còn lại để chọn nhà cung cấp; giờ reset là lúc quota dự kiến trở lại. Tránh nhầm giờ địa phương khi lập kế hoạch."
+    },
+    "performance": {
+      "title": "Hiệu năng",
+      "content": "Đây là CPU/RSS theo nhóm tiến trình (daemon, worker, test, build…) và lịch sử một giờ. Dùng để phát hiện nhóm đang ngốn tài nguyên hoặc hàng đợi tăng. Bấm task liên quan để xem log; số liệu không tự sửa cấu hình."
+    },
+    "checklist": {
+      "title": "Checklist",
+      "content": "Checklist là các việc nên hoàn tất để dùng hub an toàn. Dùng khi mới cài hoặc onboarding thành viên. Bấm từng mục để đi tới nơi cấu hình; bỏ qua không xoá project."
+    },
+    "workers": {
+      "title": "Worker đang chạy",
+      "content": "Đây là các worker đang thực thi task. Dùng để theo dõi model, thời gian và tài nguyên. Bấm Tạm dừng khi cần giữ trạng thái; bấm Tiếp tục để chạy tiếp."
+    }
+  },
+  "page-projects": {
+    "projects": {
+      "title": "Danh sách project",
+      "content": "Đây là các kho mã đã đăng ký. Dùng để chọn phạm vi mà worker được phép sửa. Bấm project để mở cài đặt; kiểm tra đường dẫn và nhánh trước khi tạo task."
+    },
+    "register": {
+      "title": "Đăng ký dự án",
+      "content": "Đây là nút thêm kho mã vào hub. Dùng khi bắt đầu với project mới. Bấm để nhập đường dẫn và nhánh mặc định; đường dẫn sai sẽ làm worker chạy nhầm nơi."
+    },
+    "project-card": {
+      "title": "Thẻ project",
+      "content": "Thẻ này tóm tắt trạng thái, nhánh và giới hạn song song. Dùng để kiểm tra chính sách trước khi chạy. Bấm Cài đặt để sửa; thay đổi áp dụng cho task mới."
+    },
+    "brain-settings": {
+      "title": "Bộ não project",
+      "content": "Đây là chế độ, quyền và ngân sách của bộ não theo project. Dùng khi project cần chính sách riêng. Bật full chỉ khi tin cậy repo; quyền rộng có rủi ro sửa hoặc chạy lệnh ngoài ý muốn."
+    },
+    "worktree": {
+      "title": "Worktree",
+      "content": "Worktree là thư mục làm việc tách cho task. Dùng để nhiều task không ghi đè nhau. Bấm lựa chọn để đổi chiến lược; dọn worktree cũ trước khi thiếu ổ đĩa."
+    },
+    "references": {
+      "title": "Tham chiếu",
+      "content": "Tham chiếu là tài liệu được đưa vào ngữ cảnh worker. Dùng để cung cấp quy ước hoặc API. Bấm thêm để chọn nguồn; nội dung nhạy cảm có thể bị gửi tới model."
+    },
+    "checks": {
+      "title": "Kiểm tra và review",
+      "content": "Checks là mảng JSON mô tả lệnh kiểm tra sau khi worker sửa code, ví dụ [{\"name\":\"test\",\"cmd\":[\"npm\",\"test\"],\"timeoutSec\":600}]. Để trống thì hub tự phát hiện từ package.json; JSON sai sẽ không chạy được."
+    }
+  },
+  "page-settings": {
+    "settings": {
+      "title": "Cài đặt chung",
+      "content": "Đây là chính sách điều phối toàn hub. Dùng khi muốn đổi mặc định cho task mới. Bấm Lưu sau mỗi nhóm; hãy ghi lại giá trị cũ nếu cần hoàn tác."
+    },
+    "model-chain": {
+      "title": "Chuỗi model",
+      "content": "Chuỗi model là thứ tự thử từ khó đến dễ khi chạy task. Dùng để cân bằng chất lượng và quota. Bấm sắp xếp để đổi ưu tiên; model đầu tiên tốn quota trước."
+    },
+    "planning-approval": {
+      "title": "Duyệt kế hoạch",
+      "content": "Đây là lựa chọn tự duyệt, duyệt thủ công hoặc bỏ qua kế hoạch. Dùng thủ công cho repo quan trọng; bấm lựa chọn để đổi luồng. Tự duyệt giảm kiểm soát phạm vi."
+    },
+    "brain-policy": {
+      "title": "Chính sách bộ não",
+      "content": "Đây là chế độ, quyền, ngân sách và số lần chạy cùng lúc. Dùng để giới hạn chi phí và tác động. Bấm Lưu để áp dụng; tăng song song có thể làm máy quá tải."
+    },
+    "notifications": {
+      "title": "Thông báo",
+      "content": "Đây là thông báo desktop, giờ yên tĩnh và bản tóm tắt. Dùng để không bỏ lỡ review nhưng tránh bị làm phiền. Bấm công tắc để bật; giờ yên tĩnh sẽ trì hoãn cảnh báo."
+    },
+    "telegram": {
+      "title": "Telegram",
+      "content": "Đây là kết nối bot và chat Telegram. Dùng để nhận trạng thái ngoài trình duyệt. Bấm lưu token rồi gửi mã ghép nối; token bot là bí mật, không đưa vào log."
+    },
+    "accounts": {
+      "title": "Nhiều tài khoản",
+      "content": "Đây là tùy chọn dùng nhiều tài khoản cùng nhà cung cấp. Dùng để chia quota hoặc dự phòng. Bật khi các hồ sơ thuộc tài khoản hợp lệ; quota trùng email vẫn dùng chung."
+    },
+    "updates": {
+      "title": "Cập nhật",
+      "content": "Đây là phiên bản và trạng thái cập nhật AgentHub. Dùng để biết có bản sửa lỗi mới. Bấm kiểm tra/cập nhật theo hướng dẫn; không khởi động lại hub thật trong lúc task đang chạy."
+    }
+  },
+  "page-setup": {
+    "setup": {
+      "title": "Thiết lập",
+      "content": "Đây là checklist cài đặt AgentHub. Dùng khi thiết lập máy hoặc sửa lỗi môi trường. Bấm kiểm tra từng dòng; chỉ cài mục thiếu."
+    },
+    "tools": {
+      "title": "Công cụ",
+      "content": "Đây là các CLI worker cần có. Dùng để xác nhận lệnh có thể chạy. Bấm cài hoặc kiểm tra; phiên bản không tương thích có thể làm task thất bại."
+    },
+    "profiles": {
+      "title": "Hồ sơ đăng nhập",
+      "content": "Đây là trạng thái đăng nhập các nhà cung cấp. Dùng để biết model nào sẵn sàng. Bấm đăng nhập lại khi hết phiên; không nhập token vào chat."
+    },
+    "setup-result": {
+      "title": "Kết quả kiểm tra",
+      "content": "Đây là kết quả lệnh kiểm tra gần nhất. Dùng để đọc lỗi trước khi chạy task. Bấm xem chi tiết để biết nguyên nhân; lỗi cảnh báo không luôn chặn toàn hệ thống."
+    },
+    "help": {
+      "title": "Trợ giúp",
+      "content": "Đây là nút mở panel trợ giúp. Dùng để tìm bài hướng dẫn hoặc bắt đầu lại tour. Bấm ? bất cứ lúc nào khi quên thao tác."
+    }
+  },
+  "page-profiles": {
+    "profiles": {
+      "title": "Tài khoản",
+      "content": "Đây là danh sách hồ sơ nhà cung cấp. Dùng để theo dõi đăng nhập và quota. Bấm một hồ sơ để đăng nhập lại hoặc chỉnh sửa; refresh token phải giữ kín."
+    },
+    "provider-quota": {
+      "title": "Quota",
+      "content": "Đây là phần trăm quota còn lại và giờ reset. Dùng để chọn hồ sơ phù hợp cho task. Bấm xem chi tiết để biết họ model; quota hết sẽ khiến worker chờ hoặc chuyển dự phòng."
+    },
+    "account-types": {
+      "title": "Loại tài khoản",
+      "content": "Đây là tài khoản cá nhân, Team hoặc API. Dùng đúng loại để hiểu quyền và quota. Bấm thêm tài khoản để chọn nhà cung cấp; API key có thể tính phí riêng."
+    },
+    "add-account": {
+      "title": "Thêm tài khoản",
+      "content": "Đây là nút mở luồng đăng nhập nhà cung cấp. Dùng khi cần thêm quota hoặc dự phòng. Bấm và chọn Terminal hoặc token; kiểm tra email để tránh trùng tài khoản."
+    },
+    "reauth": {
+      "title": "Đăng nhập lại",
+      "content": "Đây là thao tác làm mới phiên đăng nhập. Dùng khi hồ sơ báo hết hạn. Bấm để mở Terminal; không xoá hồ sơ nếu chỉ cần gia hạn phiên."
+    },
+    "help": {
+      "title": "Trợ giúp",
+      "content": "Đây là nút mở panel trợ giúp. Dùng để tìm bài về quota hoặc tài khoản. Bấm ? rồi chọn Bắt đầu lại tour này nếu muốn xem từ đầu."
+    }
+  },
+  "page-tasks": {
+    "tasks": {
+      "title": "Task",
+      "content": "Đây là bảng các task theo trạng thái. Dùng để theo dõi toàn bộ công việc. Bấm một thẻ để mở chi tiết; dữ liệu có thể thay đổi khi worker đang chạy."
+    },
+    "filters": {
+      "title": "Bộ lọc",
+      "content": "Đây là bộ lọc project, trạng thái và tìm kiếm. Dùng để tìm đúng task giữa danh sách lớn. Bấm chọn hoặc nhập từ khóa; lọc chỉ thay đổi cách hiển thị."
+    },
+    "views": {
+      "title": "Kanban và DAG",
+      "content": "Đây là hai cách xem task: cột trạng thái và đồ thị phụ thuộc. Dùng Kanban để xử lý hàng ngày, DAG để hiểu thứ tự. Bấm tab để đổi chế độ; không thay đổi dữ liệu."
+    },
+    "lifecycle": {
+      "title": "Trạng thái",
+      "content": "Đây là các bước xếp hàng, chạy, kiểm tra và review. Dùng để biết bước tiếp theo. Bấm thẻ để xem lý do chờ; không tự bỏ qua kiểm tra bắt buộc."
+    },
+    "actions": {
+      "title": "Chạy lại, Huỷ, Tạm dừng",
+      "content": "Đây là nhóm thao tác điều khiển task. Dùng Chạy lại khi lỗi tạm thời, Tạm dừng để giữ trạng thái, Huỷ để kết thúc. Bấm Huỷ là hành động khó hoàn tác; hãy xác nhận đúng task."
+    },
+    "columns": {
+      "title": "Các cột",
+      "content": "Các cột cho biết task đang chờ, chạy, review hay hoàn tất. Dùng để đọc tiến độ tổng thể. Bấm thẻ để xem log và diff; số lượng cột không phải số worker."
+    },
+    "help": {
+      "title": "Trợ giúp",
+      "content": "Đây là nút mở panel trợ giúp của trang Task. Dùng để tra ý nghĩa cột và nút. Bấm ? để tìm kiếm hoặc chạy lại tour."
+    }
+  },
+  "page-task-detail": {
+    "tasks": {
+      "title": "Chi tiết task",
+      "content": "Đây là nơi kiểm tra một task từ đầu đến cuối. Dùng trước khi duyệt hoặc trả về. Bấm các tab để đọc bằng chứng; duyệt khi log, diff và checks đều ổn."
+    },
+    "tabs": {
+      "title": "Log, Diff, Kiểm tra, Review",
+      "content": "Đây là các tab bằng chứng: Log là diễn biến, Diff là thay đổi, Kiểm tra là lệnh test, Review là quyết định. Dùng theo thứ tự này trước khi duyệt. Bấm tab để chuyển, không làm mất dữ liệu."
+    },
+    "run-actions": {
+      "title": "Điều khiển lần chạy",
+      "content": "Đây là các nút chạy lại, tạm dừng và huỷ. Dùng chạy lại cho lỗi tạm thời; tạm dừng để điều tra; huỷ khi không cần nữa. Huỷ có thể dừng worker ngay."
+    },
+    "review": {
+      "title": "Duyệt hoặc trả về",
+      "content": "Đây là nơi duyệt kết quả hoặc yêu cầu sửa. Dùng Duyệt khi thay đổi đạt yêu cầu; Trả về khi cần feedback cụ thể. Bấm Duyệt có thể chuyển sang merge/deploy theo chính sách."
+    },
+    "capture": {
+      "title": "Tạo task sửa từ log",
+      "content": "Đây là nút tạo task mới từ một lỗi hoặc đoạn log. Dùng để giữ ngữ cảnh điều tra. Bấm và chỉnh mô tả trước khi gửi; task mới vẫn tiêu tốn quota."
+    },
+    "task-summary": {
+      "title": "Tóm tắt task",
+      "content": "Đây là project, model, nhánh và trạng thái của task. Dùng để xác nhận bạn đang xem đúng việc. Bấm liên kết project nếu cần đổi chính sách; không sửa nhầm nhánh tích hợp."
+    },
+    "help": {
+      "title": "Trợ giúp",
+      "content": "Đây là nút mở bài hướng dẫn Chi tiết task. Dùng để tra tab hoặc quy trình review. Bấm ? để tìm kiếm và bắt đầu lại tour."
+    }
+  },
+  "page-chat": {
+    "chat": {
+      "title": "Chat",
+      "content": "Đây là nơi trao đổi trực tiếp với Trợ lý hoặc bộ não. Dùng Chat để hỏi nhanh, dùng bộ não để điều phối task. Bấm chọn phiên để tiếp tục ngữ cảnh."
+    },
+    "assistant": {
+      "title": "Trợ lý và bộ não",
+      "content": "Trợ lý trả lời hội thoại; bộ não lập kế hoạch và theo dõi worker. Dùng đúng chế độ cho mục tiêu. Bấm bộ chọn để đổi; đổi chế độ có thể đổi model và quota."
+    },
+    "composer": {
+      "title": "Ô nhập",
+      "content": "Đây là ô viết tin nhắn. Dùng / để chọn lệnh và @ để chèn project, task hoặc tài liệu. Bấm Gửi để thực thi; kiểm tra nội dung trước khi yêu cầu quyền rộng."
+    },
+    "new-session": {
+      "title": "Phiên chat mới",
+      "content": "Đây là nút tạo ngữ cảnh hội thoại mới. Dùng khi đổi project hoặc chủ đề. Bấm để chọn project và safe/full; full có thể chạy lệnh và sửa file."
+    },
+    "permissions": {
+      "title": "Xin quyền",
+      "content": "Thẻ xin quyền cho biết công cụ muốn làm gì. Cho phép chỉ chấp thuận lần này, Luôn cho phép lưu quy tắc, Từ chối chặn thao tác. Chọn Luôn cho phép chỉ với lệnh tin cậy."
+    },
+    "sessions": {
+      "title": "Danh sách phiên",
+      "content": "Đây là các phiên đã lưu. Dùng để quay lại ngữ cảnh cũ hoặc xoá phiên không còn cần. Bấm phiên để mở; xoá là hành động khó hoàn tác."
+    },
+    "help": {
+      "title": "Trợ giúp",
+      "content": "Đây là nút mở hướng dẫn Chat. Dùng để tra /, @ và thẻ quyền. Bấm ? để tìm kiếm hoặc chạy lại tour."
+    }
+  },
+  "page-plans": {
+    "plans": {
+      "title": "Kế hoạch",
+      "content": "Đây là các kế hoạch bộ não đề xuất. Dùng để kiểm tra phạm vi trước khi dispatch. Bấm một kế hoạch để xem chi tiết; chưa duyệt thì worker chưa chạy."
+    },
+    "filters": {
+      "title": "Bộ lọc kế hoạch",
+      "content": "Đây là bộ lọc project và trạng thái. Dùng để tìm kế hoạch nháp hoặc đang chạy. Bấm lựa chọn để lọc; không thay đổi kế hoạch."
+    },
+    "current": {
+      "title": "Kế hoạch hiện tại",
+      "content": "Đây là kế hoạch đang được chọn. Dùng để đọc phụ thuộc và thứ tự task. Bấm từng task để sửa; sửa phụ thuộc có thể thay đổi lịch chạy."
+    },
+    "add-task": {
+      "title": "Thêm task",
+      "content": "Đây là nút thêm một task vào kế hoạch. Dùng khi kế hoạch thiếu bước. Bấm để nhập độ khó, model chain và phụ thuộc; phụ thuộc sai có thể tạo vòng lặp."
+    },
+    "approve-plan": {
+      "title": "Duyệt kế hoạch",
+      "content": "Đây là nút cho phép kế hoạch được dispatch. Dùng sau khi kiểm tra task và phụ thuộc. Bấm Duyệt để chuyển vòng đời; hãy chắc project và model đúng."
+    },
+    "help": {
+      "title": "Trợ giúp",
+      "content": "Đây là nút mở hướng dẫn Kế hoạch. Dùng để hiểu phụ thuộc và duyệt. Bấm ? để tìm kiếm hoặc chạy lại tour."
+    }
+  },
+  "modal-add-account": {
+    "modal": {
+      "title": "Thêm tài khoản",
+      "content": "Đây là hộp thoại thêm hồ sơ nhà cung cấp. Dùng để thêm quota hoặc dự phòng. Bấm chọn nhà cung cấp rồi chọn Terminal hoặc Refresh Token; token là bí mật và không nên dán vào nơi khác."
+    }
+  },
+  "modal-register-project": {
+    "modal": {
+      "title": "Đăng ký dự án",
+      "content": "Đây là hộp thoại đăng ký project. Dùng để khai báo đường dẫn, nhánh mặc định và giới hạn song song. Bấm Nâng cao để mở chính sách; đường dẫn sai có thể làm worker sửa nhầm repo."
+    }
+  },
+  "modal-create-task": {
+    "modal": {
+      "title": "Tạo task",
+      "content": "Đây là hộp thoại tạo task. Dùng để mô tả mục tiêu, độ khó, chuỗi model và phụ thuộc. Bấm Tạo để xếp hàng; chọn model khó trước sẽ tốn quota hơn."
+    }
+  },
+  "modal-new-session": {
+    "modal": {
+      "title": "Phiên chat mới",
+      "content": "Đây là hộp thoại tạo phiên chat. Dùng để chọn project và chế độ safe/full. Bấm Tạo phiên để lưu ngữ cảnh; full cho phép tác động rộng hơn và cần thận trọng."
+    }
+  },
+  "modal-full-permission": {
+    "modal": {
+      "title": "Xác nhận toàn quyền",
+      "content": "Đây là hộp thoại cảnh báo quyền full. Dùng khi bạn hiểu lệnh và thư mục worker sẽ chạm tới. Bấm Xác nhận chỉ khi cần; quyền này có thể sửa file hoặc chạy lệnh nguy hiểm."
+    }
+  },
+  "modal-delete-project": {
+    "modal": {
+      "title": "Xoá dự án",
+      "content": "Đây là hộp thoại xác nhận xoá project. Dùng để bỏ cấu hình không còn cần. Bấm Xoá sẽ loại project khỏi hub; kiểm tra task và worktree trước vì thao tác có thể khó hoàn tác."
+    }
+  }
+} },
+  checklist: { title: 'Bắt đầu với AgentHub', subtitle: 'Hoàn thành vài bước để bắt đầu làm việc.', hide: 'Ẩn danh sách', cli: 'Cài CLI', account: 'Đăng nhập tài khoản worker', project: 'Thêm project', telegram: 'Kết nối Telegram', task: 'Giao task đầu tiên' },
   setup: {
     navLabel: 'Thiết lập', loading: 'Đang kiểm tra môi trường…', title: 'Bắt đầu với AgentHub', subtitle: 'Chuẩn bị các công cụ cần thiết để bạn có thể dùng ngay.',
     progress: 'Tiến độ sẵn sàng', progressSummary: '{ready}/{total} mục đã sẵn sàng',
@@ -467,10 +849,93 @@ export const vi = {
     envHint: 'Tuỳ chọn, ví dụ cổng/DB riêng cho mỗi worktree với {slot}',
     checksHint: 'Các lệnh kiểm tra tự động trước khi review (JSON array)',
     hooksHint: 'Lệnh chạy sau khi xoá worktree (tuỳ chọn)',
-    settings: 'Cài đặt', saveSettings: 'Lưu cài đặt', settingsPartialHint: 'Thay đổi được gửi theo từng phần settings của project.', brainMode: 'Bộ não', brainInherit: 'Kế thừa toàn cục', brainOff: 'Tắt', brainSuggest: 'Gợi ý', brainAuto: 'Tự động', brainExternal: 'Claude ngoài (VS Code) điều phối', brainDescinherit: 'Dùng cấu hình toàn cục.', brainDescoff: 'Không điều phối tự động.', brainDescsuggest: 'Chỉ gợi ý khi cần.', brainDescauto: 'Tự động lập kế hoạch và giao việc.', brainDescexternal: 'Claude ngoài (VS Code) điều phối.', dailyTokenBudget: 'Ngân sách token/ngày', maxTurnsPerHour: 'Lượt tối đa/giờ', worktreeInstall: 'Cài phụ thuộc', worktreeAuto: 'Tự động', worktreeSkip: 'Không cài', gitHooks: 'Git hooks', gitHooksRun: 'Chạy', gitHooksSkip: 'Bỏ qua', integrationEnabled: 'Bật nhánh tích hợp', integrationBaseRef: 'Nhánh gốc', references: 'Tham chiếu chỉ đọc', addReference: 'Thêm', referenceName: 'Tên', referencePath: 'Đường dẫn', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Đầy đủ', telegramMinimal: 'Tối giản',
+    brainPermissions: 'Quyền của bộ não', brainPermissionInherit: 'Kế thừa toàn cục', brainPermissionStandard: 'Tiêu chuẩn', brainPermissionTrusted: 'Tin cậy', brainPermissionFull: 'Toàn quyền', brainPermissionDescinherit: 'Dùng mặc định toàn cục.', brainPermissionDescstandard: 'Đọc an toàn và lệnh đã duyệt.', brainPermissionDesctrusted: 'Được sửa và chạy lệnh trong dự án.', brainPermissionDescfull: 'Không hỏi quyền; dùng thận trọng.',
+    settings: 'Cài đặt', saveSettings: 'Lưu cài đặt', saveSettingsError: 'Không thể lưu cài đặt dự án', settingsPartialHint: 'Thay đổi được gửi theo từng phần settings của project.', brainMode: 'Bộ não', brainInherit: 'Kế thừa toàn cục', brainOff: 'Tắt', brainSuggest: 'Gợi ý', brainAuto: 'Tự động', brainExternal: 'Claude ngoài (VS Code) điều phối', brainDescinherit: 'Dùng cấu hình toàn cục.', brainDescoff: 'Không điều phối tự động.', brainDescsuggest: 'Chỉ gợi ý khi cần.', brainDescauto: 'Tự động lập kế hoạch và giao việc.', brainDescexternal: 'Claude ngoài (VS Code) điều phối.', dailyTokenBudget: 'Ngân sách token/ngày', maxTurnsPerHour: 'Lượt tối đa/giờ', worktreeInstall: 'Cài phụ thuộc', worktreeAuto: 'Tự động', worktreeSkip: 'Không cài', gitHooks: 'Git hooks', gitHooksRun: 'Chạy', gitHooksSkip: 'Bỏ qua', integrationEnabled: 'Bật nhánh tích hợp', integrationBaseRef: 'Nhánh gốc', references: 'Tham chiếu chỉ đọc', addReference: 'Thêm', referenceName: 'Tên', referencePath: 'Đường dẫn', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Đầy đủ', telegramMinimal: 'Tối giản',
+    ciLabel: 'Theo dõi CI GitHub Actions', ciEnabled: 'Bật theo dõi CI', ciBranch: 'Nhánh theo dõi CI', ciStatusPassed: 'CI: Thành công', ciStatusFailed: 'CI: Thất bại', ciStatusRunning: 'CI: Đang chạy', ciViewRun: 'Xem run trên GitHub', ciNoRun: 'Chưa có run',
+    knowledgeChecklistTitle: 'Kiến thức & checklist', knowledgeChecklistHint: 'Chọn tối đa 5 đường dẫn, mỗi file tối đa 64KB. Bộ não bắt buộc đối chiếu khi duyệt.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Checklist khi duyệt', checklistUnreadable: 'không đọc được', checklistTooLarge: 'Cảnh báo: file vượt 64KB, nội dung không được inject.', suggestAutomaticChecks: 'Gợi ý chuyển thành kiểm tra tự động', draftChecksCreated: 'Đã tạo task nháp gợi ý kiểm tra tự động.',
+    sectionBrainTitle: 'Bộ não',
+    sectionBrainDesc: 'Cấu hình quyền tự động và giới hạn quota của Claude đối với dự án.',
+    sectionWorktreeTitle: 'Worktree',
+    sectionWorktreeDesc: 'Quản lý khởi tạo môi trường và hook trong worktree riêng biệt.',
+    sectionIntegrationTitle: 'Nhánh tích hợp',
+    sectionIntegrationDesc: 'Tự động gộp các nhánh task vào nhánh tích hợp để kiểm thử tổng hợp.',
+    sectionReferencesTitle: 'Tham chiếu chỉ đọc',
+    sectionReferencesDesc: 'Khai báo các tài liệu hoặc repo phụ trợ để Claude đọc thêm ngữ cảnh.',
+    sectionNotificationsTitle: 'Thông báo',
+    sectionNotificationsDesc: 'Tùy chỉnh định dạng thông báo gửi về Telegram khi có cập nhật task.',
+    sectionAdvancedTitle: 'Kiểm tra & review (Nâng cao)',
+    sectionAdvancedDesc: 'Cấu hình checks tự động, hooks sau khi xóa worktree, chuỗi review và template biến môi trường.',
+    sectionDeployTitle: 'Triển khai (Deploy)',
+    sectionDeployDesc: 'Theo dõi trạng thái và kích hoạt lại quy trình deploy sau khi tích hợp.',
+    settingsDrawerTitle: 'Cài đặt dự án: {name}',
+    settingsDrawerSubtitle: 'Cấu hình chi tiết các tham số hoạt động cho dự án.',
+    closeSettings: 'Đóng cài đặt',
+    unsavedChangesBar: 'Bạn có {count} thay đổi chưa lưu',
+    discardChanges: 'Huỷ',
+    saveChanges: 'Lưu',
+    savingChanges: 'Đang lưu…',
+    saveSuccessToast: 'Đã lưu cài đặt dự án thành công!',
+    unlimitedBudget: 'Không giới hạn',
+    unitTokenPerDay: 'token / ngày',
+    unitTurnsPerHour: 'lượt / giờ',
+    tokenBudgetPlaceholder: 'Theo toàn cục ({value})',
+    maxTurnsPlaceholder: 'Theo toàn cục ({value})',
+    tokenBudgetHint: 'Để trống để theo cấu hình toàn cục ({value}).',
+    maxTurnsHint: 'Để trống để theo cấu hình toàn cục ({value}).',
+    fullPermissionWarning: 'Cảnh báo: Toàn quyền cho phép Claude chạy mọi lệnh trên hệ thống mà không cần hỏi xác nhận. Dùng thận trọng!',
+    worktreeInstallDesc: 'Nên tắt khi dự án không có file package.json hoặc dependencies lớn, nhằm tăng tốc tạo worktree.',
+    gitHooksDesc: 'Nên bỏ qua khi git hooks (pre-commit/linter) chạy quá lâu hoặc phụ thuộc công cụ ngoài máy host.',
+    integrationWorktreePath: 'Đường dẫn worktree',
+    integrationCurrentBranchLabel: 'Nhánh hiện tại',
+    integrationAheadBehind: 'Commit chênh lệch',
+    integrationCleanStatus: 'Trạng thái thư mục',
+    integrationClean: 'Sạch (Clean)',
+    integrationDirty: 'Bẩn (Dirty)',
+    noIntegrationStatus: 'Chưa có thông tin trạng thái tích hợp.',
+    statusExists: 'Đã tồn tại',
+    statusNotExists: 'Chưa tạo',
+    targetBranch: 'Mục tiêu: {branch}',
+    dirtyHint: 'Có thay đổi chưa commit trong worktree',
+    cleanHint: 'Thư mục làm việc sạch sẽ',
+    invalidRefName: 'Tên chỉ gồm chữ cái, số, gạch ngang (-) hoặc gạch dưới (_).',
+    duplicateRefName: 'Tên tham chiếu không được trùng lặp.',
+    refNamePlaceholder: 'vd: docs-api, schema',
+    refPathPlaceholder: 'vd: /opt/docs hoặc ../shared-api',
+    refNameHeader: 'Tên',
+    refPathHeader: 'Đường dẫn',
+    refInjectHeader: 'Ngữ cảnh',
+    refActionsHeader: 'Thao tác',
+    noReferences: 'Chưa có tham chiếu chỉ đọc nào. Bấm nút bên dưới để thêm.',
+    deleteRef: 'Xoá dòng',
+    telegramContentDesc: 'Chế độ "Tối giản" sẽ ẩn tiêu đề và nội dung chi tiết task để bảo vệ quyền riêng tư.',
+    insertExample: 'Chèn mẫu',
+    jsonSyntaxError: 'Lỗi cú pháp JSON: {error}',
+    deploySteps: 'Các bước thực thi',
+    deployTimeout: 'Thời gian timeout: {sec}s',
+    deployRestart: 'Khởi động lại hub: {val}',
+    deployPush: 'Đẩy nhánh: {from} → {to} ({remote})',
+    noDeployConfig: 'Chưa có cấu hình deploy sau khi merge (afterMerge).',
+    deployLatestStatus: 'Lượt gần nhất',
+    deployStatusQueued: 'Chờ thực hiện',
+    deployStatusRunning: 'Đang deploy',
+    deployStatusRestarting: 'Đang khởi động lại hub',
+    deployStatusSucceeded: 'Thành công',
+    deployStatusFailed: 'Thất bại: {error}',
+    deployStatusSkipped: 'Bỏ qua',
+    deployNoRuns: 'Chưa có lượt deploy nào.',
+    deployNowBtn: 'Đẩy ngay',
+    deployRerunBtn: 'Deploy lại',
+    deployingBtn: 'Đang deploy…',
+    cardBranch: 'Nhánh:',
+    cardIntegration: 'Tích hợp:',
+    cardBrain: 'Bộ não:',
+    cardCI: 'CI:',
+    integrationDisabled: 'Tắt',
+    integrationEnabledBadge: 'Bật ({branch})',
   },
   settings: {
     title: 'Cài đặt hệ thống',
+    brandingTitle: 'Tên ứng dụng', brandingDescription: 'Chỉ đổi tên hiển thị; lệnh CLI, service, thư mục và biến môi trường kỹ thuật không thay đổi.', brandingName: 'Tên hiển thị', brandingShortName: 'Tên ngắn', brandingTagline: 'Slogan (tuỳ chọn)', brandingAccent: 'Màu nhấn (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, tối đa 256KB', brandingLogoError: 'Không thể tải logo',
     subtitle: 'Cấu hình chuỗi model ưu tiên và thời gian timeout tối đa cho các lượt chạy (DEC-001).',
     saveSuccess: 'Cài đặt hệ thống đã được cập nhật thành công!',
     saveError: 'Không thể lưu cài đặt',
@@ -485,6 +950,8 @@ export const vi = {
     easyChainHint: 'Mặc định: gemini-3.8-flash-medium, codex:gpt-5.6-luna',
     easyChainRequired: 'Chuỗi model Easy phải có ít nhất 1 model',
     timeoutLabel: 'Thời gian timeout tối đa cho mỗi lượt chạy (giờ)',
+    multiplePerProviderLabel: 'Cho phép nhiều tài khoản cùng nhà cung cấp',
+    multiplePerProviderHint: 'Khi tắt: mỗi nhà cung cấp chỉ có một tài khoản cá nhân; tài khoản Team/API vẫn được thêm.',
     saveConfigBtn: 'Lưu cấu hình',
     savingConfigBtn: 'Đang lưu...',
     savingsSectionTitle: 'Hiệu quả ủy quyền (Savings)',
@@ -502,6 +969,11 @@ export const vi = {
       suggest: 'Gợi ý (Suggest)',
       auto: 'Tự động (Auto)',
     },
+    wakeupTitle: 'Đánh thức quota theo giờ',
+    wakeupHint: 'Vào giờ hẹn, gửi một prompt rất ngắn cho các tài khoản đang rảnh để cửa sổ quota 5 giờ bắt đầu sớm và reset trước giờ làm việc. Tốn một chút quota mỗi lần.',
+    wakeupTimes: 'Giờ đánh thức (cách nhau bằng dấu phẩy)',
+    quotaLowTitle: 'Cảnh báo sắp hết quota',
+    quotaLowHint: 'Báo khi quota 5 giờ hoặc tuần của một tài khoản tụt xuống dưới mức này. Đặt 0 để tắt.',
     quietHoursTitle: 'Giờ yên tĩnh (Quiet Hours)',
     quietHoursHint: 'Trong khung giờ này, chỉ gửi các sự cố nghiêm trọng; các tin khác được dồn lại cho bản tóm tắt.',
     quietHoursStart: 'Giờ bắt đầu',
@@ -555,7 +1027,7 @@ export const vi = {
     hasTokenBadge: 'Token Telegram sẵn sàng',
   },
   extra: {
-    claudeVersion: 'Phiên bản Claude đang dùng', systemBrain: 'Bộ não hệ thống', projectBrains: 'Bộ não theo dự án',
+    claudeVersion: 'Phiên bản Claude đang dùng', systemBrain: 'Bộ não hệ thống', projectBrains: 'Bộ não theo dự án', assistantChats: 'Trợ lý',
     connected: 'Đã kết nối', disconnected: 'Mất kết nối', connectionAria: 'Trạng thái kết nối',
     themeAria: 'Chế độ giao diện', dark: 'Tối', light: 'Sáng', system: 'Hệ thống', default: 'Mặc định',
     sidebarAria: 'Sidebar điều hướng', pageTaskCreate: 'Tạo task mới', pageTaskDetail: 'Chi tiết task',
@@ -582,7 +1054,7 @@ export const vi = {
     noProjects: 'Chưa có project nào được đăng ký.', loadProjectsError: 'Không thể tải danh sách project.',
     defaultBranch: 'Nhánh mặc định: ', maxParallel: 'Tối đa song song: ', validJson: 'JSON hợp lệ',
     invalidJson: 'Cú pháp JSON không hợp lệ: {error}',
-    updateAvailable: 'Có phiên bản dashboard mới', reload: 'Tải lại', silent: 'im lặng {minutes} phút',
+    updateAvailable: 'Có phiên bản dashboard mới', reload: 'Tải lại', updateHint: 'Tải lại trang để áp dụng bản mới nhất', silent: 'im lặng {minutes} phút',
     noData: 'Chưa có dữ liệu', refresh: 'Làm mới', checkResults: 'Kết quả kiểm tra', rerunCheck: 'Chạy lại kiểm tra',
     noCheckResults: 'Chưa có kết quả kiểm tra.', noOutput: '(không có output)', reviewChainLabel: 'Chuỗi review (JSON)', saveReviewChain: 'Lưu chuỗi review', planningApprovalTitle: 'Duyệt kế hoạch của Claude', planningApprovalHint: 'Chọn khi nào Claude phải chờ bạn duyệt trước khi giao việc cho agent.', planningApprovalNone: 'Không cần duyệt — Claude giao việc ngay và báo lại', planningApprovalLarge: 'Chỉ duyệt kế hoạch lớn, từ số task:', planningApprovalAll: 'Duyệt mọi task Claude tạo', planningApprovalMinTasks: 'Số task tối thiểu cần duyệt', captureFix: 'Tạo task sửa', captureFromSelection: 'Tạo task sửa lỗi từ đoạn log đã chọn', captureFromSelectionTip: 'Bôi đen một đoạn lỗi trong log rồi bấm để giao một task sửa lỗi mới cho agent, kèm đoạn log làm bằng chứng', captureFromSelectionHint: 'Bôi đen đoạn lỗi trong log ở trên để bật nút này', captureSelectedChars: 'Đã chọn {count} ký tự', captureDesc: 'Task mới sẽ được giao cho agent sửa lỗi, kèm đoạn log dưới đây và liên kết tới task hiện tại.', captureFieldTitle: 'Tiêu đề', captureSubmit: 'Tạo task', captureTitle: 'Tạo task sửa lỗi', reLogin: 'Đăng nhập lại', reLoginTip: 'Đăng nhập lại khi phiên hết hạn hoặc muốn đổi tài khoản', deleteProfile: 'Xoá', deleteProfileTip: 'Xoá hồ sơ khỏi hub (lịch sử chạy vẫn giữ)', deleteBusyTip: 'Hồ sơ đang chạy task, đợi task xong rồi xoá', deleteConfirm: 'Xoá hồ sơ "{name}"?', deleteClaudeNote: 'Hồ sơ và thư mục cấu hình Claude của nó sẽ bị xoá.', deleteSoftNote: 'Hồ sơ sẽ bị ẩn và không được giao task nữa. Thư mục đăng nhập và lịch sử chạy vẫn được giữ.', deleteFailed: 'Xoá hồ sơ thất bại',
     brainPlanning: 'Đang lập kế hoạch', brainDispatching: 'Đang giao việc', brainReviewing: 'Đang review', brainMerging: 'Đang ghép code', brainDeploying: 'Đang triển khai', brainWaiting: 'Đang chờ worker', brainIdle: 'Rảnh', brainTalking: 'Đang trao đổi với bạn',
@@ -596,13 +1068,14 @@ export const vi = {
     settingsSubtitle: 'Cấu hình chuỗi model ưu tiên, thời gian timeout tối đa và các hệ số đo lường hiệu quả ủy quyền.', fullModeConfirm: 'Cảnh báo: Chế độ Đầy đủ cho phép Claude thực thi MỌI lệnh trên máy chủ của bạn mà không có giới hạn sandbox. Bạn có chắc chắn muốn bật không?', chatSettings: 'Cấu hình Chat với Claude', claudeBin: 'Đường dẫn thực thi Claude CLI (claudeBin)', claudeBinHint: 'Mặc định: claude (tìm trong PATH)', maxConcurrent: 'Số phiên chat đồng thời tối đa (maxConcurrent)', chatModel: 'Model chat Claude', allowFullMode: 'Cho phép chế độ Đầy đủ (allowFullMode)', enabled: 'ĐÃ BẬT', savingsSettings: 'Cấu hình dung lượng bucket ước tính cho cửa sổ 5h và các hệ số quy đổi tiết kiệm của Claude.', geminiBucketHint: 'Dung lượng token ước tính cho cửa sổ 5h của Gemini (mặc định: 5,000,000)', claudeBucketHint: 'Dung lượng token ước tính cho cửa sổ 5h của Claude (mặc định: 5,000,000)', claudeFactor: 'Hệ số Claude Factor', claudeFactorHint: 'Hệ số token tiết kiệm cho Claude = workerTokens × claudeFactor (mặc định: 0.9)', claudeOverhead: 'Claude Overhead mỗi task (tokens)', claudeOverheadHint: 'Chi phí giao việc và duyệt = overhead × (1 + số lần review) (mặc định: 40,000)',
     processingError: 'Đã xảy ra lỗi trong quá trình xử lý.', createChatError: 'Không thể tạo phiên trò chuyện', deleteChatError: 'Không thể xóa phiên trò chuyện', sendError: 'Lỗi khi gửi tin nhắn', stopError: 'Không thể dừng phản hồi', chatList: 'Danh sách cuộc trò chuyện', openSessions: 'Mở danh sách phiên', mode: 'Chế độ', chatWithClaude: 'Chat với Claude Code', chatWelcome: 'Chào mừng bạn đến với Chat với Claude!', chatWelcomeDesc: 'Tương tác trực tiếp với Claude Code để rà soát mã nguồn, điều phối tác vụ và giao việc tự động cho các agent.', startChat: 'Bắt đầu cuộc trò chuyện mới', emptyChat: 'Cuộc trò chuyện này chưa có tin nhắn nào.', emptyChatDesc: 'Hãy nhập câu hỏi bên dưới hoặc chọn một câu gợi ý nhanh để bắt đầu trao đổi với Claude.', runningTool: 'Đang chạy {tool}', progress: 'Đang làm: {tool} · bước {step} · {time}', thinking: 'Claude đang suy nghĩ… {seconds} giây',
     projectOptional: 'Dự án (không bắt buộc)', noProject: 'Không chọn project', chatTitle: 'Tiêu đề cuộc trò chuyện', chatTitlePlaceholder: 'VD: Hỏi về kiến trúc hệ thống, chia task...', claudeModel: 'Model Claude', claudeDefault: 'Mặc định của Claude Code', operationMode: 'Chế độ hoạt động', safeModeDesc: 'Claude được đọc code, xem git, chạy test và giao việc qua AgentHub; không sửa file.', enabledInSettings: 'bật trong Cài đặt', fullModeWarning: 'Cảnh báo: Claude được chạy MỌI lệnh trên máy.', createChat: 'Tạo cuộc trò chuyện',
-    resetIn: 'reset sau {time}', fast: 'nhanh',
+    resetIn: 'reset sau {time}', fast: 'nhanh', locale: 'vi', updatedAt: 'cập nhật lúc', claudeQuotaAvailable: 'Còn quota', claudeQuotaWarning: 'Sắp hết quota', claudeQuotaRejected: 'Đã hết quota (tạm khoá)',
     noCommit: 'Chưa commit {minutes} phút',
     looping: 'Lặp lệnh',
     compact: 'Nén',
     compactTooltip: 'Nén ngữ cảnh phiên này',
     compacted: 'Đã nén ngữ cảnh',
     compactError: 'Không thể nén ngữ cảnh',
+    skipToContent: 'Bỏ qua tới nội dung', brainStateWaiting: 'chờ bạn trả lời', brainStateWorking: 'đang làm', brainStateIdle: 'không hoạt động', requestLabel: 'Yêu cầu', toolLabel: 'Công cụ', toolUsed: 'Đã dùng {count} công cụ', expandSessions: 'Mở rộng danh sách', collapseSessions: 'Thu gọn danh sách', addKnowledgePlaceholder: 'Thêm ghi chú kiến thức...', pinKnowledge: 'Ghim/bỏ ghim', closeProfile: 'Đóng', editProfileTitle: 'Sửa hồ sơ {name}', renameProfileTitle: 'Đổi tên {name}', deleteProfileTitle: 'Xoá hồ sơ {name}', displayName: 'Tên hiển thị', notes: 'Ghi chú', priority: 'Ưu tiên', enableProfile: 'Bật hồ sơ', nameMismatch: 'Tên nhập lại chưa khớp', saveProfileError: 'Không thể lưu hồ sơ', renameError: 'Không thể đổi tên', deleteError: 'Không thể xoá hồ sơ', modelChatAria: 'Model chat', chatModelsLabel: 'Danh sách model chat', defaultChatModel: 'Model chat mặc định. Danh sách chọn:', reviewer: 'Reviewer', reviewerModel: 'Model reviewer', fallbackChain: 'Claude fallback chain', fallbackHint: 'Kéo các bước để sắp xếp lại. API key chỉ được ghi.', remove: 'Xoá', addStep: 'Thêm bước', apiKey: 'Anthropic API key', configuredReplace: 'Đã cấu hình (nhập để thay thế)', knowledgeAdd: 'Thêm', linkedTasks: 'Liên kết task', generatedFrom: 'Sinh từ', generatedTask: 'Đã sinh task', orphanProcesses: 'Tiến trình mồ côi', orphanProcessesDesc: 'Các tiến trình còn giữ cwd trong worktree đã dừng.', loadingOlderMessages: 'Đang tải thêm tin nhắn cũ…', grantedPermissions: 'Quyền đã cấp', grantedPermissionsDesc: 'Các quy tắc được dùng để tự động cho phép công cụ.', noPermissionRules: 'Chưa có quy tắc.', cleanup: 'Dọn', cleanupRunning: 'Đang dọn…',
     forkSummary: 'Mở phiên mới kèm tóm tắt',
     forkSummaryTooltip: 'Tóm tắt và tách sang phiên mới',
     forkSummaryError: 'Không thể tách phiên',
@@ -634,6 +1107,7 @@ export const vi = {
     saveName: 'Lưu tên',
     newNameAria: 'Tên mới của phiên',
     retryLastTurn: 'Thử lại lượt gần nhất',
+    retryLimit: 'Thử lại ngay',
     permissionTitle: 'Claude cần quyền: {tool}',
     permissionAria: 'Yêu cầu cấp quyền công cụ',
     allow: 'Cho phép',
@@ -645,7 +1119,10 @@ export const vi = {
     failedHandlePermission: 'Không thể xử lý yêu cầu cấp quyền',
     failedUpdateSession: 'Không thể cập nhật phiên trò chuyện',
     compactRequested: 'Đã gửi yêu cầu nén ngữ cảnh',
-    failedCompact: 'Không thể nén ngữ cảnh',
+    failedCompact: 'Không thể nén ngữ cảnh', editMessage: 'Sửa tin nhắn',
+    permissionProject: 'Dự án: {project}', permissionSession: 'Phiên: {session}',
+    permissionNoProject: 'Không gắn dự án', permissionCwd: 'cwd', permissionFile: 'file',
+    toolRead: 'Đọc {path}', toolRun: 'Chạy `{command}`', toolDefault: 'Công cụ',
   },
   claudeSessions: {
     active: 'Đang hoạt động',

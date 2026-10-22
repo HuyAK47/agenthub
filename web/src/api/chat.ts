@@ -47,6 +47,10 @@ export async function getChatPermissions(sessionId: string): Promise<ChatPermiss
   return apiFetch<ChatPermissionRequest[]>(`/api/chat/permissions?sessionId=${encodeURIComponent(sessionId)}`);
 }
 
+export interface PermissionRule { id: string; scope: string; sessionId: string | null; projectId: string | null; toolName: string; pattern: string; createdAt: string; createdBy: string }
+export function getPermissionRules(): Promise<PermissionRule[]> { return apiFetch<PermissionRule[]>('/api/chat/permission-rules'); }
+export function deletePermissionRule(id: string): Promise<{ ok: boolean }> { return apiFetch(`/api/chat/permission-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+
 export async function createChatSession(
   data: CreateChatSessionInput,
 ): Promise<ChatSession> {
@@ -134,6 +138,10 @@ export async function stopChatSession(sessionId: string): Promise<{ ok: boolean 
   return apiFetch<{ ok: boolean }>(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' },
   );
+}
+
+export async function retryChatLimitNow(sessionId: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/limit-retry/now`, { method: 'POST' });
 }
 
 export async function compactChatSession(sessionId: string): Promise<{ ok: boolean; contextTokens?: number }> {

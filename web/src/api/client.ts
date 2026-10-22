@@ -4,6 +4,7 @@ import {
   CheckProfileResponse,
   CreateProfileInput,
   CreateProjectInput,
+  DeployStatus,
   CreateTaskInput,
   CaptureTaskInput,
   HubStatus,
@@ -27,7 +28,10 @@ import {
   ModelOptions,
   TaskBatch,
   CreateBatchInput,
+  PerfReport,
 } from '../types/api';
+
+export const getPerf = () => apiFetch<PerfReport>('/api/perf');
 
 export async function getModelOptions(): Promise<ModelOptions> {
   return apiFetch<ModelOptions>('/api/models');
@@ -248,6 +252,10 @@ export async function getProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects');
 }
 
+export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+export const getProjectDeployStatus = (id: string) =>
+  apiFetch<DeployStatus | null>(`/api/projects/${encodeURIComponent(id)}/deploy`);
+
 export async function createProject(data: CreateProjectInput): Promise<Project> {
   return apiFetch<Project>('/api/projects', {
     method: 'POST',
@@ -271,6 +279,9 @@ export async function deleteProject(id: string): Promise<{ ok: boolean }> {
 export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
   return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
 }
+
+export const getReviewChecklistPreview = (projectId: string) =>
+  apiFetch<Array<{ path: string; resolvedPath: string; size: number | null; truncated: boolean; content: string | null; warning?: string }>>(`/api/projects/${encodeURIComponent(projectId)}/review-checklist/preview`);
 
 export async function addProjectKnowledge(
   projectId: string,
@@ -327,7 +338,9 @@ export interface ImportTokensResult {
   }>;
 }
 
+/** Nhập tài khoản từ token: Antigravity (mặc định) hoặc Codex (`engine: 'codex'`). */
 export async function importAgyTokens(data: {
+  engine?: 'agy' | 'codex';
   tokens: any;
   accountType?: 'personal' | 'team' | 'api';
 }): Promise<ImportTokensResult> {
@@ -362,6 +375,18 @@ export async function loginProfile(name: string): Promise<LoginSessionResponse> 
   return apiFetch<LoginSessionResponse>(`/api/profiles/${encodeURIComponent(name)}/login`, {
     method: 'POST',
   });
+}
+
+export interface WakeupResult {
+  profile: string;
+  ok: boolean;
+  skipped?: string;
+  results: Array<{ target: string; ok: boolean; message: string }>;
+}
+
+/** Đánh thức quota ngay (bỏ qua kiểm tra cửa sổ 5 giờ đang chạy). */
+export async function wakeupProfile(name: string): Promise<WakeupResult> {
+  return apiFetch<WakeupResult>(`/api/profiles/${encodeURIComponent(name)}/wakeup`, { method: 'POST' });
 }
 
 export async function checkProfile(name: string): Promise<CheckProfileResponse> {
@@ -602,11 +627,21 @@ export async function getConfig(): Promise<SystemConfig> {
   return apiFetch<SystemConfig>('/api/config');
 }
 
-export async function updateConfig(data: SystemConfig): Promise<SystemConfig> {
+export async function updateConfig(data: Partial<SystemConfig>): Promise<SystemConfig> {
   return apiFetch<SystemConfig>('/api/config', {
     method: 'PUT',
     body: JSON.stringify(data),
   });
+}
+
+export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; logo: string }> {
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(reader.error || new Error('Không thể đọc logo'));
+    reader.readAsDataURL(file);
+  });
+  return apiFetch('/api/branding/logo', { method: 'PUT', body: JSON.stringify({ mimeType: file.type, data }) });
 }
 
 export async function getSavings(params?: {

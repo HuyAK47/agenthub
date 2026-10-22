@@ -127,9 +127,10 @@ export async function mergeTaskIntoBase(
 
   const before = await git(repo, ['rev-parse', 'HEAD']);
   const hubHome = process.env.AGENTHUB_HOME || path.join(process.env.HOME || process.cwd(), '.agenthub');
-  const env = workerEnvironment(hubHome, process.env, { project });
+  const env = workerEnvironment(hubHome, process.env, { project, cwd: repo, guards: false });
+  const identity = await gitIdentityArgs(repo, env);
   try {
-    await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${targetBranch}`], { cwd: repo, env });
+    await execFileAsync('git', [...identity, 'merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${targetBranch}`], { cwd: repo, env });
   } catch {
     let conflicts = '';
     try { conflicts = await git(repo, ['diff', '--name-only', '--diff-filter=U']); } catch { /* keep original error */ }
@@ -162,4 +163,17 @@ export async function mergeTaskIntoBase(
     throw new MergeError(422, 'unprocessable_entity', `Checks sau merge thất bại:\n${failures.join('\n\n')}`);
   }
   return { mergeCommit, checks };
+}
+
+async function gitIdentityArgs(repo: string, env: NodeJS.ProcessEnv): Promise<string[]> {
+  const read = async (key: string): Promise<string> => {
+    try {
+      const { stdout } = await execFileAsync('git', ['config', '--get', key], { cwd: repo, env });
+      return stdout.trim();
+    } catch {
+      return '';
+    }
+  };
+  const [name, email] = await Promise.all([read('user.name'), read('user.email')]);
+  return name && email ? [] : ['-c', 'user.name=AgentHub', '-c', 'user.email=agenthub@localhost'];
 }

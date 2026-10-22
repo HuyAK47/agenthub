@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { hubVersion } from '../version.js';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ServerResponse } from 'node:http';
@@ -13,6 +14,9 @@ import { registerSseRoute } from './sse.js';
 import { PtyManager, registerPtyRoutes } from './pty.js';
 import { registerBrainRoutes } from '../brain.js';
 import { registerChatRoutes } from '../chat/service.js';
+import { runMcpInstall } from '../tools/mcp-install.js';
+import { findClaudeBin } from '../chat/claude.js';
+import { brandingLogoPath, saveBrandingLogo } from '../branding.js';
 
 export function resolveWebDistDir(customDir?: string): string {
   return path.resolve(customDir || resolveWebDir(import.meta.url, process.env));
@@ -108,7 +112,7 @@ export async function createServer(
 
   // Health check (no token required)
   fastify.get('/health', async () => {
-    return { ok: true, version: '0.1.0' };
+    return { ok: true, version: hubVersion() };
   });
 
   fastify.get('/api/version', async () => {
@@ -122,6 +126,8 @@ export async function createServer(
   fastify.get('/api/status', async () => {
     return service.getStatus();
   });
+
+  fastify.get('/api/perf', async () => service.getPerf());
 
   fastify.get('/api/setup/status', async () => service.getSetupStatus());
   fastify.post('/api/setup/install/:tool', async (req, reply) => {
@@ -139,13 +145,15 @@ export async function createServer(
   fastify.post('/api/setup/mcp', async () => {
     const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
     const cliPath = path.join(projectRoot, 'dist', 'cli.js');
-    const { execFile } = await import('node:child_process');
-    return new Promise((resolve, reject) => {
-      execFile('claude', ['mcp', 'add', '--scope', 'user', 'agenthub', '--', process.execPath, cliPath, 'mcp'], { timeout: 60_000 }, (error, stdout, stderr) => {
-        if (error) return reject(new HttpError(500, 'mcp_install_failed', stderr || error.message));
-        resolve({ ok: true, output: `${stdout}${stderr}` });
-      });
-    });
+    const claudeBin = findClaudeBin(service.config.chat.claudeBin);
+    if (!claudeBin) {
+      throw new HttpError(404, 'claude_not_found', 'Không tìm thấy Claude Code. Hãy cài Claude Code trước, hoặc đặt đường dẫn trong Cài đặt → Chat (claudeBin).');
+    }
+    try {
+      return { ok: true, output: await runMcpInstall({ claudeBin, nodePath: process.execPath, cliPath }) };
+    } catch (error) {
+      throw new HttpError(500, 'mcp_install_failed', error instanceof Error ? error.message : String(error));
+    }
   });
 
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
@@ -196,6 +204,21 @@ export async function createServer(
     return service.getProject(id);
   });
 
+  fastify.get('/api/projects/:id/deploy', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getDeployStatus(id);
+  });
+
+  fastify.post('/api/projects/:id/deploy', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { pushNow?: boolean };
+    if (body.pushNow === true) {
+      const result = await service.pushDeployNow(id);
+      return reply.status(result.status === 'failed' ? 500 : 200).send(result);
+    }
+    return reply.status(202).send(service.rerunDeploy(id));
+  });
+
   fastify.post('/api/projects', async (req: FastifyRequest, reply: FastifyReply) => {
     const project = service.createProject(req.body);
     return reply.status(201).send(project);
@@ -203,7 +226,15 @@ export async function createServer(
 
   fastify.patch('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return service.updateProject(id, req.body);
+    const body = (req.body || {}) as { settings?: { brain?: { permissions?: string } }; confirm?: boolean };
+    if (body.settings?.brain?.permissions === 'full' && body.confirm !== true) {
+      throw new HttpError(409, 'confirmation_required', 'Cấp Toàn quyền cần confirm: true vì cho phép Claude chạy mọi lệnh');
+    }
+    const result = service.updateProject(id, req.body);
+    if (body.settings?.brain?.permissions) {
+      service.scheduler.getEventBus().emit('brain.trust_changed', undefined, { projectId: id, permissions: body.settings.brain.permissions });
+    }
+    return result;
   });
 
   fastify.delete('/api/projects/:id', async (req: FastifyRequest) => {
@@ -214,6 +245,11 @@ export async function createServer(
   fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.listKnowledge(id);
+  });
+
+  fastify.get('/api/projects/:id/review-checklist/preview', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.reviewChecklistPreview(id);
   });
 
   fastify.post('/api/projects/:id/knowledge', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -277,8 +313,13 @@ export async function createServer(
   });
 
   fastify.post('/api/profiles/import-tokens', async (req: FastifyRequest, reply: FastifyReply) => {
-    const result = await service.importAgyTokens(req.body);
+    const result = await service.importTokens(req.body);
     return reply.status(200).send(result);
+  });
+
+  fastify.post('/api/profiles/:name/wakeup', async (req: FastifyRequest) => {
+    const { name } = req.params as { name: string };
+    return service.wakeupProfile(name, { force: true });
   });
 
   fastify.post('/api/profiles/:name/check', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -448,8 +489,45 @@ export async function createServer(
     return service.getConfig();
   });
 
+  fastify.get('/api/branding/logo', async (_req, reply) => {
+    const logoPath = brandingLogoPath(config.hubHome);
+    if (!logoPath) return reply.status(404).send({ error: 'not_found', message: 'Chưa cấu hình logo' });
+    const mime = logoPath.endsWith('.svg') ? 'image/svg+xml' : 'image/png';
+    return reply
+      .header('Cache-Control', 'public, max-age=300')
+      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Content-Disposition', `inline; filename="logo${mime === 'image/svg+xml' ? '.svg' : '.png'}"`)
+      .type(mime)
+      .send(fs.createReadStream(logoPath));
+  });
+
+  fastify.put('/api/branding/logo', async (req: FastifyRequest) => {
+    const body = (req.body || {}) as { mimeType?: unknown; data?: unknown };
+    if (typeof body.mimeType !== 'string' || typeof body.data !== 'string') {
+      throw new HttpError(400, 'bad_request', 'Logo cần mimeType và data base64');
+    }
+    let data: Buffer;
+    try { data = Buffer.from(body.data, 'base64'); } catch { throw new HttpError(400, 'bad_request', 'Logo base64 không hợp lệ'); }
+    try {
+      const logo = saveBrandingLogo(config.hubHome, body.mimeType, data);
+      service.updateConfig({ branding: { logo } });
+      return { ok: true, logo };
+    } catch (error) {
+      throw new HttpError(400, 'invalid_logo', error instanceof Error ? error.message : 'Logo không hợp lệ');
+    }
+  });
+
   fastify.put('/api/config', async (req: FastifyRequest) => {
-    return service.updateConfig(req.body);
+    const body = (req.body || {}) as { brain?: { permissions?: string }; confirm?: boolean };
+    if (body.brain?.permissions === 'full' && body.confirm !== true) {
+      throw new HttpError(409, 'confirmation_required', 'Cấp Toàn quyền mặc định cần confirm: true');
+    }
+    const result = service.updateConfig(req.body);
+    if (body.brain?.permissions) {
+      service.scheduler.getEventBus().emit('brain.trust_changed', undefined, { projectId: null, permissions: body.brain.permissions });
+    }
+    return result;
   });
   fastify.get('/api/models', async () => service.getModelOptions());
 

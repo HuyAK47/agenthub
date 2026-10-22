@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AgentHubConfig } from './config.js';
+import { AgentHubConfig, DEFAULT_QUOTA_LOW_PCT } from './config.js';
 import {
   openDatabase,
   ProjectRepo,
@@ -14,13 +14,17 @@ import {
   ChatSessionRepo,
   ChatMessageRepo,
   ChatPermissionRepo,
+  PermissionRuleRepo,
   ChatRetryRepo,
   RunMetricsRepo,
   TaskNoteRepo,
   KnowledgeRepo,
   TaskBatchRepo,
   BrainTurnRepo,
+  BrainDirectiveRepo,
+  CiRepo,
 } from './db/index.js';
+import { CiWatchService } from './ci.js';
 import { ProfileService } from './profiles/index.js';
 import { Scheduler } from './scheduler/index.js';
 import { Engine, AgyEngine, CodexEngine, FakeEngine } from './engines/index.js';
@@ -42,9 +46,11 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
-import { BrainPolicy, projectBrainPolicy } from './brain/policy.js';
+import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
+import { DeployService } from './deploy.js';
+import { PerfCollector } from './perf.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -79,6 +85,11 @@ export interface DaemonContext {
   usageRepo: QuotaUsageRepo;
   telegramService: TelegramBotService;
   brainRunner: BrainRunner;
+  directiveRepo: BrainDirectiveRepo;
+  deployService: DeployService;
+  ciRepo: CiRepo;
+  ciService: CiWatchService;
+  perfCollector: PerfCollector;
 }
 
 export interface CreateContextOptions {
@@ -120,8 +131,10 @@ export function createContext(
   const chatSessionRepo = new ChatSessionRepo(db);
   const chatMessageRepo = new ChatMessageRepo(db);
   const chatPermissionRepo = new ChatPermissionRepo(db);
+  const permissionRuleRepo = new PermissionRuleRepo(db);
   const chatRetryRepo = new ChatRetryRepo(db);
   const brainTurnRepo = new BrainTurnRepo(db);
+  const directiveRepo = new BrainDirectiveRepo(db);
   chatPermissionRepo.expirePending();
   const systemBrainPolicy = new BrainPolicy({
     roots: [process.cwd(), config.hubHome, config.worktreesDir],
@@ -129,17 +142,24 @@ export function createContext(
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
     mode: config.brain.mode === 'auto' ? 'auto' : 'suggest',
+    permissions: config.brain.permissions,
   });
+  const systemAssistantPolicy = globalAssistantPolicy(config);
   const permissionBroker = new PermissionBroker(chatPermissionRepo, config.chat.permissionTimeoutSec, (request) => {
     eventRepo.insert('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
     scheduler?.getEventBus?.().emit('chat.permission_request', request.sessionId, request as unknown as Record<string, unknown>);
   }, (sessionId) => {
     const session = chatSessionRepo.get(sessionId);
+    if (session?.kind === 'assistant' && session.projectId) {
+      const project = projectRepo.get(session.projectId);
+      return project ? assistantPolicy(project, config) : systemAssistantPolicy;
+    }
+    if (session?.kind === 'assistant') return systemAssistantPolicy;
     if (!session?.projectId) return systemBrainPolicy;
     const project = projectRepo.get(session.projectId);
     if (!project) return systemBrainPolicy;
     return projectBrainPolicy(project, config);
-  }, chatSessionRepo);
+  }, chatSessionRepo, permissionRuleRepo, projectRepo);
   const claudeSessionRepo = new ClaudeSessionRepo(db);
   const failoverState = new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'), undefined, {
     steps: config.brain.fallback,
@@ -179,7 +199,7 @@ export function createContext(
     engines.set('agy', new AgyEngine());
     const codexPath = CodexEngine.findCodexPath();
     if (codexPath) {
-      engines.set('codex', new CodexEngine(codexPath));
+      engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
   }
 
@@ -199,6 +219,8 @@ export function createContext(
     knowledgeRepo,
     diskFn ? { diskSpace: diskFn } : undefined,
   );
+  usageService.setEventBus(scheduler.getEventBus());
+  usageService.setQuotaLowThreshold(() => config.notifications?.quotaLowPct ?? DEFAULT_QUOTA_LOW_PCT);
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
     profileService.registerAll();
     scheduler.refreshEngines();
@@ -222,17 +244,31 @@ export function createContext(
     quotaMarkRepo,
     usageRepo,
     eventRepo,
-    { failoverState, retryRepo: chatRetryRepo },
+    { failoverState, retryRepo: chatRetryRepo, knowledgeRepo },
   );
+  scheduler.getEventBus().on('claude.quota_available', (_taskId, payload) => {
+    const data = payload && typeof payload === 'object' ? payload as { profileName?: unknown; observedAt?: unknown } : {};
+    if (typeof data.profileName !== 'string') return;
+    if (typeof data.observedAt === 'string') claudeSessionRepo.markAllowedAfter(data.profileName, data.observedAt);
+    chatService.retryWaitingForProfile(data.profileName);
+  });
   const brainRunner = new BrainRunner({
     config: config.brain,
     eventBus: scheduler.getEventBus(),
     chatService,
     chatSessionRepo,
     profileRepo,
+    taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
+    directiveRepo,
+    knowledgeRepo,
   });
+
+  const deployService = new DeployService(config, projectRepo, scheduler.getEventBus(), undefined, undefined, undefined, undefined, {
+    snapshot: () => scheduler.getRestartSnapshot(),
+  });
+  deployService.start();
 
   const bulletinService = new BulletinService({
     config,
@@ -268,7 +304,21 @@ export function createContext(
     taskBatchRepo,
     setupManager,
     brainRunner,
+    directiveRepo,
   );
+  service.deployService = deployService;
+  const perfCollector = new PerfCollector();
+  service.setPerfCollector(perfCollector);
+
+  const ciRepo = new CiRepo(db);
+  const ciService = new CiWatchService({
+    config,
+    projectRepo,
+    ciRepo,
+    eventBus: scheduler.getEventBus(),
+  });
+  service.ciRepo = ciRepo;
+  service.ciService = ciService;
 
   const notifier = new NotificationService({
     eventBus: scheduler.getEventBus(),
@@ -277,6 +327,7 @@ export function createContext(
     profileRepo,
     quotaMarkRepo,
     projectRepo,
+    ciRepo,
   });
 
   const telegramService = new TelegramBotService({
@@ -289,6 +340,8 @@ export function createContext(
     quotaMarkRepo,
     chatService,
     brainSession: true,
+    directiveRepo,
+    ciRepo,
   });
   service.setTelegramBotService(telegramService);
 
@@ -325,10 +378,20 @@ export function createContext(
     usageRepo,
     telegramService,
     brainRunner,
+    directiveRepo,
+    deployService,
+    ciRepo,
+    ciService,
+    perfCollector,
   };
 }
 
 export function closeContext(ctx: DaemonContext): void {
+  try {
+    ctx.perfCollector?.stop();
+  } catch {
+    // ignore
+  }
   try {
     ctx.brainRunner?.stop();
   } catch {
@@ -345,6 +408,11 @@ export function closeContext(ctx: DaemonContext): void {
     // ignore
   }
   try {
+    ctx.ciService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
     stopProcessGroups('SIGTERM');
   } catch {
     // ignore
@@ -356,6 +424,7 @@ export function closeContext(ctx: DaemonContext): void {
   }
   try {
     ctx.usageService?.stop();
+    ctx.service?.stopWakeupTimer();
   } catch {
     // ignore
   }
@@ -396,6 +465,7 @@ export async function startDaemon(
     });
   }
   ctx.usageService.start();
+  ctx.service.startWakeupTimer();
 
   // Start scheduler
   ctx.scheduler.start();
@@ -405,6 +475,8 @@ export async function startDaemon(
   ctx.claudeScanner.start();
   ctx.bulletinService.start();
   ctx.brainRunner.start();
+  ctx.ciService.start();
+  ctx.perfCollector.start();
 
   // Start Telegram bot if enabled
   if (config.telegram?.enabled) {

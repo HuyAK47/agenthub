@@ -539,6 +539,115 @@ export const MIGRATIONS: string[] = [
   UPDATE tasks SET waitReason = waitReason_old;
   ALTER TABLE tasks DROP COLUMN waitReason_old;
   `,
+  // Migration 43: Claude quota observations per profile (keep claude_quota for legacy clients).
+  `
+  CREATE TABLE IF NOT EXISTS claude_quota_profiles (
+    profileName TEXT PRIMARY KEY,
+    status TEXT,
+    resetsAt INTEGER,
+    rateLimitType TEXT,
+    isUsingOverage INTEGER NOT NULL DEFAULT 0,
+    observedAt TEXT NOT NULL
+  );
+  `,
+  // Migration 44: GitHub Actions CI runs and annotations
+  `
+  CREATE TABLE IF NOT EXISTS ci_runs (
+    projectId TEXT NOT NULL,
+    runId INTEGER NOT NULL,
+    workflow TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    status TEXT NOT NULL,
+    conclusion TEXT,
+    jobs TEXT NOT NULL DEFAULT '[]',
+    completedAt TEXT,
+    url TEXT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (projectId, runId),
+    FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_ci_runs_project ON ci_runs(projectId, completedAt);
+  `,
+  // Migration 45: durable chat permission rules
+  `
+  CREATE TABLE IF NOT EXISTS permission_rules (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL CHECK(scope IN ('session','project','global')),
+    sessionId TEXT,
+    projectId TEXT,
+    toolName TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    createdBy TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_permission_rules_lookup
+    ON permission_rules(scope, sessionId, projectId, toolName, pattern);
+  `,
+  // Migration 46: assistant sessions and durable user directives for the brain.
+  // chat_sessions had a CHECK on kind, so rebuild it while preserving every column.
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE chat_sessions_new (
+    id TEXT PRIMARY KEY,
+    projectId TEXT,
+    claudeSessionId TEXT,
+    title TEXT,
+    mode TEXT NOT NULL DEFAULT 'safe' CHECK(mode IN ('safe','full')),
+    busy INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    model TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'idle' CHECK(state IN ('idle','running','waiting_permission','waiting_limit','error')),
+    profileName TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    lastMessageAt TEXT,
+    inputTokens INTEGER NOT NULL DEFAULT 0,
+    outputTokens INTEGER NOT NULL DEFAULT 0,
+    contextTokens INTEGER NOT NULL DEFAULT 0,
+    waitingLimitResetAt INTEGER,
+    kind TEXT NOT NULL DEFAULT 'chat' CHECK(kind IN ('chat','brain','assistant')),
+    FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  INSERT INTO chat_sessions_new
+    (id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens,waitingLimitResetAt,kind)
+    SELECT id,projectId,claudeSessionId,title,mode,busy,createdAt,updatedAt,model,state,profileName,pinned,archived,lastMessageAt,inputTokens,outputTokens,contextTokens,waitingLimitResetAt,kind
+    FROM chat_sessions;
+  DROP TABLE chat_sessions;
+  ALTER TABLE chat_sessions_new RENAME TO chat_sessions;
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE IF NOT EXISTS brain_directives (
+    id TEXT PRIMARY KEY,
+    projectId TEXT,
+    text TEXT NOT NULL,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    createdBy TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_brain_directives_project_active ON brain_directives(projectId, active, createdAt);
+  `,
+  // Migration 47: preserve the Claude session and original goal for standalone task history grouping.
+  `
+  ALTER TABLE tasks ADD COLUMN creationSessionId TEXT;
+  ALTER TABLE tasks ADD COLUMN creationGoal TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_creation_session ON tasks(projectId, creationSessionId, createdAt);
+  `,
+  // Migration 48: indexes for dashboard/API filters and per-resource history.
+  `
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(projectId, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_task_deps_dependency ON task_deps(dependsOnId, taskId);
+  CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(taskId, id);
+  CREATE INDEX IF NOT EXISTS idx_runs_outcome_task ON runs(outcome, taskId);
+  CREATE INDEX IF NOT EXISTS idx_check_results_task_run ON check_results(taskId, runId);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(sessionId, createdAt);
+  `,
+  // Migration 49: bind persisted check results to the worktree revision.
+  `
+  ALTER TABLE check_results ADD COLUMN head TEXT;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -589,9 +698,10 @@ function repairForkAvatarMigration(db: Database.Database, currentVersion: number
   return 40;
 }
 
-/** Cột avatarUrl nằm ngoài danh sách MIGRATIONS để không giành số migration với upstream. */
+/** Cột riêng của bản fork (avatarUrl, plan) nằm ngoài MIGRATIONS để không giành số migration với upstream. */
 function ensureProfileAvatarColumn(db: Database.Database): void {
   if (!hasColumn(db, 'profiles', 'avatarUrl')) db.exec('ALTER TABLE profiles ADD COLUMN avatarUrl TEXT');
+  if (!hasColumn(db, 'profiles', 'plan')) db.exec('ALTER TABLE profiles ADD COLUMN plan TEXT');
 }
 
 // Repository helpers
@@ -643,6 +753,8 @@ export interface ProfileRow {
   priority?: number;
   accountType?: 'personal' | 'team' | 'api';
   avatarUrl?: string | null;
+  /** Gói tài khoản đã chuẩn hoá (free, plus, pro, team, max_20x…); xem src/profiles/plan.ts. */
+  plan?: string | null;
   deletedAt?: string | null;
 }
 
@@ -693,6 +805,8 @@ export interface TaskRow {
   diffStat?: string | null;
   slot: number | null;
   batchId?: string | null;
+  creationSessionId?: string | null;
+  creationGoal?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -852,6 +966,10 @@ export class ProfileRepo {
       );
   }
 
+  updatePlan(name: string, plan: string | null): void {
+    this.db.prepare('UPDATE profiles SET plan = ? WHERE name = ?').run(plan, name);
+  }
+
   updateAvatarUrl(name: string, avatarUrl: string | null): void {
     this.db.prepare('UPDATE profiles SET avatarUrl = ? WHERE name = ?').run(avatarUrl, name);
   }
@@ -947,14 +1065,19 @@ export class QuotaMarkRepo {
     return this.db.prepare('SELECT * FROM quota_marks').all() as QuotaMarkRow[];
   }
 
-  getActive(): QuotaMarkRow[] {
-    const now = Math.floor(Date.now() / 1000);
+  getActive(nowSeconds?: number): QuotaMarkRow[] {
+    const now = nowSeconds !== undefined ? nowSeconds : Math.floor(Date.now() / 1000);
     return this.db
       .prepare('SELECT * FROM quota_marks WHERE until > ?')
       .all(now) as QuotaMarkRow[];
   }
 
-  mark(profileName: string, family: string, until: number, reason?: string): void {
+  mark(profileName: string, family: string, until: number, reason?: string): boolean {
+    const now = Math.floor(Date.now() / 1000);
+    const previous = this.db
+      .prepare('SELECT until FROM quota_marks WHERE profileName = ? AND family = ?')
+      .get(profileName, family) as { until: number } | undefined;
+    const shouldEmit = !previous || previous.until <= now || until - previous.until > 10 * 60;
     this.db
       .prepare(
         `INSERT INTO quota_marks (profileName, family, until, reason)
@@ -962,6 +1085,7 @@ export class QuotaMarkRepo {
          ON CONFLICT(profileName, family) DO UPDATE SET until=excluded.until, reason=excluded.reason`,
       )
       .run(profileName, family, until, reason || null);
+    return shouldEmit;
   }
 
   clear(profileName: string, family: string): void {
@@ -1021,6 +1145,21 @@ export class TaskRepo {
     return this.db.prepare('SELECT * FROM tasks ORDER BY createdAt').all() as TaskRow[];
   }
 
+  list(filter?: { project?: string; status?: string }): TaskRow[] {
+    const conditions: string[] = [];
+    const values: string[] = [];
+    if (filter?.project) {
+      conditions.push('projectId = ?');
+      values.push(filter.project);
+    }
+    if (filter?.status) {
+      conditions.push('status = ?');
+      values.push(filter.status);
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
+  }
+
   getByProject(projectId: string): TaskRow[] {
     return this.db
       .prepare('SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt')
@@ -1063,13 +1202,15 @@ export class TaskRepo {
     diffStat?: string | null;
     sourceRef?: string | null;
     batchId?: string | null;
+    creationSessionId?: string | null;
+    creationGoal?: string | null;
     skipDeps?: boolean;
   }): void {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -1089,6 +1230,8 @@ export class TaskRepo {
         row.diffStat || null,
         row.sourceRef || null,
         row.batchId || null,
+        row.creationSessionId || null,
+        row.creationGoal || null,
       );
 
     // Populate task_deps
@@ -1253,6 +1396,10 @@ export class TaskBatchRepo {
 export class RunRepo {
   constructor(private db: Database.Database) {}
 
+  getAll(): RunRow[] {
+    return this.db.prepare('SELECT * FROM runs ORDER BY startedAt').all() as RunRow[];
+  }
+
   getByTask(taskId: string): RunRow[] {
     return this.db
       .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt')
@@ -1345,6 +1492,10 @@ export interface ReviewRow {
 export class ReviewRepo {
   constructor(private db: Database.Database) {}
 
+  getAll(): ReviewRow[] {
+    return this.db.prepare('SELECT * FROM reviews ORDER BY createdAt').all() as ReviewRow[];
+  }
+
   getByTask(taskId: string): ReviewRow[] {
     return this.db
       .prepare('SELECT * FROM reviews WHERE taskId = ? ORDER BY createdAt')
@@ -1379,7 +1530,7 @@ export interface ChatSessionRow {
   contextTokens: number;
   createdAt: string;
   updatedAt: string;
-  kind: 'chat' | 'brain';
+  kind: 'chat' | 'brain' | 'assistant';
 }
 
 export interface ChatRetryRow {
@@ -1405,16 +1556,35 @@ export interface ChatMessageRow {
 export class ChatSessionRepo {
   constructor(private db: Database.Database) {}
 
+  private normalizeAssistantSession(session: ChatSessionRow): ChatSessionRow {
+    const isAssistantId = session.id === 'assistant' || session.id.startsWith('assistant:');
+    if (!isAssistantId) return session;
+    const projectId = session.id === 'assistant' || session.id === 'assistant:global'
+      ? null
+      : session.id.slice('assistant:'.length);
+    if (session.kind === 'assistant' && session.projectId === projectId) return session;
+    try {
+      this.db.prepare("UPDATE chat_sessions SET kind = 'assistant', projectId = ?, updatedAt = datetime('now') WHERE id = ?")
+        .run(projectId, session.id);
+      return this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(session.id) as ChatSessionRow;
+    } catch {
+      // Keep the assistant kind even if an old database references a project
+      // that has since been removed and the foreign-key update cannot apply.
+      this.db.prepare("UPDATE chat_sessions SET kind = 'assistant', updatedAt = datetime('now') WHERE id = ?").run(session.id);
+      return this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(session.id) as ChatSessionRow;
+    }
+  }
+
   getAll(options?: { archived?: number | null }): ChatSessionRow[] {
     const archived = options?.archived !== undefined ? options.archived : 0;
     if (archived === null) {
       return this.db
         .prepare('SELECT * FROM chat_sessions ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
-        .all() as ChatSessionRow[];
+        .all().map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
     }
     return this.db
       .prepare('SELECT * FROM chat_sessions WHERE archived = ? ORDER BY pinned DESC, updatedAt DESC, createdAt DESC')
-      .all(archived) as ChatSessionRow[];
+      .all(archived).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
   }
 
   search(query: string, options?: { archived?: number | null }): ChatSessionRow[] {
@@ -1433,7 +1603,7 @@ export class ChatSessionRepo {
            WHERE (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
            ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
         )
-        .all(pattern, pattern) as ChatSessionRow[];
+        .all(pattern, pattern).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
     }
     return this.db
       .prepare(
@@ -1442,13 +1612,12 @@ export class ChatSessionRepo {
          WHERE s.archived = ? AND (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
          ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
       )
-      .all(archived, pattern, pattern) as ChatSessionRow[];
+      .all(archived, pattern, pattern).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
   }
 
   get(id: string): ChatSessionRow | undefined {
-    return this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as
-      | ChatSessionRow
-      | undefined;
+    const session = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined;
+    return session ? this.normalizeAssistantSession(session) : undefined;
   }
 
   insert(row: {
@@ -1467,7 +1636,7 @@ export class ChatSessionRepo {
     inputTokens?: number;
     outputTokens?: number;
     contextTokens?: number;
-    kind?: 'chat' | 'brain';
+    kind?: 'chat' | 'brain' | 'assistant';
   }): void {
     this.db
       .prepare(
@@ -1494,14 +1663,21 @@ export class ChatSessionRepo {
       );
   }
 
-  getByKind(kind: 'chat' | 'brain', projectId?: string | null): ChatSessionRow | undefined {
-    if (projectId === undefined) {
-      return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+  getByKind(kind: 'chat' | 'brain' | 'assistant', projectId?: string | null): ChatSessionRow | undefined {
+    if (kind === 'assistant') {
+      const id = projectId ? `assistant:${projectId}` : 'assistant';
+      const session = this.get(id);
+      if (session?.kind === 'assistant') return session;
     }
-    return this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
+    if (projectId === undefined) {
+      const session = this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? ORDER BY createdAt LIMIT 1').get(kind) as ChatSessionRow | undefined;
+      return session ? this.normalizeAssistantSession(session) : undefined;
+    }
+    const session = this.db.prepare('SELECT * FROM chat_sessions WHERE kind = ? AND projectId IS ? ORDER BY createdAt LIMIT 1').get(kind, projectId) as ChatSessionRow | undefined;
+    return session ? this.normalizeAssistantSession(session) : undefined;
   }
 
-  updateKind(id: string, kind: 'chat' | 'brain'): void {
+  updateKind(id: string, kind: 'chat' | 'brain' | 'assistant'): void {
     this.db.prepare("UPDATE chat_sessions SET kind = ?, updatedAt = datetime('now') WHERE id = ?").run(kind, id);
   }
 
@@ -1511,6 +1687,10 @@ export class ChatSessionRepo {
 
   updateModel(id: string, model: string): void {
     this.db.prepare("UPDATE chat_sessions SET model = ?, updatedAt = datetime('now') WHERE id = ?").run(model, id);
+  }
+
+  updateMode(id: string, mode: 'safe' | 'full'): void {
+    this.db.prepare("UPDATE chat_sessions SET mode = ?, updatedAt = datetime('now') WHERE id = ?").run(mode, id);
   }
 
   updateTitle(id: string, title: string): void {
@@ -1597,6 +1777,44 @@ export class ChatSessionRepo {
   delete(id: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE sessionId = ?').run(id);
     this.db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
+  }
+}
+
+export interface BrainDirectiveRow {
+  id: string;
+  projectId: string | null;
+  text: string;
+  createdAt: string;
+  createdBy: string;
+  active: number;
+}
+
+export class BrainDirectiveRepo {
+  constructor(private db: Database.Database) {}
+
+  add(row: { id: string; projectId?: string | null; text: string; createdBy: string }): BrainDirectiveRow {
+    this.db.prepare('INSERT INTO brain_directives (id, projectId, text, createdBy, active) VALUES (?, ?, ?, ?, 1)')
+      .run(row.id, row.projectId || null, row.text, row.createdBy);
+    return this.get(row.id)!;
+  }
+
+  list(projectId?: string | null, includeGlobal = true): BrainDirectiveRow[] {
+    if (projectId == null) {
+      return this.db.prepare('SELECT * FROM brain_directives WHERE active = 1 AND projectId IS NULL ORDER BY createdAt, id').all() as BrainDirectiveRow[];
+    }
+    return this.db.prepare(
+      `SELECT * FROM brain_directives
+       WHERE active = 1 AND (projectId = ? OR (projectId IS NULL AND ? = 1))
+       ORDER BY createdAt, id`,
+    ).all(projectId, includeGlobal ? 1 : 0) as BrainDirectiveRow[];
+  }
+
+  get(id: string): BrainDirectiveRow | undefined {
+    return this.db.prepare('SELECT * FROM brain_directives WHERE id = ?').get(id) as BrainDirectiveRow | undefined;
+  }
+
+  remove(id: string): boolean {
+    return this.db.prepare('UPDATE brain_directives SET active = 0 WHERE id = ? AND active = 1').run(id).changes > 0;
   }
 }
 
@@ -1713,6 +1931,10 @@ export class ChatPermissionRepo {
       : this.db.prepare("SELECT * FROM chat_permissions WHERE status = 'pending' ORDER BY createdAt").all()) as ChatPermissionRow[];
   }
 
+  listAlways(sessionId: string, toolName: string): ChatPermissionRow[] {
+    return this.db.prepare("SELECT * FROM chat_permissions WHERE sessionId = ? AND toolName = ? AND status = 'allow_always'").all(sessionId, toolName) as ChatPermissionRow[];
+  }
+
   expirePending(message = 'AgentHub khởi động lại'): number {
     const result = this.db.prepare("UPDATE chat_permissions SET status = 'deny', message = ?, resolvedAt = datetime('now') WHERE status = 'pending'").run(message);
     return result.changes;
@@ -1727,6 +1949,46 @@ export class ChatPermissionRepo {
     this.db.prepare("UPDATE chat_permissions SET status = ?, message = ?, reason = ?, resolvedAt = datetime('now') WHERE id = ? AND status = 'pending'")
       .run(status, message, reason || null, id);
     return this.get(id);
+  }
+}
+
+export interface PermissionRuleRow {
+  id: string;
+  scope: 'session' | 'project' | 'global';
+  sessionId: string | null;
+  projectId: string | null;
+  toolName: string;
+  pattern: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+export class PermissionRuleRepo {
+  constructor(private db: Database.Database) {}
+
+  list(options?: { sessionId?: string; projectId?: string; toolName?: string }): PermissionRuleRow[] {
+    const scopes: string[] = [];
+    const values: unknown[] = [];
+    if (options?.sessionId) { scopes.push('(scope = \'session\' AND sessionId = ?)'); values.push(options.sessionId); }
+    if (options?.projectId) { scopes.push('(scope = \'project\' AND projectId = ?)'); values.push(options.projectId); }
+    if (options?.sessionId || options?.projectId) scopes.push("scope = 'global'");
+    if (options?.toolName) values.push(options.toolName);
+    const where = scopes.length ? ` WHERE (${scopes.join(' OR ')})${options?.toolName ? ' AND toolName = ?' : ''}` : options?.toolName ? ' WHERE toolName = ?' : '';
+    return this.db.prepare(`SELECT * FROM permission_rules${where} ORDER BY createdAt, id`).all(...values) as PermissionRuleRow[];
+  }
+
+  listAll(): PermissionRuleRow[] {
+    return this.db.prepare('SELECT * FROM permission_rules ORDER BY createdAt, id').all() as PermissionRuleRow[];
+  }
+
+  insert(row: Omit<PermissionRuleRow, 'createdAt'>): PermissionRuleRow {
+    this.db.prepare('INSERT INTO permission_rules (id, scope, sessionId, projectId, toolName, pattern, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.scope, row.sessionId, row.projectId, row.toolName, row.pattern, row.createdBy);
+    return this.db.prepare('SELECT * FROM permission_rules WHERE id = ?').get(row.id) as PermissionRuleRow;
+  }
+
+  delete(id: string): boolean {
+    return this.db.prepare('DELETE FROM permission_rules WHERE id = ?').run(id).changes > 0;
   }
 }
 
@@ -2035,4 +2297,98 @@ export class TaskNoteRepo {
   }
 }
 
+export interface CiRunRow {
+  projectId: string;
+  runId: number;
+  workflow: string;
+  sha: string;
+  status: string;
+  conclusion: string | null;
+  jobs: string; // JSON
+  completedAt: string | null;
+  url?: string | null;
+  createdAt?: string;
+}
+
+export class CiRepo {
+  constructor(private db: Database.Database) {}
+
+  insert(row: {
+    projectId: string;
+    runId: number;
+    workflow: string;
+    sha: string;
+    status: string;
+    conclusion: string | null;
+    jobs: string;
+    completedAt: string | null;
+    url?: string | null;
+  }): CiRunRow {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO ci_runs (projectId, runId, workflow, sha, status, conclusion, jobs, completedAt, url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.projectId,
+        row.runId,
+        row.workflow,
+        row.sha,
+        row.status,
+        row.conclusion,
+        row.jobs,
+        row.completedAt,
+        row.url ?? null,
+      );
+    return this.get(row.projectId, row.runId)!;
+  }
+
+  get(projectId: string, runId: number): CiRunRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM ci_runs WHERE projectId = ? AND runId = ?')
+      .get(projectId, runId) as CiRunRow | undefined;
+  }
+
+  listActiveProjects(): string[] {
+    return (
+      this.db
+        .prepare("SELECT DISTINCT projectId FROM ci_runs WHERE completedAt IS NULL AND status != 'completed'")
+        .all() as Array<{ projectId: string }>
+    ).map((row) => row.projectId);
+  }
+
+  getLatest(projectId: string): CiRunRow | undefined {
+    return this.db
+      .prepare(
+        'SELECT * FROM ci_runs WHERE projectId = ? ORDER BY runId DESC LIMIT 1',
+      )
+      .get(projectId) as CiRunRow | undefined;
+  }
+
+  listByProject(projectId: string, limit = 20): CiRunRow[] {
+    return this.db
+      .prepare(
+        'SELECT * FROM ci_runs WHERE projectId = ? ORDER BY runId DESC LIMIT ?',
+      )
+      .all(projectId, limit) as CiRunRow[];
+  }
+
+  getLatestForAllProjects(): Map<string, CiRunRow> {
+    const rows = this.db
+      .prepare(
+        `SELECT c.* FROM ci_runs c
+         INNER JOIN (
+           SELECT projectId, MAX(runId) AS maxRunId
+           FROM ci_runs
+           GROUP BY projectId
+         ) latest ON c.projectId = latest.projectId AND c.runId = latest.maxRunId`,
+      )
+      .all() as CiRunRow[];
+    const map = new Map<string, CiRunRow>();
+    for (const row of rows) {
+      map.set(row.projectId, row);
+    }
+    return map;
+  }
+}
 

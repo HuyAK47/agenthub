@@ -7,6 +7,7 @@ import { createContext } from './daemon.js';
 import { CodexEngine } from './engines/index.js';
 import { findClaudeBin } from './chat/claude.js';
 import { getPlatform } from './platform/index.js';
+import { lockTool } from './profiles/locks.js';
 
 export type CheckStatus = 'ok' | 'error' | 'skip' | 'warn';
 
@@ -201,6 +202,59 @@ export async function checkGit(deps?: CheckGitDeps): Promise<DoctorCheckItem> {
     message: `Lệnh git thất bại với mã thoát ${res.status}: ${res.stderr.trim() || '(không có lỗi chi tiết)'}`,
     suggestion: `Kiểm tra lại cài đặt git trên máy.`,
     details: { status: res.status, stderr: res.stderr },
+  };
+}
+
+// Git identity is a warning because users may configure it later; workers and hub
+// commits have an explicit AgentHub fallback when it is absent.
+export async function checkGitIdentity(deps?: CheckGitDeps): Promise<DoctorCheckItem> {
+  const exec = deps?.exec ?? defaultExecSync;
+  const timeoutMs = deps?.timeoutMs ?? 5000;
+  const name = exec('git', ['config', '--get', 'user.name'], { timeout: timeoutMs });
+  const email = exec('git', ['config', '--get', 'user.email'], { timeout: timeoutMs });
+  const hasName = name.status === 0 && name.stdout.trim().length > 0;
+  const hasEmail = email.status === 0 && email.stdout.trim().length > 0;
+  if (hasName && hasEmail) {
+    return { id: 'git-identity', name: 'Danh tính Git', status: 'ok', message: `${name.stdout.trim()} <${email.stdout.trim()}>` };
+  }
+  return {
+    id: 'git-identity',
+    name: 'Danh tính Git',
+    status: 'warn',
+    message: 'Chưa cấu hình đầy đủ user.name/user.email (AgentHub sẽ dùng danh tính mặc định khi cần commit)',
+    suggestion: "Chạy 'git config --global user.name ...' và 'git config --global user.email ...' để cấu hình danh tính Git.",
+    details: { hasName, hasEmail },
+  };
+}
+
+export interface CheckLockToolDeps {
+  exec?: SyncExecFn;
+  timeoutMs?: number;
+}
+
+export async function checkLockTool(deps?: CheckLockToolDeps): Promise<DoctorCheckItem> {
+  const exec = deps?.exec ?? defaultExecSync;
+  const timeoutMs = deps?.timeoutMs ?? 5000;
+  const tool = lockTool();
+  const res = exec(tool, [], { timeout: timeoutMs });
+  if (!res.error) {
+    return {
+      id: 'lock-tool',
+      name: 'Công cụ khóa file',
+      status: 'ok',
+      message: `Tìm thấy ${tool} (${process.platform === 'darwin' ? 'macOS lockf' : 'Linux flock'})`,
+      details: { tool, platform: process.platform },
+    };
+  }
+  return {
+    id: 'lock-tool',
+    name: 'Công cụ khóa file',
+    status: 'error',
+    message: `Không thể thực thi ${tool}: ${res.error.message}`,
+    suggestion: process.platform === 'darwin'
+      ? 'Đảm bảo /usr/bin/lockf có sẵn trên macOS.'
+      : 'Cài đặt util-linux để có lệnh flock và đảm bảo nó có trong PATH.',
+    details: { tool, platform: process.platform, error: res.error.message },
   };
 }
 
@@ -620,9 +674,9 @@ export interface CheckPermissionsDeps {
 }
 
 export async function checkPermissions(deps?: CheckPermissionsDeps): Promise<DoctorCheckItem> {
-  const config = loadConfig();
-  const hubHome = deps?.hubHome ?? config.hubHome;
-  const tokenPath = deps?.tokenPath ?? config.tokenPath;
+  const config = deps?.hubHome && deps?.tokenPath ? undefined : loadConfig();
+  const hubHome = deps?.hubHome ?? config!.hubHome;
+  const tokenPath = deps?.tokenPath ?? config!.tokenPath;
   const statFn = deps?.statSync ?? fs.statSync;
   const existsFn = deps?.existsSync ?? fs.existsSync;
 
@@ -689,6 +743,8 @@ export async function checkPermissions(deps?: CheckPermissionsDeps): Promise<Doc
 export interface DoctorDeps {
   node?: CheckNodeDeps;
   git?: CheckGitDeps;
+  gitIdentity?: CheckGitDeps;
+  lockTool?: CheckLockToolDeps;
   engines?: CheckEnginesDeps;
   daemon?: CheckDaemonDeps;
   systemd?: CheckSystemdDeps;
@@ -701,6 +757,8 @@ export async function runDoctor(deps?: DoctorDeps): Promise<DoctorReport> {
   const checks: DoctorCheckItem[] = [
     await checkNode(deps?.node),
     await checkGit(deps?.git),
+    await checkGitIdentity(deps?.gitIdentity ?? deps?.git),
+    await checkLockTool(deps?.lockTool),
     await checkEngines(deps?.engines),
     await checkDaemon(deps?.daemon),
     await checkSystemd(deps?.systemd),

@@ -10,6 +10,10 @@ export type TaskStatus =
   | 'cancelled'
   | 'waiting_quota';
 
+export interface PerfGroup { cpuPercent: number; rssBytes: number; processes: number; }
+export interface PerfSample { at: string; cpuCount: number; groups: Record<string, PerfGroup>; }
+export interface PerfReport { samples: PerfSample[]; latest: PerfSample | null; }
+
 export type TaskLevel = 'easy' | 'hard';
 
 export type EngineType = 'agy' | 'codex' | 'claude';
@@ -67,8 +71,12 @@ export interface Profile {
   notes?: string | null;
   priority?: number;
   avatarUrl?: string | null;
+  /** Gói tài khoản đã chuẩn hoá: free, plus, pro, team, max_20x… (null khi chưa biết). */
+  plan?: string | null;
   /** Chỉ có trong phản hồi của nút Làm mới: kết quả lấy ảnh đại diện. */
   avatarMessage?: string;
+  /** Chỉ có trong phản hồi của nút Làm mới cho Codex: kết quả lấy quota/gói qua API. */
+  refreshMessage?: string;
   currentTask?: { id?: string; title?: string } | null;
 }
 
@@ -109,15 +117,58 @@ export interface Project {
   /** Always present in API responses (defaults filled in by the server). */
   settings?: ProjectSettings;
   integrationStatus?: IntegrationStatus | null;
+  ciStatus?: CiStatusSummary | null;
   createdAt?: string;
+  afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
+}
+
+export interface CiJobAnnotation {
+  path?: string;
+  start_line?: number;
+  end_line?: number;
+  annotation_level?: string;
+  message: string;
+  title?: string;
+  raw_details?: string;
+}
+
+export interface CiJob {
+  id: number;
+  name: string;
+  status?: string;
+  conclusion?: string | null;
+  annotations?: CiJobAnnotation[];
+}
+
+export interface CiStatusSummary {
+  runId: number;
+  workflow: string;
+  sha: string;
+  status: string;
+  conclusion?: string | null;
+  url?: string | null;
+  completedAt?: string | null;
+  jobs?: CiJob[];
+}
+
+export interface DeployStatus {
+  projectId: string;
+  status: 'queued' | 'running' | 'restarting' | 'succeeded' | 'failed' | 'skipped';
+  startedAt?: string;
+  finishedAt?: string;
+  commit?: string;
+  error?: string;
+  logPath?: string;
 }
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
-  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
   worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string };
+  ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
+  reviewChecklist?: string[];
   notifications: { telegramContent: 'full' | 'minimal' };
 }
 
@@ -221,6 +272,14 @@ export interface TaskBatch {
   createdBy: string | null;
   createdAt: string;
   tasks?: Task[];
+  progress?: {
+    total: number;
+    done: number;
+    running: number;
+    failed: number;
+    waiting: number;
+    pending: number;
+  };
 }
 
 export interface CreateBatchInput {
@@ -236,6 +295,7 @@ export interface CreateBatchInput {
     dependsOn?: string[];
   }>;
   createdBy?: string;
+  dispatch?: boolean;
 }
 
 export interface CheckResult {
@@ -318,17 +378,29 @@ export interface BrainStatus {
   sessions?: BrainSession[];
   state?: 'working' | 'waiting' | 'inactive';
   brains?: ProjectBrain[];
+  assistants?: AssistantStatus[];
 }
 
 export interface ProjectBrain {
   projectId: string | null;
   projectName: string;
   mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  permissions?: 'standard' | 'trusted' | 'full';
+  sessionMode?: 'safe' | 'full';
   sessionId: string;
   state: 'idle' | 'running' | 'waiting' | 'error';
   queued: boolean;
   lastTurnAt: string | null;
   tokensToday: number;
+  directives?: Array<{ id: string; text: string; createdAt: string }>;
+}
+
+export interface AssistantStatus {
+  projectId: string | null;
+  projectName: string;
+  sessionId: string;
+  state: 'idle' | 'running' | 'waiting_permission' | 'waiting_limit' | 'error';
+  busy: boolean;
 }
 
 export interface BrainSession {
@@ -349,6 +421,7 @@ export interface ClaudeQuota {
   rateLimitType: string | null;
   observedAt: string | null;
   limited?: boolean;
+  profiles?: Array<{ profileName: string; status: string | null; resetsAt: number | null; rateLimitType: string | null; observedAt: string; limited: boolean; source: string }>;
 }
 
 export interface TaskNote {
@@ -523,6 +596,7 @@ export interface DailyUsageReport {
 }
 
 export interface SystemConfig {
+  branding?: { name: string; shortName: string; logo?: string; logoVersion?: number; accentColor?: string; tagline?: string };
   modelChainHard: string[];
   modelChainEasy: string[];
   defaultTimeout: number;
@@ -543,7 +617,10 @@ export interface SystemConfig {
   reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
+    permissions?: 'standard' | 'trusted' | 'full';
     maxConcurrent?: number;
+    dailyTokenBudget?: number;
+    maxTurnsPerHour?: number;
     digest?: {
       enabled: boolean;
       time: string;
@@ -563,6 +640,13 @@ export interface SystemConfig {
       start: string;
       end: string;
     };
+    quotaLowPct?: number;
+  };
+  wakeup?: {
+    enabled: boolean;
+    times: string[];
+    profiles?: string[];
+    agyModels?: string[];
   };
   load?: {
     enabled: boolean;
@@ -571,6 +655,7 @@ export interface SystemConfig {
     minFreeMemGB: number;
     recoverAfterSec: number;
   };
+  ui?: { tours?: Record<string, boolean> };
 }
 
 export interface ModelOptions {
@@ -586,7 +671,7 @@ export interface ChatSession {
   title: string;
   mode: ChatMode;
   busy: boolean;
-  state?: 'idle' | 'running' | 'waiting_permission' | 'error';
+  state?: 'idle' | 'running' | 'waiting_permission' | 'waiting_limit' | 'error';
   model?: string;
   profileName?: string | null;
   updatedAt: string;
@@ -597,6 +682,7 @@ export interface ChatSession {
   outputTokens?: number;
   contextTokens?: number;
   createdAt?: string;
+  kind?: 'chat' | 'brain' | 'assistant';
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system';
@@ -604,6 +690,10 @@ export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system'
 export interface ChatMessageMeta {
   name?: string;
   summary?: string;
+  input?: unknown;
+  output?: string;
+  status?: 'running' | 'done' | 'error';
+  diff?: string;
   durationMs?: number;
   costUsd?: number;
   numTurns?: number;
@@ -620,6 +710,10 @@ export interface ChatPermissionRequest {
   status: 'pending' | 'allow' | 'deny' | 'allow_always';
   message?: string | null;
   createdAt: string;
+  sessionTitle?: string | null;
+  projectName?: string | null;
+  permissionLabel?: string;
+  canAlwaysAllow?: boolean;
 }
 
 export interface ChatMessage {
@@ -687,6 +781,7 @@ export interface UpdateProjectInput {
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
   settings?: Partial<ProjectSettings>;
+  confirm?: boolean;
 }
 
 export interface CreateProfileInput {

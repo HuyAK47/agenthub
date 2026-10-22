@@ -21,7 +21,7 @@ let runRepo: RunRepo;
 let eventRepo: EventRepo;
 
 function setupTestEnv() {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-sched-test-'));
+  tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-sched-test-')));
   const agyHomesDir = path.join(tmpDir, 'agy-homes');
   fs.mkdirSync(agyHomesDir, { recursive: true });
 
@@ -491,11 +491,16 @@ describe('Codex reviewer failover lifecycle', () => {
 
   function makeReviewer(mode: string, withChecks = true) {
     const projectPath = path.join(tmpDir, 'review-repo');
-    if (!projectRepo.get('test-project')) createTestProject(projectPath);
+    if (!projectRepo.get('test-project') || !fs.existsSync(projectPath)) createTestProject(projectPath);
     profileRepo.upsert({ name: 'codex-1', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
     const worktreePath = path.join(tmpDir, 'review-worktree');
     fs.rmSync(worktreePath, { recursive: true, force: true });
-    fs.cpSync(projectPath, worktreePath, { recursive: true });
+    try {
+      execFileSync('git', ['-C', projectPath, 'worktree', 'prune']);
+      execFileSync('git', ['-C', projectPath, 'worktree', 'add', '-q', '-b', `review-${Date.now()}-${Math.random().toString(36).slice(2)}`, worktreePath, 'main']);
+    } catch {
+      fs.cpSync(projectPath, worktreePath, { recursive: true });
+    }
     taskRepo.insert({ id: 'test-project/review', projectId: 'test-project', slug: 'review', title: 'Review me', body: 'Check the change.', status: 'review' });
     taskRepo.update('test-project/review', { worktreePath });
     process.env.FAKE_MODE = mode;
@@ -1190,6 +1195,244 @@ describe('Checking after worker completion', () => {
 
     expect(taskRepo.get('test-project/t1')?.status).toBe('review');
     expect(eventRepo.getRecent(10).map((event) => event.type)).toContain('task.checking');
+    scheduler.stop();
+  });
+
+  it('starts completion handling for every finished task before awaiting any completion', async () => {
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const schedulerInternal = scheduler as unknown as {
+      isProcessAlive: (pid: number | null, pidStart?: number | null) => boolean;
+      running: Map<string, unknown>;
+      checkRunningTasks: () => Promise<void>;
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+    };
+    const firstCompletion = new Promise<void>(() => {});
+    const completionSpy = vi.spyOn(schedulerInternal, 'handleRunCompletion')
+      .mockImplementation((taskId) => taskId === 'test-project/t1' ? firstCompletion : Promise.resolve());
+    vi.spyOn(schedulerInternal, 'isProcessAlive').mockReturnValue(false);
+
+    const runningTask = { pid: 999999, pidStart: null };
+    schedulerInternal.running.set('test-project/t1', runningTask);
+    schedulerInternal.running.set('test-project/t2', runningTask);
+
+    const checkPromise = schedulerInternal.checkRunningTasks();
+    await vi.waitFor(() => {
+      expect(completionSpy).toHaveBeenCalledWith('test-project/t2', runningTask);
+    });
+
+    expect(completionSpy).toHaveBeenCalledTimes(2);
+    scheduler.stop();
+    void checkPromise;
+  });
+
+  it('logs error on completion failure only when not stopped', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'DONE'), 'done');
+
+    taskRepo.insert({
+      id: 'test-project/t1',
+      projectId: 'test-project',
+      slug: 't1',
+      title: 'Task 1',
+      status: 'running',
+      worktreePath: projectPath,
+    });
+    runRepo.insert({
+      id: 'run-1',
+      taskId: 'test-project/t1',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+
+    const fakeRt: unknown = {
+      runId: 'run-1',
+      taskId: 'test-project/t1',
+      pid: 999999,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }) },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now(),
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+
+    const schedulerInternal = scheduler as unknown as {
+      isProcessAlive: (pid: number | null, pidStart?: number | null) => boolean;
+      recoverFinishedWork: (run: unknown) => boolean;
+      running: Map<string, unknown>;
+      checkRunningTasks: () => Promise<void>;
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+    };
+
+    vi.spyOn(schedulerInternal, 'isProcessAlive').mockReturnValue(false);
+    vi.spyOn(schedulerInternal, 'recoverFinishedWork').mockReturnValue(false);
+    const completionSpy = vi.spyOn(schedulerInternal, 'handleRunCompletion');
+    const checkSpy = vi.spyOn(scheduler, 'runChecksForTask').mockRejectedValue(new Error('simulated check error'));
+
+    try {
+      // Case 1: scheduler is running (not stopped) -> console.error is called
+      schedulerInternal.running.set('test-project/t1', fakeRt);
+      await schedulerInternal.checkRunningTasks();
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(
+          '[scheduler] handleRunCompletion failed for test-project/t1:',
+          expect.any(Error),
+        );
+      });
+      await completionSpy.mock.results[0]?.value;
+
+      // Case 2: scheduler is stopped -> console.error is NOT called
+      errorSpy.mockClear();
+      checkSpy.mockImplementationOnce(async () => {
+        scheduler.stop();
+        throw new Error('simulated check error');
+      });
+      schedulerInternal.running.set('test-project/t1', fakeRt);
+      await schedulerInternal.checkRunningTasks();
+      await vi.waitFor(() => {
+        expect(checkSpy).toHaveBeenCalledTimes(2);
+      });
+      await completionSpy.mock.results[1]?.value;
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      scheduler.stop();
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe('Checking queue lifecycle', () => {
+  beforeEach(setupTestEnv);
+  afterEach(teardownTestEnv);
+
+  beforeEach(() => createTestProject(path.join(tmpDir, 'repo')));
+
+  function makeCheckingScheduler(maxConcurrent = 2) {
+    config.checks.maxConcurrent = maxConcurrent;
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map(), undefined, undefined, db);
+    return scheduler as Scheduler & { checkRunner: { run: (...args: unknown[]) => Promise<unknown> } };
+  }
+
+  function addCheckTask(slug: string, worktreePath = path.join(tmpDir, slug), status: 'review' | 'done' | 'cancelled' = 'review') {
+    fs.mkdirSync(worktreePath, { recursive: true });
+    taskRepo.insert({ id: `test-project/${slug}`, projectId: 'test-project', slug, title: slug, status, worktreePath });
+  }
+
+  it('runs at most maxConcurrent checks and starts the FIFO third after one completes', async () => {
+    addCheckTask('c1'); addCheckTask('c2'); addCheckTask('c3');
+    const scheduler = makeCheckingScheduler(2);
+    let active = 0; let peak = 0;
+    const releases: Array<() => void> = [];
+    scheduler.checkRunner = { run: async () => {
+      active++; peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active--;
+      return { passed: true, failed: [], results: [] };
+    } };
+
+    const first = scheduler.runChecksForTask('test-project/c1', 'run-c1');
+    const second = scheduler.runChecksForTask('test-project/c2', 'run-c2');
+    const third = scheduler.runChecksForTask('test-project/c3', 'run-c3');
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(peak).toBe(2);
+    releases.shift()!();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(peak).toBe(2);
+    releases.shift()!(); releases.shift()!();
+    await Promise.all([first, second, third]);
+    scheduler.stop();
+  });
+
+  it('deduplicates the same runId but queues a newer runId after the old run releases the worktree', async () => {
+    addCheckTask('same');
+    const scheduler = makeCheckingScheduler();
+    let calls = 0; let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    scheduler.checkRunner = { run: async () => { calls++; await gate; return { passed: true, failed: [], results: [] }; } };
+    const old = scheduler.runChecksForTask('test-project/same', 'old');
+    const duplicate = scheduler.runChecksForTask('test-project/same', 'old');
+    expect(duplicate).toBeDefined();
+    const newer = scheduler.runChecksForTask('test-project/same', 'new');
+    release();
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(taskRepo.get('test-project/same')?.status).toBe('review');
+    release = () => {};
+    await Promise.all([old, newer]);
+    expect(calls).toBe(2);
+    scheduler.stop();
+  });
+
+  it('does not run checks concurrently for the same worktree', async () => {
+    const worktree = path.join(tmpDir, 'shared');
+    addCheckTask('w1', worktree); addCheckTask('w2', worktree);
+    const scheduler = makeCheckingScheduler(2);
+    let active = 0; let peak = 0; const releases: Array<() => void> = [];
+    scheduler.checkRunner = { run: async () => {
+      active++; peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active--; return { passed: true, failed: [], results: [] };
+    } };
+    const first = scheduler.runChecksForTask('test-project/w1', 'run-w1');
+    const second = scheduler.runChecksForTask('test-project/w2', 'run-w2');
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    expect(peak).toBe(1);
+    releases.shift()!();
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases.shift()!();
+    await Promise.all([first, second]);
+    scheduler.stop();
+  });
+
+  it('keeps a cancelled task unchanged when an old check completes', async () => {
+    addCheckTask('cancel');
+    const scheduler = makeCheckingScheduler();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    scheduler.checkRunner = { run: async () => { await gate; return { passed: true, failed: [], results: [] }; } };
+    const check = scheduler.runChecksForTask('test-project/cancel', 'run-cancel');
+    await vi.waitFor(() => expect(taskRepo.get('test-project/cancel')?.status).toBe('checking'));
+    scheduler.cancelTask('test-project/cancel');
+    release();
+    await check;
+    expect(taskRepo.get('test-project/cancel')?.status).toBe('cancelled');
+    scheduler.stop();
+  });
+
+  it('never changes done or cancelled tasks when recovery asks for checks', async () => {
+    addCheckTask('done', path.join(tmpDir, 'done'), 'done');
+    addCheckTask('cancelled', path.join(tmpDir, 'cancelled'), 'cancelled');
+    const scheduler = makeCheckingScheduler();
+    const runner = scheduler as unknown as { checkRunner: { run: (...args: unknown[]) => Promise<unknown> } };
+    runner.checkRunner = { run: async () => { throw new Error('must not run'); } };
+    await scheduler.runChecksForTask('test-project/done', 'run-done');
+    await scheduler.runChecksForTask('test-project/cancelled', 'run-cancelled');
+    await scheduler.recoverCheckingTasks();
+    expect(taskRepo.get('test-project/done')?.status).toBe('done');
+    expect(taskRepo.get('test-project/cancelled')?.status).toBe('cancelled');
     scheduler.stop();
   });
 });

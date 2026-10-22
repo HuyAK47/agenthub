@@ -1,6 +1,7 @@
-import { TaskRepo, ProjectRepo, ProfileRepo, QuotaMarkRepo, EventRepo } from '../db/index.js';
+import { TaskRepo, ProjectRepo, ProfileRepo, QuotaMarkRepo, EventRepo, CiRepo } from '../db/index.js';
 import type { QuietHoursConfig } from '../config.js';
 import type { ChatService } from '../chat/service.js';
+import { projectSettings } from '../projects/settings.js';
 
 export interface PendingDecision {
   id: string;
@@ -123,7 +124,7 @@ export function forwardDecisionToBrain(
     chatService.getOrCreateSession(sessionId, projectId
       ? { title: `Bộ não · ${projectId}`, kind: 'brain', projectId }
       : { title: 'Bộ não', kind: 'brain' });
-    chatService.sendMessage(sessionId, brainMsg);
+    chatService.sendMessage(sessionId, brainMsg, { queueIfBusy: true });
   } catch {
     // ignore if brain session cannot receive (e.g. busy)
   }
@@ -176,7 +177,7 @@ export function areAllProfilesQuotaExhausted(
   const profiles = profileRepo.getAll(true);
   if (profiles.length === 0) return false;
 
-  const marks = quotaMarkRepo.getActive().filter((m) => m.until > Math.floor(now / 1000));
+  const marks = quotaMarkRepo.getActive(Math.floor(now / 1000)).filter((m) => m.until > Math.floor(now / 1000));
   const exhaustedProfiles = new Set(marks.map((m) => m.profileName));
 
   return profiles.every((p) => exhaustedProfiles.has(p.name));
@@ -216,6 +217,7 @@ export interface GenerateDigestOptions {
   quotaMarkRepo?: QuotaMarkRepo;
   eventRepo?: EventRepo;
   decisionTracker?: DecisionTracker;
+  ciRepo?: CiRepo;
   now?: () => number;
   accumulatedQuietHoursMessages?: string[];
   port?: number;
@@ -329,7 +331,7 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
   // 3. Quota summary
   const profiles = opts.profileRepo ? opts.profileRepo.getAll(true) : [];
   const activeMarks = opts.quotaMarkRepo
-    ? opts.quotaMarkRepo.getActive().filter((m) => m.until > Math.floor(nowMs / 1000))
+    ? opts.quotaMarkRepo.getActive(Math.floor(nowMs / 1000)).filter((m) => m.until > Math.floor(nowMs / 1000))
     : [];
   const exhaustedMap = new Map<string, { family: string; until: string }>();
   for (const m of activeMarks) {
@@ -365,13 +367,31 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
     quotaSummary = `${availableList.length}/${profiles.length} tài khoản sẵn sàng`;
   }
 
+  // Helper to extract projectId
+  const getTaskProjectId = (t: { projectId?: string | null; id?: string }): string | null => {
+    if (t.projectId) return t.projectId;
+    if (t.id && t.id.includes('/')) return t.id.slice(0, t.id.indexOf('/'));
+    return null;
+  };
+
+  const isProjectMinimal = (projectId: string | null | undefined): boolean => {
+    if (!projectId || !opts.projectRepo) return false;
+    const proj = opts.projectRepo.get(projectId);
+    return projectSettings(proj).notifications.telegramContent === 'minimal';
+  };
+
   // 4. Pending decisions
   const decisions: Array<{ id: string; text: string; createdAt: string; remindersCount?: number }> = [];
   if (opts.decisionTracker) {
     for (const d of opts.decisionTracker.getPending()) {
+      const projId = d.taskId?.includes('/') ? d.taskId.slice(0, d.taskId.indexOf('/')) : null;
+      const proj = projId && opts.projectRepo ? opts.projectRepo.get(projId) : null;
+      const minimal = isProjectMinimal(projId);
+      const projLabel = proj?.name || projId;
+      const prefix = projLabel ? `[${projLabel}] ` : '';
       decisions.push({
         id: d.id,
-        text: d.text,
+        text: minimal ? `${prefix}1 việc cần quyết định` : (prefix ? `${prefix}${d.text}` : d.text),
         createdAt: new Date(d.createdAt).toISOString(),
         remindersCount: d.remindersCount,
       });
@@ -381,31 +401,112 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
   // Also include escalated review tasks that require human decision
   for (const t of reviewTasks) {
     if (t.reviewerEscalated) {
+      const projId = getTaskProjectId(t);
+      const proj = projId && opts.projectRepo ? opts.projectRepo.get(projId) : null;
+      const minimal = isProjectMinimal(projId);
+      const projLabel = proj?.name || projId;
+      const prefix = projLabel ? `[${projLabel}] ` : '';
       decisions.push({
         id: `review:${t.id}`,
-        text: `Duyệt task escalated: ${t.title || t.id}`,
+        text: minimal ? `${prefix}1 task cần duyệt` : `${prefix}Duyệt task escalated: ${t.title || t.id}`,
         createdAt: t.updatedAt || nowIso,
       });
     }
   }
 
   // Format Telegram HTML text
-  const taskLines = [
-    `• Hoàn thành: <b>${tasksSummary.done}</b> (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done})`,
-    `• Đang chạy: <b>${tasksSummary.running}</b>`,
-    `• Lỗi: <b>${tasksSummary.failed}</b>${tasksSummary.blocked ? ` (Bị chặn: <b>${tasksSummary.blocked}</b>)` : ''}${tasksSummary.review ? ` (Chờ review: <b>${tasksSummary.review}</b>)` : ''}`,
-  ];
+  const projects = opts.projectRepo ? opts.projectRepo.getAll() : [];
+  const projectLines: string[] = [];
+  const projectMarkdownLines: string[] = [];
+
+  if (projects.length > 0) {
+    for (const proj of projects) {
+      const pDone24h = done24hTasks.filter((t) => getTaskProjectId(t) === proj.id).length;
+      const pRunning = runningTasks.filter((t) => getTaskProjectId(t) === proj.id).length;
+      const pFailed = failedTasks.filter((t) => getTaskProjectId(t) === proj.id).length;
+      const pBlocked = blockedTasks.filter((t) => getTaskProjectId(t) === proj.id).length;
+      const pReview = reviewTasks.filter((t) => getTaskProjectId(t) === proj.id).length;
+      const label = proj.name || proj.id;
+      // Requirement 5: tóm tắt theo từng dự án + một dòng tổng; dự án minimal chỉ hiện số
+      projectLines.push(
+        `• <b>[${escapeHtml(label)}]</b>: Hoàn thành: <b>${pDone24h}</b> · Đang chạy: <b>${pRunning}</b> · Lỗi: <b>${pFailed}</b>${pBlocked ? ` · Bị chặn: <b>${pBlocked}</b>` : ''}${pReview ? ` · Chờ review: <b>${pReview}</b>` : ''}`
+      );
+      projectMarkdownLines.push(
+        `- **[${label}]**: Hoàn thành: **${pDone24h}** · Đang chạy: **${pRunning}** · Lỗi: **${pFailed}**${pBlocked ? ` · Bị chặn: **${pBlocked}**` : ''}${pReview ? ` · Chờ review: **${pReview}**` : ''}`
+      );
+    }
+  }
+
+  const totalLine = `• <b>Tổng cộng</b>: Hoàn thành: <b>${tasksSummary.done}</b> (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done}) · Đang chạy: <b>${tasksSummary.running}</b> · Lỗi: <b>${tasksSummary.failed}</b>${tasksSummary.blocked ? ` · Bị chặn: <b>${tasksSummary.blocked}</b>` : ''}${tasksSummary.review ? ` · Chờ review: <b>${tasksSummary.review}</b>` : ''}`;
+  const totalMarkdownLine = `- **Tổng cộng**: Hoàn thành: **${tasksSummary.done}** (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done}) · Đang chạy: **${tasksSummary.running}** · Lỗi: **${tasksSummary.failed}**${tasksSummary.blocked ? ` · Bị chặn: **${tasksSummary.blocked}**` : ''}${tasksSummary.review ? ` · Chờ review: **${tasksSummary.review}**` : ''}`;
+
+  const taskLines = projects.length > 0
+    ? [...projectLines, totalLine]
+    : [
+        `• Hoàn thành: <b>${tasksSummary.done}</b> (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done})`,
+        `• Đang chạy: <b>${tasksSummary.running}</b>`,
+        `• Lỗi: <b>${tasksSummary.failed}</b>${tasksSummary.blocked ? ` (Bị chặn: <b>${tasksSummary.blocked}</b>)` : ''}${tasksSummary.review ? ` (Chờ review: <b>${tasksSummary.review}</b>)` : ''}`,
+      ];
+
+  const markdownTaskLines = projects.length > 0
+    ? [...projectMarkdownLines, totalMarkdownLine].join('\n')
+    : [
+        `- Hoàn thành: **${tasksSummary.done}** (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done})`,
+        `- Đang chạy: **${tasksSummary.running}**`,
+        `- Lỗi: **${tasksSummary.failed}**`,
+        `- Chờ review: **${tasksSummary.review}**`,
+        `- Bị chặn: **${tasksSummary.blocked}**`,
+      ].join('\n');
 
   let mergedSection = '';
+  let markdownMergedSection = '';
   if (merged.length === 0) {
     mergedSection = '• <i>Không có task nào được merge trong 24h qua</i>';
+    markdownMergedSection = '_Không có task nào được merge trong 24h qua_';
   } else {
-    mergedSection = merged
-      .slice(0, 10)
-      .map((m) => `• <code>${escapeHtml(m.taskId)}</code>: ${escapeHtml(m.title)}${m.mergeCommit ? ` <i>(${m.mergeCommit})</i>` : ''}`)
-      .join('\n');
+    // Count minimal merged tasks per project so we only show counts
+    const minimalMergedCounts = new Map<string, number>();
+    for (const m of merged) {
+      const projId = m.taskId.includes('/') ? m.taskId.slice(0, m.taskId.indexOf('/')) : null;
+      if (isProjectMinimal(projId) && projId) {
+        minimalMergedCounts.set(projId, (minimalMergedCounts.get(projId) || 0) + 1);
+      }
+    }
+    const renderedMinimalHtml = new Set<string>();
+    const renderedMinimalMd = new Set<string>();
+    const htmlLines: string[] = [];
+    const mdLines: string[] = [];
+
+    for (const m of merged.slice(0, 10)) {
+      const projId = m.taskId.includes('/') ? m.taskId.slice(0, m.taskId.indexOf('/')) : null;
+      const proj = projId && opts.projectRepo ? opts.projectRepo.get(projId) : null;
+      const minimal = isProjectMinimal(projId);
+      const label = proj?.name || projId || '';
+
+      if (minimal && projId) {
+        if (!renderedMinimalHtml.has(projId)) {
+          renderedMinimalHtml.add(projId);
+          const count = minimalMergedCounts.get(projId) || 1;
+          htmlLines.push(`• [${escapeHtml(label)}]: ${count} task đã merge`);
+        }
+        if (!renderedMinimalMd.has(projId)) {
+          renderedMinimalMd.add(projId);
+          const count = minimalMergedCounts.get(projId) || 1;
+          mdLines.push(`- [${label}]: ${count} task đã merge`);
+        }
+      } else {
+        const prefix = label ? `[${escapeHtml(label)}] ` : '';
+        htmlLines.push(`• ${prefix}<code>${escapeHtml(m.taskId)}</code>: ${escapeHtml(m.title)}${m.mergeCommit ? ` <i>(${m.mergeCommit})</i>` : ''}`);
+        const mdPrefix = label ? `[${label}] ` : '';
+        mdLines.push(`- ${mdPrefix}\`${m.taskId}\`: ${m.title}${m.mergeCommit ? ` (${m.mergeCommit})` : ''}`);
+      }
+    }
+
+    mergedSection = htmlLines.join('\n');
+    markdownMergedSection = mdLines.join('\n');
     if (merged.length > 10) {
       mergedSection += `\n• <i>... và ${merged.length - 10} task khác</i>`;
+      markdownMergedSection += `\n- _... và ${merged.length - 10} task khác_`;
     }
   }
 
@@ -432,11 +533,45 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
     }
   }
 
+  // 5. CI status per project
+  const ciLines: string[] = [];
+  const ciMarkdownLines: string[] = [];
+  if (projects.length > 0) {
+    for (const proj of projects) {
+      const label = proj.name || proj.id;
+      const latestRun = opts.ciRepo?.getLatest(proj.id);
+      let statusText = 'Chưa có run';
+      let icon = '⚪️';
+      if (latestRun) {
+        const wf = latestRun.workflow || 'CI';
+        const sha = latestRun.sha ? ` (${latestRun.sha.slice(0, 7)})` : '';
+        if (latestRun.status !== 'completed') {
+          icon = '🟡';
+          statusText = `Đang chạy · ${wf}${sha}`;
+        } else if (latestRun.conclusion === 'success') {
+          icon = '🟢';
+          statusText = `Đạt · ${wf}${sha}`;
+        } else if (latestRun.conclusion === 'failure') {
+          icon = '🔴';
+          statusText = `Thất bại · ${wf}${sha}`;
+        } else {
+          icon = '⚪️';
+          statusText = `${latestRun.conclusion || latestRun.status} · ${wf}${sha}`;
+        }
+      }
+      ciLines.push(`• <b>[${escapeHtml(label)}]</b>: ${icon} ${escapeHtml(statusText)}`);
+      ciMarkdownLines.push(`- **[${label}]**: ${icon} ${statusText}`);
+    }
+  }
+  const ciSection = ciLines.length > 0 ? ciLines.join('\n') : '• <i>Chưa có dự án nào</i>';
+  const markdownCiSection = ciMarkdownLines.length > 0 ? ciMarkdownLines.join('\n') : '_Chưa có dự án nào_';
+
   const text =
     `📋 <b>TÓM TẮT HỆ THỐNG AGENTHUB</b>\n` +
     `<i>${dateStr}</i>\n\n` +
     `📊 <b>Tiến độ công việc:</b>\n${taskLines.join('\n')}\n\n` +
     `🔀 <b>Đã merge (24h):</b>\n${mergedSection}\n\n` +
+    `🚦 <b>Trạng thái CI:</b>\n${ciSection}\n\n` +
     `⏳ <b>Quota tài khoản:</b>\n${quotaSection}\n\n` +
     `📌 <b>Việc cần quyết định (${decisions.length}):</b>\n${decisionsSection}${quietSection}`;
 
@@ -444,15 +579,11 @@ export function generateDigest(opts: GenerateDigestOptions): DigestData {
   const markdown =
     `# Tóm tắt hệ thống AgentHub (${dateStr})\n\n` +
     `### Tiến độ công việc\n` +
-    `- Hoàn thành: **${tasksSummary.done}** (tổng: ${tasksSummary.doneTotal ?? tasksSummary.done})\n` +
-    `- Đang chạy: **${tasksSummary.running}**\n` +
-    `- Lỗi: **${tasksSummary.failed}**\n` +
-    `- Chờ review: **${tasksSummary.review}**\n` +
-    `- Bị chặn: **${tasksSummary.blocked}**\n\n` +
+    `${markdownTaskLines}\n\n` +
     `### Đã merge (24h)\n` +
-    (merged.length === 0
-      ? `_Không có task nào được merge trong 24h qua_\n\n`
-      : merged.map((m) => `- \`${m.taskId}\`: ${m.title}${m.mergeCommit ? ` (${m.mergeCommit})` : ''}`).join('\n') + '\n\n') +
+    `${markdownMergedSection}\n\n` +
+    `### Trạng thái CI\n` +
+    `${markdownCiSection}\n\n` +
     `### Quota tài khoản\n` +
     `- ${quotaSummary}\n` +
     (exhaustedList.length > 0

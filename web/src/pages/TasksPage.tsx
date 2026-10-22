@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { getProjects, getStatus, getTasks } from '../api/client';
@@ -25,7 +25,7 @@ export interface KanbanColumnProps {
   search: string;
 }
 
-export const KanbanColumn: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
+const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
   const { t } = useLocale();
   // Dùng chung cache ['status'] giữa các cột, chỉ để hiện dung lượng đĩa trong nhãn "Chờ ổ đĩa".
   const { data: hubStatus } = useQuery({
@@ -214,6 +214,8 @@ export const KanbanColumn: React.FC<KanbanColumnProps> = ({ statusKey, tasks, se
   );
 };
 
+export const KanbanColumn = memo(KanbanColumnComponent);
+
 export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
@@ -234,7 +236,7 @@ export const TasksPage: React.FC = () => {
     refetchInterval: 5000,
   });
 
-  const grouped = groupTasksByStatus(tasks);
+  const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
 
   const dagTasks = useMemo(() => {
     let list = tasks;
@@ -254,9 +256,9 @@ export const TasksPage: React.FC = () => {
   }, [tasks, search, selectedProject, selectedStatus, doneFilter]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-tour="task-lifecycle">
       {/* Top Bar: Filter & New Task Button */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4" data-tour="task-filters">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
             {t('tasks.title')}
@@ -266,7 +268,7 @@ export const TasksPage: React.FC = () => {
 
         <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
           {/* View Mode Toggle: Kanban <-> Sơ đồ (DAG) */}
-          <div className="flex items-center bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-0.5 shadow-xs">
+          <div className="flex items-center bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-0.5 shadow-xs" data-tour="task-views">
             <button
               type="button"
               onClick={() => setViewMode('kanban')}
@@ -396,6 +398,7 @@ export const TasksPage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate('/tasks/new')}
+            data-tour="task-actions"
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold shadow-xs cursor-pointer transition-colors shrink-0"
           >
             <Plus className="w-4 h-4" />
@@ -414,7 +417,7 @@ export const TasksPage: React.FC = () => {
         </div>
       ) : (
         /* Kanban Board Grid */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-8" data-tour="task-columns">
           {KANBAN_STATUSES.map((statusKey) => (
             <KanbanColumn
               key={statusKey}

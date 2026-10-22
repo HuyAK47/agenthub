@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config.js';
 import { openDatabase, TaskRepo, QuotaMarkRepo, EventRepo, ProjectRepo, ProfileRepo } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 import { NotificationService } from '../src/notify.js';
+import { formatReset } from '../src/time-format.js';
 
 describe('NotificationService (Desktop Notifications)', () => {
   let tmpDir: string;
@@ -149,6 +150,16 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
+  it('maps CI warning level to explicit normal desktop urgency', () => {
+    const notifier = new NotificationService({ config, eventBus, exec: fakeExec });
+    notifier.start();
+
+    eventBus.emit('ci.failed', 'proj', { projectId: 'proj', workflow: 'CI', sha: 'abcdef' });
+
+    expect(execCalls[0].args.slice(0, 2)).toEqual(['-u', 'normal']);
+    notifier.stop();
+  });
+
   it('notifies when a task is escalated to a human reviewer', () => {
     taskRepo.insert({
       id: 'proj/task-escalated',
@@ -167,10 +178,9 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
-  it('notifies on quota.exhausted with profile, family, and reset time HH:MM', () => {
+  it('notifies on quota.exhausted with profile, family, and readable reset time', () => {
     const resetEpoch = Math.floor(Date.now() / 1000) + 3600;
-    const expectedD = new Date(resetEpoch * 1000);
-    const expectedTime = `${String(expectedD.getHours()).padStart(2, '0')}:${String(expectedD.getMinutes()).padStart(2, '0')}`;
+    const expectedTime = formatReset(resetEpoch, Date.now(), 'vi');
 
     const notifier = new NotificationService({
       eventBus,

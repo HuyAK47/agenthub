@@ -14,6 +14,100 @@ AGENTHUB_LINK_DIR="${AGENTHUB_LINK_DIR:-$HOME/.local/bin}"
 SYSTEMCTL="${AGENTHUB_SYSTEMCTL:-systemctl}"
 LAUNCHCTL="${AGENTHUB_LAUNCHCTL:-launchctl}"
 
+# Release installs use one script-level trap.  This is deliberately POSIX sh:
+# the installer is commonly run as `curl ... | sh`, where the shell is dash.
+INSTALL_LOG=""
+_install_step=""
+_failure_reason=""
+_release_tmp=""
+_release_stage=""
+_release_dir=""
+_release_root=""
+_release_backup=""
+_old_current=""
+_old_link=""
+_old_service_backup=""
+_pointers_changed=0
+_install_success=0
+_service_file=""
+
+installer_log() {
+  [ -n "$INSTALL_LOG" ] || return 0
+  printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$INSTALL_LOG"
+}
+
+cleanup_stale_tmp_dirs() {
+  [ -d "$AGENTHUB_DIR" ] || return 0
+  _cleanup_root="$(canonical_dir "$AGENTHUB_DIR")" || return 0
+  [ -n "$_cleanup_root" ] || return 0
+  for _stale in "$_cleanup_root"/.*.tmp.*; do
+    [ -d "$_stale" ] || continue
+    _stale_real="$(canonical_dir "$_stale")" || continue
+    case "$_stale_real/" in
+      "$_cleanup_root/"*) rm -rf "$_stale"; echo "✓ Đã dọn thư mục cài đặt dở: $_stale" ;;
+    esac
+  done
+}
+
+restore_release_state() {
+  [ "$_pointers_changed" = "1" ] || return 0
+  installer_log "rollback: restoring current=$_old_current link=$_old_link"
+  if [ -n "$_release_root" ]; then
+    rm -f "$_release_root/current"
+    if [ -n "$_old_current" ]; then ln -s "$_old_current" "$_release_root/current"; fi
+    if [ -n "$_release_dir" ] && [ -d "$_release_dir" ]; then rm -rf "$_release_dir"; fi
+    if [ -n "$_release_backup" ] && [ -d "$_release_backup" ]; then mv "$_release_backup" "$_release_dir"; fi
+  fi
+  _link_file="$AGENTHUB_LINK_DIR/agenthub"
+  rm -f "$_link_file"
+  if [ -n "$_old_link" ]; then
+    mkdir -p "$AGENTHUB_LINK_DIR"
+    ln -s "$_old_link" "$_link_file"
+  fi
+  if [ -n "$_service_file" ]; then
+    rm -f "$_service_file"
+    if [ -n "$_old_service_backup" ] && [ -f "$_old_service_backup" ]; then
+      mkdir -p "$(dirname "$_service_file")"
+      cp "$_old_service_backup" "$_service_file"
+    fi
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    Linux*)
+      "$SYSTEMCTL" --user daemon-reload 2>/dev/null || true
+      ;;
+  esac
+  echo "! Đã hoàn tác current, symlink CLI và service về bản trước (nếu có)." >&2
+}
+
+installer_cleanup() {
+  _status="$1"
+  set +e
+  if [ "$_install_success" != "1" ] && [ "$_status" -ne 0 ] 2>/dev/null; then
+    restore_release_state
+  fi
+  [ -n "$_release_tmp" ] && rm -rf "$_release_tmp"
+  [ -n "$_release_stage" ] && rm -rf "$_release_stage"
+  [ -n "$_old_service_backup" ] && rm -f "$_old_service_backup"
+  if [ -n "$INSTALL_LOG" ] && [ "$_status" -ne 0 ] 2>/dev/null; then
+    echo "" >&2
+    echo "❌ Cài đặt thất bại ở bước: ${_install_step:-khởi tạo}" >&2
+    echo "Nguyên nhân: ${_failure_reason:-lệnh cài đặt trả về lỗi}" >&2
+    echo "Khắc phục: sửa nguyên nhân rồi chạy lại; bản trước vẫn được giữ nguyên." >&2
+    echo "Log chi tiết: $INSTALL_LOG" >&2
+    if [ "$_pointers_changed" = "1" ]; then
+      echo "Đã hoàn tác về bản trước; bản trước (nếu có) vẫn dùng được" >&2
+    else
+      echo "Không có gì bị thay đổi trên máy; bản trước (nếu có) vẫn dùng được" >&2
+    fi
+  fi
+}
+
+installer_signal() {
+  _signal="$1"
+  _failure_reason="bị ngắt bởi tín hiệu $_signal"
+  exit "$2"
+}
+
 canonical_dir() {
   (cd "$1" 2>/dev/null && pwd -P)
 }
@@ -182,8 +276,104 @@ release_checksum() {
   fi
 }
 
+# Find a Node binary of the given major version (the one the release's native modules were built
+# for). Uses `node` from PATH if it matches, otherwise nvm (installing nvm/Node after asking).
+# Prints the absolute path of the node binary.
+find_node_major() {
+  _want="$1"
+  _cur="$(command -v node 2>/dev/null || true)"
+  if [ -n "$_cur" ] && [ "$("$_cur" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" = "$_want" ]; then
+    printf '%s' "$_cur"; return 0
+  fi
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  # shellcheck source=/dev/null
+  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+  if ! command -v nvm >/dev/null 2>&1; then
+    echo "AgentHub cần Node $_want (máy đang có: ${_cur:+$("$_cur" -v)}${_cur:-không có Node})." >&2
+    if prompt_yes_no "Cài nvm để cài Node $_want riêng cho AgentHub (không đổi Node mặc định của bạn)?" "y"; then
+      curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash >&2
+      # shellcheck source=/dev/null
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+    fi
+  fi
+  if ! command -v nvm >/dev/null 2>&1; then
+    echo "Lỗi: cần Node $_want. Cài Node $_want hoặc nvm rồi chạy lại." >&2
+    return 1
+  fi
+  _path="$(nvm which "$_want" 2>/dev/null || true)"
+  if [ -z "$_path" ] || [ ! -x "$_path" ]; then
+    if prompt_yes_no "Cài Node $_want qua nvm cho AgentHub?" "y"; then
+      nvm install "$_want" >&2 || return 1
+      _path="$(nvm which "$_want" 2>/dev/null || true)"
+    fi
+  fi
+  if [ -z "$_path" ] || [ ! -x "$_path" ]; then
+    echo "Lỗi: không tìm được Node $_want." >&2
+    return 1
+  fi
+  printf '%s' "$_path"
+}
+
+check_native_modules() {
+  _native_root="$1"
+  for _native_name in node-pty better-sqlite3; do
+    _native_dir="$_native_root/node_modules/$_native_name"
+    [ -d "$_native_dir" ] || continue
+    _native_file="$(find "$_native_dir" -type f -name '*.node' -print 2>/dev/null | head -n 1)"
+    [ -n "$_native_file" ] || continue
+    _native_output="$("$_node_bin" -e 'process.dlopen(module, process.argv[1])' "$_native_file" 2>&1)" || {
+      installer_log "native $_native_name ($_native_file): $_native_output"
+      echo "Lỗi: module native không nạp được: $_native_file" >&2
+      if printf '%s' "$_native_output" | grep -Eqi 'GLIBC_[0-9]+\.[0-9]+'; then
+        _glibc_need="$(printf '%s' "$_native_output" | sed -n 's/.*GLIBC_\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | sort -V | tail -n 1)"
+        _glibc_have="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+        echo "Máy đang có: ${_glibc_have:-không xác định}; ldd: $(ldd --version 2>&1 | head -n 1)" >&2
+        echo "Bản phát hành này cần glibc ≥ ${_glibc_need:-yêu cầu trong lỗi}; hãy dùng bản mới hơn hoặc nâng cấp hệ điều hành" >&2
+        _failure_reason="$_native_name cần glibc ≥ ${_glibc_need:-phiên bản cao hơn}"
+      elif printf '%s' "$_native_output" | grep -Eqi 'NODE_MODULE_VERSION'; then
+        _node_abi="$("$_node_bin" -p 'process.versions.modules' 2>/dev/null || echo '?')"
+        echo "Node đang dùng: $("$_node_bin" -v 2>/dev/null || echo '?'); ABI đang dùng: $_node_abi; bản gói cần xem trong lỗi trên." >&2
+        echo "Hãy dùng đúng Node của bản phát hành hoặc tải lại gói tương thích." >&2
+        _failure_reason="$_native_name sai ABI Node"
+      elif printf '%s' "$_native_output" | grep -Eqi 'MODULE_NOT_FOUND|cannot open shared object|No such file'; then
+        echo "Gói release bị thiếu file native; hãy tải lại bản phát hành." >&2
+        _failure_reason="$_native_name bị thiếu file native"
+      else
+        _failure_reason="$_native_name không nạp được"
+      fi
+      return 1
+    }
+  done
+  # Also inspect vendor modules with a non-standard package name. This gives a
+  # useful filename for corrupt archives instead of hiding it behind setup.
+  for _native_file in $(find "$_native_root/node_modules" -type f -name '*.node' -print 2>/dev/null); do
+    case "$_native_file" in
+      */node-pty/*|*/better-sqlite3/*) continue ;;
+    esac
+    _native_output="$("$_node_bin" -e 'process.dlopen(module, process.argv[1])' "$_native_file" 2>&1)" || {
+      installer_log "native file ($_native_file): $_native_output"
+      echo "Lỗi: module native không nạp được: $_native_file" >&2
+      if printf '%s' "$_native_output" | grep -Eqi 'GLIBC_[0-9]+\.[0-9]+'; then
+        _glibc_need="$(printf '%s' "$_native_output" | sed -n 's/.*GLIBC_\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | sort -V | tail -n 1)"
+        echo "Bản phát hành này cần glibc ≥ ${_glibc_need:-yêu cầu trong lỗi}; hãy dùng bản mới hơn hoặc nâng cấp hệ điều hành" >&2
+        _failure_reason="file native cần glibc ≥ ${_glibc_need:-phiên bản cao hơn}"
+      elif printf '%s' "$_native_output" | grep -Eqi 'NODE_MODULE_VERSION'; then
+        echo "Node đang dùng: $("$_node_bin" -v 2>/dev/null || echo '?'); bản gói cần xem trong lỗi trên." >&2
+        _failure_reason="file native sai ABI Node"
+      else
+        echo "Gói release bị thiếu hoặc hỏng file native; hãy tải lại bản phát hành." >&2
+        _failure_reason="file native không nạp được"
+      fi
+      return 1
+    }
+  done
+  return 0
+}
+
 install_from_release() {
+  _install_step="kiểm tra công cụ"
   if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+    _failure_reason="thiếu curl hoặc tar"
     echo "Lỗi: --from-release cần curl và tar." >&2
     return 1
   fi
@@ -200,7 +390,7 @@ install_from_release() {
   if [ -z "$RELEASE_VERSION" ]; then
     _release_json="$(curl -fsSL "$_base/releases/latest" 2>/dev/null || true)"
     RELEASE_VERSION="$(printf '%s' "$_release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9A-Za-z.-]*\)".*/\1/p' | head -n 1)"
-    [ -n "$RELEASE_VERSION" ] || { echo "Lỗi: không xác định được phiên bản release mới nhất." >&2; return 1; }
+    if [ -z "$RELEASE_VERSION" ]; then _failure_reason="không xác định được phiên bản release mới nhất"; echo "Lỗi: không xác định được phiên bản release mới nhất." >&2; return 1; fi
   fi
   case "$RELEASE_VERSION" in
     v*) RELEASE_VERSION="${RELEASE_VERSION#v}" ;;
@@ -219,27 +409,46 @@ install_from_release() {
   esac
   _archive="agenthub-${RELEASE_VERSION}-${_platform}-${_arch}"
   _archive="${_archive}.tar.gz"
-  _tmp="${TMPDIR:-/tmp}/agenthub-release.$$"
+  _install_step="tải release"
+  _release_tmp="${TMPDIR:-/tmp}/agenthub-release.$$"
+  _tmp="$_release_tmp"
   mkdir -p "$_tmp"
-  trap 'rm -rf "$_tmp"' EXIT HUP INT TERM
   echo "==> Tải AgentHub v$RELEASE_VERSION..."
   if ! curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/$_archive" -o "$_tmp/$_archive"; then
+    _failure_reason="không tải được archive $_archive"
     echo "Lỗi: không tìm thấy archive $_archive cho OS/arch hiện tại ($_os/$_machine)." >&2
     return 1
   fi
-  curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/SHA256SUMS" -o "$_tmp/SHA256SUMS"
+  if ! curl -fsSL "$_base/releases/download/v$RELEASE_VERSION/SHA256SUMS" -o "$_tmp/SHA256SUMS"; then
+    _failure_reason="không tải được SHA256SUMS"
+    return 1
+  fi
   _expected="$(awk -v file="$_archive" '$2 == file { print $1; exit }' "$_tmp/SHA256SUMS")"
   _actual="$(release_checksum "$_tmp/$_archive" | awk '{print $1}')"
-  [ -n "$_expected" ] && [ "$_expected" = "$_actual" ] || { echo "Lỗi: kiểm tra SHA256 thất bại cho $_archive." >&2; return 1; }
+  if [ -z "$_expected" ] || [ "$_expected" != "$_actual" ]; then
+    _failure_reason="kiểm tra SHA256 thất bại cho $_archive"
+    echo "Lỗi: kiểm tra SHA256 thất bại cho $_archive." >&2
+    return 1
+  fi
 
   _release_root="$AGENTHUB_DIR"
   _release_dir="$_release_root/$RELEASE_VERSION"
   _release_stage="$_release_root/.${RELEASE_VERSION}.tmp.$$"
+  _install_step="chuẩn bị thư mục stage"
   mkdir -p "$_release_root"
+  cleanup_stale_tmp_dirs
   rm -rf "$_release_stage"
   mkdir -p "$_release_stage"
-  trap 'rm -rf "$_tmp" "$_release_stage"' EXIT HUP INT TERM
+  _install_step="giải nén release"
   tar -xzf "$_tmp/$_archive" -C "$_release_stage"
+  # Pin the Node major the bundled native modules were built for (see scripts/package.mjs).
+  _node_major="$(cat "$_release_stage/node-runtime" 2>/dev/null || echo 22)"
+  _install_step="tìm Node phù hợp"
+  _node_bin="$(find_node_major "$_node_major")" || { _failure_reason="không tìm được Node.js $_node_major"; return 1; }
+  printf '%s\n' "$_node_bin" > "$_release_stage/.node-bin"
+  echo "✓ Dùng Node $("$_node_bin" -v) cho AgentHub ($_node_bin)"
+  PATH="$(dirname "$_node_bin"):$PATH"
+  export PATH
   if [ -d "$_release_stage/node_modules" ]; then
     echo "✓ Gói đã có sẵn node_modules production; bỏ qua npm ci."
   else
@@ -259,17 +468,45 @@ install_from_release() {
         ;;
     esac
     echo "==> Cài dependencies native theo máy..."
-    (cd "$_release_stage" && npm ci --omit=dev)
+    _install_step="cài dependencies native"
+    (cd "$_release_stage" && npm ci --omit=dev) || { _failure_reason="npm ci --omit=dev thất bại"; return 1; }
   fi
   # Run setup before switching the live pointers, without attempting a service install.
-  (cd "$_release_stage" && AGENTHUB_WORKER=1 ./bin/agenthub setup --no-browser)
+  _install_step="kiểm tra module native"
+  check_native_modules "$_release_stage" || return 1
+  _install_step="setup"
+  if ! (cd "$_release_stage" && AGENTHUB_WORKER=1 ./bin/agenthub setup --no-browser); then
+    _failure_reason="agenthub setup thất bại"
+    return 1
+  fi
 
-  if [ -e "$_release_dir" ] || [ -L "$_release_dir" ]; then rm -rf "$_release_dir"; fi
+  _install_step="lưu trạng thái bản trước"
+  _old_current=""
+  [ -L "$_release_root/current" ] && _old_current="$(readlink "$_release_root/current")"
+  _link_file="$AGENTHUB_LINK_DIR/agenthub"
+  _old_link=""
+  [ -L "$_link_file" ] && _old_link="$(readlink "$_link_file")"
+  _service_file="$HOME/.config/systemd/user/agenthub.service"
+  _old_service_backup="$_tmp/service.before"
+  [ -f "$_service_file" ] && cp "$_service_file" "$_old_service_backup"
+
+  if [ -e "$_release_dir" ] || [ -L "$_release_dir" ]; then
+    _release_backup="$_release_root/.${RELEASE_VERSION}.rollback.$$"
+    rm -rf "$_release_backup"
+    mv "$_release_dir" "$_release_backup"
+  fi
+  _install_step="chuyển current"
   mv "$_release_stage" "$_release_dir"
+  _release_stage=""
   ln -sfn "$RELEASE_VERSION" "$_release_root/current"
-  "$_release_root/current/bin/agenthub" link
-  "$_release_root/current/bin/agenthub" install-service
-  "$_release_root/current/bin/agenthub" open --no-browser
+  _pointers_changed=1
+  _install_step="tạo symlink CLI"
+  if ! "$_release_root/current/bin/agenthub" link; then _failure_reason="không tạo được symlink CLI"; return 1; fi
+  _install_step="cài service"
+  if ! "$_release_root/current/bin/agenthub" install-service; then _failure_reason="cài service thất bại"; return 1; fi
+  _install_step="mở dashboard"
+  if ! "$_release_root/current/bin/agenthub" open --no-browser; then _failure_reason="không mở được dashboard"; return 1; fi
+  _install_step="ghi metadata"
   printf 'mode=release\nversion=%s\ndate=%s\n' "$RELEASE_VERSION" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$_release_root/.agenthub-app"
 
   find "$_release_root" -mindepth 1 -maxdepth 1 -type d -name '.*.tmp.*' -exec rm -rf {} +
@@ -282,10 +519,19 @@ install_from_release() {
       rm -rf "$_old"
     fi
   done
+  [ -n "$_release_backup" ] && rm -rf "$_release_backup"
+  _install_success=1
   echo "✓ Đã cài AgentHub v$RELEASE_VERSION; bản hiện tại: $_release_root/current"
 }
 
 if [ "$FROM_RELEASE" = "1" ]; then
+  INSTALL_LOG="${TMPDIR:-/tmp}/agenthub-install-$(date +%s).log"
+  : > "$INSTALL_LOG"
+  installer_log "installer started"
+  trap 'installer_cleanup "$?"' EXIT
+  trap 'installer_signal HUP 129' HUP
+  trap 'installer_signal INT 130' INT
+  trap 'installer_signal TERM 143' TERM
   if [ "$DRY_RUN" = "1" ]; then
     echo "[dry-run] tải release v${RELEASE_VERSION:-latest} từ $(release_repo_path)"
     echo "[dry-run] kiểm tra SHA256, giải nén vào $AGENTHUB_DIR/<version>, cập nhật symlink current"
@@ -323,6 +569,10 @@ if [ "$UNINSTALL" = "1" ]; then
     fi
     exit 0
   fi
+
+  # Only remove exact staging names inside the configured app directory; never
+  # recursively delete arbitrary user directories just because their names look temporary.
+  cleanup_stale_tmp_dirs
 
   # 1. Gỡ service theo nền tảng
   OS="$(uname -s)"

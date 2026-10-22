@@ -256,8 +256,13 @@ describe('Doctor checks', () => {
         .mockReturnValueOnce({ status: 0, stdout: 'systemd 245\n', stderr: '' })
         .mockReturnValueOnce({ status: 0, stdout: 'active\n', stderr: '' });
       const res = await checkSystemd({ exec: mockExec });
-      expect(res.status).toBe('ok');
-      expect(res.message).toContain('đang hoạt động (active)');
+      if (process.platform === 'darwin') {
+        expect(res.status).toBe('skip');
+        expect(res.message).toContain('LaunchAgent');
+      } else {
+        expect(res.status).toBe('ok');
+        expect(res.message).toContain('đang hoạt động (active)');
+      }
     });
 
     it('returns error with suggestion when service is inactive', async () => {
@@ -265,9 +270,14 @@ describe('Doctor checks', () => {
         .mockReturnValueOnce({ status: 0, stdout: 'systemd 245\n', stderr: '' })
         .mockReturnValueOnce({ status: 3, stdout: 'inactive\n', stderr: '' });
       const res = await checkSystemd({ exec: mockExec });
-      expect(res.status).toBe('error');
-      expect(res.message).toContain('không hoạt động (inactive)');
-      expect(res.suggestion).toContain('agenthub install-service');
+      if (process.platform === 'darwin') {
+        expect(res.status).toBe('skip');
+        expect(res.message).toContain('LaunchAgent');
+      } else {
+        expect(res.status).toBe('error');
+        expect(res.message).toContain('không hoạt động (inactive)');
+        expect(res.suggestion).toContain('agenthub install-service');
+      }
     });
   });
 
@@ -502,20 +512,25 @@ describe('Doctor checks', () => {
         },
       });
 
+      const isDarwin = process.platform === 'darwin';
+      const expectedPassed = isDarwin ? 9 : 10;
+      const expectedSkipped = isDarwin ? 1 : 0;
+
       expect(report.ok).toBe(true);
-      expect(report.summary.total).toBe(8);
-      expect(report.summary.passed).toBe(8);
+      expect(report.summary.total).toBe(10);
+      expect(report.summary.passed).toBe(expectedPassed);
+      expect(report.summary.skipped).toBe(expectedSkipped);
       expect(report.summary.failed).toBe(0);
 
       const text = formatDoctorText(report);
       expect(text).toContain('=== AgentHub Doctor ===');
-      expect(text).toContain('Tất cả 8/8 mục kiểm tra đều đạt!');
+      expect(text).toContain(`Tất cả ${expectedPassed}/10 mục kiểm tra đều đạt!`);
 
       const json = formatDoctorJson(report);
       const parsed = JSON.parse(json);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary.passed).toBe(8);
-      expect(parsed.checks.length).toBe(8);
+      expect(parsed.summary.passed).toBe(expectedPassed);
+      expect(parsed.checks.length).toBe(10);
     });
 
     it('formats error suggestions in text output when issues exist', async () => {
@@ -548,7 +563,7 @@ describe('Doctor checks', () => {
 
   describe('cmdDoctor CLI', () => {
     it('executes cmdDoctor in text mode and returns report', async () => {
-      const config = loadConfig();
+      const config = loadConfig(path.join(tmpHome, '.agenthub'));
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       const report = await cmdDoctor(config, [], {
@@ -596,7 +611,7 @@ describe('Doctor checks', () => {
     });
 
     it('executes cmdDoctor with --json flag and prints valid JSON', async () => {
-      const config = loadConfig();
+      const config = loadConfig(path.join(tmpHome, '.agenthub'));
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       const report = await cmdDoctor(config, ['--json'], {
@@ -641,7 +656,8 @@ describe('Doctor checks', () => {
       const jsonOutput = consoleSpy.mock.calls[0][0];
       const parsed = JSON.parse(jsonOutput);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary.passed).toBe(8);
+      const isDarwin = process.platform === 'darwin';
+      expect(parsed.summary.passed).toBe(isDarwin ? 9 : 10);
       consoleSpy.mockRestore();
     });
   });
