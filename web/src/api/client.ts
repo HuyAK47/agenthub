@@ -265,6 +265,14 @@ export const writeProjectGuidance = (projectId: string, content: string) =>
     method: 'POST',
     body: JSON.stringify({ content, confirm: true }),
   });
+export const summarizeProjectContext = (projectId: string, data: { sessions: string[]; notes?: string }) =>
+  apiFetch<{ taskId: string; status: string; summary: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/summarize-context`,
+    {
+      method: 'POST',
+      body: JSON.stringify(data),
+    },
+  );
 
 export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
 export const getProjectDeployStatus = (id: string) =>

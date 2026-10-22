@@ -4,12 +4,12 @@ import {
   addProjectKnowledge,
   createNewProject,
   createProject,
-  createTask,
   inspectProject,
+  summarizeProjectContext,
   writeProjectGuidance,
 } from '../api/client';
 import { useLocale } from '../context/LocaleContext';
-import type { ProjectInspection, ProjectSettings } from '../types/api';
+import type { Project, ProjectInspection, ProjectSettings } from '../types/api';
 import { Button, Card } from './ui';
 import {
   emptyDraft,
@@ -71,6 +71,9 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
   const [inspection, setInspection] = useState<ProjectInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<WizardDraft>(restoredDraft);
+  const [createdProject, setCreatedProject] = useState<Project | null>(null);
+  const [summaryPhase, setSummaryPhase] = useState<'idle' | 'summarizing' | 'review'>('idle');
+  const [contextSummary, setContextSummary] = useState('');
 
   const update = (patch: Partial<WizardDraft>) => {
     setError(null);
@@ -95,6 +98,32 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
     onError: (cause: Error) => setError(cause.message),
   });
 
+  const summarizeMutation = useMutation({
+    mutationFn: async (params: { projectId: string; sessions: string[] }) => {
+      return summarizeProjectContext(params.projectId, { sessions: params.sessions });
+    },
+    onSuccess: (result) => {
+      setContextSummary(result.summary);
+      setSummaryPhase('review');
+    },
+    onError: (cause: Error) => {
+      setError(cause.message);
+      setSummaryPhase('idle');
+    },
+  });
+
+  const pinSummaryMutation = useMutation({
+    mutationFn: async (params: { projectId: string; content: string }) => {
+      return addProjectKnowledge(params.projectId, { content: params.content, pinned: true });
+    },
+    onSuccess: () => {
+      localStorage.removeItem(DRAFT_KEY);
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      onClose();
+    },
+    onError: (cause: Error) => setError(cause.message),
+  });
+
   const createMutation = useMutation({
     mutationFn: async () => {
       const input = {
@@ -107,34 +136,23 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       return draft.mode === 'new' ? createNewProject(input) : createProject(input);
     },
     onSuccess: async (project) => {
+      setCreatedProject(project);
       if (draft.contextApproved) {
         if (draft.pinMemory && inspection?.memoryPreview) {
           await addProjectKnowledge(project.id, { content: inspection.memoryPreview, pinned: true });
-        }
-        if (draft.selectedSessions.length > 0) {
-          await createTask({
-            project: project.id,
-            slug: 'summarize-previous-context',
-            title: 'Review and summarize previous Claude Code context',
-            body: [
-              'Read the selected previous session files and summarize durable project knowledge.',
-              '',
-              'Selected sessions:',
-              ...draft.selectedSessions,
-              '',
-              'Present the proposed knowledge for user approval before pinning it.',
-            ].join('\n'),
-            level: 'easy',
-            start: true,
-          });
         }
       }
       if (draft.agentsDraft && draft.agentsApproved && draft.agentsContent.trim()) {
         await writeProjectGuidance(project.id, draft.agentsContent.trim());
       }
-      localStorage.removeItem(DRAFT_KEY);
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      onClose();
+      if (draft.contextApproved && draft.selectedSessions.length > 0) {
+        setSummaryPhase('summarizing');
+        summarizeMutation.mutate({ projectId: project.id, sessions: draft.selectedSessions });
+      } else {
+        localStorage.removeItem(DRAFT_KEY);
+        queryClient.invalidateQueries({ queryKey: ['projects'] });
+        onClose();
+      }
     },
     onError: (cause: Error) => setError(cause.message),
   });
@@ -169,25 +187,83 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       </div>
       <div className="flex gap-1" aria-label={t('projects.wizardProgress')}>
         {[0, 1, 2, 3, 4, 5, 6].map((item) => (
-          <div key={item} className={`h-1 flex-1 rounded ${item <= step ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-border)]'}`} />
+          <div key={item} className={`h-1 flex-1 rounded ${item <= step || summaryPhase !== 'idle' ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-border)]'}`} />
         ))}
       </div>
       {error && <div role="alert" className="rounded-lg p-3 text-sm text-[var(--t-crit)]">{error}</div>}
-      {step === 0 && <StepMode draft={draft} update={update} t={t} />}
-      {step === 1 && <StepPath draft={draft} update={update} t={t} />}
-      {step === 2 && <StepInspect inspection={inspection} draft={draft} update={update} t={t} />}
-      {step === 3 && <StepSuggestions inspection={inspection} draft={draft} update={update} t={t} />}
-      {step === 4 && <StepContext inspection={inspection} draft={draft} update={update} t={t} />}
-      {step === 5 && <StepBrain draft={draft} update={update} t={t} />}
-      {step === 6 && <StepSummary draft={draft} inspection={inspection} t={t} />}
-      <div className="flex justify-between">
-        <Button type="button" variant="secondary" size="sm" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))}>{t('projects.wizardBack')}</Button>
-        {step < 6 ? (
-          <Button type="button" size="sm" onClick={next} disabled={!canNext || inspectMutation.isPending} loading={inspectMutation.isPending}>{t('projects.wizardNext')}</Button>
-        ) : (
-          <Button type="button" size="sm" onClick={() => createMutation.mutate()} loading={createMutation.isPending}>{t('projects.wizardCreate')}</Button>
-        )}
-      </div>
+      {summaryPhase === 'summarizing' && (
+        <div className="space-y-4 py-4" data-testid="wizard-summarizing">
+          <h3 className="text-sm font-bold">{t('projects.wizardSummarizingTitle')}</h3>
+          <p className="text-sm text-[var(--t-text-3)]">{t('projects.wizardSummarizingProgress')}</p>
+          <div className="space-y-1 text-xs">
+            {draft.selectedSessions.map((s) => (
+              <div key={s} className="font-mono text-[var(--t-text-3)]">· {s}</div>
+            ))}
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded bg-[var(--t-border)]">
+            <div className="h-full w-2/3 animate-pulse rounded bg-[var(--t-accent)]" />
+          </div>
+        </div>
+      )}
+      {summaryPhase === 'review' && (
+        <div className="space-y-4 py-2" data-testid="wizard-summary-review">
+          <div>
+            <h3 className="text-sm font-bold">{t('projects.wizardSummaryReviewTitle')}</h3>
+            <p className="text-xs text-[var(--t-text-3)]">{t('projects.wizardSummaryReviewDesc')}</p>
+          </div>
+          <textarea
+            aria-label={t('projects.wizardSummaryReviewTitle')}
+            className="min-h-48 w-full rounded border bg-[var(--t-surface-2)] p-2 font-mono text-xs"
+            value={contextSummary}
+            onChange={(e) => setContextSummary(e.target.value)}
+          />
+          <div className="flex justify-between gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                localStorage.removeItem(DRAFT_KEY);
+                queryClient.invalidateQueries({ queryKey: ['projects'] });
+                onClose();
+              }}
+            >
+              {t('projects.wizardSkipPin')}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                if (createdProject && contextSummary.trim()) {
+                  pinSummaryMutation.mutate({ projectId: createdProject.id, content: contextSummary.trim() });
+                }
+              }}
+              loading={pinSummaryMutation.isPending}
+            >
+              {t('projects.wizardApproveAndPin')}
+            </Button>
+          </div>
+        </div>
+      )}
+      {summaryPhase === 'idle' && (
+        <>
+          {step === 0 && <StepMode draft={draft} update={update} t={t} />}
+          {step === 1 && <StepPath draft={draft} update={update} t={t} />}
+          {step === 2 && <StepInspect inspection={inspection} draft={draft} update={update} t={t} />}
+          {step === 3 && <StepSuggestions inspection={inspection} draft={draft} update={update} t={t} />}
+          {step === 4 && <StepContext inspection={inspection} draft={draft} update={update} t={t} />}
+          {step === 5 && <StepBrain draft={draft} update={update} t={t} />}
+          {step === 6 && <StepSummary draft={draft} inspection={inspection} t={t} />}
+          <div className="flex justify-between">
+            <Button type="button" variant="secondary" size="sm" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))}>{t('projects.wizardBack')}</Button>
+            {step < 6 ? (
+              <Button type="button" size="sm" onClick={next} disabled={!canNext || inspectMutation.isPending} loading={inspectMutation.isPending}>{t('projects.wizardNext')}</Button>
+            ) : (
+              <Button type="button" size="sm" onClick={() => createMutation.mutate()} loading={createMutation.isPending}>{t('projects.wizardCreate')}</Button>
+            )}
+          </div>
+        </>
+      )}
     </Card>
   );
 }

@@ -160,25 +160,46 @@ export function StepContext({
       {/* Claude sessions listing and selection */}
       {sessions.length > 0 && (
         <div className="space-y-2">
-          <p className="text-sm font-medium">
-            {t('projects.wizardSessionsFound', { count: sessions.length })}
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">
+              {t('projects.wizardSessionsFound', { count: sessions.length })}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="text-xs text-[var(--t-accent)] hover:underline"
+                onClick={() => update({ selectedSessions: sessions.map((s) => s.name) })}
+              >
+                {t('projects.wizardSessionSelectAll')}
+              </button>
+              <button
+                type="button"
+                className="text-xs text-[var(--t-text-3)] hover:underline"
+                onClick={() => update({ selectedSessions: [] })}
+              >
+                {t('projects.wizardSessionDeselectAll')}
+              </button>
+            </div>
+          </div>
           <ul className="space-y-1 text-sm">
             {sessions.map((session) => (
-              <li key={session.name} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  aria-label={session.name}
-                  checked={draft.selectedSessions.includes(session.name)}
-                  onChange={() => toggleSession(session.name)}
-                />
-                <span className="text-xs">
-                  {session.name} ·{' '}
-                  {new Date(session.modifiedAt).toLocaleString()} ·{' '}
-                  {Math.round(session.sizeBytes / 1024)} KB
-                </span>
+              <li key={session.name} className="flex flex-col gap-1 rounded border border-[var(--t-border)] p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      aria-label={session.name}
+                      checked={draft.selectedSessions.includes(session.name)}
+                      onChange={() => toggleSession(session.name)}
+                    />
+                    <span className="text-xs font-mono font-medium">{session.name}</span>
+                  </label>
+                  <span className="text-xs text-[var(--t-text-3)]">
+                    {new Date(session.modifiedAt).toLocaleString()} · {Math.round(session.sizeBytes / 1024)} KB
+                  </span>
+                </div>
                 <details className="text-xs">
-                  <summary>{t('projects.wizardViewSession')}</summary>
+                  <summary className="cursor-pointer text-[var(--t-accent)]">{t('projects.wizardViewSession')}</summary>
                   <pre className="mt-1 max-h-32 max-w-full overflow-auto whitespace-pre-wrap rounded bg-[var(--t-surface-2)] p-2">
                     {inspection?.claudeSessionPreviews.find(
                       (preview) => preview.name === session.name,
