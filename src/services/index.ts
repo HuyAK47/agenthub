@@ -1329,8 +1329,20 @@ export class AppService {
   restoreProject(id: string): ProjectRow {
     const project = this.projectRepo.getIncludingArchived(id);
     if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+    if (project.archivedAt && this.taskNoteRepo) {
+      for (const note of this.taskNoteRepo.getByProject(id)) {
+        if (!note.content.startsWith('project_archive_status:')) continue;
+        try {
+          const saved = JSON.parse(note.content.slice('project_archive_status:'.length)) as { status?: string; waitReason?: string | null };
+          if (saved.status) {
+            this.taskRepo.update(note.taskId, { status: saved.status, waitReason: saved.waitReason as TaskRow['waitReason'] });
+          }
+        } catch {
+          // Ignore malformed historical notes.
+        }
+      }
+    }
     this.projectRepo.restore(id);
-    this.brainRunner?.stopProject(id);
     this.invalidateOutOfScopeClaudeScanStates();
     return this.getProject(id);
   }
@@ -1361,14 +1373,14 @@ export class AppService {
         ['draft', 'queued', 'waiting_quota', 'review'].includes(task.status),
       );
       for (const task of tasksToPause) {
-        this.taskRepo.update(task.id, { status: 'cancelled' });
+        this.taskRepo.update(task.id, { status: 'paused' });
         this.taskNoteRepo?.insert({
           projectId: id,
           taskId: task.id,
           kind: 'note',
-          content: 'Task đã dừng vì dự án được ẩn.',
+          content: `project_archive_status:${JSON.stringify({ status: task.status, waitReason: task.waitReason || null })}`,
         });
-        this.scheduler.getEventBus().emit('task.cancelled', task.id, {
+        this.scheduler.getEventBus().emit('task.paused', task.id, {
           reason: 'project_archived',
           projectId: id,
         });

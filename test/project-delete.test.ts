@@ -51,7 +51,7 @@ describe('project archive and purge', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('archives safely, stops queued work, restores, and re-registers by path', async () => {
+  it('archives safely, pauses queued work, restores original statuses, and re-registers by path', async () => {
     const repo = path.join(root, 'repo');
     initGitRepo(repo);
     ctx.projectRepo.insert({ id: 'archive-me', name: 'Archive Me', path: repo, defaultBranch: 'main', maxParallel: 2 });
@@ -62,8 +62,8 @@ describe('project archive and purge', () => {
     expect(archived.statusCode).toBe(200);
     expect(ctx.projectRepo.get('archive-me')).toBeUndefined();
     expect(ctx.projectRepo.getIncludingArchived('archive-me')?.archivedAt).toBeTruthy();
-    expect(ctx.taskRepo.get('archive-me/queued')?.status).toBe('cancelled');
-    expect(ctx.taskRepo.get('archive-me/review')?.status).toBe('cancelled');
+    expect(ctx.taskRepo.get('archive-me/queued')?.status).toBe('paused');
+    expect(ctx.taskRepo.get('archive-me/review')?.status).toBe('paused');
     expect(ctx.taskNoteRepo.getByProject('archive-me')).toHaveLength(2);
     expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/projects', headers: headers() })).body)).toEqual([]);
     expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/projects/archive-me', headers: headers() })).body).error).toBe('not_found');
@@ -71,6 +71,8 @@ describe('project archive and purge', () => {
     const restored = await server.inject({ method: 'POST', url: '/api/projects/archive-me/restore', headers: headers() });
     expect(restored.statusCode).toBe(200);
     expect(ctx.projectRepo.get('archive-me')).toBeDefined();
+    expect(ctx.taskRepo.get('archive-me/queued')?.status).toBe('queued');
+    expect(ctx.taskRepo.get('archive-me/review')?.status).toBe('review');
 
     await server.inject({ method: 'DELETE', url: '/api/projects/archive-me', headers: headers() });
     const reRegistered = ctx.service.createProject({ name: 'Archive Again', id: 'new-id', path: repo, defaultBranch: 'main' });
