@@ -252,6 +252,10 @@ export async function getProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects');
 }
 
+export async function getArchivedProjects(): Promise<Project[]> {
+  return apiFetch<Project[]>('/api/projects?archived=true');
+}
+
 export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
 export const getProjectDeployStatus = (id: string) =>
   apiFetch<DeployStatus | null>(`/api/projects/${encodeURIComponent(id)}/deploy`);
@@ -270,10 +274,15 @@ export async function updateProject(id: string, data: UpdateProjectInput): Promi
   });
 }
 
-export async function deleteProject(id: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, {
+export async function deleteProject(id: string, options?: { purge?: boolean; confirm?: string }): Promise<{ ok: boolean; archived?: boolean; counts?: Record<string, number>; warnings?: string[] }> {
+  const query = options?.purge ? `?purge=true&confirm=${encodeURIComponent(options.confirm || '')}` : '';
+  return apiFetch<{ ok: boolean; archived?: boolean; counts?: Record<string, number>; warnings?: string[] }>(`/api/projects/${encodeURIComponent(id)}${query}`, {
     method: 'DELETE',
   });
+}
+
+export async function restoreProject(id: string): Promise<Project> {
+  return apiFetch<Project>(`/api/projects/${encodeURIComponent(id)}/restore`, { method: 'POST' });
 }
 
 export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
