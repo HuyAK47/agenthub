@@ -87,7 +87,7 @@ export interface RunningTurn {
 }
 
 const TOOL_OUTPUT_LIMIT = 4096;
-const SECRET_TOOL_PATH = /(?:^|[\\/])(?:auth\.json|\.credentials\.json|.*(?:token|keyring).*|secrets)(?:[\\/]|$)/i;
+const SECRET_TOOL_PATH = /(?:^|[\\/])(?:auth\.json|\.?credentials?\.json|.*(?:token|keyring).*|secrets)(?:[\\/]|$)/i;
 
 function toolInputPath(input?: Record<string, unknown>): string | undefined {
   if (!input) return undefined;
@@ -102,8 +102,25 @@ function boundedToolOutput(output: string | undefined, input?: Record<string, un
   return output.length > TOOL_OUTPUT_LIMIT ? `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n…` : output;
 }
 
+function boundedToolInput(input: Record<string, unknown>): Record<string, unknown> {
+  const compact = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      return value.length > 2000 ? `${value.slice(0, 2000)}\n…` : value;
+    }
+    if (Array.isArray(value)) return value.map(compact);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, compact(child)]));
+    }
+    return value;
+  };
+  const compacted = compact(input) as Record<string, unknown>;
+  const serialized = JSON.stringify(compacted);
+  if (serialized.length <= TOOL_OUTPUT_LIMIT) return compacted;
+  return { truncated: true, preview: `${serialized.slice(0, TOOL_OUTPUT_LIMIT - 1)}…` };
+}
+
 function toolDiff(name: string, input?: Record<string, unknown>): string | undefined {
-  if (!/^(?:edit|write|multiedit|notebookedit)$/i.test(name) || !input) return undefined;
+  if (!/(?:edit|write|multiedit|notebookedit)/i.test(name) || !input || SECRET_TOOL_PATH.test(toolInputPath(input) || '')) return undefined;
   const oldText = typeof input.old_string === 'string' ? input.old_string : '';
   const newText = typeof input.new_string === 'string' ? input.new_string : typeof input.content === 'string' ? input.content : '';
   if (!oldText && !newText) return undefined;
@@ -1908,7 +1925,7 @@ export class ChatService {
   private recordToolStart(turn: RunningTurn, ev: Extract<ParsedStreamEvent, { type: 'tool_use' }>): void {
     const id = ev.id || crypto.randomUUID();
     const toolMessageId = crypto.randomUUID();
-    const input = ev.input || {};
+    const input = boundedToolInput(ev.input || {});
     const meta = { name: ev.name, summary: ev.summary, input, status: 'running' as const, diff: toolDiff(ev.name, input), id };
     if (!turn.toolExecutions) turn.toolExecutions = new Map();
     turn.toolExecutions.set(id, { messageId: toolMessageId, startedAt: Date.now(), name: ev.name, summary: ev.summary, input });

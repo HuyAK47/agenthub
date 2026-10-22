@@ -65,6 +65,22 @@ async function handlePrompt(prompt) {
     await new Promise(() => {});
   }
 
+  if (prompt.includes('tool-secret')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-secret-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool_secret_1', name: 'Read', input: { file_path: '/tmp/auth.json' } }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_secret_1', content: 'SECRET_TOKEN_VALUE' }] } }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-secret-123', is_error: false, result: 'Đã đọc file.' }));
+    return;
+  }
+
+  if (prompt.includes('tool-large')) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-tool-large-123' }));
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool_large_1', name: 'mcp__agenthub__Edit', input: { file_path: 'src/example.ts', old_string: 'old', new_string: 'new', content: 'x'.repeat(6000) } }] } }));
+    console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool_large_1', content: 'y'.repeat(6000) }] } }));
+    console.log(JSON.stringify({ type: 'result', session_id: 'sess-tool-large-123', is_error: false, result: 'Đã sửa file.' }));
+    return;
+  }
+
   if (prompt.trim() === 'quota') {
     console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-quota-123' }));
     console.log(JSON.stringify({ type: 'result', session_id: 'sess-quota-123', is_error: true, result: 'Usage limit reached. Try again in 1m' }));
