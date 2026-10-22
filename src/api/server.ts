@@ -300,6 +300,11 @@ export async function createServer(
     return reply.status(200).send(result);
   });
 
+  fastify.post('/api/profiles/:name/wakeup', async (req: FastifyRequest) => {
+    const { name } = req.params as { name: string };
+    return service.wakeupProfile(name, { force: true });
+  });
+
   fastify.post('/api/profiles/:name/check', async (req: FastifyRequest, reply: FastifyReply) => {
     const { name } = req.params as { name: string };
     return reply.status(202).send(service.startProfileCheck(name));

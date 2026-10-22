@@ -33,6 +33,7 @@ import {
 import type { CiWatchService } from '../ci.js';
 import { BulletinService } from '../bulletin.js';
 import { parseCodexTokenItem, writeCodexAuthFile } from '../profiles/codexToken.js';
+import { defaultWakeupRunner, planWakeup, wakeupCommands, wakeupCwd, wakeupSucceeded, type WakeupRunner } from '../quota/wakeup.js';
 import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, exchangeAgyRefreshToken, writeAgyIsolatedToken, fetchAgyGoogleUserInfo, fetchAgyGoogleUserInfoDetailed, inspectAgyAccessToken, fetchAgyTier, agyTierToPlan } from '../profiles/index.js';
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
@@ -435,6 +436,12 @@ export const UpdateConfigSchema = z.object({
     }).optional(),
     /** Báo khi quota 5h/tuần của một tài khoản tụt xuống dưới ngưỡng này (%); 0 = tắt. */
     quotaLowPct: z.number().int().min(0).max(95).optional(),
+  }).optional(),
+  wakeup: z.object({
+    enabled: z.boolean().optional(),
+    times: z.array(z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/)).max(12).optional(),
+    profiles: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/)).max(100).optional(),
+    agyModels: z.array(z.string().min(1)).max(6).optional(),
   }).optional(),
   savings: z
     .object({
@@ -1383,6 +1390,94 @@ export class AppService {
       return { avatarUrl: info.picture, message: 'Đã cập nhật ảnh đại diện' };
     }
     return { avatarUrl: info.picture, message: 'Ảnh đại diện đã là mới nhất' };
+  }
+
+  /** Chạy CLI khi đánh thức; test thay bằng runner giả để không bao giờ chạy agy/codex thật. */
+  wakeupRunner: WakeupRunner = defaultWakeupRunner;
+  private wakeupTimer?: NodeJS.Timeout;
+  private wakeupDone = new Set<string>();
+  private wakeupInFlight = new Set<string>();
+
+  /**
+   * Đánh thức quota một hồ sơ: gửi prompt rất ngắn để cửa sổ 5 giờ bắt đầu ngay.
+   * `force` (nút bấm) bỏ qua kiểm tra cửa sổ đang chạy; lịch hẹn thì không.
+   */
+  async wakeupProfile(name: string, options: { force?: boolean } = {}): Promise<{
+    profile: string;
+    ok: boolean;
+    skipped?: string;
+    results: Array<{ target: string; ok: boolean; message: string }>;
+  }> {
+    const profile = this.profileRepo.get(name);
+    if (!profile || profile.deletedAt) throw new HttpError(404, 'not_found', `Hồ sơ "${name}" không tồn tại`);
+    if (this.wakeupInFlight.has(name)) throw new HttpError(409, 'conflict', `Hồ sơ "${name}" đang được đánh thức`);
+    const busy = Array.from(this.scheduler.getRunning().values()).some((run) => run.profileName === name);
+    const plan = planWakeup(profile, this.usageService.getForProfile(name), this.config.wakeup, {
+      loggedIn: isProfileLoggedIn(profile),
+      busy,
+      nowSec: Math.floor(Date.now() / 1000),
+      force: options.force,
+    });
+    if (plan.skip) return { profile: name, ok: false, skipped: plan.skip, results: [] };
+
+    const commands = wakeupCommands(profile, plan, {
+      agy: process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'),
+      codex: process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath() || null,
+      claude: findClaudeBin(this.config.chat.claudeBin) || process.env.AGENTHUB_CLAUDE_BIN || null,
+    });
+    if (commands.length === 0) return { profile: name, ok: false, skipped: `Không tìm thấy CLI của ${profile.engine}`, results: [] };
+
+    this.wakeupInFlight.add(name);
+    const results: Array<{ target: string; ok: boolean; message: string }> = [];
+    try {
+      const cwd = wakeupCwd(this.config.hubHome);
+      for (let i = 0; i < commands.length; i++) {
+        const target = plan.models[i] || profile.engine;
+        const result = await this.wakeupRunner(commands[i], cwd);
+        const ok = wakeupSucceeded(profile.engine, result);
+        results.push({ target, ok, message: ok ? 'Đã đánh thức' : (result.error ? 'CLI báo lỗi' : 'Không thấy phản hồi hợp lệ') });
+      }
+    } finally {
+      this.wakeupInFlight.delete(name);
+    }
+    const ok = results.some((r) => r.ok);
+    this.scheduler.getEventBus().emit('quota.wakeup', undefined, { profile: name, ok, results });
+    // Cập nhật quota để thấy cửa sổ 5 giờ mới bắt đầu.
+    await this.refreshUsage(name).catch(() => null);
+    return { profile: name, ok, results };
+  }
+
+  /** Chạy các lượt đánh thức đến giờ hẹn; mỗi giờ hẹn chỉ chạy một lần mỗi ngày. */
+  async runScheduledWakeups(now = new Date()): Promise<string[]> {
+    const wake = this.config.wakeup;
+    if (!wake?.enabled) return [];
+    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const due = wake.times.find((time) => time.padStart(5, '0') === hhmm);
+    if (!due) return [];
+    const key = `${now.toDateString()} ${due}`;
+    if (this.wakeupDone.has(key)) return [];
+    this.wakeupDone.add(key);
+
+    const targets = this.profileRepo.getAll()
+      .filter((p) => ['agy', 'codex', 'claude'].includes(p.engine))
+      .filter((p) => wake.profiles.length === 0 || wake.profiles.includes(p.name));
+    const woken: string[] = [];
+    for (const profile of targets) {
+      const result = await this.wakeupProfile(profile.name).catch(() => null);
+      if (result?.ok) woken.push(profile.name);
+    }
+    return woken;
+  }
+
+  startWakeupTimer(): void {
+    if (this.wakeupTimer) return;
+    this.wakeupTimer = setInterval(() => void this.runScheduledWakeups().catch(() => null), 30_000);
+    this.wakeupTimer.unref?.();
+  }
+
+  stopWakeupTimer(): void {
+    if (this.wakeupTimer) clearInterval(this.wakeupTimer);
+    this.wakeupTimer = undefined;
   }
 
   refreshProfileEmail(name: string): string | null {
@@ -3327,6 +3422,7 @@ export class AppService {
       assistant: this.config.assistant,
       reviewer: this.config.reviewer,
       notifications: this.config.notifications,
+      wakeup: this.config.wakeup,
       savings: this.config.savings,
       load: this.config.load,
       stall: this.config.stall,

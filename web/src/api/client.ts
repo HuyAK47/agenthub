@@ -368,6 +368,18 @@ export async function loginProfile(name: string): Promise<LoginSessionResponse> 
   });
 }
 
+export interface WakeupResult {
+  profile: string;
+  ok: boolean;
+  skipped?: string;
+  results: Array<{ target: string; ok: boolean; message: string }>;
+}
+
+/** Đánh thức quota ngay (bỏ qua kiểm tra cửa sổ 5 giờ đang chạy). */
+export async function wakeupProfile(name: string): Promise<WakeupResult> {
+  return apiFetch<WakeupResult>(`/api/profiles/${encodeURIComponent(name)}/wakeup`, { method: 'POST' });
+}
+
 export async function checkProfile(name: string): Promise<CheckProfileResponse> {
   return apiFetch<CheckProfileResponse>(`/api/profiles/${encodeURIComponent(name)}/check`, {
     method: 'POST',

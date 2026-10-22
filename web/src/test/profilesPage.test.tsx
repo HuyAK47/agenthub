@@ -426,6 +426,23 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(screen.queryByTestId('profile-card-pro_acc')).toBeNull();
   });
 
+  it('9g. Đánh thức quota từ menu: gọi API và báo kết quả từng model', async () => {
+    const wakeSpy = vi.spyOn(client, 'wakeupProfile').mockResolvedValue({
+      profile: 'g1', ok: true, results: [{ target: 'gemini-3.8-flash-low', ok: true, message: 'Đã đánh thức' }],
+    });
+    renderPage();
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+
+    const card = screen.getByTestId('profile-card-g1');
+    fireEvent.click(card.querySelector('button[aria-label]')!);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Đánh thức quota' }));
+    });
+
+    expect(wakeSpy).toHaveBeenCalledWith('g1');
+    expect(await screen.findByText(/✓ Đã đánh thức g1 \(gemini-3.8-flash-low: ✓\)/)).toBeInTheDocument();
+  });
+
   it('10. Quota mark UI: không hiển thị quota mark đã hết hạn (until trong quá khứ)', async () => {
     const profilesWithExpired: Profile[] = [
       {

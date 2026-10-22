@@ -35,6 +35,8 @@ export const SettingsPage: React.FC = () => {
   const [quietHoursStart, setQuietHoursStart] = useState<string>('22:00');
   const [quietHoursEnd, setQuietHoursEnd] = useState<string>('07:00');
   const [quotaLowPct, setQuotaLowPct] = useState<string>('20');
+  const [wakeupEnabled, setWakeupEnabled] = useState(false);
+  const [wakeupTimes, setWakeupTimes] = useState<string>('06:00');
   const [digestEnabled, setDigestEnabled] = useState<boolean>(true);
   const [digestTime, setDigestTime] = useState<string>('18:00');
   const [apiKey, setApiKey] = useState('');
@@ -96,6 +98,8 @@ export const SettingsPage: React.FC = () => {
       setQuietHoursStart(config.notifications?.quietHours?.start || '22:00');
       setQuietHoursEnd(config.notifications?.quietHours?.end || '07:00');
       setQuotaLowPct(String(config.notifications?.quotaLowPct ?? 20));
+      setWakeupEnabled(Boolean(config.wakeup?.enabled));
+      setWakeupTimes((config.wakeup?.times ?? ['06:00']).join(', '));
       setDigestEnabled(config.brain?.digest?.enabled ?? true);
       setDigestTime(config.brain?.digest?.time || '18:00');
     }
@@ -193,6 +197,11 @@ export const SettingsPage: React.FC = () => {
           end: quietHoursEnd.trim() || '07:00',
         },
         quotaLowPct: Math.min(95, Math.max(0, Math.round(Number(quotaLowPct) || 0))),
+      },
+      wakeup: {
+        enabled: wakeupEnabled,
+        // Bỏ giờ sai định dạng thay vì làm hỏng cả lần lưu.
+        times: wakeupTimes.split(/[,\s]+/).map((time) => time.trim()).filter((time) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(time)),
       },
       planning: {
         requireApproval: approvalMode === 'all',
@@ -671,6 +680,42 @@ export const SettingsPage: React.FC = () => {
                 />
                 <span className="text-sm text-[var(--t-text-3)]">%</span>
               </div>
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label htmlFor="wakeup-toggle" className="text-sm font-semibold text-[var(--t-text)]">
+                    {t('settings.wakeupTitle')}
+                  </label>
+                  <p className="text-xs text-[var(--t-text-3)]">
+                    {t('settings.wakeupHint')}
+                  </p>
+                </div>
+                <input
+                  id="wakeup-toggle"
+                  type="checkbox"
+                  data-testid="wakeup-toggle"
+                  checked={wakeupEnabled}
+                  onChange={(e) => setWakeupEnabled(e.target.checked)}
+                  className="rounded border-[var(--t-border)]"
+                />
+              </div>
+              {wakeupEnabled && (
+                <div>
+                  <label htmlFor="wakeup-times" className="block text-xs font-semibold text-[var(--t-text-2)] mb-1">
+                    {t('settings.wakeupTimes')}
+                  </label>
+                  <input
+                    id="wakeup-times"
+                    data-testid="wakeup-times"
+                    value={wakeupTimes}
+                    onChange={(e) => setWakeupTimes(e.target.value)}
+                    placeholder="06:00, 13:00"
+                    className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="py-2 space-y-3">

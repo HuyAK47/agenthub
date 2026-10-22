@@ -29,6 +29,7 @@ import {
   refreshProfileUsage,
   renameProfile,
   updateProfile,
+  wakeupProfile,
 } from '../api/client';
 import { subscribeToEvents } from '../api/sse';
 import { DailyUsageTable } from '../components/DailyUsageTable';
@@ -184,6 +185,23 @@ export const ProfilesPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
     }
   };
+  const runWakeup = async (profile: Profile) => {
+    const label = profile.label || profile.name;
+    toast(t('profiles.wakeupStarted', { name: label }));
+    try {
+      const result = await wakeupProfile(profile.name);
+      if (result.skipped) {
+        toast(t('profiles.wakeupSkipped', { name: label, reason: result.skipped }), true);
+      } else {
+        const detail = result.results.map((item) => `${item.target}: ${item.ok ? '✓' : '✗'}`).join(', ');
+        toast(`${result.ok ? '✓' : '✗'} ${t(result.ok ? 'profiles.wakeupDone' : 'profiles.wakeupFailed', { name: label })} (${detail})`, !result.ok);
+      }
+    } catch (err: any) {
+      toast(err?.message || t('profiles.wakeupFailed', { name: label }), true);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+    }
+  };
   const runToggle = async (profile: Profile, enabled: boolean) => {
     try {
       await updateProfile(profile.name, { enabled });
@@ -296,6 +314,7 @@ export const ProfilesPage: React.FC = () => {
                         refreshing={Boolean(refreshing[profile.name])}
                         onLogin={runLogin}
                         onTokenLogin={setTokenLogin}
+                        onWakeup={runWakeup}
                         onCheck={runCheck}
                         onEdit={setEditing}
                         onRename={setRenaming}
@@ -529,6 +548,7 @@ function ProfileCard({
   refreshing,
   onLogin,
   onTokenLogin,
+  onWakeup,
   onCheck,
   onEdit,
   onRename,
@@ -545,6 +565,7 @@ function ProfileCard({
   refreshing: boolean;
   onLogin: (name: string, engine: Provider) => void;
   onTokenLogin: (profile: Profile) => void;
+  onWakeup: (profile: Profile) => void;
   onCheck: (name: string) => void;
   onEdit: (profile: Profile) => void;
   onRename: (profile: Profile) => void;
@@ -638,6 +659,19 @@ function ProfileCard({
               >
                 {t('profiles.checkBtn')}
               </button>
+              {['agy', 'codex', 'claude'].includes(profile.engine) && logged && (
+                <button
+                  type="button"
+                  className="menu-item"
+                  title={t('profiles.wakeupTip')}
+                  onClick={() => {
+                    setMenu(null);
+                    onWakeup(profile);
+                  }}
+                >
+                  {t('profiles.wakeupBtn')}
+                </button>
+              )}
               <button
                 type="button"
                 className="menu-item"

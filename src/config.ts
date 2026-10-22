@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
 import type { ExtraDiskPath } from './disk.js';
 import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
+import { DEFAULT_WAKEUP_CONFIG, type WakeupConfig } from './quota/wakeup.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -223,6 +224,19 @@ export const DEFAULT_WORKERS_CONFIG: WorkersConfig = {
   codexSandbox: 'off',
 };
 
+/** Đọc cấu hình đánh thức quota, bỏ giá trị sai và dùng mặc định cho phần thiếu. */
+export function parseWakeupConfig(raw: unknown): WakeupConfig {
+  const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const strings = (input: unknown, valid: (item: string) => boolean): string[] | null =>
+    Array.isArray(input) ? input.filter((item): item is string => typeof item === 'string' && valid(item.trim())).map((item) => item.trim()) : null;
+  return {
+    enabled: typeof value.enabled === 'boolean' ? value.enabled : DEFAULT_WAKEUP_CONFIG.enabled,
+    times: strings(value.times, (t) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) ?? [...DEFAULT_WAKEUP_CONFIG.times],
+    profiles: strings(value.profiles, (n) => /^[a-zA-Z0-9_-]+$/.test(n)) ?? [],
+    agyModels: strings(value.agyModels, (m) => m.length > 0) ?? [...DEFAULT_WAKEUP_CONFIG.agyModels],
+  };
+}
+
 export interface AgentHubConfig {
   hubHome: string;
   agyHomesDir: string;
@@ -259,6 +273,8 @@ export interface AgentHubConfig {
     maxChangesRequested: number;
   };
   notifications: NotificationsConfig;
+  /** Đánh thức quota theo giờ hẹn (src/quota/wakeup.ts). */
+  wakeup: WakeupConfig;
   disk: {
     minFreeGB: number;
     extraPaths: ExtraDiskPath[];
@@ -306,6 +322,7 @@ export function saveConfig(
       quietHours?: Partial<QuietHoursConfig>;
       quotaLowPct: number;
     }>;
+    wakeup?: Partial<WakeupConfig>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
@@ -466,6 +483,7 @@ export function updateConfigInMemory(
       quietHours?: Partial<QuietHoursConfig>;
       quotaLowPct: number;
     }>;
+    wakeup?: Partial<WakeupConfig>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
@@ -565,6 +583,9 @@ export function updateConfigInMemory(
         end: patch.notifications.quietHours.end ?? config.notifications.quietHours?.end ?? DEFAULT_QUIET_HOURS_CONFIG.end,
       };
     }
+  }
+  if (patch.wakeup) {
+    config.wakeup = parseWakeupConfig({ ...config.wakeup, ...patch.wakeup });
   }
   if (patch.disk?.minFreeGB !== undefined) {
     config.disk.minFreeGB = patch.disk.minFreeGB;
@@ -961,6 +982,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       failoverSec: typeof reviewerRaw.failoverSec === 'number' ? reviewerRaw.failoverSec : 5 * 60 * 60,
       maxChangesRequested: typeof reviewerRaw.maxChangesRequested === 'number' ? reviewerRaw.maxChangesRequested : 2,
     },
+    wakeup: parseWakeupConfig(userConfig.wakeup),
     notifications: {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
         ? (userConfig.notifications as { desktop: boolean }).desktop

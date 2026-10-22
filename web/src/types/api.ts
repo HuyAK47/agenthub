@@ -614,6 +614,12 @@ export interface SystemConfig {
     };
     quotaLowPct?: number;
   };
+  wakeup?: {
+    enabled: boolean;
+    times: string[];
+    profiles?: string[];
+    agyModels?: string[];
+  };
   load?: {
     enabled: boolean;
     high: number;
