@@ -35,10 +35,12 @@ describe('TaskRepo.page', () => {
   });
 
   it('filters project/status and accent-insensitive escaped search', () => {
-    const { repo } = setup();
+    const { repo, db } = setup();
+    db.prepare("INSERT INTO tasks (id, projectId, slug, title, level, dependsOn) VALUES ('p1~underscore', 'p1', 'underscore', 'x_y literal', 'easy', '[]')").run();
     expect(repo.page({ status: 'running', limit: 20 }).items.map((task) => task.id)).toEqual(['p1~b']);
     expect(repo.page({ search: 'dang nhap', limit: 20 }).items.map((task) => task.id)).toEqual(['p1~a']);
     expect(repo.page({ search: '%', limit: 20 }).items).toHaveLength(0);
+    expect(repo.page({ search: '_', limit: 20 }).items.map((task) => task.slug)).toEqual(['underscore']);
   });
 
   it('rejects malformed cursors and keeps legacy list behavior separate', () => {

@@ -2261,7 +2261,7 @@ export class AppService {
     return this.decorateTasks(this.taskRepo.list(filter));
   }
 
-  listTasksPage(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskRow> {
+  listTasksPage(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number; sort?: string; order?: string }): PageResult<TaskRow> {
     const page = this.taskRepo.page(filter);
     return { ...page, items: this.decorateTasks(page.items) };
   }

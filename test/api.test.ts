@@ -558,7 +558,10 @@ describe('AgentHub HTTP API Endpoints', () => {
 
     const second = await server.inject({ method: 'GET', url: `/api/tasks?project=pageproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
     expect(JSON.parse(second.body).items.map((task: { slug: string }) => task.slug)).toEqual(['two']);
-    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&status=running&search=BUILD&limit=20', headers: authHeaders() })).body).items).toHaveLength(1);
+    const filtered = JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&status=running&search=BUILD&limit=20', headers: authHeaders() })).body);
+    expect(filtered.items).toHaveLength(1);
+    expect(filtered.items[0].projectId).toBe('pageproj');
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=missing&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
     expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%25&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
     expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%5F&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
     expect((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&cursor=broken&limit=1', headers: authHeaders() })).statusCode).toBe(400);

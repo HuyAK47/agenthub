@@ -1316,7 +1316,7 @@ export class TaskRepo {
     return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
   }
 
-  page(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskRow> {
+  page(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number; sort?: string; order?: string }): PageResult<TaskRow> {
     const conditions: string[] = [];
     const values: unknown[] = [];
     if (filter?.project && filter.project !== 'all') { conditions.push('projectId = ?'); values.push(filter.project); }
@@ -1328,8 +1328,11 @@ export class TaskRepo {
     }
     const cursor = decodeCursor(filter?.cursor);
     if (filter?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    const sortColumn = filter?.sort === 'updatedAt' ? 'updatedAt' : filter?.sort === 'title' ? 'title' : filter?.sort === 'slug' ? 'slug' : 'createdAt';
+    const descending = filter?.order !== 'asc';
+    const comparison = descending ? '<' : '>';
     if (cursor) {
-      conditions.push('(createdAt < ? OR (createdAt = ? AND id < ?))');
+      conditions.push(`(${sortColumn} ${comparison} ? OR (${sortColumn} = ? AND id ${comparison} ?))`);
       values.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
     }
     const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
@@ -1339,11 +1342,11 @@ export class TaskRepo {
     const limit = parsePageSize(filter?.limit);
     const offset = typeof filter?.offset === 'number' ? filter.offset : Number(filter?.offset || 0);
     const safeOffset = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
-    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit + 1, safeOffset) as TaskRow[];
+    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY ${sortColumn} ${descending ? 'DESC' : 'ASC'}, id ${descending ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`).all(...values, limit + 1, safeOffset) as TaskRow[];
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
     const last = items.at(-1);
-    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null };
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(String(last[sortColumn as keyof TaskRow] ?? ''), last.id) : null };
   }
 
   getByProject(projectId: string): TaskRow[] {
