@@ -23,6 +23,8 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import { CircleHelp } from 'lucide-react';
+import { useTour } from './tour/TourContext';
 
 const PlansBadgeInner: React.FC = () => {
   const { data: batches = [] } = useQuery({
@@ -77,6 +79,7 @@ export const Layout: React.FC = () => {
   }, []);
 
   const connected = isOnline && sseConnected;
+  const { openTour, getPageTour } = useTour();
 
   const navItems = [
     { to: '/', label: t('common.dashboard'), icon: Activity },
@@ -151,6 +154,7 @@ export const Layout: React.FC = () => {
                 end={item.to === '/'}
                 title={item.label}
                 aria-label={item.label}
+                data-tour={item.to === '/' ? 'overview' : item.to.slice(1).split('/')[0]}
                 className={({ isActive }) =>
                   `relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors max-[1100px]:justify-center max-[1100px]:px-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--t-surface)] ${
                     isActive
@@ -179,6 +183,17 @@ export const Layout: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              data-tour="help"
+              onClick={() => {
+                const tour = getPageTour(location.pathname);
+                if (tour) openTour(tour.id);
+              }}
+              title={t('tour.help')}
+              aria-label={t('tour.help')}
+              className="rounded-lg border border-[var(--t-border)] p-1.5 text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]"
+            ><CircleHelp size={17} /></button>
             {/* Connection Status Indicator */}
             <div
               title={connected ? t('extra.connected') : t('extra.disconnected')}

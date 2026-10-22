@@ -8,6 +8,8 @@ import { Layout } from './components/Layout';
 import { connectSSE } from './api/sse';
 import { useQuery } from '@tanstack/react-query';
 import { getSetupStatus } from './api/client';
+import { TourProvider } from './components/tour/TourContext';
+import { TourOverlay } from './components/tour/TourOverlay';
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
 const TasksPage = lazy(() => import('./pages/TasksPage').then((m) => ({ default: m.TasksPage })));
@@ -57,8 +59,9 @@ export const App: React.FC = () => {
         <LocaleProvider>
           <AuthGate>
           <BrowserRouter>
-            <SetupRedirect />
-            <Suspense
+            <TourProvider>
+              <SetupRedirect />
+              <Suspense
               fallback={
                 <div className="flex items-center justify-center p-12">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
@@ -85,7 +88,9 @@ export const App: React.FC = () => {
                   <Route path="settings" element={<SettingsPage />} />
                 </Route>
               </Routes>
-            </Suspense>
+              </Suspense>
+              <TourOverlay />
+            </TourProvider>
           </BrowserRouter>
           </AuthGate>
         </LocaleProvider>

@@ -5,9 +5,11 @@ import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'luci
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
 import { deletePermissionRule, getPermissionRules } from '../api/chat';
+import { useTour } from '../components/tour/TourContext';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
+  const { openTour } = useTour();
   const queryClient = useQueryClient();
   const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
   const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
@@ -217,11 +219,14 @@ export const SettingsPage: React.FC = () => {
   return (
     <div className="max-w-3xl space-y-6">
       {/* Header */}
-      <div>
+      <div className="flex items-start justify-between gap-3">
+        <div>
         <h1 className="text-2xl font-bold tracking-tight">{t('settings.title')}</h1>
         <p className="text-sm text-[var(--t-text-3)]">
           {t('extra.settingsSubtitle')}
         </p>
+        </div>
+        <button type="button" onClick={() => openTour('intro')} className="rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs text-[var(--t-text-2)] hover:bg-[var(--t-hover)]">{t('tour.replay')}</button>
       </div>
 
       {saveSuccess && (

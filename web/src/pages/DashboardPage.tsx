@@ -32,6 +32,7 @@ import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { Profile, QuotaUsageItem, ProjectBrain } from '../types/api';
+import { GettingStartedChecklist } from '../components/GettingStartedChecklist';
 
 function providerUsage(profiles: Profile[], engine: Profile['engine']): QuotaUsageItem[] {
   const rows = profiles.filter((profile) => profile.engine === engine).flatMap((profile) => profile.usage || []);
@@ -218,7 +219,7 @@ export const DashboardPage: React.FC = () => {
       {/* Page Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">{t('dashboard.title')}</h1>
+          <h1 data-tour="overview" className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">{t('dashboard.title')}</h1>
           <p className="text-sm text-[var(--text-secondary)]">
             {t('dashboard.subtitle')}
           </p>
@@ -262,6 +263,8 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
+      <GettingStartedChecklist />
+
       {status.disks && status.disks.length > 0 && (
         <div data-testid="monitored-disks" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {status.disks.map((disk) => (
@@ -280,7 +283,7 @@ export const DashboardPage: React.FC = () => {
 
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} />}
-      {brainOverview?.brains && <div data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+      {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
         <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
         {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
           <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('projects.brainPermissions')}: {brain.permissions} · Mode phiên: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--text-secondary)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
@@ -387,7 +390,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* Running workers */}
-      <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
+      <div data-tour="workers" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
         <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Cpu className="w-5 h-5 text-[var(--t-accent)]" />

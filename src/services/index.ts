@@ -485,6 +485,9 @@ export const UpdateConfigSchema = z.object({
       fallback: z.boolean().optional(),
     }).optional(),
   }).optional(),
+  ui: z.object({
+    tours: z.record(z.boolean()).optional(),
+  }).optional(),
 });
 
 export function toTaskId(idOrParam: string): string {
@@ -3252,6 +3255,7 @@ export class AppService {
         chats: this.config.telegram.chats,
         notify: this.config.telegram.notify,
       },
+      ui: this.config.ui,
     };
   }
 

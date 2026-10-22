@@ -638,6 +638,7 @@ export interface SystemConfig {
     minFreeMemGB: number;
     recoverAfterSec: number;
   };
+  ui?: { tours?: Record<string, boolean> };
 }
 
 export interface ModelOptions {

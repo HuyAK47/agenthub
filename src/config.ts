@@ -216,6 +216,10 @@ export interface WorkersConfig {
   codexSandbox: 'off' | 'workspace-write';
 }
 
+export interface UiConfig {
+  tours: Record<string, boolean>;
+}
+
 export const DEFAULT_WORKERS_CONFIG: WorkersConfig = {
   codexSandbox: 'off',
 };
@@ -274,6 +278,7 @@ export interface AgentHubConfig {
   updates: UpdatesConfig;
   tools: ToolsConfig;
   workers: WorkersConfig;
+  ui: UiConfig;
   deploy: Record<string, DeployProjectConfig>;
 }
 
@@ -320,6 +325,7 @@ export function saveConfig(
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
+    ui?: Partial<UiConfig>;
   }>,
 ): void {
   const configFilePath = path.join(hubHome, 'config.json');
@@ -405,6 +411,9 @@ export function saveConfig(
           },
         }
       : {}),
+    ...(patch.ui && typeof patch.ui === 'object'
+      ? { ui: { ...((current.ui as Record<string, unknown>) || {}), ...patch.ui, ...(patch.ui.tours ? { tours: { ...(((current.ui as Record<string, unknown>)?.tours as Record<string, unknown>) || {}), ...patch.ui.tours } } : {}) } }
+      : {}),
     ...(patch.tools ? { tools: { ...((current.tools as Record<string, unknown>) || {}), ...patch.tools, ...(patch.tools.installers ? { installers: { ...(((current.tools as Record<string, unknown>)?.installers as Record<string, unknown>) || {}), ...patch.tools.installers } } : {}) } } : {}),
     ...(patch.telegram && typeof patch.telegram === 'object'
       ? {
@@ -479,6 +488,7 @@ export function updateConfigInMemory(
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
+    ui?: Partial<UiConfig>;
   }>,
 ): void {
   if (patch.modelChainHard) {
@@ -635,6 +645,7 @@ export function updateConfigInMemory(
       ...patch.workers,
     };
   }
+  if (patch.ui?.tours) config.ui = { ...config.ui, tours: { ...config.ui.tours, ...patch.ui.tours } };
   if (patch.tools?.installers) {
     for (const [name, value] of Object.entries(patch.tools.installers) as Array<[keyof ToolsConfig['installers'], ToolInstallerPatch | undefined]>) {
       if (!value) continue;
@@ -860,6 +871,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     const value = rawInstallers[name];
     return value && typeof value === 'object' ? { ...fallback, ...(value as ToolInstaller) } : fallback;
   };
+  const rawUi = (userConfig.ui as Record<string, unknown>) || {};
+  const ui: UiConfig = {
+    tours: rawUi.tours && typeof rawUi.tours === 'object'
+      ? Object.fromEntries(Object.entries(rawUi.tours).filter(([, value]) => typeof value === 'boolean'))
+      : {},
+  };
 
   return {
     hubHome,
@@ -1016,6 +1033,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       },
     },
     workers,
+    ui,
     deploy,
   };
 }
