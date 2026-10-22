@@ -935,6 +935,7 @@ export const vi = {
   },
   settings: {
     title: 'Cài đặt hệ thống',
+    brandingTitle: 'Tên ứng dụng', brandingDescription: 'Chỉ đổi tên hiển thị; lệnh CLI, service, thư mục và biến môi trường kỹ thuật không thay đổi.', brandingName: 'Tên hiển thị', brandingShortName: 'Tên ngắn', brandingTagline: 'Slogan (tuỳ chọn)', brandingAccent: 'Màu nhấn (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, tối đa 256KB', brandingLogoError: 'Không thể tải logo',
     subtitle: 'Cấu hình chuỗi model ưu tiên và thời gian timeout tối đa cho các lượt chạy (DEC-001).',
     saveSuccess: 'Cài đặt hệ thống đã được cập nhật thành công!',
     saveError: 'Không thể lưu cài đặt',
@@ -1118,7 +1119,10 @@ export const vi = {
     failedHandlePermission: 'Không thể xử lý yêu cầu cấp quyền',
     failedUpdateSession: 'Không thể cập nhật phiên trò chuyện',
     compactRequested: 'Đã gửi yêu cầu nén ngữ cảnh',
-    failedCompact: 'Không thể nén ngữ cảnh',
+    failedCompact: 'Không thể nén ngữ cảnh', editMessage: 'Sửa tin nhắn',
+    permissionProject: 'Dự án: {project}', permissionSession: 'Phiên: {session}',
+    permissionNoProject: 'Không gắn dự án', permissionCwd: 'cwd', permissionFile: 'file',
+    toolRead: 'Đọc {path}', toolRun: 'Chạy `{command}`', toolDefault: 'Công cụ',
   },
   claudeSessions: {
     active: 'Đang hoạt động',

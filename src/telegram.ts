@@ -245,6 +245,7 @@ export class TelegramBotService {
   private lastSentCi = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
+  private get appName(): string { return this.config.branding?.name || 'AgentHub'; }
   private sleepFn: (ms: number) => Promise<void>;
   private execFileFn: GitDiffFn;
   private chatService?: ChatService;
@@ -600,7 +601,7 @@ export class TelegramBotService {
     const queueItems = [...this.quietHoursQueue];
     const pendingDecisions = this.decisionTracker.getPending();
 
-    let text = `🌅 <b>TÓM TẮT BUỔI SÁNG AGENTHUB</b>\n<i>${dateStr} (Hết giờ yên tĩnh)</i>\n\n`;
+    let text = `🌅 <b>TÓM TẮT BUỔI SÁNG ${this.escapeHtml(this.appName).toUpperCase()}</b>\n<i>${dateStr} (Hết giờ yên tĩnh)</i>\n\n`;
 
     if (queueItems.length === 0) {
       text += `🔕 <i>Không có thông báo mới trong đêm.</i>\n\n`;
@@ -836,7 +837,7 @@ export class TelegramBotService {
           this.pairingAttemptsByChat.delete(chatId);
           await this.sendDirectMessage(
             chatId,
-            '✅ Ghép đôi thành công! Bạn đã được cấp quyền điều khiển AgentHub từ xa.\nGõ /help để xem danh sách các lệnh.',
+            `✅ Ghép đôi thành công! Bạn đã được cấp quyền điều khiển ${this.escapeHtml(this.appName)} từ xa.\nGõ /help để xem danh sách các lệnh.`,
           );
           return;
         }
@@ -988,7 +989,7 @@ export class TelegramBotService {
       case '/start':
         await this.sendMessage(
           chatId,
-          '👋 Chào bạn! Bạn đã kết nối với AgentHub.\nGõ /help để xem danh sách các lệnh.',
+          `👋 Chào bạn! Bạn đã kết nối với ${this.escapeHtml(this.appName)}.\nGõ /help để xem danh sách các lệnh.`,
         );
         break;
 
@@ -2230,7 +2231,7 @@ export class TelegramBotService {
     const isPaused = this.service.isSchedulerPaused();
     const brain = status.brain;
 
-    let text = '📊 <b>Tổng quan trạng thái AgentHub</b>\n\n';
+    let text = `📊 <b>Tổng quan trạng thái ${this.escapeHtml(this.appName)}</b>\n\n`;
     text = text + `• Điều phối: <b>${isPaused ? '⏸ Tạm dừng giao việc' : '▶️ Đang hoạt động'}</b>\n`;
     if (brain) text = text + `• Brain: <b>${this.brainLabel(brain)}</b>\n`;
     text = text + `• Tasks: <b>${tasks.running}</b> đang chạy, <b>${tasks.review}</b> chờ review, <b>${tasks.queued}</b> hàng đợi, <b>${tasks.waiting_quota}</b> chờ quota, <b>${tasks.failed}</b> lỗi, <b>${tasks.blocked}</b> bị chặn, <b>${tasks.done}</b> hoàn thành\n`;
@@ -3717,7 +3718,7 @@ export class TelegramBotService {
   }
 
   private renderHelp(): string {
-    return `🤖 <b>Danh sách lệnh AgentHub Telegram Bot:</b>
+    return `🤖 <b>Danh sách lệnh ${this.escapeHtml(this.appName)} Telegram Bot:</b>
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)

@@ -7,7 +7,8 @@ import { AuthGate } from './components/AuthGate';
 import { Layout } from './components/Layout';
 import { connectSSE } from './api/sse';
 import { useQuery } from '@tanstack/react-query';
-import { getSetupStatus } from './api/client';
+import { getConfig, getSetupStatus } from './api/client';
+import { BrandingProvider } from './context/BrandingContext';
 import { TourProvider } from './components/tour/TourContext';
 import { TourOverlay } from './components/tour/TourOverlay';
 
@@ -55,8 +56,18 @@ export const App: React.FC = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <AppShell />
+    </QueryClientProvider>
+  );
+};
+
+/** Everything that reads queries (branding config included) must render inside QueryClientProvider. */
+const AppShell: React.FC = () => {
+  const { data: config } = useQuery({ queryKey: ['config'], queryFn: getConfig, staleTime: 30_000 });
+  return (
       <ThemeProvider>
-        <LocaleProvider>
+        <LocaleProvider appName={config?.branding?.name}>
+          <BrandingProvider branding={config?.branding}>
           <AuthGate>
           <BrowserRouter>
             <TourProvider>
@@ -93,8 +104,8 @@ export const App: React.FC = () => {
             </TourProvider>
           </BrowserRouter>
           </AuthGate>
+          </BrandingProvider>
         </LocaleProvider>
       </ThemeProvider>
-    </QueryClientProvider>
   );
 };

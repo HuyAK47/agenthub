@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { fileURLToPath } from 'node:url';
-import { loadConfig, AgentHubConfig } from './config.js';
+import { loadConfig, saveConfig, AgentHubConfig } from './config.js';
 import { createContext, closeContext, startDaemon } from './daemon.js';
 import { runMcpServer } from './mcp/index.js';
 import { getOrCreateToken, getTokenPath, readExistingToken } from './auth.js';
@@ -282,6 +282,10 @@ async function main() {
       await cmdStatus(config);
       break;
 
+    case 'config':
+      await cmdConfig(config, subcommand, args.slice(2));
+      break;
+
     case 'clean':
       await cmdClean(config, args.slice(1));
       break;
@@ -378,6 +382,18 @@ async function cmdClaudeFailover(config: ReturnType<typeof loadConfig>, extraArg
   } finally {
     ctx.db.close();
   }
+}
+
+async function cmdConfig(config: AgentHubConfig, action: string | undefined, values: string[]): Promise<void> {
+  if (action !== 'set' || values[0] !== 'branding.name' || !values.slice(1).join(' ').trim()) {
+    console.log('Cách dùng: agenthub config set branding.name "Tên hiển thị"');
+    return;
+  }
+  const name = values.slice(1).join(' ').trim();
+  if (name.length > 80) throw new Error('Tên thương hiệu tối đa 80 ký tự');
+  saveConfig(config.hubHome, { branding: { name } });
+  config.branding.name = name;
+  console.log(`✓ Đã đổi tên hiển thị thành ${name}`);
 }
 
 async function cmdClaudeSessions(config: ReturnType<typeof loadConfig>, extraArgs: string[]): Promise<void> {

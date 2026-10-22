@@ -1,6 +1,7 @@
 import React, { memo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Link } from 'react-router-dom';
 import { ChatMessage } from '../../types/api';
 import { Check, Copy, AlertCircle } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
@@ -9,6 +10,17 @@ export interface MessageItemProps {
   message: ChatMessage;
   isStreaming?: boolean;
   onRetry?: () => void;
+  onEdit?: () => void;
+}
+
+function highlightedCode(code: string, language: string) {
+  const parts = code.split(/(\/\/.*|#.*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\b(?:const|let|var|function|return|if|else|for|while|class|import|from|export|async|await|true|false|null)\b)/g);
+  return parts.map((part, index) => {
+    const isComment = /^\/\//.test(part) || (language === 'python' && /^#/.test(part));
+    const isString = /^("|')/.test(part);
+    const isKeyword = /^(const|let|var|function|return|if|else|for|while|class|import|from|export|async|await|true|false|null)$/.test(part);
+    return <span key={`${index}-${part}`} className={isComment ? 'text-emerald-400' : isString ? 'text-amber-300' : isKeyword ? 'text-sky-300' : undefined}>{part}</span>;
+  });
 }
 
 function CodeBlock({ children, className }: { children: any; className?: string }) {
@@ -53,7 +65,7 @@ function CodeBlock({ children, className }: { children: any; className?: string 
       </div>
       {/* Code Body */}
       <pre className="p-3 text-xs font-mono text-[var(--t-text)] overflow-x-auto leading-relaxed">
-        <code>{children}</code>
+        <code data-testid="syntax-highlighted-code">{highlightedCode(codeString, match?.[1] || '')}</code>
       </pre>
     </div>
   );
@@ -78,13 +90,18 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   message,
   isStreaming = false,
   onRetry,
+  onEdit,
 }) => {
   const { t } = useLocale();
 
   // User message
   if (message.role === 'user') {
     return (
-      <div className="flex justify-end my-3">
+      <div className="group flex justify-end my-3 items-end gap-2">
+        <div className="hidden group-hover:flex items-center gap-1">
+          <button type="button" onClick={() => navigator.clipboard?.writeText(message.content)} aria-label={t('extra.copy')} className="p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)]"><Copy className="w-3.5 h-3.5" /></button>
+          {onEdit && <button type="button" onClick={onEdit} aria-label={t('extra.editMessage')} className="p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)]">✎</button>}
+        </div>
         <div className="max-w-2xl px-4 py-2.5 rounded-2xl rounded-tr-xs bg-[var(--t-accent)] text-white text-sm shadow-xs whitespace-pre-wrap break-words leading-relaxed">
           {message.content}
         </div>
@@ -147,6 +164,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
+              a({ href, children, ...props }: any) {
+                const taskMatch = typeof children?.[0] === 'string' ? children[0].match(/^agenthub\/(.+)$/) : null;
+                const target = taskMatch ? `/tasks/agenthub~${encodeURIComponent(taskMatch[1])}` : href;
+                if (taskMatch) return <Link to={target} className="text-[var(--t-accent)] underline underline-offset-2" {...props}>{children}</Link>;
+                return <a href={target} className="text-[var(--t-accent)] underline underline-offset-2" {...props}>{children}</a>;
+              },
               code({ node, inline, className, children, ...props }: any) {
                 if (inline) {
                   return (

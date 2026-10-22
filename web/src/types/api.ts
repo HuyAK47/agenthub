@@ -596,6 +596,7 @@ export interface DailyUsageReport {
 }
 
 export interface SystemConfig {
+  branding?: { name: string; shortName: string; logo?: string; logoVersion?: number; accentColor?: string; tagline?: string };
   modelChainHard: string[];
   modelChainEasy: string[];
   defaultTimeout: number;
@@ -689,6 +690,10 @@ export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system'
 export interface ChatMessageMeta {
   name?: string;
   summary?: string;
+  input?: unknown;
+  output?: string;
+  status?: 'running' | 'done' | 'error';
+  diff?: string;
   durationMs?: number;
   costUsd?: number;
   numTurns?: number;

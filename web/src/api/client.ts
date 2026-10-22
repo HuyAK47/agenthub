@@ -634,6 +634,16 @@ export async function updateConfig(data: Partial<SystemConfig>): Promise<SystemC
   });
 }
 
+export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; logo: string }> {
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(reader.error || new Error('Không thể đọc logo'));
+    reader.readAsDataURL(file);
+  });
+  return apiFetch('/api/branding/logo', { method: 'PUT', body: JSON.stringify({ mimeType: file.type, data }) });
+}
+
 export async function getSavings(params?: {
   project?: string;
   since?: string;

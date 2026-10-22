@@ -936,6 +936,7 @@ export const en: typeof vi = {
   },
   settings: {
     title: 'System Settings',
+    brandingTitle: 'Application name', brandingDescription: 'Only the display name changes; technical CLI commands, services, directories, and environment variables stay the same.', brandingName: 'Display name', brandingShortName: 'Short name', brandingTagline: 'Tagline (optional)', brandingAccent: 'Accent color (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, up to 256KB', brandingLogoError: 'Could not upload logo',
     subtitle: 'Configure preferred model chains and maximum run timeout (DEC-001).',
     saveSuccess: 'System settings updated successfully!',
     saveError: 'Failed to save settings',
@@ -1090,7 +1091,10 @@ export const en: typeof vi = {
     failedHandlePermission: 'Failed to handle permission request',
     failedUpdateSession: 'Failed to update chat session',
     compactRequested: 'Context compaction requested',
-    failedCompact: 'Failed to compact context',
+    failedCompact: 'Failed to compact context', editMessage: 'Edit message',
+    permissionProject: 'Project: {project}', permissionSession: 'Session: {session}',
+    permissionNoProject: 'No project attached', permissionCwd: 'cwd', permissionFile: 'file',
+    toolRead: 'Read {path}', toolRun: 'Run `{command}`', toolDefault: 'Tool',
   },
   claudeSessions: {
     active: 'Active',
