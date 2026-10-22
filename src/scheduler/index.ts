@@ -670,8 +670,14 @@ export class Scheduler {
     if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
     if (!task) return;
-    // A completed, cancelled, or queued task must never enter the checking queue.
-    if (task.status === 'done' || task.status === 'cancelled' || task.status === 'queued') return;
+    // Checks are only admitted for the task state written by the worker
+    // completion path. This prevents callers from turning a running/queued
+    // task into checking with an arbitrary or stale run id.
+    if (task.status !== 'checking') return;
+    const completedRun = this.runRepo.get(runId);
+    if (!completedRun || completedRun.taskId !== taskId || completedRun.kind !== 'worker' || completedRun.outcome !== 'done') return;
+    const workerRuns = this.runRepo.getByTask(taskId).filter((candidate) => candidate.kind === 'worker');
+    if (workerRuns.at(-1)?.id !== runId) return;
     const runningTask = this.running.get(taskId);
     if (runningTask && runningTask.runId !== runId) return;
     const activeWorkerRuns = this.runRepo
@@ -724,7 +730,10 @@ export class Scheduler {
   private async executeChecksForTask(taskId: string, runId: string, reuseSavedResults: boolean): Promise<void> {
     if (this.stopped) return;
     const task = this.taskRepo.get(taskId);
-    if (!task || task.status === 'done' || task.status === 'cancelled' || task.status === 'queued') return;
+    const completedRun = this.runRepo.get(runId);
+    if (!task || task.status !== 'checking' || !completedRun || completedRun.taskId !== taskId || completedRun.kind !== 'worker' || completedRun.outcome !== 'done') return;
+    const workerRuns = this.runRepo.getByTask(taskId).filter((candidate) => candidate.kind === 'worker');
+    if (workerRuns.at(-1)?.id !== runId) return;
     if (this.checkingRunIds.get(taskId) !== runId) return;
     const runningTask = this.running.get(taskId);
     if (runningTask && runningTask.runId !== runId) return;
@@ -2706,12 +2715,8 @@ export class Scheduler {
           reviewStep: 0,
         });
 
-        // Remove markers
-        const agentHubDir = path.join(task.worktreePath, '.agenthub');
-        const donePath = path.join(agentHubDir, 'DONE');
-        const blockedPath = path.join(agentHubDir, 'BLOCKED');
-        if (fs.existsSync(donePath)) fs.unlinkSync(donePath);
-        if (fs.existsSync(blockedPath)) fs.unlinkSync(blockedPath);
+        // Remove markers from the previous worker attempt.
+        this.clearWorkerMarkers(task.worktreePath);
 
         // Re-write task.md with feedback
         this.writeTaskFiles(task, newBody, true, feedback);

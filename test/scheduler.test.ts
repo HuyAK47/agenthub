@@ -1195,7 +1195,7 @@ describe('Checking after worker completion', () => {
       projectId: 'test-project',
       slug: 't1',
       title: 'Task 1',
-      status: 'running',
+      status: 'checking',
       worktreePath: projectPath,
     });
     runRepo.insert({
@@ -1205,6 +1205,7 @@ describe('Checking after worker completion', () => {
       model: 'gemini-3.8-flash-medium',
       profileName: 'p1',
     });
+    db.prepare("UPDATE runs SET outcome = 'done' WHERE id = 'run-1'").run();
 
     const scheduler = new Scheduler(
       config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
@@ -1214,7 +1215,7 @@ describe('Checking after worker completion', () => {
     await scheduler.runChecksForTask('test-project/t1', 'run-1');
 
     expect(taskRepo.get('test-project/t1')?.status).toBe('review');
-    expect(eventRepo.getRecent(10).map((event) => event.type)).toContain('task.checking');
+    expect(eventRepo.getRecent(10).map((event) => event.type)).toContain('task.review_ready');
     scheduler.stop();
   });
 
@@ -1612,9 +1613,13 @@ describe('Checking queue lifecycle', () => {
     return scheduler as Scheduler & { checkRunner: { run: (...args: unknown[]) => Promise<unknown> } };
   }
 
-  function addCheckTask(slug: string, worktreePath = path.join(tmpDir, slug), status: 'review' | 'done' | 'cancelled' = 'review') {
+  function addCheckTask(slug: string, worktreePath = path.join(tmpDir, slug), status: 'checking' | 'done' | 'cancelled' = 'checking') {
     fs.mkdirSync(worktreePath, { recursive: true });
     taskRepo.insert({ id: `test-project/${slug}`, projectId: 'test-project', slug, title: slug, status, worktreePath });
+    if (status === 'checking') {
+      runRepo.insert({ id: `run-${slug}`, taskId: `test-project/${slug}`, engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+      runRepo.finish(`run-${slug}`, 'done');
+    }
   }
 
   it('runs at most maxConcurrent checks and starts the FIFO third after one completes', async () => {
@@ -1644,6 +1649,10 @@ describe('Checking queue lifecycle', () => {
 
   it('deduplicates the same runId but queues a newer runId after the old run releases the worktree', async () => {
     addCheckTask('same');
+    runRepo.insert({ id: 'old', taskId: 'test-project/same', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    runRepo.insert({ id: 'new', taskId: 'test-project/same', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    runRepo.finish('old', 'done');
+    runRepo.finish('new', 'done');
     const scheduler = makeCheckingScheduler();
     let calls = 0; let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -1653,11 +1662,11 @@ describe('Checking queue lifecycle', () => {
     expect(duplicate).toBeDefined();
     const newer = scheduler.runChecksForTask('test-project/same', 'new');
     release();
-    await vi.waitFor(() => expect(calls).toBe(2));
-    expect(taskRepo.get('test-project/same')?.status).toBe('review');
+    await vi.waitFor(() => expect(calls).toBe(1));
     release = () => {};
     await Promise.all([old, newer]);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
+    expect(taskRepo.get('test-project/same')?.status).toBe('review');
     scheduler.stop();
   });
 
@@ -1722,6 +1731,26 @@ describe('Checking queue lifecycle', () => {
 
     expect(run).not.toHaveBeenCalled();
     expect(taskRepo.get('test-project/stale')?.status).toBe('checking');
+    scheduler.stop();
+  });
+
+  it('rejects an unknown or stale run and a task that is still running', async () => {
+    addCheckTask('strict');
+    const scheduler = makeCheckingScheduler();
+    const run = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run };
+
+    await scheduler.runChecksForTask('test-project/strict', 'missing-run');
+    expect(run).not.toHaveBeenCalled();
+
+    taskRepo.update('test-project/strict', { status: 'running' });
+    await scheduler.runChecksForTask('test-project/strict', 'run-strict');
+    expect(run).not.toHaveBeenCalled();
+
+    taskRepo.update('test-project/strict', { status: 'checking' });
+    runRepo.insert({ id: 'stale-run', taskId: 'test-project/strict', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', outcome: 'crashed' });
+    await scheduler.runChecksForTask('test-project/strict', 'stale-run');
+    expect(run).not.toHaveBeenCalled();
     scheduler.stop();
   });
 });
