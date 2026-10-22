@@ -4,9 +4,23 @@ import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import type { PlatformApi, PlatformProcessInfo, ServiceRestartResult, ServiceUninstallResult } from './types.js';
 
-function command(args: string[]): string { try { return execFileSync(args[0], args.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } }
+function command(args: string[]): string {
+  try {
+    return execFileSync(args[0], args.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (error) {
+    if (error && typeof error === 'object' && 'stdout' in error && typeof error.stdout === 'string') {
+      return error.stdout;
+    }
+    return '';
+  }
+}
 
 const TRACKED_NAMES = /^(?:node|agy|codex|claude|vitest|npm|pnpm)$/i;
+
+function commandName(raw: string): string {
+  const first = raw.trim().split(/\s+/)[0] || '';
+  return path.basename(first);
+}
 
 type ProcessRow = PlatformProcessInfo & { name: string };
 
@@ -42,7 +56,7 @@ function parseCwds(output: string): Map<number, string> {
 function listProcesses(): PlatformProcessInfo[] {
   const processes = parseProcessRows(command(['ps', '-axo', 'pid=,ppid=,rss=,%cpu=,lstart=,comm=']));
   const byPid = new Map(processes.map((processInfo) => [processInfo.pid, processInfo]));
-  const relevant = new Set<number>(processes.filter((processInfo) => TRACKED_NAMES.test(processInfo.name)).map((processInfo) => processInfo.pid));
+  const relevant = new Set<number>(processes.filter((processInfo) => TRACKED_NAMES.test(commandName(processInfo.name))).map((processInfo) => processInfo.pid));
   let changed = true;
   while (changed) {
     changed = false;
@@ -61,7 +75,7 @@ function listProcesses(): PlatformProcessInfo[] {
   const cwds = parseCwds(cwdOutput);
   return processes.map(({ name: _name, ...processInfo }) => ({
     ...processInfo,
-    parentName: byPid.get(processInfo.ppid)?.name || '',
+    parentName: commandName(byPid.get(processInfo.ppid)?.name || '') || byPid.get(processInfo.ppid)?.name || '',
     cwd: cwds.get(processInfo.pid) || '',
   } satisfies PlatformProcessInfo));
 }

@@ -68,4 +68,14 @@ describe('worktree deletion safety (sự cố 16/10: hub xóa nhầm thư mục 
     expect(fs.existsSync(wt)).toBe(false);
     expect(fs.existsSync(path.join(project, 'README.md'))).toBe(true);
   });
+
+  it('hoạt động đúng khi worktreesDir đi qua symlink nhưng target chưa tồn tại (macOS /var -> /private/var)', () => {
+    const { root, project } = setup();
+    const realDir = path.join(root, 'real-worktrees');
+    const symlinkDir = path.join(root, 'symlink-worktrees');
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.symlinkSync(realDir, symlinkDir);
+    expect(isDeletableWorktreePath(symlinkDir, path.join(symlinkDir, 'project', 'uncreated-task'), [project])).toBe(true);
+    expect(isDeletableWorktreePath(symlinkDir, path.join(realDir, 'project', 'uncreated-task'), [project])).toBe(true);
+  });
 });
