@@ -116,6 +116,24 @@ exit 1
 `;
 }
 
+/**
+ * Interpreter guard used by brain sandboxes. The Codex executable may be a
+ * JavaScript fixture (or a managed JS launcher), so permit only the exact
+ * entrypoint that AgentHub started; all other interpreter invocations remain
+ * blocked, including `node -e` and arbitrary scripts.
+ */
+export function brainInterpreterShimScript(name: string, realBinary: string): string {
+  return `#!/bin/sh
+shim_path="$1"
+shift
+if [ "$1" = "$AGENTHUB_BRAIN_ENTRYPOINT" ] && [ -n "$AGENTHUB_BRAIN_ENTRYPOINT" ]; then
+  exec ${shellQuote(realBinary)} "$@"
+fi
+echo ${shellQuote(`AgentHub: brain policy chặn interpreter '${name}'`)} >&2
+exit 1
+`;
+}
+
 export function gitShimScript(realBinary: string): string {
   return `#!/bin/sh
 # Shim git: chặn push và remote set-url, chuyển tiếp nguyên vẹn mọi lệnh khác.
@@ -292,7 +310,10 @@ export function workerEnvironment(
         'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman',
         'mkfs', 'dd', 'truncate', 'chown', 'chmod', 'chgrp', 'mount', 'umount', 'tar', 'zip', 'unzip',
       ]) {
-        writeShimFile(path.join(workerDir, name), brainBlockedShimScript(name));
+        const content = name === 'node'
+          ? brainInterpreterShimScript(name, findExecutable(name, env, hubHome) || process.execPath)
+          : brainBlockedShimScript(name);
+        writeShimFile(path.join(workerDir, name), content);
       }
       // serviceDir precedes workerDir in PATH, so replace the permissive worker
       // service guard for brain sessions with the same unconditional policy.

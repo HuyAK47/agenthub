@@ -133,7 +133,7 @@ export class AgyEngine implements Engine {
     if (opts.env) {
       Object.assign(env, opts.env);
     }
-
+    
     // Ensure log directory exists
     const logDir = path.dirname(opts.logPath);
     if (!fs.existsSync(logDir)) {
@@ -308,7 +308,16 @@ function brainSandboxCommand(
       if (fs.existsSync(target)) sandboxArgs.push('--ro-bind', gitShim, target);
     }
   }
-  return [bwrap, [...sandboxArgs, '--', command, ...args]];
+  let sandboxCommand = command;
+  // Keep the primary JS launcher out of the interpreter shim overlay. This
+  // private mount is only the process AgentHub started; child `node` commands
+  // still resolve through the policy shim in /bin and /usr/bin.
+  if (command === process.execPath && fs.existsSync(command)) {
+    const runtime = '/tmp/agenthub-brain-node';
+    sandboxArgs.push('--ro-bind', command, runtime);
+    sandboxCommand = runtime;
+  }
+  return [bwrap, [...sandboxArgs, '--', sandboxCommand, ...args]];
 }
 
 function isDescendant(parent: string, candidate: string): boolean {
@@ -426,6 +435,10 @@ export class CodexEngine implements Engine {
     if (opts.env) {
       Object.assign(env, opts.env);
     }
+    // A JS Codex launcher (used by managed installs and tests) needs to pass
+    // through the node interpreter shim. The shim only permits this exact
+    // entrypoint; arbitrary `node -e`/script invocations remain denied.
+    env.AGENTHUB_BRAIN_ENTRYPOINT = codexPath;
     Object.assign(
       env,
       workerEnvironment(
@@ -435,7 +448,16 @@ export class CodexEngine implements Engine {
       ),
     );
 
-    const [codexExe, codexArgs] = lowPriority(codexPath, args);
+    // Managed/test launchers can be JavaScript files with a `/usr/bin/env
+    // node` shebang. Start those through the node executable explicitly so
+    // the brain interpreter shim can identify the approved entrypoint instead
+    // of seeing the Codex subcommand as its first argument.
+    const isJavaScriptLauncher = /\.(?:c|m)?js$/i.test(codexPath);
+    const launchPath = isJavaScriptLauncher ? process.execPath : codexPath;
+    const launchArgs = isJavaScriptLauncher ? [codexPath, ...args] : args;
+    const [codexExe, codexArgs] = isJavaScriptLauncher && opts.brainPolicy
+      ? [launchPath, launchArgs] as [string, string[]]
+      : lowPriority(launchPath, launchArgs);
     const locked = opts.lockFile ? lockCommand(opts.lockFile, [codexExe, ...codexArgs]) : [codexExe, codexArgs] as [string, string[]];
     let executable = locked[0];
     let command = locked[1];
