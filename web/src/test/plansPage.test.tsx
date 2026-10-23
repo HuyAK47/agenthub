@@ -88,7 +88,7 @@ describe('PlansPage', () => {
     vi.spyOn(client, 'getConfig').mockResolvedValue({
       planning: { requireApproval: false, approvalMinTasks: 0 },
     } as any);
-    vi.spyOn(client, 'getBatches').mockResolvedValue([mockBatch1, mockBatch2]);
+    vi.spyOn(client, 'getBatchesPage').mockResolvedValue({ items: [mockBatch1, mockBatch2], total: 2, nextCursor: null });
     vi.spyOn(client, 'getBatch').mockImplementation(async (id: string) => {
       if (id === 'b-1') return mockBatch1;
       if (id === 'b-2') return mockBatch2;
@@ -271,7 +271,7 @@ describe('PlansPage', () => {
   });
 
   it('8. Trạng thái trống hiện đúng khối giải thích và câu cài đặt khi requireApproval = false và approvalMinTasks = 0', async () => {
-    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    vi.spyOn(client, 'getBatchesPage').mockResolvedValue({ items: [], total: 0, nextCursor: null });
     vi.spyOn(client, 'getConfig').mockResolvedValue({
       planning: { requireApproval: false, approvalMinTasks: 0 },
     } as any);
@@ -287,7 +287,7 @@ describe('PlansPage', () => {
   });
 
   it('9. Trạng thái trống hiện đúng câu khi cài đặt theo số task (approvalMinTasks > 0)', async () => {
-    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    vi.spyOn(client, 'getBatchesPage').mockResolvedValue({ items: [], total: 0, nextCursor: null });
     vi.spyOn(client, 'getConfig').mockResolvedValue({
       planning: { requireApproval: false, approvalMinTasks: 4 },
     } as any);
@@ -299,7 +299,7 @@ describe('PlansPage', () => {
   });
 
   it('10. Trạng thái trống hiện đúng câu khi cài đặt duyệt mọi task (requireApproval = true)', async () => {
-    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    vi.spyOn(client, 'getBatchesPage').mockResolvedValue({ items: [], total: 0, nextCursor: null });
     vi.spyOn(client, 'getConfig').mockResolvedValue({
       planning: { requireApproval: true, approvalMinTasks: 0 },
     } as any);
@@ -311,7 +311,7 @@ describe('PlansPage', () => {
   });
 
   it('11. Khung bên phải khi chưa chọn đợt hiển thị 3 bước ngắn (Chọn đợt → Sửa/bỏ task → Giao cả đợt)', async () => {
-    vi.spyOn(client, 'getBatches').mockResolvedValue([]);
+    vi.spyOn(client, 'getBatchesPage').mockResolvedValue({ items: [], total: 0, nextCursor: null });
     renderPlansPage('/plans');
 
     expect(await screen.findByTestId('plans-no-batch-selected')).toBeInTheDocument();

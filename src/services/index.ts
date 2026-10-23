@@ -52,7 +52,9 @@ import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
+import type { ClaudeSessionRow } from '../claude-sessions/repo.js';
 import { isClaudeProcessOpen, isClaudeQuotaLimited, ClaudeSessionScanner } from '../claude-sessions/scanner.js';
+import type { PageResult } from '../pagination.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
@@ -955,11 +957,10 @@ export class AppService {
   getSetupLogPath(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.getLogPath(tool); }
   completeSetup(skip = false) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.complete(skip); }
 
-  listClaudeSessions(activeWithinMin?: number) {
-    if (!this.claudeSessionRepo) return [];
+  private decorateClaudeSessions(rows: ClaudeSessionRow[], activeWithinMin?: number) {
     const min = typeof activeWithinMin === 'number' && !Number.isNaN(activeWithinMin) ? activeWithinMin : (this.config.claudeSessions?.activeWithinMin ?? 10);
     const cutoff = Date.now() - min * 60_000;
-    return this.claudeSessionRepo.list().map((session) => {
+    return rows.map((session) => {
       const active = (!!session.lastAt && Date.parse(session.lastAt) >= cutoff) || (!!session.cwd && isClaudeProcessOpen(session.cwd));
       const title = session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId);
       return {
@@ -969,6 +970,21 @@ export class AppService {
         topTasks: this.claudeSessionRepo!.topTasks(session.sessionId),
       };
     });
+  }
+  listClaudeSessions(activeWithinMin?: number) {
+    if (!this.claudeSessionRepo) return [];
+    return this.decorateClaudeSessions(this.claudeSessionRepo.list(), activeWithinMin);
+  }
+  pageClaudeSessions(options?: { activeWithinMin?: number; limit?: string | number; offset?: string | number; cursor?: string; sort?: string; order?: string }) {
+    if (!this.claudeSessionRepo) return { items: [], total: 0, nextCursor: null };
+    const rawLimit = typeof options?.limit === 'number' ? options.limit : Number(options?.limit);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(100, Math.floor(rawLimit)) : 20;
+    const rawOffset = typeof options?.offset === 'number' ? options.offset : Number(options?.offset);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+    const sort = options?.sort === 'title' || options?.sort === 'messages' || options?.sort === 'effectiveTokens' ? options.sort : 'lastAt';
+    const order = options?.order === 'asc' ? 'asc' : 'desc';
+    const page = this.claudeSessionRepo.page(limit, offset, options?.cursor, sort, order);
+    return { ...page, items: this.decorateClaudeSessions(page.items, options?.activeWithinMin) };
   }
   getClaudeSession(id: string, activeWithinMin?: number) {
     if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');
@@ -2514,8 +2530,7 @@ export class AppService {
   }
 
   // --- Tasks ---
-  listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
-    const tasks = this.taskRepo.list(filter);
+  private decorateTasks(tasks: TaskRow[]): TaskRow[] {
     const projects = new Map(this.projectRepo.getAll().map((project) => [project.id, project]));
     const running = this.scheduler.getRunning();
     return tasks.map((task) => {
@@ -2554,6 +2569,15 @@ export class AppService {
         } : null,
       };
     }) as TaskRow[];
+  }
+
+  listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
+    return this.decorateTasks(this.taskRepo.list(filter));
+  }
+
+  listTasksPage(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number; sort?: string; order?: string }): PageResult<TaskRow> {
+    const page = this.taskRepo.page(filter);
+    return { ...page, items: this.decorateTasks(page.items) };
   }
 
   getTasksGraph(options?: { project?: string; includeDone?: string | boolean }) {
@@ -3080,6 +3104,18 @@ export class AppService {
       ...apiBatch(batch),
       progress: batchProgress(this.taskRepo.getByBatch(batch.id)),
     }));
+  }
+
+  pageBatches(params?: { project?: string; status?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskBatchRow & { progress: BatchProgress }> {
+    if (!this.taskBatchRepo) return { items: [], total: 0, nextCursor: null };
+    const page = this.taskBatchRepo.page(params);
+    return {
+      ...page,
+      items: page.items.map((batch) => ({
+        ...apiBatch(batch),
+        progress: batchProgress(this.taskRepo.getByBatch(batch.id)),
+      })),
+    };
   }
 
   dispatchBatch(id: string): { ok: boolean; batchId: string; dispatchedCount: number } {
@@ -3684,9 +3720,45 @@ export class AppService {
     return notes.map(apiTaskNote);
   }
 
+  pageTaskRuns(idParam: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
+    const taskId = toTaskId(idParam);
+    if (!this.taskRepo.get(taskId)) throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    return this.runRepo.pageByTask(taskId, options?.limit, options?.cursor, options?.offset);
+  }
+
+  pageEvents(options?: { taskId?: string; limit?: string | number; cursor?: string; offset?: string | number }) {
+    const page = this.eventRepo.page(options);
+    return {
+      ...page,
+      items: page.items.map((event) => {
+        let payload: unknown = null;
+        if (event.payload) {
+          try {
+            payload = JSON.parse(event.payload);
+          } catch {
+            payload = event.payload;
+          }
+        }
+        return { id: event.id, ts: toApiTime(event.ts)!, type: event.type, taskId: event.taskId, payload };
+      }),
+    };
+  }
+
   listKnowledge(projectId: string): KnowledgeEntryRow[] {
     if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
+  }
+
+  pageKnowledge(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
+    if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    if (!this.knowledgeRepo) return { items: [], total: 0, nextCursor: null };
+    const page = this.knowledgeRepo.pageByProject(projectId, options?.limit, options?.cursor, options?.offset);
+    return { ...page, items: page.items.map(apiKnowledgeEntry) };
+  }
+
+  pageCiRuns(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
+    if (!this.ciRepo) return { items: [], total: 0, nextCursor: null };
+    return this.ciRepo.pageByProject(projectId, options);
   }
 
   reviewChecklistPreview(projectId: string) {
