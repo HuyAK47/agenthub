@@ -93,6 +93,10 @@ Dữ liệu (DB SQLite, token, log, worktree) nằm ở `~/.agenthub/`. Muốn �
 
 ```bash
 agenthub install-service          # Linux: systemd; macOS: ~/Library/LaunchAgents/dev.agenthub.plist
+agenthub stop                     # tắt êm, task đang chạy sẽ resume
+agenthub stop --disable           # tắt và không tự bật khi đăng nhập
+agenthub start                    # bật lại
+# Đóng tab web không tắt hub; uninstall-service là gỡ service.
 loginctl enable-linger "$USER"    # (tuỳ chọn) chạy cả khi chưa đăng nhập màn hình
 systemctl --user status agenthub  # kiểm tra đang chạy
 
@@ -403,7 +407,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 
 ```json
 {
-  "load": { "enabled": true, "high": 16, "ok": 11, "minFreeMemGB": 1.5, "recoverAfterSec": 300 },
+  "load": { "enabled": true, "high": 16, "ok": 11, "pressureHigh": 20, "pressureIoHigh": 40, "pressureOk": 10, "minFreeMemGB": 1.5, "recoverAfterSec": 300 },
   "disk": {
     "minFreeGB": 3,
     "extraPaths": [{ "path": "/var/lib/docker", "minFreeGB": 1.5, "label": "Docker" }]
@@ -413,7 +417,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 }
 ```
 
-- **load**: máy quá tải thì tạm giảm mỗi dự án xuống 1 task. Máy ổn định đủ `recoverAfterSec` thì trả lại.
+- **load**: máy quá tải thì tạm giảm mỗi dự án xuống 1 task. `pressureIoHigh` mặc định là 40% và I/O PSI chỉ được coi là quá tải khi memory PSI đồng thời đạt `pressureOk` (mặc định 10%); I/O nền thấp hơn ngưỡng không đánh thức brain. Máy ổn định đủ `recoverAfterSec` thì trả lại.
 - **disk**: ổ dưới ngưỡng thì không giao task mới. Thêm ổ chứa dữ liệu Docker nếu dự án dùng Docker.
 - **defaultTimeout**: giới hạn thời gian mỗi lượt chạy (giây). Ngoài ra hub cảnh báo khi task chạy lâu mà không commit, hoặc khi chạy lặp lại một lệnh.
 

@@ -709,6 +709,29 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
   PRAGMA foreign_keys = ON;
   `,
+  // Migration 52: departments group projects and optionally assign worker profiles.
+  `
+  CREATE TABLE IF NOT EXISTS departments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    priority INTEGER NOT NULL DEFAULT 0,
+    maxParallel INTEGER NOT NULL DEFAULT 3,
+    claudeDailyTokenBudget INTEGER NOT NULL DEFAULT 0,
+    telegramTopicId INTEGER,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  INSERT OR IGNORE INTO departments (id, name) VALUES ('chung', 'Chung');
+  ALTER TABLE projects ADD COLUMN departmentId TEXT NOT NULL DEFAULT 'chung';
+  CREATE INDEX IF NOT EXISTS idx_projects_department ON projects(departmentId);
+  CREATE TABLE IF NOT EXISTS department_profiles (
+    departmentId TEXT NOT NULL,
+    profileName TEXT NOT NULL,
+    share REAL,
+    PRIMARY KEY (departmentId, profileName),
+    FOREIGN KEY (departmentId) REFERENCES departments(id) ON DELETE CASCADE,
+    FOREIGN KEY (profileName) REFERENCES profiles(name) ON DELETE CASCADE
+  );
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -776,6 +799,7 @@ export interface ProjectRow {
   defaultBranch: string;
   envTemplate: string | null;
   maxParallel: number;
+  departmentId: string;
   checks: string | null;
   hooks: string | null;
   merge?: string | null;
@@ -794,6 +818,29 @@ export interface ProjectRow {
   } | null;
   createdAt: string;
   archivedAt?: string | null;
+}
+
+export interface DepartmentRow {
+  id: string;
+  name: string;
+  priority: number;
+  maxParallel: number;
+  claudeDailyTokenBudget: number;
+  telegramTopicId: number | null;
+  createdAt: string;
+  profiles?: DepartmentProfileRow[];
+  projectCount?: number;
+}
+
+export interface DepartmentProfileRow {
+  departmentId: string;
+  profileName: string;
+  share: number | null;
+}
+
+export interface DepartmentProjectRow {
+  id: string;
+  name: string;
 }
 
 export interface ProjectDeleteTask {
@@ -939,18 +986,19 @@ export class ProjectRepo {
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings' | 'departmentId'> & {
       checks?: string | null;
       hooks?: string | null;
       merge?: string | null;
       reviewChain?: string | null;
       review?: string | null;
       settings?: string | null;
+      departmentId?: string;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review, settings, departmentId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -965,12 +1013,13 @@ export class ProjectRepo {
         row.reviewChain || null,
         row.review || null,
         row.settings || null,
+        row.departmentId || 'chung',
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings' | 'archivedAt'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings' | 'archivedAt' | 'departmentId'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -1060,6 +1109,73 @@ export class ProjectRepo {
       this.db.prepare('DELETE FROM ci_runs WHERE projectId = ?').run(id);
       this.db.prepare('DELETE FROM brain_directives WHERE projectId = ?').run(id);
       this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    });
+    transaction();
+  }
+}
+
+export class DepartmentRepo {
+  constructor(private db: Database.Database) {}
+
+  getAll(): DepartmentRow[] {
+    return this.db.prepare(`
+      SELECT d.*, COUNT(DISTINCT p.id) AS projectCount
+      FROM departments d LEFT JOIN projects p ON p.departmentId = d.id AND p.archivedAt IS NULL
+      GROUP BY d.id ORDER BY d.priority DESC, d.name
+    `).all() as DepartmentRow[];
+  }
+
+  get(id: string): DepartmentRow | undefined {
+    return this.db.prepare('SELECT * FROM departments WHERE id = ?').get(id) as DepartmentRow | undefined;
+  }
+
+  insert(row: Omit<DepartmentRow, 'createdAt' | 'profiles' | 'projectCount'>): void {
+    this.db.prepare(
+      'INSERT INTO departments (id, name, priority, maxParallel, claudeDailyTokenBudget, telegramTopicId) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(row.id, row.name, row.priority, row.maxParallel, row.claudeDailyTokenBudget, row.telegramTopicId);
+  }
+
+  update(id: string, fields: Partial<Pick<DepartmentRow, 'name' | 'priority' | 'maxParallel' | 'claudeDailyTokenBudget' | 'telegramTopicId'>>): void {
+    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+    if (!entries.length) return;
+    this.db.prepare(`UPDATE departments SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
+      .run(...entries.map(([, value]) => value), id);
+  }
+
+  delete(id: string): void {
+    if (id === 'chung') throw new Error('Không thể xóa phòng ban Chung');
+    this.db.prepare("UPDATE projects SET departmentId = 'chung' WHERE departmentId = ?").run(id);
+    this.db.prepare('DELETE FROM departments WHERE id = ?').run(id);
+  }
+
+  profiles(departmentId: string): DepartmentProfileRow[] {
+    return this.db.prepare('SELECT * FROM department_profiles WHERE departmentId = ? ORDER BY profileName').all(departmentId) as DepartmentProfileRow[];
+  }
+
+  projects(departmentId: string): DepartmentProjectRow[] {
+    return this.db.prepare('SELECT id, name FROM projects WHERE departmentId = ? AND archivedAt IS NULL ORDER BY name').all(departmentId) as DepartmentProjectRow[];
+  }
+
+  claudeUsageToday(departmentId: string): number {
+    const row = this.db.prepare(`
+      SELECT COALESCE(SUM(ctu.effectiveTokens), 0) AS tokens
+      FROM claude_task_usage ctu
+      JOIN tasks t ON t.id = ctu.taskId
+      JOIN projects p ON p.id = t.projectId
+      WHERE p.departmentId = ? AND EXISTS (
+        SELECT 1 FROM claude_usage cu
+        WHERE cu.sessionId = ctu.sessionId AND cu.turnId = ctu.turnId
+          AND date(cu.ts, 'localtime') = date('now', 'localtime')
+      )
+    `).get(departmentId) as { tokens: number };
+    return Number(row?.tokens || 0);
+  }
+
+  setProfiles(departmentId: string, profiles: Array<{ profileName: string; share?: number | null }>): void {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM department_profiles WHERE departmentId = ?').run(departmentId);
+      const insert = this.db.prepare('INSERT INTO department_profiles (departmentId, profileName, share) VALUES (?, ?, ?)');
+      for (const profile of profiles) insert.run(departmentId, profile.profileName, profile.share ?? null);
     });
     transaction();
   }

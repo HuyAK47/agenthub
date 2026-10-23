@@ -4,6 +4,7 @@ import { AgentHubConfig } from './config.js';
 import {
   openDatabase,
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   TaskRepo,
@@ -45,6 +46,8 @@ import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { SetupManager } from './tools/setup.js';
 import { ClaudeReviewEngine, CLAUDE_REVIEW_ENGINE_KEY } from './engines/claude-review.js';
 import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
@@ -120,6 +123,7 @@ export function createContext(
   }
   const db = openDatabase(config.dbPath);
   const projectRepo = new ProjectRepo(db);
+  const departmentRepo = new DepartmentRepo(db);
   const profileRepo = new ProfileRepo(db);
   const quotaMarkRepo = new QuotaMarkRepo(db);
   const taskRepo = new TaskRepo(db);
@@ -222,6 +226,7 @@ export function createContext(
     runMetricsRepo,
     knowledgeRepo,
     diskFn ? { diskSpace: diskFn } : undefined,
+    departmentRepo,
   );
   usageService.setEventBus(scheduler.getEventBus());
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
@@ -308,6 +313,7 @@ export function createContext(
     setupManager,
     brainRunner,
     directiveRepo,
+    departmentRepo,
   );
   service.deployService = deployService;
   scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {
@@ -484,6 +490,7 @@ export async function startDaemon(
 
   // Start scheduler
   ctx.scheduler.start();
+  void ctx.service.retryParkedEscalations();
 
   // Start notification service and claude transcript scanner
   ctx.notifier.start();
@@ -499,7 +506,22 @@ export async function startDaemon(
   }
 
   // Start Fastify HTTP server with security and API endpoints
-  const fastify = await createServer(ctx.service, config);
+  const fastify = await createServer(ctx.service, config, {
+    onShutdown: (disable) => {
+      if (disable) {
+        try {
+          const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+          const args = process.platform === 'darwin'
+            ? ['unload', path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist')]
+            : ['--user', 'disable', 'agenthub'];
+          execFileSync(command, args, { stdio: 'ignore' });
+        } catch {
+          // The CLI reports service-manager errors; the daemon must still exit cleanly.
+        }
+      }
+      setImmediate(() => { void shutdown(); });
+    },
+  });
 
   const port = config.port;
   try {

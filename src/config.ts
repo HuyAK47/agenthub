@@ -33,6 +33,7 @@ export interface QuietHoursConfig {
 
 export interface NotificationsConfig {
   desktop: boolean;
+  desktopLevel: 'all' | 'important' | 'critical' | 'off';
   quietHours?: QuietHoursConfig;
 }
 
@@ -327,6 +328,7 @@ export function saveConfig(
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
+      desktopLevel: NotificationsConfig['desktopLevel'];
       quietHours?: Partial<QuietHoursConfig>;
     }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
@@ -496,6 +498,7 @@ export function updateConfigInMemory(
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
+      desktopLevel: NotificationsConfig['desktopLevel'];
       quietHours?: Partial<QuietHoursConfig>;
     }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
@@ -593,6 +596,9 @@ export function updateConfigInMemory(
   if (patch.notifications) {
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
+    }
+    if (patch.notifications.desktopLevel !== undefined) {
+      config.notifications.desktopLevel = patch.notifications.desktopLevel;
     }
     if (patch.notifications.quietHours) {
       config.notifications.quietHours = {
@@ -1042,6 +1048,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
         ? (userConfig.notifications as { desktop: boolean }).desktop
         : true,
+      desktopLevel: (() => {
+        const level = (userConfig.notifications as { desktopLevel?: unknown } | undefined)?.desktopLevel;
+        return level === 'all' || level === 'critical' || level === 'off' || level === 'important' ? level : 'important';
+      })(),
       ...(userConfig.notifications && typeof userConfig.notifications === 'object' && 'quietHours' in userConfig.notifications
         ? {
             quietHours: (() => {
@@ -1075,6 +1085,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
       pressureHigh: typeof rawLoad.pressureHigh === 'number' ? rawLoad.pressureHigh : DEFAULT_LOAD_CONFIG.pressureHigh,
+      pressureIoHigh: typeof rawLoad.pressureIoHigh === 'number' ? rawLoad.pressureIoHigh : DEFAULT_LOAD_CONFIG.pressureIoHigh,
       pressureOk: typeof rawLoad.pressureOk === 'number' ? rawLoad.pressureOk : DEFAULT_LOAD_CONFIG.pressureOk,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,
