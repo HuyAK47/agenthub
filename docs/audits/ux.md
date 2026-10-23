@@ -111,5 +111,5 @@
 
 - **Linter**: `npm run lint` — Hoàn toàn sạch, không có cảnh báo nào.
 - **Typecheck**: `npm run typecheck` — 0 lỗi TypeScript trên cả server và web.
-- **Kiểm thử Web (Vitest)**: `npm run test:web` — **49/49 test files pass, 339/339 tests pass**.
-- **Đóng gói sản phẩm (Build Web)**: `npm run build:web` — Build production hoàn tất thành công trong 5.01 giây (built in 5.01s).
+- **Kiểm thử Web (Vitest)**: `npm run test:web` — **50/50 test files pass, 353/353 tests pass**.
+- **Đóng gói sản phẩm (Build Web)**: `npm run build:web` — Build production hoàn tất thành công trong 6.45 giây (built in 6.45s).
