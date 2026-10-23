@@ -2212,10 +2212,14 @@ export class Scheduler {
     return codexProfiles.every((p) => this.quotaService.isExhausted(p.name, 'codex') || (p.authState != null && p.authState !== 'ok'));
   }
 
-  private startClaudeFallbackReview(task: TaskRow): void {
+  private startClaudeFallbackReview(task: TaskRow): 'started' | 'waiting' | 'unavailable' {
     const arbiter = this.config.reviewer?.arbiter || { engine: 'claude' as const, model: 'opus' };
+    if (arbiter.engine === 'claude' && !this.claudeBudgetAvailable(task)) {
+      this.eventBus.emit('review.waiting', task.id, { actor: 'claude-reviewer', reason: 'department_claude_budget' });
+      return 'waiting';
+    }
     const engine = this.engines.get(arbiter.engine === 'claude' ? CLAUDE_REVIEW_ENGINE_KEY : 'codex');
-    if (!engine) return;
+    if (!engine) return 'unavailable';
     const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
     const preferred = arbiter.engine === 'claude' ? (this.config.reviewer?.claudeProfiles ?? []) : [];
     const rank = (name: string) => (preferred.includes(name) ? preferred.indexOf(name) : preferred.length);
@@ -2228,9 +2232,10 @@ export class Scheduler {
       .sort((a, b) => Number(a.name === lastWorker?.profileName) - Number(b.name === lastWorker?.profileName) ||
         rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
     const profile = candidates[0];
-    if (!profile) return;
+    if (!profile) return 'unavailable';
     this.eventBus.emit('review.fallback', task.id, { from: 'reviewer', to: arbiter.engine, reason: 'arbiter', profile: profile.name });
     this.startReview(task, profile.name, engine, normalizeReviewerModel(arbiter.engine, arbiter.model), arbiter.engine === 'claude' ? 'claude-reviewer' : 'codex-reviewer');
+    return 'started';
   }
 
   /** Prefer Claude as arbiter, but immediately fall back to an independent Codex account. */
@@ -2238,7 +2243,8 @@ export class Scheduler {
     const before = this.reviewerRuns.size;
     // Arbiter selection is independent from the legacy reviewer fallback switch. The configured
     // arbiter must get the first chance even when claudeFallback is disabled.
-    this.startClaudeFallbackReview(task);
+    const arbiterResult = this.startClaudeFallbackReview(task);
+    if (arbiterResult === 'waiting') return;
     if (this.reviewerRuns.size > before) return;
 
     const arbiterEngine = this.config.reviewer?.arbiter?.engine ?? 'claude';

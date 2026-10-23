@@ -630,6 +630,7 @@ describe('Codex reviewer failover lifecycle', () => {
     process.env.FAKE_MODE = mode;
     config.reviewer.enabled = true;
     const fake = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    (fake as unknown as { id: string }).id = 'codex';
     const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
       new Map<string, Engine>([['codex', fake]]), undefined, undefined, db);
     if (withChecks) {
@@ -800,6 +801,14 @@ describe('Codex reviewer failover lifecycle', () => {
     (scheduler as unknown as { engines: Map<string, Engine> }).engines.set('claude-review', claude);
   }
 
+  function exhaustDepartmentClaudeBudget(scheduler: Scheduler) {
+    const departmentRepo = new DepartmentRepo(db);
+    departmentRepo.insert({ id: 'review-eng', name: 'Review Engineering', priority: 0, maxParallel: 3, claudeDailyTokenBudget: 100, telegramTopicId: null });
+    projectRepo.update('test-project', { departmentId: 'review-eng' });
+    vi.spyOn(departmentRepo, 'claudeUsageToday').mockReturnValue(100);
+    (scheduler as unknown as { departmentRepo: DepartmentRepo }).departmentRepo = departmentRepo;
+  }
+
   it('falls back to a Claude reviewer when every Codex account is out of quota', async () => {
     const { scheduler, reviewRepo } = makeReviewer('reviewer-chatter');
     withClaudeReviewer(scheduler);
@@ -848,6 +857,37 @@ describe('Codex reviewer failover lifecycle', () => {
     expect(reviewer?.profileName).toBe('codex-2');
     expect(eventRepo.getRecent(30).some((event) => event.type === 'review.fallback' && event.payload?.includes('arbiter_unavailable'))).toBe(true);
     await vi.waitFor(() => expect(reviewRepo.getByTask('test-project/review').at(-1)?.actor).toBe('codex-reviewer'));
+    scheduler.stop();
+  });
+
+  it('waits when a Claude arbiter exceeds the department budget', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    exhaustDepartmentClaudeBudget(scheduler);
+    for (let i = 0; i < 2; i++) {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    }
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    expect(eventRepo.getRecent(30).some((event) => event.type === 'review.waiting' && event.payload?.includes('department_claude_budget'))).toBe(true);
+    scheduler.stop();
+  });
+
+  it('still runs a Codex arbiter when the department Claude budget is exhausted', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    exhaustDepartmentClaudeBudget(scheduler);
+    config.reviewer.arbiter = { engine: 'codex', model: 'gpt-5.6-luna' };
+    for (let i = 0; i < 2; i++) {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    }
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.engine).toBe('codex');
     scheduler.stop();
   });
 
