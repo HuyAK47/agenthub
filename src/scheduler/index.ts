@@ -2213,14 +2213,10 @@ export class Scheduler {
   }
 
   private startClaudeFallbackReview(task: TaskRow): void {
-    if (!this.claudeBudgetAvailable(task)) {
-      this.eventBus.emit('review.waiting', task.id, { actor: 'claude-reviewer', reason: 'department_claude_budget' });
-      return;
-    }
     const arbiter = this.config.reviewer?.arbiter || { engine: 'claude' as const, model: 'opus' };
     const engine = this.engines.get(arbiter.engine === 'claude' ? CLAUDE_REVIEW_ENGINE_KEY : 'codex');
     if (!engine) return;
-    const lastRun = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'reviewer').at(-1);
+    const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
     const preferred = arbiter.engine === 'claude' ? (this.config.reviewer?.claudeProfiles ?? []) : [];
     const rank = (name: string) => (preferred.includes(name) ? preferred.indexOf(name) : preferred.length);
     const candidates = this.profileRepo.getEnabled()
@@ -2229,7 +2225,7 @@ export class Scheduler {
         !this.quotaService.isExhausted(p.name, arbiter.engine === 'claude' ? 'claude' : 'codex') &&
         !this.reviewerInBackoff(p.name) &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null)
-      .sort((a, b) => Number(a.name === lastRun?.profileName) - Number(b.name === lastRun?.profileName) ||
+      .sort((a, b) => Number(a.name === lastWorker?.profileName) - Number(b.name === lastWorker?.profileName) ||
         rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
     const profile = candidates[0];
     if (!profile) return;
@@ -2240,15 +2236,16 @@ export class Scheduler {
   /** Prefer Claude as arbiter, but immediately fall back to an independent Codex account. */
   private startEscalationArbiter(task: TaskRow): void {
     const before = this.reviewerRuns.size;
-    if (this.config.reviewer?.arbiter?.engine === 'codex' || this.config.reviewer?.claudeFallback !== false) {
-      this.startClaudeFallbackReview(task);
-    }
+    // Arbiter selection is independent from the legacy reviewer fallback switch. The configured
+    // arbiter must get the first chance even when claudeFallback is disabled.
+    this.startClaudeFallbackReview(task);
     if (this.reviewerRuns.size > before) return;
 
     const arbiterEngine = this.config.reviewer?.arbiter?.engine ?? 'claude';
     if (arbiterEngine === 'codex') {
       const claude = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
       if (!claude || !task.worktreePath || !this.claudeBudgetAvailable(task)) return;
+      const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
       const candidates = this.profileRepo.getEnabled()
         .filter((profile) => profile.engine === 'claude'
           && (profile.authState == null || profile.authState === 'ok')
@@ -2256,7 +2253,8 @@ export class Scheduler {
           && !this.reviewerInBackoff(profile.name)
           && !this.reviewerRunsForProfile(profile.name)
           && this.locks.findFreeSlotSync(profile) !== null)
-        .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+        .sort((a, b) => Number(a.name === lastWorker?.profileName) - Number(b.name === lastWorker?.profileName) ||
+          (b.priority ?? 0) - (a.priority ?? 0));
       const profile = candidates[0];
       if (!profile) return;
       this.eventBus.emit('review.fallback', task.id, { from: 'codex', to: 'claude', profile: profile.name, reason: 'arbiter_unavailable' });
@@ -2269,12 +2267,12 @@ export class Scheduler {
     const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
     const candidates = this.profileRepo.getEnabled()
       .filter((profile) => profile.engine === 'codex'
-        && profile.name !== lastWorker?.profileName
         && !this.quotaService.isExhausted(profile.name, 'codex')
         && !this.reviewerInBackoff(profile.name)
         && !this.reviewerRunsForProfile(profile.name)
         && this.locks.findFreeSlotSync(profile) !== null)
-      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+      .sort((a, b) => Number(a.name === lastWorker?.profileName) - Number(b.name === lastWorker?.profileName) ||
+        (b.priority ?? 0) - (a.priority ?? 0));
     const profile = candidates[0];
     if (!profile) return;
     this.eventBus.emit('review.fallback', task.id, { from: 'claude', to: 'codex', profile: profile.name, reason: 'arbiter_unavailable' });
