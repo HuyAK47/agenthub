@@ -2161,6 +2161,7 @@ export class Scheduler {
     const arbiter = this.config.reviewer?.arbiter || { engine: 'claude' as const, model: 'opus' };
     const engine = this.engines.get(arbiter.engine === 'claude' ? CLAUDE_REVIEW_ENGINE_KEY : 'codex');
     if (!engine) return;
+    const lastRun = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'reviewer').at(-1);
     const preferred = arbiter.engine === 'claude' ? (this.config.reviewer?.claudeProfiles ?? []) : [];
     const rank = (name: string) => (preferred.includes(name) ? preferred.indexOf(name) : preferred.length);
     const candidates = this.profileRepo.getEnabled()
@@ -2168,11 +2169,10 @@ export class Scheduler {
         (preferred.length === 0 || preferred.includes(p.name)) &&
         !this.quotaService.isExhausted(p.name, arbiter.engine === 'claude' ? 'claude' : 'codex') &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null)
-      .sort((a, b) => rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
+      .sort((a, b) => Number(a.name === lastRun?.profileName) - Number(b.name === lastRun?.profileName) ||
+        rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
     const profile = candidates[0];
     if (!profile) return;
-    const lastRun = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'reviewer').at(-1);
-    if (lastRun?.profileName === profile.name) return;
     this.eventBus.emit('review.fallback', task.id, { from: 'reviewer', to: arbiter.engine, reason: 'arbiter', profile: profile.name });
     this.startReview(task, profile.name, engine, normalizeReviewerModel(arbiter.engine, arbiter.model), arbiter.engine === 'claude' ? 'claude-reviewer' : 'codex-reviewer');
   }
