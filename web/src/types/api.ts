@@ -654,6 +654,7 @@ export interface SystemConfig {
     claudeFallback?: boolean;
     claudeProfiles?: string[];
     claudeModel?: string;
+    claudeFallbackAfterMin?: number;
     order?: ReviewerOrderItem[];
     fallback?: Partial<ReviewerFallback>;
     arbiter?: { engine: 'codex' | 'claude'; model: string };

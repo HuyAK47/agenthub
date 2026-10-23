@@ -120,7 +120,11 @@ export const SettingsPage: React.FC = () => {
         { engine: 'codex', model: (config.reviewer?.model || 'codex:gpt-5.6-luna').replace(/^codex:/, ''), profiles: [] },
         ...(config.reviewer?.claudeFallback === false ? [] : [{ engine: 'claude' as const, model: config.reviewer?.claudeModel || 'sonnet', profiles: config.reviewer?.claudeProfiles || [] }]),
       ]);
-      setReviewFallback(config.reviewer?.fallback || { onUnavailable: true, onBusyAfterMin: config.reviewer?.claudeFallbackAfterMin ?? 10, onError: true });
+      setReviewFallback({
+        onUnavailable: config.reviewer?.fallback?.onUnavailable ?? true,
+        onBusyAfterMin: config.reviewer?.fallback?.onBusyAfterMin ?? config.reviewer?.claudeFallbackAfterMin ?? 10,
+        onError: config.reviewer?.fallback?.onError ?? true,
+      });
       setArbiter(config.reviewer?.arbiter || { engine: 'claude', model: 'opus' });
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
       setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);

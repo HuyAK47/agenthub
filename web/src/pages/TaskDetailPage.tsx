@@ -712,7 +712,7 @@ export const TaskDetailPage: React.FC = () => {
                   {review.actor || t('taskDetail.unknownReviewer')}
                   {review.model ? <span className="ml-2 text-xs font-mono text-[var(--t-text-3)]">({review.model})</span> : null}
                 </span>
-                <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${review.verdict === 'approved' ? 'text-[var(--t-ok)] bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)]' : 'text-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)]}`}>
+                <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${review.verdict === 'approved' ? 'text-[var(--t-ok)] bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)]' : 'text-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)]'}`}>
                   {review.verdict === 'approved' ? t('taskDetail.reviewApproved') : t('taskDetail.reviewChangesRequested')}
                 </span>
               </li>
