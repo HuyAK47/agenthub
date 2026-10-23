@@ -284,6 +284,7 @@ export class TelegramBotService {
   private lastNotificationTime = new Map<string, number>();
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
+  private reviewFallbackNotified = new Set<string>();
 
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
@@ -3079,6 +3080,7 @@ export class TelegramBotService {
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
+        type === 'review.fallback' ||
         allExhausted;
 
       if (!isAllowedInAuto) {
@@ -3256,6 +3258,31 @@ export class TelegramBotService {
 
         this.broadcastMessage(
           `${prefix}${header}\nID: <code>${taskId}</code>\nTiêu đề: <b>${this.escapeHtml(title)}</b>${checksText}`,
+          { inline_keyboard: keyboard },
+        );
+        break;
+      }
+
+      case 'review.fallback': {
+        if (!notify.fallback) return;
+        if (taskId && this.reviewFallbackNotified.has(taskId)) return;
+        if (taskId) this.reviewFallbackNotified.add(taskId);
+
+        const task = taskId ? this.taskRepo.get(taskId) : null;
+        const dashboardUrl = this.getDashboardUrl(taskId ? `#/tasks/${toRouteId(taskId)}` : '');
+        const keyboard: InlineKeyboardButton[][] = [
+          [{ text: '🌐 Xem dashboard', url: dashboardUrl }],
+        ];
+
+        if (minimal) {
+          this.broadcastMessage(`${prefix}Codex hết quota, Claude đang duyệt …`, { inline_keyboard: keyboard });
+          break;
+        }
+
+        const title = this.resolveTaskTitle(taskId, p, task);
+        const header = '🔀 <b>Codex hết quota, Claude đang duyệt …</b>';
+        this.broadcastMessage(
+          `${prefix}${header}\nID: <code>${taskId}</code>\nTiêu đề: <b>${this.escapeHtml(title)}</b>`,
           { inline_keyboard: keyboard },
         );
         break;
@@ -3726,6 +3753,8 @@ export class TelegramBotService {
         return minimal ? `${prefix}CI thất bại` : `${prefix}CI thất bại: ${p?.workflow || 'CI'}`;
       case 'ci.passed':
         return minimal ? `${prefix}CI đã xanh` : `${prefix}CI đã xanh: ${p?.workflow || 'CI'}`;
+      case 'review.fallback':
+        return `${prefix}Codex hết quota, Claude đang duyệt …`;
       case 'quota.exhausted':
         return `Hồ sơ ${p?.profile || p?.profileName || 'tài khoản'} hết quota ${p?.family || ''}`;
       default:
