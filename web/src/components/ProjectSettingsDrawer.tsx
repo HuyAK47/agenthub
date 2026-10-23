@@ -26,6 +26,7 @@ import {
   StatTile,
 } from './ui';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
 import { Project, ProjectSettings, UpdateProjectInput } from '../types/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -570,14 +571,16 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 overflow-hidden"
+      className="fixed inset-0 overflow-hidden"
+      style={{ zIndex: UI_Z_INDEX.modal }}
       data-testid="project-settings-drawer"
     >
       {/* Toast Notification */}
       {toastMessage && (
         <div
           role="status"
-          className="fixed top-5 right-5 z-60 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-white font-medium text-xs shadow-xl flex items-center gap-2"
+          className="fixed top-5 right-5 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-white font-medium text-xs shadow-xl flex items-center gap-2"
+          style={{ zIndex: UI_Z_INDEX.toast }}
         >
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{toastMessage}</span>
@@ -591,7 +594,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       />
 
       {/* Slide-over Drawer Panel */}
-      <div className="fixed inset-y-0 right-0 w-full md:max-w-3xl bg-[var(--t-surface)] border-l border-[var(--t-border)] shadow-2xl flex flex-col z-50">
+      <div className="fixed inset-y-0 right-0 w-full md:max-w-3xl bg-[var(--t-surface)] border-l border-[var(--t-border)] shadow-2xl flex flex-col">
         {/* Drawer Header */}
         <div
           className={

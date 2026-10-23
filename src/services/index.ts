@@ -1168,6 +1168,7 @@ export class AppService {
           limitedSessions: this.getClaudeProfileLimitedSessions(p),
         } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
+        duplicateEmailWith: (dupes.get(accountKey(p) || '') || []).filter((name) => name !== p.name),
       };
     });
 
@@ -1705,6 +1706,7 @@ export class AppService {
           limitedSessions: this.getClaudeProfileLimitedSessions(p),
         } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
+        duplicateEmailWith: (dupes.get(accountKey(p) || '') || []).filter((name) => name !== p.name),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
