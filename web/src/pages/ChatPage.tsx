@@ -26,6 +26,7 @@ import { Composer } from '../components/chat/Composer';
 import { ContextMeter } from '../components/chat/ContextMeter';
 import { NewSessionModal } from '../components/chat/NewSessionModal';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 import {
   Menu,
   X,
@@ -486,7 +487,8 @@ export const ChatPage: React.FC = () => {
       {toastMessage && (
         <div
           role="alert"
-          className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-[var(--t-warn)] text-[var(--t-on-accent)] font-medium text-xs shadow-xl flex items-center gap-2 animate-fade-in"
+          className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-xl bg-[var(--t-warn)] text-[var(--t-on-accent)] font-medium text-xs shadow-xl flex items-center gap-2 animate-fade-in"
+          style={{ zIndex: UI_Z_INDEX.toast }}
         >
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{toastMessage}</span>
@@ -510,7 +512,7 @@ export const ChatPage: React.FC = () => {
 
       {/* Mobile Drawer Backdrop & Drawer < 900px */}
       {mobileDrawerOpen && (
-        <div className="min-[900px]:hidden fixed inset-0 z-50 flex">
+        <div className="min-[900px]:hidden fixed inset-0 flex" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div
             className="fixed inset-0 bg-[var(--t-overlay)] backdrop-blur-xs"
             onClick={() => setMobileDrawerOpen(false)}

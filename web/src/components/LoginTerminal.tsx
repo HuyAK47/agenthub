@@ -7,6 +7,7 @@ import { getToken } from '../api/client';
 import { useOptionalTheme } from '../context/ThemeContext';
 import { AlertTriangle, Copy, ExternalLink, Send, Terminal, X } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from './ui/layers';
 import { useFocusTrap } from './ui/useFocusTrap';
 
 interface LoginTerminalProps {
@@ -240,7 +241,8 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
       role="dialog"
       aria-modal="true"
       aria-labelledby="login-terminal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--t-overlay)] p-3"
+      className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-3"
+      style={{ zIndex: UI_Z_INDEX.modal }}
       data-testid="login-terminal"
     >
       <div

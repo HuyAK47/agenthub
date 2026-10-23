@@ -15,6 +15,7 @@ interface HubHomeSnapshot {
 }
 
 interface WebSnapshot { path: string; checksum: string | null; }
+interface ServiceSnapshot { path: string; exists: boolean; mtime: number | null; checksum: string | null; }
 
 function resolveTargetHomes(): string[] {
   const homes = new Set<string>();
@@ -60,12 +61,27 @@ function getChecksum(filePath: string): string | null {
   try { return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex'); } catch { return null; }
 }
 
+function getServiceSnapshot(filePath: string): ServiceSnapshot {
+  if (!fs.existsSync(filePath)) return { path: filePath, exists: false, mtime: null, checksum: null };
+  try {
+    return { path: filePath, exists: true, mtime: fs.statSync(filePath).mtimeMs, checksum: getChecksum(filePath) };
+  } catch {
+    return { path: filePath, exists: false, mtime: null, checksum: null };
+  }
+}
+
 let initialAgyHomes: AgyHomesSnapshot[] = [];
 let initialHubHomes: HubHomeSnapshot[] = [];
 let initialWeb: WebSnapshot;
+let initialServices: ServiceSnapshot[] = [];
 
 export function setup() {
   const targetHomes = resolveTargetHomes();
+  const realHome = os.userInfo().homedir;
+  initialServices = [
+    path.join(realHome, '.config', 'systemd', 'user', 'agenthub.service'),
+    path.join(realHome, 'Library', 'LaunchAgents', 'dev.agenthub.plist'),
+  ].map(getServiceSnapshot);
 
   initialAgyHomes = targetHomes.map((home) => {
     const dir = path.join(home, '.agy-homes');
@@ -123,6 +139,17 @@ export function setup() {
     const currentChecksum = getChecksum(initialWeb.path);
     if (currentChecksum !== initialWeb.checksum) {
       throw new Error(`SAFETY NET VIOLATION: ${initialWeb.path} checksum changed during test execution!`);
+    }
+
+    for (const snap of initialServices) {
+      const current = getServiceSnapshot(snap.path);
+      if (snap.exists !== current.exists || snap.mtime !== current.mtime || snap.checksum !== current.checksum) {
+        throw new Error(
+          `SAFETY NET VIOLATION: service file changed during test execution: ${snap.path}\n` +
+          `Before: exists=${snap.exists}, mtime=${snap.mtime}, sha256=${snap.checksum}\n` +
+          `After:  exists=${current.exists}, mtime=${current.mtime}, sha256=${current.checksum}`,
+        );
+      }
     }
   };
 }

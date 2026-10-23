@@ -106,6 +106,8 @@ export interface Project {
   defaultBranch: string;
   envTemplate?: string | null;
   maxParallel: number;
+  priority?: number;
+  departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
@@ -116,6 +118,25 @@ export interface Project {
   ciStatus?: CiStatusSummary | null;
   createdAt?: string;
   afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
+}
+
+export interface DepartmentProfile {
+  departmentId: string;
+  profileName: string;
+  share: number | null;
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  priority: number;
+  maxParallel: number;
+  claudeDailyTokenBudget: number;
+  telegramTopicId: number | null;
+  createdAt: string;
+  projectCount?: number;
+  profiles: DepartmentProfile[];
+  projects: Array<{ id: string; name: string }>;
 }
 
 export interface CiJobAnnotation {
@@ -160,8 +181,8 @@ export interface DeployStatus {
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
   brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
-  worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
-  integration: { enabled: boolean; branch?: string; baseRef?: string };
+  worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
+  integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
   reviewChecklist?: string[];
@@ -184,6 +205,7 @@ export interface Run {
   model: string;
   profileName: string;
   pid?: number | null;
+  kind?: string | null;
   startedAt: string;
   endedAt?: string | null;
   outcome?: 'done' | 'blocked' | 'quota' | 'crashed' | 'cancelled' | 'timeout' | 'stalled' | null;
@@ -198,6 +220,7 @@ export interface Review {
   verdict: 'approved' | 'changes_requested';
   feedback?: string | null;
   createdAt: string;
+  actor?: string;
 }
 
 export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
@@ -230,6 +253,7 @@ export interface Task {
   reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
+  reviewer?: 'codex' | 'claude';
   currentRun?: {
     startedAt: string;
     lastOutputAt: string;
@@ -303,10 +327,13 @@ export interface CheckResult {
 }
 
 export interface TaskDetail extends Task {
+  mergeAvailable?: boolean;
+  mergeUnavailableReason?: string | null;
   reviewChain?: ReviewChainStep[];
   reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
+  events?: EventItem[];
   doneContent?: string | null;
   blockedContent?: string | null;
   commits?: string[] | null;
@@ -449,6 +476,11 @@ export interface HubStatus {
     low: boolean;
     source: 'worktrees' | 'extra';
   }>;
+  worktrees?: {
+    count: number;
+    bytes: number;
+    byStatus: Record<string, { count: number; bytes: number }>;
+  };
   load?: {
     load1: number;
     freeMemGB: number;
@@ -610,7 +642,16 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
-  reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
+  reviewer?: {
+    model: string;
+    enabled?: boolean;
+    timeoutSec?: number;
+    failoverSec?: number;
+    maxChangesRequested?: number;
+    claudeFallback?: boolean;
+    claudeProfiles?: string[];
+    claudeModel?: string;
+  };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
@@ -631,6 +672,7 @@ export interface SystemConfig {
   };
   notifications?: {
     desktop: boolean;
+    desktopLevel?: 'all' | 'important' | 'critical' | 'off';
     quietHours?: {
       enabled: boolean;
       start: string;

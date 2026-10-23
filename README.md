@@ -1,5 +1,7 @@
 # AgentHub
 
+**Public landing page:** [agenthub landing page](https://ducanh19020217.github.io/agenthub/)
+
 **English** | [Tiếng Việt](README.vi.md)
 
 > A local operating system for AI coding workers that coordinates Antigravity (Gemini) and OpenAI Codex CLI across isolated git worktrees, orchestrated by Claude Code via MCP, Web Chat, and Telegram.
@@ -10,10 +12,12 @@ AgentHub transforms standalone AI coding assistants into an autonomous, quota-aw
 
 **New to AgentHub?** Start with the [Getting Started Guide (docs/en/GETTING-STARTED.md)](docs/en/GETTING-STARTED.md) ([Bản tiếng Việt](docs/GETTING-STARTED.md)).
 
+Choose a workflow with the [Usage Modes guide](docs/en/USAGE-MODES.md) ([Tiếng Việt](docs/USAGE-MODES.md)): standalone hub control from Web/Telegram, or Claude Code through MCP.
+
 > **Multi-Channel Control:** Direct your local AI team through your preferred interface: **Interactive Web Dashboard Chat**, **Telegram Remote Control** on your phone, or **Claude Code in VS Code** via Model Context Protocol (MCP).
 
 - Deep dive into features: [Feature Catalog (docs/FEATURES.md)](docs/FEATURES.md)
-- Operational guides & workflows: [Usage Guide (docs/USAGE.md)](docs/USAGE.md)
+- Operational guides & workflows: [Usage Guide (docs/USAGE.md)](docs/USAGE.md) · [Usage Modes](docs/en/USAGE-MODES.md)
 - Architecture decisions & internals: [System Plan (docs/PLAN.md)](docs/PLAN.md)
 - Contributing guidelines & CLA: [Contributing Guide (CONTRIBUTING.md)](CONTRIBUTING.md)
 
@@ -149,6 +153,12 @@ node dist/cli.js link && agenthub doctor
 # 4. Install background daemon service
 agenthub install-service
 
+# Tắt / bật AgentHub: đóng tab web không tắt daemon
+agenthub stop
+agenthub stop --disable
+agenthub start
+# uninstall-service là gỡ service, không phải tắt tạm.
+
 # 5. Open Web Dashboard and connect worker profiles
 agenthub open
 ```
@@ -168,7 +178,7 @@ agenthub open
 
 ### Cài trên máy khác từ GitHub Release
 
-Máy mới chỉ cần Node.js 22, npm, `curl` và `tar`; archive release đã kèm `node_modules` production đã build theo OS/arch. Nếu archive thiếu dependencies, installer sẽ hướng dẫn cài compiler native.
+Trên macOS, máy mới chỉ cần `curl` và `tar`: installer tự tải Node.js 22 chính thức đúng kiến trúc, kiểm tra `SHASUMS256.txt`, rồi lưu runtime riêng trong `~/.agenthub/runtime/node-v22.x`. Không cần cài Node, nvm hay Xcode Command Line Tools khi archive đã kèm `node_modules` production. Linux cũng dùng runtime này nếu PATH không có Node 22. Nếu archive thiếu dependencies, installer sẽ hướng dẫn cài compiler native.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
@@ -177,6 +187,8 @@ agenthub setup
 ```
 
 Dùng `--from-release 0.1.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, bỏ qua `npm ci` khi archive đã có dependencies production, rồi chỉ cập nhật symlink sau khi cài thành công. Hai bản cũ được giữ lại để rollback thủ công.
+
+Nếu muốn tự quản lý Node qua nvm, truyền rõ `--use-nvm`. Các lỗi thường gặp: checksum sai (tải lại release), thiếu `curl`/`tar`, hoặc archive không đúng OS/kiến trúc. Nếu cài từ source và macOS báo thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại lệnh cài; release installer không cần git để tải Node.
 
 ```bash
 agenthub rollback          # chọn bản cũ gần nhất

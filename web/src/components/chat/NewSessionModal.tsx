@@ -4,6 +4,7 @@ import { getProjects, getConfig, getProfiles } from '../../api/client';
 import { ChatMode, Profile } from '../../types/api';
 import { X, ShieldCheck, AlertTriangle, Sparkles } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
+import { UI_Z_INDEX } from '../ui/layers';
 import { useFocusTrap } from '../ui/useFocusTrap';
 import { useTour } from '../tour/TourContext';
 
@@ -68,7 +69,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       aria-modal="true"
       aria-labelledby="new-session-modal-title"
       data-tour="modal-new-session"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--t-overlay)] backdrop-blur-xs"
+      className="fixed inset-0 flex items-center justify-center p-4 bg-[var(--t-overlay)] backdrop-blur-xs"
+      style={{ zIndex: UI_Z_INDEX.modal }}
     >
       <div
         ref={containerRef}
@@ -147,7 +149,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           </div>
 
           {/* Mode Selector */}
-          <div>
+          <div data-tour="session-mode">
             <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-2">
               {t('extra.operationMode')}
             </label>

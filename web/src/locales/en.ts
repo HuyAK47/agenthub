@@ -8,6 +8,7 @@ export const en: typeof vi = {
     projects: 'Projects',
     plans: 'Plans',
     settings: 'Settings',
+    departments: 'Departments',
     toggleTheme: 'Toggle theme',
     language: 'Language',
     switchLanguage: 'Chuyển sang Tiếng Việt',
@@ -96,7 +97,7 @@ export const en: typeof vi = {
     overlapWarningTitle: 'File Overlap Warnings',
     overlapWarningDesc: 'There are {count} file overlap warnings among running tasks:',
     brains: 'Brains', assistant: 'Assistant', assistantWorking: 'answering', assistantReady: 'ready', openAssistantChat: 'Open assistant', brainMode: 'Mode', brainStatewaiting_limit: 'waiting for quota reset', brainStatewaiting_permission: 'waiting for your permission', brainMode_off: 'off', brainMode_suggest: 'suggest', brainMode_auto: 'auto', brainMode_external: 'external Claude', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
-    ciCardTitle: 'CI', ciCardSubtitle: 'Latest GitHub Actions CI status', ciCardNoData: 'No CI data recorded', ciPassed: 'Passed', ciFailed: 'Failed', ciRunning: 'Running',
+    ciCardTitle: 'CI', ciCardSubtitle: 'Latest GitHub Actions CI status', ciCardNoData: 'No CI data recorded', ciPassed: 'Passed', ciFailed: 'Failed', ciRunning: 'Running', projectTaskSummary: 'Tasks by project', projectRunning: 'Running', projectWaiting: 'Waiting',
   },
   tasks: {
     title: 'Task Management',
@@ -105,6 +106,15 @@ export const en: typeof vi = {
     allProjects: 'All projects',
     createTask: 'New Task',
     filterQuick: 'Filter slug / title',
+    projectView: 'By project',
+    attention: 'Needs attention',
+    projectCounts: 'Project task counts',
+    waitingShort: 'Waiting',
+    showOldDone: 'Show {count} older completed',
+    hideOldDone: 'Hide older completed',
+    showMore: 'Show {count} more ({remaining} left)',
+    collapse: 'Collapse',
+    priority: 'Priority {value}',
   },
   dag: {
     title: 'Dependency Diagram',
@@ -257,6 +267,7 @@ export const en: typeof vi = {
     btnRetry: 'Retry',
     btnReview: 'Approve',
     btnMerge: 'Approve & merge',
+    mergeSettingsLink: 'Open Integration settings',
     btnRequestChanges: 'Request Changes',
     btnDeleteWorktree: 'Delete worktree',
     noLog: 'No log output from worker yet...',
@@ -311,6 +322,9 @@ export const en: typeof vi = {
     retryWithModel: 'Retry with another model',
     modelWarningTitle: 'Model chain warning',
     modelWarningItem: 'Model "{model}" is not available in a configured engine and will be skipped.',
+    timeline: 'Timeline',
+    noEvents: 'No events recorded yet.',
+    reviewFallbackLine: 'Codex out of quota, Claude is reviewing ({profile})',
   },
   profiles: {
     antigravitySubtitle: 'Google account and Gemini quota', codexSubtitle: 'ChatGPT account and device auth', claudeSubtitle: 'Claude Code account',
@@ -360,6 +374,7 @@ export const en: typeof vi = {
     notLoggedIn: 'Not logged in', needsLogin: 'Sign in again',
     loginNow: 'Log in now',
     duplicateEmail: 'Duplicate email with: {emails}',
+    duplicateEmailNoProfiles: 'Duplicate email with another profile',
     duplicateTip: 'Tip: Log in again using a different Google account!',
     ready: 'Ready',
     clearQuota: 'Clear',
@@ -430,35 +445,35 @@ export const en: typeof vi = {
   "intro": {
     "overview": {
       "title": "Overview",
-      "content": "This is overview. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use the overview before assigning work to check hub health, capacity, and current activity. Open its cards for live details; the values are indicators, not configuration changes."
     },
     "connection": {
       "title": "Connection",
-      "content": "This is connection. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use connection status to confirm live updates are reaching the dashboard. If it is offline, check the hub before retrying because a request may still be pending."
     },
     "resources": {
       "title": "Machine load and disk",
-      "content": "This is machine load and disk. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use machine load and disk status before increasing concurrency. High CPU, memory, or low free space can slow or block workers; free space before retrying."
     },
     "brain": {
       "title": "Brain",
-      "content": "This is brain. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use the brain to plan and dispatch task work across workers. Unlike the Assistant, it follows task lifecycle and consumes configured task quota."
     },
     "assistant": {
       "title": "Assistant",
-      "content": "This is assistant. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use the Assistant for questions and exploration before creating a task. Send a message to get a reply; it does not modify a repository unless you request an action."
     },
     "projects": {
       "title": "Project",
-      "content": "This is project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use a project to bind tasks to the correct repository, branch, and policy. Review its path before creating work because a wrong path affects the wrong code."
     },
     "tasks": {
       "title": "Task",
-      "content": "This is task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use a task to track one unit of work, its worker, checks, and review. Open it for evidence; retry is for transient failures and cancel may stop the run."
     },
     "queue": {
       "title": "Queue",
-      "content": "This is queue. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use the queue to find tasks by status or project without changing them. Select a filter to narrow the list; queued work may wait for a worker or dependency."
     },
     "plans": {
       "title": "Plans",
@@ -466,23 +481,23 @@ export const en: typeof vi = {
     },
     "lifecycle": {
       "title": "Task lifecycle",
-      "content": "This is task lifecycle. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Follow queued → running → checks → waiting for review → merge → deploy to understand where work stopped. Open the task for the blocking reason."
     },
     "profiles": {
       "title": "Accounts",
-      "content": "This is accounts. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use accounts to connect model providers and distribute quota or provide fallback. Re-authenticate expired sessions; never paste refresh tokens into chat or logs."
     },
     "settings": {
       "title": "System settings",
-      "content": "This is system settings. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use system settings to change model, permission, notification, and run-limit defaults. Save deliberately because new tasks inherit these values."
     },
     "setup": {
       "title": "Setup",
-      "content": "This is setup. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use setup to check CLI, MCP, and account readiness after installation or a machine change. Run only missing checks; green items need no action."
     },
     "help": {
       "title": "Help",
-      "content": "This is help. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+      "content": "Use Help to search translated page guides and restart a tour. Open the ? panel when a control is unclear; it does not change settings."
     }
   },
   "page-dashboard": {
@@ -744,50 +759,83 @@ export const en: typeof vi = {
     }
   },
   "modal-add-account": {
-    "modal": {
-      "title": "Add account",
-      "content": "This is add account. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    "provider": {
+      "title": "Provider and account type",
+      "content": "Choose Antigravity, Codex, or Claude and whether this is a personal, Team, or API account. Use the matching provider so quota and permissions are tracked correctly; changing it changes the login flow."
+    },
+    "login-method": {
+      "title": "Login method",
+      "content": "Terminal starts an interactive login and is best when a browser is available; Refresh Token uses a token from the provider session. Select a method to change authentication, and never share the token."
+    },
+    "account-name": {
+      "title": "Account name",
+      "content": "This is the local name for the profile, not a secret token. Use a clear name such as work-gemini or team-codex; creating it prepares the profile for login and quota tracking."
+    },
+    "token": {
+      "title": "Refresh Token",
+      "content": "Use this field when you are not signing in through Terminal. Get the token from the provider's official authentication flow, then create the profile. It is secret, and profiles for one email still share quota."
     }
   },
   "modal-register-project": {
-    "modal": {
-      "title": "Register project",
-      "content": "This is register project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    "path": {
+      "title": "Project path",
+      "content": "This is the repository directory where workers operate. Use an absolute path to the intended repo, then register it. A wrong path can make a worker edit the wrong source tree."
+    },
+    "branch": {
+      "title": "Default branch",
+      "content": "This is the base branch for worktrees and comparisons. Use the repository's real main or integration branch; changing it affects tasks created afterward."
+    },
+    "advanced": {
+      "title": "Advanced and parallelism",
+      "content": "Advanced settings contain concurrency, worktrees, checks, and environment variables. Open them for project-specific policy; increasing concurrency can overload the machine."
     }
   },
   "modal-create-task": {
-    "modal": {
-      "title": "Tạo task",
-      "content": "This is tạo task. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    "task": {
+      "title": "Task goal",
+      "content": "Describe the work the worker must do in the selected project. State the goal and acceptance criteria clearly so the diff can be checked; Create queues the task for execution."
+    },
+    "difficulty": {
+      "title": "Difficulty and model chain",
+      "content": "Difficulty selects the hard or easy model chain, tried in order. Use hard for complex changes and easy for small ones; the first model consumes quota first."
+    },
+    "dependencies": {
+      "title": "Dependencies",
+      "content": "Dependencies make this task wait for selected tasks to finish. Use them when a later task needs an earlier output; selecting a cycle will prevent the task from running."
     }
   },
   "modal-new-session": {
-    "modal": {
-      "title": "New chat session",
-      "content": "This is new chat session. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    "project": {
+      "title": "Session project",
+      "content": "This project supplies the repository context and policy for the chat. Select it when the Assistant should understand a specific repo, then create the new context."
+    },
+    "mode": {
+      "title": "Safe or full mode",
+      "content": "Safe keeps sensitive actions controlled; Full permits broader changes. Use Safe by default and choose Full only for a trusted repo because commands or files may be changed directly."
     }
   },
   "modal-full-permission": {
-    "modal": {
-      "title": "Full access confirmation",
-      "content": "This is full access confirmation. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
-    }
-  },
-  "modal-delete-project": {
-    "modal": {
-      "title": "Delete project",
-      "content": "This is delete project. Use it when you need to understand or manage this part of AgentHub. Select it to see the related details; check the impact before confirming changes."
+    "confirm": {
+      "title": "Confirm full access",
+      "content": "This warning appears before allowing actions without another prompt. Confirm only when you understand the command, directory, and risk; full access can edit files or run dangerous commands.",
+      "note": "The browser's native confirmation has no stable DOM element; the tour skips this step when it cannot be marked."
     }
   }
 } },
   checklist: { title: 'Get started with AgentHub', subtitle: 'Complete a few steps to get to work.', hide: 'Hide checklist', cli: 'Install CLI', account: 'Sign in to a worker account', project: 'Add a project', telegram: 'Connect Telegram', task: 'Create your first task' },
+    usageModes: { title: 'Choose how to use AgentHub', subtitle: 'Choose the coordination style that fits your workflow.', copy: 'Copy', copied: 'Copied', copyCommand: 'Copy mcp-install command', docs: 'Read the full guide', hub: { title: 'A — Standalone hub', summary: 'Assign and monitor work on the Web or Telegram.', when: 'Choose this when AgentHub should plan and coordinate workers without opening an IDE.', step1: 'Install the claude CLI, sign in to a profile/account with available quota, sign in to at least one worker account, and register a project.', step2: 'Leave brain.mode at auto or suggest, then assign tasks from Web Chat or Telegram.', step3: 'Track tasks, review, and merge/deploy from the Dashboard or Telegram.', brainLink: 'Configure the brain', telegramLink: 'Configure Telegram' }, mcp: { title: 'B — Use through MCP', summary: 'Claude Code plans and reviews through hub_* tools.', when: 'Choose this when Claude Code in VS Code or a terminal should own planning and review.', step1: 'Install the claude CLI, sign in, and ensure you have quota; the AgentHub daemon must also be running.', step2: 'Run agenthub mcp-install, then select a project and set brain.mode = external.', step3: 'Use Claude Code to call hub_* tools for dispatch, tracking, review, and merge/deploy.' } },
   setup: {
     navLabel: 'Setup', loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
     progress: 'Readiness progress', progressSummary: '{ready}/{total} items ready',
     node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Background service', mcp: 'Claude Code MCP registration', accounts: 'Sign in to accounts', account: 'Account {name}', login: 'Sign in in Profiles', needsCheck: 'Needs checking', manualGuide: 'Guide', install: 'Install', installAll: 'Install all missing tools', installing: 'Installing…', log: 'View log', complete: 'Complete', skip: 'Skip for now', done: 'Complete', notDone: 'Needs action', running: 'Running', installFailed: 'Installation failed',
     firstProject: 'Add first project', addProject: 'Add project',
   },
+  departments: {
+    title: 'Departments', subtitle: 'Group projects, accounts, and execution limits by department.',
+    create: 'Create department', name: 'Department name', priority: 'Priority', maxParallel: 'Max parallel', budget: 'Claude tokens/day budget', topic: 'Telegram topic ID', projects: 'Projects', profiles: 'Accounts', save: 'Save', delete: 'Delete', chung: 'General', empty: 'No departments yet.', confirmDelete: 'Delete this department? Projects will move to General.',
+  },
   projects: {
+    activeTasks: 'Active or waiting tasks', viewTasks: 'View tasks',
     title: 'Project Management',
     subtitle: 'Register and configure software projects for AI workers to create worktrees and run tasks.',
     registerBtn: 'Register Project',
@@ -834,12 +882,13 @@ export const en: typeof vi = {
     maxParallelHint: 'Maximum concurrent tasks on this project',
     advanced: 'Advanced',
     envHint: 'Optional, e.g. dedicated port/DB for each worktree with {slot}',
-    checksHint: 'Automated checks before review (JSON array)',
+    checksHint: 'Automated checks before review (JSON array)', checksInfo: 'Use an array such as [{"name":"test","cmd":["npm","test"],"timeoutSec":600}]. Leave it empty for package.json auto-detection.', envInfo: 'These JSON variables are supplied to the worktree, such as PORT or DATABASE_URL; inject secrets only when necessary.', integrationInfo: 'The integration branch receives merged changes so end-to-end checks can run.', referencesInfo: 'Inject adds reference documents to the worker context; do not use files containing secrets.', permissionsInfo: 'Permissions control whether the worker may read, edit, and run commands; use full only for trusted repositories.',
     hooksHint: 'Commands executed after worktree removal (optional)',
     brainPermissions: 'Brain permissions', brainPermissionInherit: 'Inherit global', brainPermissionStandard: 'Standard', brainPermissionTrusted: 'Trusted', brainPermissionFull: 'Full access', brainPermissionDescinherit: 'Use the global default.', brainPermissionDescstandard: 'Safe reads and approved commands.', brainPermissionDesctrusted: 'May edit and run project commands.', brainPermissionDescfull: 'No permission prompts; use with care.',
-    settings: 'Settings', saveSettings: 'Save settings', saveSettingsError: 'Failed to save project settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
+    settings: 'Settings', saveSettings: 'Save settings', saveSettingsError: 'Failed to save project settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationAutoMerge: 'Auto-merge and deploy once Codex approves', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
     ciLabel: 'GitHub Actions CI Watch', ciEnabled: 'Enable CI Watch', ciBranch: 'CI Branch', ciStatusPassed: 'CI: Passed', ciStatusFailed: 'CI: Failed', ciStatusRunning: 'CI: Running', ciViewRun: 'View run on GitHub', ciNoRun: 'No runs recorded',
     knowledgeChecklistTitle: 'Knowledge & checklist', knowledgeChecklistHint: 'Choose up to 5 paths; each file is limited to 64KB. The brain must check them during review.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Review checklist', checklistUnreadable: 'unreadable', checklistTooLarge: 'Warning: file exceeds 64KB; content was not injected.', suggestAutomaticChecks: 'Suggest automatic checks', draftChecksCreated: 'Draft task created to suggest automatic checks.',
+    worktreeRoot: 'Worktree directory', worktreeRootPlaceholder: '/absolute/path', worktreeRootDesc: 'The configured root must be dedicated to this project and not shared with another project. Each task is created at <root>/<slug>, with the integration worktree at <root>/.integration. The directory must exist and be writable.', worktreeLogsInRoot: 'Store task logs in this directory/.logs',
     sectionBrainTitle: 'Brain',
     sectionBrainDesc: 'Configure automated agent permissions and token quota limits for this project.',
     sectionWorktreeTitle: 'Worktree',
@@ -922,6 +971,7 @@ export const en: typeof vi = {
   },
   settings: {
     title: 'System Settings',
+    shutdownTitle: 'Stop AgentHub', shutdownDescription: '{count} running task(s) will return to the queue.', shutdownButton: 'Stop AgentHub', shutdownConfirmTitle: 'Confirm stopping AgentHub', shutdownConfirm: '{count} running task(s) will return to the queue to resume later. AgentHub will stop daemon, workers, reviewers, and background chats.', shutdownDisable: 'Do not start automatically at login', shutdownDone: 'AgentHub is stopped. Start it from this machine with',
     brandingTitle: 'Application name', brandingDescription: 'Only the display name changes; technical CLI commands, services, directories, and environment variables stay the same.', brandingName: 'Display name', brandingShortName: 'Short name', brandingTagline: 'Tagline (optional)', brandingAccent: 'Accent color (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, up to 256KB', brandingLogoError: 'Could not upload logo',
     subtitle: 'Configure preferred model chains and maximum run timeout (DEC-001).',
     saveSuccess: 'System settings updated successfully!',
@@ -930,7 +980,7 @@ export const en: typeof vi = {
     languageSectionTitle: 'Display Language',
     languageSectionDesc: 'Select the interface language for the dashboard.',
     infoChain: 'The system will try models sequentially from top to bottom. Upon Quota error (429/RESOURCE_EXHAUSTED), Scheduler will automatically switch to the next model in the chain.',
-    hardChainLabel: 'Default model chain for "Hard" tasks (one per line) *',
+    hardChainLabel: 'Default model chain for "Hard" tasks (one per line) *', hardChainInfo: 'Try the hard model first, then fall back to easier models; for example opus → sonnet → haiku. The first model consumes quota first.',
     hardChainHint: 'Default: codex:gpt-5.6-luna, gemini-3.8-flash-high',
     hardChainRequired: 'Hard model chain must have at least 1 model',
     easyChainLabel: 'Default model chain for "Easy" tasks (one per line) *',
@@ -948,6 +998,8 @@ export const en: typeof vi = {
     notificationsTitle: 'Notifications & Digest',
     notificationsDescription: 'Configure desktop notifications, brain mode, quiet hours, and periodic digest.',
     desktopNotifyLabel: 'Desktop Notifications',
+    desktopNotifyLevelLabel: 'Desktop notification level',
+    desktopNotifyLevelAll: 'All', desktopNotifyLevelImportant: 'Important', desktopNotifyLevelCritical: 'Critical only', desktopNotifyLevelOff: 'Off',
     desktopNotifyHint: 'Send desktop notifications via notify-send / osascript on critical events.',
     brainModeLabel: 'Brain Operating Mode',
     brainModeHint: 'In Auto mode, raw task notifications are suppressed, sending only key events and incidents.', brainMaxConcurrent: 'Maximum concurrent brain turns',
@@ -963,6 +1015,12 @@ export const en: typeof vi = {
     digestTitle: 'Daily Digest',
     digestHint: 'Automatically summarize task counts, merged changes, and quota status every day.',
     digestTime: 'Digest delivery time',
+    claudeFallback: 'Fall back to Claude when Codex is out of quota',
+    claudeFallbackHint: 'When every Codex account is out of quota or logged out, automatically use Claude reviewer to continue reviewing.',
+    claudeModel: 'Claude review model',
+    claudeProfiles: 'Claude review profiles (in priority order)',
+    claudeProfilesHint: 'Select Claude profiles for review fallback (leave empty to use any profile).',
+    claudeProfilesOrder: 'Priority order',
   },
   savings: { title: 'Delegation Savings', subtitle: 'Measure the work Claude (the brain) avoids by delegating to workers (Gemini, Codex).', clearFilters: 'Clear filters', loadError: 'Failed to load delegation savings.', claudeSaved: 'Claude work avoided', savingRate: 'saving rate', codeWritten: 'Code written by workers', lines: 'lines', linesDeleted: 'lines deleted', approvedTasks: 'Approved tasks', totalTasks: '{count} tasks in the system', avgReviewRounds: 'Average review rounds', rounds: 'rounds', changesRound: 'Each changes_requested counts as one round', tokensByDay: 'Worker tokens by day', tokensByDayDesc: 'Daily token consumption split between Gemini (agy) and Codex.', noDailyData: 'No daily run data.', byTask: 'By-task table', byTaskDesc: 'Code lines, worker tokens, and review rounds for each task.', linesChange: 'Lines (+/-)', reviewRounds: 'Review rounds', noMatchingTasks: 'No matching tasks.', estimatedTitle: 'Estimated from 5-hour quota reduction', methodTitle: 'Measurement method and conversion factors', methodDesc: 'agy values are estimated from 5-hour quota reduction and bucketTokens capacity. Codex values are analyzed precisely from run logs.', },
   dailyUsage: {

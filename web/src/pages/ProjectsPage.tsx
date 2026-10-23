@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
+import { Link, useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addProjectKnowledge,
@@ -10,6 +10,7 @@ import {
   getProjectKnowledge,
   getArchivedProjects,
   getProjects,
+  getTasks,
   updateProjectKnowledge,
 } from '../api/client';
 import {
@@ -28,6 +29,7 @@ import {
 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
 import { Project } from '../types/api';
 import {
@@ -54,6 +56,7 @@ function ProjectSettingsForm({
 }) {
   const { t } = useLocale();
   const { suggestModalTour } = useTour();
+  const [confirmFullPermission, setConfirmFullPermission] = useState(false);
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) =>
     onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () =>
@@ -89,10 +92,9 @@ function ProjectSettingsForm({
             value={value.brain.permissions ?? 'inherit'}
             onChange={(e) => {
               const permissions = e.target.value;
-              if (
-                permissions === 'full' &&
-                (suggestModalTour('modal-full-permission'), !window.confirm(t('extra.fullModeConfirm')))
-              ) {
+              if (permissions === 'full') {
+                setConfirmFullPermission(true);
+                suggestModalTour('modal-full-permission');
                 return;
               }
               update('brain', { permissions });
@@ -316,6 +318,18 @@ function ProjectSettingsForm({
           {t('projects.settingsPartialHint')}
         </p>
       )}
+      {confirmFullPermission && (
+        <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-4" style={{ zIndex: UI_Z_INDEX.modal }} role="dialog" aria-modal="true" data-tour="modal-full-permission">
+          <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-2xl">
+            <h2 className="text-base font-semibold">{t('common.confirm')}</h2>
+            <p className="mt-2 text-sm text-[var(--t-text-2)]">{t('extra.fullModeConfirm')}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="button-secondary" onClick={() => setConfirmFullPermission(false)}>{t('common.cancel')}</button>
+              <button type="button" className="button-primary" onClick={() => { update('brain', { permissions: 'full' }); setConfirmFullPermission(false); }}>{t('common.confirm')}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -357,6 +371,11 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: projectTasks = [] } = useQuery({
+    queryKey: ['tasks'],
+    queryFn: () => getTasks(),
+    refetchInterval: 10_000,
   });
   const { data: archivedProjects = [] } = useQuery({
     queryKey: ['projects', 'archived'],
@@ -635,6 +654,7 @@ export const ProjectsPage: React.FC = () => {
                   {t('projects.branchHint')}
                 </p>
                 <Input
+                  data-tour="project-default-branch"
                   type="text"
                   placeholder="main"
                   value={defaultBranch}
@@ -663,6 +683,7 @@ export const ProjectsPage: React.FC = () => {
 
             {/* Advanced Section (collapsible, collapsed by default) */}
             <details
+              data-tour="project-register-advanced"
               data-testid="advanced-section"
               className="border border-[var(--t-border)] rounded-lg p-3 group"
             >
@@ -1028,6 +1049,10 @@ export const ProjectsPage: React.FC = () => {
 
               {/* Card Footer: Knowledge button */}
               <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
+                {(() => {
+                  const activeCount = projectTasks.filter((task) => task.projectId === proj.id && ['running', 'queued', 'waiting_quota'].includes(task.status)).length;
+                  return <Link to={`/tasks?project=${encodeURIComponent(proj.id)}`} className="flex items-center justify-between rounded-lg border border-[var(--t-border)] px-2.5 py-2 text-xs hover:border-[var(--t-accent)] transition-colors" data-testid={`project-task-summary-${proj.id}`}><span className="text-[var(--t-text-2)]">{t('projects.activeTasks')}</span><span className="font-semibold text-[var(--t-accent)]">{activeCount} · {t('projects.viewTasks')}</span></Link>;
+                })()}
                 <Button
                   type="button"
                   variant="ghost"

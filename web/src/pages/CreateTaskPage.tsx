@@ -174,7 +174,7 @@ export const CreateTaskPage: React.FC = () => {
           </div>
 
           {/* Level */}
-          <div>
+          <div data-tour="task-difficulty">
             <label className="block text-xs font-semibold text-[var(--t-text)] uppercase tracking-wider mb-2">
                 {t('createTask.complexityLabel')}
             </label>

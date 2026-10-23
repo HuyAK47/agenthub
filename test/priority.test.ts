@@ -22,6 +22,7 @@ describe('priority helpers', () => {
   it('keeps test runners at most two threads even when worker count is absent', () => {
     expect(testThreadLimit(1, 12)).toBe(2);
     expect(testThreadLimit(6, 12)).toBe(2);
+    expect(testThreadLimit(8, 12)).toBe(2);
     expect(testThreadLimit(20, 12)).toBe(1);
   });
   it('wraps commands with nice on linux and macos', () => {

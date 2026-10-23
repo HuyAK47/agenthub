@@ -26,6 +26,7 @@ import {
   StatTile,
 } from './ui';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
 import { Project, ProjectSettings, UpdateProjectInput } from '../types/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -570,14 +571,16 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 overflow-hidden"
+      className="fixed inset-0 overflow-hidden"
+      style={{ zIndex: UI_Z_INDEX.modal }}
       data-testid="project-settings-drawer"
     >
       {/* Toast Notification */}
       {toastMessage && (
         <div
           role="status"
-          className="fixed top-5 right-5 z-60 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-[var(--t-on-accent)] font-medium text-xs shadow-xl flex items-center gap-2"
+          className="fixed top-5 right-5 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-[var(--t-on-accent)] font-medium text-xs shadow-xl flex items-center gap-2"
+          style={{ zIndex: UI_Z_INDEX.toast }}
         >
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{toastMessage}</span>
@@ -591,7 +594,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       />
 
       {/* Slide-over Drawer Panel */}
-      <div className="fixed inset-y-0 right-0 w-full md:max-w-3xl bg-[var(--t-surface)] border-l border-[var(--t-border)] shadow-2xl flex flex-col z-50">
+      <div className="fixed inset-y-0 right-0 w-full md:max-w-3xl bg-[var(--t-surface)] border-l border-[var(--t-border)] shadow-2xl flex flex-col">
         {/* Drawer Header */}
         <div
           className={
@@ -645,7 +648,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-[var(--t-accent)]" />
                 <span>{t('projects.sectionBrainTitle')}</span>
-                <InfoTooltip text="Chọn chế độ và quyền theo mức tin cậy của repository; full có thể chạy lệnh và sửa file rộng hơn." label="Giải thích bộ não" />
+                <InfoTooltip text={t('projects.permissionsInfo')} label={t('projects.brainPermissions')} />
               </h3>
               <p className="text-xs text-[var(--t-text-3)]">
                 {t('projects.sectionBrainDesc')}
@@ -873,6 +876,30 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] md:col-span-2">
+                <label className="text-xs font-semibold text-[var(--t-text)] block">{t('projects.worktreeRoot')}</label>
+                <Input
+                  aria-label={t('projects.worktreeRoot')}
+                  placeholder={t('projects.worktreeRootPlaceholder')}
+                  value={draftSettings.worktree.root ?? ''}
+                  onChange={(e) => setDraftSettings((prev) => ({
+                    ...prev,
+                    worktree: { ...prev.worktree, root: e.target.value || undefined },
+                  }))}
+                />
+                <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.worktreeRootDesc')}</p>
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={draftSettings.worktree.logsInRoot === true}
+                    onChange={(e) => setDraftSettings((prev) => ({
+                      ...prev,
+                      worktree: { ...prev.worktree, logsInRoot: e.target.checked },
+                    }))}
+                  />
+                  {t('projects.worktreeLogsInRoot')}
+                </label>
+              </div>
               {/* Dependency install */}
               <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]">
                 <div className="flex items-center justify-between">
@@ -1016,10 +1043,31 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
             </div>
 
             {draftSettings.integration.enabled && (
+              <div className="flex items-center gap-2">
+                <input
+                  id="integration-automerge"
+                  type="checkbox"
+                  checked={draftSettings.integration.autoMerge === true}
+                  onChange={(e) => {
+                    setApiError(null);
+                    setDraftSettings((prev) => ({
+                      ...prev,
+                      integration: { ...prev.integration, autoMerge: e.target.checked },
+                    }));
+                  }}
+                  className="w-4 h-4 text-[var(--t-accent)] rounded border-[var(--t-border)]"
+                />
+                <label htmlFor="integration-automerge" className="text-xs text-[var(--t-text)] cursor-pointer">
+                  {t('projects.integrationAutoMerge')}
+                </label>
+              </div>
+            )}
+
+            {draftSettings.integration.enabled && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
-                    {t('projects.integrationBranch')}
+                    {t('projects.integrationBranch')} <InfoTooltip text={t('projects.integrationInfo')} label={t('projects.integrationBranch')} />
                   </label>
                   <Input
                     placeholder="integration"
@@ -1174,7 +1222,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       {t('projects.refPathHeader')}
                     </TableHead>
                     <TableHead className="w-24 text-center">
-                      {t('projects.refInjectHeader')}
+                      {t('projects.refInjectHeader')} <InfoTooltip text={t('projects.referencesInfo')} label={t('projects.refInjectHeader')} />
                     </TableHead>
                     <TableHead className="w-16 text-center">
                       {t('projects.refActionsHeader')}
@@ -1215,6 +1263,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       </TableCell>
                       <TableCell className="align-middle text-center py-2">
                         <input
+                          data-tour="reference-inject"
                           type="checkbox"
                           checked={ref.inject}
                           onChange={(e) =>
@@ -1356,7 +1405,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold text-[var(--t-text)]">
-                    {t('extra.checks')}
+                    {t('extra.checks')} <InfoTooltip text={t('projects.checksInfo')} label={t('extra.checks')} />
                   </label>
                   <Button
                     type="button"
@@ -1455,7 +1504,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold text-[var(--t-text)]">
-                    {t('projects.envLabel')}
+                    {t('projects.envLabel')} <InfoTooltip text={t('projects.envInfo')} label={t('projects.envLabel')} />
                   </label>
                   <Button
                     type="button"

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import type { PlatformApi, PlatformProcessInfo, ServiceInstallResult, ServiceRestartResult, ServiceUninstallResult } from './types.js';
+import { assertServiceWriteAllowed } from './service-safety.js';
 
 function bootTimeMs(): number {
   try { return Number(fs.readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)$/m)?.[1] || 0) * 1000; } catch { return 0; }
@@ -85,6 +86,7 @@ function installService(opts: { nodePath: string; cliPath: string; currentPath: 
   const file = path.join(opts.homeDir, '.config', 'systemd', 'user', 'agenthub.service');
   const activate = `${systemctlCommand('--user', 'daemon-reload')} && ${systemctlCommand('--user', 'enable', '--now', 'agenthub')}`;
   if (!opts.print) {
+    assertServiceWriteAllowed(file);
     try {
       execFileSync(process.env.AGENTHUB_SYSTEMCTL || 'systemctl', ['--version'], { stdio: 'ignore' });
     } catch {
@@ -115,6 +117,7 @@ function restartService(opts?: { exec?: (command: string, options?: { stdio?: 'i
 function uninstallService(opts?: { homeDir?: string; exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceUninstallResult {
   const homeDir = opts?.homeDir || os.homedir();
   const file = path.join(homeDir, '.config', 'systemd', 'user', 'agenthub.service');
+  assertServiceWriteAllowed(file);
   const runner = opts?.exec || ((command, options) => execFileSync('sh', ['-c', command], options));
   try {
     runner(`${systemctlCommand('--user', 'stop', 'agenthub')} && ${systemctlCommand('--user', 'disable', 'agenthub')}`, { stdio: 'ignore' });

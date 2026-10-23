@@ -20,6 +20,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
+import { UI_Z_INDEX } from '../ui/layers';
 
 export interface SessionListProps {
   sessions: ChatSession[];
@@ -489,7 +490,8 @@ export const SessionList: React.FC<SessionListProps> = ({
           role="dialog"
           aria-modal="true"
           aria-label={t('extra.confirmDeleteTitle')}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--t-overlay)] backdrop-blur-xs animate-fade-in"
+          className="fixed inset-0 flex items-center justify-center p-4 bg-[var(--t-overlay)] backdrop-blur-xs animate-fade-in"
+          style={{ zIndex: UI_Z_INDEX.modal }}
         >
           <div className="bg-[var(--t-surface)] border border-[var(--t-border)] rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-4">
             <div className="flex items-center gap-2.5 text-[var(--t-crit)] font-semibold text-sm">

@@ -5,6 +5,7 @@ import { Task } from '../types/api';
 import { getTasks } from '../api/client';
 import { ClipboardCheck, ArrowRight, Eye } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { getReviewerEngine } from '../utils/reviewer';
 
 export interface ReviewQueueProps {
   tasks?: Task[];
@@ -83,6 +84,16 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
                     >
                       {displayTitle}
                     </Link>
+
+                    <span
+                      data-testid="reviewer-badge"
+                      className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-[var(--t-on-accent)] shadow-2xs ${
+                        getReviewerEngine(task) === 'claude' ? 'bg-[var(--t-claude)]' : 'bg-[var(--t-ok)]'
+                      }`}
+                      style={getReviewerEngine(task) === 'claude' ? { backgroundColor: 'var(--t-claude)' } : undefined}
+                    >
+                      {getReviewerEngine(task) === 'claude' ? 'Claude' : 'Codex'}
+                    </span>
 
                     {watching ? (
                       <span

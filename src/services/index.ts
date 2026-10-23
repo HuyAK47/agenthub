@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
+import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../projects/paths.js';
 import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
@@ -12,6 +13,7 @@ import { z, ZodError } from 'zod';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
 import {
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   TaskRepo,
@@ -37,6 +39,7 @@ import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, ex
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
+import { QuotaService } from '../quota/index.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
@@ -56,13 +59,31 @@ import { mergeTaskIntoBase, MergeError } from '../merge.js';
 import { computeTaskGraph, filterTasksForGraph, detectCycle, parseDependsOn } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
-import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
+import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
 import type { DeployService } from '../deploy.js';
 import type { PerfCollector } from '../perf.js';
 
 const execFileAsync = promisify(execFile);
+const CODEX_EMAIL_RECHECK_MS = 10 * 60 * 1000;
+const ESCALATION_MODEL = 'claude-opus-4-6-thinking';
+
+function worktreeBytes(root: string): number {
+  let total = 0;
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return 0; }
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    try {
+      if (entry.isDirectory()) total += worktreeBytes(fullPath);
+      else if (entry.isFile()) total += fs.statSync(fullPath).size;
+    } catch {
+      // Files can disappear while the status snapshot is being collected.
+    }
+  }
+  return total;
+}
 
 function apiProject(project: ProjectRow, hubHome?: string, ciRepo?: CiRepo): ProjectRow {
   let merge: unknown = null;
@@ -130,6 +151,21 @@ function apiTask(task: TaskRow): TaskRow {
     createdAt: toApiTime(task.createdAt)!,
     updatedAt: toApiTime(task.updatedAt)!,
   };
+}
+
+function hasConfiguredMerge(project: ProjectRow, baseRef: string): boolean {
+  const settings = projectSettings(project);
+  if (settings.integration.enabled) return true;
+  if (!project.merge) return false;
+  try {
+    const merge = JSON.parse(project.merge) as { enabled?: boolean; worktrees?: Record<string, unknown> };
+    return merge.enabled === true
+      && !!merge.worktrees
+      && typeof merge.worktrees[baseRef] === 'string'
+      && path.isAbsolute(merge.worktrees[baseRef]);
+  } catch {
+    return false;
+  }
 }
 
 export function apiTaskNote(note: TaskNoteRow): TaskNoteRow {
@@ -232,6 +268,15 @@ export const ProjectReviewSchema = z.object({
   maxRounds: z.number().int().positive().default(2),
 });
 
+export const DepartmentInputSchema = z.object({
+  id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  name: z.string().min(1).max(120),
+  priority: z.number().int().default(0),
+  maxParallel: z.number().int().positive().default(3),
+  claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
+  telegramTopicId: z.number().int().positive().nullable().default(null),
+});
+
 export const CreateProjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1),
@@ -239,6 +284,7 @@ export const CreateProjectSchema = z.object({
   defaultBranch: z.string().default('main'),
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().default(3),
+  departmentId: z.string().min(1).default('chung'),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
@@ -252,6 +298,7 @@ export const UpdateProjectSchema = z.object({
   defaultBranch: z.string().min(1).optional(),
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().optional(),
+  departmentId: z.string().min(1).optional(),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
@@ -434,6 +481,10 @@ export const UpdateConfigSchema = z.object({
     timeoutSec: z.number().int().positive().optional(),
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
+    claudeFallback: z.boolean().optional(),
+    claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
+    claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+    claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
   }).optional(),
   brain: z.object({
     fallback: z.array(z.discriminatedUnion('type', [
@@ -456,6 +507,7 @@ export const UpdateConfigSchema = z.object({
     enabled: z.boolean().optional(),
     model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
     policy: z.array(z.string().min(1)).max(100).optional(),
+    permissions: z.enum(['guarded', 'full']).optional(),
   }).optional(),
   notifications: z.object({
     desktop: z.boolean(),
@@ -476,6 +528,7 @@ export const UpdateConfigSchema = z.object({
     high: z.number().positive().optional(),
     ok: z.number().positive().optional(),
     pressureHigh: z.number().positive().optional(),
+    pressureIoHigh: z.number().positive().optional(),
     pressureOk: z.number().positive().optional(),
     minFreeMemGB: z.number().positive().optional(),
     recoverAfterSec: z.number().int().positive().optional(),
@@ -745,6 +798,13 @@ export function formatEventSummary(
       return `${taskLabel} ghi chú: ${content.length > 50 ? content.slice(0, 50) + '...' : content}`;
     }
 
+    case 'review.fallback': {
+      const to = p.to || 'claude';
+      const from = p.from || 'codex';
+      const profile = p.profile ? ` (${p.profile})` : '';
+      return `${taskLabel} fallback review từ ${from} sang ${to}${profile}`;
+    }
+
     default:
       if (taskId) {
         return `${taskLabel}: ${type}`;
@@ -760,6 +820,10 @@ export class AppService {
   private perfCollector?: PerfCollector;
   private profileChecks = new Set<string>();
   private reviewingTasks = new Set<string>();
+  private worktreeUsageCache: { at: number; value: { count: number; bytes: number; byStatus: Record<string, { count: number; bytes: number }> } } | null = null;
+  private gitVersion: { value: string | null; checkedAt: number } | null = null;
+  private gitVersionCheck?: Promise<string | null>;
+  private static readonly SETUP_VERSION_CACHE_MS = 10 * 60 * 1000;
   constructor(
     public config: AgentHubConfig,
     public projectRepo: ProjectRepo,
@@ -786,20 +850,93 @@ export class AppService {
     public setupManager?: SetupManager,
     public brainRunner?: BrainRunner,
     public directiveRepo?: BrainDirectiveRepo,
+    public departmentRepo?: DepartmentRepo,
   ) {}
 
+  // --- Departments ---
+  listDepartments() {
+    if (!this.departmentRepo) throw new HttpError(503, 'unavailable', 'Department service chưa sẵn sàng');
+    return this.departmentRepo.getAll().map((department) => ({ ...department, profiles: this.departmentRepo!.profiles(department.id), projects: this.departmentRepo!.projects(department.id) }));
+  }
+
+  getDepartment(id: string) {
+    const department = this.departmentRepo?.get(id);
+    if (!department) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    return { ...department, profiles: this.departmentRepo!.profiles(id), projects: this.departmentRepo!.projects(id) };
+  }
+
+  createDepartment(raw: unknown) {
+    if (!this.departmentRepo) throw new HttpError(503, 'unavailable', 'Department service chưa sẵn sàng');
+    const parsed = DepartmentInputSchema.parse(raw);
+    const id = parsed.id || parsed.name.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id) throw new HttpError(400, 'bad_request', 'Tên phòng ban không hợp lệ');
+    if (this.departmentRepo.get(id)) throw new HttpError(409, 'conflict', `Department ID "${id}" đã tồn tại`);
+    this.departmentRepo.insert({ id, ...parsed });
+    return this.getDepartment(id);
+  }
+
+  updateDepartment(id: string, raw: unknown) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    const parsed = DepartmentInputSchema.partial().parse(raw);
+    this.departmentRepo!.update(id, parsed);
+    return this.getDepartment(id);
+  }
+
+  deleteDepartment(id: string) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    try { this.departmentRepo.delete(id); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : 'Không thể xóa phòng ban'); }
+    return { ok: true };
+  }
+
+  updateDepartmentProfiles(id: string, raw: unknown) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    const parsed = z.object({ profiles: z.array(z.object({ profileName: z.string().min(1), share: z.number().min(0).max(1).nullable().optional() })) }).parse(raw);
+    for (const profile of parsed.profiles) {
+      if (!this.profileRepo.get(profile.profileName)) throw new HttpError(404, 'not_found', `Profile "${profile.profileName}" không tồn tại`);
+    }
+    this.departmentRepo.setProfiles(id, parsed.profiles);
+    return this.getDepartment(id);
+  }
+
   setPerfCollector(collector: PerfCollector): void { this.perfCollector = collector; }
+
+  shutdownForUser(): { queued: number; reviewers: number; childPids: number[] } {
+    const result = this.scheduler.shutdownForUser();
+    const chatPids = this.chatService?.getRunningPids?.() || [];
+    this.chatService?.stop();
+    this.deployService?.stop();
+    this.ciService?.stop();
+    void this.telegramBotService?.stop();
+    return {
+      ...result,
+      childPids: [...(result.childPids || []), ...chatPids],
+    };
+  }
   getPerf() { return { samples: this.perfCollector?.getSamples() || [], latest: this.perfCollector?.latest() || null }; }
 
   async getSetupStatus() {
     if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng');
     const tools = await this.setupManager.status();
     const profiles = this.listProfiles();
-    let gitVersion: string | null = null;
-    try { gitVersion = execFileSync('git', ['--version'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { /* optional */ }
+    const gitVersion = await this.getGitVersion();
     let mcpRegistered = false;
     try { mcpRegistered = fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8').includes('agenthub'); } catch { /* optional */ }
     return { node: { version: process.versions.node, ok: Number(process.versions.node.split('.')[0]) >= 22 }, git: { version: gitVersion, installed: Boolean(gitVersion) }, tools, profiles, mcpRegistered, serviceRunning: true, ...this.setupManager.getSetupState() };
+  }
+
+  private async getGitVersion(): Promise<string | null> {
+    if (this.gitVersion && Date.now() - this.gitVersion.checkedAt < AppService.SETUP_VERSION_CACHE_MS) return this.gitVersion.value;
+    if (this.gitVersionCheck) return this.gitVersionCheck;
+    this.gitVersionCheck = (async () => {
+      let value: string | null = null;
+      try {
+        const output = await execFileAsync('git', ['--version'], { encoding: 'utf8', timeout: 5000 });
+        value = output.stdout.trim();
+      } catch { /* optional */ }
+      this.gitVersion = { value, checkedAt: Date.now() };
+      return value;
+    })();
+    try { return await this.gitVersionCheck; } finally { this.gitVersionCheck = undefined; }
   }
   installSetupTool(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.install(tool); }
   getSetupLogPath(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.getLogPath(tool); }
@@ -1028,6 +1165,24 @@ export class AppService {
 
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
+    const now = Date.now();
+    if (!this.worktreeUsageCache || now - this.worktreeUsageCache.at >= 15_000) {
+      const byStatus: Record<string, { count: number; bytes: number }> = {};
+      let count = 0;
+      let bytes = 0;
+      for (const task of tasks) {
+        if (!task.worktreePath || !fs.existsSync(task.worktreePath)) continue;
+        const size = worktreeBytes(task.worktreePath);
+        const current = byStatus[task.status] || { count: 0, bytes: 0 };
+        current.count += 1;
+        current.bytes += size;
+        byStatus[task.status] = current;
+        count += 1;
+        bytes += size;
+      }
+      this.worktreeUsageCache = { at: now, value: { count, bytes, byStatus } };
+    }
+
     const runningTasks = Array.from(runningMap.values()).map((r) => {
       const task = taskMap.get(r.taskId) || taskMap.get(toTaskId(r.taskId)) || taskMap.get(r.taskId.replace('/', '~'));
       return {
@@ -1070,6 +1225,7 @@ export class AppService {
           limitedSessions: this.getClaudeProfileLimitedSessions(p),
         } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
+        duplicateEmailWith: (dupes.get(accountKey(p) || '') || []).filter((name) => name !== p.name),
       };
     });
 
@@ -1094,7 +1250,8 @@ export class AppService {
 
     const diskReader = this.scheduler ? this.scheduler.getDiskReader() : getDiskSpaceSync;
     const disk = diskReader(this.config.worktreesDir);
-    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
+    const worktreeRoots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const disks = getMonitoredDisks(worktreeRoots, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
     const runningTaskIds = runningTasks.map((r) => r.taskId);
     const overlaps = this.taskNoteRepo
       ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)
@@ -1117,6 +1274,7 @@ export class AppService {
         minFreeGB: this.config.disk.minFreeGB,
       },
       disks,
+      worktrees: this.worktreeUsageCache.value,
       load: this.scheduler.getLoadStatus(),
       telegram: {
         enabled: this.config.telegram?.enabled ?? false,
@@ -1132,7 +1290,8 @@ export class AppService {
     const running = new Set(this.scheduler.getRunning().keys());
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
-    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths });
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const processes = listAllWorktreeProcesses({ worktreesDir: roots, protectedPaths });
     return processes
       .map((process) => {
         const cwd = process.cwd.replace(/ \(deleted\)$/, '');
@@ -1146,10 +1305,11 @@ export class AppService {
     const orphans = this.getOrphans();
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
     const reaped: number[] = [];
     for (const orphan of orphans) {
       reaped.push(...reapSyncForWorktree(orphan.cwd.replace(/ \(deleted\)$/, ''), {
-        worktreesDir: this.config.worktreesDir,
+        worktreesDir: roots,
         protectedPaths,
       }));
     }
@@ -1193,6 +1353,9 @@ export class AppService {
 
   createProject(raw: unknown): ProjectRow {
     const parsed = CreateProjectSchema.parse(raw);
+    if (this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
+      throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
+    }
     const id = parsed.id || parsed.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     const existing = this.projectRepo.getIncludingArchived(id);
     if (existing && !existing.archivedAt) {
@@ -1209,6 +1372,10 @@ export class AppService {
     }
 
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
+    if (effectiveSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(effectiveSettings.worktree.root, resolvedPath, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
     if (effectiveSettings.integration.enabled || effectiveSettings.integration.branch) {
       validateIntegrationBranch(effectiveSettings.integration.branch || 'agenthub/integration', parsed.defaultBranch);
     }
@@ -1269,6 +1436,7 @@ export class AppService {
         defaultBranch: parsed.defaultBranch,
         envTemplate: parsed.envTemplate || null,
         maxParallel: parsed.maxParallel,
+        departmentId: parsed.departmentId,
       });
       this.invalidateOutOfScopeClaudeScanStates();
       return this.getProject(archived.id);
@@ -1287,6 +1455,7 @@ export class AppService {
       reviewChain: parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
       review: parsed.review ? JSON.stringify(parsed.review) : null,
       settings: parsed.settings ? JSON.stringify(effectiveSettings) : null,
+      departmentId: parsed.departmentId,
     });
 
     if (effectiveSettings.integration.enabled) {
@@ -1304,10 +1473,18 @@ export class AppService {
     this.getProject(id);
     const parsed = UpdateProjectSchema.parse(raw);
     const current = this.projectRepo.get(id)!;
+    if (parsed.departmentId && this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
+      throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
+    }
     const effectiveDefaultBranch = parsed.defaultBranch ?? current.defaultBranch;
     const mergedSettings = parsed.settings === undefined
       ? projectSettings(current)
       : mergeProjectSettings(projectSettings(current), parsed.settings);
+
+    if (mergedSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(mergedSettings.worktree.root, current.path, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
 
     if (mergedSettings.integration.enabled || mergedSettings.integration.branch) {
       validateIntegrationBranch(mergedSettings.integration.branch || 'agenthub/integration', effectiveDefaultBranch);
@@ -1419,7 +1596,12 @@ export class AppService {
         warnings.push(`Giữ worktree ${task.worktreePath} vì có thay đổi chưa commit`);
         continue;
       }
-      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(proj.path, task.worktreePath, { projectId: id, taskId: task.id, slug: task.slug });
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(
+        proj.path,
+        task.worktreePath,
+        { projectId: id, taskId: task.id, slug: task.slug },
+        projectWorktreeRoots(proj, this.config.hubHome, this.config.worktreesDir),
+      );
       if (!removed) warnings.push(`Không thể gỡ worktree ${task.worktreePath}; đã giữ nguyên`);
     }
 
@@ -1568,13 +1750,11 @@ export class AppService {
         }
       }
       if (p.engine === 'codex' && !p.email && this.isProfileLoggedIn(p)) {
+        // ChatGPT logins often print no email, so a short retry would spawn the CLI on every poll.
         const lastCheck = this.emailCheckCache.get(p.name) || 0;
-        if (now - lastCheck > 30_000) {
+        if (now - lastCheck > CODEX_EMAIL_RECHECK_MS) {
           this.emailCheckCache.set(p.name, now);
-          const email = this.refreshCodexEmail(p);
-          if (email) {
-            p.email = email;
-          }
+          void this.refreshCodexEmail(p);
         }
       }
     }
@@ -1601,6 +1781,7 @@ export class AppService {
           limitedSessions: this.getClaudeProfileLimitedSessions(p),
         } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
+        duplicateEmailWith: (dupes.get(accountKey(p) || '') || []).filter((name) => name !== p.name),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
@@ -1955,25 +2136,32 @@ export class AppService {
     return apiProfile(this.profileRepo.get(newName)!);
   }
 
-  private refreshCodexEmail(profile: ProfileRow): string | null {
-    if (profile.engine !== 'codex') return null;
+  private codexEmailChecks = new Map<string, Promise<string | null>>();
+
+  /** Reads the Codex account email in the background; one check per profile at a time, never blocking the event loop. */
+  private refreshCodexEmail(profile: ProfileRow): Promise<string | null> {
+    if (profile.engine !== 'codex') return Promise.resolve(null);
+    const running = this.codexEmailChecks.get(profile.name);
+    if (running) return running;
     const codexPath = process.env.AGENTHUB_CODEX_BIN || CodexEngine.findCodexPath();
-    if (!codexPath) return null;
+    if (!codexPath) return Promise.resolve(null);
     const checkEnv: NodeJS.ProcessEnv = { ...process.env };
     if (profile.kind === 'isolated' && profile.home) {
       checkEnv.CODEX_HOME = profile.home;
     }
-    try {
-      const res = execFileSync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' });
-      const parsed = parseCodexLoginStatus(res);
-      if (parsed.email && parsed.email !== profile.email) {
-        this.profileRepo.upsert({ ...profile, email: parsed.email });
-        return parsed.email;
-      }
-    } catch {
-      // ignore
-    }
-    return null;
+    const check = execFileAsync(codexPath, ['login', 'status'], { env: checkEnv, timeout: 5000, encoding: 'utf8' })
+      .then(({ stdout, stderr }) => {
+        const parsed = parseCodexLoginStatus(`${stdout}${stderr}`);
+        if (parsed.email && parsed.email !== profile.email) {
+          this.profileRepo.upsert({ ...profile, email: parsed.email });
+          return parsed.email;
+        }
+        return null;
+      })
+      .catch(() => null)
+      .finally(() => this.codexEmailChecks.delete(profile.name));
+    this.codexEmailChecks.set(profile.name, check);
+    return check;
   }
 
   startProfileCheck(name: string): { started: true } {
@@ -2191,9 +2379,13 @@ export class AppService {
     const parsed = MarkQuotaSchema.parse(raw);
     const seconds = parsed.seconds || 5 * 3600;
     if (this.coreProfileService.markQuota(name, parsed.family, seconds, parsed.reason)) {
+      const engine = profile.engine;
       this.scheduler.getEventBus().emit('quota.exhausted', undefined, {
         profile: name,
         family: parsed.family,
+        engine,
+        allExhausted: new QuotaService(this.quotaMarkRepo, this.profileRepo)
+          .allProfilesForEngineExhausted(engine, parsed.family),
       });
     }
     return { ok: true };
@@ -2222,9 +2414,17 @@ export class AppService {
       if (project?.review) {
         try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
       }
+      // Keep this lookup scoped to the task. A global recent-event window can
+      // forget an older fallback after unrelated events push it out of that window.
+      const isFallback = this.eventRepo?.getByTask(task.id).some((event) => event.type === 'review.fallback') ?? false;
+      const reviewerRun = this.scheduler?.getReviewerRun?.(task.id);
+      const reviewer = reviewerRun
+        ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
+        : (isFallback ? 'claude' : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex'));
       return {
         ...apiTask(task),
         reviewChain,
+        reviewer,
         checks: this.scheduler.getCheckResults(task.id),
         paused: Boolean(run?.paused),
         pauseReason: run?.pauseReason ?? null,
@@ -2287,6 +2487,7 @@ export class AppService {
 
     // Task history remains readable after its project is archived.
     const project = this.projectRepo.getIncludingArchived(task.projectId);
+    const configuredMerge = project ? hasConfiguredMerge(project, task.baseRef || project.defaultBranch) : false;
     const reviewSettings = project?.review ? (() => {
       try { return JSON.parse(project.review!) as { chain?: unknown; maxRounds?: number }; } catch { return null; }
     })() : null;
@@ -2306,8 +2507,36 @@ export class AppService {
     } catch {
       modelWarnings = ['modelChain không phải JSON hợp lệ'];
     }
+
+    const events = (this.eventRepo ? this.eventRepo.getByTask(taskId) : []).map((e) => {
+      let parsedPayload: unknown = null;
+      if (e.payload) {
+        try {
+          parsedPayload = JSON.parse(e.payload);
+        } catch {
+          parsedPayload = e.payload;
+        }
+      }
+      return {
+        id: e.id,
+        ts: toApiTime(e.ts)!,
+        type: e.type,
+        taskId: e.taskId,
+        payload: parsedPayload,
+      };
+    });
+
+    const isFallback = events.some((e) => e.type === 'review.fallback');
+    const reviewerRun = this.scheduler?.getReviewerRun?.(taskId);
+    const activeReviewChain: ReviewChainStep[] = (Array.isArray(reviewSettings?.chain) ? reviewSettings.chain as ReviewChainStep[] : undefined) || parseReviewChain(project?.reviewChain);
+    const reviewer = reviewerRun
+      ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
+      : (isFallback ? 'claude' : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex')));
+
     return {
       ...apiTask(task),
+      reviewer,
+      events,
       paused: Boolean(activeRun?.paused),
       pauseReason: activeRun?.pauseReason ?? null,
       currentRun: activeRun ? {
@@ -2326,6 +2555,8 @@ export class AppService {
       runs: runs.map(apiRun),
       reviews: reviews.map(apiReview),
       reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
+      mergeAvailable: configuredMerge,
+      mergeUnavailableReason: configuredMerge ? null : 'Project chưa cấu hình merge tự động. Mở Cài đặt dự án → Integration để bật.',
       reviewStep: task.reviewStep ?? 0,
       reviewMaxRounds: reviewSettings?.maxRounds || 2,
       doneContent,
@@ -2973,7 +3204,7 @@ export class AppService {
         mergeResult = await mergeTaskIntoBase(task, project, { hubHome: this.config.hubHome });
       } catch (error) {
         if (error instanceof MergeError) {
-          this.createMergeFailureDraft(task, error.message);
+          if (!error.configuration) this.createMergeFailureDraft(task, error.message);
           throw new HttpError(error.statusCode, error.error, error.message);
         }
         throw error;
@@ -3007,7 +3238,98 @@ export class AppService {
     }
   }
 
+  /**
+   * Merges a task whose review chain finished on a Codex approval, when the project opted in with
+   * `integration.autoMerge`. A merged task then self-deploys through the usual task.merged hook.
+   */
+  async autoMergeReviewedTask(taskId: string): Promise<void> {
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.status !== 'review') return;
+    const project = this.projectRepo.get(task.projectId);
+    if (!project) return;
+    const settings = projectSettings(project);
+    if (!settings.integration.autoMerge || (!settings.integration.enabled && !project.merge)) return;
+    const last = this.reviewRepo.getByTask(taskId).at(-1);
+    if (!last || (last.actor !== 'codex-reviewer' && last.actor !== 'claude-reviewer') || last.verdict !== 'approved') return;
+    // The ready event can arrive twice for one approval; the first call is already merging.
+    if (this.reviewingTasks.has(taskId)) return;
+    try {
+      await this.reviewTask(toRouteId(taskId), {
+        verdict: 'approved',
+        merge: true,
+        by: 'auto-merge',
+        feedback: 'Tự merge sau khi Codex reviewer chấp thuận.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.scheduler.getEventBus().emit('merge.failed', taskId, { actor: 'auto-merge', message });
+      // A conflict means the branch fell behind the merge target: hand it back to the worker.
+      if (error instanceof HttpError && error.statusCode === 409 && /xung đột|conflict/i.test(message)) {
+        try {
+          await this.reviewTask(toRouteId(taskId), {
+            verdict: 'changes_requested',
+            by: 'auto-merge',
+            feedback: `Reviewer đã duyệt nhưng merge tự động bị xung đột: ${message}\n\nCập nhật nhánh lên nhánh đích mới nhất (rebase hoặc merge), giải xung đột, giữ nguyên phần đã được duyệt, chạy lại lint/typecheck/test rồi commit.`,
+          });
+        } catch (retryError) {
+          console.error(`[review] could not hand merge conflict back for ${taskId}: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Brains do not receive reviewer escalations, so without this the task would sit in review
+   * forever. Send it back once with the reviewer's feedback on the strongest model; a second
+   * escalation stays parked for a person (the review.escalated notification already went out).
+   */
+  /** Escalations raised before a restart never reach the event handler again; pick them up here. */
+  async retryParkedEscalations(): Promise<void> {
+    for (const task of this.taskRepo.getByStatus('review')) {
+      if (!task.reviewerEscalated) continue;
+      const feedback = this.reviewRepo.getByTask(task.id).at(-1)?.feedback ?? undefined;
+      await this.retryEscalatedReview(task.id, { reason: task.reviewerEscalationReason, feedback });
+    }
+  }
+
+  async retryEscalatedReview(taskId: string, payload: { reason?: unknown; feedback?: unknown }): Promise<void> {
+    if (payload.reason !== 'reviewer_changes_limit') return;
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.status !== 'review' || !task.reviewerEscalated) return;
+    const escalations = this.eventRepo.getByTask(taskId)
+      .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit')).length;
+    if (escalations > 1) return;
+    let current: string[] = [];
+    try { current = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { current = []; }
+    if (current.length === 0) current = task.level === 'easy' ? this.config.defaultModelChains.easy : this.config.defaultModelChains.hard;
+    const chain = [ESCALATION_MODEL, ...current.filter((model) => model !== ESCALATION_MODEL)];
+    this.taskRepo.update(taskId, { modelChain: JSON.stringify(chain) });
+    const feedback = typeof payload.feedback === 'string' && payload.feedback.trim() ? payload.feedback : 'Reviewer yêu cầu sửa nhiều lần.';
+    try {
+      await this.reviewTask(toRouteId(taskId), {
+        verdict: 'changes_requested',
+        by: 'auto-escalation',
+        feedback: `${feedback}\n\n(Reviewer đã yêu cầu sửa quá số vòng cho phép; giao lại một lần với ${ESCALATION_MODEL}.)`,
+      });
+    } catch (error) {
+      console.error(`[review] auto-escalation retry failed for ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private createMergeFailureDraft(source: TaskRow, output: string): TaskRow | null {
+    const existing = this.taskRepo.getDerivedFrom(source.id).find((task) =>
+      task.sourceRef
+      && !['done', 'cancelled', 'failed', 'blocked'].includes(task.status)
+      && (() => {
+        try {
+          const sourceRef = JSON.parse(task.sourceRef) as { checkName?: unknown };
+          return sourceRef.checkName === 'merge';
+        } catch {
+          return false;
+        }
+      })(),
+    );
+    if (existing) return existing;
     const slugBase = `${source.slug}-fix-merge`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60);
     let slug = slugBase;
     for (let index = 2; this.taskRepo.get(`${source.projectId}/${slug}`); index += 1) slug = `${slugBase}-${index}`;
@@ -3051,6 +3373,18 @@ export class AppService {
       reviewerEscalatedAt: null,
       reviewerEscalationReason: null,
     });
+
+    // Retry reuses the existing worktree. Old worker markers must not be
+    // mistaken for completion of the new run.
+    if (task.worktreePath) {
+      for (const marker of ['DONE', 'BLOCKED']) {
+        try {
+          fs.unlinkSync(path.join(task.worktreePath, '.agenthub', marker));
+        } catch {
+          // Marker is absent or already removed.
+        }
+      }
+    }
 
     this.scheduler.getEventBus().emit('task.queued', taskId, { reason: 'retry', note: parsed.note });
     this.scheduler.triggerTick();
@@ -3113,6 +3447,7 @@ export class AppService {
           taskId: task.id,
           hooks,
         },
+        project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir,
       );
       if (!removed) {
         throw new HttpError(
