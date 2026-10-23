@@ -72,6 +72,12 @@ describe('project settings parsing', () => {
     expect(projectWorktreeRoot({ id: 'demo', path: project.path }, path.join(root, 'hub')))
       .toBe(path.join(root, 'hub', 'worktrees', 'demo'));
   });
+
+  it('does not move an unconfigured project based on its mount path', () => {
+    const hub = path.join(os.tmpdir(), 'agenthub-hub');
+    const project = { id: 'mounted', path: '/media/veracrypt8/company/repo' };
+    expect(projectWorktreeRoot(project, hub)).toBe(path.join(hub, 'worktrees', 'mounted'));
+  });
 });
 
 describe('project settings through the service', () => {

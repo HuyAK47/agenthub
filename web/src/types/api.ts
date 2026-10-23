@@ -106,6 +106,7 @@ export interface Project {
   defaultBranch: string;
   envTemplate?: string | null;
   maxParallel: number;
+  departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
@@ -140,6 +141,24 @@ export interface ProjectInspection {
   hasClaudeMemory: boolean;
   memoryPreview: string | null;
   suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
+
+export interface DepartmentProfile {
+  departmentId: string;
+  profileName: string;
+  share: number | null;
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  priority: number;
+  maxParallel: number;
+  claudeDailyTokenBudget: number;
+  telegramTopicId: number | null;
+  createdAt: string;
+  projectCount?: number;
+  profiles: DepartmentProfile[];
+  projects: Array<{ id: string; name: string }>;
 }
 
 export interface CiJobAnnotation {
@@ -208,6 +227,7 @@ export interface Run {
   model: string;
   profileName: string;
   pid?: number | null;
+  kind?: string | null;
   startedAt: string;
   endedAt?: string | null;
   outcome?: 'done' | 'blocked' | 'quota' | 'crashed' | 'cancelled' | 'timeout' | 'stalled' | null;
@@ -222,6 +242,7 @@ export interface Review {
   verdict: 'approved' | 'changes_requested';
   feedback?: string | null;
   createdAt: string;
+  actor?: string;
 }
 
 export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
@@ -254,6 +275,7 @@ export interface Task {
   reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
+  reviewer?: 'codex' | 'claude';
   currentRun?: {
     startedAt: string;
     lastOutputAt: string;
@@ -333,6 +355,7 @@ export interface TaskDetail extends Task {
   reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
+  events?: EventItem[];
   doneContent?: string | null;
   blockedContent?: string | null;
   commits?: string[] | null;
@@ -475,6 +498,11 @@ export interface HubStatus {
     low: boolean;
     source: 'worktrees' | 'extra';
   }>;
+  worktrees?: {
+    count: number;
+    bytes: number;
+    byStatus: Record<string, { count: number; bytes: number }>;
+  };
   load?: {
     load1: number;
     freeMemGB: number;
@@ -636,7 +664,16 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
-  reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
+  reviewer?: {
+    model: string;
+    enabled?: boolean;
+    timeoutSec?: number;
+    failoverSec?: number;
+    maxChangesRequested?: number;
+    claudeFallback?: boolean;
+    claudeProfiles?: string[];
+    claudeModel?: string;
+  };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
@@ -657,6 +694,7 @@ export interface SystemConfig {
   };
   notifications?: {
     desktop: boolean;
+    desktopLevel?: 'all' | 'important' | 'critical' | 'off';
     quietHours?: {
       enabled: boolean;
       start: string;

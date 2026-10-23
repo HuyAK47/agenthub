@@ -7,6 +7,7 @@ v1 chỉ xử lý **nội bộ trên máy chạy hub**:
 - Chỉ repo AgentHub có self-deploy và tự push. Hub **không** push code dự án khác ra ngoài.
 - Điều khiển qua web dashboard, Telegram và MCP.
 - **Không** kết nối hệ thống quản lý việc bên ngoài (OpenProject, Jira…) và **không** tạo merge request trên Git server.
+- Đã chuyển lên v1 (23/10): **phòng ban** (nhóm project, tài khoản, giới hạn, bộ não theo phòng, chia lượt công bằng, topic Telegram theo phòng), **quy ước commit/nhánh theo project** (`externalRef`, autocheck `commit-message`), **chế độ tập trung** theo project, và Telegram tách theo project.
 
 ## Mục tiêu v2
 Đưa hub ra làm việc với hệ thống của tổ chức: **nhận việc từ công cụ quản lý dự án, giao kết quả qua merge request**, đồng thời giữ mặc định an toàn.
@@ -28,10 +29,8 @@ v1 chỉ xử lý **nội bộ trên máy chạy hub**:
 - File quy định cho mỗi project (ví dụ `docs/AI-WORKFLOW.md`): việc nào được nhận, cách chia việc, thao tác nào AI được tự làm, thao tác nào phải hỏi người.
 - Task nháp: `v2-openproject-sync`.
 
-### B. Quy ước commit và nhánh theo project
-- Thiết lập `commitConvention`: mẫu nhánh (`feature/{ref}-{slug}`), mẫu commit (`{type}({scope}): {ref} {summary}`), regex kiểm tra, mẫu merge commit.
-- Task có trường `externalRef` (ví dụ `OP#123`, `PROJ-45`). Hub đưa quy ước vào đề bài worker và thêm autocheck `commit-message`.
-- Task nháp: `v2-commit-convention`.
+### B. Quy ước commit và nhánh theo project — *đã chuyển lên v1*
+Phần nền (template nhánh/commit, `externalRef`, autocheck) làm trong v1. v2 chỉ thêm việc tự lấy mã việc từ tracker.
 
 ### C. Giao kết quả qua Git server (GitLab/GitHub)
 - Sau khi duyệt xong: push nhánh và tạo **merge request** (không push thẳng vào nhánh chính). Tiêu đề và mô tả MR có mã việc để tracker tự liên kết.
@@ -39,15 +38,12 @@ v1 chỉ xử lý **nội bộ trên máy chạy hub**:
 - Bật riêng cho từng project, dùng token bot, có danh sách remote được phép.
 - Task nháp: `v2-git-mr`.
 
-### D. Phòng ban và chia tài nguyên
-- Nhóm project theo phòng ban, mỗi phòng có tài khoản, giới hạn, ngân sách token và bộ não riêng, và chia lượt worker công bằng.
-- Task nháp: `d-departments`, `d-brain-per-dept`, `d-fair-scheduler`, `d-telegram-topics`.
+### D. Phòng ban — *đã chuyển lên v1*
+Xem các task `d-departments`, `d-brain-per-dept`, `d-fair-scheduler`, `d-telegram-topics`.
 
 ## Thứ tự đề xuất
-1. **B** (quy ước commit): nền cho A và C, và cũng có ích cho dự án chỉ chạy nội bộ.
-2. **A** (tracker) ở chế độ chỉ đọc + tạo Kế hoạch. Sau đó bật comment, rồi bật đổi trạng thái.
-3. **C** (merge request).
-4. **D** (phòng ban), khi số project và người dùng tăng.
+1. **A** (tracker) ở chế độ chỉ đọc + tạo Kế hoạch. Sau đó bật comment, rồi bật đổi trạng thái.
+2. **C** (merge request).
 
 ## Chuẩn bị phía tổ chức trước khi bật
 - Tài khoản bot trên tracker và Git server, quyền giới hạn theo project.

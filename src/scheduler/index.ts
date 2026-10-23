@@ -10,6 +10,7 @@ import {
   RunRepo,
   EventRepo,
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   ReviewRepo,
@@ -20,10 +21,10 @@ import {
   TaskNoteRepo,
 } from '../db/index.js';
 import { projectSettings } from '../projects/settings.js';
-import { projectWorktreeRoot } from '../projects/paths.js';
+import { isProjectWorktreeRootAccessible, projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
-import { DependencyContext, WorktreeService } from '../worktrees/index.js';
+import { DependencyContext, isDeletableWorktreePath, WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules, nodeModulesCacheSummary, pruneNodeModulesCache } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
@@ -39,7 +40,6 @@ import { ClaudeFailoverState } from '../chat/failover.js';
 import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { CLAUDE_REVIEW_ENGINE_KEY } from '../engines/claude-review.js';
-import { effectiveBrainMode } from '../brain/mode.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
@@ -143,7 +143,7 @@ function isAutoReviewer(by: string | undefined): by is ReviewerActor {
 const ARBITER_ROUNDS = 2;
 const ARBITER_RETRY_MODEL = 'claude-opus-4-6-thinking';
 
-interface ReviewerRun {
+export interface ReviewerRun {
   taskId: string;
   runId: string;
   pid: number;
@@ -204,9 +204,14 @@ export class Scheduler {
   private reviewNotified = new Map<string, string>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
+  private readonly worktreeCleanupRetryAt = new Map<string, number>();
+  private readonly worktreeCleanupLogged = new Set<string>();
+  private readonly dirtyWorktreeLogged = new Set<string>();
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
+  private lastLoadHighEventAt: number | null = null;
+  private lastLoadHighEventSnapshot: LoadSnapshot | null = null;
   private notifiedSkippedModels = new Set<string>();
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
   private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
@@ -232,6 +237,7 @@ export class Scheduler {
     runMetricsRepo?: RunMetricsRepo,
     knowledgeRepo?: KnowledgeRepo,
     diskReader?: ((p: string) => DiskSpace) | SchedulerOptions,
+    private departmentRepo?: DepartmentRepo,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -298,6 +304,10 @@ export class Scheduler {
     return { active, running: [...this.reviewerRuns.keys()], waiting: active ? Math.max(0, this.taskRepo.getByStatus('review').length - this.reviewerRuns.size) : 0 };
   }
 
+  getReviewerRun(taskId: string): ReviewerRun | undefined {
+    return this.reviewerRuns.get(taskId);
+  }
+
   getRestartSnapshot(projectId?: string): { checks: number; editing: number } {
     const editing = projectId
       ? [...this.running.values()].filter((running) => running.projectId === projectId).length
@@ -320,8 +330,38 @@ export class Scheduler {
     return this.running;
   }
 
-  effectiveParallel(project: { maxParallel: number }): number {
-    return this.loadGuard.effectiveParallel(project.maxParallel);
+  effectiveParallel(project: { maxParallel: number; departmentId?: string }): number {
+    const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    return this.loadGuard.effectiveParallel(Math.min(project.maxParallel, department?.maxParallel || project.maxParallel));
+  }
+
+  private parallelUsage(project: { id: string; departmentId?: string }): { project: number; department: number } {
+    const active = [...this.running.values(), ...this.starting.values()];
+    return {
+      project: active.filter((task) => task.projectId === project.id).length,
+      department: project.departmentId
+        ? active.filter((task) => this.projectRepo.get(task.projectId)?.departmentId === project.departmentId).length
+        : 0,
+    };
+  }
+
+  private hasParallelCapacity(project: { id: string; maxParallel: number; departmentId?: string }): boolean {
+    const usage = this.parallelUsage(project);
+    if (usage.project >= this.effectiveParallel(project)) return false;
+    const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    return !department || usage.department < this.loadGuard.effectiveParallel(department.maxParallel);
+  }
+
+  private departmentPriority(task: TaskRow): number {
+    const project = this.projectRepo.get(task.projectId);
+    return project?.departmentId ? this.departmentRepo?.get(project.departmentId)?.priority || 0 : 0;
+  }
+
+  private claudeBudgetAvailable(task: TaskRow): boolean {
+    const project = this.projectRepo.get(task.projectId);
+    const department = project?.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    if (!department || department.claudeDailyTokenBudget <= 0 || !this.db) return true;
+    return (this.departmentRepo?.claudeUsageToday(department.id) || 0) < department.claudeDailyTokenBudget;
   }
 
   getLoadStatus(): LoadSnapshot {
@@ -422,9 +462,7 @@ export class Scheduler {
 
   start(): void {
     this.stopped = false;
-    // The orphan pass is periodic; do not scan and potentially reap processes
-    // during daemon startup while tests or callers are still preparing state.
-    this.lastOrphanScan = Date.now();
+    this.lastOrphanScan = 0;
     // Recover crashed runs on startup
     this.recoverOnStartup();
     this.skipSchedulingOnce = true;
@@ -491,11 +529,75 @@ export class Scheduler {
     }
   }
 
+  /** Persist a resumable state before the service manager terminates the daemon. */
+  shutdownForUser(): { queued: number; reviewers: number; childPids: number[] } {
+    const childPids: number[] = [];
+    let queued = 0;
+    for (const rt of [...this.running.values()]) {
+      if (rt.pid) childPids.push(rt.pid);
+      this.killProcessGroup(rt.pid, 'SIGTERM');
+      this.running.delete(rt.taskId);
+      if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
+      this.locks.invalidate(rt.profileName);
+      this.runRepo.finish(rt.runId, 'crashed', undefined, 'user_stop');
+      this.taskRepo.update(rt.taskId, { status: 'queued', resume: 1 });
+      this.eventBus.emit('task.queued', rt.taskId, { reason: 'user_stop', note: 'dừng bởi người dùng' });
+      queued++;
+    }
+
+    for (const entry of [...this.checkingActive.values(), ...this.checkingQueue]) {
+      const task = this.taskRepo.get(entry.taskId);
+      if (task && (task.status === 'checking' || task.status === 'running')) {
+        this.taskRepo.update(entry.taskId, { status: 'queued', resume: 1 });
+        this.eventBus.emit('task.queued', entry.taskId, { reason: 'user_stop', note: 'dừng bởi người dùng' });
+        queued++;
+      }
+    }
+    for (const entry of this.checkingQueue.splice(0)) entry.resolve();
+    this.checkingActive.clear();
+    this.checkingPromises.clear();
+    this.checkingRunIds.clear();
+
+    let reviewers = 0;
+    for (const active of [...this.reviewerRuns.values()]) {
+      if (active.pid) childPids.push(active.pid);
+      this.killProcessGroup(active.pid, 'SIGTERM');
+      clearTimeout(active.timeout);
+      if (active.exitTimeout) clearTimeout(active.exitTimeout);
+      if (active.lockFile) this.locks.release(active.profileName, active.lockFile);
+      this.runRepo.finish(active.runId, 'crashed', undefined, 'user_stop');
+      this.reviewerRuns.delete(active.taskId);
+      reviewers++;
+    }
+    this.eventBus.emit('daemon.shutdown_requested', undefined, { queued, reviewers, note: 'dừng bởi người dùng' });
+    return { queued, reviewers, childPids };
+  }
+
   /**
    * On startup: mark any runs that were "running" but whose pid is no longer alive as crashed.
    * Re-queue their tasks.
    */
   private recoverOnStartup(): void {
+    // A restart while startTask was preparing the worktree (status already 'running', no run row
+    // yet) left tasks 'running' forever with nothing behind them; put them back in the queue.
+    const liveRunTasks = new Set(this.runRepo.getRunning().map((run) => run.taskId));
+    for (const task of this.taskRepo.getByStatus('running')) {
+      if (liveRunTasks.has(task.id) || !this.projectRepo.get(task.projectId)) continue;
+      this.taskRepo.update(task.id, { status: 'queued', resume: task.worktreePath ? 1 : 0 });
+      this.eventBus.emit('task.queued', task.id, { reason: 'orphaned_start' });
+    }
+
+    // Checks interrupted by a restart left tasks 'checking' with nothing running. Re-run them when the
+    // task's latest worker run finished cleanly (the only state that could have started checks).
+    for (const task of this.taskRepo.getByStatus('checking')) {
+      if (!this.projectRepo.get(task.projectId)) continue;
+      const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+      if (!lastWorker || lastWorker.outcome !== 'done') continue;
+      void this.runChecksForTask(task.id, lastWorker.id).catch((error) => {
+        if (!this.stopped) console.error(`[scheduler] re-check after restart failed for ${task.id}:`, error);
+      });
+    }
+
     const shutdownRuns = this.runRepo.getShutdownRuns();
     for (const run of shutdownRuns) {
       const task = this.taskRepo.get(run.taskId);
@@ -828,9 +930,25 @@ export class Scheduler {
   tick(): void {
     this.loadGuard.setConfig(this.config.load);
     const load = this.loadGuard.update();
+    const now = Date.now();
     if (load.overloaded !== this.lastLoadOverloaded) {
       this.lastLoadOverloaded = load.overloaded;
       this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
+      if (load.overloaded) {
+        this.lastLoadHighEventAt = now;
+        this.lastLoadHighEventSnapshot = load;
+      } else {
+        this.lastLoadHighEventAt = null;
+        this.lastLoadHighEventSnapshot = null;
+      }
+    } else if (load.overloaded && this.lastLoadHighEventAt !== null && this.lastLoadHighEventSnapshot !== null
+      && now - this.lastLoadHighEventAt >= 30 * 60 * 1000
+      && ((load.load1 > this.lastLoadHighEventSnapshot.load1
+        && load.load1 >= this.lastLoadHighEventSnapshot.load1 * 1.3)
+        || this.lastLoadHighEventSnapshot.freeMemGB - load.freeMemGB > 1)) {
+      this.eventBus.emit('load.high', undefined, load);
+      this.lastLoadHighEventAt = now;
+      this.lastLoadHighEventSnapshot = load;
     }
 
     // Auto-pause / resume by load guard
@@ -879,7 +997,8 @@ export class Scheduler {
     } else {
       const diskSpace = disks.find((disk) => disk.source === 'worktrees')!;
       this.dockerDiskLow = false;
-      if (this.diskLow) {
+      const recovered = diskSpace.freeGB >= diskSpace.minFreeGB + 1;
+      if (this.diskLow && recovered) {
         this.diskLow = false;
         this.eventBus.emit('disk.ok', undefined, {
           freeGB: diskSpace.freeGB,
@@ -916,9 +1035,7 @@ export class Scheduler {
     for (const task of parallelWaiters) {
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
-      const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
-      const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
-      if (runningInProject + startingInProject < project.maxParallel) {
+      if (this.hasParallelCapacity(project)) {
         this.taskRepo.updateStatus(task.id, 'queued');
         this.eventBus.emit('task.queued', task.id, { reason: 'parallel_available' });
       }
@@ -973,15 +1090,21 @@ export class Scheduler {
     void this.checkRunningTasks().catch(() => {});
 
     // 3. Start new tasks if possible
-    this.scheduleNewTasks();
-
-    // 3b. Claude failover reviews tasks that are waiting for review.
+    // 3. Reviews first: a slot freed by a worker should finish reviewed work before starting new work,
+    // otherwise busy Codex accounts starve the review queue.
     this.scheduleReviews();
 
-    // 4. Prune expired worktrees for completed tasks
+    // 3b. Prune expired worktrees before dispatching tasks. When disk is low,
+    // this gives cleanup a chance to free space before queued work is parked.
     this.cleanExpiredWorktrees();
-    if (Date.now() - this.lastOrphanScan >= 10 * 60 * 1000) {
+
+    // 3c. Start new tasks if possible
+    this.scheduleNewTasks();
+
+    // 4. Scan worktrees and reap orphaned worker processes periodically.
+    if (Date.now() - this.lastOrphanScan >= 6 * 60 * 60 * 1000) {
       this.lastOrphanScan = Date.now();
+      this.scanOrphanWorktrees();
       this.reapOrphans();
     }
   }
@@ -989,7 +1112,8 @@ export class Scheduler {
   /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
   reapOrphans(): void {
     const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
-    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    const roots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const processes = listAllWorktreeProcesses({ worktreesDir: roots, protectedPaths: [this.config.hubHome] });
     const activeWorktrees = new Set<string>();
     for (const run of this.running.values()) {
       const task = this.taskRepo.get(run.taskId);
@@ -1002,7 +1126,7 @@ export class Scheduler {
     for (const info of processes) {
       const dir = info.cwd.replace(/ \(deleted\)$/, '');
       if (info.cwd.endsWith(' (deleted)')) {
-        reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        reapSyncForWorktree(dir, { worktreesDir: roots, protectedPaths: [this.config.hubHome] });
         continue;
       }
 
@@ -1010,7 +1134,7 @@ export class Scheduler {
       const active = [...activeWorktrees].some((worktree) => processCwd === worktree || processCwd.startsWith(worktree + path.sep));
       if (active) continue;
       if (info.startedAt > oldProcessCutoff && !isOrphanProcess(info)) continue;
-      reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      reapSyncForWorktree(dir, { worktreesDir: roots, protectedPaths: [this.config.hubHome] });
     }
   }
 
@@ -1280,7 +1404,7 @@ export class Scheduler {
     const stalledTask = this.taskRepo.get(taskId);
     if (stalledTask?.worktreePath) {
       const project = this.projectRepo.get(stalledTask.projectId);
-      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
     this.running.delete(taskId);
     if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
@@ -1437,7 +1561,8 @@ export class Scheduler {
       }
 
       if (task.worktreePath) {
-        await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        const project = this.projectRepo.get(task.projectId);
+        await reap(task.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
       }
 
     // Read log tail for quota detection
@@ -1632,7 +1757,13 @@ export class Scheduler {
 
           // Mark quota for profile and same-email profiles
           if (this.quotaService.mark(rt.profileName, family, resetSeconds, `quota exhausted on ${rt.model}`)) {
-            this.eventBus.emit('quota.exhausted', taskId, { profile: rt.profileName, family });
+            const profile = this.profileRepo.get(rt.profileName);
+            this.eventBus.emit('quota.exhausted', taskId, {
+              profile: rt.profileName,
+              family,
+              engine: profile?.engine,
+              allExhausted: profile ? this.quotaService.allProfilesForEngineExhausted(profile.engine, family) : false,
+            });
           }
 
           // Try to find another profile/model
@@ -1765,7 +1896,9 @@ export class Scheduler {
       this.skipSchedulingOnce = false;
       return;
     }
-    const queuedTasks = this.taskRepo.getByStatus('queued');
+    const queuedTasks = this.taskRepo.getByStatus('queued').sort((a, b) =>
+      this.departmentPriority(b) - this.departmentPriority(a) || parseDbTime(a.createdAt) - parseDbTime(b.createdAt),
+    );
 
     for (const task of queuedTasks) {
       if (task.notBefore != null && task.notBefore > Math.floor(Date.now() / 1000)) continue;
@@ -1792,10 +1925,7 @@ export class Scheduler {
         continue;
       }
 
-      const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
-      const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
-
-      if (runningInProject + startingInProject >= this.effectiveParallel(project)) {
+      if (!this.hasParallelCapacity(project)) {
         this.markQueuedWaiting(task, 'parallel');
         continue;
       }
@@ -1887,8 +2017,8 @@ export class Scheduler {
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
       if (!task.worktreePath) continue;
       if (codexProfiles.length === 0) {
-        // Every Codex account out of quota or logged out (not merely busy): review with Claude instead.
-        if (this.codexReviewUnavailable()) this.startClaudeFallbackReview(task);
+        // Every Codex account out of quota or logged out, or busy for too long: review with Claude instead.
+        if (this.codexReviewUnavailable() || this.reviewWaitedTooLong(task)) this.startClaudeFallbackReview(task);
         continue;
       }
       codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -1899,6 +2029,10 @@ export class Scheduler {
         ? codexProfiles.find((p) => p.name !== lastWorker.profileName)
         : codexProfiles[0];
       if (!profile) continue;
+      if (step?.reviewer === 'claude' && !this.claudeBudgetAvailable(task)) {
+        this.eventBus.emit('review.waiting', task.id, { reason: 'department_claude_budget' });
+        continue;
+      }
       this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
     }
   }
@@ -1941,14 +2075,12 @@ export class Scheduler {
   }
 
   /**
-   * Without an auto brain, a task escalated a second time for reviewer change requests gets one
+   * A task escalated a second time for reviewer change requests gets one
    * final verdict from the Claude reviewer instead of waiting for a person. Its approval merges as
    * usual; a further change request leaves the task parked (it is already escalated).
    */
   private needsClaudeArbiter(task: TaskRow): boolean {
     if (this.config.reviewer?.claudeFallback === false || task.reviewerEscalationReason !== 'reviewer_changes_limit') return false;
-    const project = this.projectRepo.get(task.projectId);
-    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return false;
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
@@ -1957,14 +2089,12 @@ export class Scheduler {
   }
 
   /**
-   * The Claude arbiter asked for changes on an escalated task. With nobody to decide, send it back
+   * The Claude arbiter asked for changes on an escalated task. Send it back
    * with that feedback on the strongest model, at most ARBITER_ROUNDS times; then block it and say so.
    */
   private actOnArbiterRejection(task: TaskRow, last: { actor: string; verdict: string; feedback: string | null; createdAt: string } | undefined): void {
     if (!last || last.actor !== 'claude-reviewer' || last.verdict !== 'changes_requested') return;
     if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return;
-    const project = this.projectRepo.get(task.projectId);
-    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return;
     const rejections = this.reviewRepo?.getByTask(task.id)
       .filter((review) => review.actor === 'claude-reviewer' && review.verdict === 'changes_requested').length ?? 0;
     if (rejections > ARBITER_ROUNDS) {
@@ -1982,12 +2112,21 @@ export class Scheduler {
     this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
   }
 
+  private reviewWaitedTooLong(task: TaskRow): boolean {
+    const waitedMs = Date.now() - parseDbTime(task.updatedAt);
+    return Number.isFinite(waitedMs) && waitedMs >= (this.config.reviewer?.claudeFallbackAfterMin ?? 10) * 60_000;
+  }
+
   private codexReviewUnavailable(): boolean {
     const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex');
     return codexProfiles.every((p) => this.quotaService.isExhausted(p.name, 'codex') || (p.authState != null && p.authState !== 'ok'));
   }
 
   private startClaudeFallbackReview(task: TaskRow): void {
+    if (!this.claudeBudgetAvailable(task)) {
+      this.eventBus.emit('review.waiting', task.id, { actor: 'claude-reviewer', reason: 'department_claude_budget' });
+      return;
+    }
     const engine = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
     if (!engine || this.config.reviewer?.claudeFallback === false) return;
     const preferred = this.config.reviewer?.claudeProfiles ?? [];
@@ -2028,7 +2167,7 @@ export class Scheduler {
   private taskLogDir(task: TaskRow): string {
     const project = this.projectRepo.get(task.projectId);
     if (project && projectSettings(project).worktree.logsInRoot === true) {
-      return path.join(projectWorktreeRoot(project, this.config.hubHome), '.logs');
+      return path.join(projectWorktreeRoot(project, this.config.hubHome), '.logs', task.id.replace('/', '_'));
     }
     return path.join(this.config.logsDir, task.id.replace('/', '_'));
   }
@@ -2318,7 +2457,10 @@ export class Scheduler {
       const engineId = getModelEngine(model);
 
       // Find suitable profiles
-      const profiles = this.profileRepo.getEnabled().filter((p) => !p.authState || p.authState === 'ok');
+      const project = this.projectRepo.get(task.projectId);
+      const assigned = project?.departmentId ? this.departmentRepo?.profiles(project.departmentId) : [];
+      const assignedNames = assigned && assigned.length > 0 ? new Set(assigned.map((item) => item.profileName)) : null;
+      const profiles = this.profileRepo.getEnabled().filter((p) => (!p.authState || p.authState === 'ok') && (!assignedNames || assignedNames.has(p.name)));
       const eligibleProfiles = profiles.filter((profile) => {
         if (profile.engine !== engineId) return false;
         if (this.quotaService.isExhausted(profile.name, family)) return false;
@@ -2522,8 +2664,13 @@ export class Scheduler {
     }
 
     const projectAccessible = isProjectAccessible(project.path);
+    const worktreeRootAccessible = isProjectWorktreeRootAccessible({
+      id: project.id,
+      path: project.path,
+      settings: project.settings,
+    });
     const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
-    if (!projectAccessible || !worktreeAccessible) {
+    if (!projectAccessible || !worktreeRootAccessible || !worktreeAccessible) {
       this.locks.release(profile.name, lockFile);
       this.markTaskWaitingForProject(task, project);
       return;
@@ -2556,6 +2703,10 @@ export class Scheduler {
           ensureIntegrationWorktree(project, this.config.hubHome);
         } catch (e) {
           this.locks.release(profile.name, lockFile);
+          if (!isProjectAccessible(project.path) || !isProjectWorktreeRootAccessible({ id: project.id, path: project.path, settings: project.settings })) {
+            this.markTaskWaitingForProject(task, project);
+            return;
+          }
           this.taskRepo.updateStatus(task.id, 'failed');
           this.eventBus.emit('task.failed', task.id, { error: String(e) });
           return;
@@ -2573,7 +2724,7 @@ export class Scheduler {
         });
       } catch (e) {
         this.locks.release(profile.name, lockFile);
-        if (!isProjectAccessible(project.path)) {
+        if (!isProjectAccessible(project.path) || !isProjectWorktreeRootAccessible({ id: project.id, path: project.path, settings: project.settings })) {
           this.markTaskWaitingForProject(task, project);
           return;
         }
@@ -2910,7 +3061,7 @@ export class Scheduler {
     const task = this.taskRepo.get(taskId);
     if (task?.worktreePath) {
       const project = this.projectRepo.get(task.projectId);
-      reapSyncForWorktree(task.worktreePath, { worktreesDir: project ? projectWorktreeRoot(project, this.config.hubHome) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      reapSyncForWorktree(task.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
 
     this.running.delete(taskId);
@@ -2995,7 +3146,8 @@ export class Scheduler {
   }
 
   private getMonitoredDisks(): MonitoredDisk[] {
-    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
+    const roots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    return getMonitoredDisks(roots, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
   }
 
   private getBlockingDisk(): MonitoredDisk | undefined {
@@ -3068,21 +3220,22 @@ export class Scheduler {
 
   private cleanExpiredWorktrees(): void {
     const afterHours = this.config.cleanup?.worktreeOnDoneAfterHours ?? 24;
-    if (afterHours <= 0) return;
+    const effectiveAfterHours = this.diskLow ? Math.min(afterHours > 0 ? afterHours : 2, 2) : afterHours;
+    if (effectiveAfterHours <= 0) return;
 
-    const thresholdMs = afterHours * 60 * 60 * 1000;
+    const thresholdMs = effectiveAfterHours * 60 * 60 * 1000;
     const now = Date.now();
 
-    const doneTasks = this.taskRepo.getByStatus('done');
-    for (const task of doneTasks) {
-      // STRICT SAFETY: Never delete worktree of non-done tasks
-      if (task.status !== 'done') continue;
+    const completedTasks = this.taskRepo.getAll().filter((task) => task.status === 'done' || task.status === 'cancelled');
+    for (const task of completedTasks) {
       if (!task.worktreePath) continue;
 
       const updatedAt = parseDbTime(task.updatedAt);
       if (isNaN(updatedAt)) continue;
 
       if (now - updatedAt >= thresholdMs) {
+        const retryAt = this.worktreeCleanupRetryAt.get(task.id) || 0;
+        if (now < retryAt) continue;
         const project = this.projectRepo.get(task.projectId);
         let hooks = null;
         if (project?.hooks) {
@@ -3092,21 +3245,98 @@ export class Scheduler {
             // ignore
           }
         }
+        if (fs.existsSync(task.worktreePath)) {
+          let dirty = false;
+          try {
+            dirty = execFileSync('git', ['-C', task.worktreePath, 'status', '--porcelain'], { encoding: 'utf8' }).trim().length > 0;
+          } catch {
+            // A non-git directory is still eligible for a task-owned cleanup.
+          }
+          if (dirty) {
+            if (!this.dirtyWorktreeLogged.has(task.id)) {
+              this.dirtyWorktreeLogged.add(task.id);
+              console.warn(`[worktree] Keeping ${task.worktreePath}: uncommitted changes for task ${task.id}`);
+            }
+            continue;
+          }
+          this.dirtyWorktreeLogged.delete(task.id);
+        }
+
+        let removed = !fs.existsSync(task.worktreePath);
+        let removalError: unknown;
         try {
-          // remove() refuses anything outside worktreesDir or overlapping a project root.
-          this.worktreeService.remove(project?.path ?? null, task.worktreePath, {
+          if (!removed) {
+            // remove() refuses anything outside worktreesDir or overlapping a project root.
+            removed = this.worktreeService.remove(project?.path ?? null, task.worktreePath, {
             slot: task.slot,
             slug: task.slug,
             projectId: task.projectId,
             taskId: task.id,
             hooks,
-          });
-        } catch {
-          // ignore
+            }, project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir);
+          }
+        } catch (error) {
+          removed = false;
+          removalError = error;
         }
 
-        this.taskRepo.update(task.id, { worktreePath: null, slot: null });
-        this.eventBus.emit('worktree.cleaned', task.id, { worktreePath: task.worktreePath });
+        if (removed && !fs.existsSync(task.worktreePath)) {
+          this.worktreeCleanupRetryAt.delete(task.id);
+          this.worktreeCleanupLogged.delete(task.id);
+          this.taskRepo.update(task.id, { worktreePath: null, slot: null });
+          this.eventBus.emit('worktree.cleaned', task.id, { worktreePath: task.worktreePath });
+        } else {
+          this.worktreeCleanupRetryAt.set(task.id, now + 60 * 60 * 1000);
+          if (!this.worktreeCleanupLogged.has(task.id)) {
+            this.worktreeCleanupLogged.add(task.id);
+            const reason = removalError instanceof Error ? `: ${removalError.message}` : '';
+            console.warn(`[worktree] Failed to remove ${task.worktreePath} for task ${task.id}${reason}; will retry later`);
+          }
+        }
+      }
+    }
+  }
+
+  private scanOrphanWorktrees(): void {
+    const root = path.resolve(this.config.worktreesDir);
+    let projects: fs.Dirent[];
+    try {
+      projects = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    const tasks = this.taskRepo.getAll();
+    const referenced = new Set(tasks.filter((task) => task.worktreePath).map((task) => path.resolve(task.worktreePath!)));
+    for (const projectDir of projects) {
+      if (!projectDir.isDirectory()) continue;
+      const project = this.projectRepo.get(projectDir.name);
+      if (!project) continue;
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(path.join(root, projectDir.name), { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(root, projectDir.name, entry.name);
+        if (referenced.has(path.resolve(candidate)) || !isDeletableWorktreePath(this.config.worktreesDir, candidate, [this.config.hubHome, project.path])) continue;
+        const task = tasks.find((row) => row.projectId === project.id && row.slug === entry.name);
+        if (task?.worktreePath) continue;
+        if (task && task.status !== 'done' && task.status !== 'cancelled') continue;
+        let isGitWorktree = false;
+        try {
+          const listed = execFileSync('git', ['-C', project.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+          isGitWorktree = listed.split(/\n(?=worktree )/).some((block) => block.split('\n')[0] === `worktree ${candidate}`);
+        } catch {
+          // Keep unknown repositories untouched.
+        }
+        if (!isGitWorktree) {
+          console.warn(`[worktree] Keeping orphan ${candidate}: not a registered git worktree`);
+          continue;
+        }
+        try {
+          execFileSync('git', ['-C', project.path, 'worktree', 'remove', candidate], { timeout: 30000 });
+          if (!fs.existsSync(candidate)) console.log(`[worktree] Removed orphan ${candidate}`);
+        } catch (error) {
+          console.warn(`[worktree] Failed to remove orphan ${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
   }

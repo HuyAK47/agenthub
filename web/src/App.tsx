@@ -19,6 +19,7 @@ const TaskDetailPage = lazy(() => import('./pages/TaskDetailPage').then((m) => (
 const ProfilesPage = lazy(() => import('./pages/ProfilesPage').then((m) => ({ default: m.ProfilesPage })));
 const ChatPage = lazy(() => import('./pages/ChatPage').then((m) => ({ default: m.ChatPage })));
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
+const DepartmentsPage = lazy(() => import('./pages/DepartmentsPage').then((m) => ({ default: m.DepartmentsPage })));
 const PlansPage = lazy(() => import('./pages/PlansPage').then((m) => ({ default: m.PlansPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const SavingsPage = lazy(() => import('./pages/SavingsPage').then((m) => ({ default: m.SavingsPage })));
@@ -46,14 +47,6 @@ const SetupRedirect: React.FC = () => {
 };
 
 export const App: React.FC = () => {
-  useEffect(() => {
-    // Start SSE stream connection and automatic cache invalidation
-    const cleanupSSE = connectSSE(queryClient);
-    return () => {
-      cleanupSSE();
-    };
-  }, []);
-
   return (
     <QueryClientProvider client={queryClient}>
       <AppShell />
@@ -64,6 +57,11 @@ export const App: React.FC = () => {
 /** Everything that reads queries (branding config included) must render inside QueryClientProvider. */
 const AppShell: React.FC = () => {
   const { data: config } = useQuery({ queryKey: ['config'], queryFn: getConfig, staleTime: 30_000 });
+  useEffect(() => {
+    if (!config) return;
+    // Do not consume notification events until the persisted notification and brain policies are loaded.
+    return connectSSE(queryClient);
+  }, [config]);
   return (
       <ThemeProvider>
         <LocaleProvider appName={config?.branding?.name}>
@@ -96,6 +94,7 @@ const AppShell: React.FC = () => {
                   <Route path="profiles" element={<ProfilesPage />} />
                   <Route path="projects" element={<ProjectsPage />} />
                   <Route path="projects/:id/settings" element={<ProjectsPage />} />
+                  <Route path="departments" element={<DepartmentsPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                 </Route>
               </Routes>

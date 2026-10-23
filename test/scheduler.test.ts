@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
-import { openDatabase, ProjectRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, ReviewRepo } from '../src/db/index.js';
+import { openDatabase, ProjectRepo, DepartmentRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, ReviewRepo } from '../src/db/index.js';
 import { Scheduler } from '../src/scheduler/index.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
 import { QuotaService } from '../src/quota/index.js';
@@ -314,6 +314,44 @@ describe('maxParallel limit', () => {
       for (const child of workers) child.kill();
     }
   });
+
+  it('enforces the department limit across projects', () => {
+    const firstProjectPath = path.join(tmpDir, 'repo-first');
+    createTestProject(firstProjectPath);
+    const secondProjectPath = path.join(tmpDir, 'repo-second');
+    fs.mkdirSync(secondProjectPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: secondProjectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
+    fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Test');
+    execFileSync('git', ['add', '.'], { cwd: secondProjectPath });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: secondProjectPath,
+      env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' },
+    });
+    projectRepo.insert({ id: 'second-project', name: 'Second Project', path: secondProjectPath, defaultBranch: 'main', maxParallel: 3 });
+
+    const departmentRepo = new DepartmentRepo(db);
+    departmentRepo.insert({ id: 'eng', name: 'Engineering', priority: 10, maxParallel: 1, claudeDailyTokenBudget: 0, telegramTopicId: null });
+    projectRepo.update('test-project', { departmentId: 'eng' });
+    projectRepo.update('second-project', { departmentId: 'eng' });
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    profileRepo.upsert({ name: 'p2', engine: 'agy', kind: 'isolated', home: '/tmp/p2', email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/low', projectId: 'test-project', slug: 'low', title: 'Low', status: 'queued' });
+    taskRepo.insert({ id: 'second-project/high', projectId: 'second-project', slug: 'high', title: 'High', status: 'queued' });
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]), undefined, undefined, undefined, undefined, undefined, undefined, departmentRepo,
+    );
+    scheduler.tick();
+
+    expect(taskRepo.get('test-project/low')?.status).toBe('running');
+    expect(taskRepo.get('second-project/high')?.status).toBe('queued');
+    expect(taskRepo.get('second-project/high')?.waitReason).toBe('parallel');
+    expect(scheduler.getRunning().size).toBe(1);
+    scheduler.stop();
+  });
 });
 
 describe('Profile uses both agy slots', () => {
@@ -357,6 +395,69 @@ describe('Scheduler regression fixes', () => {
       new Map<string, Engine>([['agy', fakeEngine]]));
   }
 
+  it('does not repeat load.high while overloaded metrics stay flat', () => {
+    config.load.enabled = true;
+    const scheduler = makeScheduler();
+    const loadEvents: unknown[] = [];
+    scheduler.getEventBus().on('load.high', (_taskId, payload) => loadEvents.push(payload));
+    let snapshot = {
+      load1: 10,
+      freeMemGB: 6,
+      overloaded: true,
+      recoveringSince: null,
+      highSince: 0,
+      autoPauseTriggered: false,
+    };
+    const loadGuard = (scheduler as unknown as { loadGuard: { setConfig: (value: typeof config.load) => void; update: () => typeof snapshot; isAutoPauseTriggered: () => boolean; isOverloaded: () => boolean } }).loadGuard;
+    loadGuard.setConfig = () => {};
+    loadGuard.update = () => snapshot;
+    loadGuard.isAutoPauseTriggered = () => false;
+    loadGuard.isOverloaded = () => true;
+    vi.spyOn(Date, 'now').mockReturnValue(0);
+
+    scheduler.tick();
+    vi.mocked(Date.now).mockReturnValue(30 * 60 * 1000);
+    scheduler.tick();
+    vi.mocked(Date.now).mockReturnValue(60 * 60 * 1000);
+    scheduler.tick();
+    expect(loadEvents).toHaveLength(1);
+
+    snapshot = { ...snapshot, load1: 13 };
+    scheduler.tick();
+    expect(loadEvents).toHaveLength(2);
+    scheduler.stop();
+    vi.restoreAllMocks();
+  });
+
+  it('does not treat a zero load baseline as worsening when it stays zero', () => {
+    config.load.enabled = true;
+    const scheduler = makeScheduler();
+    const loadEvents: unknown[] = [];
+    scheduler.getEventBus().on('load.high', (_taskId, payload) => loadEvents.push(payload));
+    const snapshot = {
+      load1: 0,
+      freeMemGB: 6,
+      overloaded: true,
+      recoveringSince: null,
+      highSince: 0,
+      autoPauseTriggered: false,
+    };
+    const loadGuard = (scheduler as unknown as { loadGuard: { setConfig: (value: typeof config.load) => void; update: () => typeof snapshot; isAutoPauseTriggered: () => boolean; isOverloaded: () => boolean } }).loadGuard;
+    loadGuard.setConfig = () => {};
+    loadGuard.update = () => snapshot;
+    loadGuard.isAutoPauseTriggered = () => false;
+    loadGuard.isOverloaded = () => true;
+    vi.spyOn(Date, 'now').mockReturnValue(0);
+
+    scheduler.tick();
+    vi.mocked(Date.now).mockReturnValue(60 * 60 * 1000);
+    scheduler.tick();
+
+    expect(loadEvents).toHaveLength(1);
+    scheduler.stop();
+    vi.restoreAllMocks();
+  });
+
   it('uses the second profile slot before waiting for completion', async () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);
@@ -385,6 +486,29 @@ describe('Scheduler regression fixes', () => {
     expect(runRepo.getByTask('test-project/a')[0].outcome).toBeNull();
     scheduler.cancelAll();
     delete process.env.FAKE_MODE;
+  });
+
+  it('re-runs checks for a task left checking by a restart', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    taskRepo.insert({ id: 'test-project/chk', projectId: 'test-project', slug: 'chk', title: 'Chk', status: 'checking' });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind, outcome, endedAt) VALUES ('w-chk', 'test-project/chk', 'agy', 'gemini-3.8-flash-high', 'p', 'worker', 'done', datetime('now'))").run();
+    const scheduler = makeScheduler();
+    const seen: string[] = [];
+    (scheduler as unknown as { runChecksForTask: (id: string, run: string) => Promise<void> }).runChecksForTask = async (id, run) => { seen.push(`${id}:${run}`); };
+    scheduler.start();
+    expect(seen).toEqual(['test-project/chk:w-chk']);
+    scheduler.stop();
+  });
+
+  it('requeues a task left running without any run after a restart', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    taskRepo.insert({ id: 'test-project/orphan', projectId: 'test-project', slug: 'orphan', title: 'Orphan', status: 'running' });
+    const scheduler = makeScheduler();
+    scheduler.start();
+    expect(taskRepo.get('test-project/orphan')?.status).not.toBe('running');
+    scheduler.stop();
   });
 
   it('recovers a live worker into the running map', async () => {
@@ -716,7 +840,8 @@ describe('Codex reviewer failover lifecycle', () => {
       scheduler.tick();
       const task = taskRepo.get('test-project/review')!;
       if (round <= 2) {
-        expect(task.status).toBe('queued');
+        // Back in the queue; the same tick may already mark it waiting for a free account.
+        expect(['queued', 'waiting_quota']).toContain(task.status);
         expect(JSON.parse(task.modelChain!)[0]).toBe('claude-opus-4-6-thinking');
       } else {
         expect(task.status).toBe('blocked');
@@ -732,6 +857,16 @@ describe('Codex reviewer failover lifecycle', () => {
     taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
     scheduler.tick();
     expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('lets Claude review once a busy Codex has kept the task waiting too long', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    (scheduler as unknown as { reviewerRunsForProfile: (name: string) => boolean }).reviewerRunsForProfile = (name) => name === 'codex-1';
+    db.prepare("UPDATE tasks SET updatedAt = datetime('now', '-30 minutes') WHERE id = 'test-project/review'").run();
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.profileName).toBe('claude-1');
     scheduler.stop();
   });
 

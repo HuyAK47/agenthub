@@ -11,8 +11,7 @@ export interface WorktreeProjectPath {
 
 /**
  * Return the parent directory used for this project's task worktrees.
- * The optional root keeps old projects at <hubHome>/worktrees/<projectId>, while
- * projects on another mounted filesystem are kept beside the repository.
+ * An explicit root is used as-is; otherwise retain the historical location.
  */
 export function projectWorktreeRoot(
   project: WorktreeProjectPath,
@@ -42,6 +41,41 @@ export function projectWorktreeRoot(
   return path.join(base, project.id);
 }
 
+/** Both the current configured root and the historical root may contain a task. */
+export function projectWorktreeRoots(
+  project: WorktreeProjectPath,
+  hubHome = path.join(os.homedir(), '.agenthub'),
+  legacyWorktreesDir = path.join(hubHome, 'worktrees'),
+): string[] {
+  const current = projectWorktreeRoot(project, hubHome, legacyWorktreesDir);
+  const legacy = path.join(legacyWorktreesDir, project.id);
+  return current === legacy ? [current] : [current, legacy];
+}
+
+/** Return whether an explicitly configured root is currently mounted and writable. */
+export function isProjectWorktreeRootAccessible(project: WorktreeProjectPath): boolean {
+  const configured = project.settings ? projectSettingsRoot(project.settings) : undefined;
+  if (!configured) return true;
+  try {
+    fs.statSync(configured);
+    fs.accessSync(configured, fs.constants.R_OK | fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function projectSettingsRoot(raw: string): string | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { worktree?: { root?: unknown } };
+    return typeof parsed.worktree?.root === 'string' && path.isAbsolute(parsed.worktree.root)
+      ? path.resolve(parsed.worktree.root)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function validateProjectWorktreeRoot(root: string, projectPath: string, hubHome: string): void {
   if (!path.isAbsolute(root)) throw new Error('Worktree root phải là đường dẫn tuyệt đối');
   const resolved = path.resolve(root);
@@ -64,7 +98,12 @@ export function validateProjectWorktreeRoot(root: string, projectPath: string, h
     if (!ignored) throw new Error('Worktree root nằm trong project nhưng chưa được gitignore');
   }
   if (!fs.existsSync(resolved)) throw new Error(`Worktree root không tồn tại: ${resolved}`);
-  try { fs.accessSync(resolved, fs.constants.W_OK); } catch { throw new Error(`Worktree root không ghi được: ${resolved}`); }
+  try {
+    if (!fs.statSync(resolved).isDirectory()) throw new Error('not a directory');
+    fs.accessSync(resolved, fs.constants.W_OK);
+  } catch {
+    throw new Error(`Worktree root phải là thư mục ghi được: ${resolved}`);
+  }
 }
 
 function resolveRealPath(value: string): string {
