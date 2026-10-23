@@ -13,7 +13,15 @@ export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
   const { openTour } = useTour();
   const queryClient = useQueryClient();
-  const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
+  const [permissionPage, setPermissionPage] = useState(1);
+  const [permissionCursors, setPermissionCursors] = useState<Record<number, string | undefined>>({});
+  const permissionRules = useQuery({
+    queryKey: ['permissionRules', permissionPage, permissionCursors[permissionPage - 1]],
+    queryFn: () => getPermissionRules({ limit: 20, cursor: permissionCursors[permissionPage - 1] }),
+  });
+  useEffect(() => {
+    if (permissionRules.data?.nextCursor) setPermissionCursors((current) => ({ ...current, [permissionPage]: permissionRules.data!.nextCursor || undefined }));
+  }, [permissionPage, permissionRules.data?.nextCursor]);
   const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
 
   const [hardChain, setHardChain] = useState<string>('');
@@ -758,16 +766,17 @@ export const SettingsPage: React.FC = () => {
             <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
             <DataTable
-              rows={permissionRules.data || []}
+              rows={permissionRules.data?.items || []}
               emptyTitle={t('extra.noPermissionRules')}
               columns={[
                 { key: 'tool', title: t('extra.permissionTool'), sortable: true, sortValue: (rule) => `${rule.toolName} ${rule.pattern}`, render: (rule) => <code className="break-all">{rule.toolName} {rule.pattern}</code> },
                 { key: 'scope', title: t('extra.permissionScope'), sortable: true, sortValue: (rule) => rule.scope, render: (rule) => <span>{rule.scope}</span> },
                 { key: 'actions', title: t('extra.actions'), render: (rule) => <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button> },
               ]}
-              page={1}
+              page={permissionPage}
               pageSize={20}
-              total={permissionRules.data?.length || 0}
+              total={permissionRules.data?.total || 0}
+              onPageChange={setPermissionPage}
             />
           </section>
 

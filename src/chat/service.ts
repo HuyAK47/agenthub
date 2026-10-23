@@ -279,6 +279,7 @@ export class ChatService {
   }
 
   listPermissionRules() { return this.permissionBroker.listRules(); }
+  pagePermissionRules(options: { limit?: string; cursor?: string }) { return this.permissionBroker.pageRules(options.limit, options.cursor); }
 
   getPermission(id: string) { return this.permissionBroker.get(id); }
 
@@ -2119,7 +2120,11 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
     return chatService.listPermissions(sessionId);
   });
 
-  fastify.get('/api/chat/permission-rules', async () => chatService.listPermissionRules());
+  fastify.get('/api/chat/permission-rules', async (req: FastifyRequest) => {
+    const query = req.query as { limit?: string; cursor?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return query.limit === undefined ? chatService.listPermissionRules() : chatService.pagePermissionRules(query);
+  });
   fastify.delete('/api/chat/permission-rules/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return chatService.deletePermissionRule(id);

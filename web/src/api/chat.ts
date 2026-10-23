@@ -65,7 +65,13 @@ export async function getChatPermissions(sessionId: string): Promise<ChatPermiss
 }
 
 export interface PermissionRule { id: string; scope: string; sessionId: string | null; projectId: string | null; toolName: string; pattern: string; createdAt: string; createdBy: string }
-export function getPermissionRules(): Promise<PermissionRule[]> { return apiFetch<PermissionRule[]>('/api/chat/permission-rules'); }
+export interface PermissionRulePage { items: PermissionRule[]; total: number; nextCursor: string | null }
+export function getPermissionRules(): Promise<PermissionRule[]>;
+export function getPermissionRules(options: { limit: number; cursor?: string }): Promise<PermissionRulePage>;
+export async function getPermissionRules(options?: { limit: number; cursor?: string }): Promise<PermissionRule[] | PermissionRulePage> {
+  const query = options ? `?limit=${options.limit}${options.cursor ? `&cursor=${encodeURIComponent(options.cursor)}` : ''}` : '';
+  return options ? apiFetch<PermissionRulePage>(`/api/chat/permission-rules${query}`) : apiFetch<PermissionRule[]>('/api/chat/permission-rules');
+}
 export function deletePermissionRule(id: string): Promise<{ ok: boolean }> { return apiFetch(`/api/chat/permission-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
 
 export async function createChatSession(

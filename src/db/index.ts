@@ -1618,6 +1618,23 @@ export class RunRepo {
       .all(taskId) as RunRow[];
   }
 
+  pageByTask(taskId: string, limit: string | number | undefined, cursor?: string): PageResult<RunRow> {
+    const decoded = decodeCursor(cursor);
+    if (cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(limit);
+    const values: unknown[] = [taskId];
+    const where = decoded
+      ? ' WHERE taskId = ? AND (startedAt < ? OR (startedAt = ? AND id < ?))'
+      : ' WHERE taskId = ?';
+    if (decoded) values.push(decoded.value, decoded.value, decoded.id);
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM runs WHERE taskId = ?').get(taskId) as { count: number }).count;
+    const rows = this.db.prepare(`SELECT * FROM runs${where} ORDER BY startedAt DESC, id DESC LIMIT ?`).all(...values, pageSize + 1) as RunRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.startedAt, last.id) : null };
+  }
+
   getRunning(): RunRow[] {
     return this.db
       .prepare('SELECT * FROM runs WHERE outcome IS NULL')
@@ -1690,6 +1707,24 @@ export class EventRepo {
     return this.db
       .prepare('SELECT * FROM events WHERE taskId = ? ORDER BY id')
       .all(taskId) as EventRow[];
+  }
+
+  page(options?: { taskId?: string; limit?: string | number; cursor?: string }): PageResult<EventRow> {
+    const decoded = decodeCursor(options?.cursor);
+    if (options?.cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(options?.limit);
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (options?.taskId) { conditions.push('taskId = ?'); values.push(options.taskId); }
+    if (decoded) { conditions.push('id < ?'); values.push(Number(decoded.value)); }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = options?.taskId ? ' WHERE taskId = ?' : '';
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM events${countConditions}`).get(...(options?.taskId ? [options.taskId] : [])) as { count: number }).count;
+    const rows = this.db.prepare(`SELECT * FROM events${where} ORDER BY id DESC LIMIT ?`).all(...values, pageSize + 1) as EventRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.id, String(last.id)) : null };
   }
 }
 
@@ -2232,6 +2267,21 @@ export class PermissionRuleRepo {
     return this.db.prepare('SELECT * FROM permission_rules ORDER BY createdAt, id').all() as PermissionRuleRow[];
   }
 
+  page(limit: string | number | undefined, cursor?: string): PageResult<PermissionRuleRow> {
+    const decoded = decodeCursor(cursor);
+    if (cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(limit);
+    const values: unknown[] = [];
+    const where = decoded ? ' WHERE (createdAt < ? OR (createdAt = ? AND id < ?))' : '';
+    if (decoded) values.push(decoded.value, decoded.value, decoded.id);
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM permission_rules').get() as { count: number }).count;
+    const rows = this.db.prepare(`SELECT * FROM permission_rules${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, pageSize + 1) as PermissionRuleRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null };
+  }
+
   insert(row: Omit<PermissionRuleRow, 'createdAt'>): PermissionRuleRow {
     this.db.prepare('INSERT INTO permission_rules (id, scope, sessionId, projectId, toolName, pattern, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(row.id, row.scope, row.sessionId, row.projectId, row.toolName, row.pattern, row.createdBy);
@@ -2456,6 +2506,23 @@ export class KnowledgeRepo {
     return this.db
       .prepare('SELECT * FROM knowledge_entries WHERE projectId = ? ORDER BY pinned DESC, createdAt DESC, id DESC')
       .all(projectId) as KnowledgeEntryRow[];
+  }
+
+  pageByProject(projectId: string, limit: string | number | undefined, cursor?: string): PageResult<KnowledgeEntryRow> {
+    const decoded = decodeCursor(cursor);
+    if (cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(limit);
+    const values: unknown[] = [projectId];
+    const where = decoded
+      ? ' WHERE projectId = ? AND (createdAt < ? OR (createdAt = ? AND id < ?))'
+      : ' WHERE projectId = ?';
+    if (decoded) values.push(decoded.value, decoded.value, decoded.id);
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM knowledge_entries WHERE projectId = ?').get(projectId) as { count: number }).count;
+    const rows = this.db.prepare(`SELECT * FROM knowledge_entries${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, pageSize + 1) as KnowledgeEntryRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, String(last.id)) : null };
   }
 
   get(id: number): KnowledgeEntryRow | undefined {

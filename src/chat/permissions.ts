@@ -119,6 +119,7 @@ export class PermissionBroker {
   get(id: string): ChatPermissionRow | undefined { return this.repo.get(id); }
   getLatest(sessionId: string, messageId: string | null | undefined, toolName: string): ChatPermissionRow | undefined { return this.repo.getLatest(sessionId, messageId, toolName); }
   listRules() { return this.ruleRepo?.listAll() || []; }
+  pageRules(limit: string | number | undefined, cursor?: string) { return this.ruleRepo?.page(limit, cursor) || { items: [], total: 0, nextCursor: null }; }
   deleteRule(id: string): boolean { return this.ruleRepo?.delete(id) || false; }
   private context(sessionId: string): { projectId: string | null; projectPath?: string } { const session = this.sessionRepo?.get(sessionId); const projectId = session?.projectId || null; return { projectId, projectPath: projectId ? this.projectRepo?.get(projectId)?.path : undefined }; }
   private patterns(input: Record<string, unknown>, toolName: string, ctx: { projectId: string | null; projectPath?: string }): string[] {

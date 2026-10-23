@@ -3410,9 +3410,26 @@ export class AppService {
     return notes.map(apiTaskNote);
   }
 
+  pageTaskRuns(idParam: string, options?: { limit?: string | number; cursor?: string }) {
+    const taskId = toTaskId(idParam);
+    if (!this.taskRepo.get(taskId)) throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    return this.runRepo.pageByTask(taskId, options?.limit, options?.cursor);
+  }
+
+  pageEvents(options?: { taskId?: string; limit?: string | number; cursor?: string }) {
+    return this.eventRepo.page(options);
+  }
+
   listKnowledge(projectId: string): KnowledgeEntryRow[] {
     if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
+  }
+
+  pageKnowledge(projectId: string, options?: { limit?: string | number; cursor?: string }) {
+    if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    if (!this.knowledgeRepo) return { items: [], total: 0, nextCursor: null };
+    const page = this.knowledgeRepo.pageByProject(projectId, options?.limit, options?.cursor);
+    return { ...page, items: page.items.map(apiKnowledgeEntry) };
   }
 
   reviewChecklistPreview(projectId: string) {
