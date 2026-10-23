@@ -732,6 +732,8 @@ export const MIGRATIONS: string[] = [
     FOREIGN KEY (profileName) REFERENCES profiles(name) ON DELETE CASCADE
   );
   `,
+  // Migration 53: external references for task/project commit conventions.
+  `ALTER TABLE tasks ADD COLUMN externalRef TEXT;`,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -899,6 +901,7 @@ export interface TaskRow {
   projectId: string;
   slug: string;
   title: string;
+  externalRef: string | null;
   body: string | null;
   level: string;
   modelChain: string | null;
@@ -1455,6 +1458,7 @@ export class TaskRepo {
     projectId: string;
     slug: string;
     title: string;
+    externalRef?: string | null;
     body?: string;
     level?: string;
     modelChain?: string;
@@ -1475,14 +1479,15 @@ export class TaskRepo {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, externalRef, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
         row.projectId,
         row.slug,
         row.title,
+        row.externalRef || null,
         row.body || null,
         row.level || 'easy',
         row.modelChain || null,
@@ -1540,7 +1545,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'externalRef' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];

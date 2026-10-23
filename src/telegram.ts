@@ -2551,16 +2551,19 @@ export class TelegramBotService {
 
     const beforePipe = trimmed.slice(0, pipeIdx).trim();
     const body = trimmed.slice(pipeIdx + 1).trim();
+    const refMatch = beforePipe.match(/^([A-Za-z][A-Za-z0-9]*#[A-Za-z0-9_-]+|[A-Za-z][A-Za-z0-9]*-\d+)\s+/);
+    const externalRef = refMatch?.[1];
+    const titlePart = externalRef ? beforePipe.slice(refMatch![0].length).trim() : beforePipe;
 
     const selectedProjId = this.selectedProject.get(chatId);
     let project = '';
     let title = '';
 
-    const firstSpace = beforePipe.indexOf(' ');
+    const firstSpace = titlePart.indexOf(' ');
     if (firstSpace === -1) {
       if (selectedProjId && this.projectRepo.get(selectedProjId)) {
         project = selectedProjId;
-        title = beforePipe;
+        title = titlePart;
       } else {
         await this.sendMessage(
           chatId,
@@ -2569,16 +2572,16 @@ export class TelegramBotService {
         return;
       }
     } else {
-      const candidateProj = beforePipe.slice(0, firstSpace).trim();
+      const candidateProj = titlePart.slice(0, firstSpace).trim();
       if (this.projectRepo.get(candidateProj)) {
         project = candidateProj;
-        title = beforePipe.slice(firstSpace + 1).trim();
+        title = titlePart.slice(firstSpace + 1).trim();
       } else if (selectedProjId && this.projectRepo.get(selectedProjId)) {
         project = selectedProjId;
-        title = beforePipe;
+        title = titlePart;
       } else {
         project = candidateProj;
-        title = beforePipe.slice(firstSpace + 1).trim();
+        title = titlePart.slice(firstSpace + 1).trim();
       }
     }
 
@@ -2603,6 +2606,7 @@ export class TelegramBotService {
         slug,
         title,
         body,
+        externalRef,
         level: 'easy',
         start: false,
       });
