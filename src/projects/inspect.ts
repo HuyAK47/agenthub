@@ -37,6 +37,7 @@ const PROJECT_FILES = ['package.json', 'pyproject.toml', 'requirements.txt', 'Ca
 const MAX_SCAN_BYTES = 512 * 1024 * 1024;
 const MAX_SCAN_ENTRIES = 20_000;
 const MAX_SCAN_MS = 1_500;
+const MAX_CONTEXT_BYTES = 96 * 1024;
 
 function command(cwd: string, args: string[]): string | null {
   try { return execFileSync(cwd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim() || null; } catch { return null; }
@@ -70,6 +71,28 @@ function walkSize(root: string): { bytes: number; truncated: boolean } {
 
 function encodedProjectDir(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+/** Read a bounded, human-readable excerpt for the wizard's worker task. */
+export function readClaudeSessionExcerpt(projectPath: string, sessionName: string, home = os.homedir()): string | null {
+  if (!/^[a-zA-Z0-9._-]+\.jsonl$/.test(sessionName)) return null;
+  const file = path.join(home, '.claude', 'projects', encodedProjectDir(path.resolve(projectPath)), sessionName);
+  try {
+    if (!fs.statSync(file).isFile()) return null;
+    const lines = fs.readFileSync(file, 'utf8').slice(0, MAX_CONTEXT_BYTES).split('\n');
+    return lines.flatMap((line) => {
+      try {
+        const item = JSON.parse(line) as { type?: string; role?: string; message?: { role?: string; content?: unknown } };
+        const value = item.message?.content;
+        const text = typeof value === 'string'
+          ? value
+          : Array.isArray(value)
+            ? value.filter((part): part is { text: string } => Boolean(part && typeof part === 'object' && 'text' in part && typeof part.text === 'string')).map((part) => part.text).join('\n')
+            : '';
+        return text ? [`${item.message?.role || item.role || item.type || 'message'}: ${text.slice(0, 4_000)}`] : [];
+      } catch { return []; }
+    }).join('\n\n').slice(0, MAX_CONTEXT_BYTES);
+  } catch { return null; }
 }
 
 function detectLanguage(root: string, packageJson: Record<string, unknown> | null): string {
@@ -114,16 +137,7 @@ export function inspectProject(projectPath: string, home = os.homedir()): Projec
     });
     claudeSessionPreviews = claudeSessions.map(({ name }) => {
       try {
-        const lines = fs.readFileSync(path.join(claudeRoot, name), 'utf8').slice(0, 64_000).split('\n');
-        const content = lines.flatMap((line) => {
-          try {
-            const item = JSON.parse(line) as { type?: string; role?: string; message?: { role?: string; content?: unknown } };
-            const value = item.message?.content ?? (item.type === 'user' || item.type === 'assistant' ? item.message : null);
-            const text = typeof value === 'string' ? value : Array.isArray(value) ? value.filter((part): part is { text: string } => Boolean(part && typeof part === 'object' && 'text' in part && typeof part.text === 'string')).map((part) => part.text).join('\n') : '';
-            return text ? [`${item.message?.role || item.role || item.type || 'message'}: ${text.slice(0, 2_000)}`] : [];
-          } catch { return []; }
-        }).join('\n\n').slice(0, 8_000);
-        return { name, content };
+        return { name, content: readClaudeSessionExcerpt(resolved, name, home)?.slice(0, 8_000) || '' };
       } catch { return { name, content: '' }; }
     });
   } catch { /* optional */ }

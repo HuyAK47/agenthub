@@ -61,7 +61,7 @@ import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
-import { createNewGitProject, inspectProject } from '../projects/inspect.js';
+import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
 import type { PerfCollector } from '../perf.js';
 
@@ -1228,15 +1228,24 @@ export class AppService {
     const project = this.projectRepo.get(id);
     if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
 
+    const sessionContext = input.sessions.map((session) => {
+      const excerpt = readClaudeSessionExcerpt(project.path, session);
+      if (excerpt === null) {
+        throw new HttpError(400, 'bad_request', `Phiên Claude không hợp lệ hoặc không còn tồn tại: ${session}`);
+      }
+      return [`### ${session}`, excerpt || 'Phiên không có nội dung văn bản; chỉ dùng các mục người dùng đã chọn bên dưới.'].join('\n');
+    });
+
     const task = this.createTask({
       project: project.id,
       slug: 'summarize-previous-context',
       title: 'Review and summarize previous Claude Code context',
       body: [
         'Read the selected previous session files and summarize durable project knowledge.',
+        'The session excerpts below are the approved input. Do not access ~/.claude or any other session file directly.',
         '',
-        'Selected sessions:',
-        ...input.sessions,
+        'Selected session excerpts:',
+        ...sessionContext,
         ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
         ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
       ].join('\n'),

@@ -77,10 +77,13 @@ describe('project wizard inspection', () => {
 describe('project inspection and creation at service level', () => {
   let tmpDir: string;
   let ctx: ReturnType<typeof createContext>;
+  let previousHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = tempDir();
     process.env.AGENTHUB_HOME = tmpDir;
+    previousHome = process.env.HOME;
+    process.env.HOME = path.join(tmpDir, 'home');
     process.env.AGENTHUB_AGY_HOMES = path.join(tmpDir, 'agy-homes');
     fs.mkdirSync(process.env.AGENTHUB_AGY_HOMES, { recursive: true });
     const config = loadConfig(tmpDir);
@@ -92,6 +95,8 @@ describe('project inspection and creation at service level', () => {
 
   afterEach(() => {
     ctx.scheduler.stop();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
   });
 
   it('rejects relative path on inspectProject via service', () => {
@@ -117,6 +122,9 @@ describe('project inspection and creation at service level', () => {
   it('creates a tracking task and waits for the worker result before exposing a summary', async () => {
     const target = path.join(tmpDir, 'valid-repo');
     const created = ctx.service.createNewProject({ name: 'Summary Project', path: target, defaultBranch: 'main' });
+    const sessionDir = path.join(process.env.HOME as string, '.claude', 'projects', target.replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'session-old.jsonl'), JSON.stringify({ message: { role: 'assistant', content: 'Keep the project conventions.' } }) + '\n');
     const result = ctx.service.summarizeProjectContext(created.id, { sessions: ['session-old.jsonl'] });
     expect(result.taskId).toBeTruthy();
     expect(['queued', 'waiting_quota']).toContain(result.status);
