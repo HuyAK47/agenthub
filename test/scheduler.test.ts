@@ -395,6 +395,69 @@ describe('Scheduler regression fixes', () => {
       new Map<string, Engine>([['agy', fakeEngine]]));
   }
 
+  it('does not repeat load.high while overloaded metrics stay flat', () => {
+    config.load.enabled = true;
+    const scheduler = makeScheduler();
+    const loadEvents: unknown[] = [];
+    scheduler.getEventBus().on('load.high', (_taskId, payload) => loadEvents.push(payload));
+    let snapshot = {
+      load1: 10,
+      freeMemGB: 6,
+      overloaded: true,
+      recoveringSince: null,
+      highSince: 0,
+      autoPauseTriggered: false,
+    };
+    const loadGuard = (scheduler as unknown as { loadGuard: { setConfig: (value: typeof config.load) => void; update: () => typeof snapshot; isAutoPauseTriggered: () => boolean; isOverloaded: () => boolean } }).loadGuard;
+    loadGuard.setConfig = () => {};
+    loadGuard.update = () => snapshot;
+    loadGuard.isAutoPauseTriggered = () => false;
+    loadGuard.isOverloaded = () => true;
+    vi.spyOn(Date, 'now').mockReturnValue(0);
+
+    scheduler.tick();
+    vi.mocked(Date.now).mockReturnValue(30 * 60 * 1000);
+    scheduler.tick();
+    vi.mocked(Date.now).mockReturnValue(60 * 60 * 1000);
+    scheduler.tick();
+    expect(loadEvents).toHaveLength(1);
+
+    snapshot = { ...snapshot, load1: 13 };
+    scheduler.tick();
+    expect(loadEvents).toHaveLength(2);
+    scheduler.stop();
+    vi.restoreAllMocks();
+  });
+
+  it('does not treat a zero load baseline as worsening when it stays zero', () => {
+    config.load.enabled = true;
+    const scheduler = makeScheduler();
+    const loadEvents: unknown[] = [];
+    scheduler.getEventBus().on('load.high', (_taskId, payload) => loadEvents.push(payload));
+    const snapshot = {
+      load1: 0,
+      freeMemGB: 6,
+      overloaded: true,
+      recoveringSince: null,
+      highSince: 0,
+      autoPauseTriggered: false,
+    };
+    const loadGuard = (scheduler as unknown as { loadGuard: { setConfig: (value: typeof config.load) => void; update: () => typeof snapshot; isAutoPauseTriggered: () => boolean; isOverloaded: () => boolean } }).loadGuard;
+    loadGuard.setConfig = () => {};
+    loadGuard.update = () => snapshot;
+    loadGuard.isAutoPauseTriggered = () => false;
+    loadGuard.isOverloaded = () => true;
+    vi.spyOn(Date, 'now').mockReturnValue(0);
+
+    scheduler.tick();
+    vi.mocked(Date.now).mockReturnValue(60 * 60 * 1000);
+    scheduler.tick();
+
+    expect(loadEvents).toHaveLength(1);
+    scheduler.stop();
+    vi.restoreAllMocks();
+  });
+
   it('uses the second profile slot before waiting for completion', async () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);

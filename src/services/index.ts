@@ -530,6 +530,7 @@ export const UpdateConfigSchema = z.object({
     high: z.number().positive().optional(),
     ok: z.number().positive().optional(),
     pressureHigh: z.number().positive().optional(),
+    pressureIoHigh: z.number().positive().optional(),
     pressureOk: z.number().positive().optional(),
     minFreeMemGB: z.number().positive().optional(),
     recoverAfterSec: z.number().int().positive().optional(),
