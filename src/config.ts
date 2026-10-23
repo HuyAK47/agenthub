@@ -137,12 +137,16 @@ export interface TelegramProjectTopic {
   threadId: number;
 }
 
+export type TelegramDepartmentTopic = TelegramProjectTopic;
+
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
   chats: TelegramChat[];
+  topicMode?: 'project' | 'department';
   projectTopics: Record<string, TelegramProjectTopic>;
+  departmentTopics?: Record<string, TelegramProjectTopic>;
   notify: TelegramNotifyConfig;
 }
 
@@ -362,7 +366,9 @@ export function saveConfig(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      topicMode?: 'project' | 'department';
       projectTopics?: Record<string, TelegramProjectTopic>;
+      departmentTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -533,7 +539,9 @@ export function updateConfigInMemory(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      topicMode?: 'project' | 'department';
       projectTopics?: Record<string, TelegramProjectTopic>;
+      departmentTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -689,7 +697,9 @@ export function updateConfigInMemory(
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
       chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
+      topicMode: patch.telegram.topicMode !== undefined ? patch.telegram.topicMode : config.telegram.topicMode,
       projectTopics: patch.telegram.projectTopics !== undefined ? { ...patch.telegram.projectTopics } : config.telegram.projectTopics,
+      departmentTopics: patch.telegram.departmentTopics !== undefined ? { ...patch.telegram.departmentTopics } : config.telegram.departmentTopics,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -884,10 +894,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
           Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
         )
       : [],
+    topicMode: rawTelegram.topicMode === 'department' ? 'department' : 'project',
     projectTopics: rawTelegram.projectTopics && typeof rawTelegram.projectTopics === 'object'
       ? Object.fromEntries(Object.entries(rawTelegram.projectTopics).filter(([, topic]) => Boolean(
           topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
         )).map(([projectId, topic]) => [projectId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
+    departmentTopics: rawTelegram.departmentTopics && typeof rawTelegram.departmentTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.departmentTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([deptId, topic]) => [deptId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
       : {},
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,

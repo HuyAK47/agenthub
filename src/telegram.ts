@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentHubConfig, TelegramChat, TelegramProjectTopic, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
-import { BrainDirectiveRepo, TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo, CiRepo } from './db/index.js';
+import { BrainDirectiveRepo, TaskRepo, ProjectRepo, DepartmentRepo, DepartmentRow, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo, CiRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
 import type { ChatService } from './chat/service.js';
 import { planningRule } from './chat/claude.js';
@@ -123,6 +123,7 @@ export interface TelegramServiceOptions {
   eventBus: EventBus;
   taskRepo: TaskRepo;
   projectRepo: ProjectRepo;
+  departmentRepo?: DepartmentRepo;
   profileRepo?: ProfileRepo;
   quotaMarkRepo?: QuotaMarkRepo;
   fetch?: typeof fetch;
@@ -308,7 +309,9 @@ export class TelegramBotService {
   private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string }>();
   /** Per-chat selected project (persisted in config.telegram.chats). */
   private selectedProject = new Map<number, string>();
+  private selectedDepartment = new Map<number, string>();
   private activeThreadByChat = new Map<number, number | undefined>();
+  public departmentRepo?: DepartmentRepo;
   private notificationProjectId: string | null = null;
   /** Keeps same-text system events from different projects independently deduplicated. */
   private notificationDedupProjectId: string | null = null;
@@ -319,6 +322,7 @@ export class TelegramBotService {
     this.eventBus = opts.eventBus;
     this.taskRepo = opts.taskRepo;
     this.projectRepo = opts.projectRepo;
+    this.departmentRepo = opts.departmentRepo || (opts.service as unknown as { departmentRepo?: DepartmentRepo })?.departmentRepo;
     this.profileRepo = opts.profileRepo || (opts.service as unknown as { profileRepo?: ProfileRepo })?.profileRepo;
     this.quotaMarkRepo = opts.quotaMarkRepo;
     this.ciRepo = opts.ciRepo;
@@ -484,6 +488,93 @@ export class TelegramBotService {
   async ensureProjectTopic(projectId: string): Promise<void> {
     if (!this.config.telegram.enabled || this.config.telegram.projectTopics?.[projectId]) return;
     try { await this.createProjectTopic(projectId); } catch { /* topic setup is best effort */ }
+  }
+
+  getDepartmentTopics(): Record<string, TelegramProjectTopic> {
+    const fromConfig = { ...(this.config.telegram.departmentTopics || {}) };
+    const defaultChatId = this.config.telegram.allowedChatIds.find((id) => id < 0) ?? this.config.telegram.allowedChatIds[0];
+    if (defaultChatId !== undefined && this.departmentRepo) {
+      for (const dept of this.departmentRepo.getAll()) {
+        if (dept.telegramTopicId && !fromConfig[dept.id]) {
+          fromConfig[dept.id] = { chatId: defaultChatId, threadId: dept.telegramTopicId };
+        }
+      }
+    }
+    return fromConfig;
+  }
+
+  getDepartmentTopic(departmentId: string): TelegramProjectTopic | undefined {
+    return this.getDepartmentTopics()[departmentId];
+  }
+
+  findDepartmentByTopic(chatId: number, threadId: number): DepartmentRow | undefined {
+    for (const [deptId, topic] of Object.entries(this.getDepartmentTopics())) {
+      if (topic.chatId === chatId && topic.threadId === threadId) {
+        return this.departmentRepo?.get(deptId);
+      }
+    }
+    return undefined;
+  }
+
+  async createDepartmentTopic(departmentId: string): Promise<TelegramProjectTopic> {
+    const dept = this.departmentRepo?.get(departmentId);
+    if (!dept) throw new Error(`Không tìm thấy phòng ban "${departmentId}"`);
+    const existing = this.config.telegram.departmentTopics?.[departmentId];
+    if (existing) return existing;
+    const chatId = this.config.telegram.allowedChatIds.find((id) => {
+      const chat = this.config.telegram.chats.find((item) => item.id === id);
+      return !chat?.projectId;
+    }) ?? this.config.telegram.allowedChatIds[0];
+    if (chatId === undefined) throw new Error('Chưa có chat Telegram được cho phép');
+    if (!this.token) throw new Error('Chưa cấu hình Telegram bot token');
+    const response = await this.fetchFn(`https://api.telegram.org/bot${this.token}/createForumTopic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, name: dept.name }),
+    });
+    const data = await response.json() as { ok: boolean; description?: string; result?: { message_thread_id?: number } };
+    if (!response.ok || !data.ok || typeof data.result?.message_thread_id !== 'number') {
+      throw new Error(data.description || `Telegram createForumTopic failed with status ${response.status}`);
+    }
+    const topic = { chatId, threadId: data.result.message_thread_id };
+    this.config.telegram.departmentTopics = { ...(this.config.telegram.departmentTopics || {}), [departmentId]: topic };
+    this.departmentRepo?.update(departmentId, { telegramTopicId: topic.threadId });
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+    return topic;
+  }
+
+  async setupDepartmentTopics(): Promise<Record<string, TelegramProjectTopic>> {
+    for (const dept of this.departmentRepo?.getAll() || []) {
+      if (!this.config.telegram.departmentTopics?.[dept.id] && !dept.telegramTopicId) {
+        try { await this.createDepartmentTopic(dept.id); } catch (error) {
+          console.error(`[telegram] topic setup failed for department ${dept.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+    return this.getDepartmentTopics();
+  }
+
+  async setupTopics(mode?: 'project' | 'department'): Promise<Record<string, TelegramProjectTopic>> {
+    const targetMode = mode || this.config.telegram.topicMode || 'project';
+    if (targetMode === 'department') {
+      return this.setupDepartmentTopics();
+    }
+    return this.setupProjectTopics();
+  }
+
+  getSelectedDepartment(chatId: number): string | undefined {
+    return this.selectedDepartment.get(chatId);
+  }
+
+  setDepartmentTopic(departmentId: string, topic: TelegramProjectTopic): void {
+    this.config.telegram.departmentTopics = {
+      ...(this.config.telegram.departmentTopics || {}),
+      [departmentId]: topic,
+    };
+    this.departmentRepo?.update(departmentId, { telegramTopicId: topic.threadId });
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
   }
 
   setProjectChat(projectId: string, chatId: number): void {
@@ -782,7 +873,7 @@ export class TelegramBotService {
     const keyboard: InlineKeyboardButton[][] = [
       [{ text: '🌐 Xem dashboard', url: this.getDashboardUrl() }],
     ];
-    this.broadcastMessage(digest.text, { inline_keyboard: keyboard });
+    this.broadcastMessage(digest.text, { inline_keyboard: keyboard }, undefined, 'chung');
     this.eventBus.emit('brain.digest', undefined, digest);
 
     // Reset quiet hours queue after digest
@@ -893,16 +984,35 @@ export class TelegramBotService {
     const chatId = msg.chat.id;
     const threadId = msg.message_thread_id;
     this.activeThreadByChat.set(chatId, threadId);
-    const topicProject = threadId === undefined ? undefined : Object.entries(this.config.telegram.projectTopics || {}).find(([, topic]) => topic.chatId === chatId && topic.threadId === threadId)?.[0];
-    if (topicProject) this.selectedProject.set(chatId, topicProject);
+    if (threadId !== undefined) {
+      const topicDept = this.findDepartmentByTopic(chatId, threadId);
+      if (topicDept) {
+        this.selectedDepartment.set(chatId, topicDept.id);
+        this.selectedProject.delete(chatId);
+      } else {
+        const topicProject = Object.entries(this.config.telegram.projectTopics || {}).find(([, topic]) => topic.chatId === chatId && topic.threadId === threadId)?.[0];
+        if (topicProject) {
+          this.selectedProject.set(chatId, topicProject);
+          this.selectedDepartment.delete(chatId);
+        }
+      }
+    }
     const rawText = (msg.text || '').trim();
     const isAllowed = this.config.telegram?.allowedChatIds?.includes(chatId);
 
     // 1. Unrecognized / non-allowed chats
     if (!isAllowed) {
-      // Check for /start <mã> pairing command
-      const match = rawText.match(/^\/start(?:\s+(\d{6}))?$/i);
-      if (match && match[1] && msg.chat.type === 'private') {
+      // Check for /start or /pair <mã> pairing command
+      const match = rawText.match(/^\/(?:start|pair)(?:\s+(\d{6}))?$/i);
+      const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+      const senderId = msg.from?.id;
+
+      // In groups, pairing requires that the sender is an already allowed chat
+      if (isGroup && (!senderId || !this.config.telegram?.allowedChatIds?.includes(senderId))) {
+        return;
+      }
+
+      if (match && match[1] && (msg.chat.type === 'private' || isGroup)) {
         const code = match[1];
         const now = this.now();
         if (this.pairingCode && this.pairingCode === code && this.pairingExpiresAt > now) {
@@ -911,6 +1021,7 @@ export class TelegramBotService {
             id: chatId,
             name: msg.chat.title || (msg.chat.first_name ? `${msg.chat.first_name}${msg.chat.username ? ` (@${msg.chat.username})` : ''}` : `Chat ${chatId}`),
             ...(msg.chat.username ? { username: msg.chat.username } : {}),
+            kind: 'chat',
           });
           this.pairingCode = null;
           this.pairingExpiresAt = 0;
@@ -918,7 +1029,11 @@ export class TelegramBotService {
           this.pairingAttemptsByChat.delete(chatId);
           await this.sendDirectMessage(
             chatId,
-            `✅ Ghép đôi thành công! Bạn đã được cấp quyền điều khiển ${this.escapeHtml(this.appName)} từ xa.\nGõ /help để xem danh sách các lệnh.`,
+            isGroup
+              ? `✅ Ghép đôi nhóm thành công! Nhóm đã được cấp quyền điều khiển ${this.escapeHtml(this.appName)}.\nGõ /help để xem danh sách các lệnh.`
+              : `✅ Ghép đôi thành công! Bạn đã được cấp quyền điều khiển ${this.escapeHtml(this.appName)} từ xa.\nGõ /help để xem danh sách các lệnh.`,
+            undefined,
+            threadId,
           );
           return;
         }
@@ -1089,15 +1204,27 @@ export class TelegramBotService {
         await this.sendMessage(chatId, '🆕 Đã mở phiên chat mới.');
         break;
 
-      case '/topics':
-        if (args[0]?.toLowerCase() !== 'setup') {
-          await this.sendMessage(chatId, 'Cú pháp: /topics setup');
+      case '/topics': {
+        const sub = args[0]?.toLowerCase();
+        if (sub !== 'setup') {
+          await this.sendMessage(chatId, 'Cú pháp: /topics setup [project|department]');
           break;
         }
-        await this.sendMessage(chatId, '⏳ Đang tạo topic cho các dự án…');
-        await this.setupProjectTopics();
-        await this.sendMessage(chatId, `✅ Đã đồng bộ ${Object.keys(this.config.telegram.projectTopics || {}).length} topic dự án.`);
+        const requestedMode = args[1]?.toLowerCase();
+        const mode = requestedMode === 'department' || requestedMode === 'project'
+          ? requestedMode
+          : (this.config.telegram.topicMode || 'project');
+        if (mode === 'department') {
+          await this.sendMessage(chatId, '⏳ Đang tạo topic cho các phòng ban…');
+          const topics = await this.setupDepartmentTopics();
+          await this.sendMessage(chatId, `✅ Đã đồng bộ ${Object.keys(topics).length} topic phòng ban.`);
+        } else {
+          await this.sendMessage(chatId, '⏳ Đang tạo topic cho các dự án…');
+          const topics = await this.setupProjectTopics();
+          await this.sendMessage(chatId, `✅ Đã đồng bộ ${Object.keys(topics).length} topic dự án.`);
+        }
         break;
+      }
 
       case '/stop':
         await this.stopChat(chatId);
@@ -1529,6 +1656,13 @@ export class TelegramBotService {
   }
 
   private sessionIdForChat(chatId: number): string {
+    const selectedDeptId = this.selectedDepartment.get(chatId);
+    if (selectedDeptId) {
+      if (selectedDeptId === 'chung' && this.config.brain.director?.enabled) {
+        return 'brain:director';
+      }
+      return `brain:department:${selectedDeptId}`;
+    }
     // Assistant sessions are independent from resident brain turns, so user messages never queue behind events.
     const selectedProjectId = this.selectedProject.get(chatId);
     if (this.brainSession && this.config.assistant.enabled) {
@@ -1579,21 +1713,53 @@ export class TelegramBotService {
     const isAssistant = sessionId === 'assistant' || sessionId.startsWith('assistant:');
     const selectedProjId = this.selectedProject.get(chatId);
     const threadId = this.activeThreadByChat.get(chatId);
-    const projectId = sessionId.startsWith('brain:') || sessionId.startsWith('assistant:')
-      ? sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length) === 'global'
-        ? null
-        : sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length)
-      : (selectedProjId || null);
+    const isDeptBrain = sessionId.startsWith('brain:department:');
+    const isDirector = sessionId === 'brain:director';
+    const deptId = isDeptBrain ? sessionId.slice('brain:department:'.length) : undefined;
+    const dept = deptId ? this.departmentRepo?.get(deptId) : undefined;
+
+    const projectId = isDeptBrain || isDirector
+      ? null
+      : sessionId.startsWith('brain:') || sessionId.startsWith('assistant:')
+        ? sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length) === 'global'
+          ? null
+          : sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length)
+        : (selectedProjId || null);
+
     if (isAssistant) {
       const brainId = projectId ? `brain:${projectId}` : 'brain';
       this.chatService.getOrCreateSession(brainId, {
         title: 'Bộ não', kind: 'brain', projectId, model: this.config.brain.model,
       });
     }
+
+    const title = isDeptBrain
+      ? (dept ? `Bộ não · ${dept.name}` : 'Bộ não')
+      : isDirector
+        ? 'Bộ não Giám đốc'
+        : isBrain
+          ? 'Bộ não'
+          : isAssistant
+            ? 'Trợ lý'
+            : 'Cuộc trò chuyện Telegram';
+    const mode = isDeptBrain
+      ? (dept?.brainPermissions === 'full' ? 'full' : 'safe')
+      : isDirector
+        ? (this.config.brain.director?.permissions === 'full' ? 'full' : 'safe')
+        : undefined;
+    const model = isDeptBrain
+      ? dept?.brainModel || this.config.brain.model
+      : isDirector
+        ? this.config.brain.director?.model || this.config.brain.model
+        : isAssistant
+          ? this.config.assistant.model
+          : undefined;
+
     this.chatService.getOrCreateSession(sessionId, {
-      title: isBrain ? 'Bộ não' : isAssistant ? 'Trợ lý' : 'Cuộc trò chuyện Telegram',
+      title,
       kind: isBrain ? 'brain' : isAssistant ? 'assistant' : 'chat',
-      model: isAssistant ? this.config.assistant.model : undefined,
+      model,
+      mode,
       projectId,
     });
     let initial: unknown;
@@ -1876,13 +2042,24 @@ export class TelegramBotService {
     const threadId = query.message?.message_thread_id;
     if (chatId !== undefined) {
       this.activeThreadByChat.set(chatId, threadId);
-      const topicProject = threadId === undefined ? undefined : Object.entries(this.config.telegram.projectTopics || {}).find(([, topic]) => topic.chatId === chatId && topic.threadId === threadId)?.[0];
-      if (topicProject) this.selectedProject.set(chatId, topicProject);
+      if (threadId !== undefined) {
+        const topicDept = this.findDepartmentByTopic(chatId, threadId);
+        if (topicDept) {
+          this.selectedDepartment.set(chatId, topicDept.id);
+          this.selectedProject.delete(chatId);
+        } else {
+          const topicProject = Object.entries(this.config.telegram.projectTopics || {}).find(([, topic]) => topic.chatId === chatId && topic.threadId === threadId)?.[0];
+          if (topicProject) {
+            this.selectedProject.set(chatId, topicProject);
+            this.selectedDepartment.delete(chatId);
+          }
+        }
+      }
     }
     const userId = query.from.id;
     const isAllowed = Boolean(
       chatId &&
-      userId === chatId &&
+      (userId === chatId || this.config.telegram?.allowedChatIds?.includes(userId)) &&
       this.config.telegram?.allowedChatIds?.includes(chatId),
     );
 
@@ -3689,6 +3866,7 @@ export class TelegramBotService {
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
     projectId = this.notificationProjectId,
+    departmentId?: string,
   ): void {
     // Event notifications can fire repeatedly for the same state (quota polls, scheduler ticks).
     const now = this.now();
@@ -3698,13 +3876,47 @@ export class TelegramBotService {
     this.lastBroadcast.set(dedupKey, now);
     for (const [key, at] of this.lastBroadcast) if (now - at >= NOTIFY_REPEAT_WINDOW_MS) this.lastBroadcast.delete(key);
     const allowed = this.config.telegram?.allowedChatIds || [];
-    let targets: Array<{ chatId: number; threadId?: number | null }> = projectId && this.config.telegram.projectTopics?.[projectId] && allowed.includes(this.config.telegram.projectTopics[projectId].chatId)
-      ? [this.config.telegram.projectTopics[projectId]]
-      : projectId
-        ? (this.config.telegram.chats || []).filter((chat) => chat.projectId === projectId && allowed.includes(chat.id)).map((chat) => ({ chatId: chat.id, threadId: null }))
-        : allowed.map((chatId) => ({ chatId, threadId: null }));
-    // Legacy configurations have allowedChatIds but no per-project mapping.
-    if (projectId && targets.length === 0) targets = allowed.map((chatId) => ({ chatId, threadId: null }));
+
+    const isDeptMode = this.config.telegram.topicMode === 'department';
+    let targets: Array<{ chatId: number; threadId?: number | null }> = [];
+
+    if (isDeptMode) {
+      if (projectId) {
+        const project = this.projectRepo.get(projectId);
+        const resolvedDeptId = departmentId || project?.departmentId || 'chung';
+        const deptTopic = this.getDepartmentTopic(resolvedDeptId);
+        if (deptTopic && allowed.includes(deptTopic.chatId)) {
+          targets = [deptTopic];
+        } else {
+          targets = allowed.map((chatId) => ({ chatId, threadId: null }));
+        }
+      } else {
+        // System event / periodic digest: send to topic "Chung" if available
+        const chungTopic = this.getDepartmentTopic(departmentId || 'chung');
+        if (chungTopic && allowed.includes(chungTopic.chatId)) {
+          targets = [chungTopic];
+        } else {
+          targets = allowed.map((chatId) => ({ chatId, threadId: null }));
+        }
+      }
+    } else {
+      if (departmentId) {
+        const deptTopic = this.getDepartmentTopic(departmentId);
+        if (deptTopic && allowed.includes(deptTopic.chatId)) {
+          targets = [deptTopic];
+        }
+      }
+      if (targets.length === 0) {
+        targets = projectId && this.config.telegram.projectTopics?.[projectId] && allowed.includes(this.config.telegram.projectTopics[projectId].chatId)
+          ? [this.config.telegram.projectTopics[projectId]]
+          : projectId
+            ? (this.config.telegram.chats || []).filter((chat) => chat.projectId === projectId && allowed.includes(chat.id)).map((chat) => ({ chatId: chat.id, threadId: null }))
+            : allowed.map((chatId) => ({ chatId, threadId: null }));
+        // Legacy configurations have allowedChatIds but no per-project mapping.
+        if (projectId && targets.length === 0) targets = allowed.map((chatId) => ({ chatId, threadId: null }));
+      }
+    }
+
     for (const target of targets) {
       void this.sendMessage(target.chatId, text, replyMarkup, target.threadId);
     }

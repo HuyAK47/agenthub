@@ -360,6 +360,7 @@ export function createContext(
     eventBus: scheduler.getEventBus(),
     taskRepo,
     projectRepo,
+    departmentRepo,
     profileRepo,
     quotaMarkRepo,
     chatService,
