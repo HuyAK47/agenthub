@@ -142,6 +142,8 @@ function isAutoReviewer(by: string | undefined): by is ReviewerActor {
 /** Times an arbiter rejection sends a task back before it is blocked for a person. */
 const ARBITER_ROUNDS = 2;
 const ARBITER_RETRY_MODEL = 'claude-opus-4-6-thinking';
+const REVIEWER_CRASH_BACKOFF_MS = 60_000;
+const REVIEWER_LOCK_BACKOFF_MS = 10_000;
 
 export interface ReviewerRun {
   taskId: string;
@@ -201,6 +203,8 @@ export class Scheduler {
   private failoverState?: ClaudeFailoverState;
   private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
+  /** Prevent a broken reviewer profile from being respawned on every scheduler tick. */
+  private reviewerBackoffUntil = new Map<string, number>();
   private reviewNotified = new Map<string, string>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
@@ -1987,7 +1991,7 @@ export class Scheduler {
           this.resetReviewerEscalation(task.id);
           task.reviewerEscalated = 0;
         } else {
-          if (this.needsClaudeArbiter(task)) this.startClaudeFallbackReview(task);
+          if (this.needsEscalationArbiter(task)) this.startEscalationArbiter(task);
           else this.actOnArbiterRejection(task, last);
           continue;
         }
@@ -2079,17 +2083,16 @@ export class Scheduler {
   }
 
   /**
-   * A task escalated a second time for reviewer change requests gets one
-   * final verdict from the Claude reviewer instead of waiting for a person. Its approval merges as
-   * usual; a further change request leaves the task parked (it is already escalated).
+   * A task escalated a second time gets a final automated verdict instead of waiting for a person.
+   * Claude is preferred; an independent Codex account takes over when Claude is unavailable.
    */
-  private needsClaudeArbiter(task: TaskRow): boolean {
-    if (this.config.reviewer?.claudeFallback === false || task.reviewerEscalationReason !== 'reviewer_changes_limit') return false;
+  private needsEscalationArbiter(task: TaskRow): boolean {
+    if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return false;
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
-    const lastEscalation = escalations[escalations.length - 1].ts;
-    return !this.reviewRepo?.getByTask(task.id).some((review) => review.actor === 'claude-reviewer' && review.createdAt >= lastEscalation);
+    const lastEscalationId = escalations[escalations.length - 1].id;
+    return !this.hasAutomatedVerdictAfter(task.id, lastEscalationId);
   }
 
   /**
@@ -2097,10 +2100,14 @@ export class Scheduler {
    * with that feedback on the strongest model, at most ARBITER_ROUNDS times; then block it and say so.
    */
   private actOnArbiterRejection(task: TaskRow, last: { actor: string; verdict: string; feedback: string | null; createdAt: string } | undefined): void {
-    if (!last || last.actor !== 'claude-reviewer' || last.verdict !== 'changes_requested') return;
+    if (!last || !isAutoReviewer(last.actor) || last.verdict !== 'changes_requested') return;
     if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return;
-    const rejections = this.reviewRepo?.getByTask(task.id)
-      .filter((review) => review.actor === 'claude-reviewer' && review.verdict === 'changes_requested').length ?? 0;
+    const escalations = this.eventRepo.getByTask(task.id)
+      .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
+    const lastEscalationId = escalations.at(-1)?.id;
+    if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    const rejections = this.eventRepo.getByTask(task.id)
+      .filter((event) => event.id > lastEscalationId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
     if (rejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {
@@ -2114,6 +2121,18 @@ export class Scheduler {
     try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
     this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
     this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
+  }
+
+  private hasAutomatedVerdictAfter(taskId: string, eventId: number, verdict?: ReviewerVerdict): boolean {
+    return this.eventRepo.getByTask(taskId).some((event) => {
+      if (event.id <= eventId || event.type !== 'review.completed' || !event.payload) return false;
+      try {
+        const payload = JSON.parse(event.payload) as { actor?: string; verdict?: ReviewerVerdict };
+        return isAutoReviewer(payload.actor) && (!verdict || payload.verdict === verdict);
+      } catch {
+        return false;
+      }
+    });
   }
 
   private reviewWaitedTooLong(task: TaskRow): boolean {
@@ -2139,12 +2158,45 @@ export class Scheduler {
       .filter((p) => p.engine === 'claude' && (p.authState == null || p.authState === 'ok') &&
         (preferred.length === 0 || preferred.includes(p.name)) &&
         !this.quotaService.isExhausted(p.name, 'claude') &&
+        !this.reviewerInBackoff(p.name) &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null)
       .sort((a, b) => rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
     const profile = candidates[0];
     if (!profile) return;
     this.eventBus.emit('review.fallback', task.id, { from: 'codex', to: 'claude', profile: profile.name });
     this.startReview(task, profile.name, engine, `claude:${this.config.reviewer?.claudeModel || 'sonnet'}`, 'claude-reviewer');
+  }
+
+  /** Prefer Claude as arbiter, but immediately fall back to an independent Codex account. */
+  private startEscalationArbiter(task: TaskRow): void {
+    const before = this.reviewerRuns.size;
+    if (this.config.reviewer?.claudeFallback !== false) this.startClaudeFallbackReview(task);
+    if (this.reviewerRuns.size > before) return;
+
+    const codex = this.engines.get('codex');
+    if (!codex || !task.worktreePath) return;
+    const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+    const candidates = this.profileRepo.getEnabled()
+      .filter((profile) => profile.engine === 'codex'
+        && profile.name !== lastWorker?.profileName
+        && !this.quotaService.isExhausted(profile.name, 'codex')
+        && !this.reviewerInBackoff(profile.name)
+        && !this.reviewerRunsForProfile(profile.name)
+        && this.locks.findFreeSlotSync(profile) !== null)
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    const profile = candidates[0];
+    if (!profile) return;
+    this.eventBus.emit('review.fallback', task.id, { from: 'claude', to: 'codex', profile: profile.name, reason: 'arbiter_unavailable' });
+    this.startReview(task, profile.name, codex, this.config.reviewer?.model || 'codex:gpt-5.6-luna', 'codex-reviewer');
+  }
+
+  private reviewerInBackoff(profileName: string): boolean {
+    const until = this.reviewerBackoffUntil.get(profileName) || 0;
+    if (until <= Date.now()) {
+      this.reviewerBackoffUntil.delete(profileName);
+      return false;
+    }
+    return true;
   }
 
   private skippedCodexGate(task: TaskRow, chain: ReviewChainStep[]): boolean {
@@ -2264,11 +2316,13 @@ export class Scheduler {
     const duration = Date.now() - active.startedAt;
     const isLockBusy = duration < 3000 && logOutput.trim() === '' && Boolean(active.lockFile) && exitCode === 1;
     if (isLockBusy) {
+      this.reviewerBackoffUntil.set(profileName, Date.now() + REVIEWER_LOCK_BACKOFF_MS);
       this.runRepo.finish(runId, 'crashed', undefined, 'lock_busy');
       this.eventBus.emit('review.waiting', taskId, { actor: active.actor, reason: 'lock_busy' });
       return;
     }
     if (reason === 'timeout' || reason === 'error' || exitCode !== 0 || quota) {
+      this.reviewerBackoffUntil.set(profileName, Date.now() + REVIEWER_CRASH_BACKOFF_MS);
       this.runRepo.finish(runId, quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crashed');
       if (quota) this.quotaService.mark(profileName, active.actor === 'claude-reviewer' ? 'claude' : 'codex', this.config.reviewer?.failoverSec || 5 * 60 * 60, `${active.actor} quota`);
       this.eventBus.emit('review.waiting', taskId, { actor: active.actor, reason: quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crash' });
