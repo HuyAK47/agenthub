@@ -821,6 +821,9 @@ describe('Codex reviewer failover lifecycle', () => {
     withClaudeReviewer(scheduler);
     profileRepo.upsert({ name: 'codex-2', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
     db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('arb-worker', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
+    // The rejection that caused escalation can share its second-resolution timestamp with the
+    // escalation event. It must not be mistaken for a new arbiter verdict.
+    reviewRepo.insert({ id: 'pre-escalation-review', taskId: 'test-project/review', verdict: 'changes_requested', feedback: 'old rejection', actor: 'codex-reviewer' });
     for (let i = 0; i < 2; i++) {
       db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
     }
