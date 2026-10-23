@@ -45,8 +45,13 @@ interface ProjectPushState {
   nextPushAt?: string;
 }
 
+interface PendingDeployState {
+  commit?: string;
+  dueAt: string;
+}
+
 export class DeployService {
-  private pending = new Map<string, { commit?: string; timer?: NodeJS.Timeout }>();
+  private pending = new Map<string, { commit?: string; dueAt: number; timer?: NodeJS.Timeout }>();
   private latest = new Map<string, DeployStatus>();
   private pushStates = new Map<string, ProjectPushState>();
   private deferredPushes = new Map<string, { dueTime: number; timer?: NodeJS.Timeout }>();
@@ -78,6 +83,7 @@ export class DeployService {
   start(): void {
     this.restoreRestartState();
     this.restorePushState();
+    this.restorePendingState();
     this.eventBus.on('task.merged', (_taskId, payload) => {
       const value = (payload && typeof payload === 'object' ? payload : {}) as { projectId?: string; mergeCommit?: string };
       const taskId = _taskId || '';
@@ -87,6 +93,8 @@ export class DeployService {
   }
 
   stop(): void {
+    this.savePendingState();
+    this.savePushState();
     for (const entry of this.pending.values()) {
       if (entry.timer) clearTimeout(entry.timer);
     }
@@ -99,6 +107,40 @@ export class DeployService {
 
   private getPushStatePath(): string {
     return path.join(this.config.hubHome, 'deploy-push-state.json');
+  }
+
+  private getPendingStatePath(): string {
+    return path.join(this.config.hubHome, 'deploy-pending-state.json');
+  }
+
+  private savePendingState(): void {
+    const state: Record<string, PendingDeployState> = {};
+    for (const [projectId, entry] of this.pending.entries()) {
+      state[projectId] = { commit: entry.commit, dueAt: new Date(entry.dueAt).toISOString() };
+    }
+    try {
+      if (Object.keys(state).length === 0) fs.rmSync(this.getPendingStatePath(), { force: true });
+      else fs.writeFileSync(this.getPendingStatePath(), JSON.stringify(state, null, 2), 'utf8');
+    } catch (err) {
+      console.error('[deploy] Failed to save pending state', err);
+    }
+  }
+
+  private restorePendingState(): void {
+    const statePath = this.getPendingStatePath();
+    try {
+      if (!fs.existsSync(statePath)) return;
+      const data = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Record<string, PendingDeployState>;
+      fs.rmSync(statePath, { force: true });
+      for (const [projectId, entry] of Object.entries(data || {})) {
+        const dueAt = new Date(entry.dueAt).getTime();
+        if (!Number.isFinite(dueAt) || !this.definition(projectId)) continue;
+        this.schedulePending(projectId, dueAt, entry.commit);
+        this.latest.set(projectId, { projectId, status: 'queued', commit: entry.commit });
+      }
+    } catch {
+      // Malformed pending state must not prevent daemon startup
+    }
   }
 
   private loadPushState(): void {
@@ -317,17 +359,25 @@ export class DeployService {
   }
 
   schedule(projectId: string, commit?: string): void {
+    const existing = this.pending.get(projectId);
+    const dueAt = Date.now() + this.debounceMs;
+    this.schedulePending(projectId, dueAt, commit || existing?.commit);
+    this.latest.set(projectId, { projectId, status: 'queued' });
+    this.savePendingState();
+  }
+
+  private schedulePending(projectId: string, dueAt: number, commit?: string): void {
     if (!this.definition(projectId)) return;
     const existing = this.pending.get(projectId);
     if (existing?.timer) clearTimeout(existing.timer);
-    const entry: { commit?: string; timer?: NodeJS.Timeout } = { commit: commit || existing?.commit };
+    const entry: { commit?: string; dueAt: number; timer?: NodeJS.Timeout } = { commit: commit || existing?.commit, dueAt };
     entry.timer = setTimeout(() => {
       this.pending.delete(projectId);
+      this.savePendingState();
       this.enqueue(projectId, entry.commit);
-    }, this.debounceMs);
+    }, Math.max(0, dueAt - Date.now()));
     entry.timer.unref();
     this.pending.set(projectId, entry);
-    this.latest.set(projectId, { projectId, status: 'queued' });
   }
 
   private enqueue(projectId: string, commit?: string): DeployStatus {
