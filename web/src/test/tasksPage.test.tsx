@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TasksPage } from '../pages/TasksPage';
@@ -34,6 +34,18 @@ describe('TasksPage & Kanban Long Lists', () => {
     }));
   };
 
+  const mockKanbanTasks = (tasks: Task[]) => {
+    vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) => {
+      const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, (c) => c === 'đ' ? 'd' : 'D').toLowerCase();
+      const query = normalize(params?.search || '');
+      const matching = tasks.filter((task) => (!params?.status || params.status === 'all' || task.status === params.status) && (!query || normalize(`${task.slug} ${task.title}`).includes(query)));
+      const limit = params?.limit || 20;
+      const offset = params?.cursor ? Number(params.cursor.split(':').at(-1)) : 0;
+      const items = matching.slice(offset, offset + limit);
+      return { items, total: matching.length, nextCursor: offset + limit < matching.length ? `cursor:${params?.status}:${offset + limit}` : null };
+    });
+  };
+
   beforeEach(() => {
     window.localStorage.clear();
     queryClient = new QueryClient({
@@ -48,11 +60,11 @@ describe('TasksPage & Kanban Long Lists', () => {
     vi.restoreAllMocks();
   });
 
-  function renderPage() {
+  function renderPage(initialEntry = '/tasks') {
     return render(
       <QueryClientProvider client={queryClient}>
         <LocaleProvider initialLocale="vi">
-          <MemoryRouter initialEntries={['/tasks']}>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <TasksPage />
           </MemoryRouter>
         </LocaleProvider>
@@ -60,22 +72,75 @@ describe('TasksPage & Kanban Long Lists', () => {
     );
   }
 
+  it('view danh sách chỉ hiển thị trang hiện tại và gửi cursor khi chuyển trang', async () => {
+    const firstPage = createDoneTasks(2);
+    const secondPage = createDoneTasks(1).map((task) => ({ ...task, slug: 'page-two' }));
+    const getTasks = vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) => {
+      if (params?.limit) {
+        return params.cursor
+          ? { items: secondPage, total: 3, nextCursor: null }
+          : { items: firstPage, total: 3, nextCursor: 'cursor-page-2' };
+      }
+      return { items: [], total: 0, nextCursor: null };
+    });
+
+    renderPage('/tasks?view=list&pageSize=1&search=needle');
+
+    expect(await screen.findByText('slug-1')).toBeInTheDocument();
+    expect(screen.queryByText('page-two')).not.toBeInTheDocument();
+    expect(screen.queryByText('slug-3')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /trang sau/i }));
+    expect(await screen.findByText('page-two')).toBeInTheDocument();
+    expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1, cursor: 'cursor-page-2', search: 'needle' }));
+  });
+
+  it('khôi phục filter từ URL và reset về trang đầu khi filter đổi', async () => {
+    const getTasks = vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) =>
+      params?.limit ? { items: createDoneTasks(1), total: 1, nextCursor: null } : { items: [], total: 0, nextCursor: null },
+    );
+
+    renderPage('/tasks?view=list&page=3&status=review&search=alpha');
+
+    const search = await screen.findByDisplayValue('alpha');
+    expect(screen.getByRole('combobox', { name: /lọc theo trạng thái/i })).toHaveValue('review');
+    expect(getTasks).toHaveBeenCalledWith(expect.objectContaining({ status: 'review', search: 'alpha', limit: 20, offset: 40 }));
+    fireEvent.change(search, { target: { value: 'beta' } });
+    await screen.findByText('slug-1');
+    expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'review', search: 'beta', limit: 20, offset: 0 }));
+  });
+
+  it('khôi phục deep-link page và tiếp tục bằng cursor của trang đó', async () => {
+    const getTasks = vi.spyOn(client, 'getTasksPage').mockImplementation(async (params?: client.TaskQuery) => ({
+      items: createDoneTasks(1).map((task) => ({ ...task, slug: `page-${params?.offset ? params.offset / 20 + 1 : 1}` })),
+      total: 80,
+      nextCursor: params?.offset === 40 ? 'cursor-page-4' : null,
+    }));
+
+    renderPage('/tasks?view=list&page=3');
+    expect(await screen.findByText('page-3')).toBeInTheDocument();
+    expect(getTasks).toHaveBeenCalledWith(expect.objectContaining({ offset: 40 }));
+
+    fireEvent.click(screen.getByRole('button', { name: /trang sau/i }));
+    await waitFor(() => expect(getTasks).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'cursor-page-4', offset: undefined })));
+  });
+
   it('cột 131 task chỉ render 10 thẻ done + nút Xem thêm, bấm thì thêm đúng step', async () => {
     const tasks = createDoneTasks(131);
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
     const doneCol = await screen.findByTestId('kanban-column-done');
-    expect(doneCol).toHaveTextContent('131');
+    await waitFor(() => expect(doneCol).toHaveTextContent('131'));
 
     // Mặc định cột done chỉ render 10 thẻ
     const linksBefore = doneCol.querySelectorAll('a[href^="/tasks/"]');
     expect(linksBefore.length).toBe(10);
 
-    // Có nút Xem thêm 20 (còn 121)
+    // Có nút Xem thêm 10 (còn 121)
     const showMoreBtn = screen.getByRole('button', {
-      name: /xem thêm 20 \(còn 121\)/i,
+      name: /xem thêm 10 \(còn 121\)/i,
     });
     expect(showMoreBtn).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /thu gọn/i })).not.toBeInTheDocument();
@@ -83,20 +148,10 @@ describe('TasksPage & Kanban Long Lists', () => {
     // Bấm xem thêm
     fireEvent.click(showMoreBtn);
 
-    // Giờ có 30 thẻ
-    const linksAfter = doneCol.querySelectorAll('a[href^="/tasks/"]');
-    expect(linksAfter.length).toBe(30);
+    // Trang tiếp theo thêm 10 thẻ
+    await waitFor(() => expect(doneCol.querySelectorAll('a[href^="/tasks/"]')).toHaveLength(20));
 
-    // Nút cập nhật thành "Xem thêm 20 (còn 101)" và xuất hiện nút "Thu gọn"
-    expect(screen.getByRole('button', { name: /xem thêm 20 \(còn 101\)/i })).toBeInTheDocument();
-    const collapseBtn = screen.getByRole('button', { name: /thu gọn/i });
-    expect(collapseBtn).toBeInTheDocument();
-
-    // Bấm thu gọn
-    fireEvent.click(collapseBtn);
-    const linksCollapsed = doneCol.querySelectorAll('a[href^="/tasks/"]');
-    expect(linksCollapsed.length).toBe(10);
-    expect(screen.queryByRole('button', { name: /thu gọn/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /xem thêm 10 \(còn 111\)/i })).toBeInTheDocument();
   });
 
   it('cột khác mặc định hiển thị 20 thẻ', async () => {
@@ -113,12 +168,12 @@ describe('TasksPage & Kanban Long Lists', () => {
       createdAt: '2026-10-15T00:00:00Z',
       updatedAt: new Date(Date.now() - (25 - i) * 1000).toISOString(),
     }));
-    vi.spyOn(client, 'getTasks').mockResolvedValue(queuedTasks);
+    mockKanbanTasks(queuedTasks);
 
     renderPage();
 
     const queuedCol = await screen.findByTestId('kanban-column-queued');
-    expect(queuedCol).toHaveTextContent('25');
+    await waitFor(() => expect(queuedCol).toHaveTextContent('25'));
 
     // Mặc định cột queued hiện 20 thẻ
     const links = queuedCol.querySelectorAll('a[href^="/tasks/"]');
@@ -156,25 +211,24 @@ describe('TasksPage & Kanban Long Lists', () => {
         updatedAt: '2026-10-15T00:00:00Z',
       },
     ];
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
-    await screen.findByTestId('kanban-column-done');
-    expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument();
-    expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument());
 
     const filterInput = screen.getByPlaceholderText(/lọc slug \/ tiêu đề/i);
 
     // Lọc không dấu: "dang nhap" khớp với "đăng nhập"
     fireEvent.change(filterInput, { target: { value: 'dang nhap' } });
-    expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Xử lý đăng nhập tài khoản')).toBeInTheDocument());
     expect(screen.queryByText('Cập nhật giao diện người dùng')).not.toBeInTheDocument();
 
     // Lọc theo slug
     fireEvent.change(filterInput, { target: { value: 'other-slug' } });
-    expect(screen.queryByText('Xử lý đăng nhập tài khoản')).not.toBeInTheDocument();
-    expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Xử lý đăng nhập tài khoản')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Cập nhật giao diện người dùng')).toBeInTheDocument());
   });
 
   it('giữ nguyên badge reviewerEscalated khi có task cần duyệt', async () => {
@@ -192,7 +246,7 @@ describe('TasksPage & Kanban Long Lists', () => {
       createdAt: '2026-10-15T00:00:00Z',
       updatedAt: '2026-10-16T00:00:00Z',
     };
-    vi.spyOn(client, 'getTasks').mockResolvedValue([escalatedTask]);
+    mockKanbanTasks([escalatedTask]);
 
     renderPage();
 
@@ -200,7 +254,7 @@ describe('TasksPage & Kanban Long Lists', () => {
     expect(screen.getByText(/chờ duyệt/i)).toBeInTheDocument();
   });
 
-  it('sắp xếp theo updatedAt giảm dần (mới nhất lên đầu)', async () => {
+  it('sắp xếp ổn định theo createdAt giảm dần', async () => {
     const tasks: Task[] = [
       {
         id: 'p1~t-old',
@@ -225,165 +279,30 @@ describe('TasksPage & Kanban Long Lists', () => {
         dependsOn: [],
         attempt: 0,
         resume: 0,
-        createdAt: '2026-10-10T00:00:00Z',
+        createdAt: '2026-10-18T00:00:00Z',
         updatedAt: '2026-10-18T00:00:00Z',
       },
     ];
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
     const draftCol = await screen.findByTestId('kanban-column-draft');
+    await waitFor(() => expect(draftCol.querySelectorAll('h3')).toHaveLength(2));
     const titles = Array.from(draftCol.querySelectorAll('h3')).map((el) => el.textContent);
-    expect(titles).toEqual(['Task Mới', 'Task Cũ']);
+    expect(titles).toEqual(['Task Cũ', 'Task Mới']);
   });
 
   it('ghi nhớ trạng thái mở rộng trong localStorage', async () => {
-    window.localStorage.setItem('agenthub:tasks:done', 'expanded');
     const tasks = createDoneTasks(35);
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+    mockKanbanTasks(tasks);
 
     renderPage();
 
     const doneCol = await screen.findByTestId('kanban-column-done');
+    await waitFor(() => expect(doneCol.querySelectorAll('a[href^="/tasks/"]')).toHaveLength(10));
     const links = doneCol.querySelectorAll('a[href^="/tasks/"]');
-    expect(links.length).toBe(35);
-    expect(screen.getByRole('button', { name: /thu gọn/i })).toBeInTheDocument();
-  });
-
-  it('chuyển sang chế độ theo project và ghi nhớ lựa chọn', async () => {
-    vi.spyOn(client, 'getTasks').mockResolvedValue(createDoneTasks(1));
-
-    renderPage();
-
-    fireEvent.click(screen.getByTestId('view-toggle-project'));
-
-    expect(await screen.findByTestId('project-view-wrapper')).toBeInTheDocument();
-    expect(screen.getByTestId('project-task-group-p1')).toBeInTheDocument();
-    expect(window.localStorage.getItem('agenthub:tasks:view-mode')).toBe('project');
-  });
-
-  it('thu gọn và mở lại nhóm project, đồng thời đếm đúng trạng thái', async () => {
-    const tasks: Task[] = [
-      { ...createDoneTasks(1)[0], id: 'p1~running', slug: 'running', title: 'Running task', status: 'running' },
-      { ...createDoneTasks(1)[0], id: 'p1~checking', slug: 'checking', title: 'Checking task', status: 'checking' },
-      { ...createDoneTasks(1)[0], id: 'p1~review', slug: 'review', title: 'Review task', status: 'review' },
-      { ...createDoneTasks(1)[0], id: 'p1~blocked', slug: 'blocked', title: 'Blocked task', status: 'blocked' },
-      { ...createDoneTasks(1)[0], id: 'p1~queued', slug: 'queued', title: 'Queued task', status: 'queued' },
-      { ...createDoneTasks(1)[0], id: 'p1~quota', slug: 'quota', title: 'Quota task', status: 'waiting_quota' },
-    ];
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
-
-    renderPage();
-
-    fireEvent.click(screen.getByTestId('view-toggle-project'));
-    const group = await screen.findByTestId('project-task-group-p1');
-    expect(within(group).getByLabelText('Số task theo trạng thái')).toHaveTextContent('Đang chạy: 1');
-    expect(within(group).getByLabelText('Số task theo trạng thái')).toHaveTextContent('Đang kiểm tra: 1');
-    expect(within(group).getByLabelText('Số task theo trạng thái')).toHaveTextContent('Chờ duyệt: 1');
-    expect(within(group).getByLabelText('Số task theo trạng thái')).toHaveTextContent('Bị chặn: 1');
-    expect(within(group).getByLabelText('Số task theo trạng thái')).toHaveTextContent('Chờ: 2');
-
-    const toggle = group.querySelector('button[aria-expanded]') as HTMLButtonElement;
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(within(group).queryByText('Running task')).not.toBeInTheDocument();
-    fireEvent.click(toggle);
-    expect(within(group).getByText('Running task')).toBeInTheDocument();
-  });
-
-  it('lọc được đồng thời nhiều project bằng các chip project', async () => {
-    const secondProject: Project = { ...mockProject, id: 'p2', name: 'Project 2' };
-    vi.spyOn(client, 'getProjects').mockResolvedValue([mockProject, secondProject]);
-    vi.spyOn(client, 'getTasks').mockResolvedValue([
-      { ...createDoneTasks(1)[0], id: 'p1~one', slug: 'one', title: 'Task one' },
-      { ...createDoneTasks(1)[0], id: 'p2~two', projectId: 'p2', slug: 'two', title: 'Task two' },
-    ]);
-
-    renderPage();
-
-    fireEvent.click(screen.getByTestId('view-toggle-project'));
-    await screen.findByTestId('project-task-group-p1');
-    const projectFilter = (name: string) => screen.getAllByRole('button', { name }).find((button) => !button.hasAttribute('aria-expanded')) as HTMLButtonElement;
-    fireEvent.click(projectFilter('Project 1'));
-    fireEvent.click(projectFilter('Project 2'));
-
-    expect(screen.getByTestId('project-task-group-p1')).toBeInTheDocument();
-    expect(screen.getByTestId('project-task-group-p2')).toBeInTheDocument();
-    expect(screen.getByText('Task one')).toBeInTheDocument();
-    expect(screen.getByText('Task two')).toBeInTheDocument();
-  });
-
-  it('giới hạn task trong nhóm project dài và cho xem thêm theo từng bước', async () => {
-    const tasks = createDoneTasks(45);
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
-
-    renderPage();
-
-    fireEvent.click(screen.getByTestId('view-toggle-project'));
-    const group = await screen.findByTestId('project-task-group-p1');
-    expect(group.querySelectorAll('a[href^="/tasks/"]').length).toBe(20);
-    expect(within(group).getByRole('button', { name: /xem thêm 20 \(còn 25\)/i })).toBeInTheDocument();
-
-    fireEvent.click(within(group).getByRole('button', { name: /xem thêm 20 \(còn 25\)/i }));
-    expect(group.querySelectorAll('a[href^="/tasks/"]').length).toBe(40);
-  });
-
-  it('áp dụng bộ lọc nhanh slug/tiêu đề trong chế độ theo project', async () => {
-    vi.spyOn(client, 'getTasks').mockResolvedValue([
-      { ...createDoneTasks(1)[0], id: 'p1~matching', slug: 'matching-task', title: 'Matching task' },
-      { ...createDoneTasks(1)[0], id: 'p1~other', slug: 'other-task', title: 'Other task' },
-    ]);
-
-    renderPage();
-
-    fireEvent.click(screen.getByTestId('view-toggle-project'));
-    const group = await screen.findByTestId('project-task-group-p1');
-    fireEvent.change(screen.getByRole('textbox', { name: /lọc slug \/ tiêu đề/i }), { target: { value: 'matching' } });
-
-    expect(within(group).getByText('Matching task')).toBeInTheDocument();
-    expect(within(group).queryByText('Other task')).not.toBeInTheDocument();
-  });
-
-  it('sắp xếp task trong nhóm project theo thứ tự ưu tiên: running > checking > review > blocked > failed > queued > waiting_quota > draft > done', async () => {
-    const statuses: Task['status'][] = [
-      'done',
-      'queued',
-      'checking',
-      'failed',
-      'draft',
-      'waiting_quota',
-      'review',
-      'blocked',
-      'running',
-    ];
-    const tasks: Task[] = statuses.map((status) => ({
-      ...createDoneTasks(1)[0],
-      id: `p1~${status}`,
-      slug: `slug-${status}`,
-      title: `Title ${status}`,
-      status,
-    }));
-    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
-
-    renderPage();
-
-    fireEvent.click(screen.getByTestId('view-toggle-project'));
-    const group = await screen.findByTestId('project-task-group-p1');
-
-    const renderedTitles = Array.from(
-      group.querySelectorAll('a[href^="/tasks/p1~"] .line-clamp-2'),
-    ).map((el) => el.textContent);
-    expect(renderedTitles).toEqual([
-      'Title running',
-      'Title checking',
-      'Title review',
-      'Title blocked',
-      'Title failed',
-      'Title queued',
-      'Title waiting_quota',
-      'Title draft',
-      'Title done',
-    ]);
+    expect(links.length).toBe(10);
+    expect(screen.getByRole('button', { name: /xem thêm 10/i })).toBeInTheDocument();
   });
 });

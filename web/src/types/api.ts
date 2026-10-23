@@ -602,6 +602,8 @@ export interface SavingsReport {
   byModel: Record<string, { tokens: number; taskCount: number }>;
   byDay: SavingsDailyItem[];
   tasks: SavingsTaskItem[];
+  tasksTotal?: number;
+  tasksNextCursor?: string | null;
 }
 
 export interface ProfileQuotaInfo {

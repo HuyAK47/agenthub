@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf, getTasks } from '../api/client';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf, getEventHistoryPage } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage, retryChatLimitNow } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -30,6 +30,7 @@ import { DailyUsageTable } from '../components/DailyUsageTable';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { Pagination } from '../components/ui/Pagination';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { Profile, QuotaUsageItem, ProjectBrain } from '../types/api';
 import { formatReset, formatTimeTitle } from '../lib/time';
@@ -80,12 +81,30 @@ export const DashboardPage: React.FC = () => {
   const [quickChatText, setQuickChatText] = useState('');
   const [isSubmittingQuickChat, setIsSubmittingQuickChat] = useState(false);
   const [isReaping, setIsReaping] = useState(false);
+  const [urlParams, setUrlParams] = useSearchParams();
+  const [eventPageNumber, setEventPageNumber] = useState(Math.max(1, Number(urlParams.get('eventsPage') || 1)));
+  const [eventCursors, setEventCursors] = useState<Record<number, string | undefined>>({});
+  const eventCursor = eventCursors[eventPageNumber - 1];
 
   const { data: status, isLoading, error } = useQuery({
     queryKey: ['status'],
     queryFn: getStatus,
     refetchInterval: 5000,
   });
+  const { data: eventPage } = useQuery({
+    queryKey: ['event-history', 'dashboard', eventPageNumber, eventCursor],
+    queryFn: () => getEventHistoryPage({ limit: 20, cursor: eventCursor, offset: eventCursor ? undefined : (eventPageNumber - 1) * 20 }),
+    refetchInterval: 10_000,
+  });
+  useEffect(() => {
+    if (eventPage?.nextCursor) setEventCursors((current) => ({ ...current, [eventPageNumber]: eventPage.nextCursor || undefined }));
+  }, [eventPage?.nextCursor, eventPageNumber]);
+  useEffect(() => {
+    const next = new URLSearchParams(urlParams);
+    if (eventPageNumber > 1) next.set('eventsPage', String(eventPageNumber));
+    else next.delete('eventsPage');
+    if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
+  }, [eventPageNumber, setUrlParams, urlParams]);
   const { data: profiles = [], refetch: refetchProfiles } = useQuery({
     queryKey: ['profiles'],
     queryFn: getProfiles,
@@ -97,7 +116,6 @@ export const DashboardPage: React.FC = () => {
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: getProjects, refetchInterval: 30_000 });
-  const { data: allTasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: () => getTasks(), refetchInterval: 10_000 });
   const { data: perf } = useQuery({ queryKey: ['perf'], queryFn: getPerf, refetchInterval: 30_000 });
 
   const queryClient = useQueryClient();
@@ -132,7 +150,8 @@ export const DashboardPage: React.FC = () => {
 
     try {
       setIsSubmittingQuickChat(true);
-      const sessions = await getChatSessions();
+      const sessionsPage = await getChatSessions({ limit: 1 });
+      const sessions = sessionsPage.items;
       let targetSessionId: string;
       if (sessions.length > 0) {
         targetSessionId = sessions[0].id;
@@ -182,7 +201,7 @@ export const DashboardPage: React.FC = () => {
   const waitingQuotaCount = taskCounts.waiting_quota || 0;
   const errorCount = (taskCounts.failed || 0) + (taskCounts.blocked || 0);
   const workers = status.running || status.runningWorkers || [];
-  const events = liveEvents.length > 0 ? liveEvents : status.recentEvents || [];
+  const events = liveEvents.length > 0 ? liveEvents : eventPage?.items || status.recentEvents || [];
 
   const metrics = [
     {
@@ -218,12 +237,12 @@ export const DashboardPage: React.FC = () => {
   ];
 
   const projectTaskSummary = projects.map((project) => {
-    const projectTasks = allTasks.filter((task) => task.projectId === project.id);
+    const projectTasks = status.tasksByProject?.[project.id] || {};
     return {
       project,
-      running: projectTasks.filter((task) => task.status === 'running').length,
-      waiting: projectTasks.filter((task) => ['queued', 'waiting_quota'].includes(task.status)).length,
-      attention: projectTasks.filter((task) => ['blocked', 'failed'].includes(task.status) || Boolean(task.reviewerEscalated)).length,
+      running: projectTasks.running || 0,
+      waiting: (projectTasks.queued || 0) + (projectTasks.waiting_quota || 0),
+      attention: (projectTasks.blocked || 0) + (projectTasks.failed || 0),
     };
   });
 
@@ -787,6 +806,14 @@ export const DashboardPage: React.FC = () => {
             }}
             </CollapsibleList>
           </ul>
+        )}
+        {eventPage && liveEvents.length === 0 && (
+          <Pagination
+            page={eventPageNumber}
+            pageSize={20}
+            total={eventPage.total}
+            onPageChange={setEventPageNumber}
+          />
         )}
       </div>
     </div>

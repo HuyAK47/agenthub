@@ -27,8 +27,8 @@ function renderPage(initialEntry = '/claude-sessions') {
 
 describe('ClaudeSessionsPage', () => {
   beforeEach(() => {
-    vi.spyOn(client, 'apiFetch').mockImplementation(async (path) => {
-      if (path === '/api/claude/sessions') return [session];
+    vi.spyOn(client, 'getClaudeSessionsPage').mockResolvedValue({ items: [session], total: 1, nextCursor: null });
+    vi.spyOn(client, 'apiFetch').mockImplementation(async () => {
       return {
         ...session,
         turns: [{ ts: '2026-10-16T09:00:00Z', turnId: 'turn-1', effectiveTokens: 120, input: 80, output: 40, tasks: [{ taskId: 'proj~alpha', effectiveTokens: 120 }] }],
@@ -47,7 +47,7 @@ describe('ClaudeSessionsPage', () => {
   });
 
   it('falls back to shortened sessionId and "Ngoài task" label when title is null and task is _general', async () => {
-    vi.spyOn(client, 'apiFetch').mockResolvedValueOnce([
+    vi.mocked(client.getClaudeSessionsPage).mockResolvedValueOnce({ items: [
       {
         sessionId: 'c7489ab1-248b-4b47-b844-0a91bdc9082f',
         cwd: '/work/project',
@@ -59,7 +59,7 @@ describe('ClaudeSessionsPage', () => {
         active: false,
         topTasks: [{ taskId: '_general', effectiveTokens: 50 }],
       },
-    ]);
+    ], total: 1, nextCursor: null });
     renderPage();
     // Shortened sessionId should be displayed
     expect(await screen.findByText('c7489ab1')).toBeInTheDocument();
@@ -72,6 +72,13 @@ describe('ClaudeSessionsPage', () => {
     await screen.findByText('Implement feature');
     fireEvent.click(screen.getByRole('button', { name: 'Quét lại' }));
     await waitFor(() => expect(client.rescanClaudeSessions).toHaveBeenCalledTimes(1));
+  });
+
+  it('restores the session page from URL and requests only that page', async () => {
+    const page = vi.mocked(client.getClaudeSessionsPage);
+    renderPage('/claude-sessions?page=3&pageSize=50');
+    await screen.findByText('Implement feature');
+    expect(page).toHaveBeenCalledWith({ limit: 50, offset: 100, sort: 'lastAt', order: 'desc' });
   });
 
   it('shows a token chart, turn rows, and active badge in the detail view', async () => {

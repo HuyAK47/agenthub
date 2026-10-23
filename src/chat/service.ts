@@ -26,6 +26,7 @@ import { HttpError } from '../services/index.js';
 import { isProfileLoggedIn, resolveClaudeProfile, resolveCodexProfile } from '../profiles/index.js';
 import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage, ClaudeQuotaSignal } from './parse.js';
 import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
+import { decodeCursor } from '../pagination.js';
 import { findClaudeBin,
   checkClaudePartialSupport,
   checkClaudeStreamJsonSupport,
@@ -60,6 +61,7 @@ async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
   } catch {
     // ignore if brain module does not exist
   }
+
 }
 
 export interface QueuedTurn {
@@ -289,6 +291,7 @@ export class ChatService {
   }
 
   listPermissionRules() { return this.permissionBroker.listRules(); }
+  pagePermissionRules(options: { limit?: string; cursor?: string }) { return this.permissionBroker.pageRules(options.limit, options.cursor); }
 
   getPermission(id: string) { return this.permissionBroker.get(id); }
 
@@ -625,6 +628,14 @@ export class ChatService {
       }
       return res;
     });
+  }
+
+  pageSessions(options?: { search?: string; archived?: string | number | boolean; limit?: string | number; cursor?: string }) {
+    const archivedParam = options?.archived;
+    const archivedFilter: number | null = archivedParam === 'all' ? null : archivedParam === '1' || archivedParam === 1 || archivedParam === true ? 1 : 0;
+    const page = this.chatSessionRepo.page({ search: options?.search, archived: archivedFilter, limit: options?.limit, cursor: options?.cursor });
+    const mapped = this.listSessions({ search: options?.search, archived: options?.archived });
+    return { ...page, items: page.items.map((s) => mapped.find((item) => item.id === s.id)!).filter(Boolean) };
   }
 
   createSession(body: {
@@ -2363,7 +2374,11 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
     return chatService.listPermissions(sessionId);
   });
 
-  fastify.get('/api/chat/permission-rules', async () => chatService.listPermissionRules());
+  fastify.get('/api/chat/permission-rules', async (req: FastifyRequest) => {
+    const query = req.query as { limit?: string; cursor?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return query.limit === undefined ? chatService.listPermissionRules() : chatService.pagePermissionRules(query);
+  });
   fastify.delete('/api/chat/permission-rules/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return chatService.deletePermissionRule(id);
@@ -2380,7 +2395,11 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
 
   // GET /api/chat/sessions
   fastify.get('/api/chat/sessions', async (req: FastifyRequest) => {
-    const query = req.query as { search?: string; archived?: string };
+    const query = req.query as { search?: string; archived?: string; limit?: string; cursor?: string };
+    if (query.limit !== undefined) {
+      if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+      return chatService.pageSessions(query);
+    }
     return chatService.listSessions(query);
   });
 

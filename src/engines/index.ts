@@ -133,7 +133,7 @@ export class AgyEngine implements Engine {
     if (opts.env) {
       Object.assign(env, opts.env);
     }
-    
+
     // Ensure log directory exists
     const logDir = path.dirname(opts.logPath);
     if (!fs.existsSync(logDir)) {

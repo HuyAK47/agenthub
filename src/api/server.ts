@@ -15,6 +15,7 @@ import { PtyManager, registerPtyRoutes } from './pty.js';
 import { registerBrainRoutes } from '../brain.js';
 import { registerChatRoutes } from '../chat/service.js';
 import { brandingLogoPath, saveBrandingLogo } from '../branding.js';
+import { decodeCursor } from '../pagination.js';
 
 export function resolveWebDistDir(customDir?: string): string {
   return path.resolve(customDir || resolveWebDir(import.meta.url, process.env));
@@ -315,7 +316,24 @@ export async function createServer(
 
   fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return service.listKnowledge(id);
+    const query = req.query as { limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return query.limit === undefined ? service.listKnowledge(id) : service.pageKnowledge(id, query);
+  });
+
+  fastify.get('/api/projects/:id/ci/runs', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit === undefined) return service.ciRepo?.listByProject(id) || [];
+    return service.pageCiRuns(id, query);
+  });
+
+  fastify.get('/api/events/history', async (req: FastifyRequest) => {
+    const query = req.query as { taskId?: string; limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit === undefined) return query.taskId ? service.eventRepo.getByTask(query.taskId) : service.eventRepo.getRecent(50);
+    return service.pageEvents(query);
   });
 
   fastify.get('/api/projects/:id/review-checklist/preview', async (req: FastifyRequest) => {
@@ -416,8 +434,12 @@ export async function createServer(
 
   // --- Tasks API ---
   fastify.get('/api/tasks', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; status?: string };
-    return service.listTasks(query);
+    const query = req.query as { project?: string; status?: string; search?: string; q?: string; limit?: string; cursor?: string; offset?: string; sort?: string; order?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) {
+      throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    }
+    if (query.limit === undefined) return service.listTasks(query);
+    return service.listTasksPage({ ...query, search: query.search ?? query.q });
   });
 
   fastify.get('/api/tasks/graph', async (req: FastifyRequest) => {
@@ -508,6 +530,14 @@ export async function createServer(
     return service.getTaskNotes(id);
   });
 
+  fastify.get('/api/tasks/:id/runs', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit === undefined) return service.runRepo.getByTask(id.replace('~', '/'));
+    return service.pageTaskRuns(id, query);
+  });
+
   fastify.delete('/api/tasks/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.deleteTask(id);
@@ -515,7 +545,9 @@ export async function createServer(
 
   // --- Batches API ---
   fastify.get('/api/batches', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; status?: string };
+    const query = req.query as { project?: string; status?: string; limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit !== undefined) return service.pageBatches(query);
     return service.listBatches(query);
   });
 
@@ -599,7 +631,8 @@ export async function createServer(
 
   // --- Savings API ---
   fastify.get('/api/savings', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; since?: string };
+    const query = req.query as { project?: string; since?: string; limit?: string; offset?: string; cursor?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
     return service.getSavings(query);
   });
 
@@ -611,8 +644,11 @@ export async function createServer(
   });
 
   fastify.get('/api/claude/sessions', async (req: FastifyRequest) => {
-    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
-    return service.listClaudeSessions(raw ? Number(raw) : undefined);
+    const query = (req.query as { activeWithinMin?: string; limit?: string; offset?: string; cursor?: string; sort?: string; order?: string } | undefined) || {};
+    const activeWithinMin = query.activeWithinMin ? Number(query.activeWithinMin) : undefined;
+    if (query.limit === undefined) return service.listClaudeSessions(activeWithinMin);
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return service.pageClaudeSessions({ activeWithinMin, limit: query.limit, offset: query.offset, cursor: query.cursor, sort: query.sort, order: query.order });
   });
   fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => {
     const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;

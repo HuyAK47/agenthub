@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { decodeCursor, encodeCursor, PageResult } from '../pagination.js';
 
 export interface ClaudeSessionRow { sessionId: string; cwd: string; title: string | null; firstAt: string | null; lastAt: string | null; model: string | null; messages: number; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; effectiveTokens: number; isHubChat: number; limitResetAt: number | null; limitHitAt: string | null; autoResumeEnabled: number; lastUserRequest: string | null; lastToolName: string | null; lastToolSummary: string | null; lastEventKind: string | null; fiveHourTokens: number | null }
 export interface ClaudeUsageRow { sessionId: string; messageId: string; ts: string; turnId: string; model: string | null; input: number; output: number; cacheCreation: number; cacheRead: number; effective: number; isSidechain: number }
@@ -7,6 +8,22 @@ export class ClaudeSessionRepo {
   constructor(private db: Database.Database) {}
   get(id: string) { return this.db.prepare('SELECT * FROM claude_sessions WHERE sessionId = ?').get(id) as ClaudeSessionRow | undefined; }
   list() { return this.db.prepare('SELECT * FROM claude_sessions ORDER BY lastAt DESC').all() as ClaudeSessionRow[]; }
+  page(limit: number, offset = 0, cursor?: string, sort: 'lastAt' | 'title' | 'messages' | 'effectiveTokens' = 'lastAt', order: 'asc' | 'desc' = 'desc'): PageResult<ClaudeSessionRow> {
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM claude_sessions').get() as { count: number }).count;
+    const decoded = decodeCursor(cursor);
+    if (cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const values: unknown[] = [];
+    const sortColumn = sort === 'title' ? 'title' : sort === 'messages' ? 'messages' : sort === 'effectiveTokens' ? 'effectiveTokens' : 'lastAt';
+    const descending = order !== 'asc';
+    const comparison = descending ? '<' : '>';
+    const where = decoded ? ` WHERE (COALESCE(${sortColumn}, '') ${comparison} ? OR (COALESCE(${sortColumn}, '') = ? AND sessionId ${comparison} ?))` : '';
+    if (decoded) values.push(decoded.value, decoded.value, decoded.id);
+    const rows = this.db.prepare(`SELECT * FROM claude_sessions${where} ORDER BY COALESCE(${sortColumn}, '') ${descending ? 'DESC' : 'ASC'}, sessionId ${descending ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`).all(...values, limit + 1, decoded ? 0 : Math.max(0, Math.floor(offset))) as ClaudeSessionRow[];
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor((last[sortColumn as keyof ClaudeSessionRow] as string | number | null) ?? '', last.sessionId) : null };
+  }
   upsert(row: Partial<ClaudeSessionRow> & Pick<ClaudeSessionRow, 'sessionId' | 'cwd'>) {
     this.db.prepare(`INSERT INTO claude_sessions (sessionId,cwd,title,firstAt,lastAt,model,messages,inputTokens,outputTokens,cacheCreationTokens,cacheReadTokens,effectiveTokens,isHubChat,limitResetAt,limitHitAt,autoResumeEnabled,lastUserRequest,lastToolName,lastToolSummary,lastEventKind,fiveHourTokens) VALUES (@sessionId,@cwd,@title,@firstAt,@lastAt,@model,@messages,@inputTokens,@outputTokens,@cacheCreationTokens,@cacheReadTokens,@effectiveTokens,@isHubChat,@limitResetAt,@limitHitAt,@autoResumeEnabled,@lastUserRequest,@lastToolName,@lastToolSummary,@lastEventKind,@fiveHourTokens) ON CONFLICT(sessionId) DO UPDATE SET cwd=COALESCE(NULLIF(excluded.cwd,''),claude_sessions.cwd),title=COALESCE(excluded.title,claude_sessions.title),firstAt=COALESCE(excluded.firstAt,claude_sessions.firstAt),lastAt=CASE WHEN excluded.lastAt IS NULL THEN claude_sessions.lastAt WHEN claude_sessions.lastAt IS NULL THEN excluded.lastAt ELSE MAX(claude_sessions.lastAt,excluded.lastAt) END,model=COALESCE(excluded.model,claude_sessions.model),messages=excluded.messages,inputTokens=excluded.inputTokens,outputTokens=excluded.outputTokens,cacheCreationTokens=excluded.cacheCreationTokens,cacheReadTokens=excluded.cacheReadTokens,effectiveTokens=excluded.effectiveTokens,isHubChat=excluded.isHubChat,lastUserRequest=COALESCE(excluded.lastUserRequest,claude_sessions.lastUserRequest),lastToolName=COALESCE(excluded.lastToolName,claude_sessions.lastToolName),lastToolSummary=COALESCE(excluded.lastToolSummary,claude_sessions.lastToolSummary),lastEventKind=COALESCE(excluded.lastEventKind,claude_sessions.lastEventKind),fiveHourTokens=COALESCE(excluded.fiveHourTokens,claude_sessions.fiveHourTokens)`).run({ title: null, firstAt: null, lastAt: null, model: null, messages: 0, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, effectiveTokens: 0, isHubChat: 0, limitResetAt: null, limitHitAt: null, autoResumeEnabled: 0, lastUserRequest: null, lastToolName: null, lastToolSummary: null, lastEventKind: null, fiveHourTokens: null, ...row });
   }

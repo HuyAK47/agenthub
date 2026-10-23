@@ -7,12 +7,21 @@ import { TelegramCard } from '../components/TelegramCard';
 import { deletePermissionRule, getPermissionRules } from '../api/chat';
 import { useTour } from '../components/tour/TourContext';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
+import { DataTable } from '../components/ui';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
   const { openTour } = useTour();
   const queryClient = useQueryClient();
-  const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
+  const [permissionPage, setPermissionPage] = useState(1);
+  const [permissionCursors, setPermissionCursors] = useState<Record<number, string | undefined>>({});
+  const permissionRules = useQuery({
+    queryKey: ['permissionRules', permissionPage, permissionCursors[permissionPage - 1]],
+    queryFn: () => getPermissionRules({ limit: 20, cursor: permissionCursors[permissionPage - 1] }),
+  });
+  useEffect(() => {
+    if (permissionRules.data?.nextCursor) setPermissionCursors((current) => ({ ...current, [permissionPage]: permissionRules.data!.nextCursor || undefined }));
+  }, [permissionPage, permissionRules.data?.nextCursor]);
   const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
   const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
   const codexProfiles = profiles.filter((p) => p.engine === 'codex' && Boolean(p.enabled));
@@ -990,12 +999,19 @@ export const SettingsPage: React.FC = () => {
           <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
             <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
-            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">{t('extra.noPermissionRules')}</p> : permissionRules.data.map((rule) => (
-              <div key={rule.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs">
-                <code className="break-all">{rule.toolName} {rule.pattern}</code>
-                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button>
-              </div>
-            ))}
+            <DataTable
+              rows={permissionRules.data?.items || []}
+              emptyTitle={t('extra.noPermissionRules')}
+              columns={[
+                { key: 'tool', title: t('extra.permissionTool'), sortable: true, sortValue: (rule) => `${rule.toolName} ${rule.pattern}`, render: (rule) => <code className="break-all">{rule.toolName} {rule.pattern}</code> },
+                { key: 'scope', title: t('extra.permissionScope'), sortable: true, sortValue: (rule) => rule.scope, render: (rule) => <span>{rule.scope}</span> },
+                { key: 'actions', title: t('extra.actions'), render: (rule) => <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button> },
+              ]}
+              page={permissionPage}
+              pageSize={20}
+              total={permissionRules.data?.total || 0}
+              onPageChange={setPermissionPage}
+            />
           </section>
 
           <div className="flex justify-end">
