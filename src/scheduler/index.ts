@@ -527,6 +527,50 @@ export class Scheduler {
     }
   }
 
+  /** Persist a resumable state before the service manager terminates the daemon. */
+  shutdownForUser(): { queued: number; reviewers: number; childPids: number[] } {
+    const childPids: number[] = [];
+    let queued = 0;
+    for (const rt of [...this.running.values()]) {
+      if (rt.pid) childPids.push(rt.pid);
+      this.killProcessGroup(rt.pid, 'SIGTERM');
+      this.running.delete(rt.taskId);
+      if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
+      this.locks.invalidate(rt.profileName);
+      this.runRepo.finish(rt.runId, 'crashed', undefined, 'user_stop');
+      this.taskRepo.update(rt.taskId, { status: 'queued', resume: 1 });
+      this.eventBus.emit('task.queued', rt.taskId, { reason: 'user_stop', note: 'dừng bởi người dùng' });
+      queued++;
+    }
+
+    for (const entry of [...this.checkingActive.values(), ...this.checkingQueue]) {
+      const task = this.taskRepo.get(entry.taskId);
+      if (task && (task.status === 'checking' || task.status === 'running')) {
+        this.taskRepo.update(entry.taskId, { status: 'queued', resume: 1 });
+        this.eventBus.emit('task.queued', entry.taskId, { reason: 'user_stop', note: 'dừng bởi người dùng' });
+        queued++;
+      }
+    }
+    for (const entry of this.checkingQueue.splice(0)) entry.resolve();
+    this.checkingActive.clear();
+    this.checkingPromises.clear();
+    this.checkingRunIds.clear();
+
+    let reviewers = 0;
+    for (const active of [...this.reviewerRuns.values()]) {
+      if (active.pid) childPids.push(active.pid);
+      this.killProcessGroup(active.pid, 'SIGTERM');
+      clearTimeout(active.timeout);
+      if (active.exitTimeout) clearTimeout(active.exitTimeout);
+      if (active.lockFile) this.locks.release(active.profileName, active.lockFile);
+      this.runRepo.finish(active.runId, 'crashed', undefined, 'user_stop');
+      this.reviewerRuns.delete(active.taskId);
+      reviewers++;
+    }
+    this.eventBus.emit('daemon.shutdown_requested', undefined, { queued, reviewers, note: 'dừng bởi người dùng' });
+    return { queued, reviewers, childPids };
+  }
+
   /**
    * On startup: mark any runs that were "running" but whose pid is no longer alive as crashed.
    * Re-queue their tasks.

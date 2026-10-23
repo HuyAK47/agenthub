@@ -30,7 +30,7 @@ export function resolveWebDir(moduleUrl: string, env: NodeJS.ProcessEnv = {}): s
 export async function createServer(
   service: AppService,
   config: AgentHubConfig,
-  options?: { webDir?: string },
+  options?: { webDir?: string; onShutdown?: (disable: boolean) => void },
 ): Promise<FastifyInstance> {
   const fastify = Fastify({ logger: false, forceCloseConnections: true });
 
@@ -123,6 +123,14 @@ export async function createServer(
   // --- Status API ---
   fastify.get('/api/status', async () => {
     return service.getStatus();
+  });
+
+  fastify.post('/api/hub/shutdown', async (req) => {
+    const body = (req.body || {}) as { disable?: unknown };
+    const disable = body.disable === true;
+    const result = service.shutdownForUser();
+    options?.onShutdown?.(disable);
+    return { ok: true, daemonPid: process.pid, ...result };
   });
 
   fastify.get('/api/perf', async () => service.getPerf());

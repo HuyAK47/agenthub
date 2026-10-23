@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getProfiles } from '../api/client';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
@@ -55,6 +55,11 @@ export const SettingsPage: React.FC = () => {
   const [brandingTagline, setBrandingTagline] = useState('');
   const [brandingAccent, setBrandingAccent] = useState('');
   const [brandingLogoError, setBrandingLogoError] = useState<string | null>(null);
+  const [shutdownOpen, setShutdownOpen] = useState(false);
+  const [shutdownDisable, setShutdownDisable] = useState(false);
+  const [shutdownDone, setShutdownDone] = useState(false);
+  const hubStatus = useQuery({ queryKey: ['status'], queryFn: getStatus, staleTime: 3000 });
+  const shutdownMutation = useMutation({ mutationFn: () => shutdownHub(shutdownDisable), onSuccess: () => { setShutdownOpen(false); setShutdownDone(true); } });
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['config'],
@@ -906,6 +911,14 @@ export const SettingsPage: React.FC = () => {
 
           <TelegramCard />
 
+          <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="shutdown-settings">
+            <h2 className="text-sm font-semibold">{t('settings.shutdownTitle')}</h2>
+            {shutdownDone ? <p className="text-sm text-[var(--t-ok)]">{t('settings.shutdownDone')} <code>agenthub start</code></p> : <>
+              <p className="text-xs text-[var(--t-text-3)]">{t('settings.shutdownDescription', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
+              <button type="button" onClick={() => setShutdownOpen(true)} className="rounded-lg bg-[var(--t-crit)] px-4 py-2 text-xs font-semibold text-white">{t('settings.shutdownButton')}</button>
+            </>}
+          </section>
+
           <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
             <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
@@ -929,6 +942,14 @@ export const SettingsPage: React.FC = () => {
           </div>
         </form>
       )}
+      {shutdownOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+        <div className="max-w-md rounded-xl bg-[var(--t-surface)] p-6 shadow-xl space-y-4">
+          <h2 className="font-semibold">{t('settings.shutdownConfirmTitle')}</h2>
+          <p className="text-sm text-[var(--t-text-2)]">{t('settings.shutdownConfirm', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shutdownDisable} onChange={(e) => setShutdownDisable(e.target.checked)} />{t('settings.shutdownDisable')}</label>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setShutdownOpen(false)} className="rounded-lg border px-3 py-2 text-xs">{t('common.cancel')}</button><button type="button" onClick={() => shutdownMutation.mutate()} className="rounded-lg bg-[var(--t-crit)] px-3 py-2 text-xs text-white">{t('settings.shutdownButton')}</button></div>
+        </div>
+      </div>}
     </div>
   );
 };

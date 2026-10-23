@@ -881,6 +881,19 @@ export class AppService {
   }
 
   setPerfCollector(collector: PerfCollector): void { this.perfCollector = collector; }
+
+  shutdownForUser(): { queued: number; reviewers: number; childPids: number[] } {
+    const result = this.scheduler.shutdownForUser();
+    const chatPids = this.chatService?.getRunningPids?.() || [];
+    this.chatService?.stop();
+    this.deployService?.stop();
+    this.ciService?.stop();
+    void this.telegramBotService?.stop();
+    return {
+      ...result,
+      childPids: [...(result.childPids || []), ...chatPids],
+    };
+  }
   getPerf() { return { samples: this.perfCollector?.getSamples() || [], latest: this.perfCollector?.latest() || null }; }
 
   async getSetupStatus() {

@@ -212,6 +212,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'shutdown', description: 'Tắt AgentHub (bật lại từ máy bằng agenthub start)' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
   { command: 'newtask', description: 'Tạo task từ một đoạn mô tả chung' },
@@ -1019,6 +1020,19 @@ export class TelegramBotService {
         await this.stopChat(chatId);
         break;
 
+      case '/shutdown': {
+        const status = this.service.getStatus();
+        const running = status.tasks.running + status.tasks.checking;
+        await this.sendMessage(chatId,
+          `⚠️ <b>Tắt AgentHub?</b> ${running} task đang chạy sẽ được đưa về hàng chờ và tiếp tục khi bật lại. Sau đó chỉ có thể bật lại từ máy bằng lệnh <code>agenthub start</code>.`,
+          { inline_keyboard: [[
+            { text: '✅ Xác nhận tắt', callback_data: 'hubshutdown:confirm' },
+            { text: '❌ Hủy', callback_data: 'hubshutdown:cancel' },
+          ]] },
+        );
+        break;
+      }
+
       case '/compact':
         await this.sendMessage(chatId, 'ℹ️ Tính năng nén ngữ cảnh chưa được bật.');
         break;
@@ -1779,6 +1793,18 @@ export class TelegramBotService {
     const domain = parts[0];
     const action = parts[1];
     const taskIdOrParam = parts.slice(2).join(':');
+
+    if (domain === 'hubshutdown') {
+      if (action !== 'confirm') {
+        await this.answerCallbackQuery(query.id, 'Đã hủy.');
+        return;
+      }
+      await this.answerCallbackQuery(query.id, 'Đang tắt AgentHub...');
+      this.service.shutdownForUser();
+      await this.sendMessage(chatId, '🛑 AgentHub đã lưu trạng thái và đang tắt. Bật lại từ máy bằng: <code>agenthub start</code>.');
+      setImmediate(() => process.kill(process.pid, 'SIGTERM'));
+      return;
+    }
 
     if (domain === 'permission') {
       if (!this.chatService) {
@@ -3767,6 +3793,7 @@ export class TelegramBotService {
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/shutdown - Tắt AgentHub; bật lại từ máy bằng <code>agenthub start</code>
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi
