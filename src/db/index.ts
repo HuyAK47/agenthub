@@ -2626,7 +2626,7 @@ export class KnowledgeRepo {
       .all(projectId) as KnowledgeEntryRow[];
   }
 
-  pageByProject(projectId: string, limit: string | number | undefined, cursor?: string): PageResult<KnowledgeEntryRow> {
+  pageByProject(projectId: string, limit: string | number | undefined, cursor?: string, offset?: string | number): PageResult<KnowledgeEntryRow> {
     const decoded = decodeCursor(cursor);
     if (cursor && !decoded) throw new Error('Invalid pagination cursor');
     const pageSize = parsePageSize(limit);
@@ -2636,7 +2636,8 @@ export class KnowledgeRepo {
       : ' WHERE projectId = ?';
     if (decoded) values.push(decoded.value, decoded.value, decoded.id);
     const total = (this.db.prepare('SELECT COUNT(*) AS count FROM knowledge_entries WHERE projectId = ?').get(projectId) as { count: number }).count;
-    const rows = this.db.prepare(`SELECT * FROM knowledge_entries${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, pageSize + 1) as KnowledgeEntryRow[];
+    const safeOffset = Number.isFinite(Number(offset)) && Number(offset) > 0 ? Math.floor(Number(offset)) : 0;
+    const rows = this.db.prepare(`SELECT * FROM knowledge_entries${where} ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, pageSize + 1, safeOffset) as KnowledgeEntryRow[];
     const hasMore = rows.length > pageSize;
     const items = hasMore ? rows.slice(0, pageSize) : rows;
     const last = items.at(-1);

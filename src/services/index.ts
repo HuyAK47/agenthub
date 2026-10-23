@@ -3617,10 +3617,10 @@ export class AppService {
     return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
   }
 
-  pageKnowledge(projectId: string, options?: { limit?: string | number; cursor?: string }) {
+  pageKnowledge(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
     if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     if (!this.knowledgeRepo) return { items: [], total: 0, nextCursor: null };
-    const page = this.knowledgeRepo.pageByProject(projectId, options?.limit, options?.cursor);
+    const page = this.knowledgeRepo.pageByProject(projectId, options?.limit, options?.cursor, options?.offset);
     return { ...page, items: page.items.map(apiKnowledgeEntry) };
   }
 

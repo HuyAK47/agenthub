@@ -587,7 +587,8 @@ export async function createServer(
 
   // --- Savings API ---
   fastify.get('/api/savings', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; since?: string };
+    const query = req.query as { project?: string; since?: string; limit?: string; offset?: string; cursor?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
     return service.getSavings(query);
   });
 

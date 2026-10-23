@@ -1289,4 +1289,30 @@ describe('AgentHub API Extra Endpoints', () => {
       expect(reviewEvt.taskId).toBe('proj-status-a/t3');
     });
   });
+
+  describe('GET /api/tasks pagination', () => {
+    it('returns paged metadata/cursor and preserves the legacy array response', async () => {
+      ctx.projectRepo.insert({ id: 'page-api-a', name: 'Page A', path: path.join(tmpDir, 'page-a'), defaultBranch: 'main', maxParallel: 2 });
+      ctx.projectRepo.insert({ id: 'page-api-b', name: 'Page B', path: path.join(tmpDir, 'page-b'), defaultBranch: 'main', maxParallel: 2 });
+      for (const [projectId, slug, status] of [['page-api-a', 'first', 'queued'], ['page-api-a', 'second', 'running'], ['page-api-b', 'other', 'queued']] as const) {
+        ctx.taskRepo.insert({ id: `${projectId}/${slug}`, projectId, slug, title: `${projectId} ${slug}`, status });
+      }
+
+      const first = await server.inject({ method: 'GET', url: '/api/tasks?project=page-api-a&limit=1', headers: authHeaders() });
+      expect(first.statusCode).toBe(200);
+      const firstBody = JSON.parse(first.body) as { items: Array<{ projectId: string }>; total: number; nextCursor: string | null };
+      expect(firstBody.total).toBe(2);
+      expect(firstBody.items).toHaveLength(1);
+      expect(firstBody.items[0].projectId).toBe('page-api-a');
+      expect(firstBody.nextCursor).toBeTruthy();
+
+      const second = await server.inject({ method: 'GET', url: `/api/tasks?project=page-api-a&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor!)}`, headers: authHeaders() });
+      expect(second.statusCode).toBe(200);
+      expect(JSON.parse(second.body).items).toHaveLength(1);
+
+      const legacy = await server.inject({ method: 'GET', url: '/api/tasks?project=page-api-a', headers: authHeaders() });
+      expect(legacy.statusCode).toBe(200);
+      expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+    });
+  });
 });
