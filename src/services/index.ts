@@ -564,7 +564,9 @@ export const UpdateConfigSchema = z.object({
     enabled: z.boolean().optional(),
     botTokenFile: z.string().optional(),
     allowedChatIds: z.array(z.number()).optional(),
+    topicMode: z.enum(['project', 'department']).optional(),
     projectTopics: z.record(z.object({ chatId: z.number(), threadId: z.number() })).optional(),
+    departmentTopics: z.record(z.object({ chatId: z.number(), threadId: z.number() })).optional(),
     notify: z.object({
       reviewReady: z.boolean().optional(),
       failed: z.boolean().optional(),
@@ -3856,19 +3858,28 @@ export class AppService {
       hasToken: Boolean(this.telegramBotService?.hasValidToken()),
       chats: this.config.telegram.chats || [],
       allowedChatIds: this.config.telegram.allowedChatIds,
+      topicMode: this.config.telegram.topicMode || 'project',
       notify: this.config.telegram.notify,
       projectTopics: this.config.telegram.projectTopics || {},
+      departmentTopics: this.telegramBotService?.getDepartmentTopics() || this.config.telegram.departmentTopics || {},
     };
   }
 
-  async setupTelegramTopics(): Promise<Record<string, TelegramProjectTopic>> {
+  async setupTelegramTopics(mode?: 'project' | 'department'): Promise<Record<string, TelegramProjectTopic>> {
     if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
-    return this.telegramBotService.setupProjectTopics();
+    return this.telegramBotService.setupTopics(mode);
   }
 
   async createTelegramProjectTopic(projectId: string): Promise<TelegramProjectTopic> {
     if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
     try { return await this.telegramBotService.createProjectTopic(projectId); } catch (error) {
+      throw new HttpError(502, 'telegram_error', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async createTelegramDepartmentTopic(departmentId: string): Promise<TelegramProjectTopic> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try { return await this.telegramBotService.createDepartmentTopic(departmentId); } catch (error) {
       throw new HttpError(502, 'telegram_error', error instanceof Error ? error.message : String(error));
     }
   }
