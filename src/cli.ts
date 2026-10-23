@@ -243,6 +243,20 @@ export async function cmdStop(config: AgentHubConfig, extraArgs: string[] = []):
     console.log(`✓ Đã lưu trạng thái và tắt AgentHub (${result.queued || 0} task sẽ tiếp tục từ hàng chờ).`);
   } catch (error) {
     console.error(`! Không gọi được daemon: ${error instanceof Error ? error.message : String(error)}`);
+    const manager = serviceManager();
+    let serviceActive = true;
+    try {
+      const output = execFileSync(manager.bin, process.platform === 'darwin'
+        ? ['print', `gui/${process.getuid?.() ?? ''}/dev.agenthub`]
+        : ['--user', 'is-active', 'agenthub'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 });
+      serviceActive = process.platform === 'darwin' ? output.trim().length > 0 : output.trim() === 'active';
+    } catch {
+      serviceActive = false;
+    }
+    if (serviceActive) {
+      throw new Error('Không thể tắt an toàn: daemon vẫn đang chạy nhưng API shutdown thất bại; task có thể bị cắt ngang.');
+    }
+    console.log('✓ Daemon đã tắt; tiếp tục dọn service còn sót.');
   }
 
   const manager = serviceManager();

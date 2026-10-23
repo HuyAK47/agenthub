@@ -281,6 +281,40 @@ describe('AgentHub CLI and Installation', () => {
     }
   });
 
+  it('cmdStop refuses to stop an active service when API shutdown fails', async () => {
+    const config = loadConfig(process.env.AGENTHUB_HOME);
+    getOrCreateToken(config.tokenPath);
+    const testServer = http.createServer((_req, res) => {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unavailable' }));
+    });
+    await new Promise<void>((resolve) => testServer.listen(0, '127.0.0.1', resolve));
+    config.port = (testServer.address() as { port: number }).port;
+
+    const fakeLog = path.join(tmpHome, 'systemctl-failed-shutdown.log');
+    const fakeSystemctl = path.join(tmpHome, 'mock-systemctl-failed-shutdown');
+    fs.writeFileSync(fakeSystemctl, `#!/bin/sh
+printf "%s\\n" "$*" >> "${fakeLog}"
+if [ "$2" = "is-active" ]; then printf 'active\\n'; exit 0; fi
+exit 0
+`, { mode: 0o755 });
+    const prevBin = process.env.AGENTHUB_SYSTEMCTL_BIN;
+    process.env.AGENTHUB_SYSTEMCTL_BIN = fakeSystemctl;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await expect(cmdStop(config, [])).rejects.toThrow('Không thể tắt an toàn');
+      const logContent = fs.readFileSync(fakeLog, 'utf8');
+      expect(logContent).toContain('--user is-active agenthub');
+      expect(logContent).not.toContain('--user stop agenthub');
+    } finally {
+      errorSpy.mockRestore();
+      if (prevBin !== undefined) process.env.AGENTHUB_SYSTEMCTL_BIN = prevBin;
+      else delete process.env.AGENTHUB_SYSTEMCTL_BIN;
+      testServer.close();
+    }
+  });
+
   it('cleanRemainingProcesses terminates lingering child processes', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       stdio: 'ignore',
