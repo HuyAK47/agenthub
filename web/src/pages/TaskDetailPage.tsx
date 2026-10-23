@@ -118,7 +118,7 @@ export const TaskDetailPage: React.FC = () => {
     enabled: Boolean(id) && activeTab === 'runs',
     placeholderData: (previous) => previous,
   });
-  const runs = runsQuery.data?.items || task?.runs || [];
+  const runs = runsQuery.isSuccess ? runsQuery.data.items : task?.runs || [];
   useEffect(() => {
     if (runsQuery.data?.nextCursor) setRunsCursors((current) => ({ ...current, [runsPage]: runsQuery.data!.nextCursor || undefined }));
   }, [runsPage, runsQuery.data?.nextCursor]);
@@ -871,7 +871,7 @@ export const TaskDetailPage: React.FC = () => {
       {/* 3. Runs list */}
       {activeTab === 'runs' && (
         <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs">
-          {runsQuery.isLoading ? (
+          {runsQuery.isLoading && !task?.runs?.length ? (
             <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('pagination.loading')}</div>
           ) : runs.length === 0 ? (
             <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('taskDetail.noRuns')}</div>
