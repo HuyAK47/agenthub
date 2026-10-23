@@ -74,8 +74,25 @@ let initialAgyHomes: AgyHomesSnapshot[] = [];
 let initialHubHomes: HubHomeSnapshot[] = [];
 let initialWeb: WebSnapshot;
 let initialServices: ServiceSnapshot[] = [];
+let initialTempDirNames = new Set<string>();
+let testTempRoot: string | undefined;
 
-export function setup() {
+function getAgentHubTempDirNames(): Set<string> {
+  try {
+    return new Set(fs.readdirSync(os.tmpdir(), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('agenthub-'))
+      .map((entry) => entry.name));
+  } catch {
+    return new Set();
+  }
+}
+
+export function setup({ provide }: { provide: (key: string, value: string) => void }) {
+  initialTempDirNames = getAgentHubTempDirNames();
+  testTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-test-run-'));
+  process.env.AGENTHUB_TEST_TMP_ROOT = testTempRoot;
+  process.env.TMPDIR = testTempRoot;
+  provide('agenthubTestTmpRoot', testTempRoot);
   const targetHomes = resolveTargetHomes();
   const realHome = os.userInfo().homedir;
   initialServices = [
@@ -104,6 +121,19 @@ export function setup() {
   initialWeb = { path: webPath, checksum: getChecksum(webPath) };
 
   return () => {
+    if (testTempRoot) {
+      try { fs.rmSync(testTempRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    delete process.env.AGENTHUB_TEST_TMP_ROOT;
+    const remainingNewTempDirs = [...getAgentHubTempDirNames()]
+      .filter((name) => !initialTempDirNames.has(name));
+    const leakedTempDirs = remainingNewTempDirs.length;
+    if (leakedTempDirs > 5) {
+      const prefixes = new Set(remainingNewTempDirs.map((name) => name.replace(/[^-]+$/, '')));
+      const message = `TEMP LEAK WARNING: ${leakedTempDirs} agenthub-* directories remain after tests; prefixes: ${[...prefixes].join(', ')}`;
+      console.warn(message);
+      if (process.env.AGENTHUB_TEST_TMP_FAIL === '1') throw new Error(message);
+    }
     // Teardown safety checks
     for (const snap of initialAgyHomes) {
       const currentSubdirs = getSubdirectories(snap.dir);

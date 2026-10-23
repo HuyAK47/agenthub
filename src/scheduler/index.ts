@@ -45,6 +45,7 @@ import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } 
 import { LoadGuard, LoadSnapshot } from '../load.js';
 import { measureProcessTree } from '../process-tree.js';
 import { ReferenceSnapshot, takeReferenceSnapshots, detectReferenceModifications, ReferenceModification } from '../references.js';
+import { cleanupTaskRunArtifacts } from '../temp-cleanup.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -3278,10 +3279,12 @@ export class Scheduler {
   private onTaskDoneOrCancelled(taskId: string): void {
     this.invalidateChecks(taskId);
     this.reviewNotified.delete(taskId);
-    if (!this.config.cleanup?.nodeModulesOnDone) return;
     const task = this.taskRepo.get(taskId);
-    if (!task || !task.worktreePath) return;
-    this.worktreeService.cleanNodeModules(task.worktreePath);
+    if (!task) return;
+    cleanupTaskRunArtifacts(this.runRepo.getByTask(taskId).map((run) => run.logPath));
+    if (this.config.cleanup?.nodeModulesOnDone && task.worktreePath) {
+      this.worktreeService.cleanNodeModules(task.worktreePath);
+    }
   }
 
   private invalidateChecks(taskId: string): void {
