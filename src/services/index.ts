@@ -278,6 +278,13 @@ export const DepartmentInputSchema = z.object({
   maxParallel: z.number().int().positive().default(3),
   claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
   telegramTopicId: z.number().int().positive().nullable().default(null),
+  brainEngine: z.enum(['claude', 'codex']).default('claude'),
+  brainModel: z.string().min(1).default('sonnet'),
+  brainCodexProfile: z.string().min(1).nullable().default(null),
+  brainMode: z.enum(['inherit', 'off', 'suggest', 'auto']).default('inherit'),
+  brainPermissions: z.enum(['inherit', 'standard', 'trusted', 'full']).default('full'),
+  brainDailyTokenBudget: z.number().int().nonnegative().default(0),
+  brainMaxTurnsPerHour: z.number().int().positive().default(20),
 });
 
 export const CreateProjectSchema = z.object({
