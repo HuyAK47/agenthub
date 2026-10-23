@@ -694,5 +694,4 @@ describe('ProjectsPage', () => {
 
     expect(await screen.findByText('XFarm')).toBeInTheDocument();
   });
-  });
 });
