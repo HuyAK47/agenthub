@@ -802,14 +802,51 @@ describe('Codex reviewer failover lifecycle', () => {
     const { scheduler } = makeReviewer('reviewer-approved');
     projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
     db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('w1', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
-    scheduler.tick();
-    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
-    expect(taskRepo.get('test-project/review')?.reviewStep ?? 0).toBe(0);
 
     profileRepo.upsert({ name: 'codex-2', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
     scheduler.tick();
     const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
     expect(reviewer?.profileName).toBe('codex-2');
+    scheduler.stop();
+  });
+
+  it('uses Claude for a chain gate when the worker is the only Codex profile', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('chain-worker', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
+    withClaudeReviewer(scheduler);
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.engine).toBe('claude');
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.profileName).toBe('claude-1');
+    scheduler.stop();
+  });
+
+  it('reuses the worker Codex profile when chain Claude fallback is disabled', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    config.reviewer.claudeFallback = false;
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('chain-worker', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.profileName).toBe('codex-1');
+    scheduler.stop();
+  });
+
+  it('reports a chain gate with no reviewer once per 30-minute window', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    profileRepo.update('codex-1', { authState: 'not_logged_in' });
+
+    scheduler.tick();
+    scheduler.tick();
+    scheduler.tick();
+
+    const waiting = eventRepo.getRecent(30).filter((event) => event.type === 'review.waiting' && event.taskId === 'test-project/review');
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].payload).toContain('no_reviewer_profile');
     scheduler.stop();
   });
 

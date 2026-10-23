@@ -211,6 +211,7 @@ export class Scheduler {
   /** Prevent a broken reviewer profile from being respawned on every scheduler tick. */
   private reviewerBackoffUntil = new Map<string, number>();
   private reviewNotified = new Map<string, string>();
+  private reviewWaitingNotified = new Map<string, { reason: string; at: number }>();
   private failoverWasActive = false;
   private reviewerErrorCounts = new Map<string, number>();
   private reviewerFallbackNotified = new Set<string>();
@@ -2210,17 +2211,121 @@ export class Scheduler {
   }
 
   private pickChainReviewer(task: TaskRow, step: ReviewChainStep | undefined, model: string, avoidProfile?: string): ReviewerPick {
-    if (step?.reviewer === 'claude' && !this.claudeBudgetAvailable(task)) {
-      this.eventBus.emit('review.waiting', task.id, { reason: 'department_claude_budget' });
+    if (step?.reviewer === 'claude') {
+      if (!this.claudeBudgetAvailable(task)) {
+        this.emitReviewWaiting(task, 'claude_budget');
+        return { wait: true };
+      }
+      const engine = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
+      if (!engine) {
+        this.emitReviewWaiting(task, 'no_reviewer_profile');
+        return { wait: true };
+      }
+      const profiles = this.availableChainProfiles('claude', undefined);
+      const profile = profiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
+      if (!profile) this.emitReviewWaiting(task, 'no_reviewer_profile');
+      return profile ? { engine, model, profile } : { wait: true };
+    }
+
+    const engine = this.engines.get('codex');
+    if (!engine) {
+      this.emitReviewWaiting(task, 'no_reviewer_profile');
       return { wait: true };
     }
-    const engine = step?.reviewer === 'claude' ? this.engines.get(CLAUDE_REVIEW_ENGINE_KEY) : this.engines.get('codex');
-    if (!engine) return { wait: true };
-    const engineId = step?.reviewer === 'claude' ? 'claude' : 'codex';
+    const eligibleCodexProfiles = this.availableChainProfiles('codex', undefined, false);
+    const codexProfiles = this.availableChainProfiles('codex', undefined);
+    const nonWorkerProfiles = codexProfiles.filter((profile) => profile.name !== avoidProfile);
+    const eligibleNonWorkerProfiles = eligibleCodexProfiles.filter((profile) => profile.name !== avoidProfile);
+    const errorCount = this.reviewerErrorCounts.get(task.id) || 0;
+    const settings = this.reviewerSettingsForTask(task);
+    const waitedMs = Date.now() - parseDbTime(task.updatedAt);
+    const claudeBudgetUnavailable = this.config.reviewer?.claudeFallback !== false && !this.claudeBudgetAvailable(task);
+    const workerOnly = Boolean(avoidProfile) && eligibleCodexProfiles.length > 0 && eligibleCodexProfiles.every((profile) => profile.name === avoidProfile);
+    const shouldFallback = (workerOnly || eligibleCodexProfiles.length === 0)
+      ? settings.fallback.onUnavailable
+      : errorCount >= 2 && settings.fallback.onError;
+
+    if (shouldFallback) {
+      const fallback = this.pickChainClaudeFallback(task, settings);
+      if (fallback) return fallback;
+      if (claudeBudgetUnavailable) this.emitReviewWaiting(task, 'claude_budget');
+      else if (workerOnly) this.emitReviewWaiting(task, 'only_worker_profile');
+      else if (!eligibleCodexProfiles.length) this.emitReviewWaiting(task, 'no_reviewer_profile');
+      else if (errorCount >= 2) this.emitReviewWaiting(task, 'no_reviewer_profile');
+    }
+
+    // The fallback attempt above is deliberately best-effort. If it is disabled, over budget,
+    // or has no usable Claude profile, the only free Codex profile is still a valid fresh session.
+    const selected = nonWorkerProfiles[0] || (workerOnly ? codexProfiles[0] : undefined);
+    if (selected && !(errorCount >= 2 && settings.fallback.onError)) {
+      return { engine, model, profile: selected };
+    }
+
+    const busy = eligibleNonWorkerProfiles.length > 0 && nonWorkerProfiles.length === 0;
+    if (busy && waitedMs >= settings.fallback.onBusyAfterMin * 60_000 && settings.fallback.onBusyAfterMin >= 0) {
+      const fallback = this.pickChainClaudeFallback(task, settings);
+      if (fallback) return fallback;
+    }
+    if (claudeBudgetUnavailable) this.emitReviewWaiting(task, 'claude_budget');
+    else if (workerOnly) this.emitReviewWaiting(task, 'only_worker_profile');
+    else if (!eligibleCodexProfiles.length) this.emitReviewWaiting(task, 'no_reviewer_profile');
+    else if (errorCount >= 2 || busy) this.emitReviewWaiting(task, 'no_reviewer_profile');
+    return { wait: true };
+  }
+
+  private reviewerSettingsForTask(task: TaskRow): { order: ReviewerOrderItem[]; fallback: ReviewerFallback } {
+    const project = this.projectRepo.get(task.projectId);
+    const settings = projectSettings(project);
+    const legacy = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>);
+    return {
+      order: settings.review?.order ?? legacy.order,
+      fallback: { ...legacy.fallback, ...(settings.review?.fallback || {}) },
+    };
+  }
+
+  private availableChainProfiles(engineId: 'codex' | 'claude', preferred: string[] | undefined, freeOnly = true): ProfileRow[] {
     const family = engineId === 'claude' ? 'claude' : 'codex';
-    const profiles = this.profileRepo.getEnabled().filter((p) => p.engine === engineId && !this.quotaService.isExhausted(p.name, family) && (p.authState == null || p.authState === 'ok') && !this.reviewerInBackoff(p.name) && !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null && p.name !== avoidProfile);
-    const profile = profiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
-    return profile ? { engine, model, profile } : { wait: true };
+    return this.profileRepo.getEnabled().filter((profile) => profile.engine === engineId
+      && (!preferred || preferred.length === 0 || preferred.includes(profile.name))
+      && (profile.authState == null || profile.authState === 'ok')
+      && !this.quotaService.isExhausted(profile.name, family)
+      && !this.reviewerInBackoff(profile.name)
+      && (!freeOnly || (!this.reviewerRunsForProfile(profile.name) && this.locks.findFreeSlotSync(profile) !== null)));
+  }
+
+  private pickChainClaudeFallback(task: TaskRow, settings: { order: ReviewerOrderItem[]; fallback: ReviewerFallback }): ReviewerPick | null {
+    if (this.config.reviewer?.claudeFallback === false) return null;
+    const item = settings.order.find((candidate) => candidate.engine === 'claude') || {
+      engine: 'claude' as const,
+      model: this.config.reviewer?.claudeModel || 'sonnet',
+      profiles: this.config.reviewer?.claudeProfiles || [],
+    };
+    if (!this.claudeBudgetAvailable(task)) {
+      this.emitReviewWaiting(task, 'claude_budget');
+      return null;
+    }
+    const engine = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
+    if (!engine) return null;
+    const profiles = this.availableChainProfiles('claude', item.profiles)
+      .sort((a, b) => (item.profiles.indexOf(a.name) < 0 ? item.profiles.length : item.profiles.indexOf(a.name)) -
+        (item.profiles.indexOf(b.name) < 0 ? item.profiles.length : item.profiles.indexOf(b.name)) ||
+        (b.priority ?? 0) - (a.priority ?? 0));
+    const profile = profiles[0];
+    if (!profile) return null;
+    const key = `${task.id}:chain:codex:claude`;
+    if (!this.reviewerFallbackNotified.has(key)) {
+      this.reviewerFallbackNotified.add(key);
+      this.eventBus.emit('review.fallback', task.id, { from: 'codex', to: 'claude', reason: 'unavailable', profile: profile.name });
+    }
+    return { engine, model: normalizeReviewerModel('claude', item.model), profile };
+  }
+
+  private emitReviewWaiting(task: TaskRow, reason: 'no_reviewer_profile' | 'only_worker_profile' | 'claude_budget'): void {
+    const now = Date.now();
+    const previous = this.reviewWaitingNotified.get(task.id);
+    if (previous && previous.reason === reason && now - previous.at < 30 * 60 * 1000) return;
+    this.reviewWaitingNotified.set(task.id, { reason, at: now });
+    this.eventBus.emit('review.waiting', task.id, { reason });
   }
 
   private reviewChainForTask(task: TaskRow): ReviewChainStep[] {
