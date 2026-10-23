@@ -415,7 +415,11 @@ export class Scheduler {
     for (const rt of this.running.values()) {
       if (!focus.projectId || rt.projectId === focus.projectId) {
         if (rt.paused && rt.pauseReason === 'focus' && this.resumeTask(rt.taskId)) resumed++;
-      } else if (focus.pauseRunning && !rt.paused && this.pauseTask(rt.taskId, 'focus')) paused++;
+      } else if (focus.pauseRunning) {
+        if (!rt.paused && this.pauseTask(rt.taskId, 'focus')) paused++;
+      } else if (rt.paused && rt.pauseReason === 'focus' && this.resumeTask(rt.taskId)) {
+        resumed++;
+      }
     }
     for (const task of this.taskRepo.getByStatus('queued')) {
       if (focus.projectId && task.projectId !== focus.projectId) {
