@@ -89,7 +89,10 @@ jobs:
           merge-multiple: true
           path: release
       - run: ls -la release
-      - run: sh scripts/smoke-install-native.sh "$(find release -name 'agenthub-*-macos-*.tar.gz' -print -quit)"
+      - name: Smoke install without Node or usable git on PATH
+        env:
+          PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        run: sh scripts/smoke-install-native.sh "$(find release -name 'agenthub-*-macos-*.tar.gz' -print -quit)"
 
   publish:
     needs: [package, smoke]

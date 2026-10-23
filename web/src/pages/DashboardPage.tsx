@@ -302,6 +302,23 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
+      {status.worktrees && (
+        <section data-testid="worktree-usage" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div><h2 className="text-base font-semibold">Worktree</h2><p className="text-xs text-[var(--text-secondary)]">{status.worktrees.count} đang có · {(status.worktrees.bytes / 1024 ** 3).toFixed(2)} GB</p></div>
+            <HardDrive className="w-5 h-5 text-[var(--t-accent)]" />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {Object.entries(status.worktrees.byStatus).map(([taskStatus, usage]) => (
+              <div key={taskStatus} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2 text-xs">
+                <div className="font-medium">{taskStatus}</div>
+                <div className="text-[var(--text-secondary)]">{usage.count} · {(usage.bytes / 1024 ** 3).toFixed(2)} GB</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} />}
       {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">

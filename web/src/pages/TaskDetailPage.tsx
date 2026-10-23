@@ -22,15 +22,17 @@ import {
   pauseTask,
   resumeTask,
 } from '../api/client';
-import { TaskLevel } from '../types/api';
-import { subscribeToRunOutput } from '../api/sse';
+import { TaskLevel, EventItem } from '../types/api';
+import { subscribeToRunOutput, subscribeToEvents } from '../api/sse';
 import { parseApiTime } from '../lib/time';
 import { CheckResults } from '../components/CheckResults';
 import { StatusBadge } from '../components/StatusBadge';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { getReviewerEngine } from '../utils/reviewer';
 import {
   ArrowLeft,
   Play,
@@ -125,6 +127,32 @@ export const TaskDetailPage: React.FC = () => {
       refetchNotes();
     },
   });
+
+  const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
+  useEffect(() => {
+    const unsub = subscribeToEvents((event: EventItem) => {
+      const rawId = id ? id.replace('~', '/') : '';
+      if (event.taskId === id || (rawId && event.taskId === rawId)) {
+        setLiveEvents((prev) => [event, ...prev.filter((e) => e.id !== event.id)]);
+      }
+    });
+    return unsub;
+  }, [id]);
+
+  const timelineEvents = React.useMemo(() => {
+    const initial = task?.events || [];
+    const combined = [...liveEvents, ...initial];
+    const seen = new Set<string | number>();
+    const unique: EventItem[] = [];
+    for (const ev of combined) {
+      const key = ev.id ?? `${ev.type}-${ev.ts}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(ev);
+      }
+    }
+    return unique;
+  }, [task?.events, liveEvents]);
 
   // Fetch initial log
   useQuery({
@@ -464,6 +492,17 @@ export const TaskDetailPage: React.FC = () => {
                 diskMinFreeGB={hubStatus?.disk?.minFreeGB}
                 size="sm"
               />
+              {(task.status === 'review' || (task.reviews && task.reviews.length > 0) || task.reviewChain?.length) && (
+                <span
+                  data-testid="reviewer-badge"
+                  className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-white shadow-2xs ${
+                    getReviewerEngine(task) === 'claude' ? 'bg-[var(--t-claude)]' : 'bg-emerald-600'
+                  }`}
+                  style={getReviewerEngine(task) === 'claude' ? { backgroundColor: 'var(--t-claude)' } : undefined}
+                >
+                  {getReviewerEngine(task) === 'claude' ? 'Claude' : 'Codex'}
+                </span>
+              )}
               {task.status === 'running' && (task.paused || task.currentRun?.paused) && (
                 <span
                   data-testid="task-paused-badge"
@@ -664,6 +703,45 @@ export const TaskDetailPage: React.FC = () => {
       <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} onCreateTask={(check) => openCapture(check.outputTail, check.name)} />
 
       {(task.sourceRef || (task.derivedTasks && task.derivedTasks.length > 0)) && <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 text-sm space-y-2"><h2 className="font-semibold">{t('extra.linkedTasks')}</h2>{task.sourceRef && <p>{t('extra.generatedFrom')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(task.sourceRef!.taskId.replace('/', '~'))}`)}>{task.sourceRef.taskId}</button></p>}{task.derivedTasks?.map((derived) => <p key={derived.id}>{t('extra.generatedTask')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(derived.id.replace('/', '~'))}`)}>{derived.id}</button></p>)}</section>}
+
+      {/* Timeline */}
+      <div data-testid="task-timeline" className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-3 shadow-xs">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--t-text-3)] flex items-center gap-2">
+          <Clock className="w-4 h-4 text-[var(--t-accent)]" />
+          <span>{t('taskDetail.timeline')}</span>
+        </h3>
+        {timelineEvents.length === 0 ? (
+          <p className="text-xs text-[var(--t-text-3)] italic">{t('taskDetail.noEvents')}</p>
+        ) : (
+          <ol className="relative border-l border-[var(--t-border)] ml-2 space-y-3 pl-4 text-xs">
+            {timelineEvents.map((evt, idx) => (
+              <li
+                key={evt.id || idx}
+                data-testid={`timeline-event-${evt.type}`}
+                className="space-y-1"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono font-semibold px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] border border-[var(--t-border)]">
+                    {evt.type}
+                  </span>
+                  {evt.ts && (
+                    <span className="text-[var(--t-text-3)] font-mono text-[11px]">
+                      {Number.isFinite(parseApiTime(evt.ts))
+                        ? new Date(parseApiTime(evt.ts)).toISOString()
+                        : String(evt.ts)}
+                    </span>
+                  )}
+                </div>
+                {evt.type === 'review.fallback' && (
+                  <p className="text-xs text-[var(--t-warn)] font-medium">
+                    {t('taskDetail.reviewFallbackLine', { profile: evt.payload?.profile || 'claude' })}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
 
       {/* Tabs */}
       <div className="flex border-b border-[var(--t-border)] space-x-6 text-sm font-medium" data-tour="task-detail-tabs">
@@ -972,7 +1050,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Cancel Confirmation Modal */}
       {showCancelModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-md w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.cancelTitle')}</h3>
             <p className="text-sm text-[var(--t-text-3)]">
@@ -1001,7 +1079,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Retry Modal with Note */}
       {showRetryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-md w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.retryTitle')}</h3>
             <div>
@@ -1039,7 +1117,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Changes Requested Modal - MANDATORY FEEDBACK */}
       {showChangesModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.changesTitle')}</h3>
             <p className="text-xs text-[var(--t-text-3)]">
@@ -1093,7 +1171,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Edit Task Modal */}
       {capture && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <form onSubmit={(event) => { event.preventDefault(); captureMutation.mutate(); }} className="w-full max-w-2xl bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4">
             <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.captureDesc')}</p>
@@ -1107,7 +1185,7 @@ export const TaskDetailPage: React.FC = () => {
       )}
 
       {showEditModal && (
-        <div data-testid="edit-task-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div data-testid="edit-task-modal" className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-[var(--t-border)]">
               <div>

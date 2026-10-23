@@ -17,9 +17,12 @@ import { WorktreeService } from './worktrees/index.js';
 import { parseCodexTokens } from './savings.js';
 import { getLockFileInfo, hashFile, getCacheNodeModulesDir, areDirectoriesHardLinked, verifyNativeModules } from './cache.js';
 import { findClaudeBin } from './chat/claude.js';
+import { findProcessesInDir } from './reaper.js';
+import { measureProcessTree } from './process-tree.js';
 import { getPlatform } from './platform/index.js';
 import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
 import { PerfCollector, formatPerfTable } from './perf.js';
+import { projectWorktreeRoots } from './projects/paths.js';
 
 export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
 import { assertWorkerMayControlHub } from './worker-guard.js';
@@ -86,6 +89,225 @@ export async function cmdInstallService(extraArgs: string[], projectRootOverride
   console.log(`✓ Đã tạo service file tại ${result.file}`);
   console.log(`✓ Đã bật và khởi chạy service agenthub (${result.activate})`);
   return result.content;
+}
+
+function serviceManager(): { bin: string; args: (action: string, disable?: boolean) => string[] } {
+  if (process.platform === 'darwin') {
+    const uid = process.getuid?.() ?? '';
+    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist');
+    return {
+      bin: process.env.AGENTHUB_LAUNCHCTL || 'launchctl',
+      args: (action, disable) => {
+        if (action === 'start') {
+          return ['bootstrap', `gui/${uid}`, plistPath];
+        }
+        if (disable) {
+          return ['unload', plistPath];
+        }
+        return ['bootout', `gui/${uid}/dev.agenthub`];
+      },
+    };
+  }
+  const bin = process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL || 'systemctl';
+  return {
+    bin,
+    args: (action) => {
+      if (action === 'start') {
+        return ['--user', 'enable', '--now', 'agenthub'];
+      }
+      return ['--user', 'stop', 'agenthub'];
+    },
+  };
+}
+
+export function isPidAlive(pid: number): boolean {
+  if (!pid || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function getAliveProcesses(
+  daemonPid?: number,
+  childPids: number[] = [],
+  worktreesDir?: string,
+): number[] {
+  const alive = new Set<number>();
+
+  if (daemonPid && isPidAlive(daemonPid)) {
+    alive.add(daemonPid);
+  }
+  for (const pid of childPids) {
+    if (isPidAlive(pid)) {
+      alive.add(pid);
+    }
+  }
+  if (worktreesDir && fs.existsSync(worktreesDir)) {
+    try {
+      const dirPids = findProcessesInDir(worktreesDir);
+      for (const pid of dirPids) {
+        if (isPidAlive(pid)) alive.add(pid);
+      }
+    } catch { /* ignore */ }
+  }
+  if (daemonPid && isPidAlive(daemonPid)) {
+    try {
+      const tree = measureProcessTree(daemonPid);
+      for (const pid of tree.pids) {
+        if (isPidAlive(pid)) alive.add(pid);
+      }
+    } catch { /* ignore */ }
+  }
+
+  return Array.from(alive);
+}
+
+export async function cleanRemainingProcesses(
+  daemonPid?: number,
+  childPids: number[] = [],
+  worktreesDir?: string,
+  timeoutMs = Number(process.env.AGENTHUB_STOP_TIMEOUT_MS) || 30_000,
+  pollIntervalMs = 200,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let termSent = false;
+  let killSent = false;
+
+  while (Date.now() < deadline) {
+    const remaining = getAliveProcesses(daemonPid, childPids, worktreesDir);
+    if (remaining.length === 0) {
+      return;
+    }
+
+    const elapsed = Date.now() - (deadline - timeoutMs);
+
+    // After a short wait (1s or immediately if short timeout), send SIGTERM
+    if (!termSent && (elapsed >= 1000 || timeoutMs <= 2000)) {
+      termSent = true;
+      for (const pid of remaining) {
+        try { process.kill(-pid, 'SIGTERM'); } catch { /* ignore */ }
+        try { process.kill(pid, 'SIGTERM'); } catch { /* ignore */ }
+      }
+    }
+
+    // When approaching deadline (remaining <= 5s or elapsed >= 1500 for short timeout), send SIGKILL
+    if (!killSent && elapsed >= Math.max(1500, timeoutMs - 5000)) {
+      killSent = true;
+      for (const pid of remaining) {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* ignore */ }
+        try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ }
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  // Final sweep: if any processes still alive, send SIGKILL
+  const finalRemaining = getAliveProcesses(daemonPid, childPids, worktreesDir);
+  for (const pid of finalRemaining) {
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* ignore */ }
+    try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ }
+  }
+}
+
+async function hubRequest(config: AgentHubConfig, method: string, endpoint: string, body?: unknown): Promise<Response> {
+  const token = readExistingToken(config.tokenPath || getTokenPath());
+  if (!token) throw new Error('Không tìm thấy token AgentHub; service có thể chưa được cài đặt.');
+  return fetch(`http://127.0.0.1:${config.port}${endpoint}`, {
+    method,
+    headers: { authorization: `Bearer ${token}`, host: `127.0.0.1:${config.port}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+export async function cmdStop(config: AgentHubConfig, extraArgs: string[] = []): Promise<void> {
+  const disable = extraArgs.includes('--disable');
+  let daemonPid: number | undefined;
+  let childPids: number[] = [];
+
+  try {
+    const response = await hubRequest(config, 'POST', '/api/hub/shutdown', { disable });
+    if (!response.ok) throw new Error(`API shutdown trả về HTTP ${response.status}`);
+    const result = await response.json() as {
+      queued?: number;
+      reviewers?: number;
+      daemonPid?: number;
+      childPids?: number[];
+    };
+    daemonPid = result.daemonPid;
+    if (Array.isArray(result.childPids)) {
+      childPids = result.childPids;
+    }
+    console.log(`✓ Đã lưu trạng thái và tắt AgentHub (${result.queued || 0} task sẽ tiếp tục từ hàng chờ).`);
+  } catch (error) {
+    console.error(`! Không gọi được daemon: ${error instanceof Error ? error.message : String(error)}`);
+    const manager = serviceManager();
+    let serviceActive = true;
+    try {
+      const output = execFileSync(manager.bin, process.platform === 'darwin'
+        ? ['print', `gui/${process.getuid?.() ?? ''}/dev.agenthub`]
+        : ['--user', 'is-active', 'agenthub'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 });
+      serviceActive = process.platform === 'darwin' ? output.trim().length > 0 : output.trim() === 'active';
+    } catch {
+      serviceActive = false;
+    }
+    if (serviceActive) {
+      throw new Error('Không thể tắt an toàn: daemon vẫn đang chạy nhưng API shutdown thất bại; task có thể bị cắt ngang.');
+    }
+    console.log('✓ Daemon đã tắt; tiếp tục dọn service còn sót.');
+  }
+
+  const manager = serviceManager();
+  try {
+    execFileSync(manager.bin, manager.args('stop', disable), { stdio: 'inherit', timeout: 30_000 });
+    if (disable) {
+      if (process.platform === 'darwin') {
+        const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist');
+        try {
+          execFileSync(manager.bin, ['unload', plistPath], { stdio: 'inherit', timeout: 30_000 });
+        } catch { /* ignore if already unloaded */ }
+      } else {
+        execFileSync(manager.bin, ['--user', 'disable', 'agenthub'], { stdio: 'inherit', timeout: 30_000 });
+      }
+    }
+  } catch (error) {
+    // Nếu không có systemd hoặc gọi service manager thất bại, thử kill PID khi không có systemd
+    if (daemonPid && isPidAlive(daemonPid)) {
+      try { process.kill(-daemonPid, 'SIGTERM'); } catch { /* ignore */ }
+      try { process.kill(daemonPid, 'SIGTERM'); } catch { /* ignore */ }
+    } else {
+      throw new Error(`Không thể dừng service (${manager.bin}): ${error instanceof Error ? error.message : String(error)}. Service đã cài chưa?`);
+    }
+  }
+
+  // Chờ tối đa 30 giây. Còn tiến trình con nào thì SIGTERM, rồi SIGKILL.
+  await cleanRemainingProcesses(daemonPid, childPids, config.worktreesDir);
+
+  console.log(`✓ AgentHub đã tắt${disable ? ' và không tự bật khi đăng nhập' : ''}.`);
+}
+
+export async function cmdStart(config: AgentHubConfig): Promise<void> {
+  const manager = serviceManager();
+  try {
+    execFileSync(manager.bin, manager.args('start'), { stdio: 'inherit', timeout: 30_000 });
+  } catch (error) {
+    throw new Error(`Không thể khởi động service (${manager.bin}): ${error instanceof Error ? error.message : String(error)}. Hãy chạy agenthub install-service.`);
+  }
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${config.port}/health`);
+      if (response.ok && (await response.json() as { ok?: boolean }).ok) {
+        console.log(`✓ AgentHub đang chạy: http://127.0.0.1:${config.port}`);
+        return;
+      }
+    } catch { /* daemon is still starting */ }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error('AgentHub đã được bật nhưng /health chưa trả về ok sau 30 giây.');
 }
 
 export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
@@ -214,7 +436,7 @@ export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = [])
 
 async function main() {
   const config = loadConfig();
-  if (command === 'install-service' || command === 'uninstall' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
+  if (command === 'install-service' || command === 'uninstall' || command === 'stop' || command === 'start' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
     assertWorkerMayControlHub(command === 'daemon' ? 'daemon stop' : command);
   }
 
@@ -251,6 +473,14 @@ async function main() {
 
     case 'install-service':
       await cmdInstallService(args.slice(1));
+      break;
+
+    case 'stop':
+      await cmdStop(config, args.slice(1));
+      break;
+
+    case 'start':
+      await cmdStart(config);
       break;
 
     case 'uninstall-service':
@@ -338,6 +568,8 @@ Cách dùng:
   agenthub version [--check]          Xem phiên bản và kiểm tra cập nhật mới
   agenthub install-service [--print]  Cài đặt systemd/LaunchAgent user service
   agenthub uninstall-service          Gỡ bỏ service chạy nền của AgentHub
+  agenthub stop [--disable]           Tắt AgentHub và lưu task đang chạy để tiếp tục
+  agenthub start                       Bật AgentHub và chờ daemon sẵn sàng
   agenthub mcp-install [--print]      Đăng ký MCP server với Claude Code
   agenthub link                       Tạo symlink vào ~/.local/bin/agenthub
   agenthub doctor [--json]            Kiểm tra môi trường và cấu hình hệ thống
@@ -415,7 +647,7 @@ async function cmdUsage(config: ReturnType<typeof loadConfig>) {
   ctx.db.close();
 }
 
-async function cmdStatus(config: ReturnType<typeof loadConfig>) {
+export async function cmdStatus(config: ReturnType<typeof loadConfig>) {
   const ctx = createContext(config);
   ctx.profileService.registerAll();
 
@@ -429,6 +661,58 @@ async function cmdStatus(config: ReturnType<typeof loadConfig>) {
   }
 
   console.log('=== AgentHub Status ===\n');
+  const manager = serviceManager();
+  let serviceRunning = false;
+  let serviceEnabled = false;
+  let serviceInstalled = true;
+  try {
+    if (process.platform === 'darwin') {
+      const plist = path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist');
+      serviceInstalled = fs.existsSync(plist);
+      serviceRunning = serviceInstalled && execFileSync(manager.bin, ['print', `gui/${process.getuid?.() ?? ''}/dev.agenthub`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).length > 0;
+      serviceEnabled = serviceInstalled;
+    } else {
+      const serviceFile = path.join(os.homedir(), '.config', 'systemd', 'user', 'agenthub.service');
+      const serviceFileExists = fs.existsSync(serviceFile);
+      const isCustomBin = Boolean(process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL);
+      let activeOk = false;
+      try {
+        const activeOut = execFileSync(manager.bin, ['--user', 'is-active', 'agenthub'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+        serviceRunning = activeOut === 'active';
+        activeOk = true;
+      } catch (err: unknown) {
+        serviceRunning = false;
+        const msg = String(err);
+        if (msg.includes('not-found') || msg.includes('could not be found') || msg.includes('Unit agenthub.service could not be found')) {
+          serviceInstalled = false;
+        }
+      }
+      try {
+        const enabledOut = execFileSync(manager.bin, ['--user', 'is-enabled', 'agenthub'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+        serviceEnabled = enabledOut === 'enabled';
+      } catch (err: unknown) {
+        serviceEnabled = false;
+        const msg = String(err);
+        if (msg.includes('not-found') || msg.includes('could not be found') || msg.includes('Unit agenthub.service could not be found') || msg.includes('No such file')) {
+          serviceInstalled = false;
+        }
+      }
+      if (!isCustomBin && !serviceFileExists && !serviceRunning && !activeOk) {
+        serviceInstalled = false;
+      }
+    }
+  } catch {
+    serviceInstalled = false;
+  }
+
+  if (!serviceInstalled) {
+    console.log('Service: chưa cài đặt (chạy \'agenthub install-service\' để cài đặt)');
+    console.log('Tự bật khi đăng nhập: chưa cài đặt');
+  } else {
+    console.log(`Service: ${serviceRunning ? 'đang chạy' : 'đã tắt'}`);
+    console.log(`Tự bật khi đăng nhập: ${serviceEnabled ? 'có' : 'không'}`);
+  }
+  console.log(`Worker đang chạy: ${tasks.filter((task) => task.status === 'running' || task.status === 'checking').length}`);
   console.log(`Hồ sơ: ${profiles.length}`);
   console.log(`Quota marks đang hoạt động: ${quotaMarks.length}`);
   console.log(`\nTask:`);
@@ -479,6 +763,21 @@ export async function cmdClean(
           }
         } catch {
           // ignore
+        }
+      }
+      for (const project of ctx.projectRepo.getAll()) {
+        const roots = projectWorktreeRoots(project, config.hubHome, config.worktreesDir);
+        for (const root of roots) {
+          try {
+            if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) continue;
+            for (const slug of fs.readdirSync(root)) {
+              if (slug === '.integration' || slug === '.logs') continue;
+              const wtDir = path.join(root, slug);
+              if (fs.existsSync(wtDir) && fs.statSync(wtDir).isDirectory()) worktreePaths.add(wtDir);
+            }
+          } catch {
+            // ignore
+          }
         }
       }
 

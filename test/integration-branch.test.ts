@@ -371,6 +371,20 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(ctx.reviewRepo.getByTask(task.id).at(-1)?.feedback).toContain('xung đột');
   });
 
+  it('retries an escalated review even when the brain runs in auto mode', async () => {
+    ctx.config.brain.mode = 'auto';
+    const repo = path.join(tmpDir, 'esc-auto-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({ id: 'esc-auto', name: 'Escalation auto', path: repo, defaultBranch: 'main' });
+    ctx.service.createTask({ project: 'esc-auto', slug: 'feat', title: 'Feature', body: 'Do it', level: 'hard', start: false, modelChain: ['codex:gpt-5.6-luna'] });
+    ctx.taskRepo.update('esc-auto/feat', { status: 'review', reviewerEscalated: 1, reviewerChangesRequested: 2, reviewerEscalationReason: 'reviewer_changes_limit' });
+    ctx.eventRepo.insert('review.escalated', 'esc-auto/feat', { reason: 'reviewer_changes_limit' });
+    await ctx.service.retryParkedEscalations();
+    const task = ctx.taskRepo.get('esc-auto/feat')!;
+    expect(task.status).not.toBe('review');
+    expect(JSON.parse(task.modelChain!)[0]).toBe('claude-opus-4-6-thinking');
+  });
+
   it('sends an escalated review back once on the strongest model when no auto brain is running', async () => {
     const repo = path.join(tmpDir, 'esc-repo');
     initGitRepo(repo, 'main');

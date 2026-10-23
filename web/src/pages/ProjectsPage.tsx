@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
 import { Project } from '../types/api';
 import {
@@ -318,7 +319,7 @@ function ProjectSettingsForm({
         </p>
       )}
       {confirmFullPermission && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" data-tour="modal-full-permission">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4" style={{ zIndex: UI_Z_INDEX.modal }} role="dialog" aria-modal="true" data-tour="modal-full-permission">
           <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-2xl">
             <h2 className="text-base font-semibold">{t('common.confirm')}</h2>
             <p className="mt-2 text-sm text-[var(--t-text-2)]">{t('extra.fullModeConfirm')}</p>

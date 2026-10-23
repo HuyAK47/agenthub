@@ -140,6 +140,19 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profiles'] });
   });
 
+  it('renders duplicate email names through i18n without leaving a placeholder', async () => {
+    vi.mocked(client.getProfiles).mockResolvedValueOnce([
+      { ...mockProfiles[0], duplicateWarning: true, duplicateEmailWith: ['g2'] },
+    ]);
+
+    renderPage();
+
+    const duplicate = await screen.findByText('Trùng email với: g2');
+    expect(duplicate).toBeInTheDocument();
+    expect(duplicate).not.toHaveTextContent('{');
+    expect(duplicate).toHaveAttribute('title', 'Gợi ý: Bấm đăng nhập lại bằng tài khoản Google khác!');
+  });
+
   it('2. Bật/Tắt hồ sơ: click nút toggle khi profile đang tắt (enabled: 0) gọi updateProfile với enabled = true', async () => {
     const updateSpy = vi.spyOn(client, 'updateProfile').mockResolvedValue({
       ...mockProfiles[1],

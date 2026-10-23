@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
+import { useEffect } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LocaleProvider } from '../context/LocaleContext';
 import { TourProvider, modalTourDefinitions, pageTours, tourDefinitions, useTour } from '../components/tour/TourContext';
+import { TourOverlay, computePopoverPosition, VIEWPORT_MARGIN, POPOVER_GAP } from '../components/tour/TourOverlay';
 import { translations, translate } from '../locales';
 import { HelpPanel } from '../components/tour/HelpPanel';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
-import { TourOverlay, computePopoverPosition, VIEWPORT_MARGIN, POPOVER_GAP } from '../components/tour/TourOverlay';
 import { CreateTaskPage } from '../pages/CreateTaskPage';
 import { AddProfileModal } from '../pages/ProfilesPage';
 import { NewSessionModal } from '../components/chat/NewSessionModal';
@@ -21,7 +22,9 @@ function wrapper(children: React.ReactNode) {
     <LocaleProvider initialLocale="en">
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={['/']}>
-          <TourProvider>{children}</TourProvider>
+          <TourProvider>
+            {children}
+          </TourProvider>
         </MemoryRouter>
       </QueryClientProvider>
     </LocaleProvider>,
@@ -105,6 +108,60 @@ describe('tour help and tooltips', () => {
     );
     expect(document.querySelector('[data-tour="session-mode"]')?.textContent).toContain('Operation mode');
     expect(document.querySelector('[data-tour="session-mode"]')?.textContent).not.toContain('Project (optional)');
+  });
+
+  it('keeps an account modal readable while its modal tour is active', async () => {
+    localStorage.clear();
+    const OpenModalTour = () => {
+      const { openTour } = useTour();
+      useEffect(() => openTour('modal-add-account'), [openTour]);
+      return <><AddProfileModal onClose={vi.fn()} onCreated={vi.fn()} onImported={vi.fn()} /><TourOverlay /></>;
+    };
+    wrapper(<OpenModalTour />);
+
+    await waitFor(() => expect(document.querySelector('[data-tour="account-provider"]')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('tour-overlay')).toBeInTheDocument());
+    const modal = screen.getByText('Add Account').closest('[role="dialog"]');
+    const tour = screen.getByRole('dialog', { name: 'Provider and account type' });
+
+    expect(modal).toHaveStyle({ zIndex: '110' });
+    expect(tour).toHaveStyle({ zIndex: '115' });
+    expect(tour.querySelector('[class~="bg-black/55"]')).toBeNull();
+    expect(document.querySelector('[data-tour="account-provider"]')).toBeVisible();
+
+    // Verify tour controls can advance and highlight the next element in the modal
+    const nextBtn = screen.getByRole('button', { name: 'Next' });
+    fireEvent.click(nextBtn);
+
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Login method' })).toBeInTheDocument());
+    expect(document.querySelector('[data-tour="account-login-method"]')).toBeVisible();
+    expect(tour).toHaveStyle({ zIndex: '115' });
+  });
+
+  it('keeps modal above page tour when target is on the page', async () => {
+    localStorage.clear();
+    const PageTourWithModal = () => {
+      const { openTour } = useTour();
+      useEffect(() => {
+        openTour('page-profiles');
+      }, [openTour]);
+      return (
+        <div>
+          <div data-tour="profiles">Profiles</div>
+          <button data-tour="add-account">Add</button>
+          <AddProfileModal onClose={vi.fn()} onCreated={vi.fn()} onImported={vi.fn()} />
+          <TourOverlay />
+        </div>
+      );
+    };
+    wrapper(<PageTourWithModal />);
+
+    await waitFor(() => expect(screen.getByTestId('tour-overlay')).toBeInTheDocument());
+    const modal = screen.getByText('Add Account').closest('[role="dialog"]');
+    const tour = screen.getByTestId('tour-overlay');
+
+    expect(modal).toHaveStyle({ zIndex: '110' });
+    expect(tour).toHaveStyle({ zIndex: '100' });
   });
 
   it('has a concrete target for every modal tour step', () => {
