@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProjectsPage } from '../pages/ProjectsPage';
@@ -711,5 +711,70 @@ describe('ProjectsPage', () => {
 
     // Ô branch được cập nhật giá trị mới từ dropdown
     expect(branchInput).toHaveValue('develop');
+  });
+
+  it('20. Đổi nhánh mặc định trong Drawer cài đặt project và lưu thành công', async () => {
+    const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue({
+      id: 'xfarm',
+      name: 'XFarm',
+      path: '/home/user/projects/xfarm',
+      defaultBranch: 'develop',
+      maxParallel: 3,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as any);
+
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: 'Cài đặt' }));
+    expect(await screen.findByTestId('project-settings-drawer')).toBeInTheDocument();
+
+    const branchSection = await screen.findByTestId('project-branch-settings');
+    expect(branchSection).toBeInTheDocument();
+
+    const branchInput = within(branchSection).getByPlaceholderText('main');
+    fireEvent.change(branchInput, { target: { value: 'develop' } });
+
+    const saveBtn = await screen.findByRole('button', { name: 'Lưu' });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith('proj-1', expect.objectContaining({
+        defaultBranch: 'develop',
+      }));
+    });
+  });
+
+  it('21. Cho phép xoá vĩnh viễn (purge) dự án trong danh sách dự án đã ẩn', async () => {
+    vi.spyOn(client, 'getArchivedProjects').mockResolvedValue([
+      {
+        id: 'archived-proj',
+        name: 'Archived Project',
+        path: '/tmp/archived',
+        defaultBranch: 'main',
+        maxParallel: 1,
+        archivedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as any,
+    ]);
+    const deleteSpy = vi.spyOn(client, 'deleteProject').mockResolvedValue({ ok: true });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    await screen.findByText('XFarm');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dự án đã ẩn' }));
+    await screen.findByText(/Archived Project/);
+
+    const purgeBtn = await screen.findByRole('button', { name: /Xoá vĩnh viễn/i });
+    fireEvent.click(purgeBtn);
+
+    await waitFor(() => {
+      expect(deleteSpy).toHaveBeenCalledWith('archived-proj', {
+        purge: true,
+        confirm: 'archived-proj',
+      });
+    });
   });
 });

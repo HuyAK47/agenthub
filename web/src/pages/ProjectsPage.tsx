@@ -29,6 +29,7 @@ import {
   ExternalLink,
   GitBranch,
   RefreshCw,
+  Search,
 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
@@ -371,7 +372,28 @@ export const ProjectsPage: React.FC = () => {
   const [isInspectingGit, setIsInspectingGit] = useState(false);
   const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
   const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false);
+  const [branchSearchFilter, setBranchSearchFilter] = useState('');
   const branchDropdownRef = useRef<HTMLDivElement>(null);
+
+  const handleRefreshBranches = async () => {
+    const trimmedPath = path.trim();
+    if (!trimmedPath) return;
+    setIsInspectingGit(true);
+    try {
+      const res = await inspectGitRepo(trimmedPath);
+      setGitInspectResult(res);
+      if (res.valid) {
+        setGitBranches(res.branches || []);
+        if (res.defaultBranch && (!defaultBranch.trim() || defaultBranch === 'main')) {
+          setDefaultBranch(res.defaultBranch);
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsInspectingGit(false);
+    }
+  };
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -547,6 +569,7 @@ export const ProjectsPage: React.FC = () => {
     setIsInspectingGit(false);
     setNameManuallyEdited(false);
     setIsBranchDropdownOpen(false);
+    setBranchSearchFilter('');
   };
 
   const handleEnvTemplateChange = (val: string) => {
@@ -615,10 +638,9 @@ export const ProjectsPage: React.FC = () => {
     });
   };
 
-  const filteredBranches = defaultBranch.trim()
-    ? gitBranches.filter((b) => b.toLowerCase().includes(defaultBranch.trim().toLowerCase()))
+  const displayBranches = branchSearchFilter.trim()
+    ? gitBranches.filter((b) => b.toLowerCase().includes(branchSearchFilter.trim().toLowerCase()))
     : gitBranches;
-  const displayBranches = filteredBranches.length > 0 ? filteredBranches : gitBranches;
 
   return (
     <div className="space-y-6">
@@ -660,9 +682,29 @@ export const ProjectsPage: React.FC = () => {
         <Card className="p-4 space-y-2">
           <h2 className="font-semibold">{t('projects.archivedTitle')}</h2>
           {archivedProjects.map((project) => (
-            <div key={project.id} className="flex items-center justify-between text-sm">
-              <span>{project.name} <span className="font-mono text-xs">({project.id})</span></span>
-              <Button size="sm" variant="secondary" onClick={() => restoreMutation.mutate(project.id)}>{t('projects.restore')}</Button>
+            <div key={project.id} className="flex items-center justify-between text-sm py-1 border-b border-[var(--t-border)] last:border-b-0">
+              <span className="truncate pr-2">
+                {project.name} <span className="font-mono text-xs text-[var(--t-text-3)]">({project.id})</span>
+              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button size="sm" variant="secondary" onClick={() => restoreMutation.mutate(project.id)}>
+                  {t('projects.restore')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    if (window.confirm(`Xoá vĩnh viễn dự án "${project.name}" (${project.id})? Toàn bộ dữ liệu tác vụ và liên kết sẽ bị xóa hoàn toàn khỏi hệ thống.`)) {
+                      deleteMutation.mutate({ id: project.id, purge: true, confirm: project.id });
+                    }
+                  }}
+                  className="text-[var(--t-crit)] hover:bg-[color-mix(in_srgb,var(--t-crit)_10%,transparent)] gap-1 px-2.5"
+                  title="Xoá vĩnh viễn dự án"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Xoá vĩnh viễn</span>
+                </Button>
+              </div>
             </div>
           ))}
         </Card>
@@ -742,9 +784,23 @@ export const ProjectsPage: React.FC = () => {
               </div>
 
               <div className="relative" ref={branchDropdownRef}>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
-                  {t('projects.branchLabel')}
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)]">
+                    {t('projects.branchLabel')}
+                  </label>
+                  {path.trim() && (
+                    <button
+                      type="button"
+                      title="Làm mới danh sách nhánh từ Git repo"
+                      disabled={isInspectingGit}
+                      onClick={handleRefreshBranches}
+                      className="inline-flex items-center gap-1 text-[11px] text-[var(--t-accent)] hover:underline cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${isInspectingGit ? 'animate-spin' : ''}`} />
+                      <span>Làm mới nhánh</span>
+                    </button>
+                  )}
+                </div>
                 <p className="text-xs text-[var(--t-text-3)] mb-1.5">
                   {t('projects.branchHint')}
                 </p>
@@ -765,7 +821,10 @@ export const ProjectsPage: React.FC = () => {
                     type="button"
                     aria-label="Xem danh sách nhánh"
                     title="Xem danh sách nhánh"
-                    onClick={() => setIsBranchDropdownOpen((prev) => !prev)}
+                    onClick={() => {
+                      setIsBranchDropdownOpen((prev) => !prev);
+                      setBranchSearchFilter('');
+                    }}
                     className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] rounded-md transition-colors cursor-pointer"
                   >
                     <ChevronDown
@@ -788,56 +847,75 @@ export const ProjectsPage: React.FC = () => {
                       <>
                         <div className="px-3 py-1.5 text-[11px] font-medium text-[var(--t-text-3)] border-b border-[var(--t-border)] flex items-center justify-between bg-[var(--t-surface-2)]">
                           <span>
-                            {filteredBranches.length > 0 && filteredBranches.length !== gitBranches.length
-                              ? `Khớp ${filteredBranches.length}/${gitBranches.length} nhánh`
-                              : `Danh sách nhánh (${gitBranches.length})`}
+                            Danh sách nhánh ({gitBranches.length})
                           </span>
-                          {filteredBranches.length === 0 && (
-                            <span className="text-[10px] text-[var(--t-warn)]">
-                              Không khớp "{defaultBranch}" (hiện tất cả)
+                          {branchSearchFilter.trim() && (
+                            <span className="text-[10px] text-[var(--t-accent)]">
+                              Khớp {displayBranches.length}/{gitBranches.length}
                             </span>
                           )}
                         </div>
+                        {gitBranches.length > 5 && (
+                          <div className="p-1.5 border-b border-[var(--t-border)] bg-[var(--t-surface-2)]">
+                            <div className="relative">
+                              <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[var(--t-text-3)]" />
+                              <input
+                                type="text"
+                                placeholder="Lọc nhánh..."
+                                value={branchSearchFilter}
+                                onChange={(e) => setBranchSearchFilter(e.target.value)}
+                                className="w-full h-7 pl-7 pr-2 text-xs bg-[var(--t-surface)] text-[var(--t-text)] border border-[var(--t-border)] rounded focus:outline-hidden focus:border-[var(--t-accent)]"
+                              />
+                            </div>
+                          </div>
+                        )}
                         <ul className="max-h-56 overflow-y-auto py-1">
-                          {displayBranches.map((b) => {
-                            const isSelected = defaultBranch === b;
-                            const isDefault = gitInspectResult?.defaultBranch === b;
-                            const isCurrent = gitInspectResult?.currentBranch === b;
-                            return (
-                              <li key={b}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDefaultBranch(b);
-                                    setIsBranchDropdownOpen(false);
-                                  }}
-                                  className={`w-full text-left px-3 py-1.5 text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
-                                    isSelected
-                                      ? 'bg-[var(--t-accent)]/15 text-[var(--t-accent)] font-semibold'
-                                      : 'hover:bg-[var(--t-hover)] text-[var(--t-text)]'
-                                  }`}
-                                >
-                                  <span className="flex items-center gap-2 truncate">
-                                    <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                                    <span className="truncate">{b}</span>
-                                  </span>
-                                  <span className="flex items-center gap-1.5 shrink-0 ml-2">
-                                    {isDefault && (
-                                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-accent)]/10 text-[var(--t-accent)]">
-                                        mặc định
-                                      </span>
-                                    )}
-                                    {isCurrent && !isDefault && (
-                                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-surface-2)] text-[var(--t-text-3)]">
-                                        hiện tại
-                                      </span>
-                                    )}
-                                    {isSelected && <Check className="h-3.5 w-3.5 text-[var(--t-accent)]" />}
-                                  </span>
-                                </button>
-                              </li>
-                            );
-                          })}
+                          {displayBranches.length === 0 ? (
+                            <li className="px-3 py-2 text-xs text-[var(--t-text-3)] text-center">
+                              Không tìm thấy nhánh phù hợp
+                            </li>
+                          ) : (
+                            displayBranches.map((b) => {
+                              const isSelected = defaultBranch === b;
+                              const isDefault = gitInspectResult?.defaultBranch === b;
+                              const isCurrent = gitInspectResult?.currentBranch === b;
+                              return (
+                                <li key={b}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDefaultBranch(b);
+                                      setIsBranchDropdownOpen(false);
+                                      setBranchSearchFilter('');
+                                    }}
+                                    className={`w-full text-left px-3 py-1.5 text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-[var(--t-accent)]/15 text-[var(--t-accent)] font-semibold'
+                                        : 'hover:bg-[var(--t-hover)] text-[var(--t-text)]'
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-2 truncate">
+                                      <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                                      <span className="truncate">{b}</span>
+                                    </span>
+                                    <span className="flex items-center gap-1.5 shrink-0 ml-2">
+                                      {isDefault && (
+                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-accent)]/10 text-[var(--t-accent)]">
+                                          mặc định
+                                        </span>
+                                      )}
+                                      {isCurrent && !isDefault && (
+                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-surface-2)] text-[var(--t-text-3)]">
+                                          hiện tại
+                                        </span>
+                                      )}
+                                      {isSelected && <Check className="h-3.5 w-3.5 text-[var(--t-accent)]" />}
+                                    </span>
+                                  </button>
+                                </li>
+                              );
+                            })
+                          )}
                         </ul>
                       </>
                     )}
@@ -845,18 +923,19 @@ export const ProjectsPage: React.FC = () => {
                 )}
 
                 {gitBranches.length > 0 && (
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     <span className="text-[11px] text-[var(--t-text-3)] flex items-center gap-1">
                       <GitBranch className="h-3 w-3" />
                       Gợi ý:
                     </span>
-                    {gitBranches.slice(0, 6).map((b) => (
+                    {gitBranches.map((b) => (
                       <button
                         key={b}
                         type="button"
                         onClick={() => {
                           setDefaultBranch(b);
                           setIsBranchDropdownOpen(false);
+                          setBranchSearchFilter('');
                         }}
                         className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors cursor-pointer ${
                           defaultBranch === b
@@ -867,15 +946,6 @@ export const ProjectsPage: React.FC = () => {
                         {b}
                       </button>
                     ))}
-                    {gitBranches.length > 6 && (
-                      <button
-                        type="button"
-                        onClick={() => setIsBranchDropdownOpen(true)}
-                        className="text-[10px] text-[var(--t-accent)] hover:underline cursor-pointer"
-                      >
-                        +{gitBranches.length - 6} nhánh khác
-                      </button>
-                    )}
                   </div>
                 )}
               </div>
