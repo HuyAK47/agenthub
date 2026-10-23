@@ -289,4 +289,45 @@ describe('BrainRunner', () => {
     expect(ctx.sent[0]).toContain('disk.low');
     expect(ctx.sessions.get('brain:director')).toMatchObject({ model: 'opus', title: 'Bộ não Giám đốc' });
   });
+
+  it('reports completed department turns to the director and keeps the shared turn alive when stopping a project', () => {
+    const ctx = setup('auto', { departments: true, projectSettings: { p1: '{}', p2: '{}' }, maxConcurrent: 2 });
+    ctx.departments.insert({ id: 'eng', name: 'Engineering', priority: 0, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, brainEngine: 'claude', brainModel: 'sonnet', brainCodexProfile: null, brainMode: 'auto', brainPermissions: 'full', brainDailyTokenBudget: 0, brainMaxTurnsPerHour: 20 });
+    ctx.projects.update('p1', { departmentId: 'eng' });
+    ctx.projects.update('p2', { departmentId: 'eng' });
+    (ctx.runner as unknown as { opts: { config: { director: unknown } } }).opts.config.director = { enabled: true, engine: 'claude', model: 'opus', permissions: 'standard' };
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p1/one');
+    ctx.events.emit('task.done', 'p2/two');
+    ctx.runner.flush();
+    ctx.runner.stopProject('p1');
+    expect(ctx.runner.getQueuedEvents()).toHaveLength(0);
+    ctx.events.emit('chat.done', undefined, { sessionId: 'brain:department:eng', message: 'Đã xử lý hai project', usage: {} });
+    ctx.runner.flush();
+    expect(ctx.sent.some((message) => message.includes('brain.department_summary'))).toBe(true);
+    expect(ctx.sessions.get('brain:department:eng')).toBeDefined();
+  });
+
+  it('reports usage for a department turn through the project API', () => {
+    const ctx = setup('suggest', { departments: true, projectSettings: { p1: '{}' } });
+    ctx.departments.insert({ id: 'eng', name: 'Engineering', priority: 0, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, brainEngine: 'claude', brainModel: 'sonnet', brainCodexProfile: null, brainMode: 'suggest', brainPermissions: 'full', brainDailyTokenBudget: 0, brainMaxTurnsPerHour: 20 });
+    ctx.projects.update('p1', { departmentId: 'eng' });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    ctx.db.prepare("INSERT INTO brain_turns (id, trigger, input, projectId, departmentId, status, inputTokens, outputTokens, startedAt) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)")
+      .run('dept-turn', 'event', 'summary', 'eng', 'done', 7, 5, today.toISOString());
+    expect(ctx.runner.getUsage('p1')).toMatchObject({ tokensToday: 12, lastTurnAt: today.toISOString() });
+  });
+
+  it('lets the director transfer an assigned profile between departments', () => {
+    const ctx = setup('auto', { departments: true });
+    ctx.profiles.upsert({ name: 'g1', engine: 'claude', kind: 'isolated', home: os.tmpdir(), email: null, enabled: 1 });
+    for (const id of ['eng', 'sales']) ctx.departments.insert({ id, name: id, priority: 0, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, brainEngine: 'claude', brainModel: 'sonnet', brainCodexProfile: null, brainMode: 'auto', brainPermissions: 'full', brainDailyTokenBudget: 0, brainMaxTurnsPerHour: 20 });
+    ctx.departments.setProfiles('eng', [{ profileName: 'g1', share: 40 }]);
+    (ctx.runner as unknown as { opts: { config: { director: unknown } } }).opts.config.director = { enabled: true, engine: 'claude', model: 'opus', permissions: 'standard' };
+    ctx.runner.start();
+    ctx.events.emit('brain.profile_transfer', undefined, { profileName: 'g1', fromDepartmentId: 'eng', toDepartmentId: 'sales' });
+    expect(ctx.departments.profiles('eng')).toHaveLength(0);
+    expect(ctx.departments.profiles('sales')).toMatchObject([{ profileName: 'g1', share: 40 }]);
+  });
 });
