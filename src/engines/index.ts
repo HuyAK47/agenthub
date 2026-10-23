@@ -225,17 +225,65 @@ function brainSandboxCommand(
   envPath = process.env.PATH || '',
 ): [string, string[]] {
   const shimRoot = path.join(hubHome, 'shims', 'worker');
+  const home = os.homedir();
+  const addDirs = (target: string, stopAt?: string) => {
+    const dirs: string[] = [];
+    let current = path.resolve(target);
+    const stop = stopAt ? path.resolve(stopAt) : path.parse(current).root;
+    while (current !== stop && current !== path.parse(current).root) {
+      dirs.unshift(current);
+      current = path.dirname(current);
+    }
+    for (const dir of dirs) sandboxArgs.push('--dir', dir);
+  };
   const sandboxArgs = [
     '--ro-bind', '/', '/',
     '--tmpfs', '/tmp',
-    '--bind', hubHome, hubHome,
+    // The daemon database, token and other profiles must not be visible to a
+    // brain. Only the selected profile, session files and read-only shims are
+    // mounted back below.
     '--bind', cwd, cwd,
-    ...(profileHome && fs.existsSync(profileHome) ? ['--bind', profileHome, profileHome] : []),
     '--dev', '/dev',
     '--proc', '/proc',
     '--share-net',
     '--die-with-parent',
   ];
+  const sessionDir = path.join(hubHome, 'sessions');
+  // Apply this after the cwd bind as tests and some
+  // deployments keep the hub directory below the project/home tree.
+  sandboxArgs.push('--tmpfs', hubHome);
+
+  // Hide common credential stores. A selected CODEX_HOME is restored after
+  // these mounts, so isolated profiles continue to work without exposing the
+  // user's other accounts.
+  const maskedDirs = [
+    path.join(home, '.ssh'), path.join(home, '.codex'), path.join(home, '.agy-homes'),
+    path.join(home, '.aws'), path.join(home, '.kube'), path.join(home, '.docker'),
+    path.join(home, '.config', 'gh'), path.join(home, '.config', 'gcloud'),
+  ];
+  for (const masked of maskedDirs) {
+    if (fs.existsSync(masked) && masked !== hubHome && !isDescendant(masked, hubHome)) {
+      sandboxArgs.push('--tmpfs', masked);
+    }
+  }
+  for (const maskedFile of [path.join(home, '.npmrc'), path.join(home, '.netrc')]) {
+    if (fs.existsSync(maskedFile) && maskedFile !== hubHome && !isDescendant(maskedFile, hubHome)) {
+      sandboxArgs.push('--ro-bind', '/dev/null', maskedFile);
+    }
+  }
+
+  if (fs.existsSync(sessionDir)) {
+    addDirs(sessionDir, hubHome);
+    sandboxArgs.push('--bind', sessionDir, sessionDir);
+  }
+  if (fs.existsSync(shimRoot)) {
+    addDirs(shimRoot, hubHome);
+    sandboxArgs.push('--ro-bind', shimRoot, shimRoot);
+  }
+  if (profileHome && fs.existsSync(profileHome) && profileHome !== hubHome && !isDescendant(profileHome, hubHome)) {
+    addDirs(profileHome, isDescendant(hubHome, profileHome) ? hubHome : path.dirname(profileHome));
+    sandboxArgs.push('--bind', profileHome, profileHome);
+  }
 
   // PATH shims do not protect against /bin/rm or `sh -c /bin/rm`. Overlay the
   // policy shims in a private mount namespace so absolute paths hit the same
@@ -261,6 +309,11 @@ function brainSandboxCommand(
     }
   }
   return [bwrap, [...sandboxArgs, '--', command, ...args]];
+}
+
+function isDescendant(parent: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 export class CodexEngine implements Engine {

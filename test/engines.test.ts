@@ -229,27 +229,34 @@ process.exit(0);
     try {
       const marker = path.join(tmp, 'must-survive');
       fs.writeFileSync(marker, 'keep');
-      const fake = path.join(tmp, 'policy-check.mjs');
-      fs.writeFileSync(fake, `
-import { spawnSync } from 'node:child_process';
-const result = spawnSync('/bin/sh', ['-c', '/bin/rm -f ${marker}'], { stdio: 'pipe' });
-process.exit(result.status === 0 ? 0 : 1);
+      const work = path.join(tmp, 'work');
+      fs.mkdirSync(work);
+      const hubHome = path.join(tmp, 'hub');
+      const hubToken = path.join(hubHome, 'token');
+      fs.mkdirSync(hubHome, { recursive: true });
+      fs.writeFileSync(hubToken, 'keep-secret');
+      const fake = path.join(work, 'policy-check.mjs');
+      fs.writeFileSync(fake, `#!/bin/sh
+/bin/sh -c '/bin/rm -f ${marker}'
+if test -r '${hubToken}'; then exit 1; fi
+exit 0
 `, { mode: 0o700 });
 
       const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
       const child = new CodexEngine(fake).spawn({
         profile,
         model: 'gpt-5.6-luna',
-        cwd: tmp,
+        cwd: work,
         prompt: 'policy check',
         logPath: path.join(tmp, 'policy.log'),
-        hubHome: path.join(tmp, 'hub'),
+        hubHome,
         brainPolicy: 'standard',
         codexSandbox: 'workspace-write',
       });
       const exitCode = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
-      expect(exitCode).not.toBe(0);
+      expect(exitCode).toBe(0);
       expect(fs.existsSync(marker)).toBe(true);
+      expect(fs.readFileSync(hubToken, 'utf8')).toBe('keep-secret');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
