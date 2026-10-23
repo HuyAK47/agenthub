@@ -107,6 +107,16 @@ describe('NotificationService (Desktop Notifications)', () => {
     expect(execCalls.join(' ')).not.toContain('sk-');
   });
 
+  it('does not notify when Claude still has a fallback step', () => {
+    const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
+    notifier.start();
+
+    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'model', model: 'claude-sonnet' }, reason: 'quota' });
+
+    expect(execCalls).toHaveLength(0);
+    notifier.stop();
+  });
+
   it('uses critical urgency only for task.failed', () => {
     taskRepo.insert({
       id: 'proj/task-fail',
@@ -231,17 +241,17 @@ describe('NotificationService (Desktop Notifications)', () => {
     eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
     eventBus.emit('task.waiting_quota', 'proj/quota-2', { reason: 'quota' });
     eventBus.emit('task.waiting_quota', 'proj/quota-3', { reason: 'quota' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 120));
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0].args.at(-1)).toContain('3 task đang chờ quota');
 
     eventBus.emit('quota.cleared', undefined, { family: 'gemini' });
     for (let i = 1; i <= 3; i += 1) taskRepo.updateStatus(`proj/quota-${i}`, 'queued');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     taskRepo.updateStatus('proj/quota-1', 'waiting_quota', 'quota');
     eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 120));
     expect(execCalls).toHaveLength(2);
 
     notifier.stop();

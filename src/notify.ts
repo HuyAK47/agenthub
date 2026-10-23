@@ -8,6 +8,8 @@ import { effectiveBrainMode } from './brain/mode.js';
 import { formatReset } from './time-format.js';
 import { NotificationDeduper } from './notification-dedupe.js';
 
+const WAITING_QUOTA_BATCH_DELAY_MS = 100;
+
 export type NotifyExecFn = (
   file: string,
   args: string[],
@@ -128,7 +130,10 @@ export class NotificationService {
       ? typeof notifyConfig.quotaPerModel === 'boolean' ? notifyConfig.quotaPerModel : (notifyConfig as unknown as { quota?: boolean }).quota === true
       : false;
     const notifyAllExhausted = notifyConfig?.quotaAllExhausted !== false;
-    if (type === 'quota.cleared' && typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+    if (type === 'quota.cleared') {
+      this.allQuotaNotified.delete('all');
+      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+    }
     if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
       this.queueWaitingQuotaCheck(notifyAllExhausted);
       return;
@@ -383,7 +388,7 @@ export class NotificationService {
       const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
       const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
       this.notify(`${waiting.length} task đang chờ quota, sớm nhất mở lại lúc ${time}`, 'warning');
-    }, 0);
+    }, WAITING_QUOTA_BATCH_DELAY_MS);
   }
 
   private resolveTaskTitle(taskId?: string, payload?: Record<string, unknown>): string {

@@ -25,6 +25,8 @@ import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permission
 import { formatReset } from './time-format.js';
 import { NotificationDeduper } from './notification-dedupe.js';
 
+const WAITING_QUOTA_BATCH_DELAY_MS = 100;
+
 const execFileAsync = promisify(execFile);
 
 export type GitDiffFn = (
@@ -3053,7 +3055,10 @@ export class TelegramBotService {
     const notifyAllExhausted = notify.quotaAllExhausted !== false;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    if (type === 'quota.cleared' && typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+    if (type === 'quota.cleared') {
+      this.allQuotaNotified.delete('all');
+      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+    }
     if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
       this.queueWaitingQuotaCheck(notifyAllExhausted);
       return;
@@ -3362,7 +3367,7 @@ export class TelegramBotService {
       }
 
       case 'claude.quota_exhausted': {
-        if (!notifyAllExhausted || p.fallbackAvailable === true) return;
+        if (!notifyAllExhausted || p.fallbackAvailable !== false) return;
         this.broadcastMessage('⏳ <b>Claude hết quota</b>\nKhông còn bước fallback khả dụng, cần chờ reset quota.');
         break;
       }
@@ -3498,7 +3503,7 @@ export class TelegramBotService {
       const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
       const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
       this.broadcastMessage(`⏳ <b>${waiting.length} task đang chờ quota</b>\nSớm nhất mở lại lúc <b>${time}</b>.`);
-    }, 0);
+    }, WAITING_QUOTA_BATCH_DELAY_MS);
   }
 
   broadcastMessage(
