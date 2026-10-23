@@ -2729,13 +2729,17 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
 
   it('deploy event co projectId van duoc gui vao General', async () => {
     createProject('p-deploy', 'Deploy App', 'suggest', 'full');
+    createProject('p-deploy-other', 'Other Deploy App', 'suggest', 'full');
     config.telegram.projectTopics = { 'p-deploy': { chatId: CHAT_ID, threadId: 88 } };
     const bot = createProjectBot('suggest');
 
     bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy', error: 'build failed' });
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy-other', error: 'build failed' });
     await bot.flushQueue(CHAT_ID);
 
-    const deployCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    const deployCalls = recordedCalls.filter((call) => call.url.includes('/sendMessage'));
+    expect(deployCalls).toHaveLength(2);
+    const deployCall = deployCalls.at(-1);
     expect(deployCall?.body?.text).toContain('Triển khai thất bại');
     expect(deployCall?.body?.message_thread_id).toBeUndefined();
   });

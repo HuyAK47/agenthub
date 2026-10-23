@@ -306,6 +306,8 @@ export class TelegramBotService {
   private selectedProject = new Map<number, string>();
   private activeThreadByChat = new Map<number, number | undefined>();
   private notificationProjectId: string | null = null;
+  /** Keeps same-text system events from different projects independently deduplicated. */
+  private notificationDedupProjectId: string | null = null;
 
   constructor(opts: TelegramServiceOptions) {
     this.config = opts.config;
@@ -3133,6 +3135,7 @@ export class TelegramBotService {
     };
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // Deduplication check: ignore duplicate events within 10 seconds
@@ -3142,7 +3145,7 @@ export class TelegramBotService {
     const decisionKey = (p.decisionId || '') as string;
     const textKey = typeof p.text === 'string' ? p.text.slice(0, 32) : '';
     const levelKey = (p.level || '') as string;
-    const dedupKey = `${type}:${taskId || batchKey || decisionKey}:${profileKey}:${familyKey}:${levelKey}:${textKey}`;
+    const dedupKey = `${type}:${projectId || ''}:${taskId || batchKey || decisionKey}:${profileKey}:${familyKey}:${levelKey}:${textKey}`;
     const now = this.now();
     const lastTime = this.lastNotificationTime.get(dedupKey) || 0;
     if (now - lastTime < 10_000) {
@@ -3151,9 +3154,9 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     // 1. Brain auto mode: suppress raw task notifications
-    const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
     const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type.startsWith('deploy.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
     this.notificationProjectId = isSystemEvent ? null : projectId;
+    this.notificationDedupProjectId = projectId;
     try {
       const prefix = this.projectPrefix(projectId);
       const minimal = this.isMinimalProject(projectId);
@@ -3571,6 +3574,7 @@ export class TelegramBotService {
       }
     } finally {
       this.notificationProjectId = null;
+      this.notificationDedupProjectId = null;
     }
   }
 
@@ -3581,9 +3585,10 @@ export class TelegramBotService {
   ): void {
     // Event notifications can fire repeatedly for the same state (quota polls, scheduler ticks).
     const now = this.now();
-    const last = this.lastBroadcast.get(text);
+    const dedupKey = `${this.notificationDedupProjectId || projectId || ''}:${text}`;
+    const last = this.lastBroadcast.get(dedupKey);
     if (last !== undefined && now - last < NOTIFY_REPEAT_WINDOW_MS) return;
-    this.lastBroadcast.set(text, now);
+    this.lastBroadcast.set(dedupKey, now);
     for (const [key, at] of this.lastBroadcast) if (now - at >= NOTIFY_REPEAT_WINDOW_MS) this.lastBroadcast.delete(key);
     const allowed = this.config.telegram?.allowedChatIds || [];
     let targets: Array<{ chatId: number; threadId?: number | null }> = projectId && this.config.telegram.projectTopics?.[projectId] && allowed.includes(this.config.telegram.projectTopics[projectId].chatId)
