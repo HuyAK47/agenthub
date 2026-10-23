@@ -1512,6 +1512,22 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(task?.body).toBe('Đăng xuất tài khoản');
     });
 
+    it('accepts free-form leading external references', async () => {
+      await bot.handleUpdate({
+        update_id: 23,
+        message: {
+          message_id: 23,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask ABC-foo Sửa lỗi đăng nhập',
+        },
+      });
+
+      const task = ctx.taskRepo.get('proj-shop/sua-loi-dang-nhap');
+      expect(task?.externalRef).toBe('ABC-foo');
+      expect(task?.title).toBe('Sửa lỗi đăng nhập');
+    });
+
     it('allows cancelling wizard via /cancel', async () => {
       await bot.handleUpdate({
         update_id: 30,
