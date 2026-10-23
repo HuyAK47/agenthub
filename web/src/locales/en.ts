@@ -249,6 +249,8 @@ export const en: typeof vi = {
     createError: 'Failed to create task',
     modelChainLabel: 'Model chain (comma-separated)',
     modelChainHint: 'Leave blank to use the default chain.',
+    externalRefLabel: 'External reference',
+    externalRefPlaceholder: 'e.g. PROJ-45, OP-123',
   },
   taskDetail: {
     notFound: 'Task not found or an error occurred while loading data.',
@@ -896,6 +898,7 @@ export const en: typeof vi = {
     ciLabel: 'GitHub Actions CI Watch', ciEnabled: 'Enable CI Watch', ciBranch: 'CI Branch', ciStatusPassed: 'CI: Passed', ciStatusFailed: 'CI: Failed', ciStatusRunning: 'CI: Running', ciViewRun: 'View run on GitHub', ciNoRun: 'No runs recorded',
     knowledgeChecklistTitle: 'Knowledge & checklist', knowledgeChecklistHint: 'Choose up to 5 paths; each file is limited to 64KB. The brain must check them during review.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Review checklist', checklistUnreadable: 'unreadable', checklistTooLarge: 'Warning: file exceeds 64KB; content was not injected.', suggestAutomaticChecks: 'Suggest automatic checks', draftChecksCreated: 'Draft task created to suggest automatic checks.',
     worktreeRoot: 'Worktree directory', worktreeRootPlaceholder: '/absolute/path', worktreeRootDesc: 'The configured root must be dedicated to this project and not shared with another project. Each task is created at <root>/<slug>, with the integration worktree at <root>/.integration. The directory must exist and be writable.', worktreeLogsInRoot: 'Store task logs in this directory/.logs',
+    commitConventionTitle: 'Commit convention', commitConventionDesc: 'Configure project-specific branch, commit message, and merge message templates.', branchTemplate: 'Branch template', commitTemplate: 'Commit message template', commitRegex: 'Commit message regex (optional)', mergeMessageTemplate: 'Merge message template', commitConventionPreview: 'Preview example',
     sectionBrainTitle: 'Brain',
     sectionBrainDesc: 'Configure automated agent permissions and token quota limits for this project.',
     sectionWorktreeTitle: 'Worktree',

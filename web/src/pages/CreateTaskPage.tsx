@@ -17,6 +17,7 @@ export const CreateTaskPage: React.FC = () => {
   const [projectId, setProjectId] = useState('');
   const [slug, setSlug] = useState('');
   const [title, setTitle] = useState('');
+  const [externalRef, setExternalRef] = useState('');
   const [level, setLevel] = useState<TaskLevel>('easy');
   const [body, setBody] = useState('');
   const [selectedDeps, setSelectedDeps] = useState<string[]>([]);
@@ -83,6 +84,7 @@ export const CreateTaskPage: React.FC = () => {
       project: projectId,
       slug: slug.trim(),
       title: title.trim(),
+      externalRef: externalRef.trim() || undefined,
       level,
       body: body.trim(),
       dependsOn: selectedDeps,
@@ -169,6 +171,19 @@ export const CreateTaskPage: React.FC = () => {
                 placeholder={t('createTask.titlePlaceholder')}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-[var(--t-text)] uppercase tracking-wider mb-2">
+              {t('createTask.externalRefLabel')}
+            </label>
+            <input
+              type="text"
+              placeholder={t('createTask.externalRefPlaceholder')}
+              value={externalRef}
+              onChange={(e) => setExternalRef(e.target.value)}
               className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
             />
           </div>

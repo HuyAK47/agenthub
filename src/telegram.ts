@@ -142,7 +142,7 @@ export interface TelegramServiceOptions {
 export type PendingChatState =
   | { action: 'reject_feedback'; taskId: string }
   | { action: 'newtask_description'; projectId?: string }
-  | { action: 'newtask_project_description'; description: string }
+  | { action: 'newtask_project_description'; description: string; externalRef?: string }
   | { action: 'newtask_project' }
   | { action: 'newtask_title'; projectId: string }
   | { action: 'newtask_body'; projectId: string; title: string; bodyLines: string[] }
@@ -310,7 +310,7 @@ export class TelegramBotService {
     assistantMessageId?: string;
   }>>();
   private chatSessions = new Map<number, string>();
-  private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string }>();
+  private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string; externalRef?: string }>();
   /** Per-chat selected project (persisted in config.telegram.chats). */
   private selectedProject = new Map<number, string>();
   private activeThreadByChat = new Map<number, number | undefined>();
@@ -986,9 +986,11 @@ export class TelegramBotService {
       if (pendingState.action === 'newtask_description') {
         this.chatStates.delete(chatId);
         if (pendingState.projectId) {
-          await this.sendAutoTaskToClaude(chatId, pendingState.projectId, rawText);
+          const parsed = this.parseLeadingExternalRef(rawText);
+          await this.sendAutoTaskToClaude(chatId, pendingState.projectId, parsed.text, parsed.externalRef);
         } else {
-          await this.handleNewTaskDescription(chatId, rawText);
+          const parsed = this.parseLeadingExternalRef(rawText);
+          await this.handleNewTaskDescription(chatId, parsed.text, parsed.externalRef);
         }
         return;
       }
@@ -2153,7 +2155,7 @@ export class TelegramBotService {
           if (currentState?.action === 'newtask_project_description') {
             this.chatStates.delete(chatId);
             await this.answerCallbackQuery(query.id, `Đã chọn ${projectId}`);
-            await this.sendAutoTaskToClaude(chatId, projectId, currentState.description);
+            await this.sendAutoTaskToClaude(chatId, projectId, currentState.description, currentState.externalRef);
             return;
           }
           this.chatStates.set(chatId, { action: 'newtask_title', projectId });
@@ -2684,22 +2686,29 @@ export class TelegramBotService {
     // Keep the old one-line format working for callers that already use it.
     const pipeIdx = trimmed.indexOf('|');
     if (pipeIdx === -1) {
-      await this.handleNewTaskDescription(chatId, trimmed);
+      const parsed = this.parseLeadingExternalRef(trimmed);
+      await this.handleNewTaskDescription(chatId, parsed.text, parsed.externalRef);
       return;
     }
 
     const beforePipe = trimmed.slice(0, pipeIdx).trim();
     const body = trimmed.slice(pipeIdx + 1).trim();
+    const firstToken = beforePipe.split(/\s+/, 1)[0];
+    const parsedTitle = this.projectRepo.get(firstToken)
+      ? { text: beforePipe }
+      : this.parseLeadingExternalRef(beforePipe);
+    const externalRef = parsedTitle.externalRef;
+    const titlePart = parsedTitle.text;
 
     const selectedProjId = this.selectedProject.get(chatId);
     let project = '';
     let title = '';
 
-    const firstSpace = beforePipe.indexOf(' ');
+    const firstSpace = titlePart.indexOf(' ');
     if (firstSpace === -1) {
       if (selectedProjId && this.projectRepo.get(selectedProjId)) {
         project = selectedProjId;
-        title = beforePipe;
+        title = titlePart;
       } else {
         await this.sendMessage(
           chatId,
@@ -2708,16 +2717,16 @@ export class TelegramBotService {
         return;
       }
     } else {
-      const candidateProj = beforePipe.slice(0, firstSpace).trim();
+      const candidateProj = titlePart.slice(0, firstSpace).trim();
       if (this.projectRepo.get(candidateProj)) {
         project = candidateProj;
-        title = beforePipe.slice(firstSpace + 1).trim();
+        title = titlePart.slice(firstSpace + 1).trim();
       } else if (selectedProjId && this.projectRepo.get(selectedProjId)) {
         project = selectedProjId;
-        title = beforePipe;
+        title = titlePart;
       } else {
         project = candidateProj;
-        title = beforePipe.slice(firstSpace + 1).trim();
+        title = titlePart.slice(firstSpace + 1).trim();
       }
     }
 
@@ -2742,6 +2751,7 @@ export class TelegramBotService {
         slug,
         title,
         body,
+        externalRef,
         level: 'easy',
         start: false,
       });
@@ -2779,7 +2789,32 @@ export class TelegramBotService {
     return matches.length === 1 ? matches[0] : null;
   }
 
-  private async handleNewTaskDescription(chatId: number, description: string): Promise<void> {
+  private parseLeadingExternalRef(text: string): { text: string; externalRef?: string } {
+    const trimmed = text.trim();
+    const match = trimmed.match(/^([^\s|]+)\s+(.+)$/);
+    if (!match) {
+      return { text: trimmed };
+    }
+    const token = match[1];
+    const rest = match[2].trim();
+
+    // 0. Exclude tokens ending with common sentence punctuation (: , . ; ! ?) or list ordinals/numbers.
+    if (/[:.,;!?]$/u.test(token) || /^\p{N}+[.)]?$/u.test(token)) {
+      return { text: trimmed };
+    }
+
+    // 1. Clear marker prefix (e.g. #123, #abc, [PROJ-45]) or structured token with internal delimiter
+    // between letters/numbers (e.g. PROJ-45, OP#123, ABC-foo, ĐỀ-123, 営業-1, ref:đề).
+    const hasMarker = /^#[\p{L}\p{N}_-]+$/u.test(token) || /^\[[\p{L}\p{N}_#/:.-]+\]$/u.test(token);
+    const hasDelimitedRef = /^(?=.*\p{L})[\p{L}\p{N}]+[-_#/:][\p{L}\p{N}_#/:.-]*[\p{L}\p{N}]$/u.test(token);
+    if (hasMarker || hasDelimitedRef) {
+      return { externalRef: token, text: rest };
+    }
+
+    return { text: trimmed };
+  }
+
+  private async handleNewTaskDescription(chatId: number, description: string, externalRef?: string): Promise<void> {
     const trimmed = description.trim();
     if (!trimmed) {
       this.chatStates.set(chatId, { action: 'newtask_description' });
@@ -2792,14 +2827,14 @@ export class TelegramBotService {
     if (preSelectedProjectId) {
       const proj = this.projectRepo.get(preSelectedProjectId);
       if (proj) {
-        await this.sendAutoTaskToClaude(chatId, proj.id, trimmed);
+        await this.sendAutoTaskToClaude(chatId, proj.id, trimmed, externalRef);
         return;
       }
     }
     const project = this.findProjectForDescription(trimmed);
     if (project === null) {
       const projects = this.projectRepo.getAll();
-      this.chatStates.set(chatId, { action: 'newtask_project_description', description: trimmed });
+      this.chatStates.set(chatId, { action: 'newtask_project_description', description: trimmed, externalRef });
       await this.sendMessage(chatId, '📁 Mô tả chưa nói rõ project. Vui lòng chọn project:', {
         inline_keyboard: [
           ...projects.map((item) => [{ text: item.name ? `${item.name} (${item.id})` : item.id, callback_data: `newtask:proj:${item.id}` }]),
@@ -2812,32 +2847,33 @@ export class TelegramBotService {
       await this.sendMessage(chatId, '❌ Không có project nào trong hệ thống.');
       return;
     }
-    await this.sendAutoTaskToClaude(chatId, project.id, trimmed);
+    await this.sendAutoTaskToClaude(chatId, project.id, trimmed, externalRef);
   }
 
-  private autoTaskPrompt(projectId: string, description: string): string {
+  private autoTaskPrompt(projectId: string, description: string, externalRef?: string): string {
     return `Người dùng muốn thực hiện việc sau trong project "${projectId}":\n${description}\n\n` +
       'Hãy xử lý như một yêu cầu việc mới theo docs/BRAIN-PLAYBOOK.md: tự đặt tiêu đề ngắn, slug, viết đề bài markdown chi tiết gồm phạm vi và tiêu chí nghiệm thu; đặt phần migration ở cuối nếu có; không commit .agenthub/. ' +
       'Chọn độ khó và model theo quy tắc: việc nặng dùng Codex trước, việc lá/UI dùng Gemini. Nếu việc lớn, tách thành nhiều task có phụ thuộc hợp lý. ' +
+      `${externalRef ? `Ref bên ngoài bắt buộc cho task: ${externalRef}. Khi gọi tool tạo task, truyền externalRef đúng giá trị này. ` : ''}` +
       `${planningRule(this.config.planning)}Dùng các MCP tool của AgentHub để tạo task/batch. Trả lời ngắn gọn bằng tiếng Việt: đã tạo task nào (id + tiêu đề), hoặc đợt nháp nào đang chờ duyệt.`;
   }
 
-  private async sendAutoTaskToClaude(chatId: number, projectId: string, description: string): Promise<void> {
+  private async sendAutoTaskToClaude(chatId: number, projectId: string, description: string, externalRef?: string): Promise<void> {
     if (!this.chatService) {
-      await this.saveFallbackDraft(chatId, description, projectId);
+      await this.saveFallbackDraft(chatId, description, projectId, externalRef);
       return;
     }
     const sessionId = this.sessionIdForChat(chatId);
     try {
-      this.pendingAutoTasks.set(sessionId, { chatId, projectId, description });
-      await this.startChatTurn(chatId, '⏳ Đang nhờ Claude phân tích và tạo task…', this.autoTaskPrompt(projectId, description));
+      this.pendingAutoTasks.set(sessionId, { chatId, projectId, description, externalRef });
+      await this.startChatTurn(chatId, '⏳ Đang nhờ Claude phân tích và tạo task…', this.autoTaskPrompt(projectId, description, externalRef));
     } catch {
       this.pendingAutoTasks.delete(sessionId);
-      await this.saveFallbackDraft(chatId, description, projectId);
+      await this.saveFallbackDraft(chatId, description, projectId, externalRef);
     }
   }
 
-  private async saveFallbackDraft(chatId: number, description: string, projectId: string): Promise<void> {
+  private async saveFallbackDraft(chatId: number, description: string, projectId: string, externalRef?: string): Promise<void> {
     if (!projectId) {
       await this.sendMessage(chatId, '❌ Không thể lưu nháp vì chưa xác định được project.');
       return;
@@ -2848,6 +2884,7 @@ export class TelegramBotService {
         project: projectId,
         slug: generateTaskSlug(title, projectId, this.taskRepo),
         title,
+        externalRef,
         body: description,
         level: 'easy',
         start: false,

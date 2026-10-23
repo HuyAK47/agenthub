@@ -463,6 +463,11 @@ export function closeContext(ctx: DaemonContext): void {
     // ignore
   }
   try {
+    ctx.chatService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
     ctx.db?.close();
   } catch {
     // ignore

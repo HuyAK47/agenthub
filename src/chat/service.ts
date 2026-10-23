@@ -168,9 +168,12 @@ interface WaitingUserMessage {
 const MAX_WAITING_USER_MESSAGES = 10;
 
 export class ChatService {
+  private stopped = false;
   private queue: QueuedTurn[] = [];
   /** Messages people sent while the session was busy, delivered in order after the current turn. */
   private waitingUserMessages = new Map<string, WaitingUserMessage[]>();
+  private drainTimers = new Map<string, NodeJS.Timeout>();
+  private delayedQueueTimer?: NodeJS.Timeout;
   private runningTurns = new Map<string, RunningTurn>();
   private lastEngines = new Map<string, 'claude' | 'codex'>();
   private forceClaude = new Set<string>();
@@ -390,6 +393,7 @@ export class ChatService {
   }
 
   private runRetry(messageId: string): void {
+    if (this.stopped) return;
     const retry = this.retryRepo?.get(messageId);
     if (!retry || retry.status !== 'pending') return;
     if (retry.attempts >= 6) { this.retryRepo?.markFailed(messageId); return; }
@@ -522,9 +526,21 @@ export class ChatService {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const turn of this.runningTurns.values()) {
       clearTimeout(turn.timeoutTimer);
+      if (turn.idleTimer) clearTimeout(turn.idleTimer);
+      if (turn.cancelTimer) clearTimeout(turn.cancelTimer);
       turn.cancelled = true;
+      if (turn.child.stdout) {
+        turn.child.stdout.removeAllListeners();
+        turn.child.stdout.destroy();
+      }
+      if (turn.child.stderr) {
+        turn.child.stderr.removeAllListeners();
+        turn.child.stderr.destroy();
+      }
+      turn.child.removeAllListeners();
       if (turn.child.pid) {
         killProcessGroup(turn.child.pid);
       }
@@ -532,9 +548,35 @@ export class ChatService {
     this.runningTurns.clear();
     for (const proc of this.persistentProcesses.values()) {
       if (proc.idleTimer) clearTimeout(proc.idleTimer);
+      if (proc.active?.timeoutTimer) clearTimeout(proc.active.timeoutTimer);
+      if (proc.active?.idleTimer) clearTimeout(proc.active.idleTimer);
+      if (proc.active?.cancelTimer) clearTimeout(proc.active.cancelTimer);
+      if (proc.active) proc.active.cancelled = true;
+      if (proc.child.stdout) {
+        proc.child.stdout.removeAllListeners();
+        proc.child.stdout.destroy();
+      }
+      if (proc.child.stderr) {
+        proc.child.stderr.removeAllListeners();
+        proc.child.stderr.destroy();
+      }
+      proc.child.removeAllListeners();
       if (proc.child.pid) killProcessGroup(proc.child.pid);
     }
     this.persistentProcesses.clear();
+    for (const timer of this.retryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.retryTimers.clear();
+    for (const timer of this.drainTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.drainTimers.clear();
+    if (this.delayedQueueTimer) {
+      clearTimeout(this.delayedQueueTimer);
+      this.delayedQueueTimer = undefined;
+    }
+    this.waitingUserMessages.clear();
     this.queue = [];
   }
 
@@ -1185,6 +1227,7 @@ export class ChatService {
           | undefined = undefined;
 
         child.stdout?.on('data', (chunk: Buffer) => {
+          if (this.stopped) return;
           for (const ev of parser.feed(chunk)) {
             if (ev.type === 'assistant_text' && ev.usage) {
               lastAssistantUsage = ev.usage;
@@ -1195,6 +1238,7 @@ export class ChatService {
         });
 
         child.on('close', (code) => {
+          if (this.stopped) return;
           this.chatSessionRepo.setBusy(sessionId, 0);
           this.setSessionState(sessionId, 'idle');
           if (code !== 0) {
@@ -1361,6 +1405,7 @@ export class ChatService {
         let summaryResult = '';
 
         child.stdout?.on('data', (chunk: Buffer) => {
+          if (this.stopped) return;
           for (const ev of parser.feed(chunk)) {
             if (ev.type === 'assistant_text' && ev.text) {
               summaryResult += ev.text;
@@ -1373,6 +1418,7 @@ export class ChatService {
         });
 
         child.on('close', (code) => {
+          if (this.stopped) return;
           this.chatSessionRepo.setBusy(sessionId, 0);
           this.setSessionState(sessionId, 'idle');
           if (code !== 0) {
@@ -1425,6 +1471,7 @@ export class ChatService {
   }
 
   private processQueue(): void {
+    if (this.stopped) return;
     const maxConcurrent = this.config.chat?.maxConcurrent ?? 2;
     while (this.runningTurns.size < maxConcurrent && this.queue.length > 0) {
       const nextTurn = this.queue.shift()!;
@@ -1435,11 +1482,17 @@ export class ChatService {
   }
 
   private executeTurn(turn: QueuedTurn): void {
+    if (this.stopped) return;
     const planned = this.failoverExecution(turn);
     this.lastEngines.set(turn.sessionId, planned.engine);
     if (planned.pausedUntil) {
       const delay = Math.max(100, planned.pausedUntil * 1000 - Date.now());
-      setTimeout(() => { this.queue.push(turn); this.processQueue(); }, delay);
+      if (this.delayedQueueTimer) clearTimeout(this.delayedQueueTimer);
+      this.delayedQueueTimer = setTimeout(() => {
+        if (this.stopped) return;
+        this.queue.push(turn);
+        this.processQueue();
+      }, delay);
       return;
     }
     if (planned.engine === 'codex') {
@@ -1564,6 +1617,7 @@ export class ChatService {
     const startTime = Date.now();
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (this.stopped) return;
       this.resetTurnWatchdog(runningTurn);
       const events = parser.feed(chunk);
       for (const ev of events) {
@@ -1678,6 +1732,7 @@ export class ChatService {
 
     child.on('close', (code) => {
       clearTimeout(timeoutTimer);
+      if (this.stopped) return;
       if (runningTurn.idleTimer) clearTimeout(runningTurn.idleTimer);
       const flushed = parser.flush();
       for (const ev of flushed) {
@@ -1852,6 +1907,7 @@ export class ChatService {
     let lastAssistantUsage: AssistantUsage | undefined;
     let stderr = '';
     const consume = (event: ParsedStreamEvent) => {
+      if (this.stopped) return;
       if (event.type === 'init' && event.sessionId) {
         this.chatSessionRepo.updateClaudeSessionId(turn.sessionId, event.sessionId);
       } else if (event.type === 'assistant_text' || event.type === 'text_delta') {
@@ -1871,12 +1927,17 @@ export class ChatService {
       }
     };
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (this.stopped) return;
       this.resetTurnWatchdog(running);
       for (const event of parser.feed(chunk)) consume(event);
     });
-    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (this.stopped) return;
+      stderr += chunk.toString('utf8');
+    });
     child.on('close', (code) => {
       clearTimeout(timeoutTimer);
+      if (this.stopped) return;
       if (running.idleTimer) clearTimeout(running.idleTimer);
       for (const event of parser.flush()) consume(event);
       if (this.runningTurns.get(turn.sessionId) !== running) return;
@@ -2002,6 +2063,7 @@ export class ChatService {
   }
 
   private handlePersistentOutput(proc: PersistentProcess, chunk: Buffer): void {
+    if (this.stopped) return;
     if (proc.active) this.resetTurnWatchdog(proc.active);
     for (const ev of proc.parser.feed(chunk)) {
       if ((ev.type === 'init' || ev.type === 'result') && ev.sessionId && !this.chatSessionRepo.get(proc.sessionId)?.claudeSessionId) {
@@ -2172,6 +2234,7 @@ export class ChatService {
   }
 
   private handlePersistentClose(proc: PersistentProcess): void {
+    if (this.stopped) return;
     if (proc.active) {
       const active = proc.active;
       clearTimeout(active.timeoutTimer);
@@ -2304,6 +2367,12 @@ export class ChatService {
 
   /** Start the next queued user message of a session once its current turn has finished. */
   private drainWaitingUserMessages(sessionId: string): void {
+    if (this.stopped) return;
+    const old = this.drainTimers.get(sessionId);
+    if (old) {
+      clearTimeout(old);
+      this.drainTimers.delete(sessionId);
+    }
     const waiting = this.waitingUserMessages.get(sessionId);
     if (!waiting || waiting.length === 0) return;
     const session = this.chatSessionRepo.get(sessionId);
@@ -2316,6 +2385,7 @@ export class ChatService {
     if (session.busy === 1 || this.runningTurns.has(sessionId)) {
       const timer = setTimeout(() => this.drainWaitingUserMessages(sessionId), 300);
       timer.unref?.();
+      this.drainTimers.set(sessionId, timer);
       return;
     }
     const next = waiting.shift()!;
