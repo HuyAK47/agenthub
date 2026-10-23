@@ -1548,7 +1548,7 @@ export class AppService {
   }
 
   deleteProject(id: string, options?: { purge?: boolean; confirm?: string }): { ok: boolean; archived?: boolean; counts?: Record<string, number>; warnings?: string[] } {
-    const proj = this.projectRepo.get(id);
+    const proj = options?.purge ? this.projectRepo.getIncludingArchived(id) : this.projectRepo.get(id);
     if (!proj) {
       throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
     }
