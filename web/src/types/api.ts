@@ -184,6 +184,7 @@ export interface Run {
   model: string;
   profileName: string;
   pid?: number | null;
+  kind?: string | null;
   startedAt: string;
   endedAt?: string | null;
   outcome?: 'done' | 'blocked' | 'quota' | 'crashed' | 'cancelled' | 'timeout' | 'stalled' | null;
