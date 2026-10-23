@@ -1,5 +1,34 @@
 @import 'tailwindcss';
 
+/* Compact, theme-aware scrollbars for the app and nested log/table panes. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar:hover {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--t-border-strong);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--t-text-3);
+}
+
 @layer components {
   .field {
     @apply w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-bg)] px-3 py-2 text-sm text-[var(--t-text)] outline-hidden focus:border-[var(--t-accent)] focus:ring-2 focus:ring-[var(--t-accent)];
@@ -457,7 +486,20 @@ body {
 
 html {
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border) transparent;
 }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border) transparent;
+}
+
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar:hover { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--t-border); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--t-text-3); }
 
 .theme-transition,
 .theme-transition * {

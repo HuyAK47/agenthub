@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getBatches,
+  getBatchesPage,
   getBatch,
   getProjects,
   getConfig,
@@ -18,6 +18,7 @@ import { TaskDag } from '../components/dag';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
+import { Pagination } from '../components/ui/Pagination';
 import { Input } from '../components/ui/Input';
 import {
   Layers,
@@ -63,11 +64,14 @@ export const PlansPage: React.FC = () => {
   const { t, locale } = useLocale();
   const navigate = useNavigate();
   const { batchId } = useParams<{ batchId?: string }>();
+  const [urlParams, setUrlParams] = useSearchParams();
   const queryClient = useQueryClient();
 
   // Filters
   const [filterProject, setFilterProject] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [batchPage, setBatchPage] = useState(Math.max(1, Number(urlParams.get('page') || 1)));
+  const batchPageSize = 20;
 
   // Modals & form state
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -134,14 +138,17 @@ export const PlansPage: React.FC = () => {
     queryFn: getProjects,
   });
 
-  const { data: batches = [], isLoading: isLoadingBatches } = useQuery({
-    queryKey: ['batches', filterProject, filterStatus],
+  const { data: batchesData, isLoading: isLoadingBatches } = useQuery({
+    queryKey: ['batches', filterProject, filterStatus, batchPage],
     queryFn: () =>
-      getBatches({
+      getBatchesPage({
         project: filterProject !== 'all' ? filterProject : undefined,
         status: filterStatus !== 'all' ? filterStatus : undefined,
+        limit: batchPageSize,
+        offset: (batchPage - 1) * batchPageSize,
       }),
   });
+  const batches = batchesData?.items || [];
 
   // Determine active batch ID
   const activeBatchId = useMemo(() => {
@@ -156,6 +163,15 @@ export const PlansPage: React.FC = () => {
       navigate(`/plans/${batches[0].id}`, { replace: true });
     }
   }, [batchId, batches, navigate]);
+  const initialFilters = useRef(true);
+  useEffect(() => {
+    if (initialFilters.current) {
+      initialFilters.current = false;
+      return;
+    }
+    setBatchPage(1);
+    setUrlParams((current) => { current.delete('page'); return current; }, { replace: true });
+  }, [filterProject, filterStatus, setUrlParams]);
 
   // Query active batch detail
   const { data: currentBatch, isLoading: isLoadingBatch } = useQuery({
@@ -490,6 +506,16 @@ export const PlansPage: React.FC = () => {
                 );
               })
             )}
+            {batchesData && <Pagination
+              page={batchPage}
+              pageSize={batchPageSize}
+              total={batchesData.total}
+              onPageChange={(nextPage) => {
+                setBatchPage(nextPage);
+                setUrlParams((current) => { if (nextPage === 1) current.delete('page'); else current.set('page', String(nextPage)); return current; }, { replace: true });
+              }}
+              onPageSizeChange={() => undefined}
+            />}
           </div>
         </div>
 

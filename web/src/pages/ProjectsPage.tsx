@@ -7,7 +7,8 @@ import {
   deleteProject,
   restoreProject,
   deleteProjectKnowledge,
-  getProjectKnowledge,
+  getProjectKnowledgePage,
+  getCiRunsPage,
   getArchivedProjects,
   getProjects,
   getTasks,
@@ -27,7 +28,7 @@ import {
   ExternalLink,
   GitBranch,
 } from 'lucide-react';
-import { Card, Button, Input } from '../components/ui';
+import { Card, Button, Input, DataTable } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
@@ -401,6 +402,11 @@ export const ProjectsPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState('');
+  const [knowledgePage, setKnowledgePage] = useState(1);
+  const knowledgePageSize = 20;
+  const [ciProject, setCiProject] = useState<string | null>(null);
+  const [ciPage, setCiPage] = useState(1);
+  const ciPageSize = 20;
   useEffect(() => {
     if (showAddForm) suggestModalTour('modal-register-project');
   }, [showAddForm, suggestModalTour]);
@@ -464,9 +470,14 @@ export const ProjectsPage: React.FC = () => {
   });
 
   const knowledgeQuery = useQuery({
-    queryKey: ['project-knowledge', knowledgeProject],
-    queryFn: () => getProjectKnowledge(knowledgeProject!),
+    queryKey: ['project-knowledge', knowledgeProject, knowledgePage],
+    queryFn: () => getProjectKnowledgePage(knowledgeProject!, { limit: knowledgePageSize, offset: (knowledgePage - 1) * knowledgePageSize }),
     enabled: knowledgeProject !== null,
+  });
+  const ciRunsQuery = useQuery({
+    queryKey: ['ci-runs', ciProject, ciPage],
+    queryFn: () => getCiRunsPage(ciProject!, { limit: ciPageSize, offset: (ciPage - 1) * ciPageSize }),
+    enabled: ciProject !== null,
   });
 
   const addKnowledgeMutation = useMutation({
@@ -1086,6 +1097,11 @@ export const ProjectsPage: React.FC = () => {
                       )}
                     </div>
                   )}
+                  {proj.ciStatus && (
+                    <button type="button" className="text-xs text-[var(--t-accent)] hover:underline" onClick={() => { setCiProject(ciProject === proj.id ? null : proj.id); setCiPage(1); }}>
+                      {t('projects.ciLabel')}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1099,11 +1115,10 @@ export const ProjectsPage: React.FC = () => {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    setKnowledgeProject(
-                      knowledgeProject === proj.id ? null : proj.id,
-                    )
-                  }
+                  onClick={() => {
+                    setKnowledgeProject(knowledgeProject === proj.id ? null : proj.id);
+                    setKnowledgePage(1);
+                  }}
                   className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] px-2 h-7"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
@@ -1133,11 +1148,21 @@ export const ProjectsPage: React.FC = () => {
                         {t('extra.knowledgeAdd')}
                       </Button>
                     </div>
-                    {(knowledgeQuery.data || []).map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="flex items-start gap-2 text-xs"
-                      >
+                    <DataTable
+                      rows={knowledgeQuery.data?.items || []}
+                      loading={knowledgeQuery.isLoading}
+                      error={knowledgeQuery.error instanceof Error ? knowledgeQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      page={knowledgePage}
+                      pageSize={knowledgePageSize}
+                      total={knowledgeQuery.data?.total || 0}
+                      onPageChange={setKnowledgePage}
+                      columns={[{
+                        key: 'content',
+                        title: t('extra.knowledge'),
+                        sortable: true,
+                        sortValue: (entry) => entry.content,
+                        render: (entry) => <div className="flex items-start gap-2 text-xs">
                         <button
                           type="button"
                           title={t('extra.pinKnowledge')}
@@ -1177,8 +1202,35 @@ export const ProjectsPage: React.FC = () => {
                         >
                           ×
                         </button>
-                      </div>
-                    ))}
+                        </div>,
+                      }, {
+                        key: 'createdAt',
+                        title: t('common.createdAt'),
+                        sortable: true,
+                        sortValue: (entry) => entry.createdAt,
+                        render: (entry) => <span className="whitespace-nowrap text-xs text-[var(--t-text-3)]">{entry.createdAt}</span>,
+                      }]}
+                    />
+                  </div>
+                )}
+                {ciProject === proj.id && (
+                  <div className="pt-2 border-t border-[var(--t-border)]">
+                    <DataTable
+                      rows={ciRunsQuery.data?.items || []}
+                      loading={ciRunsQuery.isLoading}
+                      error={ciRunsQuery.error instanceof Error ? ciRunsQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      columns={[
+                        { key: 'runId', title: 'Run', sortable: true, sortValue: (row) => row.runId, render: (row) => <span className="font-mono">#{row.runId}</span> },
+                        { key: 'workflow', title: 'Workflow', render: (row) => row.workflow },
+                        { key: 'status', title: 'Status', render: (row) => row.conclusion || row.status },
+                        { key: 'sha', title: 'SHA', render: (row) => <span className="font-mono">{row.sha.slice(0, 8)}</span> },
+                      ]}
+                      page={ciPage}
+                      pageSize={ciPageSize}
+                      total={ciRunsQuery.data?.total || 0}
+                      onPageChange={setCiPage}
+                    />
                   </div>
                 )}
               </div>

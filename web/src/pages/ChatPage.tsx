@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   stopChatSession,
   createChatSession,
@@ -38,6 +38,20 @@ import {
 } from 'lucide-react';
 
 const EMPTY_SESSIONS: ChatSession[] = [];
+type ChatSessionsQuery = { pages: Array<{ items: ChatSession[]; total: number; nextCursor: string | null }>; pageParams: unknown[] };
+
+function updateChatSessionPages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  updater: (sessions: ChatSession[]) => ChatSession[],
+): void {
+  queryClient.setQueryData<ChatSessionsQuery>(['chatSessions'], (current) => {
+    if (!current) return current;
+    return {
+      ...current,
+      pages: current.pages.map((page) => ({ ...page, items: updater(page.items) })),
+    };
+  });
+}
 
 export const ChatPage: React.FC = () => {
   const { t } = useLocale();
@@ -65,13 +79,21 @@ export const ChatPage: React.FC = () => {
   }, [toastMessage]);
 
   // Fetch chat sessions
-  const {
-    data: sessions = EMPTY_SESSIONS,
-    isLoading: isSessionsLoading,
-  } = useQuery({
+  const sessionsQuery = useInfiniteQuery({
     queryKey: ['chatSessions'],
-    queryFn: getChatSessions,
+    queryFn: async ({ pageParam }) => {
+      const result = await getChatSessions({ limit: 50, cursor: pageParam });
+      if (Array.isArray(result)) return { items: result, total: result.length, nextCursor: null };
+      return result;
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
   });
+  const sessions = useMemo(
+    () => sessionsQuery.data?.pages.flatMap((page) => page.items) || EMPTY_SESSIONS,
+    [sessionsQuery.data],
+  );
+  const isSessionsLoading = sessionsQuery.isLoading;
   const { data: systemConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig });
 
   // Resolve active session
@@ -271,7 +293,7 @@ export const ChatPage: React.FC = () => {
         queryClient.invalidateQueries({ queryKey: ['chatMessages', activeSession?.id] });
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       } else if (type === 'chat.status') {
-        queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) =>
+        updateChatSessionPages(queryClient, (prev) =>
           prev.map((session) =>
             session.id === targetSessionId
               ? {
@@ -319,10 +341,10 @@ export const ChatPage: React.FC = () => {
   const createSessionMutation = useMutation({
     mutationFn: (data: any) => createChatSession(data),
     onSuccess: (newSession) => {
-      queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) => [
-        newSession,
-        ...prev,
-      ]);
+      queryClient.setQueryData<ChatSessionsQuery>(['chatSessions'], (current) => {
+        if (!current || current.pages.length === 0) return current;
+        return { ...current, pages: [{ ...current.pages[0], items: [newSession, ...current.pages[0].items] }, ...current.pages.slice(1)] };
+      });
       setIsModalOpen(false);
       setMobileDrawerOpen(false);
       navigate(`/chat/${newSession.id}`);
@@ -336,7 +358,7 @@ export const ChatPage: React.FC = () => {
     mutationFn: ({ id, data }: { id: string; data: UpdateChatSessionInput }) =>
       updateChatSession(id, data),
     onSuccess: (updatedSession) => {
-      queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) =>
+      updateChatSessionPages(queryClient, (prev) =>
         prev.map((s) => (s.id === updatedSession.id ? { ...s, ...updatedSession } : s)),
       );
     },
@@ -348,7 +370,7 @@ export const ChatPage: React.FC = () => {
   const deleteSessionMutation = useMutation({
     mutationFn: (id: string) => deleteChatSession(id),
     onSuccess: (_, deletedId) => {
-      queryClient.setQueryData<ChatSession[]>(['chatSessions'], (prev = []) =>
+      updateChatSessionPages(queryClient, (prev) =>
         prev.filter((s) => s.id !== deletedId),
       );
       if (activeSession?.id === deletedId) {
@@ -499,6 +521,9 @@ export const ChatPage: React.FC = () => {
       <aside className="hidden min-[900px]:block w-72 lg:w-80 shrink-0 h-full">
         <SessionList
           sessions={sessions}
+          hasMore={sessionsQuery.hasNextPage}
+          isLoadingMore={sessionsQuery.isFetchingNextPage}
+          onLoadMore={() => { void sessionsQuery.fetchNextPage(); }}
           activeSessionId={activeSession?.id}
           onSelectSession={(s) => navigate(`/chat/${s.id}`)}
           onNewSession={() => setIsModalOpen(true)}
@@ -533,6 +558,9 @@ export const ChatPage: React.FC = () => {
             <div className="flex-1 overflow-hidden">
               <SessionList
                 sessions={sessions}
+                hasMore={sessionsQuery.hasNextPage}
+                isLoadingMore={sessionsQuery.isFetchingNextPage}
+                onLoadMore={() => { void sessionsQuery.fetchNextPage(); }}
                 activeSessionId={activeSession?.id}
                 onSelectSession={(s) => {
                   navigate(`/chat/${s.id}`);

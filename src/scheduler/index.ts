@@ -2108,8 +2108,11 @@ export class Scheduler {
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     const lastEscalationId = escalations.at(-1)?.id;
     if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    // Count arbiter rejections across every arbiter round (from the second escalation on), so a task
+    // that keeps getting re-escalated is still blocked after ARBITER_ROUNDS instead of looping forever.
+    const arbiterStartId = escalations[1]?.id ?? lastEscalationId;
     const rejections = this.eventRepo.getByTask(task.id)
-      .filter((event) => event.id > lastEscalationId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
+      .filter((event) => event.id > arbiterStartId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
     if (rejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {
@@ -2314,7 +2317,8 @@ export class Scheduler {
       try { logOutput = fs.readFileSync(run.logPath, 'utf8'); } catch { logOutput = ''; }
     }
     try { output = fs.readFileSync(active.outputPath, 'utf8'); } catch { output = ''; }
-    const quota = active.engine.detectQuota(logOutput).exhausted;
+    // The Claude CLI prints its limit notice on stdout, which lands in the output file, not the log.
+    const quota = active.engine.detectQuota(`${logOutput}\n${output}`).exhausted;
     const duration = Date.now() - active.startedAt;
     const isLockBusy = duration < 3000 && logOutput.trim() === '' && Boolean(active.lockFile) && exitCode === 1;
     if (isLockBusy) {

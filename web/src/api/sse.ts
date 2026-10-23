@@ -13,6 +13,66 @@ const connectionListeners = new Set<(connected: boolean) => void>();
 const runLogs = new Map<string, string>(); // runId -> accumulated log
 let isConnected = false;
 
+function patchTaskCaches(queryClient: QueryClient, taskId: string, payload: unknown): boolean {
+  const task = payload && typeof payload === 'object' && 'task' in payload
+    ? (payload as { task?: unknown }).task
+    : payload;
+  if (!task || typeof task !== 'object' || !('id' in task)) return false;
+  let patched = false;
+  const patchPage = (current: { items: Array<{ id: string }>; total: number; nextCursor: string | null } | undefined) => {
+      if (!current || !Array.isArray(current.items)) return current;
+      const index = current.items.findIndex((item) => item.id === taskId || item.id === (task as { id: string }).id);
+      if (index < 0) return current;
+      patched = true;
+      const items = [...current.items];
+      items[index] = { ...items[index], ...(task as object) };
+      return { ...current, items };
+  };
+  queryClient.setQueriesData<{ items: Array<{ id: string }>; total: number; nextCursor: string | null }>({ queryKey: ['tasks'] }, patchPage);
+  queryClient.setQueriesData<{ items: Array<{ id: string }>; total: number; nextCursor: string | null }>({ queryKey: ['tasks-kanban'] }, patchPage);
+  return patched;
+}
+
+function patchChatSessionCaches(queryClient: QueryClient, sessionId: string, payload: unknown): boolean {
+  if (!sessionId) return false;
+  const data = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  let patched = false;
+  queryClient.setQueriesData<Array<Record<string, unknown>> | { items: Array<Record<string, unknown>> }>({ queryKey: ['chatSessions'] }, (current) => {
+    if (Array.isArray(current)) {
+      const index = current.findIndex((item) => item && typeof item === 'object' && (item as { id?: string }).id === sessionId);
+      if (index < 0) return current;
+      patched = true;
+      const next = [...current];
+      next[index] = { ...(next[index] as object), ...(data.state ? { state: data.state } : {}), ...(data.busy !== undefined ? { busy: data.busy } : {}) };
+      return next;
+    }
+    if (!current || typeof current !== 'object' || !Array.isArray((current as { items?: unknown[] }).items)) return current;
+    const page = current as { items: Array<{ id?: string }>; [key: string]: unknown };
+    const index = page.items.findIndex((item) => item.id === sessionId);
+    if (index < 0) return current;
+    patched = true;
+    const items = [...page.items];
+    items[index] = { ...items[index], ...(data.state ? { state: data.state } : {}), ...(data.busy !== undefined ? { busy: data.busy } : {}) };
+    return { ...page, items };
+  });
+  queryClient.setQueriesData<{ pages: Array<{ items: Array<Record<string, unknown>> }>; pageParams: unknown[] }>({ queryKey: ['chatSessions'] }, (current) => {
+    if (!current || !Array.isArray(current.pages)) return current;
+    let changed = false;
+    const pages = current.pages.map((page) => {
+      if (!page || !Array.isArray(page.items)) return page;
+      const index = page.items.findIndex((item) => item?.id === sessionId);
+      if (index < 0) return page;
+      changed = true;
+      patched = true;
+      const items = [...page.items];
+      items[index] = { ...items[index], ...(data.state ? { state: data.state } : {}), ...(data.busy !== undefined ? { busy: data.busy } : {}) };
+      return { ...page, items };
+    });
+    return changed ? { ...current, pages } : current;
+  });
+  return patched;
+}
+
 export function isSSEConnected(): boolean {
   return isConnected;
 }
@@ -175,7 +235,14 @@ export function connectSSE(queryClient: QueryClient): () => void {
 
         // Cache invalidation based on event type
         if (type.startsWith('task.')) {
-          queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          const patched = patchTaskCaches(queryClient, taskId || '', eventItem.payload);
+          if (!patched) {
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
+          } else if (['task.queued', 'task.running', 'task.review_ready', 'task.done', 'task.blocked', 'task.failed', 'task.cancelled', 'task.waiting_quota'].includes(type)) {
+            // A status transition can move a card between columns; refresh only then.
+            queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
+          }
           queryClient.invalidateQueries({ queryKey: ['status'] });
           if (taskId) {
             queryClient.invalidateQueries({ queryKey: ['task', taskId] });
@@ -187,6 +254,7 @@ export function connectSSE(queryClient: QueryClient): () => void {
           }
         } else if (type.startsWith('run.')) {
           queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
           queryClient.invalidateQueries({ queryKey: ['status'] });
           if (taskId) {
             queryClient.invalidateQueries({ queryKey: ['task', taskId] });
@@ -208,7 +276,12 @@ export function connectSSE(queryClient: QueryClient): () => void {
           queryClient.invalidateQueries({ queryKey: ['status'] });
           queryClient.invalidateQueries({ queryKey: ['brain'] });
         } else if (type.startsWith('chat.')) {
-          queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+          const sessionId = typeof eventItem.payload === 'object' && eventItem.payload
+            ? String((eventItem.payload as { sessionId?: string }).sessionId || '')
+            : '';
+          if (!patchChatSessionCaches(queryClient, sessionId, eventItem.payload)) {
+            queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+          }
         } else if (type.startsWith('batch.')) {
           queryClient.invalidateQueries({ queryKey: ['batches'] });
         }

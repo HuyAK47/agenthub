@@ -2,7 +2,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Task } from '../types/api';
-import { getTasks } from '../api/client';
+import { getTasksPage } from '../api/client';
 import { Clock, ArrowRight } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { StatusBadge } from './StatusBadge';
@@ -23,7 +23,13 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
   const { t } = useLocale();
   const { data: fetchedTasks } = useQuery({
     queryKey: ['tasks', 'waiting'],
-    queryFn: () => getTasks(),
+    queryFn: async () => {
+      const [quota, queued] = await Promise.all([
+        getTasksPage({ status: 'waiting_quota', limit: 20, sort: 'createdAt', order: 'desc' }),
+        getTasksPage({ status: 'queued', limit: 20, sort: 'createdAt', order: 'desc' }),
+      ]);
+      return [...quota.items, ...queued.items].filter((task, index, items) => items.findIndex((item) => item.id === task.id) === index);
+    },
     enabled: propTasks === undefined,
     refetchInterval: 5000,
   });

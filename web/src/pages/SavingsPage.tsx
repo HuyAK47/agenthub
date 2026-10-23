@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { getSavings, getProjects } from '../api/client';
@@ -16,12 +16,14 @@ import {
 import { useLocale } from '../context/LocaleContext';
 import { ModelBadge } from '../components/ModelBadge';
 import { formatNumber as formatNum, formatSigned } from '../utils/format';
-import { CollapsibleList } from '../components/CollapsibleList';
+import { Pagination } from '../components/ui/Pagination';
 
 export const SavingsPage: React.FC = () => {
   const { t, locale } = useLocale();
   const [projectFilter, setProjectFilter] = useState<string>('');
   const [sinceFilter, setSinceFilter] = useState<string>('');
+  const [taskPage, setTaskPage] = useState(1);
+  const taskPageSize = 20;
   const formatNumber = (value: number | null | undefined, decimals?: number) =>
     formatNum(value, { decimals, locale });
 
@@ -35,13 +37,16 @@ export const SavingsPage: React.FC = () => {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['savings', projectFilter, sinceFilter],
+    queryKey: ['savings', projectFilter, sinceFilter, taskPage],
     queryFn: () =>
       getSavings({
         project: projectFilter || undefined,
         since: sinceFilter || undefined,
+        limit: taskPageSize,
+        offset: (taskPage - 1) * taskPageSize,
       }),
   });
+  useEffect(() => { setTaskPage(1); }, [projectFilter, sinceFilter]);
 
   const formatDuration = (ms: number | null | undefined) => {
     if (!ms || ms <= 0) return '0s';
@@ -354,7 +359,7 @@ export const SavingsPage: React.FC = () => {
                 </p>
               </div>
               <span className="text-xs text-[var(--t-text-2)]">
-                {tasks.length} task
+                {savings?.tasksTotal || 0} task
               </span>
             </div>
 
@@ -379,8 +384,7 @@ export const SavingsPage: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    <CollapsibleList items={tasks} initial={20} step={20} storageKey="agenthub:savings:tasks" tableColSpan={7}>
-                    {(task) => (
+                    tasks.map((task) => (
                       <tr
                         key={task.taskId}
                         className="hover:bg-[var(--t-hover)] transition-colors"
@@ -445,12 +449,12 @@ export const SavingsPage: React.FC = () => {
                           {formatDuration(task.durationMs)}
                         </td>
                       </tr>
-                    )}
-                    </CollapsibleList>
+                    ))
                   )}
                 </tbody>
               </table>
             </div>
+            <Pagination page={taskPage} pageSize={taskPageSize} total={savings?.tasksTotal || 0} onPageChange={setTaskPage} />
           </div>
 
           {/* Explanation Callout */}

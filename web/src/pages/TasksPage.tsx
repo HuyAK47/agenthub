@@ -1,31 +1,25 @@
-import React, { memo, useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProjects, getStatus, getTasks } from '../api/client';
+import { getProjects, getStatus, getTaskGraph, getTasks, getTasksPage } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
-import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
+import { KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
-import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, FolderKanban, ChevronDown, AlertTriangle } from 'lucide-react';
+import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, List, FolderKanban } from 'lucide-react';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { useLocale } from '../context/LocaleContext';
-import { useShowMore } from '../components/CollapsibleList';
 import { TaskDag } from '../components/dag';
 import { filterTasksForDag } from '../components/dag/dagUtils';
-
-const normalizeText = (text: string): string =>
-  text
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[đĐ]/g, (c) => (c === 'đ' ? 'd' : 'D'))
-    .toLowerCase();
+import { DataTable } from '../components/ui';
+import { useShowMore } from '../components/CollapsibleList';
 
 export interface KanbanColumnProps {
   statusKey: (typeof KANBAN_STATUSES)[number];
-  tasks: Task[];
+  project: string;
   search: string;
 }
 
-const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
+const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project, search }) => {
   const { t } = useLocale();
   // Dùng chung cache ['status'] giữa các cột, chỉ để hiện dung lượng đĩa trong nhãn "Chờ ổ đĩa".
   const { data: hubStatus } = useQuery({
@@ -34,33 +28,35 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
     refetchInterval: 10_000,
   });
 
-  const filteredTasks = useMemo(() => {
-    const query = normalizeText(search.trim());
-    let list = tasks;
-    if (query) {
-      list = list.filter((task) => {
-        const slugMatch = normalizeText(task.slug).includes(query);
-        const titleMatch = normalizeText(task.title).includes(query);
-        return slugMatch || titleMatch;
-      });
+  const pageSize = statusKey === 'done' || statusKey === 'cancelled' ? 10 : 20;
+  const { data, isLoading } = useQuery({
+    queryKey: ['tasks-kanban', project, statusKey, search, pageSize],
+    queryFn: () => getTasksPage({ project, status: statusKey, search, limit: pageSize, sort: 'createdAt', order: 'desc' }),
+    // Columns are cursor-paged. Polling page one would discard loaded pages
+    // and make cards move unexpectedly; SSE invalidation refreshes this view.
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+  const [visibleItems, setVisibleItems] = useState<Task[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  useEffect(() => {
+    setVisibleItems(data?.items || []);
+    setNextCursor(data?.nextCursor || null);
+  }, [data]);
+  const showMore = async () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const next = await getTasksPage({ project, status: statusKey, search, limit: pageSize, cursor: nextCursor, sort: 'createdAt', order: 'desc' });
+      setVisibleItems((current) => [...current, ...next.items]);
+      setNextCursor(next.nextCursor);
+    } finally {
+      setIsLoadingMore(false);
     }
-    return [...list].sort((a, b) => {
-      const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-      const timeB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-      return timeB - timeA;
-    });
-  }, [tasks, search]);
-
-  const initialCount = statusKey === 'done' || statusKey === 'cancelled' ? 10 : 20;
-  const { visibleItems, hasMore, isExpanded, showMore, collapse } = useShowMore(
-    filteredTasks,
-    initialCount,
-    20,
-    `agenthub:tasks:${statusKey}`,
-  );
-
-  const remaining = filteredTasks.length - visibleItems.length;
-  const nextStep = Math.min(20, remaining);
+  };
+  const remaining = Math.max(0, (data?.total || 0) - visibleItems.length);
+  const nextStep = Math.min(pageSize, remaining);
 
   return (
     <div
@@ -84,13 +80,15 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
           <StatusBadge status={statusKey} size="sm" />
         </div>
         <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[var(--t-surface)] border border-[var(--t-border)] text-[var(--t-text)]">
-          {tasks.length}
+          {data?.total || 0}
         </span>
       </div>
 
       {/* Cards List */}
       <div className="space-y-2.5 flex-1 overflow-y-auto">
-        {filteredTasks.length === 0 ? (
+        {isLoading ? (
+          <div className="h-24 flex items-center justify-center text-xs text-[var(--t-text-3)]">{t('pagination.loading')}</div>
+        ) : visibleItems.length === 0 ? (
           <div className="h-24 border border-dashed border-[var(--t-border)] rounded-lg flex items-center justify-center text-xs text-[var(--t-text-3)] italic">
             {t('common.empty')}
           </div>
@@ -187,26 +185,11 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
           ))
         )}
 
-        {(hasMore || isExpanded) && (
+        {nextCursor && (
           <div className="flex items-center justify-center gap-3 pt-2">
-            {hasMore && (
-              <button
-                type="button"
-                onClick={showMore}
-                className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer"
-              >
-                {t('tasks.showMore', { count: nextStep, remaining })}
-              </button>
-            )}
-            {isExpanded && (
-              <button
-                type="button"
-                onClick={collapse}
-                className="text-xs text-[var(--t-text-2)] hover:underline cursor-pointer"
-              >
-                {t('tasks.collapse')}
-              </button>
-            )}
+            <button type="button" onClick={() => void showMore()} disabled={isLoadingMore} className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer disabled:opacity-50">
+              {isLoadingMore ? t('pagination.loading') : `${t('tasks.showMore')} ${nextStep} (${t('tasks.remaining', { count: remaining })})`}
+            </button>
           </div>
         )}
       </div>
@@ -216,123 +199,25 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
 
 export const KanbanColumn = memo(KanbanColumnComponent);
 
-const PROJECT_VIEW_STORAGE_KEY = 'agenthub:tasks:view-mode';
-const PROJECT_TASK_ORDER: Task['status'][] = ['running', 'checking', 'review', 'blocked', 'failed', 'queued', 'waiting_quota', 'draft', 'done', 'cancelled'];
-
-function readStoredTaskView(): 'kanban' | 'dag' | 'project' {
-  try {
-    const value = window.localStorage.getItem(PROJECT_VIEW_STORAGE_KEY);
-    return value === 'dag' || value === 'project' ? value : 'kanban';
-  } catch {
-    return 'kanban';
-  }
-}
-
-function writeStoredTaskView(value: 'kanban' | 'dag' | 'project') {
-  try {
-    window.localStorage.setItem(PROJECT_VIEW_STORAGE_KEY, value);
-  } catch {
-    // Private browsing and disabled storage should not break the task page.
-  }
-}
-
-function isAttentionTask(task: Task) {
-  return task.status === 'blocked' || task.status === 'failed' || Boolean(task.reviewerEscalated);
-}
-
-function isOldDoneTask(task: Task) {
-  if (task.status !== 'done' && task.status !== 'cancelled') return false;
-  const updated = new Date(task.updatedAt).getTime();
-  return Number.isFinite(updated) && Date.now() - updated > 24 * 60 * 60 * 1000;
-}
-
-const ProjectTaskCard: React.FC<{ task: Task }> = ({ task }) => {
+const ProjectTaskGroup: React.FC<{ project: { id: string; name: string }; tasks: Task[] }> = ({ project, tasks }) => {
   const { t } = useLocale();
+  const visible = useShowMore(tasks, 20, 20, `agenthub:tasks:project:${project.id}`);
   return (
-    <Link
-      to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}
-      className="block rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-3 hover:border-[var(--t-accent)] transition-colors"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-xs font-mono text-[var(--t-text-2)] truncate">{task.slug}</div>
-          <div className="mt-1 text-sm font-semibold text-[var(--t-text)] line-clamp-2">{task.title}</div>
-        </div>
-        <StatusBadge status={task.status} size="sm" />
-      </div>
-      {task.reviewerEscalated ? <span className="mt-2 inline-flex text-[11px] font-semibold text-[var(--t-warn)]">{t('extra.waitingApprover')}</span> : null}
-    </Link>
-  );
-};
-
-const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority?: number }; tasks: Task[]; search: string; onCreate: () => void }> = ({ project, tasks, search, onCreate }) => {
-  const { t } = useLocale();
-  const [open, setOpen] = useState(true);
-  const [showOldDone, setShowOldDone] = useState(false);
-  const counts = useMemo(() => ({
-    running: tasks.filter((task) => task.status === 'running').length,
-    checking: tasks.filter((task) => task.status === 'checking').length,
-    review: tasks.filter((task) => task.status === 'review').length,
-    blocked: tasks.filter((task) => task.status === 'blocked').length,
-    waiting: tasks.filter((task) => ['queued', 'waiting_quota'].includes(task.status)).length,
-  }), [tasks]);
-  const visibleTasks = useMemo(() => {
-    const query = normalizeText(search.trim());
-    const matchingTasks = query
-      ? tasks.filter((task) => normalizeText(task.slug).includes(query) || normalizeText(task.title).includes(query))
-      : tasks;
-    const sorted = [...matchingTasks].sort((a, b) => {
-      const rank = (status: Task['status']) => PROJECT_TASK_ORDER.indexOf(status);
-      return rank(a.status) - rank(b.status) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-    });
-    return showOldDone ? sorted : sorted.filter((task) => !isOldDoneTask(task));
-  }, [tasks, search, showOldDone]);
-  const paginatedTasks = useShowMore(
-    visibleTasks,
-    20,
-    20,
-    `agenthub:tasks:project:${project.id}`,
-  );
-  const remaining = visibleTasks.length - paginatedTasks.visibleItems.length;
-  const oldDoneCount = tasks.filter(isOldDoneTask).length;
-
-  return (
-    <section className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] overflow-hidden" data-testid={`project-task-group-${project.id}`}>
+    <section className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] overflow-hidden">
       <div className="flex items-center gap-2 p-3 sm:p-4">
-        <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-          <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />
-          <FolderKanban className="h-4 w-4 shrink-0 text-[var(--t-accent)]" />
-          <span className="truncate font-semibold text-[var(--t-text)]">{project.name}</span>
-          {project.priority != null && project.priority > 0 ? <span className="rounded-full bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--t-warn)]">{t('tasks.priority', { value: project.priority })}</span> : null}
-        </button>
-        <div className="hidden flex-wrap justify-end gap-1.5 text-[11px] sm:flex" aria-label={t('tasks.projectCounts')}>
-          <span className="rounded-full bg-[var(--t-surface)] px-2 py-0.5 text-[var(--t-ok)]">{t('status.running')}: {counts.running}</span>
-          <span className="rounded-full bg-[var(--t-surface)] px-2 py-0.5 text-[var(--t-accent)]">{t('status.checking')}: {counts.checking}</span>
-          <span className="rounded-full bg-[var(--t-surface)] px-2 py-0.5 text-[var(--t-warn)]">{t('status.review')}: {counts.review}</span>
-          <span className="rounded-full bg-[var(--t-surface)] px-2 py-0.5 text-[var(--t-crit)]">{t('status.blocked')}: {counts.blocked}</span>
-          <span className="rounded-full bg-[var(--t-surface)] px-2 py-0.5 text-[var(--t-text-2)]">{t('tasks.waitingShort')}: {counts.waiting}</span>
-        </div>
-        <button type="button" onClick={onCreate} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[var(--t-accent)] px-2.5 py-1.5 text-xs font-semibold text-[var(--t-on-accent)] hover:bg-[var(--t-accent-hover)]" aria-label={`${t('tasks.createTask')} ${project.name}`}>
-          <Plus className="h-3.5 w-3.5" /><span className="hidden sm:inline">{t('tasks.createTask')}</span>
-        </button>
+        <FolderKanban className="h-4 w-4 text-[var(--t-accent)]" />
+        <span className="font-semibold text-[var(--t-text)]">{project.name}</span>
       </div>
-      {open && <div className="border-t border-[var(--t-border)] p-3 sm:p-4">
-        <div className="mb-3 flex flex-wrap gap-1.5 text-[11px] sm:hidden">
-          {[
-            [t('status.running'), counts.running],
-            [t('status.checking'), counts.checking],
-            [t('status.review'), counts.review],
-            [t('status.blocked'), counts.blocked],
-            [t('tasks.waitingShort'), counts.waiting],
-          ].map(([label, count]) => <span key={String(label)} className="rounded-full bg-[var(--t-surface)] px-2 py-0.5 text-[var(--t-text-2)]">{label}: {count}</span>)}
-        </div>
-        {visibleTasks.length > 0 ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{paginatedTasks.visibleItems.map((task) => <ProjectTaskCard key={task.id} task={task} />)}</div> : <div className="rounded-lg border border-dashed border-[var(--t-border)] p-5 text-center text-xs italic text-[var(--t-text-3)]">{t('common.empty')}</div>}
-        {(paginatedTasks.hasMore || paginatedTasks.isExpanded) && <div className="flex items-center justify-center gap-3 pt-3">
-          {paginatedTasks.hasMore && <button type="button" onClick={paginatedTasks.showMore} className="text-xs font-medium text-[var(--t-accent)] hover:underline">{t('tasks.showMore', { count: Math.min(20, remaining), remaining })}</button>}
-          {paginatedTasks.isExpanded && <button type="button" onClick={paginatedTasks.collapse} className="text-xs text-[var(--t-text-2)] hover:underline">{t('tasks.collapse')}</button>}
-        </div>}
-        {oldDoneCount > 0 && <button type="button" onClick={() => setShowOldDone((value) => !value)} className="mt-3 text-xs font-medium text-[var(--t-accent)] hover:underline">{showOldDone ? t('tasks.hideOldDone') : t('tasks.showOldDone', { count: oldDoneCount })}</button>}
-      </div>}
+      <div className="border-t border-[var(--t-border)] p-3 sm:p-4">
+        {visible.visibleItems.length > 0 ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{visible.visibleItems.map((task) => (
+          <Link key={task.id} to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`} className="block rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-3 hover:border-[var(--t-accent)] transition-colors">
+            <div className="text-xs font-mono text-[var(--t-text-2)] truncate">{task.slug}</div>
+            <div className="mt-1 text-sm font-semibold text-[var(--t-text)] line-clamp-2">{task.title}</div>
+            <StatusBadge status={task.status} size="sm" />
+          </Link>
+        ))}</div> : <div className="rounded-lg border border-dashed border-[var(--t-border)] p-5 text-center text-xs italic text-[var(--t-text-3)]">{t('common.empty')}</div>}
+        {visible.hasMore && <button type="button" onClick={visible.showMore} className="mt-3 text-xs font-medium text-[var(--t-accent)] hover:underline">{t('tasks.showMore')}</button>}
+      </div>
     </section>
   );
 };
@@ -340,51 +225,87 @@ const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority
 export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const [viewMode, setViewMode] = useState<'kanban' | 'dag' | 'project'>(readStoredTaskView);
-  const [selectedProjects, setSelectedProjects] = useState<string[]>(() => searchParams.get('project')?.split(',').filter(Boolean) ?? []);
-  const [selectedStatus, setSelectedStatus] = useState<string>('all');
-  const [attentionOnly, setAttentionOnly] = useState(false);
+  const [urlParams, setUrlParams] = useSearchParams();
+  const [viewMode, setViewMode] = useState<'kanban' | 'dag' | 'list' | 'project'>((urlParams.get('view') as 'kanban' | 'dag' | 'list' | 'project') || 'kanban');
+  const [selectedProject, setSelectedProject] = useState<string>(urlParams.get('project') || 'all');
+  const [selectedStatus, setSelectedStatus] = useState<string>(urlParams.get('status') || 'all');
   const [doneFilter, setDoneFilter] = useState<'active_chains' | '1d' | '3d' | '7d' | '30d' | 'all'>('active_chains');
-  const [search, setSearch] = useState<string>('');
+  const [search, setSearch] = useState<string>(urlParams.get('search') || '');
+  const [page, setPage] = useState(Number(urlParams.get('page') || 1));
+  const [pageSize, setPageSize] = useState(Number(urlParams.get('pageSize') || 20));
+  const [sortKey, setSortKey] = useState<'createdAt' | 'updatedAt' | 'title' | 'slug'>((urlParams.get('sort') as 'createdAt' | 'updatedAt' | 'title' | 'slug') || 'createdAt');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>((urlParams.get('order') as 'asc' | 'desc') || 'desc');
+  const [cursors, setCursors] = useState<Record<number, string | undefined>>({});
+  const cursor = cursors[page - 1];
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
   });
-
-  const { data: tasks = [], isLoading } = useQuery({
-    queryKey: ['tasks'],
-    queryFn: () => getTasks(),
-    refetchInterval: 5000,
+  const { data: projectTasks = [] } = useQuery({
+    queryKey: ['tasks-project-view'],
+    queryFn: getTasks,
+    enabled: viewMode === 'project',
   });
 
-  const selectedProject = selectedProjects.length === 1 ? selectedProjects[0] : 'all';
-  const filteredTasks = useMemo(() => tasks.filter((task) => (selectedProjects.length === 0 || selectedProjects.includes(task.projectId)) && (!attentionOnly || isAttentionTask(task))), [tasks, selectedProjects, attentionOnly]);
-  const grouped = useMemo(() => groupTasksByStatus(filteredTasks), [filteredTasks]);
-  const projectGroups = useMemo(() => projects.map((project) => ({ ...project, tasks: filteredTasks.filter((task) => task.projectId === project.id) })).filter((project) => selectedProjects.length === 0 || selectedProjects.includes(project.id)), [projects, filteredTasks, selectedProjects]);
-
-  useEffect(() => writeStoredTaskView(viewMode), [viewMode]);
+  const { data, isLoading: isPageLoading } = useQuery({
+    queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor, sortKey, sortDirection],
+    queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor, offset: cursor ? undefined : (page - 1) * pageSize, sort: sortKey, order: sortDirection }),
+    enabled: viewMode === 'list',
+    refetchInterval: 5000,
+    placeholderData: keepPreviousData,
+  });
+  const { data: taskGraph, isLoading: isGraphLoading } = useQuery({
+    queryKey: ['tasks-graph', selectedProject, doneFilter],
+    queryFn: () => getTaskGraph({ project: selectedProject, includeDone: doneFilter === 'all' }),
+    enabled: viewMode === 'dag',
+    refetchInterval: 5000,
+    placeholderData: keepPreviousData,
+  });
+  const initialFilters = useRef(true);
+  useEffect(() => {
+    if (data?.nextCursor) setCursors((current) => ({ ...current, [page]: data.nextCursor || undefined }));
+  }, [data?.nextCursor, page]);
+  useEffect(() => {
+    const next = new URLSearchParams(urlParams);
+    const values: Record<string, string> = { project: selectedProject, status: selectedStatus, search, page: String(page), pageSize: String(pageSize), view: viewMode, sort: sortKey, order: sortDirection };
+    for (const [key, value] of Object.entries(values)) {
+      if (value && value !== 'all' && value !== '1' && !(key === 'pageSize' && value === '20') && !(key === 'view' && value === 'kanban')) next.set(key, value);
+      else next.delete(key);
+    }
+    if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
+  }, [selectedProject, selectedStatus, search, page, pageSize, viewMode, sortKey, sortDirection, setUrlParams, urlParams]);
+  useEffect(() => {
+    if (initialFilters.current) {
+      initialFilters.current = false;
+      return;
+    }
+    setPage(1);
+    setCursors({});
+  }, [selectedProject, search, selectedStatus, pageSize]);
+  const graphTasks = useMemo<Task[]>(() => {
+    if (!taskGraph) return [];
+    const dependencies = new Map<string, string[]>();
+    for (const edge of taskGraph.edges) dependencies.set(edge.to, [...(dependencies.get(edge.to) || []), edge.from]);
+    return taskGraph.nodes.map((node) => ({
+      ...node,
+      dependsOn: dependencies.get(node.id) || [],
+      currentRun: null,
+      attempt: 0,
+      resume: 0,
+      createdAt: '',
+      updatedAt: '',
+    }));
+  }, [taskGraph]);
+  const tasks = graphTasks;
 
   const dagTasks = useMemo(() => {
-    let list = filteredTasks;
-    const query = normalizeText(search.trim());
-    if (query) {
-      list = list.filter((task) => {
-        const slugMatch = normalizeText(task.slug).includes(query);
-        const titleMatch = normalizeText(task.title).includes(query);
-        return slugMatch || titleMatch;
-      });
-    }
-    return filterTasksForDag(list, {
+    return filterTasksForDag(tasks, {
       project: selectedProject,
       status: selectedStatus,
       doneFilter,
     });
-  }, [filteredTasks, search, selectedProject, selectedStatus, doneFilter]);
-
-  const setMode = (mode: 'kanban' | 'dag' | 'project') => setViewMode(mode);
-  const toggleProject = (id: string) => setSelectedProjects((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }, [tasks, search, selectedProject, selectedStatus, doneFilter]);
 
   return (
     <div className="space-y-6" data-tour="task-lifecycle">
@@ -415,8 +336,20 @@ export const TasksPage: React.FC = () => {
               <LayoutGrid className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t('dag.toggleKanban')}</span>
             </button>
-            <button type="button" onClick={() => setMode('project')} data-testid="view-toggle-project" aria-label={t('tasks.projectView')} title={t('tasks.projectView')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${viewMode === 'project' ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold' : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'}`}>
-              <FolderKanban className="h-3.5 w-3.5" /><span className="hidden sm:inline">{t('tasks.projectView')}</span>
+            <button type="button" onClick={() => setViewMode('project')} data-testid="view-toggle-project" aria-label={t('tasks.projectView')} title={t('tasks.projectView')} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${viewMode === 'project' ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold' : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'}`}>
+              <FolderKanban className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t('tasks.projectView')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              data-testid="view-toggle-list"
+              aria-label={t('tasks.listView')}
+              title={t('tasks.listView')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${viewMode === 'list' ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold' : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'}`}
+            >
+              <List className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t('tasks.listView')}</span>
             </button>
             <button
               type="button"
@@ -447,18 +380,32 @@ export const TasksPage: React.FC = () => {
             />
           </div>
 
-          {/* Project filters */}
-          <div className="flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1.5 shadow-xs" aria-label={t('tasks.filterProject')}>
+          {/* Project Filter */}
+          <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
             <Filter className="w-4 h-4 text-[var(--t-text-2)]" />
-            <button type="button" onClick={() => setSelectedProjects([])} className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProjects.length === 0 ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)]' : 'text-[var(--t-text-2)]'}`}>{t('tasks.allProjects')}</button>
-            {projects.map((p) => <button type="button" key={p.id} onClick={() => toggleProject(p.id)} className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProjects.includes(p.id) ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)]' : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'}`}>{p.name}</button>)}
+            <select
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              aria-label={t('tasks.filterProject')}
+              className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] focus:outline-none cursor-pointer"
+            >
+              <option value="all" className="bg-[var(--t-surface)] text-[var(--t-text)]">
+                {t('tasks.allProjects')}
+              </option>
+              {projects.map((p) => (
+                <option
+                  key={p.id}
+                  value={p.id}
+                  className="bg-[var(--t-surface)] text-[var(--t-text)]"
+                >
+                  {p.name}
+                </option>
+              ))}
+            </select>
           </div>
-          <button type="button" onClick={() => setAttentionOnly((value) => !value)} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${attentionOnly ? 'border-[var(--t-crit)] bg-[color-mix(in_srgb,var(--t-crit)_12%,transparent)] text-[var(--t-crit)]' : 'border-[var(--t-border)] bg-[var(--t-surface)] text-[var(--t-text-2)]'}`} aria-pressed={attentionOnly}>
-            <AlertTriangle className="h-3.5 w-3.5" />{t('tasks.attention')}
-          </button>
 
           {/* DAG-specific filters (Status & Done cutoff) */}
-          {viewMode === 'dag' && (
+          {viewMode !== 'kanban' && viewMode !== 'project' && (
             <>
               {/* Status Filter */}
               <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
@@ -527,7 +474,30 @@ export const TasksPage: React.FC = () => {
         </div>
       </div>
 
-      {isLoading ? (
+      {viewMode === 'project' ? (
+        <div className="space-y-4 pb-8" data-testid="project-view-wrapper">
+          {projects.map((project) => <ProjectTaskGroup key={project.id} project={project} tasks={projectTasks.filter((task) => task.projectId === project.id)} />)}
+        </div>
+      ) : viewMode === 'list' ? (
+        <DataTable
+          rows={data?.items || []}
+          loading={isPageLoading}
+          columns={[
+            { key: 'slug', title: t('tasks.slug'), sortable: true, sortValue: (task) => task.slug, render: (task) => <Link className="font-mono text-[var(--t-accent)] hover:underline" to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}>{task.slug}</Link> },
+            { key: 'title', title: t('tasks.title'), sortable: true, sortValue: (task) => task.title, render: (task) => <span className="truncate" title={task.title}>{task.title}</span> },
+            { key: 'status', title: t('tasks.status'), render: (task) => <StatusBadge status={task.status} size="sm" /> },
+            { key: 'project', title: t('tasks.project'), render: (task) => <span>{task.projectId}</span> },
+          ]}
+          page={page}
+          pageSize={pageSize}
+          total={data?.total ?? 0}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => { setPageSize(size); setPage(1); setCursors({}); }}
+          sortKey={sortKey}
+          sortDirection={sortDirection}
+          onSortChange={(key, direction) => { setSortKey(key as typeof sortKey); setSortDirection(direction); setPage(1); setCursors({}); }}
+        />
+      ) : viewMode === 'dag' && isGraphLoading ? (
         <div className="flex items-center justify-center min-h-[40vh]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
         </div>
@@ -535,18 +505,14 @@ export const TasksPage: React.FC = () => {
         <div data-testid="dag-view-wrapper" className="pb-8">
           <TaskDag tasks={dagTasks} />
         </div>
-      ) : viewMode === 'project' ? (
-        <div className="space-y-4 pb-8" data-testid="project-view-wrapper">
-          {projectGroups.length === 0 ? <div className="rounded-xl border border-dashed border-[var(--t-border)] p-8 text-center text-sm text-[var(--t-text-3)]">{t('common.empty')}</div> : projectGroups.map((project) => <ProjectTaskGroup key={project.id} project={project} tasks={project.tasks} search={search} onCreate={() => navigate(`/tasks/new?project=${encodeURIComponent(project.id)}`)} />)}
-        </div>
       ) : (
         /* Kanban Board Grid */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-8" data-tour="task-columns">
           {KANBAN_STATUSES.map((statusKey) => (
             <KanbanColumn
-              key={statusKey}
+              key={`${statusKey}-${selectedProject}-${search}`}
               statusKey={statusKey}
-              tasks={grouped[statusKey] || []}
+              project={selectedProject}
               search={search}
             />
           ))}
