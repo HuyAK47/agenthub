@@ -3115,7 +3115,6 @@ export class AppService {
       });
       this.failedAutoMerges.delete(taskId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       this.failedAutoMerges.add(taskId);
       const isConflict = (error instanceof HttpError && (error.error === 'conflict' || error.statusCode === 409)) ||
         (error instanceof MergeError && error.error === 'conflict') ||
