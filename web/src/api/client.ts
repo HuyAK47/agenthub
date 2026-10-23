@@ -661,6 +661,12 @@ export interface TelegramChat {
   id: number;
   name: string;
   username?: string;
+  projectId?: string;
+}
+
+export interface TelegramProjectTopic {
+  chatId: number;
+  threadId: number;
 }
 
 export interface TelegramStatus {
@@ -668,6 +674,7 @@ export interface TelegramStatus {
   hasToken: boolean;
   chats: TelegramChat[];
   allowedChatIds: number[];
+  projectTopics: Record<string, TelegramProjectTopic>;
   notify: {
     reviewReady: boolean;
     failed: boolean;
@@ -714,6 +721,20 @@ export async function createTelegramPairCode(): Promise<TelegramPairingCode> {
 export async function removeTelegramChat(id: number): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/telegram/chats/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+  });
+}
+
+export async function createTelegramTopics(): Promise<Record<string, TelegramProjectTopic>> {
+  return apiFetch<Record<string, TelegramProjectTopic>>('/api/telegram/topics/setup', { method: 'POST' });
+}
+
+export async function createTelegramProjectTopic(projectId: string): Promise<TelegramProjectTopic> {
+  return apiFetch<TelegramProjectTopic>(`/api/telegram/projects/${encodeURIComponent(projectId)}/topic`, { method: 'POST' });
+}
+
+export async function attachTelegramProjectChat(projectId: string, chatId: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/telegram/projects/${encodeURIComponent(projectId)}/chat`, {
+    method: 'PUT', body: JSON.stringify({ chatId }),
   });
 }
 

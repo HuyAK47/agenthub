@@ -298,3 +298,8 @@ Khi thấy một worker đang ở trạng thái `running` nhưng không in thêm
      ```
    - Kiểm tra xem tiến trình con có đang chờ lệnh tương tác (như lệnh sudo/git hỏi mật khẩu hoặc xác nhận bàn phím) hoặc chạy lệnh nền không thoát (như test suite chạy chế độ watch, dev server không có timeout) hay không.
 
+## Telegram theo project
+
+Có thể dùng một group Telegram bật Topics để tách từng project. Trong Settings, dùng **Tạo topic** cho từng project hoặc gửi `/topics setup`; AgentHub lưu `config.telegram.projectTopics` và gửi thông báo đúng topic. Tin nhắn trong topic tự động đi vào phiên trợ lý của project đó, nên `/status`, `/tasks` và `/newtask` không cần `/use`.
+
+Nếu không dùng Topics, hãy dùng **Gắn chat** để gán từng chat riêng cho project. Chỉ các chat trong `allowedChatIds` mới được nhận tin.
