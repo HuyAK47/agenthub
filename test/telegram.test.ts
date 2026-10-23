@@ -3622,7 +3622,7 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
 
       const bot = createDeptBot({
         allowedChatIds: [SUPERGROUP_ID],
-        topicMode: 'department',
+        topicMode: 'project',
       });
 
       // /topics setup department
@@ -3642,6 +3642,7 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
       const lastSetupCall = setupCalls.at(-1);
       expect(lastSetupCall?.body?.text).toContain('Đã đồng bộ');
       expect(lastSetupCall?.body?.text).toContain('topic phòng ban');
+      expect(config.telegram.topicMode).toBe('department');
     });
 
     it('7. HTTP API endpoints for department topics and setup', async () => {

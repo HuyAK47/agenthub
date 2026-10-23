@@ -1235,11 +1235,11 @@ export class TelegramBotService {
           : (this.config.telegram.topicMode || 'project');
         if (mode === 'department') {
           await this.sendMessage(chatId, '⏳ Đang tạo topic cho các phòng ban…');
-          const topics = await this.setupDepartmentTopics();
+          const topics = await this.setupTopics(mode);
           await this.sendMessage(chatId, `✅ Đã đồng bộ ${Object.keys(topics).length} topic phòng ban.`);
         } else {
           await this.sendMessage(chatId, '⏳ Đang tạo topic cho các dự án…');
-          const topics = await this.setupProjectTopics();
+          const topics = await this.setupTopics(mode);
           await this.sendMessage(chatId, `✅ Đã đồng bộ ${Object.keys(topics).length} topic dự án.`);
         }
         break;
