@@ -106,6 +106,7 @@ export interface Project {
   defaultBranch: string;
   envTemplate?: string | null;
   maxParallel: number;
+  priority?: number;
   departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;

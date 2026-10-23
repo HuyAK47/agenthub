@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf } from '../api/client';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf, getTasks } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage, retryChatLimitNow } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -97,6 +97,7 @@ export const DashboardPage: React.FC = () => {
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: getProjects, refetchInterval: 30_000 });
+  const { data: allTasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: () => getTasks(), refetchInterval: 10_000 });
   const { data: perf } = useQuery({ queryKey: ['perf'], queryFn: getPerf, refetchInterval: 30_000 });
 
   const queryClient = useQueryClient();
@@ -215,6 +216,16 @@ export const DashboardPage: React.FC = () => {
       statusKey: 'failed',
     },
   ];
+
+  const projectTaskSummary = projects.map((project) => {
+    const projectTasks = allTasks.filter((task) => task.projectId === project.id);
+    return {
+      project,
+      running: projectTasks.filter((task) => task.status === 'running').length,
+      waiting: projectTasks.filter((task) => ['queued', 'waiting_quota'].includes(task.status)).length,
+      attention: projectTasks.filter((task) => ['blocked', 'failed'].includes(task.status) || Boolean(task.reviewerEscalated)).length,
+    };
+  });
 
   return (
     <div className="space-y-8">
@@ -414,6 +425,21 @@ export const DashboardPage: React.FC = () => {
             </div>
           );
         })}
+      </div>
+
+      <div data-testid="dashboard-project-summary" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-base font-semibold">{t('dashboard.projectTaskSummary')}</h2>
+          <Link to="/projects" className="text-xs text-[var(--t-accent)] hover:underline">{t('common.view')}</Link>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {projectTaskSummary.map(({ project, running, waiting, attention }) => (
+            <Link key={project.id} to={`/tasks?project=${encodeURIComponent(project.id)}`} className="rounded-lg border border-[var(--border-default)] p-3 hover:border-[var(--t-accent)] transition-colors" data-testid={`dashboard-project-${project.id}`}>
+              <div className="mb-2 truncate text-sm font-semibold">{project.name}</div>
+              <div className="flex flex-wrap gap-2 text-xs"><span className="text-[var(--t-ok)]">{t('dashboard.projectRunning')}: {running}</span><span className="text-[var(--text-secondary)]">{t('dashboard.projectWaiting')}: {waiting}</span><span className="text-[var(--t-crit)]">{t('tasks.attention')}: {attention}</span></div>
+            </Link>
+          ))}
+        </div>
       </div>
 
       {/* Running workers */}
