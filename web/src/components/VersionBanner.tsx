@@ -78,7 +78,7 @@ export const VersionBanner: React.FC = () => {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+            className="flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--t-on-accent)] shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
           >
             <RefreshCw className="h-3 w-3" />
             <span>{t('extra.reload')}</span>

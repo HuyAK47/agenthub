@@ -15,7 +15,7 @@ describe('AgentIcon', () => {
   it('renders CodexIcon for codex and openai', () => {
     const { container: codexContainer } = render(<AgentIcon provider="codex" />);
     expect(codexContainer.querySelector('svg')).toBeInTheDocument();
-    expect(codexContainer.querySelector('.text-\\[\\#10A37F\\]')).toBeInTheDocument();
+    expect(codexContainer.querySelector('.text-\\[var\\(--t-codex\\)\\]')).toBeInTheDocument();
 
     const { container: openaiContainer } = render(<AgentIcon provider="openai" />);
     expect(openaiContainer.querySelector('svg')).toBeInTheDocument();
@@ -24,7 +24,7 @@ describe('AgentIcon', () => {
   it('renders ClaudeIcon for claude and anthropic', () => {
     const { container: claudeContainer } = render(<AgentIcon provider="claude" />);
     expect(claudeContainer.querySelector('svg')).toBeInTheDocument();
-    expect(claudeContainer.querySelector('.text-\\[\\#D97757\\]')).toBeInTheDocument();
+    expect(claudeContainer.querySelector('.text-\\[var\\(--t-claude\\)\\]')).toBeInTheDocument();
 
     const { container: anthropicContainer } = render(<AgentIcon provider="anthropic" />);
     expect(anthropicContainer.querySelector('svg')).toBeInTheDocument();

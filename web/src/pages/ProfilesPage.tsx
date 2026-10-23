@@ -266,7 +266,7 @@ export const ProfilesPage: React.FC = () => {
             e.stopPropagation();
             setShowAdd(true);
           }}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-semibold text-white"
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-semibold text-[var(--t-on-accent)]"
         >
           <Plus className="h-4 w-4" />
           {t('profiles.addBtn')}
@@ -431,7 +431,7 @@ export const ProfilesPage: React.FC = () => {
           e.stopPropagation();
           setShowAdd(true);
         }}
-        className={`fixed bottom-8 right-8 z-30 flex items-center gap-2 rounded-full bg-[var(--t-accent)] p-3 sm:px-4 sm:py-3 text-sm font-semibold text-white shadow-xl shadow-[var(--t-accent)]/30 ring-1 ring-white/20 transition-all duration-300 ease-out hover:scale-105 hover:shadow-2xl hover:shadow-[var(--t-accent)]/45 active:scale-95 cursor-pointer ${
+        className={`fixed bottom-8 right-8 z-30 flex items-center gap-2 rounded-full bg-[var(--t-accent)] p-3 sm:px-4 sm:py-3 text-sm font-semibold text-[var(--t-on-accent)] shadow-xl shadow-[var(--t-accent)]/30 ring-1 ring-[var(--t-on-accent)]/20 transition-all duration-300 ease-out hover:scale-105 hover:shadow-2xl hover:shadow-[var(--t-accent)]/45 active:scale-95 cursor-pointer ${
           showFab
             ? 'translate-y-0 opacity-100 pointer-events-auto'
             : 'translate-y-6 opacity-0 pointer-events-none'
@@ -482,7 +482,7 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
   if (initial) {
     return (
       <div
-        className="flex h-9 w-9 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
+        className="flex h-9 w-9 shrink-0 select-none items-center justify-center rounded-xl font-bold text-[var(--t-on-accent)] shadow-xs"
         style={{ background: getAvatarGradient(profile.email || profile.name) }}
       >
         <span className="text-sm tracking-wider drop-shadow-xs">{initial}</span>
@@ -867,7 +867,7 @@ function ProfileCard({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-2.5">
         <label className="flex items-center gap-1.5 text-xs text-[var(--t-text-3)] cursor-pointer select-none">
           <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-4.5 w-8 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'} transition-colors cursor-pointer`}>
-            <span className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-3.5' : ''}`} />
+            <span className={`block h-3.5 w-3.5 rounded-full bg-[var(--t-surface)] transition-transform ${profile.enabled ? 'translate-x-3.5' : ''}`} />
           </button>
           <span>{t('profiles.enable')}</span>
         </label>
@@ -925,7 +925,7 @@ function Modal({
   const { t } = useLocale();
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-4"
       style={{ zIndex: UI_Z_INDEX.modal }}
       role="dialog"
       aria-modal="true"
@@ -1546,7 +1546,7 @@ function LoginWizard({
       ? 'Claude'
       : 'Antigravity';
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/75 p-3" style={{ zIndex: UI_Z_INDEX.modal }}>
+    <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-3" style={{ zIndex: UI_Z_INDEX.modal }}>
       <div className="flex h-[90vh] w-[96vw] max-w-[1400px] flex-col overflow-hidden rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-2xl">
         <div className="border-b border-[var(--t-border)] p-4">
           <h2 className="text-lg font-semibold">

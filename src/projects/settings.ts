@@ -20,6 +20,12 @@ const ReferenceSchema = z.object({
 });
 
 export const ProjectSettingsSchema = z.object({
+  commitConvention: z.object({
+    branchTemplate: z.string().min(1).max(200).default('agenthub/{slug}'),
+    commitTemplate: z.string().min(1).max(200).default('{type}: {summary}'),
+    commitRegex: z.string().min(1).max(1000).optional(),
+    mergeMessageTemplate: z.string().min(1).max(200).default("Merge branch '{branch}' into {target}"),
+  }).default({}),
   brain: z.object({
     engine: z.enum(['inherit', 'claude', 'codex']).default('inherit'),
     codexProfile: z.string().min(1).optional(),
@@ -80,6 +86,7 @@ export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;
 
 /** Input accepted by the API: every section and field optional; merged over the stored settings. */
 export const ProjectSettingsInputSchema = z.object({
+  commitConvention: ProjectSettingsSchema.shape.commitConvention.removeDefault().partial().optional(),
   brain: ProjectSettingsSchema.shape.brain.removeDefault().partial().optional(),
   worktree: ProjectSettingsSchema.shape.worktree.removeDefault().partial().optional(),
   integration: ProjectSettingsSchema.shape.integration.removeDefault().partial().optional(),
@@ -114,6 +121,7 @@ export function projectSettings(project: { settings?: string | null } | null | u
 export function mergeProjectSettings(current: ProjectSettings, input: ProjectSettingsInput): ProjectSettings {
   return ProjectSettingsSchema.parse({
     brain: { ...current.brain, ...input.brain },
+    commitConvention: { ...current.commitConvention, ...input.commitConvention },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },
     review: { ...current.review, ...input.review },

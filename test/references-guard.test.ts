@@ -318,8 +318,12 @@ process.exit(0);
       await scheduler.startTask(task, 'gemini-3.8-flash-high', 'default');
 
       // Wait for the fake worker process to complete
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      scheduler.tick();
+      for (let i = 0; i < 50; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        scheduler.tick();
+        const current = taskRepo.get(task.id);
+        if (current && current.status !== 'running') break;
+      }
 
       // Check task status
       const updatedTask = taskRepo.get(task.id);
@@ -467,8 +471,12 @@ process.exit(0);
       const task = taskRepo.get('clean-proj/good-task')!;
 
       await scheduler.startTask(task, 'gemini-3.8-flash-high', 'default');
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      scheduler.tick();
+      for (let i = 0; i < 50; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        scheduler.tick();
+        const current = taskRepo.get(task.id);
+        if (current && current.status !== 'running') break;
+      }
 
       const updatedTask = taskRepo.get(task.id);
       expect(updatedTask).toBeDefined();

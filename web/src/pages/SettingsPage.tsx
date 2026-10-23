@@ -717,7 +717,7 @@ export const SettingsPage: React.FC = () => {
           {/* Savings config block */}
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div>
-              <h2 className="text-base font-semibold text-[var(--text-primary)]">
+              <h2 className="text-base font-semibold text-[var(--t-text)]">
                 {t('settings.savingsSectionTitle')}
               </h2>
               <p className="text-xs text-[var(--t-text-3)] mt-0.5">
@@ -1064,7 +1064,7 @@ export const SettingsPage: React.FC = () => {
             <h2 className="text-sm font-semibold">{t('settings.shutdownTitle')}</h2>
             {shutdownDone ? <p className="text-sm text-[var(--t-ok)]">{t('settings.shutdownDone')} <code>agenthub start</code></p> : <>
               <p className="text-xs text-[var(--t-text-3)]">{t('settings.shutdownDescription', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
-              <button type="button" onClick={() => setShutdownOpen(true)} className="rounded-lg bg-[var(--t-crit)] px-4 py-2 text-xs font-semibold text-white">{t('settings.shutdownButton')}</button>
+              <button type="button" onClick={() => setShutdownOpen(true)} className="rounded-lg bg-[var(--t-crit)] px-4 py-2 text-xs font-semibold text-[var(--t-on-accent)]">{t('settings.shutdownButton')}</button>
             </>}
           </section>
 
@@ -1090,7 +1090,7 @@ export const SettingsPage: React.FC = () => {
             <button
               type="submit"
               disabled={mutation.isPending}
-              className="px-5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
+              className="px-5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
             >
               <Save className="w-4 h-4" />
               <span>{mutation.isPending ? t('common.loading') : t('settings.saveConfigBtn')}</span>
@@ -1098,12 +1098,12 @@ export const SettingsPage: React.FC = () => {
           </div>
         </form>
       )}
-      {shutdownOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+      {shutdownOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--t-overlay)] p-4" role="dialog" aria-modal="true">
         <div className="max-w-md rounded-xl bg-[var(--t-surface)] p-6 shadow-xl space-y-4">
           <h2 className="font-semibold">{t('settings.shutdownConfirmTitle')}</h2>
           <p className="text-sm text-[var(--t-text-2)]">{t('settings.shutdownConfirm', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shutdownDisable} onChange={(e) => setShutdownDisable(e.target.checked)} />{t('settings.shutdownDisable')}</label>
-          <div className="flex justify-end gap-2"><button type="button" onClick={() => setShutdownOpen(false)} className="rounded-lg border px-3 py-2 text-xs">{t('common.cancel')}</button><button type="button" onClick={() => shutdownMutation.mutate()} className="rounded-lg bg-[var(--t-crit)] px-3 py-2 text-xs text-white">{t('settings.shutdownButton')}</button></div>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setShutdownOpen(false)} className="rounded-lg border px-3 py-2 text-xs">{t('common.cancel')}</button><button type="button" onClick={() => shutdownMutation.mutate()} className="rounded-lg bg-[var(--t-crit)] px-3 py-2 text-xs text-[var(--t-on-accent)]">{t('settings.shutdownButton')}</button></div>
         </div>
       </div>}
     </div>

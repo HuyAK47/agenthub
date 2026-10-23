@@ -194,6 +194,26 @@ export async function createServer(
   fastify.get('/api/telegram/status', async () => {
     return service.getTelegramStatus();
   });
+  fastify.post('/api/telegram/topics/setup', async (req) => {
+    const body = req.body as { mode?: 'project' | 'department' } | undefined;
+    return service.setupTelegramTopics(body?.mode);
+  });
+  fastify.post('/api/telegram/projects/:id/topic', async (req) => {
+    const { id } = req.params as { id: string };
+    return service.createTelegramProjectTopic(id);
+  });
+  fastify.post('/api/telegram/departments/:id/topic', async (req) => {
+    const { id } = req.params as { id: string };
+    return service.createTelegramDepartmentTopic(id);
+  });
+  fastify.put('/api/telegram/projects/:id/chat', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { chatId?: unknown };
+    if (typeof body?.chatId !== 'number' || !Number.isSafeInteger(body.chatId)) {
+      throw new HttpError(400, 'bad_request', 'chatId không hợp lệ');
+    }
+    return service.attachTelegramProjectChat(id, body.chatId);
+  });
 
   fastify.get('/api/system/orphans', async () => service.getOrphans());
   fastify.post('/api/system/orphans/reap', async () => service.reapOrphans());

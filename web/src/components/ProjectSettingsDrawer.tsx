@@ -51,6 +51,11 @@ export interface ProjectSettingsDrawerProps {
 }
 
 export const defaultProjectSettings = (): NonNullable<Project['settings']> => ({
+  commitConvention: {
+    branchTemplate: 'agenthub/{slug}',
+    commitTemplate: '{type}: {summary}',
+    mergeMessageTemplate: "Merge branch '{branch}' into {target}",
+  },
   brain: { mode: 'inherit' },
   worktree: { install: 'auto', gitHooks: 'run' },
   integration: { enabled: false },
@@ -59,6 +64,27 @@ export const defaultProjectSettings = (): NonNullable<Project['settings']> => ({
   reviewChecklist: [],
   notifications: { telegramContent: 'full' },
 });
+
+function normalizeProjectSettings(settings?: Partial<NonNullable<Project['settings']>>): NonNullable<Project['settings']> {
+  const defaults = defaultProjectSettings();
+  return {
+    ...defaults,
+    ...settings,
+    commitConvention: {
+      branchTemplate: settings?.commitConvention?.branchTemplate || defaults.commitConvention!.branchTemplate,
+      commitTemplate: settings?.commitConvention?.commitTemplate || defaults.commitConvention!.commitTemplate,
+      commitRegex: settings?.commitConvention?.commitRegex,
+      mergeMessageTemplate: settings?.commitConvention?.mergeMessageTemplate || defaults.commitConvention!.mergeMessageTemplate,
+    },
+    brain: { ...defaults.brain, ...settings?.brain },
+    worktree: { ...defaults.worktree, ...settings?.worktree },
+    integration: { ...defaults.integration, ...settings?.integration },
+    ci: { ...defaults.ci, ...settings?.ci },
+    notifications: { ...defaults.notifications, ...settings?.notifications },
+    references: settings?.references ?? defaults.references,
+    reviewChecklist: settings?.reviewChecklist ?? defaults.reviewChecklist,
+  };
+}
 
 export function getProjectHooksString(proj: Project): string {
   if (!proj.hooks) return '';
@@ -83,6 +109,7 @@ export function changedSettings(
 ): Partial<NonNullable<Project['settings']>> {
   const result: Partial<NonNullable<Project['settings']>> = {};
   const sections = [
+    'commitConvention',
     'brain',
     'worktree',
     'integration',
@@ -210,6 +237,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     }
   };
 
+  const [showCommitExample, setShowCommitExample] = useState(false);
+
   const [checksError, setChecksError] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [envError, setEnvError] = useState<string | null>(null);
@@ -222,7 +251,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   // Initialize draft when project changes
   useEffect(() => {
     if (project) {
-      setDraftSettings(project.settings ? JSON.parse(JSON.stringify(project.settings)) : defaultProjectSettings());
+      setDraftSettings(normalizeProjectSettings(project.settings));
       setChecklistDraft((project.settings?.reviewChecklist || []).join('\n'));
       setDraftChecks(
         typeof project.checks === 'string'
@@ -375,7 +404,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   // Change detection
   const origSettings = useMemo(
-    () => project?.settings ?? defaultProjectSettings(),
+    () => normalizeProjectSettings(project?.settings),
     [project],
   );
   const origChecks = useMemo(() => {
@@ -460,6 +489,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     let count = 0;
     if (defaultBranchChanged) count++;
     if (brainChanged) count++;
+    if (JSON.stringify(draftSettings.commitConvention) !== JSON.stringify(origSettings.commitConvention)) count++;
     if (worktreeChanged) count++;
     if (integrationChanged) count++;
     if (referencesChanged) count++;
@@ -473,6 +503,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   }, [
     defaultBranchChanged,
     brainChanged,
+    draftSettings.commitConvention,
+    origSettings.commitConvention,
     worktreeChanged,
     integrationChanged,
     referencesChanged,
@@ -555,9 +587,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const handleDiscard = () => {
     if (!project) return;
     setDraftSettings(
-      project.settings
-        ? JSON.parse(JSON.stringify(project.settings))
-        : defaultProjectSettings(),
+      normalizeProjectSettings(project.settings),
     );
     setChecklistDraft((origSettings.reviewChecklist || []).join('\n'));
     setDraftChecks(origChecks);
@@ -646,7 +676,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       {toastMessage && (
         <div
           role="status"
-          className="fixed top-5 right-5 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-white font-medium text-xs shadow-xl flex items-center gap-2"
+          className="fixed top-5 right-5 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-[var(--t-on-accent)] font-medium text-xs shadow-xl flex items-center gap-2"
           style={{ zIndex: UI_Z_INDEX.toast }}
         >
           <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -656,7 +686,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/40 backdrop-blur-xs transition-opacity"
+        className="fixed inset-0 bg-[var(--t-overlay)] backdrop-blur-xs transition-opacity"
         onClick={onClose}
       />
 
@@ -854,7 +884,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }}
                       className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors cursor-pointer ${
                         draftDefaultBranch === b
-                          ? 'bg-[var(--t-accent)] text-white font-semibold shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] font-semibold shadow-xs'
                           : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -1087,7 +1117,41 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
             </div>
           </Card>
 
-          {/* Section 2: Worktree */}
+          {/* Section 2: Commit convention */}
+          <Card className="p-5 space-y-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-[var(--t-text)]">{t('projects.commitConventionTitle')}</h3>
+              <p className="text-xs text-[var(--t-text-3)]">{t('projects.commitConventionDesc')}</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {([
+                ['branchTemplate', 'projects.branchTemplate'],
+                ['commitTemplate', 'projects.commitTemplate'],
+                ['commitRegex', 'projects.commitRegex'],
+                ['mergeMessageTemplate', 'projects.mergeMessageTemplate'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="text-xs space-y-1">
+                  <span className="font-semibold">{t(label)}</span>
+                  <Input
+                    aria-label={t(label)}
+                    value={draftSettings.commitConvention![key] ?? ''}
+                    onChange={(e) => setDraftSettings((prev) => ({
+                      ...prev,
+                      commitConvention: { ...prev.commitConvention!, [key]: e.target.value || (key === 'commitRegex' ? undefined : '') },
+                    }))}
+                  />
+                </label>
+              ))}
+            </div>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setShowCommitExample((value) => !value)}>
+              {t('projects.commitConventionPreview')}
+            </Button>
+            {showCommitExample && (
+              <pre className="rounded border p-3 text-xs whitespace-pre-wrap">{`Branch: ${draftSettings.commitConvention!.branchTemplate.replaceAll('{slug}', 'add-login').replaceAll('{ref}', 'PROJ-45')}\nCommit: ${draftSettings.commitConvention!.commitTemplate.replaceAll('{type}', 'feat').replaceAll('{scope}', 'auth').replaceAll('{ref}', 'PROJ-45').replaceAll('{summary}', 'add login')}\nMerge: ${draftSettings.commitConvention!.mergeMessageTemplate.replaceAll('{branch}', draftSettings.commitConvention!.branchTemplate.replaceAll('{slug}', 'add-login').replaceAll('{ref}', 'PROJ-45')).replaceAll('{target}', 'main')}`}</pre>
+            )}
+          </Card>
+
+          {/* Section 3: Worktree */}
           <Card className="p-5 space-y-4" data-tour="project-worktree">
             <div className="space-y-1">
               <h3 className="text-sm font-bold text-[var(--t-text)] flex items-center gap-2">
@@ -1141,7 +1205,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.install === 'auto'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -1157,7 +1221,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.install === 'skip'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -1187,7 +1251,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.gitHooks === 'run'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -1203,7 +1267,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.gitHooks === 'skip'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -1572,7 +1636,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                     }}
                     className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                       draftSettings.notifications.telegramContent === 'full'
-                        ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                        ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                         : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                     }`}
                   >
@@ -1592,7 +1656,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                     }}
                     className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                       draftSettings.notifications.telegramContent === 'minimal'
-                        ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                        ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                         : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                     }`}
                   >

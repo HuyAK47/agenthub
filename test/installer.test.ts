@@ -1,19 +1,33 @@
 import crypto from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { cmdUpdate } from '../src/update.js';
 import { linuxPlatform } from '../src/platform/linux.js';
+import { makeTestTempDir } from './temp.js';
 
 const installer = path.resolve('scripts/install.sh');
+const tempDirs: string[] = [];
+
+function makeTemp(prefix: string) {
+  const dir = makeTestTempDir(prefix);
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
 
 describe('safe installer and updater commands', () => {
   it.skipIf(process.platform === 'darwin')(
     'uninstalls only temporary paths and calls the injected systemctl',
     () => {
-      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-'));
+      const home = makeTemp('agenthub-installer-');
       const bin = path.join(home, 'bin');
       const log = path.join(home, 'systemctl.log');
       const fakeSystemctl = path.join(bin, 'systemctl');
@@ -62,7 +76,7 @@ describe('safe installer and updater commands', () => {
   it.runIf(process.platform === 'darwin')(
     'uninstalls only temporary paths and calls the injected launchctl on macOS',
     () => {
-      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-darwin-'));
+      const home = makeTemp('agenthub-installer-darwin-');
       const bin = path.join(home, 'bin');
       const log = path.join(home, 'launchctl.log');
       const fakeLaunchctl = path.join(bin, 'launchctl');
@@ -110,7 +124,7 @@ describe('safe installer and updater commands', () => {
   );
 
   it('does not delete an ordinary git directory without the installer marker', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-unmarked-'));
+    const home = makeTemp('agenthub-installer-unmarked-');
     const app = path.join(home, 'repo');
     fs.mkdirSync(app, { recursive: true });
     fs.writeFileSync(path.join(app, 'sentinel'), 'keep');
@@ -135,7 +149,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('refuses to delete HOME even when it has an installer marker', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-home-'));
+    const home = makeTemp('agenthub-installer-home-');
     fs.writeFileSync(path.join(home, '.agenthub-app'), 'version=0.1.0\n');
     expect(spawnSync('git', ['-C', home, 'init'], { encoding: 'utf8' }).status).toBe(0);
     expect(spawnSync('git', ['-C', home, 'config', 'agenthub.installed', 'true'], { encoding: 'utf8' }).status).toBe(0);
@@ -159,7 +173,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('does not purge a data directory without AgentHub data markers', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-purge-'));
+    const home = makeTemp('agenthub-installer-purge-');
     const app = path.join(home, 'app');
     const data = path.join(home, 'data');
     const linkDir = path.join(home, 'links');
@@ -190,7 +204,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('dry-run never invokes the injected service command or changes paths', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-dry-'));
+    const home = makeTemp('agenthub-installer-dry-');
     const log = path.join(home, 'systemctl.log');
     const app = path.join(home, 'app');
     const stale = path.join(app, '.0.9.0.tmp.123');
@@ -218,7 +232,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('update uses the injected systemctl for the restart step', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-update-'));
+    const home = makeTemp('agenthub-update-');
     const projectRoot = path.join(home, 'repo');
     const log = path.join(home, 'systemctl.log');
     const fakeSystemctl = path.join(home, 'systemctl');
@@ -255,7 +269,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('skips service installation when systemctl is unavailable', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-no-systemd-'));
+    const home = makeTemp('agenthub-no-systemd-');
     const previous = process.env.AGENTHUB_SYSTEMCTL;
     process.env.AGENTHUB_SYSTEMCTL = path.join(home, 'missing-systemctl');
     try {
@@ -276,7 +290,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('refuses worker service writes unless explicitly opted in', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-worker-service-'));
+    const home = makeTemp('agenthub-worker-service-');
     const systemctl = path.join(home, 'systemctl');
     fs.writeFileSync(systemctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const previous = {
@@ -338,7 +352,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('reports a clear error when the release has no archive for the machine architecture', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-arch-'));
+    const home = makeTemp('agenthub-installer-arch-');
     const fakeBin = path.join(home, 'bin');
     fs.mkdirSync(fakeBin);
     const fakeUname = path.join(fakeBin, 'uname');
@@ -363,7 +377,7 @@ describe('safe installer and updater commands', () => {
   });
 
   it('removes stale release staging directories while retaining two old releases', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-installer-cleanup-'));
+    const home = makeTemp('agenthub-installer-cleanup-');
     const app = path.join(home, 'app');
     const releaseBase = path.join(home, 'releases', 'releases', 'download', 'v1.2.3');
     const payload = path.join(home, 'payload');

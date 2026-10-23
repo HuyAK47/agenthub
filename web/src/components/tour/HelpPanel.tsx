@@ -23,7 +23,7 @@ export const HelpPanel: React.FC<HelpPanelProps> = ({ open, onClose }) => {
   if (!open) return null;
   return (
     <div className="fixed inset-0" style={{ zIndex: UI_Z_INDEX.tour }} role="dialog" aria-modal="true" aria-label={t('tour.panelTitle')}>
-      <button type="button" aria-label={t('tour.close')} className="absolute inset-0 bg-black/45" onClick={onClose} />
+      <button type="button" aria-label={t('tour.close')} className="absolute inset-0 bg-[var(--t-overlay)]" onClick={onClose} />
       <aside className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--t-border)] bg-[var(--t-surface)] p-5 text-[var(--t-text)] shadow-2xl">
         <div className="flex items-center justify-between gap-3">
           <div><h2 className="text-lg font-semibold">{t('tour.panelTitle')}</h2><p className="mt-1 text-xs text-[var(--t-text-3)]">{t('tour.panelDescription')}</p></div>
@@ -43,7 +43,7 @@ export const HelpPanel: React.FC<HelpPanelProps> = ({ open, onClose }) => {
           ))}
           {!tours.length && <p className="py-6 text-center text-sm text-[var(--t-text-3)]">{t('tour.noResults')}</p>}
         </div>
-        <button type="button" onClick={() => { if (current) openTour(current.id); onClose(); }} disabled={!current} className="mt-5 w-full rounded-lg bg-[var(--t-accent)] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{t('tour.restartCurrent')}</button>
+        <button type="button" onClick={() => { if (current) openTour(current.id); onClose(); }} disabled={!current} className="mt-5 w-full rounded-lg bg-[var(--t-accent)] px-3 py-2 text-sm font-semibold text-[var(--t-on-accent)] disabled:opacity-50">{t('tour.restartCurrent')}</button>
       </aside>
     </div>
   );

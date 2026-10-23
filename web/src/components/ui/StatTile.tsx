@@ -23,7 +23,7 @@ export const StatTile: React.FC<StatTileProps> = ({
 
   return (
     <div
-      className={`bg-[var(--t-surface)] border border-[var(--t-border)] rounded-xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)] shadow-none flex items-start justify-between gap-4 transition-colors ${className}`}
+      className={`bg-[var(--t-surface)] border border-[var(--t-border)] rounded-xl p-5 shadow-[0_1px_3px_var(--t-shadow)] shadow-none flex items-start justify-between gap-4 transition-colors ${className}`}
     >
       <div className="flex-1 min-w-0">
         <div className="text-xs font-medium text-[var(--t-text-3)] mb-1 truncate">{label}</div>

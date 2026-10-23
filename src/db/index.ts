@@ -737,6 +737,20 @@ export const MIGRATIONS: string[] = [
     FOREIGN KEY (profileName) REFERENCES profiles(name) ON DELETE CASCADE
   );
   `,
+  // Migration 53: resident brain settings and department-scoped turn accounting.
+  `
+  ALTER TABLE departments ADD COLUMN brainEngine TEXT NOT NULL DEFAULT 'claude';
+  ALTER TABLE departments ADD COLUMN brainModel TEXT NOT NULL DEFAULT 'sonnet';
+  ALTER TABLE departments ADD COLUMN brainCodexProfile TEXT;
+  ALTER TABLE departments ADD COLUMN brainMode TEXT NOT NULL DEFAULT 'inherit';
+  ALTER TABLE departments ADD COLUMN brainPermissions TEXT NOT NULL DEFAULT 'full';
+  ALTER TABLE departments ADD COLUMN brainDailyTokenBudget INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE departments ADD COLUMN brainMaxTurnsPerHour INTEGER NOT NULL DEFAULT 20;
+  ALTER TABLE brain_turns ADD COLUMN departmentId TEXT;
+  CREATE INDEX IF NOT EXISTS idx_brain_turns_department ON brain_turns(departmentId, startedAt);
+  `,
+  // Migration 54: external references for task/project commit conventions.
+  `ALTER TABLE tasks ADD COLUMN externalRef TEXT;`,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -834,6 +848,13 @@ export interface DepartmentRow {
   maxParallel: number;
   claudeDailyTokenBudget: number;
   telegramTopicId: number | null;
+  brainEngine?: 'claude' | 'codex';
+  brainModel?: string;
+  brainCodexProfile?: string | null;
+  brainMode?: 'inherit' | 'off' | 'suggest' | 'auto';
+  brainPermissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+  brainDailyTokenBudget?: number;
+  brainMaxTurnsPerHour?: number;
   createdAt: string;
   profiles?: DepartmentProfileRow[];
   projectCount?: number;
@@ -908,6 +929,7 @@ export interface TaskRow {
   projectId: string;
   slug: string;
   title: string;
+  externalRef: string | null;
   body: string | null;
   level: string;
   modelChain: string | null;
@@ -1140,11 +1162,18 @@ export class DepartmentRepo {
 
   insert(row: Omit<DepartmentRow, 'createdAt' | 'profiles' | 'projectCount'>): void {
     this.db.prepare(
-      'INSERT INTO departments (id, name, priority, maxParallel, claudeDailyTokenBudget, telegramTopicId) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(row.id, row.name, row.priority, row.maxParallel, row.claudeDailyTokenBudget, row.telegramTopicId);
+      `INSERT INTO departments
+       (id, name, priority, maxParallel, claudeDailyTokenBudget, telegramTopicId,
+        brainEngine, brainModel, brainCodexProfile, brainMode, brainPermissions,
+        brainDailyTokenBudget, brainMaxTurnsPerHour)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(row.id, row.name, row.priority, row.maxParallel, row.claudeDailyTokenBudget, row.telegramTopicId,
+      row.brainEngine || 'claude', row.brainModel || 'sonnet', row.brainCodexProfile || null,
+      row.brainMode || 'inherit', row.brainPermissions || 'full', row.brainDailyTokenBudget || 0,
+      row.brainMaxTurnsPerHour || 20);
   }
 
-  update(id: string, fields: Partial<Pick<DepartmentRow, 'name' | 'priority' | 'maxParallel' | 'claudeDailyTokenBudget' | 'telegramTopicId'>>): void {
+  update(id: string, fields: Partial<Pick<DepartmentRow, 'name' | 'priority' | 'maxParallel' | 'claudeDailyTokenBudget' | 'telegramTopicId' | 'brainEngine' | 'brainModel' | 'brainCodexProfile' | 'brainMode' | 'brainPermissions' | 'brainDailyTokenBudget' | 'brainMaxTurnsPerHour'>>): void {
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
     if (!entries.length) return;
     this.db.prepare(`UPDATE departments SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
@@ -1185,6 +1214,24 @@ export class DepartmentRepo {
       this.db.prepare('DELETE FROM department_profiles WHERE departmentId = ?').run(departmentId);
       const insert = this.db.prepare('INSERT INTO department_profiles (departmentId, profileName, share) VALUES (?, ?, ?)');
       for (const profile of profiles) insert.run(departmentId, profile.profileName, profile.share ?? null);
+    });
+    transaction();
+  }
+
+  transferProfile(profileName: string, fromDepartmentId: string, toDepartmentId: string): void {
+    if (fromDepartmentId === toDepartmentId) return;
+    const transaction = this.db.transaction(() => {
+      const assignment = this.db.prepare(
+        'SELECT share FROM department_profiles WHERE departmentId = ? AND profileName = ?',
+      ).get(fromDepartmentId, profileName) as { share: number | null } | undefined;
+      if (!assignment) throw new Error(`Profile ${profileName} is not assigned to ${fromDepartmentId}`);
+      this.db.prepare(
+        'DELETE FROM department_profiles WHERE departmentId = ? AND profileName = ?',
+      ).run(fromDepartmentId, profileName);
+      this.db.prepare(
+        `INSERT INTO department_profiles (departmentId, profileName, share) VALUES (?, ?, ?)
+         ON CONFLICT(departmentId, profileName) DO UPDATE SET share = excluded.share`,
+      ).run(toDepartmentId, profileName, assignment.share);
     });
     transaction();
   }
@@ -1501,6 +1548,7 @@ export class TaskRepo {
     projectId: string;
     slug: string;
     title: string;
+    externalRef?: string | null;
     body?: string;
     level?: string;
     modelChain?: string;
@@ -1521,14 +1569,15 @@ export class TaskRepo {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, externalRef, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
         row.projectId,
         row.slug,
         row.title,
+        row.externalRef || null,
         row.body || null,
         row.level || 'easy',
         row.modelChain || null,
@@ -1586,7 +1635,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'externalRef' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
@@ -1937,6 +1986,7 @@ export class ChatSessionRepo {
       ? null
       : session.id.slice('assistant:'.length);
     if (session.kind === 'assistant' && session.projectId === projectId) return session;
+    if (!this.db.open) return session;
     try {
       this.db.prepare("UPDATE chat_sessions SET kind = 'assistant', projectId = ?, updatedAt = datetime('now') WHERE id = ?")
         .run(projectId, session.id);
@@ -2028,6 +2078,7 @@ export class ChatSessionRepo {
   }
 
   get(id: string): ChatSessionRow | undefined {
+    if (!this.db.open) return undefined;
     const session = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined;
     return session ? this.normalizeAssistantSession(session) : undefined;
   }
@@ -2242,14 +2293,15 @@ export interface BrainTurnRow {
   finishedAt: string | null;
   error: string | null;
   projectId: string | null;
+  departmentId: string | null;
 }
 
 export class BrainTurnRepo {
   constructor(private db: Database.Database) {}
 
-  insert(row: { id: string; trigger: string; input: string; projectId?: string | null; status?: BrainTurnRow['status'] }): BrainTurnRow {
-    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, projectId, status) VALUES (?, ?, ?, ?, ?)')
-      .run(row.id, row.trigger, row.input, row.projectId || null, row.status || 'running');
+  insert(row: { id: string; trigger: string; input: string; projectId?: string | null; departmentId?: string | null; status?: BrainTurnRow['status'] }): BrainTurnRow {
+    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, projectId, departmentId, status) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.trigger, row.input, row.projectId || null, row.departmentId || null, row.status || 'running');
     return this.get(row.id)!;
   }
 
@@ -2262,6 +2314,11 @@ export class BrainTurnRepo {
       ? 'SELECT * FROM brain_turns ORDER BY startedAt DESC LIMIT 1'
       : 'SELECT * FROM brain_turns WHERE projectId IS ? ORDER BY startedAt DESC LIMIT 1';
     return (projectId === undefined ? this.db.prepare(query).get() : this.db.prepare(query).get(projectId)) as BrainTurnRow | undefined;
+  }
+
+  latestDepartment(departmentId: string): BrainTurnRow | undefined {
+    return this.db.prepare('SELECT * FROM brain_turns WHERE departmentId = ? ORDER BY startedAt DESC LIMIT 1')
+      .get(departmentId) as BrainTurnRow | undefined;
   }
 
   finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {
@@ -2287,6 +2344,18 @@ export class BrainTurnRepo {
       ? this.db.prepare(query).get(isoDate)
       : this.db.prepare(query).get(isoDate, projectId);
     return (row as { total: number }).total;
+  }
+
+  countSinceDepartment(epochMs: number, departmentId: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch') AND departmentId = ?")
+      .get(Math.floor(epochMs / 1000), departmentId) as { count: number };
+    return row.count;
+  }
+
+  tokensSinceDepartment(isoDate: string, departmentId: string): number {
+    const row = this.db.prepare('SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ? AND departmentId = ?')
+      .get(isoDate, departmentId) as { total: number };
+    return row.total;
   }
 }
 

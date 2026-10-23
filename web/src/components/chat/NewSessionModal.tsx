@@ -69,16 +69,16 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       aria-modal="true"
       aria-labelledby="new-session-modal-title"
       data-tour="modal-new-session"
-      className="fixed inset-0 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+      className="fixed inset-0 flex items-center justify-center p-4 bg-[var(--t-overlay)] backdrop-blur-xs"
       style={{ zIndex: UI_Z_INDEX.modal }}
     >
       <div
         ref={containerRef}
         tabIndex={-1}
-        className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden text-[var(--text-primary)] outline-hidden"
+        className="bg-[var(--t-surface)] border border-[var(--t-border)] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden text-[var(--t-text)] outline-hidden"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-default)]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--t-border)]">
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-[var(--t-accent)]/10 text-[var(--t-accent)]">
               <Sparkles className="w-5 h-5" />
@@ -91,7 +91,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label={t('common.close')}
-            className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
+            className="p-1.5 rounded-lg text-[var(--t-text-2)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
           >
             <X className="w-5 h-5" />
           </button>
@@ -101,13 +101,13 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
           {/* Project selector */}
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-1.5">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1.5">
               {t('extra.projectOptional')}
             </label>
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
-              className="w-full text-sm rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)] focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]/30 focus:border-[var(--t-accent)]"
+              className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]/30 focus:border-[var(--t-accent)]"
             >
               <option value="">-- {t('extra.noProject')} --</option>
               {projects.map((p) => (
@@ -120,7 +120,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
           {/* Title */}
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-1.5">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1.5">
               {t('extra.chatTitle')}
             </label>
             <input
@@ -128,21 +128,21 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={t('extra.chatTitlePlaceholder')}
-              className="w-full text-sm rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)] focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]/30 focus:border-[var(--t-accent)]"
+              className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)]/30 focus:border-[var(--t-accent)]"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-1.5">Claude profile</label>
-            <select value={profileName} onChange={(e) => setProfileName(e.target.value)} className="w-full text-sm rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)]">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1.5">Claude profile</label>
+            <select value={profileName} onChange={(e) => setProfileName(e.target.value)} className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]">
               {claudeProfiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name}{profile.email ? ` · ${profile.email}` : ''}</option>)}
             </select>
           </div>
 
           {/* Mode Selector */}
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-1.5">{t('extra.claudeModel')}</label>
-            <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full text-sm rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)]">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1.5">{t('extra.claudeModel')}</label>
+            <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]">
               <option value="">{t('extra.claudeDefault')}</option>
               {(config?.chat?.models || ['opus', 'sonnet', 'haiku']).map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
@@ -150,7 +150,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
           {/* Mode Selector */}
           <div data-tour="session-mode">
-            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-2">
               {t('extra.operationMode')}
             </label>
             <div className="space-y-3">
@@ -159,7 +159,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                 className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-colors ${
                   mode === 'safe'
                     ? 'border-[var(--t-accent)]/70 bg-[var(--t-selected)]'
-                    : 'border-[var(--border-default)] bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)]'
+                    : 'border-[var(--t-border)] bg-[var(--t-surface-2)] hover:bg-[var(--t-hover)]'
                 }`}
               >
                 <input
@@ -178,7 +178,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                       {t('extra.default')}
                     </span>
                   </div>
-                  <p className="text-xs text-[var(--text-secondary)] mt-1">
+                  <p className="text-xs text-[var(--t-text-2)] mt-1">
                     {t('extra.safeModeDesc')}
                   </p>
                 </div>
@@ -188,10 +188,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
               <label
                 className={`flex items-start gap-3 p-3.5 rounded-xl border transition-colors ${
                   !allowFullMode
-                    ? 'opacity-50 cursor-not-allowed border-[var(--border-default)] bg-[var(--bg-surface-subtle)]'
+                    ? 'opacity-50 cursor-not-allowed border-[var(--t-border)] bg-[var(--t-surface-2)]'
                     : mode === 'full'
                     ? 'border-[var(--t-crit)]/70 bg-[var(--t-crit)]/5 cursor-pointer'
-                    : 'border-[var(--border-default)] bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] cursor-pointer'
+                    : 'border-[var(--t-border)] bg-[var(--t-surface-2)] hover:bg-[var(--t-hover)] cursor-pointer'
                 }`}
               >
                 <input
@@ -210,7 +210,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                       <span>{t('extra.fullMode')}</span>
                     </div>
                     {!allowFullMode && (
-                      <span className="text-[11px] text-[var(--text-muted)] italic">
+                      <span className="text-[11px] text-[var(--t-text-3)] italic">
                         ({t('extra.enabledInSettings')})
                       </span>
                     )}
@@ -224,12 +224,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-[var(--border-default)]">
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-[var(--t-border)]">
             <button
               type="button"
               onClick={onClose}
               disabled={isSubmitting}
-              className="px-4 py-2 text-xs font-medium rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
+              className="px-4 py-2 text-xs font-medium rounded-lg text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)] cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
             >
               {t('common.cancel')}
             </button>
@@ -237,7 +237,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
               type="submit"
               disabled={isSubmitting}
               aria-busy={isSubmitting ? true : undefined}
-              className="px-4 py-2 text-xs font-semibold rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white shadow-xs disabled:opacity-50 cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
+              className="px-4 py-2 text-xs font-semibold rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] shadow-xs disabled:opacity-50 cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
             >
               {isSubmitting ? t('common.loading') : t('extra.createChat')}
             </button>

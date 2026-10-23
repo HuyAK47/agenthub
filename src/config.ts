@@ -69,6 +69,14 @@ export interface BrainConfig {
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
   digest: BrainDigestConfig;
+  /** Optional cross-department coordinator. Disabled unless explicitly enabled. */
+  director?: {
+    enabled: boolean;
+    engine: 'claude' | 'codex';
+    model: string;
+    codexProfile?: string;
+    permissions: 'standard' | 'trusted' | 'full';
+  };
 }
 
 export interface AssistantConfig {
@@ -115,7 +123,8 @@ export interface TelegramNotifyConfig {
   reviewReady: boolean;
   failed: boolean;
   blocked: boolean;
-  quota: boolean;
+  quotaPerModel: boolean;
+  quotaAllExhausted: boolean;
   fallback: boolean;
   brainWaiting?: boolean;
 }
@@ -125,15 +134,25 @@ export interface TelegramChat {
   name: string;
   username?: string;
   /** Optional: associate this chat entry with a project for /use routing. */
-  kind?: 'chat';
+  kind?: 'chat' | 'group' | 'supergroup' | 'channel';
   projectId?: string;
 }
+
+export interface TelegramProjectTopic {
+  chatId: number;
+  threadId: number;
+}
+
+export type TelegramDepartmentTopic = TelegramProjectTopic;
 
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
   chats: TelegramChat[];
+  topicMode?: 'project' | 'department';
+  projectTopics: Record<string, TelegramProjectTopic>;
+  departmentTopics?: Record<string, TelegramProjectTopic>;
   notify: TelegramNotifyConfig;
 }
 
@@ -161,7 +180,8 @@ export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
   reviewReady: true,
   failed: true,
   blocked: true,
-  quota: true,
+  quotaPerModel: false,
+  quotaAllExhausted: true,
   fallback: true,
   brainWaiting: true,
 };
@@ -370,6 +390,9 @@ export function saveConfig(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      topicMode?: 'project' | 'department';
+      projectTopics?: Record<string, TelegramProjectTopic>;
+      departmentTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -542,6 +565,9 @@ export function updateConfigInMemory(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      topicMode?: 'project' | 'department';
+      projectTopics?: Record<string, TelegramProjectTopic>;
+      departmentTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -606,6 +632,7 @@ export function updateConfigInMemory(
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
     if (patch.brain.maxConcurrent !== undefined) config.brain.maxConcurrent = patch.brain.maxConcurrent;
+    if (patch.brain.director) config.brain.director = { ...config.brain.director, ...patch.brain.director };
     if (patch.brain.digest) {
       config.brain.digest = {
         ...config.brain.digest,
@@ -702,6 +729,9 @@ export function updateConfigInMemory(
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
       chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
+      topicMode: patch.telegram.topicMode !== undefined ? patch.telegram.topicMode : config.telegram.topicMode,
+      projectTopics: patch.telegram.projectTopics !== undefined ? { ...patch.telegram.projectTopics } : config.telegram.projectTopics,
+      departmentTopics: patch.telegram.departmentTopics !== undefined ? { ...patch.telegram.departmentTopics } : config.telegram.departmentTopics,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -896,11 +926,26 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
           Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
         )
       : [],
+    topicMode: rawTelegram.topicMode === 'department' ? 'department' : 'project',
+    projectTopics: rawTelegram.projectTopics && typeof rawTelegram.projectTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.projectTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([projectId, topic]) => [projectId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
+    departmentTopics: rawTelegram.departmentTopics && typeof rawTelegram.departmentTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.departmentTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([deptId, topic]) => [deptId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,
       failed: rawTelegramNotify.failed !== false,
       blocked: rawTelegramNotify.blocked !== false,
-      quota: rawTelegramNotify.quota !== false,
+      // `quota` was the old switch for per-model notifications.
+      quotaPerModel: typeof rawTelegramNotify.quotaPerModel === 'boolean'
+        ? rawTelegramNotify.quotaPerModel
+        : rawTelegramNotify.quota === true,
+      quotaAllExhausted: rawTelegramNotify.quotaAllExhausted !== false,
       fallback: rawTelegramNotify.fallback !== false,
       brainWaiting: rawTelegramNotify.brainWaiting !== false,
     },
@@ -1035,6 +1080,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
               : DEFAULT_BRAIN_DIGEST_CONFIG.time,
           }
         : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
+      director: {
+        enabled: (brainRaw.director as Record<string, unknown> | undefined)?.enabled === true,
+        engine: (brainRaw.director as Record<string, unknown> | undefined)?.engine === 'codex' ? 'codex' : 'claude',
+        model: typeof (brainRaw.director as Record<string, unknown> | undefined)?.model === 'string'
+          ? (brainRaw.director as Record<string, unknown>).model as string : 'opus',
+        codexProfile: typeof (brainRaw.director as Record<string, unknown> | undefined)?.codexProfile === 'string'
+          ? (brainRaw.director as Record<string, unknown>).codexProfile as string : undefined,
+        permissions: (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'full'
+          ? 'full' : (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'trusted' ? 'trusted' : 'standard',
+      },
     },
     assistant: {
       enabled: assistantRaw.enabled !== false,
