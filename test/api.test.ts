@@ -628,6 +628,8 @@ describe('AgentHub HTTP API Endpoints', () => {
     const next = await server.inject({ method: 'GET', url: `/api/batches?project=batchproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
     expect(JSON.parse(next.body).items.map((batch: { id: string }) => batch.id)).toEqual(['batch-old']);
     expect((await server.inject({ method: 'GET', url: '/api/batches?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
   it('keeps the Claude reviewer in task lists after older fallback events leave the global recent window', async () => {
     ctx.projectRepo.insert({
       id: 'fallback-list',
