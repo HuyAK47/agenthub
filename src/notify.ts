@@ -38,7 +38,7 @@ export class NotificationService {
   private lastSent = new Map<string, number>();
   private lastSentCi = new Map<string, number>();
   private allQuotaNotified = new Set<string>();
-  private waitingQuotaQueued = false;
+  private waitingQuotaNotified = false;
   private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
@@ -123,19 +123,20 @@ export class NotificationService {
       ? typeof notifyConfig.quotaPerModel === 'boolean' ? notifyConfig.quotaPerModel : (notifyConfig as unknown as { quota?: boolean }).quota === true
       : true;
     const notifyAllExhausted = notifyConfig?.quotaAllExhausted !== false;
-    if (type === 'quota.cleared' && typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+    if (type === 'quota.cleared') {
+      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+      this.waitingQuotaNotified = false;
+    }
     if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
-      if (!this.waitingQuotaQueued) {
-        this.waitingQuotaQueued = true;
-        queueMicrotask(() => {
-          this.waitingQuotaQueued = false;
-          const waiting = this.taskRepo?.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota') || [];
-          if (waiting.length === 0) return;
-          const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
-          const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
-          const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
-          this.notify(`${waiting.length} task đang chờ quota, sớm nhất mở lại lúc ${time}`, 'warning');
-        });
+      const waiting = this.taskRepo.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota');
+      if (waiting.length === 0) {
+        this.waitingQuotaNotified = false;
+      } else if (notifyAllExhausted && !this.waitingQuotaNotified) {
+        this.waitingQuotaNotified = true;
+        const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
+        const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
+        const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
+        this.notify(`${waiting.length} task đang chờ quota, sớm nhất mở lại lúc ${time}`, 'warning');
       }
       return;
     }
@@ -303,6 +304,7 @@ export class NotificationService {
 
       case 'claude.fallback_changed': {
         const step = p.step && typeof p.step === 'object' ? p.step as Record<string, unknown> : null;
+        if (step && step.type !== 'wait') break;
         const label = step?.type === 'model' ? `model ${String(step.model)}`
           : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
           : step?.type === 'apiKey' ? 'API key'

@@ -283,7 +283,7 @@ export class TelegramBotService {
   // Deduplication for event notifications
   private lastNotificationTime = new Map<string, number>();
   private allQuotaNotified = new Set<string>();
-  private waitingQuotaQueued = false;
+  private waitingQuotaNotified = false;
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
 
@@ -3048,19 +3048,20 @@ export class TelegramBotService {
     const notifyAllExhausted = notify.quotaAllExhausted !== false;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    if (type === 'quota.cleared' && typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+    if (type === 'quota.cleared') {
+      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+      this.waitingQuotaNotified = false;
+    }
     if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
-      if (!this.waitingQuotaQueued) {
-        this.waitingQuotaQueued = true;
-        queueMicrotask(() => {
-          this.waitingQuotaQueued = false;
-          const waiting = this.taskRepo?.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota') || [];
-          if (waiting.length === 0) return;
-          const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
-          const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
-          const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
-          this.broadcastMessage(`⏳ <b>${waiting.length} task đang chờ quota</b>\nSớm nhất mở lại lúc <b>${time}</b>.`);
-        });
+      const waiting = this.taskRepo.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota');
+      if (waiting.length === 0) {
+        this.waitingQuotaNotified = false;
+      } else if (notifyAllExhausted && !this.waitingQuotaNotified) {
+        this.waitingQuotaNotified = true;
+        const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
+        const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
+        const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
+        this.broadcastMessage(`⏳ <b>${waiting.length} task đang chờ quota</b>\nSớm nhất mở lại lúc <b>${time}</b>.`);
       }
       return;
     }
