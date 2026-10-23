@@ -29,6 +29,7 @@ import {
   TaskBatch,
   CreateBatchInput,
   PerfReport,
+  Department,
 } from '../types/api';
 
 export const getPerf = () => apiFetch<PerfReport>('/api/perf');
@@ -251,6 +252,12 @@ export async function rescanClaudeSessions(): Promise<{ ok: boolean }> {
 export async function getProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects');
 }
+
+export const getDepartments = () => apiFetch<Department[]>('/api/departments');
+export const createDepartment = (data: Partial<Department> & { name: string }) => apiFetch<Department>('/api/departments', { method: 'POST', body: JSON.stringify(data) });
+export const updateDepartment = (id: string, data: Partial<Department>) => apiFetch<Department>(`/api/departments/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+export const deleteDepartment = (id: string) => apiFetch<{ ok: boolean }>(`/api/departments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const updateDepartmentProfiles = (id: string, profiles: Department['profiles']) => apiFetch<Department>(`/api/departments/${encodeURIComponent(id)}/profiles`, { method: 'PUT', body: JSON.stringify({ profiles }) });
 
 export async function getArchivedProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects?archived=true');

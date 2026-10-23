@@ -19,6 +19,7 @@ const TaskDetailPage = lazy(() => import('./pages/TaskDetailPage').then((m) => (
 const ProfilesPage = lazy(() => import('./pages/ProfilesPage').then((m) => ({ default: m.ProfilesPage })));
 const ChatPage = lazy(() => import('./pages/ChatPage').then((m) => ({ default: m.ChatPage })));
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
+const DepartmentsPage = lazy(() => import('./pages/DepartmentsPage').then((m) => ({ default: m.DepartmentsPage })));
 const PlansPage = lazy(() => import('./pages/PlansPage').then((m) => ({ default: m.PlansPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const SavingsPage = lazy(() => import('./pages/SavingsPage').then((m) => ({ default: m.SavingsPage })));
@@ -96,6 +97,7 @@ const AppShell: React.FC = () => {
                   <Route path="profiles" element={<ProfilesPage />} />
                   <Route path="projects" element={<ProjectsPage />} />
                   <Route path="projects/:id/settings" element={<ProjectsPage />} />
+                  <Route path="departments" element={<DepartmentsPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                 </Route>
               </Routes>

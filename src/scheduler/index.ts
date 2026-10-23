@@ -10,6 +10,7 @@ import {
   RunRepo,
   EventRepo,
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   ReviewRepo,
@@ -232,6 +233,7 @@ export class Scheduler {
     runMetricsRepo?: RunMetricsRepo,
     knowledgeRepo?: KnowledgeRepo,
     diskReader?: ((p: string) => DiskSpace) | SchedulerOptions,
+    private departmentRepo?: DepartmentRepo,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -320,8 +322,38 @@ export class Scheduler {
     return this.running;
   }
 
-  effectiveParallel(project: { maxParallel: number }): number {
-    return this.loadGuard.effectiveParallel(project.maxParallel);
+  effectiveParallel(project: { maxParallel: number; departmentId?: string }): number {
+    const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    return this.loadGuard.effectiveParallel(Math.min(project.maxParallel, department?.maxParallel || project.maxParallel));
+  }
+
+  private parallelUsage(project: { id: string; departmentId?: string }): { project: number; department: number } {
+    const active = [...this.running.values(), ...this.starting.values()];
+    return {
+      project: active.filter((task) => task.projectId === project.id).length,
+      department: project.departmentId
+        ? active.filter((task) => this.projectRepo.get(task.projectId)?.departmentId === project.departmentId).length
+        : 0,
+    };
+  }
+
+  private hasParallelCapacity(project: { id: string; maxParallel: number; departmentId?: string }): boolean {
+    const usage = this.parallelUsage(project);
+    if (usage.project >= this.effectiveParallel(project)) return false;
+    const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    return !department || usage.department < this.loadGuard.effectiveParallel(department.maxParallel);
+  }
+
+  private departmentPriority(task: TaskRow): number {
+    const project = this.projectRepo.get(task.projectId);
+    return project?.departmentId ? this.departmentRepo?.get(project.departmentId)?.priority || 0 : 0;
+  }
+
+  private claudeBudgetAvailable(task: TaskRow): boolean {
+    const project = this.projectRepo.get(task.projectId);
+    const department = project?.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    if (!department || department.claudeDailyTokenBudget <= 0 || !this.db) return true;
+    return (this.departmentRepo?.claudeUsageToday(department.id) || 0) < department.claudeDailyTokenBudget;
   }
 
   getLoadStatus(): LoadSnapshot {
@@ -925,9 +957,7 @@ export class Scheduler {
     for (const task of parallelWaiters) {
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
-      const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
-      const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
-      if (runningInProject + startingInProject < project.maxParallel) {
+      if (this.hasParallelCapacity(project)) {
         this.taskRepo.updateStatus(task.id, 'queued');
         this.eventBus.emit('task.queued', task.id, { reason: 'parallel_available' });
       }
@@ -1778,7 +1808,9 @@ export class Scheduler {
       this.skipSchedulingOnce = false;
       return;
     }
-    const queuedTasks = this.taskRepo.getByStatus('queued');
+    const queuedTasks = this.taskRepo.getByStatus('queued').sort((a, b) =>
+      this.departmentPriority(b) - this.departmentPriority(a) || parseDbTime(a.createdAt) - parseDbTime(b.createdAt),
+    );
 
     for (const task of queuedTasks) {
       if (task.notBefore != null && task.notBefore > Math.floor(Date.now() / 1000)) continue;
@@ -1805,10 +1837,7 @@ export class Scheduler {
         continue;
       }
 
-      const runningInProject = Array.from(this.running.values()).filter((r) => r.projectId === task.projectId).length;
-      const startingInProject = Array.from(this.starting.values()).filter((r) => r.projectId === task.projectId).length;
-
-      if (runningInProject + startingInProject >= this.effectiveParallel(project)) {
+      if (!this.hasParallelCapacity(project)) {
         this.markQueuedWaiting(task, 'parallel');
         continue;
       }
@@ -1912,6 +1941,10 @@ export class Scheduler {
         ? codexProfiles.find((p) => p.name !== lastWorker.profileName)
         : codexProfiles[0];
       if (!profile) continue;
+      if (step?.reviewer === 'claude' && !this.claudeBudgetAvailable(task)) {
+        this.eventBus.emit('review.waiting', task.id, { reason: 'department_claude_budget' });
+        continue;
+      }
       this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
     }
   }
@@ -2006,6 +2039,10 @@ export class Scheduler {
   }
 
   private startClaudeFallbackReview(task: TaskRow): void {
+    if (!this.claudeBudgetAvailable(task)) {
+      this.eventBus.emit('review.waiting', task.id, { actor: 'claude-reviewer', reason: 'department_claude_budget' });
+      return;
+    }
     const engine = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
     if (!engine || this.config.reviewer?.claudeFallback === false) return;
     const preferred = this.config.reviewer?.claudeProfiles ?? [];
@@ -2336,7 +2373,10 @@ export class Scheduler {
       const engineId = getModelEngine(model);
 
       // Find suitable profiles
-      const profiles = this.profileRepo.getEnabled().filter((p) => !p.authState || p.authState === 'ok');
+      const project = this.projectRepo.get(task.projectId);
+      const assigned = project?.departmentId ? this.departmentRepo?.profiles(project.departmentId) : [];
+      const assignedNames = assigned && assigned.length > 0 ? new Set(assigned.map((item) => item.profileName)) : null;
+      const profiles = this.profileRepo.getEnabled().filter((p) => (!p.authState || p.authState === 'ok') && (!assignedNames || assignedNames.has(p.name)));
       const eligibleProfiles = profiles.filter((profile) => {
         if (profile.engine !== engineId) return false;
         if (this.quotaService.isExhausted(profile.name, family)) return false;
