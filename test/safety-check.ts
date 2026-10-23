@@ -8,10 +8,76 @@ interface AgyHomesSnapshot {
   subdirs: string[];
 }
 
-interface HubHomeSnapshot {
+export interface HubHomeSnapshot {
   dir: string;
   exists: boolean;
-  mtime: number | null;
+  entries: string[];
+}
+
+const IGNORED_HUB_EXACT_NAMES = new Set([
+  'claude-failover.json',
+  'deploy-push-state.json',
+  'daemon.log',
+  'logs',
+  'worktrees',
+  'cache',
+  'web',
+  'claude-homes',
+  'codex-homes',
+  'claude-usage-cwd',
+  'shims',
+]);
+
+export function isIgnoredHubEntry(name: string): boolean {
+  if (name.startsWith('hub.db')) return true;
+  if (/^chat-mcp.*\.json$/.test(name)) return true;
+  if (name.endsWith('.tmp') || name.includes('.tmp-')) return true;
+  if (IGNORED_HUB_EXACT_NAMES.has(name)) return true;
+  return false;
+}
+
+export function findUnexpectedHubEntries(before: string[], after: string[]): string[] {
+  const beforeSet = new Set(before);
+  const newEntries = after.filter((name) => !beforeSet.has(name));
+  return newEntries.filter((name) => !isIgnoredHubEntry(name));
+}
+
+export function getHubEntries(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  try {
+    return fs.readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+}
+
+export function getHubSnapshot(dir: string): HubHomeSnapshot {
+  const exists = fs.existsSync(dir);
+  return {
+    dir,
+    exists,
+    entries: exists ? getHubEntries(dir) : [],
+  };
+}
+
+export function verifyHubHomeSafety(snap: HubHomeSnapshot, currentDir: string = snap.dir): void {
+  const currentExists = fs.existsSync(currentDir);
+
+  if (!snap.exists && currentExists) {
+    throw new Error(
+      `SAFETY NET VIOLATION: ${currentDir} was created during test execution! Tests must use temporary directory.`,
+    );
+  }
+
+  if (snap.exists && currentExists) {
+    const currentEntries = getHubEntries(currentDir);
+    const unexpected = findUnexpectedHubEntries(snap.entries, currentEntries);
+    if (unexpected.length > 0) {
+      throw new Error(
+        `SAFETY NET VIOLATION: ${currentDir} was modified during test execution! Unexpected new entries: [${unexpected.join(', ')}]`,
+      );
+    }
+  }
 }
 
 interface WebSnapshot { path: string; checksum: string | null; }
@@ -44,17 +110,6 @@ function getSubdirectories(dir: string): string[] {
   }
 }
 
-function getHubStatus(dir: string): { exists: boolean; mtime: number | null } {
-  if (!fs.existsSync(dir)) {
-    return { exists: false, mtime: null };
-  }
-  try {
-    const stat = fs.statSync(dir);
-    return { exists: true, mtime: stat.mtimeMs };
-  } catch {
-    return { exists: false, mtime: null };
-  }
-}
 
 function getChecksum(filePath: string): string | null {
   if (!fs.existsSync(filePath)) return null;
@@ -110,12 +165,7 @@ export function setup({ provide }: { provide: (key: string, value: string) => vo
 
   initialHubHomes = targetHomes.map((home) => {
     const dir = path.join(home, '.agenthub');
-    const status = getHubStatus(dir);
-    return {
-      dir,
-      exists: status.exists,
-      mtime: status.mtime,
-    };
+    return getHubSnapshot(dir);
   });
   const webPath = path.resolve(__dirname, '..', 'dist', 'web', 'index.html');
   initialWeb = { path: webPath, checksum: getChecksum(webPath) };
@@ -151,19 +201,7 @@ export function setup({ provide }: { provide: (key: string, value: string) => vo
     }
 
     for (const snap of initialHubHomes) {
-      const currentStatus = getHubStatus(snap.dir);
-
-      if (!snap.exists && currentStatus.exists) {
-        throw new Error(
-          `SAFETY NET VIOLATION: ${snap.dir} was created during test execution! Tests must use temporary directory.`,
-        );
-      }
-
-      if (snap.exists && currentStatus.exists && snap.mtime !== currentStatus.mtime) {
-        throw new Error(
-          `SAFETY NET VIOLATION: ${snap.dir} was modified during test execution! (mtime: ${snap.mtime} vs ${currentStatus.mtime})`,
-        );
-      }
+      verifyHubHomeSafety(snap);
     }
 
     const currentChecksum = getChecksum(initialWeb.path);
