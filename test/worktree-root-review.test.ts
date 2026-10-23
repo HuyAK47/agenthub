@@ -115,6 +115,10 @@ describe('configured worktree root review regressions', () => {
       check(fixture.root);
       check(path.join(fixture.repo, 'unignored-root'));
 
+      const fileRoot = path.join(fixture.root, 'not-a-directory');
+      fs.writeFileSync(fileRoot, 'not a directory');
+      check(fileRoot);
+
       fs.writeFileSync(path.join(fixture.repo, '.gitignore'), 'ignored-root/\n');
       const ignoredRoot = path.join(fixture.repo, 'ignored-root');
       fs.mkdirSync(ignoredRoot);

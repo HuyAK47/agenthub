@@ -89,7 +89,12 @@ export function validateProjectWorktreeRoot(root: string, projectPath: string, h
     if (!ignored) throw new Error('Worktree root nằm trong project nhưng chưa được gitignore');
   }
   if (!fs.existsSync(resolved)) throw new Error(`Worktree root không tồn tại: ${resolved}`);
-  try { fs.accessSync(resolved, fs.constants.W_OK); } catch { throw new Error(`Worktree root không ghi được: ${resolved}`); }
+  try {
+    if (!fs.statSync(resolved).isDirectory()) throw new Error('not a directory');
+    fs.accessSync(resolved, fs.constants.W_OK);
+  } catch {
+    throw new Error(`Worktree root phải là thư mục ghi được: ${resolved}`);
+  }
 }
 
 function resolveRealPath(value: string): string {
