@@ -585,6 +585,17 @@ export class Scheduler {
       this.eventBus.emit('task.queued', task.id, { reason: 'orphaned_start' });
     }
 
+    // Checks interrupted by a restart left tasks 'checking' with nothing running. Re-run them when the
+    // task's latest worker run finished cleanly (the only state that could have started checks).
+    for (const task of this.taskRepo.getByStatus('checking')) {
+      if (!this.projectRepo.get(task.projectId)) continue;
+      const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+      if (!lastWorker || lastWorker.outcome !== 'done') continue;
+      void this.runChecksForTask(task.id, lastWorker.id).catch((error) => {
+        if (!this.stopped) console.error(`[scheduler] re-check after restart failed for ${task.id}:`, error);
+      });
+    }
+
     const shutdownRuns = this.runRepo.getShutdownRuns();
     for (const run of shutdownRuns) {
       const task = this.taskRepo.get(run.taskId);

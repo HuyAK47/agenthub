@@ -425,6 +425,19 @@ describe('Scheduler regression fixes', () => {
     delete process.env.FAKE_MODE;
   });
 
+  it('re-runs checks for a task left checking by a restart', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    taskRepo.insert({ id: 'test-project/chk', projectId: 'test-project', slug: 'chk', title: 'Chk', status: 'checking' });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind, outcome, endedAt) VALUES ('w-chk', 'test-project/chk', 'agy', 'gemini-3.8-flash-high', 'p', 'worker', 'done', datetime('now'))").run();
+    const scheduler = makeScheduler();
+    const seen: string[] = [];
+    (scheduler as unknown as { runChecksForTask: (id: string, run: string) => Promise<void> }).runChecksForTask = async (id, run) => { seen.push(`${id}:${run}`); };
+    scheduler.start();
+    expect(seen).toEqual(['test-project/chk:w-chk']);
+    scheduler.stop();
+  });
+
   it('requeues a task left running without any run after a restart', () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);
