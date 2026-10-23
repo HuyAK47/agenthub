@@ -950,7 +950,7 @@ export const vi = {
   },
   settings: {
     title: 'Cài đặt hệ thống',
-    shutdownTitle: 'Tắt AgentHub', shutdownDescription: '{count} task đang chạy sẽ được đưa về hàng chờ.', shutdownButton: 'Tắt AgentHub', shutdownConfirmTitle: 'Xác nhận tắt AgentHub', shutdownConfirm: 'AgentHub sẽ dừng worker, reviewer và chat nền; task sẽ tiếp tục khi bật lại.', shutdownDisable: 'Không tự bật khi đăng nhập', shutdownDone: 'AgentHub đã tắt. Bật lại từ máy bằng lệnh',
+    shutdownTitle: 'Tắt AgentHub', shutdownDescription: '{count} task đang chạy sẽ được đưa về hàng chờ.', shutdownButton: 'Tắt AgentHub', shutdownConfirmTitle: 'Xác nhận tắt AgentHub', shutdownConfirm: '{count} task đang chạy sẽ được đưa về hàng chờ để tiếp tục sau. AgentHub sẽ dừng daemon, worker, reviewer và chat nền.', shutdownDisable: 'Không tự bật khi đăng nhập', shutdownDone: 'AgentHub đã tắt. Bật lại từ máy bằng lệnh',
     brandingTitle: 'Tên ứng dụng', brandingDescription: 'Chỉ đổi tên hiển thị; lệnh CLI, service, thư mục và biến môi trường kỹ thuật không thay đổi.', brandingName: 'Tên hiển thị', brandingShortName: 'Tên ngắn', brandingTagline: 'Slogan (tuỳ chọn)', brandingAccent: 'Màu nhấn (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, tối đa 256KB', brandingLogoError: 'Không thể tải logo',
     subtitle: 'Cấu hình chuỗi model ưu tiên và thời gian timeout tối đa cho các lượt chạy (DEC-001).',
     saveSuccess: 'Cài đặt hệ thống đã được cập nhật thành công!',

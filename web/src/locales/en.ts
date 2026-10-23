@@ -951,7 +951,7 @@ export const en: typeof vi = {
   },
   settings: {
     title: 'System Settings',
-    shutdownTitle: 'Stop AgentHub', shutdownDescription: '{count} running task(s) will return to the queue.', shutdownButton: 'Stop AgentHub', shutdownConfirmTitle: 'Confirm stopping AgentHub', shutdownConfirm: 'AgentHub will stop workers, reviewers, and background chats; tasks resume when started again.', shutdownDisable: 'Do not start automatically at login', shutdownDone: 'AgentHub is stopped. Start it from this machine with',
+    shutdownTitle: 'Stop AgentHub', shutdownDescription: '{count} running task(s) will return to the queue.', shutdownButton: 'Stop AgentHub', shutdownConfirmTitle: 'Confirm stopping AgentHub', shutdownConfirm: '{count} running task(s) will return to the queue to resume later. AgentHub will stop daemon, workers, reviewers, and background chats.', shutdownDisable: 'Do not start automatically at login', shutdownDone: 'AgentHub is stopped. Start it from this machine with',
     brandingTitle: 'Application name', brandingDescription: 'Only the display name changes; technical CLI commands, services, directories, and environment variables stay the same.', brandingName: 'Display name', brandingShortName: 'Short name', brandingTagline: 'Tagline (optional)', brandingAccent: 'Accent color (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, up to 256KB', brandingLogoError: 'Could not upload logo',
     subtitle: 'Configure preferred model chains and maximum run timeout (DEC-001).',
     saveSuccess: 'System settings updated successfully!',

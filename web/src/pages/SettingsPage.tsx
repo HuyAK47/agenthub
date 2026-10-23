@@ -792,7 +792,7 @@ export const SettingsPage: React.FC = () => {
       {shutdownOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
         <div className="max-w-md rounded-xl bg-[var(--t-surface)] p-6 shadow-xl space-y-4">
           <h2 className="font-semibold">{t('settings.shutdownConfirmTitle')}</h2>
-          <p className="text-sm text-[var(--t-text-2)]">{t('settings.shutdownConfirm')}</p>
+          <p className="text-sm text-[var(--t-text-2)]">{t('settings.shutdownConfirm', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shutdownDisable} onChange={(e) => setShutdownDisable(e.target.checked)} />{t('settings.shutdownDisable')}</label>
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setShutdownOpen(false)} className="rounded-lg border px-3 py-2 text-xs">{t('common.cancel')}</button><button type="button" onClick={() => shutdownMutation.mutate()} className="rounded-lg bg-[var(--t-crit)] px-3 py-2 text-xs text-white">{t('settings.shutdownButton')}</button></div>
         </div>
