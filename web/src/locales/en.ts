@@ -96,7 +96,7 @@ export const en: typeof vi = {
     overlapWarningTitle: 'File Overlap Warnings',
     overlapWarningDesc: 'There are {count} file overlap warnings among running tasks:',
     brains: 'Brains', assistant: 'Assistant', assistantWorking: 'answering', assistantReady: 'ready', openAssistantChat: 'Open assistant', brainMode: 'Mode', brainStatewaiting_limit: 'waiting for quota reset', brainStatewaiting_permission: 'waiting for your permission', brainMode_off: 'off', brainMode_suggest: 'suggest', brainMode_auto: 'auto', brainMode_external: 'external Claude', brainStateidle: 'idle', brainStaterunning: 'running', brainStatewaiting: 'waiting', brainStateerror: 'error', brainQueued: 'queued', brainTokens: 'Today tokens', openBrainChat: 'Open brain chat',
-    ciCardTitle: 'CI', ciCardSubtitle: 'Latest GitHub Actions CI status', ciCardNoData: 'No CI data recorded', ciPassed: 'Passed', ciFailed: 'Failed', ciRunning: 'Running',
+    ciCardTitle: 'CI', ciCardSubtitle: 'Latest GitHub Actions CI status', ciCardNoData: 'No CI data recorded', ciPassed: 'Passed', ciFailed: 'Failed', ciRunning: 'Running', projectTaskSummary: 'Tasks by project', projectRunning: 'Running', projectWaiting: 'Waiting',
   },
   tasks: {
     title: 'Task Management',
@@ -105,6 +105,13 @@ export const en: typeof vi = {
     allProjects: 'All projects',
     createTask: 'New Task',
     filterQuick: 'Filter slug / title',
+    projectView: 'By project',
+    attention: 'Needs attention',
+    projectCounts: 'Project task counts',
+    waitingShort: 'Waiting',
+    showOldDone: 'Show {count} older completed',
+    hideOldDone: 'Hide older completed',
+    priority: 'Priority {value}',
   },
   dag: {
     title: 'Dependency Diagram',
@@ -817,6 +824,7 @@ export const en: typeof vi = {
     firstProject: 'Add first project', addProject: 'Add project',
   },
   projects: {
+    activeTasks: 'Active or waiting tasks', viewTasks: 'View tasks',
     title: 'Project Management',
     subtitle: 'Register and configure software projects for AI workers to create worktrees and run tasks.',
     registerBtn: 'Register Project',

@@ -1,11 +1,11 @@
-import React, { memo, useMemo, useState } from 'react';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { getProjects, getStatus, getTasks } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
-import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network } from 'lucide-react';
+import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, FolderKanban, ChevronDown, AlertTriangle } from 'lucide-react';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { useLocale } from '../context/LocaleContext';
 import { useShowMore } from '../components/CollapsibleList';
@@ -216,12 +216,114 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
 
 export const KanbanColumn = memo(KanbanColumnComponent);
 
+const PROJECT_VIEW_STORAGE_KEY = 'agenthub:tasks:view-mode';
+const PROJECT_TASK_ORDER: Task['status'][] = ['running', 'review', 'blocked', 'queued', 'waiting_quota', 'checking', 'draft', 'failed', 'done', 'cancelled'];
+
+function readStoredTaskView(): 'kanban' | 'dag' | 'project' {
+  try {
+    const value = window.localStorage.getItem(PROJECT_VIEW_STORAGE_KEY);
+    return value === 'dag' || value === 'project' ? value : 'kanban';
+  } catch {
+    return 'kanban';
+  }
+}
+
+function writeStoredTaskView(value: 'kanban' | 'dag' | 'project') {
+  try {
+    window.localStorage.setItem(PROJECT_VIEW_STORAGE_KEY, value);
+  } catch {
+    // Private browsing and disabled storage should not break the task page.
+  }
+}
+
+function isAttentionTask(task: Task) {
+  return task.status === 'blocked' || task.status === 'failed' || Boolean(task.reviewerEscalated);
+}
+
+function isOldDoneTask(task: Task) {
+  if (task.status !== 'done' && task.status !== 'cancelled') return false;
+  const updated = new Date(task.updatedAt).getTime();
+  return Number.isFinite(updated) && Date.now() - updated > 24 * 60 * 60 * 1000;
+}
+
+const ProjectTaskCard: React.FC<{ task: Task }> = ({ task }) => {
+  const { t } = useLocale();
+  return (
+    <Link
+      to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}
+      className="block rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] p-3 hover:border-[var(--t-accent)] transition-colors"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-xs font-mono text-[var(--text-secondary)] truncate">{task.slug}</div>
+          <div className="mt-1 text-sm font-semibold text-[var(--text-primary)] line-clamp-2">{task.title}</div>
+        </div>
+        <StatusBadge status={task.status} size="sm" />
+      </div>
+      {task.reviewerEscalated ? <span className="mt-2 inline-flex text-[11px] font-semibold text-[var(--t-warn)]">{t('extra.waitingApprover')}</span> : null}
+    </Link>
+  );
+};
+
+const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority?: number }; tasks: Task[]; onCreate: () => void }> = ({ project, tasks, onCreate }) => {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(true);
+  const [showOldDone, setShowOldDone] = useState(false);
+  const counts = useMemo(() => ({
+    running: tasks.filter((task) => task.status === 'running').length,
+    checking: tasks.filter((task) => task.status === 'checking').length,
+    review: tasks.filter((task) => task.status === 'review').length,
+    blocked: tasks.filter((task) => task.status === 'blocked').length,
+    waiting: tasks.filter((task) => ['queued', 'waiting_quota'].includes(task.status)).length,
+  }), [tasks]);
+  const visibleTasks = useMemo(() => {
+    const sorted = [...tasks].sort((a, b) => {
+      const rank = (status: Task['status']) => PROJECT_TASK_ORDER.indexOf(status);
+      return rank(a.status) - rank(b.status) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
+    return showOldDone ? sorted : sorted.filter((task) => !isOldDoneTask(task));
+  }, [tasks, showOldDone]);
+  const oldDoneCount = tasks.filter(isOldDoneTask).length;
+
+  return (
+    <section className="rounded-xl border border-[var(--border-default)] bg-[var(--t-surface-2)] overflow-hidden" data-testid={`project-task-group-${project.id}`}>
+      <div className="flex items-center gap-2 p-3 sm:p-4">
+        <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />
+          <FolderKanban className="h-4 w-4 shrink-0 text-[var(--t-accent)]" />
+          <span className="truncate font-semibold text-[var(--text-primary)]">{project.name}</span>
+          {project.priority != null && project.priority > 0 ? <span className="rounded-full bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--t-warn)]">{t('tasks.priority', { value: project.priority })}</span> : null}
+        </button>
+        <div className="hidden flex-wrap justify-end gap-1.5 text-[11px] sm:flex" aria-label={t('tasks.projectCounts')}>
+          <span className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--t-ok)]">{t('status.running')}: {counts.running}</span>
+          <span className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--t-accent)]">{t('status.checking')}: {counts.checking}</span>
+          <span className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--t-warn)]">{t('status.review')}: {counts.review}</span>
+          <span className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--t-crit)]">{t('status.blocked')}: {counts.blocked}</span>
+          <span className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--text-secondary)]">{t('tasks.waitingShort')}: {counts.waiting}</span>
+        </div>
+        <button type="button" onClick={onCreate} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[var(--t-accent)] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[var(--t-accent-hover)]" aria-label={`${t('tasks.createTask')} ${project.name}`}>
+          <Plus className="h-3.5 w-3.5" /><span className="hidden sm:inline">{t('tasks.createTask')}</span>
+        </button>
+      </div>
+      {open && <div className="border-t border-[var(--border-default)] p-3 sm:p-4">
+        <div className="mb-3 flex flex-wrap gap-1.5 text-[11px] sm:hidden">
+          {Object.entries(counts).map(([key, count]) => <span key={key} className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--text-secondary)]">{key}: {count}</span>)}
+        </div>
+        {visibleTasks.length > 0 ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{visibleTasks.map((task) => <ProjectTaskCard key={task.id} task={task} />)}</div> : <div className="rounded-lg border border-dashed border-[var(--border-default)] p-5 text-center text-xs italic text-[var(--text-muted)]">{t('common.empty')}</div>}
+        {oldDoneCount > 0 && <button type="button" onClick={() => setShowOldDone((value) => !value)} className="mt-3 text-xs font-medium text-[var(--t-accent)] hover:underline">{showOldDone ? t('tasks.hideOldDone') : t('tasks.showOldDone', { count: oldDoneCount })}</button>}
+      </div>}
+    </section>
+  );
+};
+
 export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
-  const [viewMode, setViewMode] = useState<'kanban' | 'dag'>('kanban');
-  const [selectedProject, setSelectedProject] = useState<string>('all');
+  const [searchParams] = useSearchParams();
+  const [viewMode, setViewMode] = useState<'kanban' | 'dag' | 'project'>(readStoredTaskView);
+  const [selectedProjects, setSelectedProjects] = useState<string[]>(() => searchParams.get('project')?.split(',').filter(Boolean) ?? []);
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [attentionOnly, setAttentionOnly] = useState(false);
   const [doneFilter, setDoneFilter] = useState<'active_chains' | '1d' | '3d' | '7d' | '30d' | 'all'>('active_chains');
   const [search, setSearch] = useState<string>('');
 
@@ -231,15 +333,20 @@ export const TasksPage: React.FC = () => {
   });
 
   const { data: tasks = [], isLoading } = useQuery({
-    queryKey: ['tasks', selectedProject],
-    queryFn: () => getTasks(selectedProject !== 'all' ? { project: selectedProject } : undefined),
+    queryKey: ['tasks'],
+    queryFn: () => getTasks(),
     refetchInterval: 5000,
   });
 
-  const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
+  const selectedProject = selectedProjects.length === 1 ? selectedProjects[0] : 'all';
+  const filteredTasks = useMemo(() => tasks.filter((task) => (selectedProjects.length === 0 || selectedProjects.includes(task.projectId)) && (!attentionOnly || isAttentionTask(task))), [tasks, selectedProjects, attentionOnly]);
+  const grouped = useMemo(() => groupTasksByStatus(filteredTasks), [filteredTasks]);
+  const projectGroups = useMemo(() => projects.map((project) => ({ ...project, tasks: filteredTasks.filter((task) => task.projectId === project.id) })).filter((project) => selectedProjects.length === 0 || selectedProjects.includes(project.id)), [projects, filteredTasks, selectedProjects]);
+
+  useEffect(() => writeStoredTaskView(viewMode), [viewMode]);
 
   const dagTasks = useMemo(() => {
-    let list = tasks;
+    let list = filteredTasks;
     const query = normalizeText(search.trim());
     if (query) {
       list = list.filter((task) => {
@@ -253,7 +360,10 @@ export const TasksPage: React.FC = () => {
       status: selectedStatus,
       doneFilter,
     });
-  }, [tasks, search, selectedProject, selectedStatus, doneFilter]);
+  }, [filteredTasks, search, selectedProject, selectedStatus, doneFilter]);
+
+  const setMode = (mode: 'kanban' | 'dag' | 'project') => setViewMode(mode);
+  const toggleProject = (id: string) => setSelectedProjects((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
   return (
     <div className="space-y-6" data-tour="task-lifecycle">
@@ -284,6 +394,9 @@ export const TasksPage: React.FC = () => {
               <LayoutGrid className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t('dag.toggleKanban')}</span>
             </button>
+            <button type="button" onClick={() => setMode('project')} data-testid="view-toggle-project" aria-label={t('tasks.projectView')} title={t('tasks.projectView')} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${viewMode === 'project' ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>
+              <FolderKanban className="h-3.5 w-3.5" /><span className="hidden sm:inline">{t('tasks.projectView')}</span>
+            </button>
             <button
               type="button"
               onClick={() => setViewMode('dag')}
@@ -313,29 +426,15 @@ export const TasksPage: React.FC = () => {
             />
           </div>
 
-          {/* Project Filter */}
-          <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
+          {/* Project filters */}
+          <div className="flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 shadow-xs" aria-label={t('tasks.filterProject')}>
             <Filter className="w-4 h-4 text-[var(--text-secondary)]" />
-            <select
-              value={selectedProject}
-              onChange={(e) => setSelectedProject(e.target.value)}
-              aria-label={t('tasks.filterProject')}
-              className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] focus:outline-none cursor-pointer"
-            >
-              <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                {t('tasks.allProjects')}
-              </option>
-              {projects.map((p) => (
-                <option
-                  key={p.id}
-                  value={p.id}
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            <button type="button" onClick={() => setSelectedProjects([])} className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProjects.length === 0 ? 'bg-[var(--t-accent)] text-white' : 'text-[var(--text-secondary)]'}`}>{t('tasks.allProjects')}</button>
+            {projects.map((p) => <button type="button" key={p.id} onClick={() => toggleProject(p.id)} className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProjects.includes(p.id) ? 'bg-[var(--t-accent)] text-white' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>{p.name}</button>)}
           </div>
+          <button type="button" onClick={() => setAttentionOnly((value) => !value)} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${attentionOnly ? 'border-[var(--t-crit)] bg-[color-mix(in_srgb,var(--t-crit)_12%,transparent)] text-[var(--t-crit)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}`} aria-pressed={attentionOnly}>
+            <AlertTriangle className="h-3.5 w-3.5" />{t('tasks.attention')}
+          </button>
 
           {/* DAG-specific filters (Status & Done cutoff) */}
           {viewMode === 'dag' && (
@@ -414,6 +513,10 @@ export const TasksPage: React.FC = () => {
       ) : viewMode === 'dag' ? (
         <div data-testid="dag-view-wrapper" className="pb-8">
           <TaskDag tasks={dagTasks} />
+        </div>
+      ) : viewMode === 'project' ? (
+        <div className="space-y-4 pb-8" data-testid="project-view-wrapper">
+          {projectGroups.length === 0 ? <div className="rounded-xl border border-dashed border-[var(--border-default)] p-8 text-center text-sm text-[var(--text-muted)]">{t('common.empty')}</div> : projectGroups.map((project) => <ProjectTaskGroup key={project.id} project={project} tasks={project.tasks} onCreate={() => navigate(`/tasks/new?project=${encodeURIComponent(project.id)}`)} />)}
         </div>
       ) : (
         /* Kanban Board Grid */

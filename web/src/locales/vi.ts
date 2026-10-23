@@ -94,7 +94,7 @@ export const vi = {
     overlapWarningTitle: 'Cảnh báo trùng file',
     overlapWarningDesc: 'Có {count} cảnh báo sửa trùng file giữa các task đang chạy:',
     brains: 'Bộ não', assistant: 'Trợ lý', assistantWorking: 'đang trả lời', assistantReady: 'sẵn sàng', openAssistantChat: 'Mở Trợ lý', brainMode: 'Chế độ', brainStatewaiting_limit: 'chờ hết giới hạn quota', brainStatewaiting_permission: 'chờ bạn cấp quyền', brainMode_off: 'tắt', brainMode_suggest: 'gợi ý', brainMode_auto: 'tự động', brainMode_external: 'Claude ngoài điều phối', brainStateidle: 'rảnh', brainStaterunning: 'đang chạy', brainStatewaiting: 'đang chờ', brainStateerror: 'lỗi', brainQueued: 'đang xếp hàng', brainTokens: 'Token hôm nay', openBrainChat: 'Mở phiên chat',
-    ciCardTitle: 'CI', ciCardSubtitle: 'Trạng thái CI GitHub Actions gần nhất', ciCardNoData: 'Chưa có dữ liệu CI', ciPassed: 'Thành công', ciFailed: 'Thất bại', ciRunning: 'Đang chạy',
+    ciCardTitle: 'CI', ciCardSubtitle: 'Trạng thái CI GitHub Actions gần nhất', ciCardNoData: 'Chưa có dữ liệu CI', ciPassed: 'Thành công', ciFailed: 'Thất bại', ciRunning: 'Đang chạy', projectTaskSummary: 'Task theo project', projectRunning: 'Đang chạy', projectWaiting: 'Đang chờ',
   },
   tasks: {
     title: 'Quản lý Task',
@@ -103,6 +103,13 @@ export const vi = {
     allProjects: 'Tất cả project',
     createTask: 'Tạo Task',
     filterQuick: 'Lọc slug / tiêu đề',
+    projectView: 'Theo project',
+    attention: 'Cần chú ý',
+    projectCounts: 'Số task theo trạng thái',
+    waitingShort: 'Chờ',
+    showOldDone: 'Xem {count} task đã xong cũ hơn',
+    hideOldDone: 'Ẩn task đã xong cũ',
+    priority: 'Ưu tiên {value}',
   },
   dag: {
     title: 'Sơ đồ phụ thuộc',
@@ -816,6 +823,7 @@ export const vi = {
     firstProject: 'Thêm dự án đầu tiên', addProject: 'Thêm dự án',
   },
   projects: {
+    activeTasks: 'Task đang chạy hoặc chờ', viewTasks: 'Xem task',
     title: 'Quản lý Project',
     subtitle: 'Đăng ký và cấu hình các dự án phần mềm để AI workers tạo worktree và chạy tác vụ.',
     registerBtn: 'Đăng ký Project',
