@@ -23,11 +23,11 @@ import {
 import { PermissionBroker, canAlwaysAllowCommand, commandPermissionLabel } from './permissions.js';
 import { EventBus } from '../scheduler/index.js';
 import { HttpError } from '../services/index.js';
-import { isProfileLoggedIn, resolveClaudeProfile } from '../profiles/index.js';
+import { isProfileLoggedIn, resolveClaudeProfile, resolveCodexProfile } from '../profiles/index.js';
 import { detectClaudeQuota, ParsedStreamEvent, StreamChunkParser, AssistantUsage, ClaudeQuotaSignal } from './parse.js';
 import { ClaudeFailoverState, ClaudeFallbackStep } from './failover.js';
-import {
-  findClaudeBin,
+import { decodeCursor } from '../pagination.js';
+import { findClaudeBin,
   checkClaudePartialSupport,
   checkClaudeStreamJsonSupport,
   ensureChatMcpConfig,
@@ -41,9 +41,15 @@ import {
   readHubSnapshotFiles,
   FORK_SUMMARY_PROMPT,
   buildAssistantPrompt,
+  buildBrainPrompt,
 } from './claude.js';
+import { findProjectRoot } from '../cli.js';
+import { readCodexRateLimits } from '../quota/codex-usage.js';
 import { buildProjectKnowledgeContext } from '../projects/knowledge-context.js';
 import { projectSettings } from '../projects/settings.js';
+import { effectiveBrainCodexProfile, effectiveBrainEngine } from '../brain/engine.js';
+import { effectiveBrainPermission } from '../brain/mode.js';
+import { CodexEngine } from '../engines/index.js';
 
 async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
   try {
@@ -55,6 +61,7 @@ async function setBrainActivity(activity: 'talking' | 'idle'): Promise<void> {
   } catch {
     // ignore if brain module does not exist
   }
+
 }
 
 export interface QueuedTurn {
@@ -165,7 +172,10 @@ export class ChatService {
   /** Messages people sent while the session was busy, delivered in order after the current turn. */
   private waitingUserMessages = new Map<string, WaitingUserMessage[]>();
   private runningTurns = new Map<string, RunningTurn>();
+  private lastEngines = new Map<string, 'claude' | 'codex'>();
+  private forceClaude = new Set<string>();
   private claudeBinOverride?: string;
+  private codexBinOverride?: string;
   private persistentProcesses = new Map<string, PersistentProcess>();
   private snapshotAt = new Map<string, number>();
   private snapshotEventAt = new Map<string, number>();
@@ -187,10 +197,13 @@ export class ChatService {
     public quotaMarkRepo?: QuotaMarkRepo,
     public quotaUsageRepo?: QuotaUsageRepo,
     public eventRepo?: EventRepo,
-    options?: { claudeBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo; knowledgeRepo?: KnowledgeRepo },
+    options?: { claudeBin?: string; codexBin?: string; failoverState?: ClaudeFailoverState; retryRepo?: ChatRetryRepo; knowledgeRepo?: KnowledgeRepo },
   ) {
     if (options?.claudeBin) {
       this.claudeBinOverride = options.claudeBin;
+    }
+    if (options?.codexBin) {
+      this.codexBinOverride = options.codexBin;
     }
     this.failoverState = options?.failoverState || new ClaudeFailoverState(path.join(config.hubHome, 'claude-failover.json'));
     // Daemon khởi động lại thì reset busy=0 cho mọi phiên
@@ -278,6 +291,7 @@ export class ChatService {
   }
 
   listPermissionRules() { return this.permissionBroker.listRules(); }
+  pagePermissionRules(options: { limit?: string; cursor?: string }) { return this.permissionBroker.pageRules(options.limit, options.cursor); }
 
   getPermission(id: string) { return this.permissionBroker.get(id); }
 
@@ -422,33 +436,89 @@ export class ChatService {
     return retried;
   }
 
-  private failoverExecution(turn: QueuedTurn): { model: string; profileName: string | null; env?: Record<string, string>; pausedUntil?: number } {
+  private failoverExecution(turn: QueuedTurn): { engine: 'claude' | 'codex'; model: string; profileName: string | null; env?: Record<string, string>; pausedUntil?: number } {
     const snapshot = this.failoverState.snapshot();
     const step = snapshot.active ? snapshot.step : null;
-    if (!step) return { model: turn.model, profileName: turn.profileName };
-    if (step.type === 'wait') return { model: turn.model, profileName: turn.profileName, pausedUntil: snapshot.until || undefined };
-    if (step.type === 'model') return { model: step.model, profileName: turn.profileName };
+    const session = this.chatSessionRepo.get(turn.sessionId);
+    const project = turn.projectId ? this.projectRepo.get(turn.projectId) : undefined;
+    if (this.forceClaude.delete(turn.sessionId)) {
+      return {
+        engine: 'claude',
+        model: turn.model,
+        profileName: resolveClaudeProfile(this.profileRepo || { getAll: () => [] }, this.config.chat.claudeProfile, this.config.chat.claudeProfileExplicit),
+      };
+    }
+    const requestedEngine = session?.kind === 'brain' ? effectiveBrainEngine(project, this.config.brain) : 'claude';
+    const selectCodex = (configured?: string): string | null => {
+      return resolveCodexProfile(
+        this.profileRepo || { getAll: () => [] },
+        configured || effectiveBrainCodexProfile(project, this.config.brain),
+        this.quotaUsageRepo,
+        this.quotaMarkRepo,
+      );
+    };
+    const codex = (model?: string, profile?: string): { engine: 'codex'; model: string; profileName: string } | null => {
+      const name = selectCodex(profile || this.config.brain.codexProfile);
+      if (!name) return null;
+      return { engine: 'codex', model: model || this.config.brain.codexModel || turn.model || 'gpt-5.6-luna', profileName: name };
+    };
+    if (!step) {
+      if (requestedEngine === 'codex') {
+        const selected = codex();
+        if (selected) return selected;
+        this.eventBus.emit('claude.fallback_changed', undefined, { reason: 'codex_unavailable', step: null });
+      }
+      return { engine: 'claude', model: turn.model, profileName: turn.profileName };
+    }
+    if (step.type === 'wait') return { engine: 'claude', model: turn.model, profileName: turn.profileName, pausedUntil: snapshot.until || undefined };
+    if (step.type === 'model') return { engine: 'claude', model: step.model, profileName: turn.profileName };
+    if (step.type === 'engine') {
+      const selected = codex();
+      if (selected) return selected;
+      const next = this.failoverState.advance('codex_unavailable');
+      this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt });
+      return this.failoverExecution(turn);
+    }
     if (step.type === 'profile') {
       const selected = step.profile
         ? this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude' && profile.name === step.profile && profile.name !== turn.profileName && isProfileLoggedIn(profile))?.name
         : this.profileRepo?.getEnabled().find((profile) => profile.engine === 'claude' && profile.name !== turn.profileName && isProfileLoggedIn(profile))?.name;
-      if (selected) return { model: turn.model, profileName: selected };
+      if (selected) return { engine: 'claude', model: turn.model, profileName: selected };
       const next = this.failoverState.advance('profile_unavailable');
       this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt });
       return this.failoverExecution(turn);
     }
     if (step.type === 'apiKey') {
       const key = this.failoverState.getApiKey();
-      if (key && snapshot.dailyCostUSD < step.dailyCapUSD) return { model: turn.model, profileName: turn.profileName, env: { ANTHROPIC_API_KEY: key } };
+      if (key && snapshot.dailyCostUSD < step.dailyCapUSD) return { engine: 'claude', model: turn.model, profileName: turn.profileName, env: { ANTHROPIC_API_KEY: key } };
       const next = this.failoverState.advance(key ? 'daily_cap_reached' : 'api_key_unconfigured');
       this.eventBus.emit('claude.fallback_changed', undefined, { step: next.step, reason: next.reason, resetAt: next.resetAt, dailyCostUSD: next.dailyCostUSD });
       return this.failoverExecution(turn);
     }
-    return { model: turn.model, profileName: turn.profileName };
+    return { engine: 'claude', model: turn.model, profileName: turn.profileName };
   }
 
   setClaudeBinOverride(bin?: string): void {
     this.claudeBinOverride = bin;
+  }
+
+  setCodexBinOverride(bin?: string): void {
+    this.codexBinOverride = bin;
+  }
+
+  getLastEngine(sessionId: string): 'claude' | 'codex' | undefined {
+    return this.lastEngines.get(sessionId);
+  }
+
+  getRunningPids(): number[] {
+    const pids: number[] = [];
+    for (const turn of this.runningTurns.values()) {
+      if (turn.child.pid) pids.push(turn.child.pid);
+    }
+    for (const proc of this.persistentProcesses.values()) {
+      if (proc.child.pid) pids.push(proc.child.pid);
+    }
+    return pids;
   }
 
   stop(): void {
@@ -559,6 +629,14 @@ export class ChatService {
       }
       return res;
     });
+  }
+
+  pageSessions(options?: { search?: string; archived?: string | number | boolean; limit?: string | number; cursor?: string }) {
+    const archivedParam = options?.archived;
+    const archivedFilter: number | null = archivedParam === 'all' ? null : archivedParam === '1' || archivedParam === 1 || archivedParam === true ? 1 : 0;
+    const page = this.chatSessionRepo.page({ search: options?.search, archived: archivedFilter, limit: options?.limit, cursor: options?.cursor });
+    const mapped = this.listSessions({ search: options?.search, archived: options?.archived });
+    return { ...page, items: page.items.map((s) => mapped.find((item) => item.id === s.id)!).filter(Boolean) };
   }
 
   createSession(body: {
@@ -1358,9 +1436,21 @@ export class ChatService {
 
   private executeTurn(turn: QueuedTurn): void {
     const planned = this.failoverExecution(turn);
+    this.lastEngines.set(turn.sessionId, planned.engine);
     if (planned.pausedUntil) {
       const delay = Math.max(100, planned.pausedUntil * 1000 - Date.now());
       setTimeout(() => { this.queue.push(turn); this.processQueue(); }, delay);
+      return;
+    }
+    if (planned.engine === 'codex') {
+      if (!planned.profileName) {
+        this.chatSessionRepo.setBusy(turn.sessionId, 0);
+        this.setSessionState(turn.sessionId, 'error');
+        this.emitChatError(turn.sessionId, turn.messageId, 'Không tìm thấy hồ sơ Codex khả dụng');
+        this.processQueue();
+        return;
+      }
+      this.executeCodexTurn(turn, { model: planned.model, profileName: planned.profileName });
       return;
     }
     const claudeBin = findClaudeBin(this.claudeBinOverride || this.config.chat?.claudeBin);
@@ -1663,6 +1753,193 @@ export class ChatService {
           this.checkAutoCompact(turn.sessionId);
         }
       }
+    });
+  }
+
+  /** Run a resident brain turn through Codex while retaining chat's event format. */
+  private executeCodexTurn(turn: QueuedTurn, execution: { model: string; profileName: string }): void {
+    const session = this.chatSessionRepo.get(turn.sessionId);
+    const profile = this.profileRepo?.get(execution.profileName);
+    if (!session || !profile) {
+      this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.emitChatError(turn.sessionId, turn.messageId, 'Không tìm thấy hồ sơ Codex đã chọn');
+      this.processQueue();
+      return;
+    }
+    const cwd = turn.projectId ? this.projectRepo.get(turn.projectId)?.path || os.homedir() : os.homedir();
+    const mcpConfigPath = ensureChatMcpConfig(this.config.hubHome, turn.sessionId, this.config.port, this.config.chat.permissionTimeoutSec, turn.projectId, session.kind);
+    const sessionDir = path.join(this.config.hubHome, 'sessions', turn.sessionId.replace(/[^a-zA-Z0-9_-]/g, '_'));
+    fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+
+    const configTomlPath = path.join(sessionDir, 'config.toml');
+    const projectRoot = findProjectRoot();
+    const cliPath = path.resolve(projectRoot, 'dist', 'cli.js');
+    const nodePath = process.execPath;
+    const tomlContent = [
+      '[mcp_servers.agenthub]',
+      `command = ${JSON.stringify(nodePath)}`,
+      `args = [${JSON.stringify(cliPath)}, "mcp"]`,
+      '[mcp_servers.agenthub.env]',
+      `AGENTHUB_CHAT_SESSION_ID = ${JSON.stringify(turn.sessionId)}`,
+      ...(turn.projectId ? [`AGENTHUB_MCP_PROJECT = ${JSON.stringify(turn.projectId)}`] : []),
+      ...(session.kind ? [`AGENTHUB_CHAT_KIND = ${JSON.stringify(session.kind)}`] : []),
+      `AGENTHUB_PORT = ${JSON.stringify(String(this.config.port || 7700))}`,
+      `AGENTHUB_PERMISSION_TIMEOUT_SEC = ${JSON.stringify(String(this.config.chat.permissionTimeoutSec || 600))}`,
+    ].join('\n');
+    fs.writeFileSync(configTomlPath, tomlContent, { encoding: 'utf-8', mode: 0o600 });
+    fs.chmodSync(configTomlPath, 0o600);
+
+    const logPath = path.join(sessionDir, 'codex.log');
+    const engine = new CodexEngine(this.codexBinOverride, session.mode === 'full' ? 'off' : 'workspace-write');
+    const project = turn.projectId ? this.projectRepo.get(turn.projectId) : undefined;
+    const permission = effectiveBrainPermission(project, this.config.brain);
+    const projectKnowledge = project && this.knowledgeRepo
+      ? buildProjectKnowledgeContext(this.knowledgeRepo.getByProject(project.id), projectSettings(project).references, undefined, project.path).text
+      : undefined;
+    const systemPrompt = session.kind === 'assistant'
+      ? this.assistantPrompt(session)
+      : (buildBrainPrompt(this.config.planning) + (projectKnowledge ? `\n\n[Kiến thức dự án]\n${projectKnowledge}` : ''));
+    const snapshot = this.hubSnapshot(session);
+    const recentMessages = this.chatMessageRepo.getBySession(turn.sessionId);
+    const history = recentMessages
+      .filter((m) => m.id !== turn.messageId && (m.role === 'user' || m.role === 'assistant'))
+      .slice(-10)
+      .map((m) => `${m.role === 'user' ? 'Người dùng' : 'Trợ lý'}: ${m.content}`)
+      .join('\n\n');
+
+    const promptParts: string[] = [systemPrompt];
+    if (snapshot) promptParts.push(`[Trạng thái AgentHub]\n${snapshot}`);
+    if (history) promptParts.push(`[Lịch sử hội thoại]\n${history}`);
+    promptParts.push(`[Yêu cầu]\n${turn.text}`);
+    const codexPrompt = promptParts.join('\n\n');
+
+    let child: ChildProcess;
+    try {
+      child = engine.spawn({
+        profile,
+        model: execution.model,
+        cwd,
+        prompt: codexPrompt,
+        logPath,
+        streamOutput: true,
+        mcpConfigPath,
+        hubHome: this.config.hubHome,
+        codexSandbox: session.mode === 'full' ? 'off' : 'workspace-write',
+        // Codex has no Claude-style allowedTools callback. Its approval policy
+        // is the process-level enforcement boundary for non-full brain modes:
+        // standard/trusted commands must be approved by Codex instead of being
+        // executed autonomously; full is the sole explicit bypass mode.
+        codexApproval: permission === 'full' ? 'never' : permission === 'standard' ? 'untrusted' : 'on-request',
+        brainPolicy: permission === 'full' ? undefined : permission,
+        project: this.projectRepo.get(turn.projectId || '') || undefined,
+      });
+    } catch (error) {
+      this.chatSessionRepo.setBusy(turn.sessionId, 0);
+      this.setSessionState(turn.sessionId, 'error');
+      this.emitChatError(turn.sessionId, turn.messageId, error instanceof Error ? error.message : String(error));
+      this.processQueue();
+      return;
+    }
+    const timeoutTimer = setTimeout(() => { if (child.pid) killProcessGroup(child.pid); }, (this.config.brain.turnTimeoutSec || 1200) * 1000);
+    const running: RunningTurn = { sessionId: turn.sessionId, messageId: turn.messageId, child, timeoutTimer, cancelled: false };
+    this.runningTurns.set(turn.sessionId, running);
+    this.armTurnWatchdog(running);
+    setBrainActivity('talking').catch(() => {});
+    const parser = new StreamChunkParser();
+    const startedAt = Date.now();
+    let text = '';
+    let result: Extract<ParsedStreamEvent, { type: 'result' }> | undefined;
+    let lastAssistantUsage: AssistantUsage | undefined;
+    let stderr = '';
+    const consume = (event: ParsedStreamEvent) => {
+      if (event.type === 'init' && event.sessionId) {
+        this.chatSessionRepo.updateClaudeSessionId(turn.sessionId, event.sessionId);
+      } else if (event.type === 'assistant_text' || event.type === 'text_delta') {
+        text += event.text;
+        if (event.type === 'assistant_text' && event.usage) lastAssistantUsage = event.usage;
+        this.emitChatDelta(turn.sessionId, turn.messageId, event.text);
+      } else if (event.type === 'tool_use') {
+        running.pendingToolUse = true;
+        this.pauseTurnWatchdog(running);
+        this.recordToolStart(running, event);
+      } else if (event.type === 'tool_result') {
+        this.recordToolResult(running, event);
+        running.pendingToolUse = false;
+        this.resetTurnWatchdog(running);
+      } else if (event.type === 'result') {
+        result = event;
+      }
+    };
+    child.stdout?.on('data', (chunk: Buffer) => {
+      this.resetTurnWatchdog(running);
+      for (const event of parser.feed(chunk)) consume(event);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    child.on('close', (code) => {
+      clearTimeout(timeoutTimer);
+      if (running.idleTimer) clearTimeout(running.idleTimer);
+      for (const event of parser.flush()) consume(event);
+      if (this.runningTurns.get(turn.sessionId) !== running) return;
+      this.runningTurns.delete(turn.sessionId);
+      this.chatSessionRepo.setBusy(turn.sessionId, 0);
+
+      const finalUsage = result?.usage || lastAssistantUsage;
+      if (finalUsage) {
+        this.chatSessionRepo.addUsage(turn.sessionId, {
+          ...finalUsage,
+          contextTokens: lastAssistantUsage?.contextTokens ?? finalUsage.inputTokens,
+        });
+      }
+      if (profile.home) {
+        try {
+          const limits = readCodexRateLimits(path.join(profile.home, '.codex'));
+          if (limits && this.quotaUsageRepo) {
+            for (const w of limits.windows) {
+              this.quotaUsageRepo.upsert({
+                profileName: profile.name,
+                grp: 'codex',
+                window: w.window,
+                remainingPct: Math.max(0, 100 - w.usedPercent),
+                resetAt: w.resetAt,
+                fetchedAt: Math.floor(Date.now() / 1000),
+              });
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      const output = result?.result || text;
+      if (result?.isError || code !== 0) {
+        const message = output || stderr.trim() || `Codex process exited with code ${code}`;
+        const quota = new CodexEngine().detectQuota(`${output}\n${stderr}`);
+        const loginFailure = /(?:not logged in|login required|log in to codex|authentication|unauthori[sz]ed|未 đăng nhập)/i.test(`${message}\n${stderr}`);
+        if (quota.exhausted || loginFailure) {
+          if (execution.profileName && this.quotaMarkRepo) {
+            if (quota.exhausted) this.quotaMarkRepo.mark(execution.profileName, 'codex', Math.floor(Date.now() / 1000) + 3600, 'codex_quota');
+          }
+          this.eventBus.emit('claude.fallback_changed', undefined, { reason: quota.exhausted ? 'codex_quota' : 'codex_login', step: null });
+          this.forceClaude.add(turn.sessionId);
+          this.chatSessionRepo.setBusy(turn.sessionId, 0);
+          this.setSessionState(turn.sessionId, 'idle');
+          this.lastEngines.set(turn.sessionId, 'claude');
+          this.executeTurn(turn);
+          return;
+        }
+        this.setSessionState(turn.sessionId, 'error');
+        this.emitChatError(turn.sessionId, turn.messageId, message);
+      } else {
+        this.setSessionState(turn.sessionId, 'idle');
+        this.chatMessageRepo.insert({
+          id: turn.messageId,
+          sessionId: turn.sessionId,
+          role: 'assistant',
+          content: output,
+          meta: JSON.stringify({ engine: 'codex', usage: finalUsage || null }),
+        });
+        this.emitChatDone(turn.sessionId, turn.messageId, { usage: finalUsage, durationMs: Date.now() - startedAt });
+      }
+      setBrainActivity('idle').catch(() => {});
+      this.processQueue();
     });
   }
 
@@ -2098,7 +2375,11 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
     return chatService.listPermissions(sessionId);
   });
 
-  fastify.get('/api/chat/permission-rules', async () => chatService.listPermissionRules());
+  fastify.get('/api/chat/permission-rules', async (req: FastifyRequest) => {
+    const query = req.query as { limit?: string; cursor?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return query.limit === undefined ? chatService.listPermissionRules() : chatService.pagePermissionRules(query);
+  });
   fastify.delete('/api/chat/permission-rules/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return chatService.deletePermissionRule(id);
@@ -2115,7 +2396,11 @@ export function registerChatRoutes(fastify: FastifyInstance, chatService: ChatSe
 
   // GET /api/chat/sessions
   fastify.get('/api/chat/sessions', async (req: FastifyRequest) => {
-    const query = req.query as { search?: string; archived?: string };
+    const query = req.query as { search?: string; archived?: string; limit?: string; cursor?: string };
+    if (query.limit !== undefined) {
+      if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+      return chatService.pageSessions(query);
+    }
     return chatService.listSessions(query);
   });
 

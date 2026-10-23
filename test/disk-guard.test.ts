@@ -234,6 +234,23 @@ describe('Disk Guard (chống đầy ổ đĩa)', () => {
     });
   });
 
+  it('monitors the configured project worktree root', () => {
+    const configuredRoot = path.join(tmpDir, 'encrypted-worktrees');
+    fs.mkdirSync(configuredRoot);
+    ctx.projectRepo.update('proj', { settings: JSON.stringify({ worktree: { root: configuredRoot } }) });
+    const seen: string[] = [];
+    fakeDiskReader = (p: string) => {
+      seen.push(p);
+      return { freeGB: p === configuredRoot ? 1 : 20, totalGB: 100 };
+    };
+    ctx.taskRepo.insert({ id: 'proj/t-configured-disk', projectId: 'proj', slug: 't-configured-disk', title: 'Configured disk', status: 'queued', level: 'easy' });
+
+    ctx.scheduler.tick();
+
+    expect(seen).toContain(configuredRoot);
+    expect(ctx.taskRepo.get('proj/t-configured-disk')?.status).toBe('waiting_quota');
+  });
+
   it('supports injecting diskSpace via options object in createContext and exposes via getStatus', () => {
     const customCtx = createContext(config, { diskSpace: () => ({ freeGB: 42, totalGB: 100 }) });
     try {

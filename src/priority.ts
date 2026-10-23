@@ -16,7 +16,7 @@ export const LIMITED_TEST_ENV: Record<string, string> = {
 };
 
 export function testThreadLimit(workerCount = 1, cpuCount = os.cpus().length): number {
-  return Math.min(2, Math.max(1, Math.floor(cpuCount / Math.max(1, Math.floor(workerCount || 1)))));
+  return Math.min(2, Math.max(1, Math.ceil(cpuCount / Math.max(1, Math.floor(workerCount || 1)))));
 }
 
 /**

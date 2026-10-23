@@ -1,31 +1,24 @@
-import React, { memo, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
-import { getProjects, getStatus, getTasks } from '../api/client';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { getProjects, getStatus, getTaskGraph, getTasksPage } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
-import { groupTasksByStatus, KANBAN_STATUSES } from '../utils/tasks';
+import { KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
-import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network } from 'lucide-react';
+import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, List } from 'lucide-react';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { useLocale } from '../context/LocaleContext';
-import { useShowMore } from '../components/CollapsibleList';
 import { TaskDag } from '../components/dag';
 import { filterTasksForDag } from '../components/dag/dagUtils';
-
-const normalizeText = (text: string): string =>
-  text
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[đĐ]/g, (c) => (c === 'đ' ? 'd' : 'D'))
-    .toLowerCase();
+import { DataTable } from '../components/ui';
 
 export interface KanbanColumnProps {
   statusKey: (typeof KANBAN_STATUSES)[number];
-  tasks: Task[];
+  project: string;
   search: string;
 }
 
-const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, search }) => {
+const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project, search }) => {
   const { t } = useLocale();
   // Dùng chung cache ['status'] giữa các cột, chỉ để hiện dung lượng đĩa trong nhãn "Chờ ổ đĩa".
   const { data: hubStatus } = useQuery({
@@ -34,33 +27,35 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
     refetchInterval: 10_000,
   });
 
-  const filteredTasks = useMemo(() => {
-    const query = normalizeText(search.trim());
-    let list = tasks;
-    if (query) {
-      list = list.filter((task) => {
-        const slugMatch = normalizeText(task.slug).includes(query);
-        const titleMatch = normalizeText(task.title).includes(query);
-        return slugMatch || titleMatch;
-      });
+  const pageSize = statusKey === 'done' || statusKey === 'cancelled' ? 10 : 20;
+  const { data, isLoading } = useQuery({
+    queryKey: ['tasks-kanban', project, statusKey, search, pageSize],
+    queryFn: () => getTasksPage({ project, status: statusKey, search, limit: pageSize, sort: 'createdAt', order: 'desc' }),
+    // Columns are cursor-paged. Polling page one would discard loaded pages
+    // and make cards move unexpectedly; SSE invalidation refreshes this view.
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+  const [visibleItems, setVisibleItems] = useState<Task[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  useEffect(() => {
+    setVisibleItems(data?.items || []);
+    setNextCursor(data?.nextCursor || null);
+  }, [data]);
+  const showMore = async () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const next = await getTasksPage({ project, status: statusKey, search, limit: pageSize, cursor: nextCursor, sort: 'createdAt', order: 'desc' });
+      setVisibleItems((current) => [...current, ...next.items]);
+      setNextCursor(next.nextCursor);
+    } finally {
+      setIsLoadingMore(false);
     }
-    return [...list].sort((a, b) => {
-      const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-      const timeB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-      return timeB - timeA;
-    });
-  }, [tasks, search]);
-
-  const initialCount = statusKey === 'done' || statusKey === 'cancelled' ? 10 : 20;
-  const { visibleItems, hasMore, isExpanded, showMore, collapse } = useShowMore(
-    filteredTasks,
-    initialCount,
-    20,
-    `agenthub:tasks:${statusKey}`,
-  );
-
-  const remaining = filteredTasks.length - visibleItems.length;
-  const nextStep = Math.min(20, remaining);
+  };
+  const remaining = Math.max(0, (data?.total || 0) - visibleItems.length);
+  const nextStep = Math.min(pageSize, remaining);
 
   return (
     <div
@@ -84,13 +79,15 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
           <StatusBadge status={statusKey} size="sm" />
         </div>
         <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[var(--bg-surface)] border border-[var(--border-default)] text-[var(--text-primary)]">
-          {tasks.length}
+          {data?.total || 0}
         </span>
       </div>
 
       {/* Cards List */}
       <div className="space-y-2.5 flex-1 overflow-y-auto">
-        {filteredTasks.length === 0 ? (
+        {isLoading ? (
+          <div className="h-24 flex items-center justify-center text-xs text-[var(--text-muted)]">{t('pagination.loading')}</div>
+        ) : visibleItems.length === 0 ? (
           <div className="h-24 border border-dashed border-[var(--border-default)] rounded-lg flex items-center justify-center text-xs text-[var(--text-muted)] italic">
             {t('common.empty')}
           </div>
@@ -187,26 +184,11 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
           ))
         )}
 
-        {(hasMore || isExpanded) && (
+        {nextCursor && (
           <div className="flex items-center justify-center gap-3 pt-2">
-            {hasMore && (
-              <button
-                type="button"
-                onClick={showMore}
-                className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer"
-              >
-                Xem thêm {nextStep} (còn {remaining})
-              </button>
-            )}
-            {isExpanded && (
-              <button
-                type="button"
-                onClick={collapse}
-                className="text-xs text-[var(--text-secondary)] hover:underline cursor-pointer"
-              >
-                Thu gọn
-              </button>
-            )}
+            <button type="button" onClick={() => void showMore()} disabled={isLoadingMore} className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer disabled:opacity-50">
+              {isLoadingMore ? t('pagination.loading') : `${t('tasks.showMore')} ${nextStep} (${t('tasks.remaining', { count: remaining })})`}
+            </button>
           </div>
         )}
       </div>
@@ -219,36 +201,77 @@ export const KanbanColumn = memo(KanbanColumnComponent);
 export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
-  const [viewMode, setViewMode] = useState<'kanban' | 'dag'>('kanban');
-  const [selectedProject, setSelectedProject] = useState<string>('all');
-  const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [urlParams, setUrlParams] = useSearchParams();
+  const [viewMode, setViewMode] = useState<'kanban' | 'dag' | 'list'>((urlParams.get('view') as 'kanban' | 'dag' | 'list') || 'kanban');
+  const [selectedProject, setSelectedProject] = useState<string>(urlParams.get('project') || 'all');
+  const [selectedStatus, setSelectedStatus] = useState<string>(urlParams.get('status') || 'all');
   const [doneFilter, setDoneFilter] = useState<'active_chains' | '1d' | '3d' | '7d' | '30d' | 'all'>('active_chains');
-  const [search, setSearch] = useState<string>('');
+  const [search, setSearch] = useState<string>(urlParams.get('search') || '');
+  const [page, setPage] = useState(Number(urlParams.get('page') || 1));
+  const [pageSize, setPageSize] = useState(Number(urlParams.get('pageSize') || 20));
+  const [sortKey, setSortKey] = useState<'createdAt' | 'updatedAt' | 'title' | 'slug'>((urlParams.get('sort') as 'createdAt' | 'updatedAt' | 'title' | 'slug') || 'createdAt');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>((urlParams.get('order') as 'asc' | 'desc') || 'desc');
+  const [cursors, setCursors] = useState<Record<number, string | undefined>>({});
+  const cursor = cursors[page - 1];
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
   });
 
-  const { data: tasks = [], isLoading } = useQuery({
-    queryKey: ['tasks', selectedProject],
-    queryFn: () => getTasks(selectedProject !== 'all' ? { project: selectedProject } : undefined),
+  const { data, isLoading: isPageLoading } = useQuery({
+    queryKey: ['tasks', selectedProject, selectedStatus, search, page, pageSize, cursor, sortKey, sortDirection],
+    queryFn: () => getTasksPage({ project: selectedProject, status: selectedStatus, search, limit: pageSize, cursor, offset: cursor ? undefined : (page - 1) * pageSize, sort: sortKey, order: sortDirection }),
+    enabled: viewMode === 'list',
     refetchInterval: 5000,
+    placeholderData: keepPreviousData,
   });
-
-  const grouped = useMemo(() => groupTasksByStatus(tasks), [tasks]);
+  const { data: taskGraph, isLoading: isGraphLoading } = useQuery({
+    queryKey: ['tasks-graph', selectedProject, doneFilter],
+    queryFn: () => getTaskGraph({ project: selectedProject, includeDone: doneFilter === 'all' }),
+    enabled: viewMode === 'dag',
+    refetchInterval: 5000,
+    placeholderData: keepPreviousData,
+  });
+  const initialFilters = useRef(true);
+  useEffect(() => {
+    if (data?.nextCursor) setCursors((current) => ({ ...current, [page]: data.nextCursor || undefined }));
+  }, [data?.nextCursor, page]);
+  useEffect(() => {
+    const next = new URLSearchParams(urlParams);
+    const values: Record<string, string> = { project: selectedProject, status: selectedStatus, search, page: String(page), pageSize: String(pageSize), view: viewMode, sort: sortKey, order: sortDirection };
+    for (const [key, value] of Object.entries(values)) {
+      if (value && value !== 'all' && value !== '1' && !(key === 'pageSize' && value === '20') && !(key === 'view' && value === 'kanban')) next.set(key, value);
+      else next.delete(key);
+    }
+    if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
+  }, [selectedProject, selectedStatus, search, page, pageSize, viewMode, sortKey, sortDirection, setUrlParams, urlParams]);
+  useEffect(() => {
+    if (initialFilters.current) {
+      initialFilters.current = false;
+      return;
+    }
+    setPage(1);
+    setCursors({});
+  }, [selectedProject, search, selectedStatus, pageSize]);
+  const graphTasks = useMemo<Task[]>(() => {
+    if (!taskGraph) return [];
+    const dependencies = new Map<string, string[]>();
+    for (const edge of taskGraph.edges) dependencies.set(edge.to, [...(dependencies.get(edge.to) || []), edge.from]);
+    return taskGraph.nodes.map((node) => ({
+      ...node,
+      dependsOn: dependencies.get(node.id) || [],
+      currentRun: null,
+      attempt: 0,
+      resume: 0,
+      createdAt: '',
+      updatedAt: '',
+    }));
+  }, [taskGraph]);
+  const tasks = graphTasks;
 
   const dagTasks = useMemo(() => {
-    let list = tasks;
-    const query = normalizeText(search.trim());
-    if (query) {
-      list = list.filter((task) => {
-        const slugMatch = normalizeText(task.slug).includes(query);
-        const titleMatch = normalizeText(task.title).includes(query);
-        return slugMatch || titleMatch;
-      });
-    }
-    return filterTasksForDag(list, {
+    return filterTasksForDag(tasks, {
       project: selectedProject,
       status: selectedStatus,
       doneFilter,
@@ -283,6 +306,17 @@ export const TasksPage: React.FC = () => {
             >
               <LayoutGrid className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t('dag.toggleKanban')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              data-testid="view-toggle-list"
+              aria-label={t('tasks.listView')}
+              title={t('tasks.listView')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${viewMode === 'list' ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+            >
+              <List className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t('tasks.listView')}</span>
             </button>
             <button
               type="button"
@@ -338,7 +372,7 @@ export const TasksPage: React.FC = () => {
           </div>
 
           {/* DAG-specific filters (Status & Done cutoff) */}
-          {viewMode === 'dag' && (
+          {viewMode !== 'kanban' && (
             <>
               {/* Status Filter */}
               <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
@@ -407,7 +441,26 @@ export const TasksPage: React.FC = () => {
         </div>
       </div>
 
-      {isLoading ? (
+      {viewMode === 'list' ? (
+        <DataTable
+          rows={data?.items || []}
+          loading={isPageLoading}
+          columns={[
+            { key: 'slug', title: t('tasks.slug'), sortable: true, sortValue: (task) => task.slug, render: (task) => <Link className="font-mono text-[var(--t-accent)] hover:underline" to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}>{task.slug}</Link> },
+            { key: 'title', title: t('tasks.title'), sortable: true, sortValue: (task) => task.title, render: (task) => <span className="truncate" title={task.title}>{task.title}</span> },
+            { key: 'status', title: t('tasks.status'), render: (task) => <StatusBadge status={task.status} size="sm" /> },
+            { key: 'project', title: t('tasks.project'), render: (task) => <span>{task.projectId}</span> },
+          ]}
+          page={page}
+          pageSize={pageSize}
+          total={data?.total ?? 0}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => { setPageSize(size); setPage(1); setCursors({}); }}
+          sortKey={sortKey}
+          sortDirection={sortDirection}
+          onSortChange={(key, direction) => { setSortKey(key as typeof sortKey); setSortDirection(direction); setPage(1); setCursors({}); }}
+        />
+      ) : viewMode === 'dag' && isGraphLoading ? (
         <div className="flex items-center justify-center min-h-[40vh]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
         </div>
@@ -420,9 +473,9 @@ export const TasksPage: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-8" data-tour="task-columns">
           {KANBAN_STATUSES.map((statusKey) => (
             <KanbanColumn
-              key={statusKey}
+              key={`${statusKey}-${selectedProject}-${search}`}
               statusKey={statusKey}
-              tasks={grouped[statusKey] || []}
+              project={selectedProject}
               search={search}
             />
           ))}

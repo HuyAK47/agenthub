@@ -223,4 +223,144 @@ process.exit(0);
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it('enforces brain policy for absolute commands and shell indirection', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-policy-'));
+    try {
+      const marker = path.join(tmp, 'must-survive');
+      fs.writeFileSync(marker, 'keep');
+      const work = path.join(tmp, 'work');
+      fs.mkdirSync(work);
+      const hubHome = path.join(tmp, 'hub');
+      const hubToken = path.join(hubHome, 'token');
+      fs.mkdirSync(hubHome, { recursive: true });
+      fs.writeFileSync(hubToken, 'keep-secret');
+      const fake = path.join(work, 'policy-check.mjs');
+      fs.writeFileSync(fake, `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+spawnSync('/bin/sh', ['-c', '/bin/rm -f ${marker}']);
+if (fs.existsSync('${hubToken}')) process.exit(1);
+`, { mode: 0o700 });
+
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      const child = new CodexEngine(fake).spawn({
+        profile,
+        model: 'gpt-5.6-luna',
+        cwd: work,
+        prompt: 'policy check',
+        logPath: path.join(tmp, 'policy.log'),
+        hubHome,
+        brainPolicy: 'standard',
+        codexSandbox: 'workspace-write',
+      });
+      const exitCode = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      expect(exitCode).toBe(0);
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(fs.readFileSync(hubToken, 'utf8')).toBe('keep-secret');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks mutation and interpreter bypasses in a brain sandbox', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-bypasses-'));
+    try {
+      const work = path.join(tmp, 'work');
+      fs.mkdirSync(work);
+      const marker = path.join(work, 'must-survive');
+      const moved = path.join(work, 'moved');
+      const touched = path.join(work, 'touched');
+      const redirected = path.join(work, 'redirected');
+      const readEscaped = path.join(work, 'read-escaped');
+      const outsideSecret = '/etc/passwd';
+      fs.writeFileSync(marker, 'keep');
+      const hubHome = path.join(tmp, 'hub');
+      fs.mkdirSync(hubHome, { recursive: true });
+      const fake = path.join(work, 'policy-bypasses.mjs');
+      fs.writeFileSync(fake, `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+for (const args of [
+  ['/usr/bin/node', ['-e', "require('node:fs').unlinkSync('${marker}')"]],
+  ['/bin/mv', ['${marker}', '${moved}']],
+  ['/usr/bin/cp', ['${marker}', '${moved}']],
+  ['/usr/bin/find', ['${work}', '-name', 'must-survive', '-delete']],
+  ['/usr/bin/touch', ['${touched}']],
+  ['/bin/sh', ['-c', 'echo escaped > ${redirected}']],
+  ['/bin/cat', ['${outsideSecret}']],
+  ['/bin/grep', ['root:', '${outsideSecret}']],
+]) {
+  const result = spawnSync(args[0], args[1], { encoding: 'utf8' });
+  if (result.status === 0) fs.writeFileSync('${readEscaped}', result.stdout || 'read escaped');
+}
+if (fs.existsSync('${readEscaped}')) process.exit(1);
+if (!fs.existsSync('${marker}') || fs.existsSync('${moved}') || fs.existsSync('${touched}') || fs.existsSync('${redirected}')) process.exit(1);
+`, { mode: 0o700 });
+
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      const child = new CodexEngine(fake).spawn({
+        profile,
+        model: 'gpt-5.6-luna',
+        cwd: work,
+        prompt: 'policy bypass check',
+        logPath: path.join(tmp, 'policy-bypasses.log'),
+        hubHome,
+        brainPolicy: 'standard',
+        codexSandbox: 'workspace-write',
+      });
+      const exitCode = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      expect(exitCode).toBe(0);
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(fs.existsSync(moved)).toBe(false);
+      expect(fs.existsSync(touched)).toBe(false);
+      expect(fs.existsSync(redirected)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let shell shims bypass the npm, npx, and curl allowlists', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-shell-policy-'));
+    try {
+      const work = path.join(tmp, 'work');
+      fs.mkdirSync(work);
+      const marker = path.join(work, 'bypass-ran');
+      const hubHome = path.join(tmp, 'hub');
+      fs.mkdirSync(hubHome, { recursive: true });
+      const fake = path.join(work, 'shell-policy.mjs');
+      fs.writeFileSync(fake, `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const attempts = [
+  ['npm', ['run', 'arbitrary-script']],
+  ['npx', ['-p', 'evil-package', 'echo', 'owned']],
+  ['curl', ['-X', 'POST', 'https://api.github.com/repos/openai/codex']],
+  ['/bin/sh', ['-c', 'npm run arbitrary-script']],
+  ['/bin/sh', ['-c', 'npx -p evil-package echo owned']],
+  ['/bin/sh', ['-c', 'curl -X POST https://api.github.com/repos/openai/codex']],
+  ['/bin/sh', ['-c', 'curl https://example.com']],
+];
+for (const [command, args] of attempts) {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
+  if (result.status === 0) fs.writeFileSync('${marker}', command + ' ' + args.join(' '));
+}
+if (fs.existsSync('${marker}')) process.exit(1);
+`, { mode: 0o700 });
+
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      const child = new CodexEngine(fake).spawn({
+        profile,
+        model: 'gpt-5.6-luna',
+        cwd: work,
+        prompt: 'shell policy check',
+        logPath: path.join(tmp, 'shell-policy.log'),
+        hubHome,
+        brainPolicy: 'standard',
+        codexSandbox: 'workspace-write',
+      });
+      const exitCode = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      expect(exitCode).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

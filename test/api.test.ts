@@ -267,12 +267,12 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect(updated.defaultTimeout).toBe(7200);
     expect(updated.slotsPerCodexProfile).toBe(3);
     expect(updated.watchdog).toEqual({ stallMinutes: 4, waitingMinutes: 2 });
-    expect(updated.notifications).toEqual({ desktop: false });
+    expect(updated.notifications).toEqual({ desktop: false, desktopLevel: 'important' });
 
     // 4. Verify in-memory config updated immediately
     expect(config.defaultModelChains.hard).toEqual(['claude-opus-4-6-thinking', 'gemini-3.8-flash-high']);
     expect(config.defaultTimeout).toBe(7200);
-    expect(config.notifications).toEqual({ desktop: false });
+    expect(config.notifications).toEqual({ desktop: false, desktopLevel: 'important' });
 
     // 5. Verify saved to config.json
     const diskConfig = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
@@ -564,6 +564,105 @@ describe('AgentHub HTTP API Endpoints', () => {
   });
 
   // --- Tasks API ---
+  it('GET /api/tasks supports cursor pagination, filters, totals, and legacy responses', async () => {
+    ctx.projectRepo.insert({ id: 'pageproj', name: 'Page Project', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 2 });
+    for (const [slug, status, title, date] of [
+      ['one', 'queued', 'Đăng nhập', '2026-01-01'],
+      ['two', 'running', 'Build app', '2026-01-02'],
+      ['three', 'done', 'Đăng xuất', '2026-01-03'],
+    ] as const) {
+      ctx.taskRepo.insert({ id: `pageproj/${slug}`, projectId: 'pageproj', slug, title, status });
+      ctx.db.prepare('UPDATE tasks SET createdAt = ?, updatedAt = ? WHERE id = ?').run(date, date, `pageproj/${slug}`);
+    }
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj', headers: authHeaders() });
+    expect(legacy.statusCode).toBe(200);
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+
+    const first = await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&limit=1', headers: authHeaders() });
+    expect(first.statusCode).toBe(200);
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody.total).toBe(3);
+    expect(firstBody.items.map((task: { slug: string }) => task.slug)).toEqual(['three']);
+
+    const second = await server.inject({ method: 'GET', url: `/api/tasks?project=pageproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(second.body).items.map((task: { slug: string }) => task.slug)).toEqual(['two']);
+    const filtered = JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&status=running&search=BUILD&limit=20', headers: authHeaders() })).body);
+    expect(filtered.items).toHaveLength(1);
+    expect(filtered.items[0].projectId).toBe('pageproj');
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=missing&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%25&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%5F&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&cursor=broken&limit=1', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
+  it('GET /api/claude/sessions pages sessions and keeps the legacy response without limit', async () => {
+    ctx.claudeSessionRepo.upsert({ sessionId: 'session-old', cwd: tmpDir, title: 'Old', lastAt: '2026-01-01T00:00:00Z' });
+    ctx.claudeSessionRepo.upsert({ sessionId: 'session-new', cwd: tmpDir, title: 'New', lastAt: '2026-01-02T00:00:00Z' });
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/claude/sessions', headers: authHeaders() });
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+
+    const page = await server.inject({ method: 'GET', url: '/api/claude/sessions?limit=1', headers: authHeaders() });
+    expect(page.statusCode).toBe(200);
+    const body = JSON.parse(page.body);
+    expect(body.total).toBe(2);
+    expect(body.items.map((session: { sessionId: string }) => session.sessionId)).toEqual(['session-new']);
+    const next = await server.inject({ method: 'GET', url: `/api/claude/sessions?limit=1&cursor=${encodeURIComponent(body.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(next.body).items.map((session: { sessionId: string }) => session.sessionId)).toEqual(['session-old']);
+    expect((await server.inject({ method: 'GET', url: '/api/claude/sessions?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
+  it('GET /api/batches supports cursor pagination and keeps the legacy response', async () => {
+    ctx.projectRepo.insert({ id: 'batchproj', name: 'Batch Project', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 2 });
+    ctx.service.taskBatchRepo?.create({ id: 'batch-old', projectId: 'batchproj', title: 'Old batch' });
+    ctx.service.taskBatchRepo?.create({ id: 'batch-new', projectId: 'batchproj', title: 'New batch' });
+    ctx.db.prepare("UPDATE task_batches SET createdAt = CASE id WHEN 'batch-old' THEN '2026-01-01' ELSE '2026-01-02' END WHERE id IN ('batch-old', 'batch-new')").run();
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/batches?project=batchproj', headers: authHeaders() });
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+    const first = await server.inject({ method: 'GET', url: '/api/batches?project=batchproj&limit=1', headers: authHeaders() });
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody.total).toBe(2);
+    expect(firstBody.items.map((batch: { id: string }) => batch.id)).toEqual(['batch-new']);
+    const next = await server.inject({ method: 'GET', url: `/api/batches?project=batchproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(next.body).items.map((batch: { id: string }) => batch.id)).toEqual(['batch-old']);
+    expect((await server.inject({ method: 'GET', url: '/api/batches?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
+  it('keeps the Claude reviewer in task lists after older fallback events leave the global recent window', async () => {
+    ctx.projectRepo.insert({
+      id: 'fallback-list',
+      name: 'Fallback list',
+      path: '/tmp',
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    ctx.taskRepo.insert({
+      id: 'fallback-list/task',
+      projectId: 'fallback-list',
+      slug: 'task',
+      title: 'Fallback task',
+      status: 'review',
+    });
+    ctx.eventRepo.insert('review.fallback', 'fallback-list/task', { from: 'codex', to: 'claude' });
+    for (let i = 0; i < 201; i += 1) {
+      ctx.eventRepo.insert('unrelated.event');
+    }
+
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/tasks?project=fallback-list',
+      headers: authHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual([
+      expect.objectContaining({ id: 'fallback-list/task', reviewer: 'claude' }),
+    ]);
+  });
+
   it('Tasks workflow: create, start, cancel, review, retry, commits, and worktree removal', async () => {
     const repoPath = path.join(tmpDir, 'test-repo');
     initGitRepo(repoPath);

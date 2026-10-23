@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import type { BrainConfig } from '../config.js';
 import { BrainDirectiveRepo, BrainTurnRepo, ChatSessionRepo, KnowledgeRepo, ProfileRepo, TaskRepo } from '../db/index.js';
-import { resolveClaudeProfile } from '../profiles/index.js';
+import { resolveClaudeProfile, resolveCodexProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
 import { effectiveBrainMode, effectiveBrainPermission, type EffectiveBrainMode } from './mode.js';
 import { projectSettings } from '../projects/settings.js';
 import { buildProjectKnowledgeContext } from '../projects/knowledge-context.js';
+import { effectiveBrainCodexProfile, effectiveBrainEngine } from './engine.js';
 
 const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high', 'brain.directive_added', 'ci.failed', 'brain.trust_changed', 'config.updated']);
 const SYSTEM_EVENTS = new Set(['quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
@@ -192,12 +193,27 @@ export class BrainRunner {
       }
       return this.opts.chatSessionRepo.get(existing.id) || existing;
     }
-    this.opts.chatService.getOrCreateSession(id, { title: project ? `Bộ não · ${project.name}` : 'Bộ não', mode, model: this.opts.config.model, profileName: this.profileName(), kind: 'brain', projectId } as never);
+    const engine = effectiveBrainEngine(project, this.opts.config);
+    this.opts.chatService.getOrCreateSession(id, {
+      title: project ? `Bộ não · ${project.name}` : 'Bộ não', mode,
+      model: engine === 'codex' ? (this.opts.config.codexModel || 'gpt-5.6-luna') : this.opts.config.model,
+      profileName: engine === 'codex' ? this.codexProfile(project) : this.profileName(), kind: 'brain', projectId,
+    } as never);
     this.opts.chatSessionRepo.updatePinned(id, 1);
     return this.opts.chatSessionRepo.get(id)!;
   }
 
   private profileName(): string { return resolveClaudeProfile(this.opts.profileRepo || { getAll: () => [] }, this.opts.config.claudeProfile, this.opts.config.claudeProfileExplicit); }
+
+  private codexProfile(project?: { settings?: string | null }): string | null {
+    return resolveCodexProfile(
+      this.opts.profileRepo || { getAll: () => [] },
+      effectiveBrainCodexProfile(
+        project,
+        this.opts.config,
+      ),
+    );
+  }
 
   private onEvent(type: string, taskId?: string, payload?: unknown): void {
     const data = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};

@@ -2,9 +2,10 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Task } from '../types/api';
-import { getTasks } from '../api/client';
+import { getTasksPage } from '../api/client';
 import { ClipboardCheck, ArrowRight, Eye } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { getReviewerEngine } from '../utils/reviewer';
 
 export interface ReviewQueueProps {
   tasks?: Task[];
@@ -18,7 +19,7 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
   const { t } = useLocale();
   const { data: fetchedTasks } = useQuery({
     queryKey: ['tasks', 'review'],
-    queryFn: () => getTasks({ status: 'review' }),
+    queryFn: async () => (await getTasksPage({ status: 'review', limit: 20, sort: 'createdAt', order: 'desc' })).items,
     enabled: propTasks === undefined,
     refetchInterval: 5000,
   });
@@ -83,6 +84,16 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
                     >
                       {displayTitle}
                     </Link>
+
+                    <span
+                      data-testid="reviewer-badge"
+                      className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-white shadow-2xs ${
+                        getReviewerEngine(task) === 'claude' ? 'bg-[var(--t-claude)]' : 'bg-emerald-600'
+                      }`}
+                      style={getReviewerEngine(task) === 'claude' ? { backgroundColor: 'var(--t-claude)' } : undefined}
+                    >
+                      {getReviewerEngine(task) === 'claude' ? 'Claude' : 'Codex'}
+                    </span>
 
                     {watching ? (
                       <span

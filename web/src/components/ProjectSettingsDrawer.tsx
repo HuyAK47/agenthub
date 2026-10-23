@@ -82,6 +82,7 @@ export function changedSettings(
     'brain',
     'worktree',
     'integration',
+    'review',
     'ci',
     'references',
     'reviewChecklist',
@@ -876,6 +877,30 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] md:col-span-2">
+                <label className="text-xs font-semibold text-[var(--t-text)] block">{t('projects.worktreeRoot')}</label>
+                <Input
+                  aria-label={t('projects.worktreeRoot')}
+                  placeholder={t('projects.worktreeRootPlaceholder')}
+                  value={draftSettings.worktree.root ?? ''}
+                  onChange={(e) => setDraftSettings((prev) => ({
+                    ...prev,
+                    worktree: { ...prev.worktree, root: e.target.value || undefined },
+                  }))}
+                />
+                <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.worktreeRootDesc')}</p>
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={draftSettings.worktree.logsInRoot === true}
+                    onChange={(e) => setDraftSettings((prev) => ({
+                      ...prev,
+                      worktree: { ...prev.worktree, logsInRoot: e.target.checked },
+                    }))}
+                  />
+                  {t('projects.worktreeLogsInRoot')}
+                </label>
+              </div>
               {/* Dependency install */}
               <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]">
                 <div className="flex items-center justify-between">

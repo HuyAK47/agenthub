@@ -14,7 +14,7 @@ import {
   DigestData,
   generateDigest,
   isQuietHours,
-  areAllProfilesQuotaExhaustedForFamily,
+  isQuotaEventEngineWide,
   isSystemIncident,
   forwardDecisionToBrain,
   getMinutesSinceTime,
@@ -214,6 +214,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'shutdown', description: 'Tắt AgentHub (bật lại từ máy bằng agenthub start)' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
   { command: 'newtask', description: 'Tạo task từ một đoạn mô tả chung' },
@@ -248,6 +249,8 @@ export class TelegramBotService {
   private quotaMarkRepo?: QuotaMarkRepo;
   private ciRepo?: CiRepo;
   private lastSentCi = new Map<string, number>();
+  private lastSentDisk = new Map<'low' | 'ok', number>();
+  private lastSentLoadSummary = 0;
   private lastBroadcast = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
@@ -289,6 +292,7 @@ export class TelegramBotService {
   private waitingQuotaCheckTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
+  private reviewFallbackNotified = new Set<string>();
 
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
@@ -1027,6 +1031,19 @@ export class TelegramBotService {
         await this.stopChat(chatId);
         break;
 
+      case '/shutdown': {
+        const status = this.service.getStatus();
+        const running = status.tasks.running + status.tasks.checking;
+        await this.sendMessage(chatId,
+          `⚠️ <b>Tắt AgentHub?</b> ${running} task đang chạy sẽ được đưa về hàng chờ và tiếp tục khi bật lại. Sau đó chỉ có thể bật lại từ máy bằng lệnh <code>agenthub start</code>.`,
+          { inline_keyboard: [[
+            { text: '✅ Xác nhận tắt', callback_data: 'hubshutdown:confirm' },
+            { text: '❌ Hủy', callback_data: 'hubshutdown:cancel' },
+          ]] },
+        );
+        break;
+      }
+
       case '/compact':
         await this.sendMessage(chatId, 'ℹ️ Tính năng nén ngữ cảnh chưa được bật.');
         break;
@@ -1194,6 +1211,18 @@ export class TelegramBotService {
   private async handleBrainCommand(chatId: number, argStr: string): Promise<void> {
     const current = this.config.brain;
     const parts = argStr.split(/\s+/).filter(Boolean);
+    if (parts[0] === 'engine') {
+      const engine = parts[1];
+      if (engine !== 'claude' && engine !== 'codex') {
+        await this.sendMessage(chatId, 'Cú pháp: /brain engine codex|claude');
+        return;
+      }
+      this.config.brain.engine = engine;
+      saveConfig(this.config.hubHome, { brain: { engine } });
+      this.eventBus.emit('config.updated', undefined, { brain: { engine }, source: 'telegram' });
+      await this.sendMessage(chatId, `🧠 Đã chuyển engine bộ não sang <b>${engine}</b>.`);
+      return;
+    }
     if (parts[0] === 'trust') {
       const projectId = parts[1];
       const permission = parts[2];
@@ -1787,6 +1816,18 @@ export class TelegramBotService {
     const domain = parts[0];
     const action = parts[1];
     const taskIdOrParam = parts.slice(2).join(':');
+
+    if (domain === 'hubshutdown') {
+      if (action !== 'confirm') {
+        await this.answerCallbackQuery(query.id, 'Đã hủy.');
+        return;
+      }
+      await this.answerCallbackQuery(query.id, 'Đang tắt AgentHub...');
+      this.service.shutdownForUser();
+      await this.sendMessage(chatId, '🛑 AgentHub đã lưu trạng thái và đang tắt. Bật lại từ máy bằng: <code>agenthub start</code>.');
+      setImmediate(() => process.kill(process.pid, 'SIGTERM'));
+      return;
+    }
 
     if (domain === 'permission') {
       if (!this.chatService) {
@@ -3089,7 +3130,7 @@ export class TelegramBotService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhaustedForFamily(this.profileRepo, this.quotaMarkRepo, typeof p.family === 'string' ? p.family : undefined, now));
+        isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
 
       const isAllowedInAuto =
         type === 'brain.notify' ||
@@ -3100,6 +3141,9 @@ export class TelegramBotService {
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
+        type === 'merge.conflict' ||
+        type === 'merge.failed' ||
+        type === 'review.fallback' ||
         allExhausted;
 
       if (!isAllowedInAuto) {
@@ -3282,6 +3326,31 @@ export class TelegramBotService {
         break;
       }
 
+      case 'review.fallback': {
+        if (!notify.fallback) return;
+        if (taskId && this.reviewFallbackNotified.has(taskId)) return;
+        if (taskId) this.reviewFallbackNotified.add(taskId);
+
+        const task = taskId ? this.taskRepo.get(taskId) : null;
+        const dashboardUrl = this.getDashboardUrl(taskId ? `#/tasks/${toRouteId(taskId)}` : '');
+        const keyboard: InlineKeyboardButton[][] = [
+          [{ text: '🌐 Xem dashboard', url: dashboardUrl }],
+        ];
+
+        if (minimal) {
+          this.broadcastMessage(`${prefix}Codex hết quota, Claude đang duyệt …`, { inline_keyboard: keyboard });
+          break;
+        }
+
+        const title = this.resolveTaskTitle(taskId, p, task);
+        const header = '🔀 <b>Codex hết quota, Claude đang duyệt …</b>';
+        this.broadcastMessage(
+          `${prefix}${header}\nID: <code>${taskId}</code>\nTiêu đề: <b>${this.escapeHtml(title)}</b>`,
+          { inline_keyboard: keyboard },
+        );
+        break;
+      }
+
       case 'task.failed': {
         if (!notify.failed) return;
         if (minimal) {
@@ -3341,7 +3410,7 @@ export class TelegramBotService {
       case 'quota.exhausted': {
         const family = typeof p.family === 'string' ? p.family : typeof p.model === 'string' ? p.model : '';
         const quotaKey = family || 'all';
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhaustedForFamily(this.profileRepo, this.quotaMarkRepo, family, now);
+        const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
         if (!isAllExhausted) this.allQuotaNotified.delete(quotaKey);
         if (effectiveMode === 'auto') {
           if (isAllExhausted && notifyAllExhausted && !this.allQuotaNotified.has(quotaKey)) {
@@ -3366,9 +3435,32 @@ export class TelegramBotService {
         break;
       }
 
+      case 'task.paused':
+      case 'load.task_paused':
+      case 'load.high': {
+        if (now - this.lastSentLoadSummary < 15 * 60_000) break;
+        this.lastSentLoadSummary = now;
+        this.broadcastMessage(`⚠️ <b>AgentHub tạm dừng/gặp tải cao</b> — xem dashboard để biết chi tiết.`);
+        break;
+      }
+
       case 'claude.quota_exhausted': {
         if (!notifyAllExhausted || p.fallbackAvailable !== false) return;
         this.broadcastMessage('⏳ <b>Claude hết quota</b>\nKhông còn bước fallback khả dụng, cần chờ reset quota.');
+        break;
+      }
+
+      case 'merge.conflict': {
+        const message = typeof p.message === 'string' ? p.message : 'Xung đột khi merge tự động';
+        const taskLabel = taskId || 'Task';
+        this.broadcastMessage(`${prefix}⚠️ <b>Xung đột tự động gộp: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
+        break;
+      }
+
+      case 'merge.failed': {
+        const message = typeof p.message === 'string' ? p.message : 'Lỗi khi merge tự động';
+        const taskLabel = taskId || 'Task';
+        this.broadcastMessage(`${prefix}❌ <b>Lỗi tự động gộp: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
         break;
       }
 
@@ -3396,6 +3488,9 @@ export class TelegramBotService {
 
       case 'disk.low': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('low');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('low', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 3;
         const cacheDir = typeof p.cacheDir === 'string' ? `\nCache node_modules: <code>${this.escapeHtml(p.cacheDir)}</code>` : '';
@@ -3408,6 +3503,9 @@ export class TelegramBotService {
 
       case 'disk.ok': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('ok');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('ok', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         this.broadcastMessage(`💾 <b>Ổ đĩa đã đủ chỗ</b> (${freeGB} GB): tiếp tục chạy task.`);
         break;
@@ -3770,6 +3868,12 @@ export class TelegramBotService {
         return minimal ? `${prefix}CI thất bại` : `${prefix}CI thất bại: ${p?.workflow || 'CI'}`;
       case 'ci.passed':
         return minimal ? `${prefix}CI đã xanh` : `${prefix}CI đã xanh: ${p?.workflow || 'CI'}`;
+      case 'merge.conflict':
+        return `${prefix}Xung đột khi merge tự động (${taskId || 'task'})`;
+      case 'merge.failed':
+        return `${prefix}Lỗi khi merge tự động (${taskId || 'task'})`;
+      case 'review.fallback':
+        return `${prefix}Codex hết quota, Claude đang duyệt …`;
       case 'quota.exhausted':
         return `Hồ sơ ${p?.profile || p?.profileName || 'tài khoản'} hết quota ${p?.family || ''}`;
       default:
@@ -3782,6 +3886,7 @@ export class TelegramBotService {
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/shutdown - Tắt AgentHub; bật lại từ máy bằng <code>agenthub start</code>
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi

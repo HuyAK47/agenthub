@@ -280,6 +280,21 @@ describe('Claude session privacy and quota handling', () => {
     db.close();
   });
 
+  it('allows transcripts from a project worktree root configured outside hubHome', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-configured-root-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects');
+    const projectDir = path.join(root, 'project');
+    const configuredRoot = path.join(root, 'encrypted-worktrees');
+    fs.mkdirSync(path.join(transcriptDir, encodeProjectDir(configuredRoot)), { recursive: true });
+    fs.mkdirSync(projectDir); fs.mkdirSync(configuredRoot);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path,settings) VALUES (?,?,?,?)').run('p', 'Project', projectDir, JSON.stringify({ worktree: { root: configuredRoot } }));
+    transcript(path.join(transcriptDir, encodeProjectDir(configuredRoot)), configuredRoot, new Date().toISOString());
+    await new ClaudeSessionScanner(db, { dir: transcriptDir, hubHome: path.join(root, 'hub-home'), worktreesDir: path.join(root, 'worktrees') }).scan();
+    expect(db.prepare('SELECT COUNT(*) count FROM claude_sessions').get()).toEqual({ count: 1 });
+    db.close();
+  });
+
   it('migration forgets previously recorded paths of unmanaged transcripts', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
     const db = openDatabase(path.join(root, 'hub.db'));
@@ -481,6 +496,20 @@ describe('Claude session privacy and quota handling', () => {
     const detail = service.getClaudeSession('12345678-abcd-ef01-2345-6789abcdef01');
     expect(detail.active).toBe(true);
     expect(detail.title).toBe('12345678');
+    db.close();
+  });
+
+  it('uses the selected sort value when continuing a cursor', () => {
+    const db = openDatabase(':memory:');
+    const repo = new ClaudeSessionRepo(db);
+    repo.upsert({ sessionId: 'session-a', cwd: '/work/a', title: 'A', messages: 1 });
+    repo.upsert({ sessionId: 'session-b', cwd: '/work/b', title: 'B', messages: 2 });
+    repo.upsert({ sessionId: 'session-c', cwd: '/work/c', title: 'C', messages: 3 });
+    const first = repo.page(1, 0, undefined, 'messages', 'desc');
+    expect(first.items.map((session) => session.sessionId)).toEqual(['session-c']);
+    db.prepare("INSERT INTO claude_sessions (sessionId, cwd, title, messages) VALUES ('session-z', '/work/z', 'Z', 99)").run();
+    const second = repo.page(1, 0, first.nextCursor!, 'messages', 'desc');
+    expect(second.items.map((session) => session.sessionId)).toEqual(['session-b']);
     db.close();
   });
 });

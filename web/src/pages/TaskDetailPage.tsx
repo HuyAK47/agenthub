@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import {
@@ -7,6 +7,7 @@ import {
   createTaskFromError,
   deleteWorktree,
   getTask,
+  getTaskRunsPage,
   getTasks,
   getTaskLog,
   retryTask,
@@ -22,8 +23,8 @@ import {
   pauseTask,
   resumeTask,
 } from '../api/client';
-import { TaskLevel } from '../types/api';
-import { subscribeToRunOutput } from '../api/sse';
+import { TaskLevel, EventItem } from '../types/api';
+import { subscribeToRunOutput, subscribeToEvents } from '../api/sse';
 import { parseApiTime } from '../lib/time';
 import { CheckResults } from '../components/CheckResults';
 import { StatusBadge } from '../components/StatusBadge';
@@ -32,6 +33,8 @@ import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { Pagination } from '../components/ui/Pagination';
+import { getReviewerEngine } from '../utils/reviewer';
 import {
   ArrowLeft,
   Play,
@@ -97,6 +100,11 @@ export const TaskDetailPage: React.FC = () => {
   const [liveLog, setLiveLog] = useState<string>('');
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const logLines = React.useMemo(() => liveLog.split('\n'), [liveLog]);
+  const [logScrollTop, setLogScrollTop] = useState(0);
+  const logVirtualized = logLines.length > 500;
+  const logStart = logVirtualized ? Math.max(0, Math.floor(logScrollTop / 18) - 20) : 0;
+  const logEnd = logVirtualized ? Math.min(logLines.length, logStart + 80) : logLines.length;
 
   const { data: task, isLoading, error } = useQuery({
     queryKey: ['task', id],
@@ -104,6 +112,21 @@ export const TaskDetailPage: React.FC = () => {
     enabled: !!id,
     refetchInterval: 4000,
   });
+
+  const [runParams, setRunParams] = useSearchParams();
+  const [runsPage, setRunsPage] = useState(Math.max(1, Number(runParams.get('runsPage') || 1)));
+  const [runsCursors, setRunsCursors] = useState<Record<number, string | undefined>>({});
+  const runsCursor = runsCursors[runsPage - 1];
+  const runsQuery = useQuery({
+    queryKey: ['task-runs', id, runsPage, runsCursor],
+    queryFn: () => getTaskRunsPage(id, { limit: 20, offset: runsCursor ? undefined : (runsPage - 1) * 20, cursor: runsCursor }),
+    enabled: Boolean(id) && activeTab === 'runs',
+    placeholderData: (previous) => previous,
+  });
+  const runs = runsQuery.isSuccess ? runsQuery.data.items : task?.runs || [];
+  useEffect(() => {
+    if (runsQuery.data?.nextCursor) setRunsCursors((current) => ({ ...current, [runsPage]: runsQuery.data!.nextCursor || undefined }));
+  }, [runsPage, runsQuery.data?.nextCursor]);
 
   const { data: hubStatus } = useQuery({
     queryKey: ['status'],
@@ -126,6 +149,32 @@ export const TaskDetailPage: React.FC = () => {
       refetchNotes();
     },
   });
+
+  const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
+  useEffect(() => {
+    const unsub = subscribeToEvents((event: EventItem) => {
+      const rawId = id ? id.replace('~', '/') : '';
+      if (event.taskId === id || (rawId && event.taskId === rawId)) {
+        setLiveEvents((prev) => [event, ...prev.filter((e) => e.id !== event.id)]);
+      }
+    });
+    return unsub;
+  }, [id]);
+
+  const timelineEvents = React.useMemo(() => {
+    const initial = task?.events || [];
+    const combined = [...liveEvents, ...initial];
+    const seen = new Set<string | number>();
+    const unique: EventItem[] = [];
+    for (const ev of combined) {
+      const key = ev.id ?? `${ev.type}-${ev.ts}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(ev);
+      }
+    }
+    return unique;
+  }, [task?.events, liveEvents]);
 
   // Fetch initial log
   useQuery({
@@ -168,6 +217,7 @@ export const TaskDetailPage: React.FC = () => {
   const handleScroll = () => {
     if (!logContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = logContainerRef.current;
+    setLogScrollTop(scrollTop);
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 30;
     setAutoScroll(isAtBottom);
   };
@@ -465,6 +515,17 @@ export const TaskDetailPage: React.FC = () => {
                 diskMinFreeGB={hubStatus?.disk?.minFreeGB}
                 size="sm"
               />
+              {(task.status === 'review' || (task.reviews && task.reviews.length > 0) || task.reviewChain?.length) && (
+                <span
+                  data-testid="reviewer-badge"
+                  className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-white shadow-2xs ${
+                    getReviewerEngine(task) === 'claude' ? 'bg-[var(--t-claude)]' : 'bg-emerald-600'
+                  }`}
+                  style={getReviewerEngine(task) === 'claude' ? { backgroundColor: 'var(--t-claude)' } : undefined}
+                >
+                  {getReviewerEngine(task) === 'claude' ? 'Claude' : 'Codex'}
+                </span>
+              )}
               {task.status === 'running' && (task.paused || task.currentRun?.paused) && (
                 <span
                   data-testid="task-paused-badge"
@@ -666,6 +727,45 @@ export const TaskDetailPage: React.FC = () => {
 
       {(task.sourceRef || (task.derivedTasks && task.derivedTasks.length > 0)) && <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 text-sm space-y-2"><h2 className="font-semibold">{t('extra.linkedTasks')}</h2>{task.sourceRef && <p>{t('extra.generatedFrom')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(task.sourceRef!.taskId.replace('/', '~'))}`)}>{task.sourceRef.taskId}</button></p>}{task.derivedTasks?.map((derived) => <p key={derived.id}>{t('extra.generatedTask')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(derived.id.replace('/', '~'))}`)}>{derived.id}</button></p>)}</section>}
 
+      {/* Timeline */}
+      <div data-testid="task-timeline" className="bg-[var(--t-surface)] p-6 rounded-xl border border-[var(--t-border)] space-y-3 shadow-xs">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--t-text-3)] flex items-center gap-2">
+          <Clock className="w-4 h-4 text-[var(--t-accent)]" />
+          <span>{t('taskDetail.timeline')}</span>
+        </h3>
+        {timelineEvents.length === 0 ? (
+          <p className="text-xs text-[var(--t-text-3)] italic">{t('taskDetail.noEvents')}</p>
+        ) : (
+          <ol className="relative border-l border-[var(--t-border)] ml-2 space-y-3 pl-4 text-xs">
+            {timelineEvents.map((evt, idx) => (
+              <li
+                key={evt.id || idx}
+                data-testid={`timeline-event-${evt.type}`}
+                className="space-y-1"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono font-semibold px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] border border-[var(--t-border)]">
+                    {evt.type}
+                  </span>
+                  {evt.ts && (
+                    <span className="text-[var(--t-text-3)] font-mono text-[11px]">
+                      {Number.isFinite(parseApiTime(evt.ts))
+                        ? new Date(parseApiTime(evt.ts)).toISOString()
+                        : String(evt.ts)}
+                    </span>
+                  )}
+                </div>
+                {evt.type === 'review.fallback' && (
+                  <p className="text-xs text-[var(--t-warn)] font-medium">
+                    {t('taskDetail.reviewFallbackLine', { profile: evt.payload?.profile || 'claude' })}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+
       {/* Tabs */}
       <div className="flex border-b border-[var(--t-border)] space-x-6 text-sm font-medium" data-tour="task-detail-tabs">
         <button
@@ -743,7 +843,15 @@ export const TaskDetailPage: React.FC = () => {
             onScroll={handleScroll}
             className="w-full h-[520px] bg-[var(--t-log-bg)] text-[var(--t-log-text)] font-mono text-xs p-4 rounded-xl overflow-y-auto border border-[var(--t-border)] shadow-inner whitespace-pre-wrap leading-relaxed select-text"
           >
-            {liveLog ? liveLog : <span className="text-[var(--t-log-muted)]">{t('taskDetail.noLog')}</span>}
+            {liveLog ? (
+              logVirtualized ? (
+                <div style={{ height: `${logLines.length * 18}px`, position: 'relative' }}>
+                  <div style={{ position: 'absolute', top: `${logStart * 18}px`, left: 0, right: 0 }}>
+                    {logLines.slice(logStart, logEnd).map((line, index) => <div key={logStart + index} className="h-[18px]">{line || '\u00a0'}</div>)}
+                  </div>
+                </div>
+              ) : liveLog
+            ) : <span className="text-[var(--t-log-muted)]">{t('taskDetail.noLog')}</span>}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button type="button" disabled={!logSelection} title={t('extra.captureFromSelectionTip')} onClick={() => { if (logSelection) openCapture(logSelection, 'log'); }} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">{t('extra.captureFromSelection')}</button>
@@ -777,9 +885,12 @@ export const TaskDetailPage: React.FC = () => {
       {/* 3. Runs list */}
       {activeTab === 'runs' && (
         <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs">
-          {!task.runs || task.runs.length === 0 ? (
+          {runsQuery.isLoading && !task?.runs?.length ? (
+            <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('pagination.loading')}</div>
+          ) : runs.length === 0 ? (
             <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('taskDetail.noRuns')}</div>
           ) : (
+            <>
             <table className="w-full text-left text-sm">
               <thead className="bg-[var(--t-surface-2)] text-xs text-[var(--t-text-3)] uppercase">
                 <tr>
@@ -793,7 +904,7 @@ export const TaskDetailPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y border-[var(--t-border)]">
-                <CollapsibleList items={task.runs || []} initial={10} step={10} storageKey={`agenthub:task:${id}:runs`} tableColSpan={7}>
+                <CollapsibleList items={runs} initial={20} step={20} storageKey={`agenthub:task:${id}:runs`} tableColSpan={7}>
                 {(r) => (
                   <tr key={r.id}>
                     <td className="px-6 py-3 font-mono text-xs">{r.id}</td>
@@ -820,6 +931,17 @@ export const TaskDetailPage: React.FC = () => {
                 </CollapsibleList>
               </tbody>
             </table>
+            {runsQuery.data && <Pagination
+              page={runsPage}
+              pageSize={20}
+              total={runsQuery.data.total}
+              onPageChange={(nextPage) => {
+                setRunsPage(nextPage);
+                setRunParams((current) => { if (nextPage === 1) current.delete('runsPage'); else current.set('runsPage', String(nextPage)); return current; }, { replace: true });
+              }}
+              onPageSizeChange={() => undefined}
+            />}
+            </>
           )}
         </div>
       )}

@@ -33,6 +33,7 @@ export interface QuietHoursConfig {
 
 export interface NotificationsConfig {
   desktop: boolean;
+  desktopLevel: 'all' | 'important' | 'critical' | 'off';
   quietHours?: QuietHoursConfig;
 }
 
@@ -48,11 +49,14 @@ export const DEFAULT_BRAIN_DIGEST_CONFIG: BrainDigestConfig = {
 };
 
 export interface BrainConfig {
+  engine?: 'claude' | 'codex';
   fallback: ClaudeFallbackStep[];
   policy: string[];
   claudeProfile: string;
   claudeProfileExplicit?: boolean;
   model: string;
+  codexProfile?: string;
+  codexModel?: string;
   mode: 'off' | 'suggest' | 'auto';
   permissions: 'standard' | 'trusted' | 'full';
   maxConcurrent: number;
@@ -326,6 +330,7 @@ export function saveConfig(
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
+      desktopLevel: NotificationsConfig['desktopLevel'];
       quietHours?: Partial<QuietHoursConfig>;
     }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
@@ -495,6 +500,7 @@ export function updateConfigInMemory(
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
+      desktopLevel: NotificationsConfig['desktopLevel'];
       quietHours?: Partial<QuietHoursConfig>;
     }>;
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
@@ -569,6 +575,9 @@ export function updateConfigInMemory(
     if (patch.brain.policy) config.brain.policy = [...patch.brain.policy];
     if (patch.brain.claudeProfile !== undefined) config.brain.claudeProfile = patch.brain.claudeProfile;
     if (patch.brain.model !== undefined) config.brain.model = patch.brain.model;
+    if (patch.brain.engine !== undefined) config.brain.engine = patch.brain.engine;
+    if (patch.brain.codexProfile !== undefined) config.brain.codexProfile = patch.brain.codexProfile;
+    if (patch.brain.codexModel !== undefined) config.brain.codexModel = patch.brain.codexModel;
     if (patch.brain.mode !== undefined) config.brain.mode = patch.brain.mode;
     if (patch.brain.permissions !== undefined) config.brain.permissions = patch.brain.permissions;
     if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
@@ -589,6 +598,9 @@ export function updateConfigInMemory(
   if (patch.notifications) {
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
+    }
+    if (patch.notifications.desktopLevel !== undefined) {
+      config.notifications.desktopLevel = patch.notifications.desktopLevel;
     }
     if (patch.notifications.quietHours) {
       config.notifications.quietHours = {
@@ -721,9 +733,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
   if (!fs.existsSync(worktreesDir)) fs.mkdirSync(worktreesDir, { recursive: true });
 
+  const testAgyHomesDir = process.env.AGENTHUB_TEST_MODE === '1'
+    ? path.join(path.dirname(hubHome), 'agy-homes')
+    : undefined;
   const agyHomesDir =
     (userConfig.agyHomesDir as string) ||
     process.env.AGENTHUB_AGY_HOMES ||
+    testAgyHomesDir ||
     path.join(os.homedir(), '.agy-homes');
 
   const defaultLogDir =
@@ -955,6 +971,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
     brain: {
+      engine: brainRaw.engine === 'codex' ? 'codex' : 'claude',
       fallback: normalizeFallbackSteps(brainRaw.fallback),
       policy: Array.isArray(brainRaw.policy)
         ? brainRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
@@ -968,6 +985,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       model: typeof brainRaw.model === 'string' && brainRaw.model
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
+      codexProfile: typeof brainRaw.codexProfile === 'string' && brainRaw.codexProfile.trim() ? brainRaw.codexProfile.trim() : undefined,
+      codexModel: typeof brainRaw.codexModel === 'string' && brainRaw.codexModel.trim() ? brainRaw.codexModel.trim() : undefined,
       mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
       permissions: brainRaw.permissions === 'trusted' || brainRaw.permissions === 'full' ? brainRaw.permissions : 'standard',
       maxConcurrent: typeof brainRaw.maxConcurrent === 'number' && brainRaw.maxConcurrent > 0
@@ -1035,6 +1054,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
         ? (userConfig.notifications as { desktop: boolean }).desktop
         : true,
+      desktopLevel: (() => {
+        const level = (userConfig.notifications as { desktopLevel?: unknown } | undefined)?.desktopLevel;
+        return level === 'all' || level === 'critical' || level === 'off' || level === 'important' ? level : 'important';
+      })(),
       ...(userConfig.notifications && typeof userConfig.notifications === 'object' && 'quietHours' in userConfig.notifications
         ? {
             quietHours: (() => {
@@ -1068,6 +1091,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
       pressureHigh: typeof rawLoad.pressureHigh === 'number' ? rawLoad.pressureHigh : DEFAULT_LOAD_CONFIG.pressureHigh,
+      pressureIoHigh: typeof rawLoad.pressureIoHigh === 'number' ? rawLoad.pressureIoHigh : DEFAULT_LOAD_CONFIG.pressureIoHigh,
       pressureOk: typeof rawLoad.pressureOk === 'number' ? rawLoad.pressureOk : DEFAULT_LOAD_CONFIG.pressureOk,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,

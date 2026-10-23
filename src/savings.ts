@@ -15,6 +15,7 @@ import {
 } from './db/index.js';
 import { ClaudeSessionRepo } from './claude-sessions/repo.js';
 import { getModelFamily } from './quota/index.js';
+import { decodeCursor, encodeCursor } from './pagination.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -281,6 +282,8 @@ export interface SavingsReport {
   byModel: Record<string, { tokens: number; taskCount: number }>;
   byDay: SavingsDailyItem[];
   tasks: SavingsTaskItem[];
+  tasksTotal: number;
+  tasksNextCursor: string | null;
 }
 
 export class SavingsService {
@@ -331,7 +334,7 @@ export class SavingsService {
   /**
    * Generates the savings report, optionally filtered by project and date.
    */
-  getSavings(query?: { project?: string; since?: string }): SavingsReport {
+  getSavings(query?: { project?: string; since?: string; limit?: string | number; offset?: string | number; cursor?: string }): SavingsReport {
     // Load each history table once. The savings endpoint is a dashboard hot path and
     // repeatedly querying runs/metrics/reviews per task becomes quadratic at scale.
     const allTasks = this.taskRepo.getAll();
@@ -545,6 +548,14 @@ export class SavingsService {
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    // Keep offset pages stable while new runs/tasks are written.
+    taskItems.sort((left, right) => left.taskId.localeCompare(right.taskId));
+    const cursor = decodeCursor(query?.cursor);
+    if (query?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    const cursorIndex = cursor ? taskItems.findIndex((task) => task.taskId === cursor.id) + 1 : -1;
+    const requestedLimit = query?.limit === undefined ? taskItems.length : Math.max(1, Math.min(100, Number(query.limit) || 20));
+    const requestedOffset = cursorIndex > 0 ? cursorIndex : Math.max(0, Number(query?.offset) || 0);
+    const pageItems = taskItems.slice(requestedOffset, requestedOffset + requestedLimit);
     return {
       summary: {
         totalWorkerTokens,
@@ -560,7 +571,11 @@ export class SavingsService {
       byEngine,
       byModel,
       byDay,
-      tasks: taskItems,
+      tasks: pageItems,
+      tasksTotal: taskItems.length,
+      tasksNextCursor: requestedOffset + requestedLimit < taskItems.length && pageItems.length > 0
+        ? encodeCursor('', pageItems[pageItems.length - 1].taskId)
+        : null,
     };
   }
 

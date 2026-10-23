@@ -1,4 +1,4 @@
-import { TaskRepo, ProjectRepo, ProfileRepo, QuotaMarkRepo, EventRepo, CiRepo } from '../db/index.js';
+import { TaskRepo, ProjectRepo, ProfileRepo, QuotaMarkRepo, EventRepo, CiRepo, ProfileRow, QuotaMarkRow } from '../db/index.js';
 import type { QuietHoursConfig } from '../config.js';
 import type { ChatService } from '../chat/service.js';
 import { projectSettings } from '../projects/settings.js';
@@ -169,18 +169,94 @@ export function isQuietHours(config?: QuietHoursConfig | null, now = new Date())
  * Determines if all configured active/enabled profiles are currently quota-exhausted.
  */
 export function areAllProfilesQuotaExhausted(
-  profileRepo?: ProfileRepo,
-  quotaMarkRepo?: QuotaMarkRepo,
+  profileRepo?: ProfileRepo | { getAll(): ProfileRow[] },
+  quotaMarkRepo?: QuotaMarkRepo | { getActive(nowSec?: number): QuotaMarkRow[] },
   now = Date.now(),
+  family?: string,
+  engine?: string,
 ): boolean {
   if (!profileRepo || !quotaMarkRepo) return false;
-  const profiles = profileRepo.getAll(true);
+  const profiles = profileRepo.getAll().filter((profile) => profile.enabled === 1);
   if (profiles.length === 0) return false;
 
   const marks = quotaMarkRepo.getActive(Math.floor(now / 1000)).filter((m) => m.until > Math.floor(now / 1000));
-  const exhaustedProfiles = new Set(marks.map((m) => m.profileName));
+  const normFamily = (f?: string) => {
+    if (!f) return undefined;
+    if (f.startsWith('codex')) return 'codex';
+    if (f.startsWith('gemini')) return 'gemini';
+    if (f.startsWith('claude')) return 'claude';
+    return f;
+  };
+  const targetFamily = normFamily(family);
+  const exhausted = new Set(
+    marks
+      .filter((mark) => !targetFamily || normFamily(mark.family) === targetFamily || mark.family === family)
+      .map((m) => m.profileName),
+  );
 
-  return profiles.every((p) => exhaustedProfiles.has(p.name));
+  const groups = new Map<string, typeof profiles>();
+  for (const profile of profiles) {
+    if (engine && profile.engine !== engine) continue;
+    const group = groups.get(profile.engine) || [];
+    group.push(profile);
+    groups.set(profile.engine, group);
+  }
+  if (groups.size === 0) return false;
+
+  // A quota event is actionable when every account of one engine is exhausted,
+  // not only when every profile in the whole hub is exhausted.
+  return [...groups.values()].some((group) => group.every((profile) => exhausted.has(profile.name)));
+}
+
+/**
+ * Resolves the engine-wide quota state for a notification event.  Producers
+ * include `allExhausted` as a hint, but consumers must recompute it from the
+ * repositories whenever they are available so a stale or incomplete event
+ * cannot interrupt the user.
+ */
+export function isQuotaEventEngineWide(
+  payload: unknown,
+  profileRepo?: ProfileRepo | { getAll(): ProfileRow[]; get?(name: string): ProfileRow | undefined },
+  quotaMarkRepo?: QuotaMarkRepo | { getActive(nowSec?: number): QuotaMarkRow[] },
+  now = Date.now(),
+): boolean {
+  const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const rawFamily = typeof p.family === 'string' ? p.family : typeof p.model === 'string' ? p.model : undefined;
+  const family = rawFamily ? (rawFamily.startsWith('codex') ? 'codex' : rawFamily.startsWith('gemini') ? 'gemini' : rawFamily.startsWith('claude') ? 'claude' : rawFamily) : undefined;
+  let engine = typeof p.engine === 'string' ? p.engine : undefined;
+
+  const profileName = typeof p.profile === 'string' ? p.profile
+    : typeof p.profileName === 'string' ? p.profileName
+    : typeof p.worker === 'string' ? p.worker : undefined;
+
+  if (profileRepo && !engine && profileName) {
+    if ('get' in profileRepo && typeof profileRepo.get === 'function') {
+      const profile = profileRepo.get(profileName);
+      engine = profile?.engine;
+    } else {
+      const profiles = profileRepo.getAll();
+      const profile = profiles.find((pr) => pr.name === profileName);
+      engine = profile?.engine;
+    }
+  }
+
+  if (!engine && (rawFamily || family)) {
+    const f = rawFamily || family || '';
+    if (f.startsWith('codex')) engine = 'codex';
+    else engine = 'agy';
+  }
+
+  if (profileRepo && quotaMarkRepo) {
+    const allProfiles = profileRepo.getAll().filter((pr) => pr.enabled !== 0 && (pr.enabled as unknown) !== false);
+    if (allProfiles.length > 0) {
+      const engineProfiles = engine ? allProfiles.filter((pr) => pr.engine === engine) : allProfiles;
+      if (engineProfiles.length > 0) {
+        return areAllProfilesQuotaExhausted(profileRepo, quotaMarkRepo, now, rawFamily || family, engine);
+      }
+    }
+    return Boolean(p.allExhausted === true);
+  }
+  return Boolean(p.allExhausted === true);
 }
 
 /** Whether every enabled profile for the engine/family has an active mark. */
@@ -222,8 +298,7 @@ export function isSystemIncident(
   if (type === 'hub.restart_failed' || type === 'system.error') return true;
 
   if (type === 'quota.exhausted') {
-    if (p.allExhausted === true) return true;
-    if (areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, typeof p.family === 'string' ? p.family : undefined, now)) return true;
+    if (isQuotaEventEngineWide(p, profileRepo, quotaMarkRepo, now)) return true;
   }
 
   return false;
