@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { assertWorkerMayControlHub, workerEnvironment, WORKER_SERVICE_MESSAGE } from '../src/worker-guard.js';
+import { makeTestTempDir } from './temp.js';
 
 describe('worker service guard', () => {
   it('blocks hub service control but forwards unrelated systemctl commands', () => {
@@ -29,8 +30,13 @@ describe('worker service guard', () => {
     process.env.AGENTHUB_WORKER = '1';
     delete process.env.AGENTHUB_HOME;
     expect(() => assertWorkerMayControlHub('install-service')).toThrow(WORKER_SERVICE_MESSAGE);
-    const env = workerEnvironment(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-worker-env-')), {});
-    expect(env.AGENTHUB_WORKER).toBe('1');
+    const tmp = makeTestTempDir('agenthub-worker-env-');
+    try {
+      const env = workerEnvironment(tmp, {});
+      expect(env.AGENTHUB_WORKER).toBe('1');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
     if (previousWorker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = previousWorker;
     if (previousHome === undefined) delete process.env.AGENTHUB_HOME; else process.env.AGENTHUB_HOME = previousHome;
   });

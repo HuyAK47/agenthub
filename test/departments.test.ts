@@ -3,14 +3,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DepartmentRepo, ProjectRepo, openDatabase } from '../src/db/index.js';
+import { makeTestTempDir } from './temp.js';
 
 const databases: Array<{ close: () => void }> = [];
+const tempDirs: string[] = [];
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
+  for (const dir of tempDirs.splice(0)) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 });
 
 function createDb() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-department-'));
+  const dir = makeTestTempDir('agenthub-department-');
+  tempDirs.push(dir);
   const db = openDatabase(path.join(dir, 'hub.db'));
   databases.push(db);
   return db;

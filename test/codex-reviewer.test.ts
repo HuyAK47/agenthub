@@ -6,6 +6,7 @@ import { detectClaudeQuota } from '../src/chat/parse.js';
 import { ClaudeFailoverState } from '../src/chat/failover.js';
 import { buildReviewerPrompt, parseReviewerOutput } from '../src/reviewer.js';
 import { loadConfig } from '../src/config.js';
+import { makeTestTempDir } from './temp.js';
 
 describe('Claude quota failover', () => {
   it.each([
@@ -24,21 +25,25 @@ describe('Claude quota failover', () => {
   });
 
   it('persists, expires, and resets failover', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-failover-'));
-    const file = path.join(dir, 'state.json');
-    let now = 100;
-    const state = new ClaudeFailoverState(file, () => now);
-    expect(state.snapshot().active).toBe(false);
-    state.activate(100, 'test');
-    expect(new ClaudeFailoverState(file, () => now).snapshot().active).toBe(true);
-    now = 201;
-    expect(state.snapshot().active).toBe(false);
+    const dir = makeTestTempDir('agenthub-failover-');
+    try {
+      const file = path.join(dir, 'state.json');
+      let now = 100;
+      const state = new ClaudeFailoverState(file, () => now);
+      expect(state.snapshot().active).toBe(false);
+      state.activate(100, 'test');
+      expect(new ClaudeFailoverState(file, () => now).snapshot().active).toBe(true);
+      now = 201;
+      expect(state.snapshot().active).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
 describe('Codex reviewer output', () => {
   it('keeps reviewer defaults for old configs and accepts a custom failover duration', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-config-'));
+    const dir = makeTestTempDir('agenthub-config-');
     fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ chat: { model: 'sonnet' } }));
     expect(loadConfig(dir).reviewer.failoverSec).toBe(5 * 60 * 60);
     fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ reviewer: { failoverSec: 1234 } }));
@@ -66,7 +71,7 @@ describe('Codex reviewer output', () => {
   });
 
   it('does not read checklist files outside the worktree', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reviewer-'));
+    const root = makeTestTempDir('agenthub-reviewer-');
     const outside = path.join(root, 'secret.md');
     fs.writeFileSync(outside, 'DO NOT LEAK', 'utf8');
     const worktree = path.join(root, 'worktree');
@@ -78,7 +83,7 @@ describe('Codex reviewer output', () => {
   });
 
   it('reads checklist files from the canonical project, not a mutable worktree', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reviewer-project-'));
+    const root = makeTestTempDir('agenthub-reviewer-project-');
     const project = path.join(root, 'project');
     const worktree = path.join(root, 'worktree');
     fs.mkdirSync(path.join(project, 'docs'), { recursive: true });
@@ -92,7 +97,7 @@ describe('Codex reviewer output', () => {
   });
 
   it('rejects a checklist symlink escaping the canonical project', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reviewer-symlink-'));
+    const root = makeTestTempDir('agenthub-reviewer-symlink-');
     const project = path.join(root, 'project');
     const outside = path.join(root, 'secret.md');
     fs.mkdirSync(project, { recursive: true });

@@ -5,8 +5,16 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findProcessesInDir, isOrphanProcess, reap } from '../src/reaper.js';
 import { isDeletableWorktreePath } from '../src/worktrees/index.js';
+import { makeTestTempDir } from './temp.js';
 
 const children: ChildProcess[] = [];
+const tempDirs: string[] = [];
+
+function makeTemp(prefix: string) {
+  const dir = fs.realpathSync(makeTestTempDir(prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -29,6 +37,9 @@ afterEach(() => {
   for (const child of children.splice(0)) {
     try { child.kill('SIGKILL'); } catch { /* already exited */ }
   }
+  for (const dir of tempDirs.splice(0)) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 });
 
 describe('reaper', () => {
@@ -39,7 +50,7 @@ describe('reaper', () => {
   });
 
   it('terminates a detached process in a worktree', async () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-')));
+    const root = makeTemp('agenthub-reaper-');
     const worktreesDir = path.join(root, 'worktrees');
     const worktree = path.join(worktreesDir, 'project', 'task');
     fs.mkdirSync(worktree, { recursive: true });
@@ -54,7 +65,7 @@ describe('reaper', () => {
   });
 
   it('does not touch a process outside the worktrees directory or the project root', async () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-')));
+    const root = makeTemp('agenthub-reaper-');
     const worktreesDir = path.join(root, 'worktrees');
     const projectRoot = path.join(root, 'project');
     const outside = path.join(root, 'outside');
@@ -71,7 +82,7 @@ describe('reaper', () => {
   });
 
   it('returns immediately when scheduling escalation', async () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-reaper-')));
+    const root = makeTemp('agenthub-reaper-');
     const worktreesDir = path.join(root, 'worktrees');
     const worktree = path.join(worktreesDir, 'project', 'task');
     fs.mkdirSync(worktree, { recursive: true });
