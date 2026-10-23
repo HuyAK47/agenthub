@@ -1528,6 +1528,36 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(task?.title).toBe('Sửa lỗi đăng nhập');
     });
 
+    it('accepts Unicode leading external references', async () => {
+      await bot.handleUpdate({
+        update_id: 24,
+        message: {
+          message_id: 24,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask ĐỀ-123 Cập nhật thanh toán',
+        },
+      });
+
+      const vietnameseTask = ctx.taskRepo.get('proj-shop/cap-nhat-thanh-toan');
+      expect(vietnameseTask?.externalRef).toBe('ĐỀ-123');
+      expect(vietnameseTask?.title).toBe('Cập nhật thanh toán');
+
+      await bot.handleUpdate({
+        update_id: 25,
+        message: {
+          message_id: 25,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask 営業-1 Sửa nội dung bán hàng',
+        },
+      });
+
+      const japaneseTask = ctx.taskRepo.get('proj-shop/sua-noi-dung-ban-hang');
+      expect(japaneseTask?.externalRef).toBe('営業-1');
+      expect(japaneseTask?.title).toBe('Sửa nội dung bán hàng');
+    });
+
     it('allows cancelling wizard via /cancel', async () => {
       await bot.handleUpdate({
         update_id: 30,

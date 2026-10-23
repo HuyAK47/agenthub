@@ -2653,10 +2653,14 @@ export class TelegramBotService {
   private parseLeadingExternalRef(text: string): { text: string; externalRef?: string } {
     const trimmed = text.trim();
     const match = trimmed.match(/^([^\s|]+)\s+(.+)$/);
-    // References are free-form tokens. Keep the legacy natural-language
-    // description flow for Vietnamese (or other non-ASCII) first words, while
-    // allowing refs such as `ABCfoo` that have no punctuation at all.
-    if (!match || [...match[1]].some((char) => char.charCodeAt(0) > 0x7f)) return { text: trimmed };
+    // References are free-form tokens, including Unicode identifiers. A
+    // Unicode word made only of letters is kept as natural-language text so
+    // the legacy `/newtask <description>` form remains intact; Unicode refs
+    // such as `ĐỀ-123` and `営業-1` are still accepted.
+    const isUnicodeWord = match && !/^\p{ASCII}+$/u.test(match[1]) && /^\p{L}+$/u.test(match[1]);
+    if (!match || isUnicodeWord) {
+      return { text: trimmed };
+    }
     return { externalRef: match[1], text: match[2].trim() };
   }
 
