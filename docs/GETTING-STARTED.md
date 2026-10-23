@@ -91,6 +91,10 @@ Dữ liệu (DB SQLite, token, log, worktree) nằm ở `~/.agenthub/`. Muốn �
 
 ```bash
 agenthub install-service          # Linux: systemd; macOS: ~/Library/LaunchAgents/dev.agenthub.plist
+agenthub stop                     # tắt êm, task đang chạy sẽ resume
+agenthub stop --disable           # tắt và không tự bật khi đăng nhập
+agenthub start                    # bật lại
+# Đóng tab web không tắt hub; uninstall-service là gỡ service.
 loginctl enable-linger "$USER"    # (tuỳ chọn) chạy cả khi chưa đăng nhập màn hình
 systemctl --user status agenthub  # kiểm tra đang chạy
 

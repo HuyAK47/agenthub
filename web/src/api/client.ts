@@ -629,6 +629,10 @@ export async function updateConfig(data: Partial<SystemConfig>): Promise<SystemC
   });
 }
 
+export async function shutdownHub(disable = false): Promise<{ ok: boolean; queued: number; reviewers: number }> {
+  return apiFetch('/api/hub/shutdown', { method: 'POST', body: JSON.stringify({ disable }) });
+}
+
 export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; logo: string }> {
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();

@@ -81,6 +81,9 @@ AgentHub cung cấp bộ lệnh CLI để khởi động daemon, tích hợp cô
 - `agenthub open`: Lấy token xác thực cục bộ và tự động mở Web Dashboard trên trình duyệt mặc định (`http://127.0.0.1:7700/#token=...`). Có thể dùng cờ `--no-browser` để chỉ in URL.
 - `agenthub doctor`: Kiểm tra, chẩn đoán sức khỏe hệ thống và môi trường thực thi (phiên bản Node.js, CLI `agy`, `codex`, git worktree, cổng mạng và tình trạng các tài khoản).
 - `agenthub install-service`: Tạo và kích hoạt systemd user service (`~/.config/systemd/user/agenthub.service`) để daemon tự động chạy nền khi đăng nhập hệ thống (hỗ trợ cờ `--print` để xem trước nội dung file service).
+- `agenthub stop`: Tắt êm AgentHub, đưa task đang chạy về hàng chờ để lần sau tiếp tục.
+- `agenthub stop --disable`: Tắt và không tự bật khi đăng nhập; `agenthub start` bật lại.
+- Đóng tab web chỉ đóng giao diện; `uninstall-service` là gỡ service chứ không phải tắt tạm.
 - `agenthub mcp-install`: Đăng ký AgentHub MCP server với Claude Code ở phạm vi người dùng (`claude mcp add --scope user agenthub ...`), cho phép Claude Code tương tác trực tiếp với AgentHub từ bất kỳ dự án nào (hỗ trợ cờ `--print`).
 - `agenthub link`: Tạo symlink tiện ích tại `~/.local/bin/agenthub` trỏ tới script wrapper, giúp chạy lệnh `agenthub` từ bất kỳ thư mục nào trong terminal.
 
