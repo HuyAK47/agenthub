@@ -261,6 +261,7 @@ export const TourOverlay: React.FC = () => {
           if (cancelled) return;
           if (!target.isConnected) {
             setRect(null);
+            next();
             return;
           }
           const box = target.getBoundingClientRect();
