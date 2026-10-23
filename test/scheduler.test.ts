@@ -348,7 +348,7 @@ describe('maxParallel limit', () => {
 
     expect(taskRepo.get('test-project/low')?.status).toBe('running');
     expect(taskRepo.get('second-project/high')?.status).toBe('queued');
-    expect(taskRepo.get('second-project/high')?.waitReason).toBe('parallel');
+    expect(taskRepo.get('second-project/high')?.waitReason).toBe('department_parallel');
     expect(scheduler.getRunning().size).toBe(1);
     scheduler.stop();
   });

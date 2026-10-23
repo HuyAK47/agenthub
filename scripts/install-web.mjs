@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const source = path.resolve('dist/web');
 const hubHome = path.resolve(process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'));
-const target = path.join(hubHome, 'web');
+const target = process.env.AGENTHUB_WEB_STAGING_DIR || path.join(hubHome, 'web');
 if (!fs.existsSync(source)) throw new Error(`Web build not found: ${source}`);
 fs.mkdirSync(hubHome, { recursive: true });
 const realHubHome = fs.realpathSync.native(hubHome);

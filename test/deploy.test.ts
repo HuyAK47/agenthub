@@ -132,6 +132,45 @@ describe('DeployService', () => {
     expect(restarts).toHaveLength(1);
   });
 
+  it('stages the web install and promotes it only immediately before restart', async () => {
+    const f = setup();
+    const target = path.join(f.root, 'web');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'version'), 'old');
+    let snapshots = 0;
+    let duringInstall = '';
+    let atRestart = '';
+    const service = new DeployService(
+      {
+        hubHome: f.root,
+        logsDir: path.join(f.root, 'logs'),
+        deploy: { demo: { steps: [['node', 'scripts/install-web.mjs']], timeoutSec: 2, restartHub: true, restartMaxWaitMin: 1 } },
+      } as never,
+      { get: () => ({ id: 'demo', path: process.cwd(), defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: process.cwd() } }) }) } as never,
+      deployEventBus(f.events) as never,
+      0,
+      undefined,
+      async (_command, _args, options) => {
+        const staging = options.env.AGENTHUB_WEB_STAGING_DIR!;
+        fs.mkdirSync(staging, { recursive: true });
+        fs.writeFileSync(path.join(staging, 'version'), 'new');
+        duringInstall = fs.readFileSync(path.join(target, 'version'), 'utf8');
+        return { code: 0, output: '' };
+      },
+      (command, args) => {
+        atRestart = fs.readFileSync(path.join(target, 'version'), 'utf8');
+        expect(command).toBe(process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+        expect(args).toContain('restart');
+      },
+      { snapshot: () => snapshots++ === 0 ? { checks: 1, editing: 0 } : { checks: 0, editing: 0 } },
+    );
+
+    const result = await service.run('demo', 'abc');
+    expect(result.status).toBe('restarting');
+    expect(duringInstall).toBe('old');
+    expect(atRestart).toBe('new');
+  });
+
   it('runs configured argv steps in order, logs them, and emits success', async () => {
     const f = setup();
     const calls: string[] = [];

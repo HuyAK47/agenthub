@@ -172,4 +172,38 @@ describe('node_modules cache', () => {
     expect(install?.env?.CI).toBe('true');
     expect(fs.existsSync(path.join(packageDir, 'node_modules', '.bin', 'tsc'))).toBe(true);
   });
+
+  it('installs root and web dependencies when hard-linking from a custom-root cache fails', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-cache-custom-root-test-'));
+    const projectDir = path.join(tmpDir, 'project');
+    const worktreeDir = path.join(tmpDir, 'custom-worktrees', 'task');
+    const cacheDir = path.join(tmpDir, 'cache');
+    for (const dir of [projectDir, path.join(projectDir, 'web'), worktreeDir, path.join(worktreeDir, 'web')]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    for (const dir of [projectDir, worktreeDir]) {
+      fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"root"}');
+      fs.writeFileSync(path.join(dir, 'package-lock.json'), '{"lockfileVersion":3}');
+    }
+    for (const dir of [path.join(projectDir, 'web'), path.join(worktreeDir, 'web')]) {
+      fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"web"}');
+      fs.writeFileSync(path.join(dir, 'package-lock.json'), '{"lockfileVersion":3}');
+    }
+    fs.mkdirSync(path.join(projectDir, 'node_modules', 'root-dep'), { recursive: true });
+    fs.mkdirSync(path.join(projectDir, 'web', 'node_modules', 'web-dep'), { recursive: true });
+
+    const npmCwds: string[] = [];
+    await ensureWorktreeNodeModules(worktreeDir, projectDir, cacheDir, async (cmd, args, opts) => {
+      if (cmd === 'cp') throw new Error('cross-device link');
+      if (cmd === 'npm') {
+        npmCwds.push(opts?.cwd || '');
+        fs.mkdirSync(path.join(opts?.cwd || worktreeDir, 'node_modules'), { recursive: true });
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    expect(npmCwds).toEqual([worktreeDir, path.join(worktreeDir, 'web')]);
+    expect(fs.existsSync(path.join(worktreeDir, 'node_modules'))).toBe(true);
+    expect(fs.existsSync(path.join(worktreeDir, 'web', 'node_modules'))).toBe(true);
+  });
 });

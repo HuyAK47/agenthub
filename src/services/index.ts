@@ -276,7 +276,7 @@ export const DepartmentInputSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1).max(120),
   priority: z.number().int().default(0),
-  maxParallel: z.number().int().positive().default(3),
+  maxParallel: z.number().int().nonnegative().default(0),
   claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
   telegramTopicId: z.number().int().positive().nullable().default(null),
   brainEngine: z.enum(['claude', 'codex']).default('claude'),
