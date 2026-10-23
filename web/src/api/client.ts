@@ -835,7 +835,9 @@ export interface TelegramStatus {
   hasToken: boolean;
   chats: TelegramChat[];
   allowedChatIds: number[];
+  topicMode?: 'project' | 'department';
   projectTopics: Record<string, TelegramProjectTopic>;
+  departmentTopics?: Record<string, TelegramProjectTopic>;
   notify: {
     reviewReady: boolean;
     failed: boolean;
@@ -893,6 +895,10 @@ export async function createTelegramProjectTopic(projectId: string): Promise<Tel
   return apiFetch<TelegramProjectTopic>(`/api/telegram/projects/${encodeURIComponent(projectId)}/topic`, { method: 'POST' });
 }
 
+export async function createTelegramDepartmentTopic(departmentId: string): Promise<TelegramProjectTopic> {
+  return apiFetch<TelegramProjectTopic>(`/api/telegram/departments/${encodeURIComponent(departmentId)}/topic`, { method: 'POST' });
+}
+
 export async function attachTelegramProjectChat(projectId: string, chatId: number): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/telegram/projects/${encodeURIComponent(projectId)}/chat`, {
     method: 'PUT', body: JSON.stringify({ chatId }),
@@ -901,6 +907,7 @@ export async function attachTelegramProjectChat(projectId: string, chatId: numbe
 
 export async function updateTelegramConfig(data: {
   enabled?: boolean;
+  topicMode?: 'project' | 'department';
   notify?: Partial<TelegramStatus['notify']>;
 }): Promise<SystemConfig> {
   return apiFetch<SystemConfig>('/api/config', {
