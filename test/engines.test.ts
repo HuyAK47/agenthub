@@ -236,10 +236,10 @@ process.exit(0);
       fs.mkdirSync(hubHome, { recursive: true });
       fs.writeFileSync(hubToken, 'keep-secret');
       const fake = path.join(work, 'policy-check.mjs');
-      fs.writeFileSync(fake, `#!/bin/sh
-/bin/sh -c '/bin/rm -f ${marker}'
-if test -r '${hubToken}'; then exit 1; fi
-exit 0
+      fs.writeFileSync(fake, `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+spawnSync('/bin/sh', ['-c', '/bin/rm -f ${marker}']);
+if (fs.existsSync('${hubToken}')) process.exit(1);
 `, { mode: 0o700 });
 
       const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
@@ -269,16 +269,31 @@ exit 0
       fs.mkdirSync(work);
       const marker = path.join(work, 'must-survive');
       const moved = path.join(work, 'moved');
+      const touched = path.join(work, 'touched');
+      const redirected = path.join(work, 'redirected');
+      const readEscaped = path.join(work, 'read-escaped');
+      const outsideSecret = '/etc/passwd';
       fs.writeFileSync(marker, 'keep');
       const hubHome = path.join(tmp, 'hub');
       fs.mkdirSync(hubHome, { recursive: true });
       const fake = path.join(work, 'policy-bypasses.mjs');
-      fs.writeFileSync(fake, `#!/bin/sh
-/usr/bin/node -e "require('node:fs').unlinkSync('${marker}')" || true
-/bin/mv '${marker}' '${moved}' || true
-/usr/bin/cp '${marker}' '${moved}' || true
-/usr/bin/find '${work}' -name must-survive -delete || true
-test -f '${marker}'
+      fs.writeFileSync(fake, `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+for (const args of [
+  ['/usr/bin/node', ['-e', "require('node:fs').unlinkSync('${marker}')"]],
+  ['/bin/mv', ['${marker}', '${moved}']],
+  ['/usr/bin/cp', ['${marker}', '${moved}']],
+  ['/usr/bin/find', ['${work}', '-name', 'must-survive', '-delete']],
+  ['/usr/bin/touch', ['${touched}']],
+  ['/bin/sh', ['-c', 'echo escaped > ${redirected}']],
+  ['/bin/cat', ['${outsideSecret}']],
+  ['/bin/grep', ['root:', '${outsideSecret}']],
+]) {
+  const result = spawnSync(args[0], args[1], { encoding: 'utf8' });
+  if (result.status === 0) fs.writeFileSync('${readEscaped}', result.stdout || 'read escaped');
+}
+if (fs.existsSync('${readEscaped}')) process.exit(1);
+if (!fs.existsSync('${marker}') || fs.existsSync('${moved}') || fs.existsSync('${touched}') || fs.existsSync('${redirected}')) process.exit(1);
 `, { mode: 0o700 });
 
       const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
@@ -296,6 +311,8 @@ test -f '${marker}'
       expect(exitCode).toBe(0);
       expect(fs.existsSync(marker)).toBe(true);
       expect(fs.existsSync(moved)).toBe(false);
+      expect(fs.existsSync(touched)).toBe(false);
+      expect(fs.existsSync(redirected)).toBe(false);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

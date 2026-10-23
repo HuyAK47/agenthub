@@ -122,8 +122,8 @@ exit 1
  * entrypoint that AgentHub started; all other interpreter invocations remain
  * blocked, including `node -e` and arbitrary scripts.
  */
-export function brainInterpreterShimScript(name: string, realBinary: string): string {
-  return `#!/bin/sh
+export function brainInterpreterShimScript(name: string, realBinary: string, interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
 shim_path="$1"
 shift
 if [ "$1" = "$AGENTHUB_BRAIN_ENTRYPOINT" ] && [ -n "$AGENTHUB_BRAIN_ENTRYPOINT" ]; then
@@ -134,8 +134,8 @@ exit 1
 `;
 }
 
-export function gitShimScript(realBinary: string): string {
-  return `#!/bin/sh
+export function gitShimScript(realBinary: string, interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
 # Shim git: chặn push và remote set-url, chuyển tiếp nguyên vẹn mọi lệnh khác.
 # Lưu ý: shim chỉ chặn lệnh gọi theo tên 'git', không chặn đường dẫn tuyệt đối (hàng rào chống nhầm, không phải sandbox).
 
@@ -192,9 +192,9 @@ exec ${shellQuote(realBinary)} "$@"
 `;
 }
 
-export function brainGitShimScript(realBinary: string, permissions: 'standard' | 'trusted'): string {
-  if (permissions === 'trusted') return gitShimScript(realBinary);
-  return `#!/bin/sh
+export function brainGitShimScript(realBinary: string, permissions: 'standard' | 'trusted', interpreter = '/bin/sh'): string {
+  if (permissions === 'trusted') return gitShimScript(realBinary, interpreter);
+  return `#!${interpreter}
 # Brain standard policy: only read-only git commands are autonomous.
 subcmd=""
 skip_next=0
@@ -214,11 +214,95 @@ esac
 `;
 }
 
-function brainBlockedShimScript(name: string): string {
-  return `#!/bin/sh
+function brainBlockedShimScript(name: string, interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
 # AgentHub BrainPolicy enforcement. Codex approvals cannot override this guard.
 echo ${shellQuote(`AgentHub: brain policy chặn lệnh '${name}'`)} >&2
 exit 1
+`;
+}
+
+/**
+ * Shells are a particularly important escape hatch: even if every mutating
+ * utility is hidden, `sh -c` can still use builtins such as redirection.  A
+ * brain may use a shell only for one of the commands that BrainPolicy can
+ * autonomously allow, without shell operators or indirection.
+ */
+export function brainShellShimScript(interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
+shim_path="$1"
+shift
+script="$2"
+case "$1" in
+  -c|--command)
+    case "$script" in
+      *';'*|*'|'*|*'&'*|*'>'*|*'<'*)
+        echo 'AgentHub: brain policy chặn shell syntax' >&2
+        exit 1
+        ;;
+    esac
+    # Shell commands do not go through BrainPolicy's parser.  Keep this
+    # fallback deliberately conservative: commands containing path
+    # indirection or an absolute path are denied here and must be invoked by
+    # the Codex tool runner through the dedicated read-command shims below.
+    case "$script" in
+      */*|*..*|*'~'*)
+        echo 'AgentHub: brain policy chặn đường dẫn shell không an toàn' >&2
+        exit 1
+        ;;
+    esac
+    case "$script" in
+      *'$('*)
+        echo 'AgentHub: brain policy chặn shell syntax' >&2
+        exit 1
+        ;;
+    esac
+    case "$script" in
+      git[[:space:]]*|grep[[:space:]]*|curl[[:space:]]*|cat[[:space:]]*|head[[:space:]]*|tail[[:space:]]*|wc[[:space:]]*|ls[[:space:]]*|npm[[:space:]]*|pnpm[[:space:]]*|npx[[:space:]]*)
+        exec ${interpreter} "$@"
+        ;;
+      *)
+        echo 'AgentHub: brain policy chặn lệnh shell' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo 'AgentHub: brain policy chặn interactive shell' >&2
+    exit 1
+    ;;
+esac
+`;
+}
+
+/**
+ * Read-only utilities still need a guard when Codex invokes them by absolute
+ * path.  The sandbox makes writes outside the worktree impossible, while
+ * this shim prevents reads of credentials and unrelated host files.
+ */
+export function brainReadShimScript(name: string, realBinary: string, interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
+root="${'${AGENTHUB_BRAIN_ROOT:-$PWD}'}"
+for arg in "$@"; do
+  case "$arg" in
+    -*|[0-9]*) continue ;;
+    */.git|*/.git/*|*/auth.json|*/.credentials.json|*oauth*token*|*/.agenthub/token|*/secrets/*|*/.ssh/*|*/.codex/*|*/.agy-homes/*)
+      echo 'AgentHub: brain policy chặn đọc secret hoặc .git' >&2
+      exit 1
+      ;;
+    /*)
+      case "$arg" in
+        "$root"|"$root"/*) ;;
+        *) echo 'AgentHub: brain policy chặn đọc ngoài project/worktree' >&2; exit 1 ;;
+      esac
+      ;;
+    ../*|*/../*|*'~'*)
+      echo 'AgentHub: brain policy chặn đường dẫn đọc không an toàn' >&2
+      exit 1
+      ;;
+  esac
+done
+exec ${shellQuote(realBinary)} "$@"
 `;
 }
 
@@ -229,6 +313,7 @@ export interface WorkerEnvOptions {
   cwd?: string;
   workerCount?: number;
   brainPolicy?: 'standard' | 'trusted';
+  brainInterpreter?: string;
 }
 
 const HUB_GIT_NAME = 'AgentHub';
@@ -296,29 +381,46 @@ export function workerEnvironment(
     const realGit = findExecutable('git', env, hubHome) || findExecutable('git', process.env, hubHome) || '/usr/bin/git';
     const gitFile = path.join(workerDir, 'git');
     const brainPolicy = options && 'brainPolicy' in options ? options.brainPolicy : undefined;
-    const gitContent = brainPolicy ? brainGitShimScript(realGit, brainPolicy) : gitShimScript(realGit);
+    const brainInterpreter = options && 'brainInterpreter' in options ? options.brainInterpreter : '/bin/sh';
+    const gitContent = brainPolicy ? brainGitShimScript(realGit, brainPolicy, brainInterpreter) : gitShimScript(realGit);
     writeShimFile(gitFile, gitContent);
 
     if (brainPolicy) {
+      if (options && 'cwd' in options && options.cwd) env.AGENTHUB_BRAIN_ROOT = path.resolve(options.cwd);
       // Brain sessions do not get an interactive approval path that can be
       // consulted by this process. Keep the command-level guard conservative:
       // interpreters and filesystem mutation tools can all be used to bypass a
       // name-based deny-list (for example `node -e`, `find -delete`, or
       // `mv`), so they must not reach the real binary from a brain sandbox.
-      for (const name of [
+      const brainShells = ['sh', 'bash', 'zsh', 'dash', 'fish'];
+      for (const name of brainShells) {
+        writeShimFile(path.join(workerDir, name), brainShellShimScript(brainInterpreter));
+      }
+
+      const blockedNames = new Set([
         'rm', 'mv', 'cp', 'install', 'find', 'xargs', 'sed', 'perl', 'python', 'python3', 'ruby', 'node',
         'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman',
         'mkfs', 'dd', 'truncate', 'chown', 'chmod', 'chgrp', 'mount', 'umount', 'tar', 'zip', 'unzip',
-      ]) {
+        'sh', 'bash', 'zsh', 'dash', 'fish', 'echo', 'printf', 'touch', 'mkdir', 'rmdir', 'ln', 'tee', 'awk', 'gawk',
+        'busybox', 'env', 'nohup', 'timeout', 'watch', 'yes', 'sort', 'uniq', 'xargs',
+        'ed', 'ex', 'vim', 'vi', 'nvim', 'emacs', 'make', 'cmake', 'gcc', 'clang', 'go', 'java', 'php',
+        ...brainShells,
+      ]);
+      const brainReadCommands = ['cat', 'grep', 'head', 'tail', 'wc', 'ls'];
+      for (const name of brainReadCommands) {
+        const realBinary = findExecutable(name, env, hubHome);
+        if (realBinary) writeShimFile(path.join(workerDir, name), brainReadShimScript(name, realBinary, brainInterpreter));
+      }
+      for (const name of blockedNames) {
         const content = name === 'node'
-          ? brainInterpreterShimScript(name, findExecutable(name, env, hubHome) || process.execPath)
-          : brainBlockedShimScript(name);
+          ? brainInterpreterShimScript(name, findExecutable(name, env, hubHome) || process.execPath, brainInterpreter)
+          : brainShells.includes(name) ? brainShellShimScript(brainInterpreter) : brainBlockedShimScript(name, brainInterpreter);
         writeShimFile(path.join(workerDir, name), content);
       }
       // serviceDir precedes workerDir in PATH, so replace the permissive worker
       // service guard for brain sessions with the same unconditional policy.
       for (const name of ['systemctl', 'launchctl']) {
-        writeShimFile(path.join(serviceDir, name), brainBlockedShimScript(name));
+        writeShimFile(path.join(serviceDir, name), brainBlockedShimScript(name, brainInterpreter));
       }
     }
   }

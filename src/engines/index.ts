@@ -248,6 +248,10 @@ function brainSandboxCommand(
     '--share-net',
     '--die-with-parent',
   ];
+  // Brain shim scripts use a private interpreter because /bin/sh itself is
+  // overlaid with a policy shim below. This keeps the guards executable while
+  // still preventing an untrusted `sh -c` from reaching the host shell.
+  if (fs.existsSync('/bin/sh')) sandboxArgs.push('--ro-bind', '/bin/sh', '/tmp/agenthub-brain-sh');
   const sessionDir = path.join(hubHome, 'sessions');
   // Apply this after the cwd bind as tests and some
   // deployments keep the hub directory below the project/home tree.
@@ -298,7 +302,13 @@ function brainSandboxCommand(
     ]);
     for (const target of targets) {
       if (target.startsWith(`${shimRoot}${path.sep}`)) continue;
-      if (fs.existsSync(target)) sandboxArgs.push('--ro-bind', shim, target);
+      try {
+        // bubblewrap cannot replace a symlink with a bind mount. Mount the
+        // canonical target instead so `/bin/sh` and similar absolute aliases
+        // receive the same policy guard.
+        const mountTarget = fs.lstatSync(target).isSymbolicLink() ? fs.realpathSync(target) : target;
+        if (fs.lstatSync(mountTarget).isFile()) sandboxArgs.push('--ro-bind', shim, mountTarget);
+      } catch { /* target is optional on this host */ }
     }
   }
 
@@ -444,7 +454,7 @@ export class CodexEngine implements Engine {
       workerEnvironment(
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         env,
-        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount, brainPolicy: opts.brainPolicy },
+        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount, brainPolicy: opts.brainPolicy, brainInterpreter: opts.brainPolicy ? '/tmp/agenthub-brain-sh' : undefined },
       ),
     );
 
@@ -479,6 +489,10 @@ export class CodexEngine implements Engine {
           'rm', 'mv', 'cp', 'install', 'find', 'xargs', 'sed', 'perl', 'python', 'python3', 'ruby', 'node',
           'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman',
           'mkfs', 'dd', 'truncate', 'chown', 'chmod', 'chgrp', 'mount', 'umount', 'tar', 'zip', 'unzip',
+          'sh', 'bash', 'zsh', 'dash', 'fish', 'echo', 'printf', 'touch', 'mkdir', 'rmdir', 'ln', 'tee', 'awk', 'gawk',
+          'busybox', 'env', 'nohup', 'timeout', 'watch', 'yes', 'sort', 'uniq', 'xargs',
+          'ed', 'ex', 'vim', 'vi', 'nvim', 'emacs', 'make', 'cmake', 'gcc', 'clang', 'go', 'java', 'php',
+          'cat', 'grep', 'head', 'tail', 'wc', 'ls',
         ],
         env.PATH,
       );
