@@ -6,6 +6,7 @@ export const vi = {
     projects: 'Project',
     plans: 'Kế hoạch',
     settings: 'Cài đặt',
+    departments: 'Phòng ban',
     toggleTheme: 'Chuyển chế độ sáng/tối',
     language: 'Ngôn ngữ',
     switchLanguage: 'Đổi ngôn ngữ sang tiếng Anh',
@@ -814,6 +815,10 @@ export const vi = {
     progress: 'Tiến độ sẵn sàng', progressSummary: '{ready}/{total} mục đã sẵn sàng',
     node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Service nền', mcp: 'Đăng ký MCP với Claude Code', accounts: 'Đăng nhập tài khoản', account: 'Tài khoản {name}', login: 'Đăng nhập trong Profiles', needsCheck: 'Cần kiểm tra', manualGuide: 'Hướng dẫn', install: 'Cài đặt', installAll: 'Cài tất cả công cụ còn thiếu', installing: 'Đang cài đặt…', log: 'Xem log', complete: 'Hoàn tất', skip: 'Bỏ qua, làm sau', done: 'Đã hoàn tất', notDone: 'Cần làm', running: 'Đang chạy', installFailed: 'Cài đặt thất bại',
     firstProject: 'Thêm dự án đầu tiên', addProject: 'Thêm dự án',
+  },
+  departments: {
+    title: 'Phòng ban', subtitle: 'Gom project, tài khoản và giới hạn chạy theo phòng ban.',
+    create: 'Tạo phòng ban', name: 'Tên phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.',
   },
   projects: {
     title: 'Quản lý Project',

@@ -8,6 +8,7 @@ export const en: typeof vi = {
     projects: 'Projects',
     plans: 'Plans',
     settings: 'Settings',
+    departments: 'Departments',
     toggleTheme: 'Toggle theme',
     language: 'Language',
     switchLanguage: 'Chuyển sang Tiếng Việt',
@@ -815,6 +816,10 @@ export const en: typeof vi = {
     progress: 'Readiness progress', progressSummary: '{ready}/{total} items ready',
     node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Background service', mcp: 'Claude Code MCP registration', accounts: 'Sign in to accounts', account: 'Account {name}', login: 'Sign in in Profiles', needsCheck: 'Needs checking', manualGuide: 'Guide', install: 'Install', installAll: 'Install all missing tools', installing: 'Installing…', log: 'View log', complete: 'Complete', skip: 'Skip for now', done: 'Complete', notDone: 'Needs action', running: 'Running', installFailed: 'Installation failed',
     firstProject: 'Add first project', addProject: 'Add project',
+  },
+  departments: {
+    title: 'Departments', subtitle: 'Group projects, accounts, and execution limits by department.',
+    create: 'Create department', name: 'Department name', priority: 'Priority', maxParallel: 'Max parallel', budget: 'Claude tokens/day budget', topic: 'Telegram topic ID', projects: 'Projects', profiles: 'Accounts', save: 'Save', delete: 'Delete', chung: 'General', empty: 'No departments yet.', confirmDelete: 'Delete this department? Projects will move to General.',
   },
   projects: {
     title: 'Project Management',
