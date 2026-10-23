@@ -24,6 +24,7 @@ import { projectSettings, mergeProjectSettings } from './projects/settings.js';
 import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permissions.js';
 import { formatReset } from './time-format.js';
 import { NotificationDeduper } from './notification-dedupe.js';
+import { reviewerSettingsFromLegacy } from './reviewer-config.js';
 
 const WAITING_QUOTA_BATCH_DELAY_MS = 100;
 
@@ -219,6 +220,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'focus', description: 'Tập trung tài nguyên cho một dự án: /focus <dự án>|off' },
   { command: 'shutdown', description: 'Tắt AgentHub (bật lại từ máy bằng agenthub start)' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
@@ -229,6 +231,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'approve', description: 'Duyệt & merge: /approve <id>' },
   { command: 'deploy', description: 'Chạy deploy gần nhất: /deploy <project> [push]' },
   { command: 'reject', description: 'Trả về: /reject <id> <nhận xét>' },
+  { command: 'review', description: 'Xem và đổi thứ tự reviewer: /review order' },
   { command: 'retry', description: 'Chạy lại task: /retry <id>' },
   { command: 'log', description: 'Xem log cuối của task: /log <id>' },
   { command: 'cancel', description: 'Huỷ task: /cancel <id>' },
@@ -298,6 +301,7 @@ export class TelegramBotService {
   private waitingQuotaCheckTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
+  private focusDigest = new Map<string, number>();
   private reviewFallbackNotified = new Set<string>();
 
   // Bound handler for EventBus
@@ -900,12 +904,25 @@ export class TelegramBotService {
 
   async periodicCheck(): Promise<void> {
     try {
+      this.flushFocusDigest();
       await this.checkDecisionReminders();
       await this.checkMorningSummary();
       await this.checkScheduledDigest();
     } catch {
       // ignore
     }
+  }
+
+  private isFocusDeferredEvent(type: string): boolean {
+    return type.startsWith('task.') || type.startsWith('assistant.') || type.startsWith('brain.');
+  }
+
+  private flushFocusDigest(): void {
+    const focusProjectId = this.config.focus?.projectId;
+    if (!focusProjectId || this.focusDigest.size === 0) return;
+    const parts = [...this.focusDigest.entries()].map(([project, count]) => `${this.escapeHtml(project)}: ${count}`);
+    this.focusDigest.clear();
+    this.broadcastMessage(`🎯 <b>Tóm tắt khi đang tập trung ${this.escapeHtml(focusProjectId)}</b>\n${parts.join('\n')} thông báo từ project khác`);
   }
 
   // --- Long Polling ---
@@ -1282,6 +1299,10 @@ export class TelegramBotService {
         await this.handleStatusCommand(chatId);
         break;
 
+      case '/focus':
+        await this.handleFocusCommand(chatId, argStr);
+        break;
+
       case '/digest':
         await this.handleDigestCommand(chatId);
         break;
@@ -1296,6 +1317,10 @@ export class TelegramBotService {
 
       case '/brain':
         await this.handleBrainCommand(chatId, argStr);
+        break;
+
+      case '/review':
+        await this.handleReviewCommand(chatId, args);
         break;
 
       case '/knowledge':
@@ -1370,6 +1395,27 @@ export class TelegramBotService {
     }
   }
 
+  private async handleFocusCommand(chatId: number, argStr: string): Promise<void> {
+    const target = argStr.trim();
+    const current = this.service.getFocus();
+    if (!target) {
+      await this.sendMessage(chatId, current.projectId
+        ? `🎯 Đang tập trung cho <b>${this.escapeHtml(current.projectId)}</b>\nTask khác đang chờ: ${this.taskRepo.getByStatus('queued').filter((task) => task.waitReason === 'focus').length}`
+        : '🎯 Chưa bật chế độ tập trung.');
+      return;
+    }
+    try {
+      const result = this.service.setFocus({ projectId: target.toLowerCase() === 'off' ? null : target });
+      if (!result.focus.projectId) {
+        await this.sendMessage(chatId, `▶️ Đã tắt tập trung. ${result.resumed} task được chạy lại.`);
+      } else {
+        await this.sendMessage(chatId, `🎯 Đã tập trung cho <b>${this.escapeHtml(result.focus.projectId)}</b>. ${result.paused} task bị tạm dừng, ${result.waiting} task khác đang chờ.`);
+      }
+    } catch (error) {
+      await this.sendMessage(chatId, `❌ ${this.escapeHtml(error instanceof Error ? error.message : String(error))}`);
+    }
+  }
+
   private async handleKnowledgeCommand(chatId: number): Promise<void> {
     const projectId = this.selectedProject.get(chatId);
     if (!projectId) {
@@ -1389,6 +1435,31 @@ export class TelegramBotService {
       checklist.length ? checklist.map((item) => `• ${this.escapeHtml(item)}`).join('\n') : '• Không có',
     ].join('\n');
     await this.sendMessage(chatId, text);
+  }
+
+  private async handleReviewCommand(chatId: number, args: string[]): Promise<void> {
+    if (args[0] !== 'order') {
+      await this.sendMessage(chatId, 'Dùng /review order để xem, hoặc /review order claude,codex để đổi thứ tự.');
+      return;
+    }
+    const current = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>);
+    if (!args[1]) {
+      await this.sendMessage(chatId, `🔎 Thứ tự reviewer: ${current.order.map((item) => item.engine).join(' → ')}\nFallback khi không khả dụng: ${current.fallback.onUnavailable ? 'bật' : 'tắt'}, bận sau ${current.fallback.onBusyAfterMin} phút.`);
+      return;
+    }
+    const names = args[1].split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    if (names.length === 0 || names.some((name) => name !== 'claude' && name !== 'codex') || new Set(names).size !== names.length) {
+      await this.sendMessage(chatId, 'Thứ tự phải là danh sách claude,codex (mỗi reviewer tối đa một lần).');
+      return;
+    }
+    const order = names.map((name) => current.order.find((item) => item.engine === name) || {
+      engine: name as 'claude' | 'codex',
+      model: name === 'claude' ? 'sonnet' : 'gpt-5.6-luna',
+      profiles: [],
+    });
+    updateConfigInMemory(this.config, { reviewer: { order } });
+    saveConfig(this.config.hubHome, { reviewer: { order } });
+    await this.sendMessage(chatId, `✅ Đã đổi thứ tự reviewer chung: ${names.join(' → ')}`);
   }
 
   private async handleDeployCommand(chatId: number, argStr: string): Promise<void> {
@@ -3445,14 +3516,19 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     // 1. Brain auto mode: suppress raw task notifications
-    const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type.startsWith('deploy.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
+    try {
+      const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type.startsWith('deploy.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
     this.notificationProjectId = isSystemEvent ? null : projectId;
     this.notificationDedupProjectId = projectId;
-    try {
-      const prefix = this.projectPrefix(projectId);
-      const minimal = this.isMinimalProject(projectId);
-      const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
-      if (effectiveMode === 'auto') {
+    const focusProjectId = this.config.focus?.projectId;
+    if (focusProjectId && projectId && projectId !== focusProjectId && this.isFocusDeferredEvent(type)) {
+      this.focusDigest.set(projectId, (this.focusDigest.get(projectId) || 0) + 1);
+      return;
+    }
+    const prefix = this.projectPrefix(projectId);
+    const minimal = this.isMinimalProject(projectId);
+    const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
+    if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
         isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
@@ -4278,6 +4354,7 @@ export class TelegramBotService {
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/focus &lt;dự án&gt; - Tập trung tài nguyên cho dự án; /focus off để tắt
 /shutdown - Tắt AgentHub; bật lại từ máy bằng <code>agenthub start</code>
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /plans - Xem 5 kế hoạch gần nhất và tiến độ

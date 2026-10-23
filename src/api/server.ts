@@ -163,6 +163,8 @@ export async function createServer(
 
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
   fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+  fastify.get('/api/focus', async () => service.getFocus());
+  fastify.put('/api/focus', async (req) => service.setFocus(req.body));
 
   // --- Telegram API ---
   fastify.get('/api/telegram/pairing-code', async (req) => {

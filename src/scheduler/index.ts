@@ -46,6 +46,7 @@ import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } 
 import { LoadGuard, LoadSnapshot } from '../load.js';
 import { measureProcessTree } from '../process-tree.js';
 import { ReferenceSnapshot, takeReferenceSnapshots, detectReferenceModifications, ReferenceModification } from '../references.js';
+import { normalizeReviewerModel, reviewerSettingsFromLegacy, type ReviewerOrderItem, type ReviewerFallback } from '../reviewer-config.js';
 import { cleanupTaskRunArtifacts } from '../temp-cleanup.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
@@ -124,7 +125,7 @@ interface RunningTask {
   lastTicks?: number;
   lastTicksAt?: number;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
   pausedAt?: number | null;
   referenceSnapshots?: ReferenceSnapshot[];
 }
@@ -161,6 +162,8 @@ export interface ReviewerRun {
   timeout: NodeJS.Timeout;
   exitTimeout?: NodeJS.Timeout;
 }
+
+type ReviewerPick = { engine: Engine; model: string; profile: ProfileRow } | { wait: true };
 
 interface QueuedCheck {
   taskId: string;
@@ -209,6 +212,8 @@ export class Scheduler {
   private reviewerBackoffUntil = new Map<string, number>();
   private reviewNotified = new Map<string, string>();
   private failoverWasActive = false;
+  private reviewerErrorCounts = new Map<string, number>();
+  private reviewerFallbackNotified = new Set<string>();
   private lastOrphanScan = 0;
   private readonly worktreeCleanupRetryAt = new Map<string, number>();
   private readonly worktreeCleanupLogged = new Set<string>();
@@ -336,9 +341,13 @@ export class Scheduler {
     return this.running;
   }
 
-  effectiveParallel(project: { maxParallel: number; departmentId?: string }): number {
+  effectiveParallel(project: { maxParallel: number; id?: string; departmentId?: string }): number {
     const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
-    return this.loadGuard.effectiveParallel(Math.min(project.maxParallel, department?.maxParallel || project.maxParallel));
+    const projectLimit = Math.min(project.maxParallel, department?.maxParallel || project.maxParallel);
+    const focus = this.getFocus();
+    const load = this.loadGuard.getStatus();
+    if (focus.projectId && project.id === focus.projectId && load.highSince === null) return projectLimit;
+    return this.loadGuard.effectiveParallel(projectLimit);
   }
 
   private parallelUsage(project: { id: string; departmentId?: string }): { project: number; department: number } {
@@ -361,6 +370,43 @@ export class Scheduler {
   private departmentPriority(task: TaskRow): number {
     const project = this.projectRepo.get(task.projectId);
     return project?.departmentId ? this.departmentRepo?.get(project.departmentId)?.priority || 0 : 0;
+  }
+
+  /** Priority is also the department's fair-share weight; zero remains eligible. */
+  private departmentWeight(task: TaskRow): number {
+    return Math.max(1, this.departmentPriority(task));
+  }
+
+  private departmentIdForTask(task: TaskRow): string {
+    return this.projectRepo.get(task.projectId)?.departmentId || 'chung';
+  }
+
+  private departmentProfileAssignments(profileName: string): Array<{ departmentId: string; share: number | null }> {
+    if (!this.departmentRepo) return [];
+    return this.departmentRepo.getAll().flatMap((department) => this.departmentRepo!.profiles(department.id)
+      .filter((assignment) => assignment.profileName === profileName)
+      .map((assignment) => ({ departmentId: assignment.departmentId, share: assignment.share })));
+  }
+
+  private profileAllowedForDepartment(profileName: string, departmentId: string): boolean {
+    const assignments = this.departmentProfileAssignments(profileName);
+    return assignments.length === 0 || assignments.some((assignment) => assignment.departmentId === departmentId);
+  }
+
+  private profileShare(profileName: string, departmentId: string): number {
+    const assignments = this.departmentProfileAssignments(profileName);
+    if (assignments.length === 0) return 1;
+    const assignment = assignments.find((item) => item.departmentId === departmentId);
+    if (!assignment) return 0;
+    return Math.max(0.01, assignment.share ?? 1);
+  }
+
+  private profileDepartmentLoad(profileName: string, departmentId: string): number {
+    const active = [...this.running.values(), ...this.starting.values()];
+    return active.filter((task) => {
+      if (task.profileName !== profileName) return false;
+      return (this.projectRepo.get(task.projectId)?.departmentId || 'chung') === departmentId;
+    }).length;
   }
 
   private claudeBudgetAvailable(task: TaskRow): boolean {
@@ -391,7 +437,7 @@ export class Scheduler {
     return this.paused;
   }
 
-  pauseTask(taskId: string, reason: 'manual' | 'load' = 'manual'): boolean {
+  pauseTask(taskId: string, reason: 'manual' | 'load' | 'focus' = 'manual'): boolean {
     const rt = this.running.get(taskId);
     if (!rt) return false;
     if (rt.paused) return true;
@@ -447,6 +493,40 @@ export class Scheduler {
     return true;
   }
 
+  getFocus(): AgentHubConfig['focus'] {
+    return this.config.focus || { projectId: null, since: null, pauseRunning: true };
+  }
+
+  applyFocus(): { paused: number; resumed: number; waiting: number } {
+    const focus = this.getFocus();
+    let paused = 0;
+    let resumed = 0;
+    let waiting = 0;
+    for (const rt of this.running.values()) {
+      if (!focus.projectId || rt.projectId === focus.projectId) {
+        if (rt.paused && rt.pauseReason === 'focus' && this.resumeTask(rt.taskId)) resumed++;
+      } else if (focus.pauseRunning) {
+        if (!rt.paused && this.pauseTask(rt.taskId, 'focus')) paused++;
+      } else if (rt.paused && rt.pauseReason === 'focus' && this.resumeTask(rt.taskId)) {
+        resumed++;
+      }
+    }
+    for (const task of this.taskRepo.getByStatus('queued')) {
+      if (focus.projectId && task.projectId !== focus.projectId) {
+        if (task.waitReason !== 'focus') {
+          this.taskRepo.update(task.id, { status: 'queued', waitReason: 'focus' });
+          this.eventBus.emit('task.queued', task.id, { reason: 'focus', projectId: focus.projectId });
+        }
+        waiting++;
+      } else if (task.waitReason === 'focus') {
+        this.taskRepo.update(task.id, { status: 'queued', waitReason: null });
+        this.eventBus.emit('task.queued', task.id, { reason: 'focus_cleared' });
+      }
+    }
+    this.pumpChecks();
+    return { paused, resumed, waiting };
+  }
+
   measureTaskResources(rt: RunningTask): void {
     const task = this.taskRepo.get(rt.taskId);
     const prev = rt.lastTicks !== undefined && rt.lastTicksAt !== undefined
@@ -471,6 +551,7 @@ export class Scheduler {
     this.lastOrphanScan = 0;
     // Recover crashed runs on startup
     this.recoverOnStartup();
+    this.applyFocus();
     this.skipSchedulingOnce = true;
 
     // Start the scheduler loop (every 2 seconds)
@@ -817,6 +898,8 @@ export class Scheduler {
     while (!this.stopped && this.checkingActive.size < limit) {
       const index = this.checkingQueue.findIndex((entry) => {
         const task = this.taskRepo.get(entry.taskId);
+        const focus = this.getFocus();
+        if (focus.projectId && task && task.projectId !== focus.projectId) return false;
         const worktree = task?.worktreePath || `project:${task?.projectId || entry.taskId}`;
         return !this.checkingWorktrees.has(worktree);
       });
@@ -1909,11 +1992,39 @@ export class Scheduler {
       this.skipSchedulingOnce = false;
       return;
     }
-    const queuedTasks = this.taskRepo.getByStatus('queued').sort((a, b) =>
-      this.departmentPriority(b) - this.departmentPriority(a) || parseDbTime(a.createdAt) - parseDbTime(b.createdAt),
-    );
+    const queuedTasks = this.taskRepo.getByStatus('queued');
+    const focus = this.getFocus();
+    const schedulableTasks: TaskRow[] = [];
 
     for (const task of queuedTasks) {
+      if (focus.projectId && task.projectId !== focus.projectId) {
+        if (task.waitReason !== 'focus') {
+          this.taskRepo.update(task.id, { status: 'queued', waitReason: 'focus' });
+          this.eventBus.emit('task.queued', task.id, { reason: 'focus', projectId: focus.projectId });
+        }
+        continue;
+      }
+      if (task.waitReason === 'focus') this.taskRepo.update(task.id, { status: 'queued', waitReason: null });
+      schedulableTasks.push(task);
+    }
+
+    const fairUsage = new Map<string, number>();
+    for (const running of [...this.running.values(), ...this.starting.values()]) {
+      const departmentId = this.projectRepo.get(running.projectId)?.departmentId || 'chung';
+      fairUsage.set(departmentId, (fairUsage.get(departmentId) || 0) + 1);
+    }
+    const remainingTasks = [...schedulableTasks];
+    while (remainingTasks.length > 0) {
+      remainingTasks.sort((a, b) => {
+        const aDept = this.departmentIdForTask(a);
+        const bDept = this.departmentIdForTask(b);
+        const aScore = (fairUsage.get(aDept) || 0) / this.departmentWeight(a);
+        const bScore = (fairUsage.get(bDept) || 0) / this.departmentWeight(b);
+        return aScore - bScore
+          || this.departmentPriority(b) - this.departmentPriority(a)
+          || parseDbTime(a.createdAt) - parseDbTime(b.createdAt);
+      });
+      const task = remainingTasks.shift()!;
       if (task.notBefore != null && task.notBefore > Math.floor(Date.now() / 1000)) continue;
       // Check dependencies
       if (!this.areDependenciesMet(task)) continue;
@@ -1954,6 +2065,8 @@ export class Scheduler {
           this.markDiskLow(disk);
           continue;
         }
+        const departmentId = this.departmentIdForTask(task);
+        fairUsage.set(departmentId, (fairUsage.get(departmentId) || 0) + 1);
         void this.startTask(task, pair.model, pair.profileName)
           .catch((error) => {
             console.error(`[scheduler] failed to start task ${task.id}:`, error);
@@ -1985,9 +2098,9 @@ export class Scheduler {
       this.eventBus.emit('claude.failover_cleared', undefined);
     }
     this.failoverWasActive = snapshot.active;
-    const codex = this.engines.get('codex');
-    if (!codex) return;
     for (const task of this.taskRepo.getByStatus('review')) {
+      const focus = this.getFocus();
+      if (focus.projectId && task.projectId !== focus.projectId) continue;
       if (this.reviewerRuns.has(task.id)) continue;
       if (task.reviewerEscalated) {
         const last = this.reviewRepo.getByTask(task.id).at(-1);
@@ -2025,31 +2138,85 @@ export class Scheduler {
         this.escalateReview(task.id, 'missing_autocheck_results', 'Không có kết quả autocheck đã lưu; cần người xác minh trước khi tiếp tục.');
         continue;
       }
-      const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex' &&
-        (p.authState == null || p.authState === 'ok') &&
-        !this.quotaService.isExhausted(p.name, 'codex') &&
-        !this.reviewerInBackoff(p.name) &&
-        !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
       if (!task.worktreePath) continue;
-      if (codexProfiles.length === 0) {
-        // Every Codex account out of quota or logged out, or busy for too long: review with Claude instead.
-        if (this.codexReviewUnavailable() || this.reviewWaitedTooLong(task)) this.startClaudeFallbackReview(task);
-        continue;
-      }
-      codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
       const model = reviewerModel(step || { reviewer: this.config.reviewer?.model || 'codex:gpt-5.6-luna', mode: 'gate' }) || this.config.reviewer?.model || 'codex:gpt-5.6-luna';
       const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
       // Same model as the worker: still review, but from another Codex account in a fresh session.
-      const profile = lastWorker?.model === model
-        ? codexProfiles.find((p) => p.name !== lastWorker.profileName)
-        : codexProfiles[0];
-      if (!profile) continue;
-      if (step?.reviewer === 'claude' && !this.claudeBudgetAvailable(task)) {
-        this.eventBus.emit('review.waiting', task.id, { reason: 'department_claude_budget' });
-        continue;
-      }
-      this.startReview(task, profile.name, codex, model, step?.reviewer || 'codex-reviewer');
+      const picked = chain.length > 0
+        ? this.pickChainReviewer(task, step, model, lastWorker?.profileName)
+        : this.pickReviewer(task, lastWorker?.model === model ? lastWorker.profileName : undefined);
+      if ('wait' in picked) continue;
+      this.startReview(task, picked.profile.name, picked.engine, picked.model, picked.engine.id === 'claude' ? 'claude-reviewer' : 'codex-reviewer');
     }
+  }
+
+  /** Pick the first reviewer that can run, applying project overrides and fallback policy. */
+  private pickReviewer(task: TaskRow, avoidProfile?: string): ReviewerPick {
+    const project = this.projectRepo.get(task.projectId);
+    const settings = projectSettings(project);
+    const legacy = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>);
+    const order: ReviewerOrderItem[] = settings.review?.order ?? legacy.order;
+    const fallback: ReviewerFallback = {
+      ...legacy.fallback,
+      ...(settings.review?.fallback || {}),
+    };
+    const waitedMs = Date.now() - parseDbTime(task.updatedAt);
+    const errorCount = this.reviewerErrorCounts.get(task.id) || 0;
+    for (let index = 0; index < order.length; index += 1) {
+      const item = order[index];
+      const engineId = item.engine === 'claude' ? CLAUDE_REVIEW_ENGINE_KEY : 'codex';
+      const engine = this.engines.get(engineId);
+      if (!engine) continue;
+      const model = normalizeReviewerModel(item.engine, item.model);
+      const candidates = this.profileRepo.getEnabled().filter((profile) => {
+        if (profile.engine !== item.engine || (item.profiles.length > 0 && !item.profiles.includes(profile.name))) return false;
+        if (profile.authState != null && profile.authState !== 'ok') return false;
+        if (this.quotaService.isExhausted(profile.name, item.engine === 'claude' ? 'claude' : 'codex')) return false;
+        if (this.reviewerInBackoff(profile.name)) return false;
+        return true;
+      });
+      const free = candidates.filter((profile) => !this.reviewerRunsForProfile(profile.name) && this.locks.findFreeSlotSync(profile) !== null)
+        .filter((profile) => !(avoidProfile && profile.name === avoidProfile && candidates.length > 1))
+        .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+      if (free.length > 0 && !(errorCount >= 2 && fallback.onError && index === 0)) {
+        if (index > 0) {
+          const key = `${task.id}:${index}`;
+          if (!this.reviewerFallbackNotified.has(key)) {
+            this.reviewerFallbackNotified.add(key);
+            this.eventBus.emit('review.fallback', task.id, { from: order[index - 1].engine, to: item.engine, reason: 'available', profile: free[0].name });
+          }
+        }
+        return { engine, model, profile: free[0] };
+      }
+      const unavailable = candidates.length === 0;
+      const busy = candidates.length > 0 && free.length === 0;
+      const canFallback = (unavailable && fallback.onUnavailable) ||
+        (busy && fallback.onBusyAfterMin > 0 && waitedMs >= fallback.onBusyAfterMin * 60_000) ||
+        (errorCount >= 2 && fallback.onError);
+      if (!canFallback) return { wait: true };
+      if (index < order.length - 1) {
+        const key = `${task.id}:${index + 1}`;
+        if (!this.reviewerFallbackNotified.has(key)) {
+          this.reviewerFallbackNotified.add(key);
+          this.eventBus.emit('review.fallback', task.id, { from: item.engine, to: order[index + 1].engine, reason: unavailable ? 'unavailable' : busy ? 'busy' : 'error' });
+        }
+      }
+    }
+    return { wait: true };
+  }
+
+  private pickChainReviewer(task: TaskRow, step: ReviewChainStep | undefined, model: string, avoidProfile?: string): ReviewerPick {
+    if (step?.reviewer === 'claude' && !this.claudeBudgetAvailable(task)) {
+      this.eventBus.emit('review.waiting', task.id, { reason: 'department_claude_budget' });
+      return { wait: true };
+    }
+    const engine = step?.reviewer === 'claude' ? this.engines.get(CLAUDE_REVIEW_ENGINE_KEY) : this.engines.get('codex');
+    if (!engine) return { wait: true };
+    const engineId = step?.reviewer === 'claude' ? 'claude' : 'codex';
+    const family = engineId === 'claude' ? 'claude' : 'codex';
+    const profiles = this.profileRepo.getEnabled().filter((p) => p.engine === engineId && !this.quotaService.isExhausted(p.name, family) && (p.authState == null || p.authState === 'ok') && !this.reviewerInBackoff(p.name) && !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null && p.name !== avoidProfile);
+    const profile = profiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
+    return profile ? { engine, model, profile } : { wait: true };
   }
 
   private reviewChainForTask(task: TaskRow): ReviewChainStep[] {
@@ -2099,11 +2266,16 @@ export class Scheduler {
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
     const lastEscalationId = escalations[escalations.length - 1].id;
-    return !this.hasAutomatedVerdictAfter(task.id, lastEscalationId);
+    if (this.hasAutomatedVerdictAfter(task.id, lastEscalationId)) return false;
+    // Keep compatibility with durable review rows written by older daemons that did not
+    // emit review.completed. Restrict this fallback to the legacy Claude arbiter actor so
+    // a stale pre-escalation Codex review cannot satisfy the current escalation.
+    const lastReview = this.reviewRepo?.getByTask(task.id).at(-1);
+    return !(lastReview?.actor === 'claude-reviewer' && lastReview.verdict === 'changes_requested');
   }
 
   /**
-   * The Claude arbiter asked for changes on an escalated task. Send it back
+   * The arbiter asked for changes on an escalated task. Send it back
    * with that feedback on the strongest model, at most ARBITER_ROUNDS times; then block it and say so.
    */
   private actOnArbiterRejection(task: TaskRow, last: { actor: string; verdict: string; feedback: string | null; createdAt: string } | undefined): void {
@@ -2112,13 +2284,18 @@ export class Scheduler {
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     const lastEscalationId = escalations.at(-1)?.id;
-    if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    if (lastEscalationId == null) return;
+    const hasEventVerdict = this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested');
+    const legacyReviews = this.reviewRepo?.getByTask(task.id)
+      .filter((review) => review.actor === 'claude-reviewer' && review.verdict === 'changes_requested') ?? [];
+    if (!hasEventVerdict && legacyReviews.length === 0) return;
     // Count arbiter rejections across every arbiter round (from the second escalation on), so a task
     // that keeps getting re-escalated is still blocked after ARBITER_ROUNDS instead of looping forever.
     const arbiterStartId = escalations[1]?.id ?? lastEscalationId;
     const rejections = this.eventRepo.getByTask(task.id)
       .filter((event) => event.id > arbiterStartId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
-    if (rejections > ARBITER_ROUNDS) {
+    const totalRejections = rejections || legacyReviews.length;
+    if (totalRejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {
         reason: 'review_rounds_exhausted',
@@ -2130,7 +2307,7 @@ export class Scheduler {
     let chain: string[] = [];
     try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
     this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
-    this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
+    this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Arbiter yêu cầu sửa.'}\n\n(Reviewer đã từ chối nhiều vòng và arbiter cũng yêu cầu sửa; giao lại lần ${totalRejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
   }
 
   private hasAutomatedVerdictAfter(taskId: string, eventId: number, verdict?: ReviewerVerdict): boolean {
@@ -2155,45 +2332,73 @@ export class Scheduler {
     return codexProfiles.every((p) => this.quotaService.isExhausted(p.name, 'codex') || (p.authState != null && p.authState !== 'ok'));
   }
 
-  private startClaudeFallbackReview(task: TaskRow): void {
-    if (!this.claudeBudgetAvailable(task)) {
+  private startClaudeFallbackReview(task: TaskRow): 'started' | 'waiting' | 'unavailable' {
+    const arbiter = this.config.reviewer?.arbiter || { engine: 'claude' as const, model: 'opus' };
+    if (arbiter.engine === 'claude' && !this.claudeBudgetAvailable(task)) {
       this.eventBus.emit('review.waiting', task.id, { actor: 'claude-reviewer', reason: 'department_claude_budget' });
-      return;
+      return 'waiting';
     }
-    const engine = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
-    if (!engine || this.config.reviewer?.claudeFallback === false) return;
-    const preferred = this.config.reviewer?.claudeProfiles ?? [];
+    const engine = this.engines.get(arbiter.engine === 'claude' ? CLAUDE_REVIEW_ENGINE_KEY : 'codex');
+    if (!engine) return 'unavailable';
+    const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+    const preferred = arbiter.engine === 'claude' ? (this.config.reviewer?.claudeProfiles ?? []) : [];
     const rank = (name: string) => (preferred.includes(name) ? preferred.indexOf(name) : preferred.length);
     const candidates = this.profileRepo.getEnabled()
-      .filter((p) => p.engine === 'claude' && (p.authState == null || p.authState === 'ok') &&
+      .filter((p) => p.engine === arbiter.engine && (p.authState == null || p.authState === 'ok') &&
         (preferred.length === 0 || preferred.includes(p.name)) &&
-        !this.quotaService.isExhausted(p.name, 'claude') &&
+        !this.quotaService.isExhausted(p.name, arbiter.engine === 'claude' ? 'claude' : 'codex') &&
         !this.reviewerInBackoff(p.name) &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null)
-      .sort((a, b) => rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
+      .sort((a, b) => Number(a.name === lastWorker?.profileName) - Number(b.name === lastWorker?.profileName) ||
+        rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
     const profile = candidates[0];
-    if (!profile) return;
-    this.eventBus.emit('review.fallback', task.id, { from: 'codex', to: 'claude', profile: profile.name });
-    this.startReview(task, profile.name, engine, `claude:${this.config.reviewer?.claudeModel || 'sonnet'}`, 'claude-reviewer');
+    if (!profile) return 'unavailable';
+    this.eventBus.emit('review.fallback', task.id, { from: 'reviewer', to: arbiter.engine, reason: 'arbiter', profile: profile.name });
+    this.startReview(task, profile.name, engine, normalizeReviewerModel(arbiter.engine, arbiter.model), arbiter.engine === 'claude' ? 'claude-reviewer' : 'codex-reviewer');
+    return 'started';
   }
 
   /** Prefer Claude as arbiter, but immediately fall back to an independent Codex account. */
   private startEscalationArbiter(task: TaskRow): void {
     const before = this.reviewerRuns.size;
-    if (this.config.reviewer?.claudeFallback !== false) this.startClaudeFallbackReview(task);
+    // Arbiter selection is independent from the legacy reviewer fallback switch. The configured
+    // arbiter must get the first chance even when claudeFallback is disabled.
+    const arbiterResult = this.startClaudeFallbackReview(task);
+    if (arbiterResult === 'waiting') return;
     if (this.reviewerRuns.size > before) return;
+
+    const arbiterEngine = this.config.reviewer?.arbiter?.engine ?? 'claude';
+    if (arbiterEngine === 'codex') {
+      const claude = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
+      if (!claude || !task.worktreePath || !this.claudeBudgetAvailable(task)) return;
+      const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+      const candidates = this.profileRepo.getEnabled()
+        .filter((profile) => profile.engine === 'claude'
+          && (profile.authState == null || profile.authState === 'ok')
+          && !this.quotaService.isExhausted(profile.name, 'claude')
+          && !this.reviewerInBackoff(profile.name)
+          && !this.reviewerRunsForProfile(profile.name)
+          && this.locks.findFreeSlotSync(profile) !== null)
+        .sort((a, b) => Number(a.name === lastWorker?.profileName) - Number(b.name === lastWorker?.profileName) ||
+          (b.priority ?? 0) - (a.priority ?? 0));
+      const profile = candidates[0];
+      if (!profile) return;
+      this.eventBus.emit('review.fallback', task.id, { from: 'codex', to: 'claude', profile: profile.name, reason: 'arbiter_unavailable' });
+      this.startReview(task, profile.name, claude, `claude:${this.config.reviewer?.claudeModel || 'sonnet'}`, 'claude-reviewer');
+      return;
+    }
 
     const codex = this.engines.get('codex');
     if (!codex || !task.worktreePath) return;
     const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
     const candidates = this.profileRepo.getEnabled()
       .filter((profile) => profile.engine === 'codex'
-        && profile.name !== lastWorker?.profileName
         && !this.quotaService.isExhausted(profile.name, 'codex')
         && !this.reviewerInBackoff(profile.name)
         && !this.reviewerRunsForProfile(profile.name)
         && this.locks.findFreeSlotSync(profile) !== null)
-      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+      .sort((a, b) => Number(a.name === lastWorker?.profileName) - Number(b.name === lastWorker?.profileName) ||
+        (b.priority ?? 0) - (a.priority ?? 0));
     const profile = candidates[0];
     if (!profile) return;
     this.eventBus.emit('review.fallback', task.id, { from: 'claude', to: 'codex', profile: profile.name, reason: 'arbiter_unavailable' });
@@ -2333,6 +2538,7 @@ export class Scheduler {
       return;
     }
     if (reason === 'timeout' || reason === 'error' || exitCode !== 0 || quota) {
+      if (!quota) this.reviewerErrorCounts.set(taskId, (this.reviewerErrorCounts.get(taskId) || 0) + 1);
       this.reviewerBackoffUntil.set(profileName, Date.now() + REVIEWER_CRASH_BACKOFF_MS);
       this.runRepo.finish(runId, quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crashed');
       if (quota) this.quotaService.mark(profileName, active.actor === 'claude-reviewer' ? 'claude' : 'codex', this.config.reviewer?.failoverSec || 5 * 60 * 60, `${active.actor} quota`);
@@ -2348,6 +2554,7 @@ export class Scheduler {
     }
     const result = parseReviewerOutput(output);
     if (!result) {
+      this.reviewerErrorCounts.set(taskId, (this.reviewerErrorCounts.get(taskId) || 0) + 1);
       this.runRepo.finish(runId, 'crashed', undefined, 'malformed reviewer output');
       this.eventBus.emit('review.failed', taskId, { actor: active.actor, reason: 'malformed_output' });
       return;
@@ -2372,6 +2579,7 @@ export class Scheduler {
       }
     }
     this.runRepo.finish(runId, 'done');
+    this.reviewerErrorCounts.delete(taskId);
     this.reviewTask(taskId, result.verdict, result.feedback, active.actor);
     this.eventBus.emit('review.completed', taskId, { actor: active.actor, verdict: result.verdict, model: run?.model || this.config.reviewer?.model || 'codex:gpt-5.6-luna', runId });
     if (!this.stopped) this.triggerTick();
@@ -2520,16 +2728,15 @@ export class Scheduler {
     task: TaskRow,
   ): { model: string; profileName: string } | null {
     const chain = this.getModelChain(task);
+    const departmentId = this.departmentIdForTask(task);
 
     for (const model of chain) {
       const family = getModelFamily(model);
       const engineId = getModelEngine(model);
 
       // Find suitable profiles
-      const project = this.projectRepo.get(task.projectId);
-      const assigned = project?.departmentId ? this.departmentRepo?.profiles(project.departmentId) : [];
-      const assignedNames = assigned && assigned.length > 0 ? new Set(assigned.map((item) => item.profileName)) : null;
-      const profiles = this.profileRepo.getEnabled().filter((p) => (!p.authState || p.authState === 'ok') && (!assignedNames || assignedNames.has(p.name)));
+      const profiles = this.profileRepo.getEnabled().filter((p) =>
+        (!p.authState || p.authState === 'ok') && this.profileAllowedForDepartment(p.name, departmentId));
       const eligibleProfiles = profiles.filter((profile) => {
         if (profile.engine !== engineId) return false;
         if (this.quotaService.isExhausted(profile.name, family)) return false;
@@ -2546,9 +2753,13 @@ export class Scheduler {
         priority: profile.priority ?? 0,
         emailRuns: this.getEmailRunningCount(profile),
         quotaRemaining: this.getQuotaRemainingPct(profile, family),
+        departmentLoad: this.profileDepartmentLoad(profile.name, departmentId) / this.profileShare(profile.name, departmentId),
       }));
 
       ranked.sort((a, b) => {
+        if (a.departmentLoad !== b.departmentLoad) {
+          return a.departmentLoad - b.departmentLoad;
+        }
         if (a.emailRuns !== b.emailRuns) {
           return a.emailRuns - b.emailRuns;
         }
@@ -2568,6 +2779,7 @@ export class Scheduler {
   }
 
   private hasBusyMatchingProfile(task: TaskRow): boolean {
+    const departmentId = this.departmentIdForTask(task);
     for (const model of this.getModelChain(task)) {
       const engineId = getModelEngine(model);
       const family = getModelFamily(model);
@@ -2575,6 +2787,7 @@ export class Scheduler {
         if (profile.authState && profile.authState !== 'ok') continue;
         if (
           profile.engine === engineId &&
+          this.profileAllowedForDepartment(profile.name, departmentId) &&
           !this.quotaService.isExhausted(profile.name, family) &&
           (this.isProfileBusy(profile.name) || this.locks.getSlotsSync(profile).busy)
         ) {

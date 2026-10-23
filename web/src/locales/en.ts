@@ -32,6 +32,8 @@ export const en: typeof vi = {
     running: 'running',
     hard: 'Hard',
     easy: 'Easy',
+    focusBanner: 'Focused on {project} — {count} other task(s) are waiting',
+    stopFocus: 'Stop focus',
   },
   status: {
     queued: 'Queued',
@@ -46,8 +48,10 @@ export const en: typeof vi = {
     checking: 'Checking',
     paused: 'Paused',
     pausedOverload: 'Paused (overloaded)',
+    pausedFocus: 'Paused because another project is focused',
   },
   waitReason: {
+    focus: 'Waiting because another project is focused',
     disk: 'Waiting for disk ({free} GB free / {min} GB needed)',
     diskNamed: 'Waiting for {label} ({free} GB free / {min} GB needed)',
     diskShort: 'Waiting for disk',
@@ -332,6 +336,7 @@ export const en: typeof vi = {
     timeline: 'Timeline',
     noEvents: 'No events recorded yet.',
     reviewFallbackLine: 'Codex out of quota, Claude is reviewing ({profile})',
+    reviewHistory: 'Review history', unknownReviewer: 'Unknown reviewer', reviewApproved: 'Approved', reviewChangesRequested: 'Changes requested',
   },
   profiles: {
     antigravitySubtitle: 'Google account and Gemini quota', codexSubtitle: 'ChatGPT account and device auth', claudeSubtitle: 'Claude Code account',
@@ -845,6 +850,8 @@ export const en: typeof vi = {
   projects: {
     title: 'Project Management',
     subtitle: 'Register and configure software projects for AI workers to create worktrees and run tasks.',
+    focusProject: 'Focus this project',
+    unfocusProject: 'Stop focus',
     registerBtn: 'Register Project',
     closeFormBtn: 'Close form',
     formTitle: 'Register New Project',
@@ -896,7 +903,7 @@ export const en: typeof vi = {
     brainPermissions: 'Brain permissions', brainPermissionInherit: 'Inherit global', brainPermissionStandard: 'Standard', brainPermissionTrusted: 'Trusted', brainPermissionFull: 'Full access', brainPermissionDescinherit: 'Use the global default.', brainPermissionDescstandard: 'Safe reads and approved commands.', brainPermissionDesctrusted: 'May edit and run project commands.', brainPermissionDescfull: 'No permission prompts; use with care.',
     settings: 'Settings', saveSettings: 'Save settings', saveSettingsError: 'Failed to save project settings', settingsPartialHint: 'Changes are sent as a partial project settings update.', brainMode: 'Brain', brainInherit: 'Inherit global', brainOff: 'Off', brainSuggest: 'Suggest', brainAuto: 'Auto', brainExternal: 'External Claude (VS Code)', brainDescinherit: 'Use the global configuration.', brainDescoff: 'Do not coordinate automatically.', brainDescsuggest: 'Only suggest when needed.', brainDescauto: 'Plan and dispatch automatically.', brainDescexternal: 'External Claude (VS Code) coordinates.', dailyTokenBudget: 'Daily token budget', maxTurnsPerHour: 'Max turns/hour', worktreeInstall: 'Dependency install', worktreeAuto: 'Automatic', worktreeSkip: 'Skip', gitHooks: 'Git hooks', gitHooksRun: 'Run', gitHooksSkip: 'Skip', integrationEnabled: 'Enable integration branch', integrationAutoMerge: 'Auto-merge and deploy once Codex approves', integrationBaseRef: 'Base branch', references: 'Read-only references', addReference: 'Add', referenceName: 'Name', referencePath: 'Path', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Full', telegramMinimal: 'Minimal',
     ciLabel: 'GitHub Actions CI Watch', ciEnabled: 'Enable CI Watch', ciBranch: 'CI Branch', ciStatusPassed: 'CI: Passed', ciStatusFailed: 'CI: Failed', ciStatusRunning: 'CI: Running', ciViewRun: 'View run on GitHub', ciNoRun: 'No runs recorded',
-    knowledgeChecklistTitle: 'Knowledge & checklist', knowledgeChecklistHint: 'Choose up to 5 paths; each file is limited to 64KB. The brain must check them during review.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Review checklist', checklistUnreadable: 'unreadable', checklistTooLarge: 'Warning: file exceeds 64KB; content was not injected.', suggestAutomaticChecks: 'Suggest automatic checks', draftChecksCreated: 'Draft task created to suggest automatic checks.',
+    knowledgeChecklistTitle: 'Knowledge & checklist', knowledgeChecklistHint: 'Choose up to 5 paths; each file is limited to 64KB. The brain must check them during review.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Review checklist', reviewerOverride: 'Reviewer override', reviewerOverrideHint: 'Optional project-specific reviewer order and fallback policy.', reviewerOrderOverride: 'Reviewer order override', reviewerFallbackOverride: 'Reviewer fallback override', checklistUnreadable: 'unreadable', checklistTooLarge: 'Warning: file exceeds 64KB; content was not injected.', suggestAutomaticChecks: 'Suggest automatic checks', draftChecksCreated: 'Draft task created to suggest automatic checks.',
     worktreeRoot: 'Worktree directory', worktreeRootPlaceholder: '/absolute/path', worktreeRootDesc: 'The configured root must be dedicated to this project and not shared with another project. Each task is created at <root>/<slug>, with the integration worktree at <root>/.integration. The directory must exist and be writable.', worktreeLogsInRoot: 'Store task logs in this directory/.logs',
     commitConventionTitle: 'Commit convention', commitConventionDesc: 'Configure project-specific branch, commit message, and merge message templates.', branchTemplate: 'Branch template', commitTemplate: 'Commit message template', commitRegex: 'Commit message regex (optional)', mergeMessageTemplate: 'Merge message template', commitConventionPreview: 'Preview example',
     sectionBrainTitle: 'Brain',
@@ -1032,6 +1039,7 @@ export const en: typeof vi = {
     claudeProfiles: 'Claude review profiles (in priority order)',
     claudeProfilesHint: 'Select Claude profiles for review fallback (leave empty to use any profile).',
     claudeProfilesOrder: 'Priority order',
+    reviewerOrder: 'Review order', reviewerOrderHint: 'Drag reviewers to choose who reviews first.', fallbackUnavailable: 'Fallback when unavailable', fallbackError: 'Fallback after errors', fallbackBusy: 'Busy after minutes', arbiter: 'Arbiter',
   },
   savings: { title: 'Delegation Savings', subtitle: 'Measure the work Claude (the brain) avoids by delegating to workers (Gemini, Codex).', clearFilters: 'Clear filters', loadError: 'Failed to load delegation savings.', claudeSaved: 'Claude work avoided', savingRate: 'saving rate', codeWritten: 'Code written by workers', lines: 'lines', linesDeleted: 'lines deleted', approvedTasks: 'Approved tasks', totalTasks: '{count} tasks in the system', avgReviewRounds: 'Average review rounds', rounds: 'rounds', changesRound: 'Each changes_requested counts as one round', tokensByDay: 'Worker tokens by day', tokensByDayDesc: 'Daily token consumption split between Gemini (agy) and Codex.', noDailyData: 'No daily run data.', byTask: 'By-task table', byTaskDesc: 'Code lines, worker tokens, and review rounds for each task.', linesChange: 'Lines (+/-)', reviewRounds: 'Review rounds', noMatchingTasks: 'No matching tasks.', estimatedTitle: 'Estimated from 5-hour quota reduction', methodTitle: 'Measurement method and conversion factors', methodDesc: 'agy values are estimated from 5-hour quota reduction and bucketTokens capacity. Codex values are analyzed precisely from run logs.', },
   dailyUsage: {

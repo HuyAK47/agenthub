@@ -35,6 +35,8 @@ import {
   rerunProjectDeploy,
   getProjectDeployStatus,
   getConfig,
+  getFocus,
+  setFocus,
   getReviewChecklistPreview,
   createTask,
 } from '../api/client';
@@ -107,6 +109,7 @@ export function changedSettings(
   const sections = [
     'commitConvention',
     'brain',
+    'review',
     'worktree',
     'integration',
     'review',
@@ -181,6 +184,14 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 }) => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
+  const { data: focus } = useQuery({ queryKey: ['focus'], queryFn: getFocus });
+  const focusMutation = useMutation({
+    mutationFn: (projectId: string | null) => setFocus(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['focus'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
 
   const { data: config } = useQuery({
     queryKey: ['config'],
@@ -194,6 +205,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [draftChecks, setDraftChecks] = useState<string>('');
   const [draftHooks, setDraftHooks] = useState<string>('');
   const [draftReview, setDraftReview] = useState<string>('');
+  const [draftReviewerOrder, setDraftReviewerOrder] = useState<string>('');
+  const [draftReviewerFallback, setDraftReviewerFallback] = useState<string>('');
   const [draftEnvTemplate, setDraftEnvTemplate] = useState<string>('');
   const [checklistDraft, setChecklistDraft] = useState('');
   const [showCommitExample, setShowCommitExample] = useState(false);
@@ -227,6 +240,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           ? JSON.stringify(project.review, null, 2)
           : '',
       );
+      setDraftReviewerOrder(project.settings?.review?.order ? JSON.stringify(project.settings.review.order, null, 2) : '');
+      setDraftReviewerFallback(project.settings?.review?.fallback ? JSON.stringify(project.settings.review.fallback, null, 2) : '');
       setDraftEnvTemplate(project.envTemplate ?? '');
       setChecksError(null);
       setReviewError(null);
@@ -430,6 +445,11 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     () => draftEnvTemplate.trim() !== origEnv.trim(),
     [draftEnvTemplate, origEnv],
   );
+  const reviewerOverrideChanged = useMemo(
+    () => draftReviewerOrder.trim() !== (origSettings.review?.order ? JSON.stringify(origSettings.review.order, null, 2) : '').trim()
+      || draftReviewerFallback.trim() !== (origSettings.review?.fallback ? JSON.stringify(origSettings.review.fallback, null, 2) : '').trim(),
+    [draftReviewerOrder, draftReviewerFallback, origSettings.review],
+  );
 
   const changeCount = useMemo(() => {
     let count = 0;
@@ -444,6 +464,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     if (hooksChanged) count++;
     if (reviewChanged) count++;
     if (envChanged) count++;
+    if (reviewerOverrideChanged) count++;
     return count;
   }, [
     brainChanged,
@@ -458,6 +479,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     hooksChanged,
     reviewChanged,
     envChanged,
+    reviewerOverrideChanged,
   ]);
 
   const hasChanges = changeCount > 0;
@@ -572,6 +594,16 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       payload.review = draftReview.trim() ? JSON.parse(draftReview) : null;
     }
 
+    if (reviewerOverrideChanged) {
+      payload.settings = {
+        ...(payload.settings || {}),
+        review: {
+          order: draftReviewerOrder.trim() ? JSON.parse(draftReviewerOrder) : undefined,
+          fallback: draftReviewerFallback.trim() ? JSON.parse(draftReviewerFallback) : undefined,
+        },
+      };
+    }
+
     if (envChanged) {
       payload.envTemplate = draftEnvTemplate.trim()
         ? draftEnvTemplate.trim()
@@ -644,6 +676,16 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               {project.path}
             </p>
           </div>
+
+          <Button
+            variant={focus?.projectId === project.id ? 'primary' : 'secondary'}
+            size="sm"
+            onClick={() => focusMutation.mutate(focus?.projectId === project.id ? null : project.id)}
+            disabled={focusMutation.isPending}
+            className="shrink-0"
+          >
+            🎯 {focus?.projectId === project.id ? t('projects.unfocusProject') : t('projects.focusProject')}
+          </Button>
 
           <Button
             variant="ghost"
@@ -1523,6 +1565,14 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                     'bg-[var(--t-surface-2)] text-[var(--t-text)] focus:ring-2 focus:ring-[var(--t-accent)]'
                   }
                 />
+              </div>
+
+              {/* review chain JSON */}
+              <div className="space-y-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3">
+                <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerOverride')}</label>
+                <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.reviewerOverrideHint')}</p>
+                <textarea aria-label={t('projects.reviewerOrderOverride')} rows={3} value={draftReviewerOrder} onChange={(event) => setDraftReviewerOrder(event.target.value)} placeholder={'[{"engine":"claude","model":"sonnet","profiles":[]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
+                <textarea aria-label={t('projects.reviewerFallbackOverride')} rows={2} value={draftReviewerFallback} onChange={(event) => setDraftReviewerFallback(event.target.value)} placeholder={'{"onUnavailable":true,"onBusyAfterMin":10,"onError":true}'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
               </div>
 
               {/* review chain JSON */}
