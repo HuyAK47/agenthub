@@ -11,8 +11,9 @@ import { Profile, EventItem } from '../types/api';
 describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
   let queryClient: QueryClient;
   let sseCallback: sse.EventCallback | null = null;
+  let mockProfiles: Profile[];
 
-  const mockProfiles: Profile[] = [
+  const createMockProfiles = (): Profile[] => [
     {
       name: 'g1',
       engine: 'agy',
@@ -50,6 +51,9 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
   ];
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
+    mockProfiles = createMockProfiles();
     window.history.replaceState({}, '', '/profiles');
     queryClient = new QueryClient({
       defaultOptions: {
@@ -70,6 +74,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     const prototype = HTMLElement.prototype as { scrollIntoView?: unknown };
     delete prototype.scrollIntoView;
@@ -296,7 +301,7 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     const badge = screen.getByTestId('quota-mark-gemini-2.5-pro');
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveAttribute('title', 'Daily token quota exceeded');
-    expect(badge).toHaveTextContent(/Đã khóa gemini-2.5-pro tới còn \d+ phút · \d{2}:\d{2} hôm nay/);
+    expect(badge).toHaveTextContent(/Đã khóa gemini-2.5-pro tới (?:còn \d+ phút|còn 1 giờ) · \d{2}:\d{2} (?:hôm nay|ngày mai)/);
 
     // Có CountdownTimer đếm ngược
     const countdown = screen.getByTestId('countdown-timer');
@@ -305,6 +310,36 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     // Có nút Gỡ
     const removeBtn = screen.getByRole('button', { name: /^Gỡ$/ });
     expect(removeBtn).toBeInTheDocument();
+  });
+
+  it('7b. Quota mark UI: hiển thị badge đúng định dạng "ngày mai" khi mốc hết hạn rơi sang ngày hôm sau', async () => {
+    vi.setSystemTime(new Date('2026-10-23T23:50:00+07:00'));
+    const nextDayProfiles: Profile[] = [
+      {
+        name: 'g1',
+        engine: 'agy',
+        kind: 'isolated',
+        email: 'g1@example.com',
+        loggedIn: true,
+        enabled: 1,
+        quotaMarks: [
+          {
+            profileName: 'g1',
+            family: 'gemini-2.5-pro',
+            until: Math.floor(Date.now() / 1000) + 3600, // 00:50 ngày mai
+            reason: 'Daily token quota exceeded',
+          },
+        ],
+      },
+    ];
+    vi.spyOn(client, 'getProfiles').mockResolvedValue(nextDayProfiles);
+
+    renderPage();
+
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+    const badge = screen.getByTestId('quota-mark-gemini-2.5-pro');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent(/Đã khóa gemini-2.5-pro tới (?:còn 59 phút|còn 1 giờ) · 00:50 ngày mai/);
   });
 
   it('8. Quota mark UI: bấm nút Gỡ nhưng hủy xác nhận (confirm = false) thì không gọi deleteQuota', async () => {
@@ -431,10 +466,48 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
 
     const badge = screen.getByTestId('quota-mark-gemini-2.5-pro');
     expect(badge).toBeInTheDocument();
-    expect(badge).toHaveTextContent(/Locked gemini-2.5-pro until in \d+ minutes · \d{2}:\d{2} today/);
+    expect(badge).toHaveTextContent(/Locked gemini-2.5-pro until (?:in \d+ minutes|in 1 hour) · \d{2}:\d{2} (?:today|tomorrow)/);
 
     const removeBtn = screen.getByRole('button', { name: /^Remove$/ });
     expect(removeBtn).toBeInTheDocument();
+  });
+
+  it('11b. Quota mark UI: hiển thị badge đúng định dạng "tomorrow" khi mốc hết hạn rơi sang ngày hôm sau trong tiếng Anh (en)', async () => {
+    vi.setSystemTime(new Date('2026-10-23T23:50:00+07:00'));
+    const nextDayProfiles: Profile[] = [
+      {
+        name: 'g1',
+        engine: 'agy',
+        kind: 'isolated',
+        email: 'g1@example.com',
+        loggedIn: true,
+        enabled: 1,
+        quotaMarks: [
+          {
+            profileName: 'g1',
+            family: 'gemini-2.5-pro',
+            until: Math.floor(Date.now() / 1000) + 3600, // 00:50 tomorrow
+            reason: 'Daily token quota exceeded',
+          },
+        ],
+      },
+    ];
+    vi.spyOn(client, 'getProfiles').mockResolvedValue(nextDayProfiles);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LocaleProvider initialLocale="en">
+          <BrowserRouter>
+            <ProfilesPage />
+          </BrowserRouter>
+        </LocaleProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+    const badge = screen.getByTestId('quota-mark-gemini-2.5-pro');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent(/Locked gemini-2.5-pro until (?:in 59 minutes|in 1 hour) · 00:50 tomorrow/);
   });
 
   it('12. Claude card: displays limited sessions with auto-resume toggle and detail link', async () => {
