@@ -161,6 +161,7 @@ interface WaitingUserMessage {
 const MAX_WAITING_USER_MESSAGES = 10;
 
 export class ChatService {
+  private stopped = false;
   private queue: QueuedTurn[] = [];
   /** Messages people sent while the session was busy, delivered in order after the current turn. */
   private waitingUserMessages = new Map<string, WaitingUserMessage[]>();
@@ -451,6 +452,7 @@ export class ChatService {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const turn of this.runningTurns.values()) {
       clearTimeout(turn.timeoutTimer);
       turn.cancelled = true;
@@ -1473,6 +1475,7 @@ export class ChatService {
     const startTime = Date.now();
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (this.stopped) return;
       this.resetTurnWatchdog(runningTurn);
       const events = parser.feed(chunk);
       for (const ev of events) {
@@ -1587,6 +1590,7 @@ export class ChatService {
 
     child.on('close', (code) => {
       clearTimeout(timeoutTimer);
+      if (this.stopped) return;
       if (runningTurn.idleTimer) clearTimeout(runningTurn.idleTimer);
       const flushed = parser.flush();
       for (const ev of flushed) {
@@ -1724,6 +1728,7 @@ export class ChatService {
   }
 
   private handlePersistentOutput(proc: PersistentProcess, chunk: Buffer): void {
+    if (this.stopped) return;
     if (proc.active) this.resetTurnWatchdog(proc.active);
     for (const ev of proc.parser.feed(chunk)) {
       if ((ev.type === 'init' || ev.type === 'result') && ev.sessionId && !this.chatSessionRepo.get(proc.sessionId)?.claudeSessionId) {
@@ -1894,6 +1899,7 @@ export class ChatService {
   }
 
   private handlePersistentClose(proc: PersistentProcess): void {
+    if (this.stopped) return;
     if (proc.active) {
       const active = proc.active;
       clearTimeout(active.timeoutTimer);
