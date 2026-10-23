@@ -138,7 +138,7 @@ function isAutoReviewer(by: string | undefined): by is ReviewerActor {
   return by === 'codex-reviewer' || by === 'claude-reviewer';
 }
 
-interface ReviewerRun {
+export interface ReviewerRun {
   taskId: string;
   runId: string;
   pid: number;
@@ -291,6 +291,10 @@ export class Scheduler {
   getReviewerStatus(): { active: boolean; running: string[]; waiting: number } {
     const active = this.failoverState?.snapshot().active === true;
     return { active, running: [...this.reviewerRuns.keys()], waiting: active ? Math.max(0, this.taskRepo.getByStatus('review').length - this.reviewerRuns.size) : 0 };
+  }
+
+  getReviewerRun(taskId: string): ReviewerRun | undefined {
+    return this.reviewerRuns.get(taskId);
   }
 
   getRestartSnapshot(projectId?: string): { checks: number; editing: number } {

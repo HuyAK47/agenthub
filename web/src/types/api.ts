@@ -198,6 +198,7 @@ export interface Review {
   verdict: 'approved' | 'changes_requested';
   feedback?: string | null;
   createdAt: string;
+  actor?: string;
 }
 
 export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
@@ -230,6 +231,7 @@ export interface Task {
   reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
+  reviewer?: 'codex' | 'claude';
   currentRun?: {
     startedAt: string;
     lastOutputAt: string;
@@ -309,6 +311,7 @@ export interface TaskDetail extends Task {
   reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
+  events?: EventItem[];
   doneContent?: string | null;
   blockedContent?: string | null;
   commits?: string[] | null;
@@ -612,7 +615,16 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
-  reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
+  reviewer?: {
+    model: string;
+    enabled?: boolean;
+    timeoutSec?: number;
+    failoverSec?: number;
+    maxChangesRequested?: number;
+    claudeFallback?: boolean;
+    claudeProfiles?: string[];
+    claudeModel?: string;
+  };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
