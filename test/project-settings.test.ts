@@ -17,6 +17,11 @@ import { projectWorktreeRoot } from '../src/projects/paths.js';
 describe('project settings parsing', () => {
   it('defaults reproduce the behaviour from before settings existed', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
+      commitConvention: {
+        branchTemplate: 'agenthub/{slug}',
+        commitTemplate: '{type}: {summary}',
+        mergeMessageTemplate: "Merge branch '{branch}' into {target}",
+      },
       brain: { mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
       integration: { enabled: false, autoMerge: false },
