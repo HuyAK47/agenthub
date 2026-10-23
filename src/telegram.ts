@@ -14,7 +14,7 @@ import {
   DigestData,
   generateDigest,
   isQuietHours,
-  areAllProfilesQuotaExhausted,
+  isQuotaEventEngineWide,
   isSystemIncident,
   forwardDecisionToBrain,
   getMinutesSinceTime,
@@ -3050,13 +3050,7 @@ export class TelegramBotService {
     // interrupt channel, so it only reports when every enabled account for
     // the affected engine/family is unavailable.
     if (type === 'quota.exhausted') {
-      const allExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
-        this.profileRepo,
-        this.quotaMarkRepo,
-        this.now(),
-        typeof p.family === 'string' ? p.family : undefined,
-        typeof p.engine === 'string' ? p.engine : undefined,
-      );
+      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
       if (!allExhausted) return;
     }
 
@@ -3085,13 +3079,7 @@ export class TelegramBotService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(
-          this.profileRepo,
-          this.quotaMarkRepo,
-          now,
-          typeof p.family === 'string' ? p.family : undefined,
-          typeof p.engine === 'string' ? p.engine : undefined,
-        ));
+        isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
 
       const isAllowedInAuto =
         type === 'brain.notify' ||
@@ -3341,13 +3329,7 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
-          this.profileRepo,
-          this.quotaMarkRepo,
-          now,
-          typeof p.family === 'string' ? p.family : undefined,
-          typeof p.engine === 'string' ? p.engine : undefined,
-        );
+        const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');

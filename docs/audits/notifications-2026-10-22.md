@@ -10,19 +10,22 @@ node scripts/notify-audit.mjs --db /path/to/hub.db --config /path/to/config.json
 
 The script reports eligible sends after content dedupe, quiet-hours/config gates, the one-hour disk-state throttle, the 15-minute load summary, the disk hysteresis guard, and the engine-wide quota check. It reads notification and Telegram settings from the config next to the database (or `--config`), and resolves the affected engine from either the event profile or its explicit `engine` field before checking all enabled profiles in that engine. The Telegram column applies the same engine/family gate and configured notify flags as `src/telegram.ts`; the browser column applies the same allow-list, hysteresis, grouped load body, and throttle keys as `web/src/notifications.ts`. It also excludes SSE activity that is not a notification event.
 
-## Event volume supplied with the task
+## Measured event volume and production pipeline results
 
-The measured input window contained the following event counts:
+The measured input window contained the following event counts and resulting notifications computed by the production pipelines:
 
-| Event type | Events | Policy result |
-|---|---:|---|
-| `deploy.restart_waiting` | 1936 | no desktop/browser notification; only emitted when blocker content changes |
-| `claude.quota_available` | 150 | no desktop/browser notification; emitted only on unavailable → available transition |
-| `brain.updated` | 69 | dashboard/SSE activity only |
-| `task.overlap` | 58 | bulletin/dashboard only; no desktop notification |
-| `quota.exhausted` | 42 | important level only when every enabled profile of the affected engine/family is exhausted |
-| `disk.low` / `disk.ok` | 7 / 5 | hysteresis at the scheduler plus at most one desktop/browser notification per state per hour |
-| `load.task_paused` / `task.paused` / `load.high` | 6 / 6 / 6 | one desktop summary at most every 15 minutes; not important-level alerts |
+| Event type | Events | Desktop (all) | Desktop (important) | Telegram sent | Browser notification | Policy result |
+|---|---:|---:|---:|---:|---:|---|
+| `deploy.restart_waiting` | 1936 | 0 | 0 | 0 | 0 | no desktop/browser notification; only emitted when blocker content changes |
+| `claude.quota_available` | 150 | 0 | 0 | 0 | 0 | no desktop/browser notification; emitted only on unavailable → available transition |
+| `brain.updated` | 69 | 0 | 0 | 0 | 0 | dashboard/SSE activity only |
+| `task.overlap` | 58 | 0 | 0 | 0 | 0 | bulletin/dashboard only; no desktop notification |
+| `quota.exhausted` | 42 | 0 | 0 | 0 | 0 | important level only when every enabled profile of the affected engine/family is exhausted |
+| `disk.low` | 7 | 1 | 1 | 1 | 1 | hysteresis at the scheduler plus at most one notification per state per hour |
+| `disk.ok` | 5 | 1 | 0 | 1 | 0 | recovery requires hysteresis margin (+1 GB) and preceding low state; normal level |
+| `load.task_paused` / `task.paused` / `load.high` | 6 / 6 / 6 | 4 | 0 | 4 | 0 | one summary at most every 15 minutes across pause/load family; normal level |
+
+Total desktop notifications at default `important` level: 1 (≤ 10).
 
 The old static audit counted all quota and disk rows as notification candidates. The executable audit now applies the actual payload, profile, persisted quota mark, dedupe, and throttle state, so its output—not a static event-type `Set`—is the source of truth for a concrete database.
 

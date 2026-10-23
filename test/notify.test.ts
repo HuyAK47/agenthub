@@ -578,4 +578,65 @@ describe('NotificationService (Desktop Notifications)', () => {
 
     notifier.stop();
   });
+
+  it('simulates 1 hour of high-noise events and verifies desktop notifications <= 10 at important level', () => {
+    config.notifications.desktopLevel = 'important';
+    let mockTime = 1_000_000_000;
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+      now: () => mockTime,
+    });
+    notifier.start();
+
+    // 1936 deploy.restart_waiting
+    for (let i = 0; i < 1936; i++) {
+      mockTime += Math.floor(3600_000 / 1936);
+      eventBus.emit('deploy.restart_waiting', undefined, { checks: 1, editing: 1 });
+    }
+    // 150 claude.quota_available
+    for (let i = 0; i < 150; i++) {
+      mockTime += Math.floor(3600_000 / 150);
+      eventBus.emit('claude.quota_available', undefined, { profileName: 'chinh' });
+    }
+    // 69 brain.updated
+    for (let i = 0; i < 69; i++) {
+      mockTime += Math.floor(3600_000 / 69);
+      eventBus.emit('brain.updated', undefined, {});
+    }
+    // 58 task.overlap
+    for (let i = 0; i < 58; i++) {
+      mockTime += Math.floor(3600_000 / 58);
+      eventBus.emit('task.overlap', 'proj/t', { file: 'shared.ts', otherTaskId: 'proj/t2' });
+    }
+    // 42 quota.exhausted (individual profiles; chinh is still free when g1 exhausts)
+    for (let i = 0; i < 42; i++) {
+      mockTime += Math.floor(3600_000 / 42);
+      eventBus.emit('quota.exhausted', undefined, { profile: 'g1', family: 'gemini', engine: 'agy' });
+    }
+    // 7 disk.low / 5 disk.ok (flapping)
+    for (let i = 0; i < 7; i++) {
+      mockTime += 200_000;
+      eventBus.emit('disk.low', undefined, { freeGB: 1, minFreeGB: 3 });
+      if (i < 5) {
+        mockTime += 100_000;
+        eventBus.emit('disk.ok', undefined, { freeGB: 4.5, minFreeGB: 3 });
+      }
+    }
+    // 6 load.task_paused, 6 task.paused, 6 load.high
+    for (let i = 0; i < 6; i++) {
+      mockTime += 300_000;
+      eventBus.emit('load.task_paused', undefined, { reason: 'load' });
+      eventBus.emit('task.paused', undefined, { reason: 'load' });
+      eventBus.emit('load.high', undefined, { cpu: 95 });
+    }
+
+    expect(execCalls.length).toBeLessThanOrEqual(10);
+    notifier.stop();
+  });
 });

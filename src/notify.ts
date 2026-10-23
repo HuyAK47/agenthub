@@ -3,7 +3,7 @@ import { AgentHubConfig } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
-import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
+import { isQuietHours, isQuotaEventEngineWide, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { formatReset } from './time-format.js';
 import { NotificationDeduper } from './notification-dedupe.js';
@@ -39,6 +39,7 @@ export class NotificationService {
   private lastSentCi = new Map<string, number>();
   private lastSentSummary = new Map<string, number>();
   private lastSentDisk = new Map<'low' | 'ok', number>();
+  private diskState: 'low' | 'ok' | undefined;
   private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
@@ -127,13 +128,7 @@ export class NotificationService {
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     if (type === 'quota.exhausted') {
-      const allExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
-        this.profileRepo,
-        this.quotaMarkRepo,
-        this.now(),
-        typeof p.family === 'string' ? p.family : undefined,
-        typeof p.engine === 'string' ? p.engine : undefined,
-      );
+      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
       // Individual quota exhaustion remains visible in the dashboard. Desktop
       // should only interrupt the user when an entire engine is unavailable.
       if (!allExhausted) return;
@@ -146,13 +141,7 @@ export class NotificationService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(
-          this.profileRepo,
-          this.quotaMarkRepo,
-          this.now(),
-          typeof p.family === 'string' ? p.family : undefined,
-          typeof p.engine === 'string' ? p.engine : undefined,
-        ));
+        isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
 
       const isSystemEvent =
         type === 'brain.notify' ||
@@ -250,6 +239,7 @@ export class NotificationService {
 
       case 'disk.low': {
         if (!this.shouldSendDisk('low', now)) break;
+        this.diskState = 'low';
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 0;
         const cacheDir = typeof p.cacheDir === 'string' ? ` Cache node_modules: ${p.cacheDir}.` : '';
@@ -261,8 +251,11 @@ export class NotificationService {
       }
 
       case 'disk.ok': {
-        if (!this.shouldSendDisk('ok', now)) break;
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
+        const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 0;
+        if (freeGB < minFreeGB + 1 || this.diskState !== 'low') break;
+        if (!this.shouldSendDisk('ok', now)) break;
+        this.diskState = 'ok';
         this.notify(`Ổ đĩa đã đủ chỗ (${freeGB} GB): tiếp tục chạy task`, 'normal');
         break;
       }
@@ -275,13 +268,7 @@ export class NotificationService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(
-          this.profileRepo,
-          this.quotaMarkRepo,
-          this.now(),
-          typeof p.family === 'string' ? p.family : undefined,
-          typeof p.engine === 'string' ? p.engine : undefined,
-        );
+        const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
