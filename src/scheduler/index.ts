@@ -1017,11 +1017,14 @@ export class Scheduler {
     // otherwise busy Codex accounts starve the review queue.
     this.scheduleReviews();
 
-    // 3b. Start new tasks if possible
+    // 3b. Prune expired worktrees before dispatching tasks. When disk is low,
+    // this gives cleanup a chance to free space before queued work is parked.
+    this.cleanExpiredWorktrees();
+
+    // 3c. Start new tasks if possible
     this.scheduleNewTasks();
 
-    // 4. Prune expired worktrees for completed tasks
-    this.cleanExpiredWorktrees();
+    // 4. Scan worktrees and reap orphaned worker processes periodically.
     if (Date.now() - this.lastOrphanScan >= 6 * 60 * 60 * 1000) {
       this.lastOrphanScan = Date.now();
       this.scanOrphanWorktrees();

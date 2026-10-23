@@ -249,6 +249,38 @@ describe('Worktree Auto-Cleanup', () => {
     expect(ctx.taskRepo.get('proj/t-failing-remove')?.worktreePath).toBe(worktreePath);
   });
 
+  it('cleans expired worktrees before parking queued work when disk is low', () => {
+    config.disk.minFreeGB = Number.MAX_SAFE_INTEGER;
+    ctx.profileRepo.upsert({
+      name: 'p1',
+      engine: 'agy',
+      kind: 'isolated',
+      home: path.join(tmpDir, 'agy-homes', 'p1'),
+      email: 'p1@example.com',
+      enabled: 1,
+    });
+    const worktreePath = path.join(tmpDir, 'worktrees', 'proj', 't-low-disk-cleanup');
+    execFileSync('git', ['-C', projectPath, 'worktree', 'add', worktreePath, '-b', 'agenthub/t-low-disk-cleanup', 'main']);
+    ctx.taskRepo.insert({
+      id: 'proj/t-low-disk-cleanup',
+      projectId: 'proj',
+      slug: 't-low-disk-cleanup',
+      title: 'Low disk cleanup',
+      status: 'done',
+    });
+    ctx.taskRepo.update('proj/t-low-disk-cleanup', { worktreePath });
+    ctx.taskRepo.insert({ id: 'proj/queued', projectId: 'proj', slug: 'queued', title: 'Queued', status: 'queued', level: 'easy' });
+    const oldTime = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
+    ctx.db.prepare("UPDATE tasks SET updatedAt = ? WHERE id = 'proj/t-low-disk-cleanup'").run(oldTime);
+
+    ctx.scheduler.tick();
+
+    expect(fs.existsSync(worktreePath)).toBe(false);
+    expect(ctx.taskRepo.get('proj/t-low-disk-cleanup')?.worktreePath).toBeNull();
+    expect(ctx.taskRepo.get('proj/queued')?.status).toBe('waiting_quota');
+    expect(ctx.taskRepo.get('proj/queued')?.waitReason).toBe('disk');
+  });
+
   it('removes an orphan git worktree while preserving its branch and ignores outside paths', () => {
     const orphanWorktree = path.join(tmpDir, 'worktrees', 'proj', 'orphan');
     execFileSync('git', ['-C', projectPath, 'worktree', 'add', orphanWorktree, '-b', 'agenthub/orphan', 'main']);
