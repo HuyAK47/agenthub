@@ -27,8 +27,20 @@ describe('departments', () => {
     const departments = new DepartmentRepo(db);
     const projects = new ProjectRepo(db);
     expect(departments.get('chung')).toMatchObject({ name: 'Chung' });
+    expect(departments.get('chung')?.maxParallel).toBe(0);
     projects.insert({ id: 'p1', name: 'P1', path: '/tmp/p1', defaultBranch: 'main', maxParallel: 1 });
     expect(projects.get('p1')?.departmentId).toBe('chung');
+  });
+
+  it('migrates an untouched Chung limit of 3 to unlimited', () => {
+    const db = createDb();
+    db.prepare("UPDATE departments SET maxParallel = 3 WHERE id = 'chung'").run();
+    db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(55));
+    db.close();
+    databases.pop();
+    const reopened = openDatabase(path.join(tempDirs[0], 'hub.db'));
+    databases.push(reopened);
+    expect(new DepartmentRepo(reopened).get('chung')?.maxParallel).toBe(0);
   });
 
   it('manages profile assignments and moves projects back before deletion', () => {

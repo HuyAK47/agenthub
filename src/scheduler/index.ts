@@ -343,7 +343,8 @@ export class Scheduler {
 
   effectiveParallel(project: { maxParallel: number; id?: string; departmentId?: string }): number {
     const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
-    const projectLimit = Math.min(project.maxParallel, department?.maxParallel || project.maxParallel);
+    const departmentLimit = department?.maxParallel && department.maxParallel > 0 ? department.maxParallel : project.maxParallel;
+    const projectLimit = Math.min(project.maxParallel, departmentLimit);
     const focus = this.getFocus();
     const load = this.loadGuard.getStatus();
     if (focus.projectId && project.id === focus.projectId && load.highSince === null) return projectLimit;
@@ -364,7 +365,7 @@ export class Scheduler {
     const usage = this.parallelUsage(project);
     if (usage.project >= this.effectiveParallel(project)) return false;
     const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
-    return !department || usage.department < this.loadGuard.effectiveParallel(department.maxParallel);
+    return !department || department.maxParallel <= 0 || usage.department < this.loadGuard.effectiveParallel(department.maxParallel);
   }
 
   private departmentPriority(task: TaskRow): number {
@@ -1124,7 +1125,7 @@ export class Scheduler {
     }
 
     // 0b. Resume parallel waiters if project slot is available
-    const parallelWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'parallel');
+    const parallelWaiters = this.taskRepo.getByStatus('waiting_quota').filter((t) => t.waitReason === 'parallel' || t.waitReason === 'department_parallel');
     for (const task of parallelWaiters) {
       const project = this.projectRepo.get(task.projectId);
       if (!project) continue;
@@ -2050,7 +2051,10 @@ export class Scheduler {
       }
 
       if (!this.hasParallelCapacity(project)) {
-        this.markQueuedWaiting(task, 'parallel');
+        const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+        const usage = this.parallelUsage(project);
+        const departmentLimited = Boolean(department && department.maxParallel > 0 && usage.department >= this.loadGuard.effectiveParallel(department.maxParallel));
+        this.markQueuedWaiting(task, departmentLimited ? 'department_parallel' : 'parallel');
         continue;
       }
 
@@ -2701,10 +2705,12 @@ export class Scheduler {
   }
 
   /** Task chờ slot/tài khoản vẫn ở `queued`; chỉ ghi DB và phát sự kiện khi lý do chờ đổi. */
-  private markQueuedWaiting(task: TaskRow, reason: 'parallel' | 'profile_busy'): void {
+  private markQueuedWaiting(task: TaskRow, reason: 'parallel' | 'department_parallel' | 'profile_busy'): void {
     if (task.status === 'queued' && task.waitReason === reason) return;
     this.taskRepo.update(task.id, { status: 'queued', waitReason: reason });
-    this.eventBus.emit('task.queued', task.id, { reason });
+    const project = this.projectRepo.get(task.projectId);
+    const department = project?.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    this.eventBus.emit('task.queued', task.id, { reason, departmentName: reason === 'department_parallel' ? department?.name : undefined });
   }
 
   private markTaskWaitingForProject(task: TaskRow, project: { id: string; path: string }): void {

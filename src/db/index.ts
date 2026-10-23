@@ -777,6 +777,16 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
   PRAGMA foreign_keys = ON;
   `,
+  // Migration 56: unlimited default department and department-level wait reasons.
+  `
+  UPDATE departments SET maxParallel = 0 WHERE id = 'chung' AND maxParallel = 3;
+  ALTER TABLE tasks ADD COLUMN waitReason_backup TEXT;
+  UPDATE tasks SET waitReason_backup = waitReason;
+  ALTER TABLE tasks DROP COLUMN waitReason;
+  ALTER TABLE tasks ADD COLUMN waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk','quota','parallel','department_parallel','profile_busy','project_unavailable','focus'));
+  UPDATE tasks SET waitReason = waitReason_backup;
+  ALTER TABLE tasks DROP COLUMN waitReason_backup;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -945,7 +955,7 @@ export interface QuotaUsageRow {
   fetchedAt: number;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'department_parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
 
 export interface TaskRow {
   id: string;
