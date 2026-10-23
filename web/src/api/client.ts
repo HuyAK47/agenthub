@@ -822,6 +822,7 @@ export interface TelegramChat {
   id: number;
   name: string;
   username?: string;
+  kind?: 'chat' | 'group' | 'supergroup' | 'channel';
   projectId?: string;
 }
 

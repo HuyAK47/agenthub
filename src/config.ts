@@ -128,7 +128,7 @@ export interface TelegramChat {
   name: string;
   username?: string;
   /** Optional: associate this chat entry with a project for /use routing. */
-  kind?: 'chat';
+  kind?: 'chat' | 'group' | 'supergroup' | 'channel';
   projectId?: string;
 }
 
