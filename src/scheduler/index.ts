@@ -208,6 +208,8 @@ export class Scheduler {
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
+  private lastLoadHighEventAt: number | null = null;
+  private lastLoadHighEventSnapshot: LoadSnapshot | null = null;
   private notifiedSkippedModels = new Set<string>();
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
   private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
@@ -917,9 +919,25 @@ export class Scheduler {
   tick(): void {
     this.loadGuard.setConfig(this.config.load);
     const load = this.loadGuard.update();
+    const now = Date.now();
     if (load.overloaded !== this.lastLoadOverloaded) {
       this.lastLoadOverloaded = load.overloaded;
       this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
+      if (load.overloaded) {
+        this.lastLoadHighEventAt = now;
+        this.lastLoadHighEventSnapshot = load;
+      } else {
+        this.lastLoadHighEventAt = null;
+        this.lastLoadHighEventSnapshot = null;
+      }
+    } else if (load.overloaded && this.lastLoadHighEventAt !== null && this.lastLoadHighEventSnapshot !== null
+      && now - this.lastLoadHighEventAt >= 30 * 60 * 1000
+      && ((load.load1 > this.lastLoadHighEventSnapshot.load1
+        && load.load1 >= this.lastLoadHighEventSnapshot.load1 * 1.3)
+        || this.lastLoadHighEventSnapshot.freeMemGB - load.freeMemGB > 1)) {
+      this.eventBus.emit('load.high', undefined, load);
+      this.lastLoadHighEventAt = now;
+      this.lastLoadHighEventSnapshot = load;
     }
 
     // Auto-pause / resume by load guard
