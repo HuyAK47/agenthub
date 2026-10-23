@@ -2266,14 +2266,6 @@ export class AppService {
     const tasks = this.taskRepo.list(filter);
     const projects = new Map(this.projectRepo.getAll().map((project) => [project.id, project]));
     const running = this.scheduler.getRunning();
-    const fallbackTaskIds = new Set(
-      this.eventRepo
-        ? this.eventRepo
-            .getRecent(200)
-            .filter((e) => e.type === 'review.fallback' && e.taskId)
-            .map((e) => e.taskId!)
-        : [],
-    );
     return tasks.map((task) => {
       const run = running.get(task.id);
       const project = projects.get(task.projectId);
@@ -2281,7 +2273,9 @@ export class AppService {
       if (project?.review) {
         try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
       }
-      const isFallback = fallbackTaskIds.has(task.id);
+      // Keep this lookup scoped to the task. A global recent-event window can
+      // forget an older fallback after unrelated events push it out of that window.
+      const isFallback = this.eventRepo?.getByTask(task.id).some((event) => event.type === 'review.fallback') ?? false;
       const reviewerRun = this.scheduler?.getReviewerRun?.(task.id);
       const reviewer = reviewerRun
         ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
