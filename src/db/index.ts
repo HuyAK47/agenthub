@@ -1666,7 +1666,7 @@ export class TaskBatchRepo {
     return this.db.prepare(query).all(...params) as TaskBatchRow[];
   }
 
-  page(options?: { project?: string; status?: string; limit?: string | number; cursor?: string }): PageResult<TaskBatchRow> {
+  page(options?: { project?: string; status?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskBatchRow> {
     const conditions: string[] = [];
     const values: unknown[] = [];
     if (options?.project && options.project !== 'all') { conditions.push('projectId = ?'); values.push(options.project); }
@@ -1679,7 +1679,8 @@ export class TaskBatchRepo {
     const countValues = cursor ? values.slice(0, -3) : values;
     const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM task_batches${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
     const limit = parsePageSize(options?.limit);
-    const rows = this.db.prepare(`SELECT * FROM task_batches${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, limit + 1) as TaskBatchRow[];
+    const offset = Number.isFinite(Number(options?.offset)) && Number(options?.offset) > 0 ? Math.floor(Number(options?.offset)) : 0;
+    const rows = this.db.prepare(`SELECT * FROM task_batches${where} ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit + 1, offset) as TaskBatchRow[];
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
     const last = items.at(-1);
@@ -1734,7 +1735,7 @@ export class RunRepo {
       .all(taskId) as RunRow[];
   }
 
-  pageByTask(taskId: string, limit: string | number | undefined, cursor?: string): PageResult<RunRow> {
+  pageByTask(taskId: string, limit: string | number | undefined, cursor?: string, offset: string | number | undefined = 0): PageResult<RunRow> {
     const decoded = decodeCursor(cursor);
     if (cursor && !decoded) throw new Error('Invalid pagination cursor');
     const pageSize = parsePageSize(limit);
@@ -1744,7 +1745,8 @@ export class RunRepo {
       : ' WHERE taskId = ?';
     if (decoded) values.push(decoded.value, decoded.value, decoded.id);
     const total = (this.db.prepare('SELECT COUNT(*) AS count FROM runs WHERE taskId = ?').get(taskId) as { count: number }).count;
-    const rows = this.db.prepare(`SELECT * FROM runs${where} ORDER BY startedAt DESC, id DESC LIMIT ?`).all(...values, pageSize + 1) as RunRow[];
+    const safeOffset = Number.isFinite(Number(offset)) && Number(offset) > 0 ? Math.floor(Number(offset)) : 0;
+    const rows = this.db.prepare(`SELECT * FROM runs${where} ORDER BY startedAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, pageSize + 1, safeOffset) as RunRow[];
     const hasMore = rows.length > pageSize;
     const items = hasMore ? rows.slice(0, pageSize) : rows;
     const last = items.at(-1);

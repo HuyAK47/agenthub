@@ -2994,7 +2994,7 @@ export class AppService {
     }));
   }
 
-  pageBatches(params?: { project?: string; status?: string; limit?: string | number; cursor?: string }): PageResult<TaskBatchRow & { progress: BatchProgress }> {
+  pageBatches(params?: { project?: string; status?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskBatchRow & { progress: BatchProgress }> {
     if (!this.taskBatchRepo) return { items: [], total: 0, nextCursor: null };
     const page = this.taskBatchRepo.page(params);
     return {
@@ -3601,10 +3601,10 @@ export class AppService {
     return notes.map(apiTaskNote);
   }
 
-  pageTaskRuns(idParam: string, options?: { limit?: string | number; cursor?: string }) {
+  pageTaskRuns(idParam: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
     const taskId = toTaskId(idParam);
     if (!this.taskRepo.get(taskId)) throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
-    return this.runRepo.pageByTask(taskId, options?.limit, options?.cursor);
+    return this.runRepo.pageByTask(taskId, options?.limit, options?.cursor, options?.offset);
   }
 
   pageEvents(options?: { taskId?: string; limit?: string | number; cursor?: string }) {

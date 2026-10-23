@@ -11,6 +11,7 @@ import {
   LoginSessionResponse,
   Profile,
   Project,
+  Run,
   RetryTaskInput,
   ReviewTaskInput,
   SystemConfig,
@@ -587,11 +588,12 @@ export async function getBatches(params?: { project?: string; status?: string })
   return apiFetch<TaskBatch[]>(`/api/batches${qStr ? `?${qStr}` : ''}`);
 }
 
-export async function getBatchesPage(params: { project?: string; status?: string; limit: number; cursor?: string }): Promise<TaskBatchPage> {
+export async function getBatchesPage(params: { project?: string; status?: string; limit: number; offset?: number; cursor?: string }): Promise<TaskBatchPage> {
   const query = new URLSearchParams({ limit: String(params.limit) });
   if (params.project && params.project !== 'all') query.set('project', params.project);
   if (params.status && params.status !== 'all') query.set('status', params.status);
   if (params.cursor) query.set('cursor', params.cursor);
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
   return apiFetch<TaskBatchPage>(`/api/batches?${query.toString()}`);
 }
 
@@ -671,6 +673,16 @@ export async function getTaskLog(
   if (params?.tail) query.set('tail', String(params.tail));
   const qStr = query.toString();
   return apiFetch<string>(`/api/tasks/${encodeURIComponent(id)}/log${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getTaskRunsPage(
+  id: string,
+  params?: { limit?: number; offset?: number; cursor?: string },
+): Promise<PageResponse<Run>> {
+  const query = new URLSearchParams({ limit: String(params?.limit ?? 20) });
+  if (params?.offset !== undefined) query.set('offset', String(params.offset));
+  if (params?.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<Run>>(`/api/tasks/${encodeURIComponent(id)}/runs?${query.toString()}`);
 }
 
 export async function getProjectNotes(

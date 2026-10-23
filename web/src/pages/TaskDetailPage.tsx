@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import {
@@ -7,6 +7,7 @@ import {
   createTaskFromError,
   deleteWorktree,
   getTask,
+  getTaskRunsPage,
   getTasks,
   getTaskLog,
   retryTask,
@@ -32,6 +33,7 @@ import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { Pagination } from '../components/ui/Pagination';
 import { getReviewerEngine } from '../utils/reviewer';
 import {
   ArrowLeft,
@@ -105,6 +107,21 @@ export const TaskDetailPage: React.FC = () => {
     enabled: !!id,
     refetchInterval: 4000,
   });
+
+  const [runParams, setRunParams] = useSearchParams();
+  const [runsPage, setRunsPage] = useState(Math.max(1, Number(runParams.get('runsPage') || 1)));
+  const [runsCursors, setRunsCursors] = useState<Record<number, string | undefined>>({});
+  const runsCursor = runsCursors[runsPage - 1];
+  const runsQuery = useQuery({
+    queryKey: ['task-runs', id, runsPage, runsCursor],
+    queryFn: () => getTaskRunsPage(id, { limit: 20, offset: runsCursor ? undefined : (runsPage - 1) * 20, cursor: runsCursor }),
+    enabled: Boolean(id) && activeTab === 'runs',
+    placeholderData: (previous) => previous,
+  });
+  const runs = runsQuery.data?.items || task?.runs || [];
+  useEffect(() => {
+    if (runsQuery.data?.nextCursor) setRunsCursors((current) => ({ ...current, [runsPage]: runsQuery.data!.nextCursor || undefined }));
+  }, [runsPage, runsQuery.data?.nextCursor]);
 
   const { data: hubStatus } = useQuery({
     queryKey: ['status'],
@@ -854,9 +871,12 @@ export const TaskDetailPage: React.FC = () => {
       {/* 3. Runs list */}
       {activeTab === 'runs' && (
         <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs">
-          {!task.runs || task.runs.length === 0 ? (
+          {runsQuery.isLoading ? (
+            <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('pagination.loading')}</div>
+          ) : runs.length === 0 ? (
             <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('taskDetail.noRuns')}</div>
           ) : (
+            <>
             <table className="w-full text-left text-sm">
               <thead className="bg-[var(--t-surface-2)] text-xs text-[var(--t-text-3)] uppercase">
                 <tr>
@@ -870,7 +890,7 @@ export const TaskDetailPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y border-[var(--t-border)]">
-                <CollapsibleList items={task.runs || []} initial={10} step={10} storageKey={`agenthub:task:${id}:runs`} tableColSpan={7}>
+                <CollapsibleList items={runs} initial={20} step={20} storageKey={`agenthub:task:${id}:runs`} tableColSpan={7}>
                 {(r) => (
                   <tr key={r.id}>
                     <td className="px-6 py-3 font-mono text-xs">{r.id}</td>
@@ -897,6 +917,17 @@ export const TaskDetailPage: React.FC = () => {
                 </CollapsibleList>
               </tbody>
             </table>
+            {runsQuery.data && <Pagination
+              page={runsPage}
+              pageSize={20}
+              total={runsQuery.data.total}
+              onPageChange={(nextPage) => {
+                setRunsPage(nextPage);
+                setRunParams((current) => { if (nextPage === 1) current.delete('runsPage'); else current.set('runsPage', String(nextPage)); return current; }, { replace: true });
+              }}
+              onPageSizeChange={() => undefined}
+            />}
+            </>
           )}
         </div>
       )}
