@@ -66,6 +66,8 @@ export interface AssistantConfig {
   enabled: boolean;
   model: string;
   policy: string[];
+  /** guarded: read-only helper (default); full: may edit files and run any command, like a full brain. */
+  permissions: 'guarded' | 'full';
 }
 
 export interface ClaudeSessionsConfig {
@@ -264,6 +266,11 @@ export interface AgentHubConfig {
     timeoutSec: number;
     failoverSec: number;
     maxChangesRequested: number;
+    /** Review with Claude when every Codex account is out of quota or logged out. */
+    claudeFallback: boolean;
+    /** Claude profiles to use for that fallback, in order; empty = any logged-in Claude profile. */
+    claudeProfiles: string[];
+    claudeModel: string;
   };
   notifications: NotificationsConfig;
   disk: {
@@ -275,6 +282,8 @@ export interface AgentHubConfig {
     worktreeOnDoneAfterHours: number;
   };
   cacheDir: string;
+  cacheMaxEntries: number;
+  cacheMaxGB: number;
   savings: SavingsConfig;
   load: LoadConfig;
   stall: StallConfig;
@@ -318,6 +327,8 @@ export function saveConfig(
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
@@ -485,6 +496,8 @@ export function updateConfigInMemory(
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
@@ -596,6 +609,8 @@ export function updateConfigInMemory(
   if (patch.cacheDir !== undefined) {
     config.cacheDir = patch.cacheDir;
   }
+  if (patch.cacheMaxEntries !== undefined) config.cacheMaxEntries = patch.cacheMaxEntries;
+  if (patch.cacheMaxGB !== undefined) config.cacheMaxGB = patch.cacheMaxGB;
   if (patch.savings) {
     if (patch.savings.bucketTokens) {
       config.savings.bucketTokens = {
@@ -768,6 +783,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     process.env.AGENTHUB_CACHE_DIR ||
     path.join(hubHome, 'cache', 'node_modules');
   if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+  const cacheMaxEntries = typeof userConfig.cacheMaxEntries === 'number' && userConfig.cacheMaxEntries > 0
+    ? Math.floor(userConfig.cacheMaxEntries) : 3;
+  const cacheMaxGB = typeof userConfig.cacheMaxGB === 'number' && userConfig.cacheMaxGB > 0
+    ? userConfig.cacheMaxGB : 3;
 
   const rawSavings = (userConfig.savings as Record<string, unknown>) || {};
   const rawLoad = (userConfig.load as Record<string, unknown>) || {};
@@ -972,6 +991,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       policy: Array.isArray(assistantRaw.policy)
         ? assistantRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
         : [],
+      permissions: assistantRaw.permissions === 'full' ? 'full' : 'guarded',
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
@@ -996,6 +1016,11 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       timeoutSec: typeof reviewerRaw.timeoutSec === 'number' ? reviewerRaw.timeoutSec : 900,
       failoverSec: typeof reviewerRaw.failoverSec === 'number' ? reviewerRaw.failoverSec : 5 * 60 * 60,
       maxChangesRequested: typeof reviewerRaw.maxChangesRequested === 'number' ? reviewerRaw.maxChangesRequested : 2,
+      claudeFallback: reviewerRaw.claudeFallback !== false,
+      claudeProfiles: Array.isArray(reviewerRaw.claudeProfiles)
+        ? reviewerRaw.claudeProfiles.filter((name): name is string => typeof name === 'string' && name.length > 0)
+        : [],
+      claudeModel: typeof reviewerRaw.claudeModel === 'string' && reviewerRaw.claudeModel ? reviewerRaw.claudeModel : 'sonnet',
     },
     notifications: {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'
@@ -1026,6 +1051,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     disk,
     cleanup,
     cacheDir,
+    cacheMaxEntries,
+    cacheMaxGB,
     savings,
     load: {
       enabled: typeof rawLoad.enabled === 'boolean' ? rawLoad.enabled : DEFAULT_LOAD_CONFIG.enabled,

@@ -17,6 +17,8 @@ Bạn là một AI worker trong hệ thống AgentHub.
 8. Chỉ tạo marker ở **bước cuối cùng**.
 9. Không sửa `.agenthub/task.md`. Không commit `.agenthub/` vào git.
 10. Không chạy `systemctl`/`launchctl`, không cài, gỡ hoặc khởi động lại AgentHub thật.
+   Worker cũng không được ghi trực tiếp vào `~/.config/systemd/user/` hoặc
+   `~/Library/LaunchAgents/`; các test service phải dùng HOME tạm.
 11. Đọc `.agenthub/context/knowledge.md` (nếu có) trước khi bắt đầu: kiến thức chung của dự án từ các task trước.
 12. Đọc `.agenthub/context/references.md` (nếu có): danh sách tài liệu tham chiếu CHỈ ĐỌC (không sửa, không commit).
 13. Đọc `.agenthub/context/review-checklist.md` (nếu có): checklist bắt buộc đối chiếu khi duyệt thay đổi.

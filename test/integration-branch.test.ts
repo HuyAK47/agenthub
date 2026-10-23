@@ -310,6 +310,91 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(fs.existsSync(path.join(t2.worktreePath!, 'feat1.txt'))).toBe(true);
   });
 
+  it('auto-merges only after a Codex approval when the project opted in', async () => {
+    const repo = path.join(tmpDir, 'auto-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'auto-proj',
+      name: 'Auto merge',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { integration: { enabled: true, branch: 'agenthub/integration', autoMerge: true } },
+      merge: { enabled: true, worktrees: {}, checks: ['node -e "process.exit(0)"'], timeoutSec: 30 },
+    });
+    const intPath = path.join(tmpDir, 'integration', 'auto-proj');
+    ctx.service.createTask({ project: 'auto-proj', slug: 'feat', title: 'Feature', body: 'Do it', level: 'easy', start: true });
+    ctx.scheduler.tick();
+    const task = ctx.taskRepo.get('auto-proj/feat')!;
+    fs.writeFileSync(path.join(task.worktreePath!, 'auto.txt'), 'auto\n');
+    execFileSync('git', ['-C', task.worktreePath!, 'add', '.']);
+    execFileSync('git', ['-C', task.worktreePath!, 'commit', '-m', 'feat: auto']);
+    ctx.taskRepo.update(task.id, { status: 'review' });
+
+    // No Codex approval yet: nothing merges.
+    await ctx.service.autoMergeReviewedTask(task.id);
+    expect(ctx.taskRepo.get(task.id)!.status).toBe('review');
+
+    ctx.reviewRepo.insert({ id: 'codex-ok', taskId: task.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
+    await ctx.service.autoMergeReviewedTask(task.id);
+    expect(ctx.taskRepo.get(task.id)!.status).toBe('done');
+    expect(fs.existsSync(path.join(intPath, 'auto.txt'))).toBe(true);
+  });
+
+  it('hands an auto-merge conflict back to the worker', async () => {
+    const repo = path.join(tmpDir, 'conflict-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({
+      id: 'conflict-proj',
+      name: 'Conflict',
+      path: repo,
+      defaultBranch: 'main',
+      settings: { integration: { enabled: true, branch: 'agenthub/integration', autoMerge: true } },
+      merge: { enabled: true, worktrees: {}, checks: [], timeoutSec: 30 },
+    });
+    const intPath = path.join(tmpDir, 'integration', 'conflict-proj');
+    ctx.service.createTask({ project: 'conflict-proj', slug: 'feat', title: 'Feature', body: 'Do it', level: 'easy', start: true });
+    ctx.scheduler.tick();
+    const task = ctx.taskRepo.get('conflict-proj/feat')!;
+    fs.writeFileSync(path.join(task.worktreePath!, 'same.txt'), 'from task\n');
+    execFileSync('git', ['-C', task.worktreePath!, 'add', '.']);
+    execFileSync('git', ['-C', task.worktreePath!, 'commit', '-m', 'feat: task side']);
+    fs.writeFileSync(path.join(intPath, 'same.txt'), 'from integration\n');
+    execFileSync('git', ['-C', intPath, 'add', '.']);
+    execFileSync('git', ['-C', intPath, 'commit', '-m', 'feat: integration side']);
+    ctx.taskRepo.update(task.id, { status: 'review' });
+    ctx.reviewRepo.insert({ id: 'codex-ok-conflict', taskId: task.id, verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
+
+    await ctx.service.autoMergeReviewedTask(task.id);
+    const after = ctx.taskRepo.get(task.id)!;
+    expect(after.status).not.toBe('review');
+    expect(after.status).not.toBe('done');
+    expect(ctx.reviewRepo.getByTask(task.id).at(-1)?.feedback).toContain('xung đột');
+  });
+
+  it('sends an escalated review back once on the strongest model when no auto brain is running', async () => {
+    const repo = path.join(tmpDir, 'esc-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({ id: 'esc-proj', name: 'Escalation', path: repo, defaultBranch: 'main' });
+    ctx.service.createTask({ project: 'esc-proj', slug: 'feat', title: 'Feature', body: 'Do it', level: 'hard', start: false, modelChain: ['codex:gpt-5.6-luna'] });
+    const id = 'esc-proj/feat';
+    const escalate = () => {
+      ctx.taskRepo.update(id, { status: 'review', reviewerEscalated: 1, reviewerChangesRequested: 2 });
+      ctx.scheduler.getEventBus().emit('review.escalated', id, { actor: 'codex-reviewer', reason: 'reviewer_changes_limit', feedback: 'Còn thiếu test' });
+    };
+
+    escalate();
+    await vi.waitFor(() => expect(ctx.taskRepo.get(id)!.status).not.toBe('review'));
+    const retried = ctx.taskRepo.get(id)!;
+    expect(JSON.parse(retried.modelChain!)).toEqual(['claude-opus-4-6-thinking', 'codex:gpt-5.6-luna']);
+    expect(retried.reviewerEscalated).toBe(0);
+
+    // A second escalation is left for a person.
+    escalate();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ctx.taskRepo.get(id)!.status).toBe('review');
+    expect(ctx.taskRepo.get(id)!.reviewerEscalated).toBe(1);
+  });
+
   it('runs merge-time checks in integration worktree and rolls back on failure', async () => {
     const repo = path.join(tmpDir, 'checks-fail-repo');
     initGitRepo(repo, 'main');
@@ -355,6 +440,14 @@ describe('Integration branch and cross-project dependencies', () => {
     fs.writeFileSync(path.join(t.worktreePath!, '.agenthub', 'DONE'), 'done');
 
     ctx.taskRepo.update('checks-proj/failing-check-task', { status: 'review' });
+    ctx.taskRepo.insert({
+      id: 'checks-proj/failing-check-task-fix-test',
+      projectId: 'checks-proj',
+      slug: 'failing-check-task-fix-test',
+      title: 'Existing test fix',
+      status: 'queued',
+      sourceRef: JSON.stringify({ taskId: t.id, checkName: 'test', excerptHash: 'test' }),
+    });
 
     await expect(ctx.service.reviewTask('checks-proj/failing-check-task', {
       verdict: 'approved',
@@ -367,6 +460,8 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(afterHead).toBe(beforeHead);
     const status = execFileSync('git', ['-C', intPath, 'status', '--porcelain'], { encoding: 'utf8' }).trim();
     expect(status).toBe('');
+    expect(ctx.taskRepo.get('checks-proj/failing-check-task-fix-test')?.status).toBe('queued');
+    expect(ctx.taskRepo.getAll().filter((task) => task.slug.endsWith('-fix-merge'))).toHaveLength(1);
   });
 
   it('rejects invalid branch names and main/master collisions', () => {

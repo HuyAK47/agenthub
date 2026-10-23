@@ -616,6 +616,112 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  it('announces a finished review chain once instead of on every tick', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    new ReviewRepo(db).insert({ id: 'codex-ok', taskId: 'test-project/review', verdict: 'approved', feedback: 'ok', actor: 'codex-reviewer' });
+    taskRepo.update('test-project/review', { reviewStep: 1 });
+    for (let tick = 0; tick < 10; tick++) scheduler.tick();
+    const ready = () => eventRepo.getRecent(50).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/review');
+    expect(ready()).toHaveLength(1);
+    // A new review round may announce again.
+    scheduler.reviewTask('test-project/review', 'changes_requested', 'fix it', 'brain');
+    taskRepo.update('test-project/review', { status: 'review', reviewStep: 1 });
+    scheduler.tick();
+    expect(ready()).toHaveLength(2);
+    scheduler.stop();
+  });
+
+  it('reviews a Codex-built task from another Codex account instead of skipping the gate', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('w1', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    expect(taskRepo.get('test-project/review')?.reviewStep ?? 0).toBe(0);
+
+    profileRepo.upsert({ name: 'codex-2', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
+    scheduler.tick();
+    const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
+    expect(reviewer?.profileName).toBe('codex-2');
+    scheduler.stop();
+  });
+
+  it('sends a task past a Codex gate without a Codex review back to the gate', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    taskRepo.update('test-project/review', { reviewStep: 1 });
+    scheduler.tick();
+    expect(taskRepo.get('test-project/review')?.reviewStep).toBe(0);
+    expect(eventRepo.getRecent(50).filter((event) => event.type === 'task.review_ready')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  function withClaudeReviewer(scheduler: Scheduler) {
+    profileRepo.upsert({ name: 'claude-1', engine: 'claude', kind: 'isolated', home: path.join(tmpDir, 'claude-1'), email: null, enabled: 1 });
+    const claude = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    (claude as unknown as { id: string }).id = 'claude';
+    (scheduler as unknown as { engines: Map<string, Engine> }).engines.set('claude-review', claude);
+  }
+
+  it('falls back to a Claude reviewer when every Codex account is out of quota', async () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-chatter');
+    withClaudeReviewer(scheduler);
+    new QuotaService(quotaMarkRepo, profileRepo).mark('codex-1', 'codex', 3600, 'test');
+    scheduler.tick();
+    const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
+    expect(reviewer?.profileName).toBe('claude-1');
+    expect(reviewer?.engine).toBe('claude');
+    await vi.waitFor(() => expect(taskRepo.get('test-project/review')?.status).toBe('done'));
+    expect(reviewRepo.getByTask('test-project/review').at(-1)?.actor).toBe('claude-reviewer');
+    expect(eventRepo.getRecent(30).some((event) => event.type === 'review.fallback')).toBe(true);
+    scheduler.stop();
+  });
+
+  it('lets the Claude reviewer give a final verdict after a second escalation', async () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-chatter');
+    withClaudeReviewer(scheduler);
+    for (let i = 0; i < 2; i++) {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    }
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+    scheduler.tick();
+    const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
+    expect(reviewer?.profileName).toBe('claude-1');
+    await vi.waitFor(() => expect(reviewRepo.getByTask('test-project/review').at(-1)?.actor).toBe('claude-reviewer'));
+    scheduler.stop();
+  });
+
+  it('clears an escalation once an automated reviewer approved, so the finished chain can merge', () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit', reviewStep: 1 });
+    reviewRepo.insert({ id: 'arb-ok', taskId: 'test-project/review', verdict: 'approved', feedback: 'ok', actor: 'claude-reviewer' });
+    scheduler.tick();
+    expect(taskRepo.get('test-project/review')?.reviewerEscalated).toBe(0);
+    expect(eventRepo.getRecent(30).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/review')).toHaveLength(1);
+    scheduler.stop();
+  });
+
+  it('leaves a first escalation for the retry path, not the arbiter', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('keeps waiting for Codex when its accounts are only busy', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    (scheduler as unknown as { reviewerRunsForProfile: (name: string) => boolean }).reviewerRunsForProfile = (name) => name === 'codex-1';
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    scheduler.stop();
+  });
+
   it('escalates before spawning when autocheck results are missing', () => {
     const { scheduler } = makeReviewer('reviewer-approved', false);
     scheduler.tick();

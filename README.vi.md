@@ -1,5 +1,7 @@
 # AgentHub
 
+**Landing page:** [Giới thiệu AgentHub](https://ducanh19020217.github.io/agenthub/)
+
 [English](README.md) | **Tiếng Việt**
 
 AgentHub là "hệ điều hành" cục bộ quản lý các worker AI coding (Antigravity CLI và Codex CLI), được điều phối và giám sát bởi **Claude Code** qua giao thức MCP (Model Context Protocol) cùng giao diện Web Dashboard trực quan.
@@ -8,10 +10,12 @@ Hệ thống tự động hóa việc phân chia task độc lập trên từng 
 
 **Người mới bắt đầu:** xem [Hướng dẫn cài đặt & sử dụng (docs/GETTING-STARTED.md)](docs/GETTING-STARTED.md).
 
+Để chọn mô hình làm việc, xem [Hai cách dùng AgentHub (docs/USAGE-MODES.md)](docs/USAGE-MODES.md): hub độc lập qua Web/Telegram hoặc Claude Code qua MCP.
+
 > **Điều khiển linh hoạt:** Bạn có thể điều khiển AgentHub (giao việc, review, quản lý task) thông qua **Chat với Claude trực tiếp trên Web Dashboard**, **Bot Telegram từ xa** trên điện thoại, hoặc **Claude Code trong VS Code** qua giao thức MCP (`agenthub mcp-install`). Dashboard cung cấp đầy đủ công cụ theo dõi tiến độ, log thời gian thực, quota tài khoản, tải máy và quản lý task.
 
 Chi tiết tính năng và mẹo sử dụng: xem [Danh sách tính năng (docs/FEATURES.md)](docs/FEATURES.md).  
-Hướng dẫn quy trình sử dụng và xử lý sự cố: xem [Hướng dẫn sử dụng (docs/USAGE.md)](docs/USAGE.md).  
+Hướng dẫn quy trình sử dụng và xử lý sự cố: xem [Hướng dẫn sử dụng (docs/USAGE.md)](docs/USAGE.md) và [Hai cách dùng](docs/USAGE-MODES.md).
 Kế hoạch kiến trúc và thiết kế hệ thống: xem [Kế hoạch chi tiết (docs/PLAN.md)](docs/PLAN.md).
 
 ---

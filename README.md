@@ -1,5 +1,7 @@
 # AgentHub
 
+**Public landing page:** [agenthub landing page](https://ducanh19020217.github.io/agenthub/)
+
 **English** | [Tiếng Việt](README.vi.md)
 
 > A local operating system for AI coding workers that coordinates Antigravity (Gemini) and OpenAI Codex CLI across isolated git worktrees, orchestrated by Claude Code via MCP, Web Chat, and Telegram.
@@ -10,10 +12,12 @@ AgentHub transforms standalone AI coding assistants into an autonomous, quota-aw
 
 **New to AgentHub?** Start with the [Getting Started Guide (docs/en/GETTING-STARTED.md)](docs/en/GETTING-STARTED.md) ([Bản tiếng Việt](docs/GETTING-STARTED.md)).
 
+Choose a workflow with the [Usage Modes guide](docs/en/USAGE-MODES.md) ([Tiếng Việt](docs/USAGE-MODES.md)): standalone hub control from Web/Telegram, or Claude Code through MCP.
+
 > **Multi-Channel Control:** Direct your local AI team through your preferred interface: **Interactive Web Dashboard Chat**, **Telegram Remote Control** on your phone, or **Claude Code in VS Code** via Model Context Protocol (MCP).
 
 - Deep dive into features: [Feature Catalog (docs/FEATURES.md)](docs/FEATURES.md)
-- Operational guides & workflows: [Usage Guide (docs/USAGE.md)](docs/USAGE.md)
+- Operational guides & workflows: [Usage Guide (docs/USAGE.md)](docs/USAGE.md) · [Usage Modes](docs/en/USAGE-MODES.md)
 - Architecture decisions & internals: [System Plan (docs/PLAN.md)](docs/PLAN.md)
 - Contributing guidelines & CLA: [Contributing Guide (CONTRIBUTING.md)](CONTRIBUTING.md)
 

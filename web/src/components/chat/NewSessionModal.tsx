@@ -147,7 +147,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           </div>
 
           {/* Mode Selector */}
-          <div>
+          <div data-tour="session-mode">
             <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-2">
               {t('extra.operationMode')}
             </label>

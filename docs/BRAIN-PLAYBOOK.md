@@ -65,7 +65,7 @@ Luôn xem diff thật (`hub_git diff <baseRef>...<branch>`), đừng chỉ đọ
 
 ## 5. Điều cấm tuyệt đối
 
-- Không chạy `systemctl`, `launchctl`, không tự cài, gỡ hay khởi động lại hub thật. Một worker từng tắt hub 2 lần vì chạy `install.sh --uninstall`.
+- Không chạy `systemctl`, `launchctl`, không tự cài, gỡ hay khởi động lại hub thật. Worker cũng không được ghi vào `~/.config/systemd/user/` hoặc `~/Library/LaunchAgents/`; một worker từng tắt hub 2 lần vì chạy `install.sh --uninstall`.
 - Không chạy `docker build/pull/compose up` trên máy này: ổ Docker gần đầy.
 - Không dùng `prisma migrate reset` hay `db push --accept-data-loss`.
 - Không đọc hay in file token, keyring, credentials (`auth.json`, `.credentials.json`, oauth token).

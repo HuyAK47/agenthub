@@ -35,7 +35,7 @@ export interface AuthDetection {
 }
 
 export interface Engine {
-  id: 'agy' | 'codex';
+  id: 'agy' | 'codex' | 'claude';
   family(model: string): string;
   spawn(opts: SpawnOpts): ChildProcess;
   detectQuota(logTail: string): QuotaDetection;
