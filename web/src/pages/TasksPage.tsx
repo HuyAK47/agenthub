@@ -283,6 +283,13 @@ const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority
     });
     return showOldDone ? sorted : sorted.filter((task) => !isOldDoneTask(task));
   }, [tasks, showOldDone]);
+  const paginatedTasks = useShowMore(
+    visibleTasks,
+    20,
+    20,
+    `agenthub:tasks:project:${project.id}`,
+  );
+  const remaining = visibleTasks.length - paginatedTasks.visibleItems.length;
   const oldDoneCount = tasks.filter(isOldDoneTask).length;
 
   return (
@@ -309,7 +316,11 @@ const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority
         <div className="mb-3 flex flex-wrap gap-1.5 text-[11px] sm:hidden">
           {Object.entries(counts).map(([key, count]) => <span key={key} className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--text-secondary)]">{key}: {count}</span>)}
         </div>
-        {visibleTasks.length > 0 ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{visibleTasks.map((task) => <ProjectTaskCard key={task.id} task={task} />)}</div> : <div className="rounded-lg border border-dashed border-[var(--border-default)] p-5 text-center text-xs italic text-[var(--text-muted)]">{t('common.empty')}</div>}
+        {visibleTasks.length > 0 ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{paginatedTasks.visibleItems.map((task) => <ProjectTaskCard key={task.id} task={task} />)}</div> : <div className="rounded-lg border border-dashed border-[var(--border-default)] p-5 text-center text-xs italic text-[var(--text-muted)]">{t('common.empty')}</div>}
+        {(paginatedTasks.hasMore || paginatedTasks.isExpanded) && <div className="flex items-center justify-center gap-3 pt-3">
+          {paginatedTasks.hasMore && <button type="button" onClick={paginatedTasks.showMore} className="text-xs font-medium text-[var(--t-accent)] hover:underline">Xem thêm {Math.min(20, remaining)} (còn {remaining})</button>}
+          {paginatedTasks.isExpanded && <button type="button" onClick={paginatedTasks.collapse} className="text-xs text-[var(--text-secondary)] hover:underline">Thu gọn</button>}
+        </div>}
         {oldDoneCount > 0 && <button type="button" onClick={() => setShowOldDone((value) => !value)} className="mt-3 text-xs font-medium text-[var(--t-accent)] hover:underline">{showOldDone ? t('tasks.hideOldDone') : t('tasks.showOldDone', { count: oldDoneCount })}</button>}
       </div>}
     </section>
