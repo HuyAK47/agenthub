@@ -111,6 +111,8 @@ export const en: typeof vi = {
     waitingShort: 'Waiting',
     showOldDone: 'Show {count} older completed',
     hideOldDone: 'Hide older completed',
+    showMore: 'Show {count} more ({remaining} left)',
+    collapse: 'Collapse',
     priority: 'Priority {value}',
   },
   dag: {

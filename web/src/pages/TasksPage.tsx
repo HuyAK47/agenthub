@@ -195,7 +195,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
                 onClick={showMore}
                 className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer"
               >
-                Xem thêm {nextStep} (còn {remaining})
+                {t('tasks.showMore', { count: nextStep, remaining })}
               </button>
             )}
             {isExpanded && (
@@ -204,7 +204,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
                 onClick={collapse}
                 className="text-xs text-[var(--text-secondary)] hover:underline cursor-pointer"
               >
-                Thu gọn
+                {t('tasks.collapse')}
               </button>
             )}
           </div>
@@ -265,7 +265,7 @@ const ProjectTaskCard: React.FC<{ task: Task }> = ({ task }) => {
   );
 };
 
-const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority?: number }; tasks: Task[]; onCreate: () => void }> = ({ project, tasks, onCreate }) => {
+const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority?: number }; tasks: Task[]; search: string; onCreate: () => void }> = ({ project, tasks, search, onCreate }) => {
   const { t } = useLocale();
   const [open, setOpen] = useState(true);
   const [showOldDone, setShowOldDone] = useState(false);
@@ -277,12 +277,16 @@ const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority
     waiting: tasks.filter((task) => ['queued', 'waiting_quota'].includes(task.status)).length,
   }), [tasks]);
   const visibleTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => {
+    const query = normalizeText(search.trim());
+    const matchingTasks = query
+      ? tasks.filter((task) => normalizeText(task.slug).includes(query) || normalizeText(task.title).includes(query))
+      : tasks;
+    const sorted = [...matchingTasks].sort((a, b) => {
       const rank = (status: Task['status']) => PROJECT_TASK_ORDER.indexOf(status);
       return rank(a.status) - rank(b.status) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
     return showOldDone ? sorted : sorted.filter((task) => !isOldDoneTask(task));
-  }, [tasks, showOldDone]);
+  }, [tasks, search, showOldDone]);
   const paginatedTasks = useShowMore(
     visibleTasks,
     20,
@@ -314,12 +318,18 @@ const ProjectTaskGroup: React.FC<{ project: { id: string; name: string; priority
       </div>
       {open && <div className="border-t border-[var(--border-default)] p-3 sm:p-4">
         <div className="mb-3 flex flex-wrap gap-1.5 text-[11px] sm:hidden">
-          {Object.entries(counts).map(([key, count]) => <span key={key} className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--text-secondary)]">{key}: {count}</span>)}
+          {[
+            [t('status.running'), counts.running],
+            [t('status.checking'), counts.checking],
+            [t('status.review'), counts.review],
+            [t('status.blocked'), counts.blocked],
+            [t('tasks.waitingShort'), counts.waiting],
+          ].map(([label, count]) => <span key={String(label)} className="rounded-full bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--text-secondary)]">{label}: {count}</span>)}
         </div>
         {visibleTasks.length > 0 ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{paginatedTasks.visibleItems.map((task) => <ProjectTaskCard key={task.id} task={task} />)}</div> : <div className="rounded-lg border border-dashed border-[var(--border-default)] p-5 text-center text-xs italic text-[var(--text-muted)]">{t('common.empty')}</div>}
         {(paginatedTasks.hasMore || paginatedTasks.isExpanded) && <div className="flex items-center justify-center gap-3 pt-3">
-          {paginatedTasks.hasMore && <button type="button" onClick={paginatedTasks.showMore} className="text-xs font-medium text-[var(--t-accent)] hover:underline">Xem thêm {Math.min(20, remaining)} (còn {remaining})</button>}
-          {paginatedTasks.isExpanded && <button type="button" onClick={paginatedTasks.collapse} className="text-xs text-[var(--text-secondary)] hover:underline">Thu gọn</button>}
+          {paginatedTasks.hasMore && <button type="button" onClick={paginatedTasks.showMore} className="text-xs font-medium text-[var(--t-accent)] hover:underline">{t('tasks.showMore', { count: Math.min(20, remaining), remaining })}</button>}
+          {paginatedTasks.isExpanded && <button type="button" onClick={paginatedTasks.collapse} className="text-xs text-[var(--text-secondary)] hover:underline">{t('tasks.collapse')}</button>}
         </div>}
         {oldDoneCount > 0 && <button type="button" onClick={() => setShowOldDone((value) => !value)} className="mt-3 text-xs font-medium text-[var(--t-accent)] hover:underline">{showOldDone ? t('tasks.hideOldDone') : t('tasks.showOldDone', { count: oldDoneCount })}</button>}
       </div>}
@@ -527,7 +537,7 @@ export const TasksPage: React.FC = () => {
         </div>
       ) : viewMode === 'project' ? (
         <div className="space-y-4 pb-8" data-testid="project-view-wrapper">
-          {projectGroups.length === 0 ? <div className="rounded-xl border border-dashed border-[var(--border-default)] p-8 text-center text-sm text-[var(--text-muted)]">{t('common.empty')}</div> : projectGroups.map((project) => <ProjectTaskGroup key={project.id} project={project} tasks={project.tasks} onCreate={() => navigate(`/tasks/new?project=${encodeURIComponent(project.id)}`)} />)}
+          {projectGroups.length === 0 ? <div className="rounded-xl border border-dashed border-[var(--border-default)] p-8 text-center text-sm text-[var(--text-muted)]">{t('common.empty')}</div> : projectGroups.map((project) => <ProjectTaskGroup key={project.id} project={project} tasks={project.tasks} search={search} onCreate={() => navigate(`/tasks/new?project=${encodeURIComponent(project.id)}`)} />)}
         </div>
       ) : (
         /* Kanban Board Grid */

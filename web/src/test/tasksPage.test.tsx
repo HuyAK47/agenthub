@@ -328,4 +328,20 @@ describe('TasksPage & Kanban Long Lists', () => {
     fireEvent.click(within(group).getByRole('button', { name: /xem thêm 20 \(còn 25\)/i }));
     expect(group.querySelectorAll('a[href^="/tasks/"]').length).toBe(40);
   });
+
+  it('áp dụng bộ lọc nhanh slug/tiêu đề trong chế độ theo project', async () => {
+    vi.spyOn(client, 'getTasks').mockResolvedValue([
+      { ...createDoneTasks(1)[0], id: 'p1~matching', slug: 'matching-task', title: 'Matching task' },
+      { ...createDoneTasks(1)[0], id: 'p1~other', slug: 'other-task', title: 'Other task' },
+    ]);
+
+    renderPage();
+
+    fireEvent.click(screen.getByTestId('view-toggle-project'));
+    const group = await screen.findByTestId('project-task-group-p1');
+    fireEvent.change(screen.getByRole('textbox', { name: /lọc slug \/ tiêu đề/i }), { target: { value: 'matching' } });
+
+    expect(within(group).getByText('Matching task')).toBeInTheDocument();
+    expect(within(group).queryByText('Other task')).not.toBeInTheDocument();
+  });
 });

@@ -109,6 +109,8 @@ export const vi = {
     waitingShort: 'Chờ',
     showOldDone: 'Xem {count} task đã xong cũ hơn',
     hideOldDone: 'Ẩn task đã xong cũ',
+    showMore: 'Xem thêm {count} (còn {remaining})',
+    collapse: 'Thu gọn',
     priority: 'Ưu tiên {value}',
   },
   dag: {
