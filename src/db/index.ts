@@ -749,7 +749,9 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE brain_turns ADD COLUMN departmentId TEXT;
   CREATE INDEX IF NOT EXISTS idx_brain_turns_department ON brain_turns(departmentId, startedAt);
   `,
-  // Migration 54: project focus wait reason.
+  // Migration 54: external references for task/project commit conventions.
+  `ALTER TABLE tasks ADD COLUMN externalRef TEXT;`,
+  // Migration 55: project focus wait reason (after externalRef, which live hubs applied first as 54).
   `
   PRAGMA foreign_keys = OFF;
   CREATE TABLE tasks_focus_new AS SELECT * FROM tasks;
@@ -766,7 +768,7 @@ export const MIGRATIONS: string[] = [
     reviewerEscalatedAt TEXT, reviewerEscalationReason TEXT,
     waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk','quota','parallel','profile_busy','project_unavailable','focus')),
     doneReport TEXT, diffStat TEXT, sourceRef TEXT, reviewStep INTEGER NOT NULL DEFAULT 0, batchId TEXT,
-    creationSessionId TEXT, creationGoal TEXT, FOREIGN KEY (projectId) REFERENCES projects(id)
+    creationSessionId TEXT, creationGoal TEXT, externalRef TEXT, FOREIGN KEY (projectId) REFERENCES projects(id)
   );
   INSERT INTO tasks SELECT * FROM tasks_focus_new;
   DROP TABLE tasks_focus_new;
@@ -775,8 +777,6 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
   PRAGMA foreign_keys = ON;
   `,
-  // Migration 55: external references for task/project commit conventions.
-  `ALTER TABLE tasks ADD COLUMN externalRef TEXT;`,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
