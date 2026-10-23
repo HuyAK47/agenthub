@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -18,6 +18,7 @@ import {
   FolderGit2,
   Plus,
   Trash2,
+  Check,
   CheckCircle2,
   AlertCircle,
   BookOpen,
@@ -369,6 +370,23 @@ export const ProjectsPage: React.FC = () => {
   const [gitInspectResult, setGitInspectResult] = useState<GitInspectResult | null>(null);
   const [isInspectingGit, setIsInspectingGit] = useState(false);
   const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
+  const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false);
+  const branchDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        branchDropdownRef.current &&
+        !branchDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsBranchDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     const trimmedPath = path.trim();
@@ -528,6 +546,7 @@ export const ProjectsPage: React.FC = () => {
     setGitInspectResult(null);
     setIsInspectingGit(false);
     setNameManuallyEdited(false);
+    setIsBranchDropdownOpen(false);
   };
 
   const handleEnvTemplateChange = (val: string) => {
@@ -595,6 +614,11 @@ export const ProjectsPage: React.FC = () => {
         : {}),
     });
   };
+
+  const filteredBranches = defaultBranch.trim()
+    ? gitBranches.filter((b) => b.toLowerCase().includes(defaultBranch.trim().toLowerCase()))
+    : gitBranches;
+  const displayBranches = filteredBranches.length > 0 ? filteredBranches : gitBranches;
 
   return (
     <div className="space-y-6">
@@ -717,26 +741,109 @@ export const ProjectsPage: React.FC = () => {
                 )}
               </div>
 
-              <div>
+              <div className="relative" ref={branchDropdownRef}>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('projects.branchLabel')}
                 </label>
                 <p className="text-xs text-[var(--t-text-3)] mb-1.5">
                   {t('projects.branchHint')}
                 </p>
-                <Input
-                  data-tour="project-default-branch"
-                  type="text"
-                  list="project-git-branches"
-                  placeholder="main"
-                  value={defaultBranch}
-                  onChange={(e) => setDefaultBranch(e.target.value)}
-                />
-                <datalist id="project-git-branches">
-                  {gitBranches.map((b) => (
-                    <option key={b} value={b} />
-                  ))}
-                </datalist>
+                <div className="relative">
+                  <Input
+                    data-tour="project-default-branch"
+                    type="text"
+                    placeholder="main"
+                    value={defaultBranch}
+                    onChange={(e) => setDefaultBranch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setIsBranchDropdownOpen(false);
+                      if (e.key === 'ArrowDown') setIsBranchDropdownOpen(true);
+                    }}
+                    className="pr-9 font-mono"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Xem danh sách nhánh"
+                    title="Xem danh sách nhánh"
+                    onClick={() => setIsBranchDropdownOpen((prev) => !prev)}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] rounded-md transition-colors cursor-pointer"
+                  >
+                    <ChevronDown
+                      className={`h-4 w-4 transition-transform duration-200 ${
+                        isBranchDropdownOpen ? 'rotate-180 text-[var(--t-accent)]' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {isBranchDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg shadow-xl overflow-hidden py-1">
+                    {gitBranches.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-[var(--t-text-3)] text-center">
+                        {isInspectingGit
+                          ? 'Đang tải danh sách nhánh...'
+                          : 'Chưa có danh sách nhánh. Hãy nhập đường dẫn Git repo hợp lệ ở trên.'}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="px-3 py-1.5 text-[11px] font-medium text-[var(--t-text-3)] border-b border-[var(--t-border)] flex items-center justify-between bg-[var(--t-surface-2)]">
+                          <span>
+                            {filteredBranches.length > 0 && filteredBranches.length !== gitBranches.length
+                              ? `Khớp ${filteredBranches.length}/${gitBranches.length} nhánh`
+                              : `Danh sách nhánh (${gitBranches.length})`}
+                          </span>
+                          {filteredBranches.length === 0 && (
+                            <span className="text-[10px] text-[var(--t-warn)]">
+                              Không khớp "{defaultBranch}" (hiện tất cả)
+                            </span>
+                          )}
+                        </div>
+                        <ul className="max-h-56 overflow-y-auto py-1">
+                          {displayBranches.map((b) => {
+                            const isSelected = defaultBranch === b;
+                            const isDefault = gitInspectResult?.defaultBranch === b;
+                            const isCurrent = gitInspectResult?.currentBranch === b;
+                            return (
+                              <li key={b}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDefaultBranch(b);
+                                    setIsBranchDropdownOpen(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-1.5 text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                                    isSelected
+                                      ? 'bg-[var(--t-accent)]/15 text-[var(--t-accent)] font-semibold'
+                                      : 'hover:bg-[var(--t-hover)] text-[var(--t-text)]'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-2 truncate">
+                                    <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                                    <span className="truncate">{b}</span>
+                                  </span>
+                                  <span className="flex items-center gap-1.5 shrink-0 ml-2">
+                                    {isDefault && (
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-accent)]/10 text-[var(--t-accent)]">
+                                        mặc định
+                                      </span>
+                                    )}
+                                    {isCurrent && !isDefault && (
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-surface-2)] text-[var(--t-text-3)]">
+                                        hiện tại
+                                      </span>
+                                    )}
+                                    {isSelected && <Check className="h-3.5 w-3.5 text-[var(--t-accent)]" />}
+                                  </span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {gitBranches.length > 0 && (
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     <span className="text-[11px] text-[var(--t-text-3)] flex items-center gap-1">
@@ -747,7 +854,10 @@ export const ProjectsPage: React.FC = () => {
                       <button
                         key={b}
                         type="button"
-                        onClick={() => setDefaultBranch(b)}
+                        onClick={() => {
+                          setDefaultBranch(b);
+                          setIsBranchDropdownOpen(false);
+                        }}
                         className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors cursor-pointer ${
                           defaultBranch === b
                             ? 'bg-[var(--t-accent)] text-white font-semibold'
@@ -758,7 +868,13 @@ export const ProjectsPage: React.FC = () => {
                       </button>
                     ))}
                     {gitBranches.length > 6 && (
-                      <span className="text-[10px] text-[var(--t-text-3)]">+{gitBranches.length - 6} nhánh khác</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsBranchDropdownOpen(true)}
+                        className="text-[10px] text-[var(--t-accent)] hover:underline cursor-pointer"
+                      >
+                        +{gitBranches.length - 6} nhánh khác
+                      </button>
                     )}
                   </div>
                 )}

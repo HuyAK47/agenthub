@@ -695,5 +695,21 @@ describe('ProjectsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'feature/ep6' }));
     const branchInput = screen.getByPlaceholderText('main');
     expect(branchInput).toHaveValue('feature/ep6');
+
+    // Nhập giá trị bất kỳ vào branch (vd: 'on')
+    fireEvent.change(branchInput, { target: { value: 'on' } });
+    expect(branchInput).toHaveValue('on');
+
+    // Bấm vào nút mũi tên để mở danh sách tất cả các option branch
+    const dropdownArrow = screen.getByRole('button', { name: 'Xem danh sách nhánh' });
+    fireEvent.click(dropdownArrow);
+
+    // Dropdown hiển thị danh sách các nhánh
+    expect(screen.getByText(/Danh sách nhánh/)).toBeInTheDocument();
+    const dropdownOptions = screen.getAllByRole('button', { name: /develop/i });
+    fireEvent.click(dropdownOptions[0]);
+
+    // Ô branch được cập nhật giá trị mới từ dropdown
+    expect(branchInput).toHaveValue('develop');
   });
 });
