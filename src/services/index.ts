@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z, ZodError } from 'zod';
-import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
+import { AgentHubConfig, TelegramChat, TelegramProjectTopic, saveConfig, updateConfigInMemory } from '../config.js';
 import {
   ProjectRepo,
   DepartmentRepo,
@@ -278,6 +278,13 @@ export const DepartmentInputSchema = z.object({
   maxParallel: z.number().int().positive().default(3),
   claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
   telegramTopicId: z.number().int().positive().nullable().default(null),
+  brainEngine: z.enum(['claude', 'codex']).default('claude'),
+  brainModel: z.string().min(1).default('sonnet'),
+  brainCodexProfile: z.string().min(1).nullable().default(null),
+  brainMode: z.enum(['inherit', 'off', 'suggest', 'auto']).default('inherit'),
+  brainPermissions: z.enum(['inherit', 'standard', 'trusted', 'full']).default('full'),
+  brainDailyTokenBudget: z.number().int().nonnegative().default(0),
+  brainMaxTurnsPerHour: z.number().int().positive().default(20),
 });
 
 export const CreateProjectSchema = z.object({
@@ -551,6 +558,7 @@ export const UpdateConfigSchema = z.object({
     enabled: z.boolean().optional(),
     botTokenFile: z.string().optional(),
     allowedChatIds: z.array(z.number()).optional(),
+    projectTopics: z.record(z.object({ chatId: z.number(), threadId: z.number() })).optional(),
     notify: z.object({
       reviewReady: z.boolean().optional(),
       failed: z.boolean().optional(),
@@ -1578,7 +1586,9 @@ export class AppService {
     }
 
     this.invalidateOutOfScopeClaudeScanStates();
-    return this.getProject(id);
+    const created = this.getProject(id);
+    void this.telegramBotService?.ensureProjectTopic(id);
+    return created;
   }
 
   updateProject(id: string, raw: unknown): ProjectRow {
@@ -3828,7 +3838,27 @@ export class AppService {
       chats: this.config.telegram.chats || [],
       allowedChatIds: this.config.telegram.allowedChatIds,
       notify: this.config.telegram.notify,
+      projectTopics: this.config.telegram.projectTopics || {},
     };
+  }
+
+  async setupTelegramTopics(): Promise<Record<string, TelegramProjectTopic>> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    return this.telegramBotService.setupProjectTopics();
+  }
+
+  async createTelegramProjectTopic(projectId: string): Promise<TelegramProjectTopic> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try { return await this.telegramBotService.createProjectTopic(projectId); } catch (error) {
+      throw new HttpError(502, 'telegram_error', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  attachTelegramProjectChat(projectId: string, chatId: number): { ok: boolean } {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try { this.telegramBotService.setProjectChat(projectId, chatId); return { ok: true }; } catch (error) {
+      throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+    }
   }
 
   getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[]; chats: TelegramChat[] } {

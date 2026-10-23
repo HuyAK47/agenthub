@@ -64,6 +64,14 @@ export interface BrainConfig {
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
   digest: BrainDigestConfig;
+  /** Optional cross-department coordinator. Disabled unless explicitly enabled. */
+  director?: {
+    enabled: boolean;
+    engine: 'claude' | 'codex';
+    model: string;
+    codexProfile?: string;
+    permissions: 'standard' | 'trusted' | 'full';
+  };
 }
 
 export interface AssistantConfig {
@@ -125,11 +133,17 @@ export interface TelegramChat {
   projectId?: string;
 }
 
+export interface TelegramProjectTopic {
+  chatId: number;
+  threadId: number;
+}
+
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
   chats: TelegramChat[];
+  projectTopics: Record<string, TelegramProjectTopic>;
   notify: TelegramNotifyConfig;
 }
 
@@ -350,6 +364,7 @@ export function saveConfig(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      projectTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -520,6 +535,7 @@ export function updateConfigInMemory(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      projectTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -584,6 +600,7 @@ export function updateConfigInMemory(
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
     if (patch.brain.maxConcurrent !== undefined) config.brain.maxConcurrent = patch.brain.maxConcurrent;
+    if (patch.brain.director) config.brain.director = { ...config.brain.director, ...patch.brain.director };
     if (patch.brain.digest) {
       config.brain.digest = {
         ...config.brain.digest,
@@ -674,6 +691,7 @@ export function updateConfigInMemory(
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
       chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
+      projectTopics: patch.telegram.projectTopics !== undefined ? { ...patch.telegram.projectTopics } : config.telegram.projectTopics,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -868,6 +886,11 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
           Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
         )
       : [],
+    projectTopics: rawTelegram.projectTopics && typeof rawTelegram.projectTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.projectTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([projectId, topic]) => [projectId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,
       failed: rawTelegramNotify.failed !== false,
@@ -1011,6 +1034,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
               : DEFAULT_BRAIN_DIGEST_CONFIG.time,
           }
         : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
+      director: {
+        enabled: (brainRaw.director as Record<string, unknown> | undefined)?.enabled === true,
+        engine: (brainRaw.director as Record<string, unknown> | undefined)?.engine === 'codex' ? 'codex' : 'claude',
+        model: typeof (brainRaw.director as Record<string, unknown> | undefined)?.model === 'string'
+          ? (brainRaw.director as Record<string, unknown>).model as string : 'opus',
+        codexProfile: typeof (brainRaw.director as Record<string, unknown> | undefined)?.codexProfile === 'string'
+          ? (brainRaw.director as Record<string, unknown>).codexProfile as string : undefined,
+        permissions: (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'full'
+          ? 'full' : (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'trusted' ? 'trusted' : 'standard',
+      },
     },
     assistant: {
       enabled: assistantRaw.enabled !== false,

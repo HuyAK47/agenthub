@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config.js';
 import { openDatabase, TaskRepo, QuotaMarkRepo, EventRepo, ProjectRepo, ProfileRepo } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 import { NotificationService } from '../src/notify.js';
+import { areAllProfilesQuotaExhaustedForFamily } from '../src/brain/digest.js';
 
 describe('NotificationService (Desktop Notifications)', () => {
   let tmpDir: string;
@@ -325,6 +326,31 @@ describe('NotificationService (Desktop Notifications)', () => {
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0].args.at(-1)).toBe('AgentHub: Mọi tài khoản đều đã hết quota');
     notifier.stop();
+  });
+
+  it('areAllProfilesQuotaExhaustedForFamily does not conflate claude engine profiles with agy profiles', () => {
+    profileRepo.upsert({ name: 'claude-1', engine: 'claude', kind: 'isolated', home: tmpDir, email: null, enabled: 1 });
+    const future = Math.floor(Date.now() / 1000) + 3600;
+
+    // Both agy profiles exhausted on claude family
+    quotaMarkRepo.mark('g1', 'claude', future);
+    quotaMarkRepo.mark('chinh', 'claude', future);
+
+    // agy engine is exhausted for claude, but claude engine is not
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'agy')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(false);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(false);
+
+    // When claude engine exhausts as well
+    quotaMarkRepo.mark('claude-1', 'claude', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(true);
+
+    // For gemini, claude-1 profile is not conflated with agy
+    quotaMarkRepo.mark('g1', 'gemini', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'gemini')).toBe(false);
+    quotaMarkRepo.mark('chinh', 'gemini', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'gemini')).toBe(true);
   });
 
   it('deduplicates identical notifications within 30 minutes', () => {

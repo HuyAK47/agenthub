@@ -144,6 +144,7 @@ export class NotificationService {
     if (type === 'quota.cleared') {
       this.allQuotaNotified.delete('all');
       if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+      this.lastSent.delete('critical:AgentHub: Mọi tài khoản đều đã hết quota');
     }
     if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
       this.queueWaitingQuotaCheck(notifyAllExhausted);

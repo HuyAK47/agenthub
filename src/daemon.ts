@@ -269,6 +269,7 @@ export function createContext(
     taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
+    departmentRepo,
     directiveRepo,
     knowledgeRepo,
   });

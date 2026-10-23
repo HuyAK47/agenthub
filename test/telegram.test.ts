@@ -1072,7 +1072,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(calls).toHaveLength(1);
     });
 
-    it('sends an identical notification text at most once per 30 minutes', async () => {
+    it('sends an all-quota notification once until the blockage clears', async () => {
       const emit = () => ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, { profile: 'g9', family: 'gemini-pro', allExhausted: true, time: '18:30' });
       emit();
       await bot.flushQueue(CHAT_ID);
@@ -1081,6 +1081,11 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
       currentTime += 16 * 60_000;
+      emit();
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
+
+      ctx.scheduler.getEventBus().emit('quota.cleared', undefined, { family: 'gemini-pro' });
       emit();
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(2);
@@ -2715,7 +2720,61 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(sysBrainSession?.kind).toBe('brain');
   });
 
-  it('2. /newtask dung du an dang chon lam mac dinh', async () => {
+  it('2. thong bao project vao topic, thong bao he thong vao General', async () => {
+    createProject('p-topic', 'Topic App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-topic': { chatId: CHAT_ID, threadId: 42 } };
+    const bot = createProjectBot('suggest');
+
+    bot.broadcastMessage('project notification', undefined, 'p-topic');
+    await bot.flushQueue(CHAT_ID);
+    const projectCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(projectCall?.body?.message_thread_id).toBe(42);
+
+    bot.broadcastMessage('system notification');
+    await bot.flushQueue(CHAT_ID);
+    const systemCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(systemCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('4. chat duoc gan project dinh tuyen ngay va event he thong luon vao General', async () => {
+    createProject('p-attached', 'Attached App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-attached': { chatId: CHAT_ID, threadId: 77 } };
+    const bot = createProjectBot('suggest');
+
+    bot.setProjectChat('p-attached', CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-attached');
+
+    bot.handleEvent('task.failed', 'p-attached/task-1');
+    await bot.flushQueue(CHAT_ID);
+    bot.broadcastMessage('system after project event', undefined);
+    await bot.flushQueue(CHAT_ID);
+    const systemCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(systemCall?.body?.message_thread_id).toBeUndefined();
+
+    bot.handleEvent('quota.exhausted', undefined, { projectId: 'p-attached', profile: 'p1', family: 'gemini' });
+    await bot.flushQueue(CHAT_ID);
+    const quotaCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(quotaCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('deploy event co projectId van duoc gui vao General', async () => {
+    createProject('p-deploy', 'Deploy App', 'suggest', 'full');
+    createProject('p-deploy-other', 'Other Deploy App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-deploy': { chatId: CHAT_ID, threadId: 88 } };
+    const bot = createProjectBot('suggest');
+
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy', error: 'build failed' });
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy-other', error: 'build failed' });
+    await bot.flushQueue(CHAT_ID);
+
+    const deployCalls = recordedCalls.filter((call) => call.url.includes('/sendMessage'));
+    expect(deployCalls).toHaveLength(2);
+    const deployCall = deployCalls.at(-1);
+    expect(deployCall?.body?.text).toContain('Triển khai thất bại');
+    expect(deployCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('3. /newtask dung du an dang chon lam mac dinh', async () => {
     createProject('p-alpha', 'Project Alpha', 'suggest', 'full');
     createProject('p-beta', 'Project Beta', 'suggest', 'full');
 
