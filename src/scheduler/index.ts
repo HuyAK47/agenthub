@@ -138,6 +138,10 @@ function isAutoReviewer(by: string | undefined): by is ReviewerActor {
   return by === 'codex-reviewer' || by === 'claude-reviewer';
 }
 
+/** Times an arbiter rejection sends a task back before it is blocked for a person. */
+const ARBITER_ROUNDS = 2;
+const ARBITER_RETRY_MODEL = 'claude-opus-4-6-thinking';
+
 interface ReviewerRun {
   taskId: string;
   runId: string;
@@ -1758,6 +1762,7 @@ export class Scheduler {
           task.reviewerEscalated = 0;
         } else {
           if (this.needsClaudeArbiter(task)) this.startClaudeFallbackReview(task);
+          else this.actOnArbiterRejection(task, last);
           continue;
         }
       }
@@ -1857,6 +1862,32 @@ export class Scheduler {
     if (escalations.length < 2) return false;
     const lastEscalation = escalations[escalations.length - 1].ts;
     return !this.reviewRepo?.getByTask(task.id).some((review) => review.actor === 'claude-reviewer' && review.createdAt >= lastEscalation);
+  }
+
+  /**
+   * The Claude arbiter asked for changes on an escalated task. With nobody to decide, send it back
+   * with that feedback on the strongest model, at most ARBITER_ROUNDS times; then block it and say so.
+   */
+  private actOnArbiterRejection(task: TaskRow, last: { actor: string; verdict: string; feedback: string | null; createdAt: string } | undefined): void {
+    if (!last || last.actor !== 'claude-reviewer' || last.verdict !== 'changes_requested') return;
+    if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return;
+    const project = this.projectRepo.get(task.projectId);
+    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return;
+    const rejections = this.reviewRepo?.getByTask(task.id)
+      .filter((review) => review.actor === 'claude-reviewer' && review.verdict === 'changes_requested').length ?? 0;
+    if (rejections > ARBITER_ROUNDS) {
+      this.taskRepo.updateStatus(task.id, 'blocked');
+      this.eventBus.emit('task.blocked', task.id, {
+        reason: 'review_rounds_exhausted',
+        title: task.title,
+        message: `Codex và Claude đều chưa duyệt sau ${ARBITER_ROUNDS} vòng giao lại; cần người xem.`,
+      });
+      return;
+    }
+    let chain: string[] = [];
+    try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
+    this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
+    this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
   }
 
   private codexReviewUnavailable(): boolean {

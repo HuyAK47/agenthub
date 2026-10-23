@@ -703,6 +703,28 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  it('sends an arbiter rejection back to the worker, then blocks after the allowed rounds', () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-approved');
+    const escalate = () => {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+      taskRepo.update('test-project/review', { status: 'review', reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+    };
+    escalate(); escalate();
+    for (let round = 1; round <= 3; round++) {
+      reviewRepo.insert({ id: `arb-no-${round}`, taskId: 'test-project/review', verdict: 'changes_requested', feedback: `thiếu test ${round}`, actor: 'claude-reviewer' });
+      if (round > 1) escalate();
+      scheduler.tick();
+      const task = taskRepo.get('test-project/review')!;
+      if (round <= 2) {
+        expect(task.status).toBe('queued');
+        expect(JSON.parse(task.modelChain!)[0]).toBe('claude-opus-4-6-thinking');
+      } else {
+        expect(task.status).toBe('blocked');
+      }
+    }
+    scheduler.stop();
+  });
+
   it('leaves a first escalation for the retry path, not the arbiter', () => {
     const { scheduler } = makeReviewer('reviewer-approved');
     withClaudeReviewer(scheduler);
