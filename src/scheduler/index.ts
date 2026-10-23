@@ -372,6 +372,43 @@ export class Scheduler {
     return project?.departmentId ? this.departmentRepo?.get(project.departmentId)?.priority || 0 : 0;
   }
 
+  /** Priority is also the department's fair-share weight; zero remains eligible. */
+  private departmentWeight(task: TaskRow): number {
+    return Math.max(1, this.departmentPriority(task));
+  }
+
+  private departmentIdForTask(task: TaskRow): string {
+    return this.projectRepo.get(task.projectId)?.departmentId || 'chung';
+  }
+
+  private departmentProfileAssignments(profileName: string): Array<{ departmentId: string; share: number | null }> {
+    if (!this.departmentRepo) return [];
+    return this.departmentRepo.getAll().flatMap((department) => this.departmentRepo!.profiles(department.id)
+      .filter((assignment) => assignment.profileName === profileName)
+      .map((assignment) => ({ departmentId: assignment.departmentId, share: assignment.share })));
+  }
+
+  private profileAllowedForDepartment(profileName: string, departmentId: string): boolean {
+    const assignments = this.departmentProfileAssignments(profileName);
+    return assignments.length === 0 || assignments.some((assignment) => assignment.departmentId === departmentId);
+  }
+
+  private profileShare(profileName: string, departmentId: string): number {
+    const assignments = this.departmentProfileAssignments(profileName);
+    if (assignments.length === 0) return 1;
+    const assignment = assignments.find((item) => item.departmentId === departmentId);
+    if (!assignment) return 0;
+    return Math.max(0.01, assignment.share ?? 1);
+  }
+
+  private profileDepartmentLoad(profileName: string, departmentId: string): number {
+    const active = [...this.running.values(), ...this.starting.values()];
+    return active.filter((task) => {
+      if (task.profileName !== profileName) return false;
+      return (this.projectRepo.get(task.projectId)?.departmentId || 'chung') === departmentId;
+    }).length;
+  }
+
   private claudeBudgetAvailable(task: TaskRow): boolean {
     const project = this.projectRepo.get(task.projectId);
     const department = project?.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
@@ -1955,12 +1992,11 @@ export class Scheduler {
       this.skipSchedulingOnce = false;
       return;
     }
-    const queuedTasks = this.taskRepo.getByStatus('queued').sort((a, b) =>
-      this.departmentPriority(b) - this.departmentPriority(a) || parseDbTime(a.createdAt) - parseDbTime(b.createdAt),
-    );
+    const queuedTasks = this.taskRepo.getByStatus('queued');
+    const focus = this.getFocus();
+    const schedulableTasks: TaskRow[] = [];
 
     for (const task of queuedTasks) {
-      const focus = this.getFocus();
       if (focus.projectId && task.projectId !== focus.projectId) {
         if (task.waitReason !== 'focus') {
           this.taskRepo.update(task.id, { status: 'queued', waitReason: 'focus' });
@@ -1969,6 +2005,26 @@ export class Scheduler {
         continue;
       }
       if (task.waitReason === 'focus') this.taskRepo.update(task.id, { status: 'queued', waitReason: null });
+      schedulableTasks.push(task);
+    }
+
+    const fairUsage = new Map<string, number>();
+    for (const running of [...this.running.values(), ...this.starting.values()]) {
+      const departmentId = this.projectRepo.get(running.projectId)?.departmentId || 'chung';
+      fairUsage.set(departmentId, (fairUsage.get(departmentId) || 0) + 1);
+    }
+    const remainingTasks = [...schedulableTasks];
+    while (remainingTasks.length > 0) {
+      remainingTasks.sort((a, b) => {
+        const aDept = this.departmentIdForTask(a);
+        const bDept = this.departmentIdForTask(b);
+        const aScore = (fairUsage.get(aDept) || 0) / this.departmentWeight(a);
+        const bScore = (fairUsage.get(bDept) || 0) / this.departmentWeight(b);
+        return aScore - bScore
+          || this.departmentPriority(b) - this.departmentPriority(a)
+          || parseDbTime(a.createdAt) - parseDbTime(b.createdAt);
+      });
+      const task = remainingTasks.shift()!;
       if (task.notBefore != null && task.notBefore > Math.floor(Date.now() / 1000)) continue;
       // Check dependencies
       if (!this.areDependenciesMet(task)) continue;
@@ -2009,6 +2065,8 @@ export class Scheduler {
           this.markDiskLow(disk);
           continue;
         }
+        const departmentId = this.departmentIdForTask(task);
+        fairUsage.set(departmentId, (fairUsage.get(departmentId) || 0) + 1);
         void this.startTask(task, pair.model, pair.profileName)
           .catch((error) => {
             console.error(`[scheduler] failed to start task ${task.id}:`, error);
@@ -2670,16 +2728,15 @@ export class Scheduler {
     task: TaskRow,
   ): { model: string; profileName: string } | null {
     const chain = this.getModelChain(task);
+    const departmentId = this.departmentIdForTask(task);
 
     for (const model of chain) {
       const family = getModelFamily(model);
       const engineId = getModelEngine(model);
 
       // Find suitable profiles
-      const project = this.projectRepo.get(task.projectId);
-      const assigned = project?.departmentId ? this.departmentRepo?.profiles(project.departmentId) : [];
-      const assignedNames = assigned && assigned.length > 0 ? new Set(assigned.map((item) => item.profileName)) : null;
-      const profiles = this.profileRepo.getEnabled().filter((p) => (!p.authState || p.authState === 'ok') && (!assignedNames || assignedNames.has(p.name)));
+      const profiles = this.profileRepo.getEnabled().filter((p) =>
+        (!p.authState || p.authState === 'ok') && this.profileAllowedForDepartment(p.name, departmentId));
       const eligibleProfiles = profiles.filter((profile) => {
         if (profile.engine !== engineId) return false;
         if (this.quotaService.isExhausted(profile.name, family)) return false;
@@ -2696,9 +2753,13 @@ export class Scheduler {
         priority: profile.priority ?? 0,
         emailRuns: this.getEmailRunningCount(profile),
         quotaRemaining: this.getQuotaRemainingPct(profile, family),
+        departmentLoad: this.profileDepartmentLoad(profile.name, departmentId) / this.profileShare(profile.name, departmentId),
       }));
 
       ranked.sort((a, b) => {
+        if (a.departmentLoad !== b.departmentLoad) {
+          return a.departmentLoad - b.departmentLoad;
+        }
         if (a.emailRuns !== b.emailRuns) {
           return a.emailRuns - b.emailRuns;
         }
@@ -2718,6 +2779,7 @@ export class Scheduler {
   }
 
   private hasBusyMatchingProfile(task: TaskRow): boolean {
+    const departmentId = this.departmentIdForTask(task);
     for (const model of this.getModelChain(task)) {
       const engineId = getModelEngine(model);
       const family = getModelFamily(model);
@@ -2725,6 +2787,7 @@ export class Scheduler {
         if (profile.authState && profile.authState !== 'ok') continue;
         if (
           profile.engine === engineId &&
+          this.profileAllowedForDepartment(profile.name, departmentId) &&
           !this.quotaService.isExhausted(profile.name, family) &&
           (this.isProfileBusy(profile.name) || this.locks.getSlotsSync(profile).busy)
         ) {

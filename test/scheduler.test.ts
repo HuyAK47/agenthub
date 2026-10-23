@@ -352,6 +352,47 @@ describe('maxParallel limit', () => {
     expect(scheduler.getRunning().size).toBe(1);
     scheduler.stop();
   });
+
+  it('shares a busy machine between departments by weighted fair share', () => {
+    createTestProject(path.join(tmpDir, 'repo'));
+    const secondProjectPath = path.join(tmpDir, 'repo-fair-second');
+    fs.mkdirSync(secondProjectPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: secondProjectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
+    fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Fair share');
+    execFileSync('git', ['add', '.'], { cwd: secondProjectPath });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: secondProjectPath,
+      env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' },
+    });
+    const departmentRepo = new DepartmentRepo(db);
+    departmentRepo.insert({ id: 'priority', name: 'Priority', priority: 4, maxParallel: 6, claudeDailyTokenBudget: 0, telegramTopicId: null });
+    departmentRepo.insert({ id: 'normal', name: 'Normal', priority: 1, maxParallel: 6, claudeDailyTokenBudget: 0, telegramTopicId: null });
+    projectRepo.update('test-project', { maxParallel: 6, departmentId: 'priority' });
+    projectRepo.insert({ id: 'fair-second', name: 'Fair Second', path: secondProjectPath, defaultBranch: 'main', envTemplate: null, maxParallel: 6, departmentId: 'normal' });
+    for (const name of ['p1', 'p2', 'p3']) {
+      profileRepo.upsert({ name, engine: 'agy', kind: 'isolated', home: `/tmp/${name}`, email: null, enabled: 1 });
+    }
+    for (let i = 1; i <= 8; i++) {
+      taskRepo.insert({ id: `test-project/priority-${i}`, projectId: 'test-project', slug: `priority-${i}`, title: 'Priority', status: 'queued' });
+      taskRepo.insert({ id: `fair-second/normal-${i}`, projectId: 'fair-second', slug: `normal-${i}`, title: 'Normal', status: 'queued' });
+    }
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]), undefined, undefined, undefined, undefined, undefined, undefined, departmentRepo,
+    );
+    scheduler.tick();
+
+    const running = taskRepo.getAll().filter((task) => task.status === 'running');
+    const priorityCount = running.filter((task) => task.projectId === 'test-project').length;
+    const normalCount = running.filter((task) => task.projectId === 'fair-second').length;
+    expect(priorityCount).toBeGreaterThan(normalCount);
+    expect(normalCount).toBeGreaterThan(0);
+    expect(running.length).toBe(6);
+    scheduler.stop();
+  });
 });
 
 describe('Profile uses both agy slots', () => {
