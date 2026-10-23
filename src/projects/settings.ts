@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { isSafeProjectRelativePath } from './paths.js';
+import { ReviewerFallbackSchema, ReviewerOrderSchema } from '../reviewer-config.js';
 
 /**
  * Per-project behaviour switches, stored as JSON in `projects.settings`.
@@ -20,6 +21,10 @@ const ReferenceSchema = z.object({
 });
 
 export const ProjectSettingsSchema = z.object({
+  review: z.object({
+    order: ReviewerOrderSchema.optional(),
+    fallback: ReviewerFallbackSchema.partial().optional(),
+  }).optional(),
   brain: z.object({
     /**
      * Who coordinates this project:
@@ -74,6 +79,10 @@ export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;
 
 /** Input accepted by the API: every section and field optional; merged over the stored settings. */
 export const ProjectSettingsInputSchema = z.object({
+  review: z.object({
+    order: ReviewerOrderSchema.optional(),
+    fallback: ReviewerFallbackSchema.partial().optional(),
+  }).partial().optional(),
   brain: ProjectSettingsSchema.shape.brain.removeDefault().partial().optional(),
   worktree: ProjectSettingsSchema.shape.worktree.removeDefault().partial().optional(),
   integration: ProjectSettingsSchema.shape.integration.removeDefault().partial().optional(),
@@ -106,6 +115,9 @@ export function projectSettings(project: { settings?: string | null } | null | u
 /** Merge a partial update over current settings, section by section; arrays are replaced. */
 export function mergeProjectSettings(current: ProjectSettings, input: ProjectSettingsInput): ProjectSettings {
   return ProjectSettingsSchema.parse({
+    ...(current.review || input.review ? {
+      review: { ...current.review, ...input.review, fallback: { ...current.review?.fallback, ...input.review?.fallback } },
+    } : {}),
     brain: { ...current.brain, ...input.brain },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },

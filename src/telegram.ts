@@ -24,6 +24,7 @@ import { projectSettings, mergeProjectSettings } from './projects/settings.js';
 import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permissions.js';
 import { formatReset } from './time-format.js';
 import { NotificationDeduper } from './notification-dedupe.js';
+import { reviewerSettingsFromLegacy } from './reviewer-config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -222,6 +223,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'approve', description: 'Duyệt & merge: /approve <id>' },
   { command: 'deploy', description: 'Chạy deploy gần nhất: /deploy <project> [push]' },
   { command: 'reject', description: 'Trả về: /reject <id> <nhận xét>' },
+  { command: 'review', description: 'Xem và đổi thứ tự reviewer: /review order' },
   { command: 'retry', description: 'Chạy lại task: /retry <id>' },
   { command: 'log', description: 'Xem log cuối của task: /log <id>' },
   { command: 'cancel', description: 'Huỷ task: /cancel <id>' },
@@ -1071,6 +1073,10 @@ export class TelegramBotService {
         await this.handleBrainCommand(chatId, argStr);
         break;
 
+      case '/review':
+        await this.handleReviewCommand(chatId, args);
+        break;
+
       case '/knowledge':
         await this.handleKnowledgeCommand(chatId);
         break;
@@ -1162,6 +1168,31 @@ export class TelegramBotService {
       checklist.length ? checklist.map((item) => `• ${this.escapeHtml(item)}`).join('\n') : '• Không có',
     ].join('\n');
     await this.sendMessage(chatId, text);
+  }
+
+  private async handleReviewCommand(chatId: number, args: string[]): Promise<void> {
+    if (args[0] !== 'order') {
+      await this.sendMessage(chatId, 'Dùng /review order để xem, hoặc /review order claude,codex để đổi thứ tự.');
+      return;
+    }
+    const current = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>);
+    if (!args[1]) {
+      await this.sendMessage(chatId, `🔎 Thứ tự reviewer: ${current.order.map((item) => item.engine).join(' → ')}\nFallback khi không khả dụng: ${current.fallback.onUnavailable ? 'bật' : 'tắt'}, bận sau ${current.fallback.onBusyAfterMin} phút.`);
+      return;
+    }
+    const names = args[1].split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    if (names.length === 0 || names.some((name) => name !== 'claude' && name !== 'codex') || new Set(names).size !== names.length) {
+      await this.sendMessage(chatId, 'Thứ tự phải là danh sách claude,codex (mỗi reviewer tối đa một lần).');
+      return;
+    }
+    const order = names.map((name) => current.order.find((item) => item.engine === name) || {
+      engine: name as 'claude' | 'codex',
+      model: name === 'claude' ? 'sonnet' : 'gpt-5.6-luna',
+      profiles: [],
+    });
+    updateConfigInMemory(this.config, { reviewer: { order } });
+    saveConfig(this.config.hubHome, { reviewer: { order } });
+    await this.sendMessage(chatId, `✅ Đã đổi thứ tự reviewer chung: ${names.join(' → ')}`);
   }
 
   private async handleDeployCommand(chatId: number, argStr: string): Promise<void> {

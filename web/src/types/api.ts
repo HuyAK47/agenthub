@@ -88,6 +88,8 @@ export interface ProjectMerge {
 }
 export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
 export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
+export interface ReviewerOrderItem { engine: 'codex' | 'claude'; model: string; profiles: string[]; }
+export interface ReviewerFallback { onUnavailable: boolean; onBusyAfterMin: number; onError: boolean; }
 
 export interface IntegrationStatus {
   path: string;
@@ -179,6 +181,7 @@ export interface DeployStatus {
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
+  review?: { order?: ReviewerOrderItem[]; fallback?: Partial<ReviewerFallback> };
   brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
   worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
@@ -650,6 +653,9 @@ export interface SystemConfig {
     claudeFallback?: boolean;
     claudeProfiles?: string[];
     claudeModel?: string;
+    order?: ReviewerOrderItem[];
+    fallback?: Partial<ReviewerFallback>;
+    arbiter?: { engine: 'codex' | 'claude'; model: string };
   };
   brain?: {
     mode?: 'off' | 'suggest' | 'auto';
