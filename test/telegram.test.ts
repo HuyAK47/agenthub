@@ -1594,6 +1594,81 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(ctx.taskRepo.get('proj-shop/sua-loi')?.title).toBe('Sửa lỗi');
     });
 
+    it('does not treat normal descriptions or trailing punctuation as external references', async () => {
+      // Direct parser checks ensuring externalRef is undefined and text is preserved
+      expect(bot['parseLeadingExternalRef']('Lỗi: không đăng nhập')).toEqual({ text: 'Lỗi: không đăng nhập' });
+      expect(bot['parseLeadingExternalRef']('Hello, world')).toEqual({ text: 'Hello, world' });
+      expect(bot['parseLeadingExternalRef']('1. Sửa login')).toEqual({ text: '1. Sửa login' });
+      expect(bot['parseLeadingExternalRef']('Fix Login bug')).toEqual({ text: 'Fix Login bug' });
+      expect(bot['parseLeadingExternalRef']('Add Dashboard page')).toEqual({ text: 'Add Dashboard page' });
+
+      // End-to-end task creation via bot
+      await bot.handleUpdate({
+        update_id: 281,
+        message: {
+          message_id: 281,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Lỗi: không đăng nhập',
+        },
+      });
+      const taskPunctuation = ctx.taskRepo.get('proj-shop/loi-khong-dang-nhap');
+      expect(taskPunctuation?.externalRef).toBeNull();
+      expect(taskPunctuation?.title).toBe('Lỗi: không đăng nhập');
+
+      await bot.handleUpdate({
+        update_id: 282,
+        message: {
+          message_id: 282,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Hello, world',
+        },
+      });
+      const taskComma = ctx.taskRepo.get('proj-shop/hello-world');
+      expect(taskComma?.externalRef).toBeNull();
+      expect(taskComma?.title).toBe('Hello, world');
+
+      await bot.handleUpdate({
+        update_id: 283,
+        message: {
+          message_id: 283,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask 1. Sửa login',
+        },
+      });
+      const taskOrdinal = ctx.taskRepo.get('proj-shop/1-sua-login');
+      expect(taskOrdinal?.externalRef).toBeNull();
+      expect(taskOrdinal?.title).toBe('1. Sửa login');
+
+      await bot.handleUpdate({
+        update_id: 284,
+        message: {
+          message_id: 284,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Fix Login bug',
+        },
+      });
+      const taskFix = ctx.taskRepo.get('proj-shop/fix-login-bug');
+      expect(taskFix?.externalRef).toBeNull();
+      expect(taskFix?.title).toBe('Fix Login bug');
+
+      await bot.handleUpdate({
+        update_id: 285,
+        message: {
+          message_id: 285,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Add Dashboard page',
+        },
+      });
+      const taskAdd = ctx.taskRepo.get('proj-shop/add-dashboard-page');
+      expect(taskAdd?.externalRef).toBeNull();
+      expect(taskAdd?.title).toBe('Add Dashboard page');
+    });
+
     it('allows cancelling wizard via /cancel', async () => {
       await bot.handleUpdate({
         update_id: 30,

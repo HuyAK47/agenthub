@@ -2789,14 +2789,21 @@ export class TelegramBotService {
     const token = match[1];
     const rest = match[2].trim();
 
-    // 1. Structured tokens (containing numbers or punctuation/symbols like #, -, _, :, /).
-    const hasPunctuationOrDigit = /[\p{N}\p{P}\p{S}]/u.test(token);
-    if (hasPunctuationOrDigit) {
+    // 0. Exclude tokens ending with common sentence punctuation (: , . ; ! ?) or list ordinals/numbers.
+    if (/[:.,;!?]$/u.test(token) || /^\p{N}+[.)]?$/u.test(token)) {
+      return { text: trimmed };
+    }
+
+    // 1. Clear marker prefix (e.g. #123, #OP-45) or structured token with internal delimiter
+    // between letters/numbers (e.g. PROJ-45, OP#123, ABC-foo, ĐỀ-123, 営業-1).
+    const hasMarker = /^#[\p{L}\p{N}_-]+$/u.test(token);
+    const hasDelimitedRef = /^(?=.*\p{L})[\p{L}\p{N}]+[-_#/:][\p{L}\p{N}_#/:.-]*[\p{L}\p{N}]$/u.test(token);
+    if (hasMarker || hasDelimitedRef) {
       return { externalRef: token, text: rest };
     }
 
     // 2. CJK / ideographic tokens (e.g. 営業).
-    const isCjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(token);
+    const isCjk = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(token);
     if (isCjk) {
       return { externalRef: token, text: rest };
     }
@@ -2813,12 +2820,12 @@ export class TelegramBotService {
       return { externalRef: token, text: rest };
     }
 
-    // 5. Letter-only token followed by a capitalized or CJK description (e.g. "đề Sửa lỗi").
-    // In natural language descriptions without a ref (e.g. "Sửa lỗi đăng nhập", "Không thể kết nối"),
-    // the first word is capitalized and followed by a lowercase word. When the remainder starts with
-    // an uppercase letter or CJK character, a leading lowercase/word token is an external reference.
+    // 5. Non-ASCII all-lowercase letters followed by a capitalized or CJK description (e.g. "đề Sửa lỗi").
+    // Normal English/Vietnamese descriptions starting with a capitalized word (e.g. "Fix Login bug",
+    // "Add Dashboard page", "Sửa lỗi đăng nhập") must not be treated as refs.
+    const isUnicodeLower = /[^\p{ASCII}]/u.test(token) && /^\p{Ll}+$/u.test(token);
     const restStartsWithCapitalOrCjk = /^[\p{Lu}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(rest);
-    if (restStartsWithCapitalOrCjk) {
+    if (isUnicodeLower && restStartsWithCapitalOrCjk) {
       return { externalRef: token, text: rest };
     }
 
