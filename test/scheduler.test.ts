@@ -692,6 +692,17 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  it('clears an escalation once an automated reviewer approved, so the finished chain can merge', () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit', reviewStep: 1 });
+    reviewRepo.insert({ id: 'arb-ok', taskId: 'test-project/review', verdict: 'approved', feedback: 'ok', actor: 'claude-reviewer' });
+    scheduler.tick();
+    expect(taskRepo.get('test-project/review')?.reviewerEscalated).toBe(0);
+    expect(eventRepo.getRecent(30).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/review')).toHaveLength(1);
+    scheduler.stop();
+  });
+
   it('leaves a first escalation for the retry path, not the arbiter', () => {
     const { scheduler } = makeReviewer('reviewer-approved');
     withClaudeReviewer(scheduler);

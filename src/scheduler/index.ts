@@ -1744,8 +1744,15 @@ export class Scheduler {
     for (const task of this.taskRepo.getByStatus('review')) {
       if (this.reviewerRuns.has(task.id)) continue;
       if (task.reviewerEscalated) {
-        if (this.needsClaudeArbiter(task)) this.startClaudeFallbackReview(task);
-        continue;
+        const last = this.reviewRepo.getByTask(task.id).at(-1);
+        if (last && isAutoReviewer(last.actor) && last.verdict === 'approved') {
+          // An automated reviewer (e.g. the Claude arbiter) approved after the escalation: it is resolved.
+          this.resetReviewerEscalation(task.id);
+          task.reviewerEscalated = 0;
+        } else {
+          if (this.needsClaudeArbiter(task)) this.startClaudeFallbackReview(task);
+          continue;
+        }
       }
       const chain = this.reviewChainForTask(task);
       const step = chain[task.reviewStep ?? 0];
