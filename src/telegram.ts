@@ -486,6 +486,7 @@ export class TelegramBotService {
     const existing = this.config.telegram.chats.find((chat) => chat.id === chatId);
     chats.push({ id: chatId, name: existing?.name || `Chat ${chatId}`, ...(existing?.username ? { username: existing.username } : {}), kind: 'chat', projectId });
     this.config.telegram.chats = chats;
+    this.selectedProject.set(chatId, projectId);
     updateConfigInMemory(this.config, { telegram: this.config.telegram });
     saveConfig(this.config.hubHome, { telegram: this.config.telegram });
   }
@@ -3117,6 +3118,9 @@ export class TelegramBotService {
 
   handleEvent(type: string, taskId?: string, payload?: unknown): void {
     if (!this.config.telegram?.enabled) return;
+    // Routing is scoped to this event only. Scheduled summaries and other direct
+    // broadcasts must never inherit the last project's destination.
+    this.notificationProjectId = null;
     const allowedChats = this.config.telegram?.allowedChatIds || [];
     if (allowedChats.length === 0) return;
 
@@ -3148,11 +3152,13 @@ export class TelegramBotService {
 
     // 1. Brain auto mode: suppress raw task notifications
     const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
-    this.notificationProjectId = projectId;
-    const prefix = this.projectPrefix(projectId);
-    const minimal = this.isMinimalProject(projectId);
-    const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
-    if (effectiveMode === 'auto') {
+    const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
+    this.notificationProjectId = isSystemEvent ? null : projectId;
+    try {
+      const prefix = this.projectPrefix(projectId);
+      const minimal = this.isMinimalProject(projectId);
+      const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
+      if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
         (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
@@ -3168,13 +3174,13 @@ export class TelegramBotService {
         type === 'ci.passed' ||
         allExhausted;
 
-      if (!isAllowedInAuto) {
-        return;
+        if (!isAllowedInAuto) {
+          return;
+        }
       }
-    }
 
-    // 2. Quiet hours: only send level 'incident'
-    if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
+      // 2. Quiet hours: only send level 'incident'
+      if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
       const isIncident = isSystemIncident(type, payload, this.profileRepo, this.quotaMarkRepo, now);
       if (!isIncident) {
         if (type === 'brain.notify' && p.level === 'decision') {
@@ -3195,9 +3201,9 @@ export class TelegramBotService {
         }
         return;
       }
-    }
+      }
 
-    switch (type) {
+      switch (type) {
       case 'brain.notify': {
         const text = typeof p.text === 'string' ? p.text : '';
         if (!text) break;
@@ -3546,6 +3552,9 @@ export class TelegramBotService {
         this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
         break;
       }
+      }
+    } finally {
+      this.notificationProjectId = null;
     }
   }
 
