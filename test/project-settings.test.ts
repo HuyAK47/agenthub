@@ -13,13 +13,20 @@ import {
   projectSettings,
 } from '../src/projects/settings.js';
 import { projectWorktreeRoot } from '../src/projects/paths.js';
+import { effectiveBrainEngine } from '../src/brain/engine.js';
 
 describe('project settings parsing', () => {
+  it('resolves project engine before global engine and inherits by default', () => {
+    expect(effectiveBrainEngine(null, { engine: 'codex' })).toBe('codex');
+    expect(effectiveBrainEngine({ settings: JSON.stringify({ brain: { engine: 'claude' } }) }, { engine: 'codex' })).toBe('claude');
+    expect(effectiveBrainEngine({ settings: JSON.stringify({}) }, { engine: 'codex' })).toBe('codex');
+  });
   it('defaults reproduce the behaviour from before settings existed', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
-      brain: { mode: 'inherit', permissions: 'inherit' },
+      brain: { engine: 'inherit', mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
       integration: { enabled: false, autoMerge: false },
+      review: { autoMerge: false },
       ci: {},
       references: [],
       reviewChecklist: [],
@@ -48,7 +55,7 @@ describe('project settings parsing', () => {
       brain: { dailyTokenBudget: 5000 },
       references: [{ name: 'glossary', path: '/data/glossary.md', inject: true }],
     });
-    expect(next.brain).toEqual({ mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
+    expect(next.brain).toEqual({ engine: 'inherit', mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
     expect(next.references).toEqual([{ name: 'glossary', path: '/data/glossary.md', inject: true }]);
     expect(next.worktree).toEqual(DEFAULT_PROJECT_SETTINGS.worktree);
   });
