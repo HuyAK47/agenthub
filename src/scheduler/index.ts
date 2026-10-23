@@ -24,7 +24,7 @@ import { projectSettings } from '../projects/settings.js';
 import { isProjectWorktreeRootAccessible, projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
-import { DependencyContext, WorktreeService } from '../worktrees/index.js';
+import { DependencyContext, isDeletableWorktreePath, WorktreeService } from '../worktrees/index.js';
 import { ensureWorktreeNodeModules, nodeModulesCacheSummary, pruneNodeModulesCache } from '../cache.js';
 import { AgentHubConfig } from '../config.js';
 import { ProfileLockService } from '../profiles/locks.js';
@@ -204,6 +204,9 @@ export class Scheduler {
   private reviewNotified = new Map<string, string>();
   private failoverWasActive = false;
   private lastOrphanScan = 0;
+  private readonly worktreeCleanupRetryAt = new Map<string, number>();
+  private readonly worktreeCleanupLogged = new Set<string>();
+  private readonly dirtyWorktreeLogged = new Set<string>();
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
@@ -457,9 +460,7 @@ export class Scheduler {
 
   start(): void {
     this.stopped = false;
-    // The orphan pass is periodic; do not scan and potentially reap processes
-    // during daemon startup while tests or callers are still preparing state.
-    this.lastOrphanScan = Date.now();
+    this.lastOrphanScan = 0;
     // Recover crashed runs on startup
     this.recoverOnStartup();
     this.skipSchedulingOnce = true;
@@ -1064,13 +1065,17 @@ export class Scheduler {
     // otherwise busy Codex accounts starve the review queue.
     this.scheduleReviews();
 
-    // 3b. Start new tasks if possible
+    // 3b. Prune expired worktrees before dispatching tasks. When disk is low,
+    // this gives cleanup a chance to free space before queued work is parked.
+    this.cleanExpiredWorktrees();
+
+    // 3c. Start new tasks if possible
     this.scheduleNewTasks();
 
-    // 4. Prune expired worktrees for completed tasks
-    this.cleanExpiredWorktrees();
-    if (Date.now() - this.lastOrphanScan >= 10 * 60 * 1000) {
+    // 4. Scan worktrees and reap orphaned worker processes periodically.
+    if (Date.now() - this.lastOrphanScan >= 6 * 60 * 60 * 1000) {
       this.lastOrphanScan = Date.now();
+      this.scanOrphanWorktrees();
       this.reapOrphans();
     }
   }
@@ -3186,21 +3191,22 @@ export class Scheduler {
 
   private cleanExpiredWorktrees(): void {
     const afterHours = this.config.cleanup?.worktreeOnDoneAfterHours ?? 24;
-    if (afterHours <= 0) return;
+    const effectiveAfterHours = this.diskLow ? Math.min(afterHours > 0 ? afterHours : 2, 2) : afterHours;
+    if (effectiveAfterHours <= 0) return;
 
-    const thresholdMs = afterHours * 60 * 60 * 1000;
+    const thresholdMs = effectiveAfterHours * 60 * 60 * 1000;
     const now = Date.now();
 
-    const doneTasks = this.taskRepo.getByStatus('done');
-    for (const task of doneTasks) {
-      // STRICT SAFETY: Never delete worktree of non-done tasks
-      if (task.status !== 'done') continue;
+    const completedTasks = this.taskRepo.getAll().filter((task) => task.status === 'done' || task.status === 'cancelled');
+    for (const task of completedTasks) {
       if (!task.worktreePath) continue;
 
       const updatedAt = parseDbTime(task.updatedAt);
       if (isNaN(updatedAt)) continue;
 
       if (now - updatedAt >= thresholdMs) {
+        const retryAt = this.worktreeCleanupRetryAt.get(task.id) || 0;
+        if (now < retryAt) continue;
         const project = this.projectRepo.get(task.projectId);
         let hooks = null;
         if (project?.hooks) {
@@ -3210,21 +3216,98 @@ export class Scheduler {
             // ignore
           }
         }
+        if (fs.existsSync(task.worktreePath)) {
+          let dirty = false;
+          try {
+            dirty = execFileSync('git', ['-C', task.worktreePath, 'status', '--porcelain'], { encoding: 'utf8' }).trim().length > 0;
+          } catch {
+            // A non-git directory is still eligible for a task-owned cleanup.
+          }
+          if (dirty) {
+            if (!this.dirtyWorktreeLogged.has(task.id)) {
+              this.dirtyWorktreeLogged.add(task.id);
+              console.warn(`[worktree] Keeping ${task.worktreePath}: uncommitted changes for task ${task.id}`);
+            }
+            continue;
+          }
+          this.dirtyWorktreeLogged.delete(task.id);
+        }
+
+        let removed = !fs.existsSync(task.worktreePath);
+        let removalError: unknown;
         try {
-          // remove() refuses anything outside worktreesDir or overlapping a project root.
-          this.worktreeService.remove(project?.path ?? null, task.worktreePath, {
+          if (!removed) {
+            // remove() refuses anything outside worktreesDir or overlapping a project root.
+            removed = this.worktreeService.remove(project?.path ?? null, task.worktreePath, {
             slot: task.slot,
             slug: task.slug,
             projectId: task.projectId,
             taskId: task.id,
             hooks,
-          }, project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir);
-        } catch {
-          // ignore
+            }, project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir);
+          }
+        } catch (error) {
+          removed = false;
+          removalError = error;
         }
 
-        this.taskRepo.update(task.id, { worktreePath: null, slot: null });
-        this.eventBus.emit('worktree.cleaned', task.id, { worktreePath: task.worktreePath });
+        if (removed && !fs.existsSync(task.worktreePath)) {
+          this.worktreeCleanupRetryAt.delete(task.id);
+          this.worktreeCleanupLogged.delete(task.id);
+          this.taskRepo.update(task.id, { worktreePath: null, slot: null });
+          this.eventBus.emit('worktree.cleaned', task.id, { worktreePath: task.worktreePath });
+        } else {
+          this.worktreeCleanupRetryAt.set(task.id, now + 60 * 60 * 1000);
+          if (!this.worktreeCleanupLogged.has(task.id)) {
+            this.worktreeCleanupLogged.add(task.id);
+            const reason = removalError instanceof Error ? `: ${removalError.message}` : '';
+            console.warn(`[worktree] Failed to remove ${task.worktreePath} for task ${task.id}${reason}; will retry later`);
+          }
+        }
+      }
+    }
+  }
+
+  private scanOrphanWorktrees(): void {
+    const root = path.resolve(this.config.worktreesDir);
+    let projects: fs.Dirent[];
+    try {
+      projects = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    const tasks = this.taskRepo.getAll();
+    const referenced = new Set(tasks.filter((task) => task.worktreePath).map((task) => path.resolve(task.worktreePath!)));
+    for (const projectDir of projects) {
+      if (!projectDir.isDirectory()) continue;
+      const project = this.projectRepo.get(projectDir.name);
+      if (!project) continue;
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(path.join(root, projectDir.name), { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(root, projectDir.name, entry.name);
+        if (referenced.has(path.resolve(candidate)) || !isDeletableWorktreePath(this.config.worktreesDir, candidate, [this.config.hubHome, project.path])) continue;
+        const task = tasks.find((row) => row.projectId === project.id && row.slug === entry.name);
+        if (task?.worktreePath) continue;
+        if (task && task.status !== 'done' && task.status !== 'cancelled') continue;
+        let isGitWorktree = false;
+        try {
+          const listed = execFileSync('git', ['-C', project.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+          isGitWorktree = listed.split(/\n(?=worktree )/).some((block) => block.split('\n')[0] === `worktree ${candidate}`);
+        } catch {
+          // Keep unknown repositories untouched.
+        }
+        if (!isGitWorktree) {
+          console.warn(`[worktree] Keeping orphan ${candidate}: not a registered git worktree`);
+          continue;
+        }
+        try {
+          execFileSync('git', ['-C', project.path, 'worktree', 'remove', candidate], { timeout: 30000 });
+          if (!fs.existsSync(candidate)) console.log(`[worktree] Removed orphan ${candidate}`);
+        } catch (error) {
+          console.warn(`[worktree] Failed to remove orphan ${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
   }

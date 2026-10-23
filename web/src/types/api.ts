@@ -475,6 +475,11 @@ export interface HubStatus {
     low: boolean;
     source: 'worktrees' | 'extra';
   }>;
+  worktrees?: {
+    count: number;
+    bytes: number;
+    byStatus: Record<string, { count: number; bytes: number }>;
+  };
   load?: {
     load1: number;
     freeMemGB: number;
