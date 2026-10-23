@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { lowPriority, runInProcessGroup, testThreadLimit } from '../src/priority.js';
+import { LIMITED_TEST_ENV, lowPriority, runInProcessGroup, testThreadLimit } from '../src/priority.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -22,6 +22,7 @@ describe('priority helpers', () => {
   it('keeps test runners at most two threads even when worker count is absent', () => {
     expect(testThreadLimit(1, 12)).toBe(2);
     expect(testThreadLimit(6, 12)).toBe(2);
+    expect(testThreadLimit(8, 12)).toBe(2);
     expect(testThreadLimit(20, 12)).toBe(1);
   });
   it('wraps commands with nice on linux and macos', () => {
@@ -47,8 +48,7 @@ describe('priority helpers', () => {
       timeoutMs: 10_000,
     });
     expect(r.code).toBe(0);
-    const expected = String(testThreadLimit(Number(process.env.AGENTHUB_WORKER_COUNT || 1)));
-    expect(r.output).toBe(expected);
+    expect(r.output).toBe(LIMITED_TEST_ENV.VITEST_MAX_THREADS);
   });
 
   it('kills grandchildren left behind after the main command exits', async () => {

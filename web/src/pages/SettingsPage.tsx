@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey } from '../api/client';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
@@ -24,6 +24,9 @@ export const SettingsPage: React.FC = () => {
   const [chatModel, setChatModel] = useState<string>('sonnet');
   const [chatModels, setChatModels] = useState<string[]>(['opus', 'sonnet', 'haiku']);
   const [reviewerModel, setReviewerModel] = useState<string>('codex:gpt-5.6-luna');
+  const [claudeFallback, setClaudeFallback] = useState<boolean>(true);
+  const [claudeProfiles, setClaudeProfiles] = useState<string[]>([]);
+  const [claudeModel, setClaudeModel] = useState<string>('sonnet');
   const [maxConcurrent, setMaxConcurrent] = useState<number>(2);
   const [autoCompactPercent, setAutoCompactPercent] = useState<number>(85);
   const [bucketGemini, setBucketGemini] = useState<number>(5_000_000);
@@ -32,6 +35,7 @@ export const SettingsPage: React.FC = () => {
   const [claudeOverhead, setClaudeOverhead] = useState<number>(40_000);
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
+  const [desktopNotifyLevel, setDesktopNotifyLevel] = useState<'all' | 'important' | 'critical' | 'off'>('important');
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
   const [brainPermissions, setBrainPermissions] = useState<'standard' | 'trusted' | 'full'>('standard');
   const [brainMaxConcurrent, setBrainMaxConcurrent] = useState<number>(2);
@@ -55,11 +59,31 @@ export const SettingsPage: React.FC = () => {
   const [brandingTagline, setBrandingTagline] = useState('');
   const [brandingAccent, setBrandingAccent] = useState('');
   const [brandingLogoError, setBrandingLogoError] = useState<string | null>(null);
+  const [shutdownOpen, setShutdownOpen] = useState(false);
+  const [shutdownDisable, setShutdownDisable] = useState(false);
+  const [shutdownDone, setShutdownDone] = useState(false);
+  const hubStatus = useQuery({ queryKey: ['status'], queryFn: getStatus, staleTime: 3000 });
+  const shutdownMutation = useMutation({ mutationFn: () => shutdownHub(shutdownDisable), onSuccess: () => { setShutdownOpen(false); setShutdownDone(true); } });
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['config'],
     queryFn: getConfig,
   });
+
+  const { data: allProfiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: getProfiles,
+  });
+
+  const availableClaudeProfiles = useMemo(
+    () => allProfiles.filter((p) => p.engine === 'claude'),
+    [allProfiles],
+  );
+
+  const allClaudeOptions = useMemo(() => {
+    const fromProfiles = availableClaudeProfiles.map((p) => p.name);
+    return Array.from(new Set([...fromProfiles, ...claudeProfiles]));
+  }, [availableClaudeProfiles, claudeProfiles]);
 
   useEffect(() => {
     if (config) {
@@ -84,6 +108,9 @@ export const SettingsPage: React.FC = () => {
       setChatModel(config.chat?.model || 'sonnet');
       setChatModels(config.chat?.models?.length ? config.chat.models : ['opus', 'sonnet', 'haiku']);
       setReviewerModel(config.reviewer?.model || 'codex:gpt-5.6-luna');
+      setClaudeFallback(config.reviewer?.claudeFallback !== false);
+      setClaudeProfiles(config.reviewer?.claudeProfiles || []);
+      setClaudeModel(config.reviewer?.claudeModel || 'sonnet');
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
       setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);
       setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
@@ -105,6 +132,7 @@ export const SettingsPage: React.FC = () => {
         }
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
+      setDesktopNotifyLevel(config.notifications?.desktopLevel ?? 'important');
       setBrainMode(config.brain?.mode ?? 'suggest');
       setBrainPermissions(config.brain?.permissions ?? 'standard');
       setBrainMaxConcurrent(config.brain?.maxConcurrent ?? 2);
@@ -184,7 +212,12 @@ export const SettingsPage: React.FC = () => {
         autoCompactPercent: Number(autoCompactPercent) || 85,
         models: chatModels,
       },
-      reviewer: { model: reviewerModel },
+      reviewer: {
+        model: reviewerModel,
+        claudeFallback,
+        claudeProfiles,
+        claudeModel,
+      },
       savings: {
         bucketTokens: {
           gemini: Number(bucketGemini) || 5_000_000,
@@ -206,6 +239,7 @@ export const SettingsPage: React.FC = () => {
       ...(brainPermissions === 'full' ? { confirm: true } : {}),
       notifications: {
         desktop: desktopNotify,
+        desktopLevel: desktopNotifyLevel,
         quietHours: {
           enabled: quietHoursEnabled,
           start: quietHoursStart.trim() || '22:00',
@@ -506,10 +540,137 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-2 shadow-xs">
-                <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
-            <label className="block text-xs font-semibold text-[var(--t-text)]">{t('extra.reviewerModel')}</label>
-            <input value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs" data-testid="reviewer-settings">
+            <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
+            <div>
+              <label htmlFor="reviewer-model-input" className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.reviewerModel')}</label>
+              <input id="reviewer-model-input" value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
+            </div>
+
+            <div className="pt-2 border-t border-[var(--t-border)] space-y-4">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="claude-fallback-toggle"
+                    checked={claudeFallback}
+                    onChange={(e) => setClaudeFallback(e.target.checked)}
+                    className="rounded border-[var(--t-border)] text-[var(--t-accent)] focus:ring-[var(--t-accent)] h-4 w-4 cursor-pointer"
+                  />
+                  <span className="text-sm font-medium text-[var(--t-text)]">
+                    {t('settings.claudeFallback')}
+                  </span>
+                </label>
+                <p className="text-xs text-[var(--t-text-3)] mt-1 ml-6">
+                  {t('settings.claudeFallbackHint')}
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="claude-model-select" className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                  {t('settings.claudeModel')}
+                </label>
+                <select
+                  id="claude-model-select"
+                  data-testid="claude-model-select"
+                  value={claudeModel}
+                  onChange={(e) => setClaudeModel(e.target.value)}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]"
+                >
+                  <option value="sonnet">sonnet</option>
+                  <option value="opus">opus</option>
+                  <option value="haiku">haiku</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="claude-profiles-select" className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                  {t('settings.claudeProfiles')}
+                </label>
+                <p className="text-xs text-[var(--t-text-3)] mb-2">
+                  {t('settings.claudeProfilesHint')}
+                </p>
+                <select
+                  id="claude-profiles-select"
+                  data-testid="claude-profiles-select"
+                  multiple
+                  value={claudeProfiles}
+                  onChange={(e) => {
+                    const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
+                    setClaudeProfiles(selected);
+                  }}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] min-h-[90px]"
+                >
+                  {allClaudeOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+
+                {claudeProfiles.length > 0 && (
+                  <div className="mt-2 space-y-1.5" data-testid="claude-profiles-priority-list">
+                    <span className="text-xs text-[var(--t-text-3)]">
+                      {t('settings.claudeProfilesOrder')}:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {claudeProfiles.map((pName, idx) => (
+                        <span
+                          key={pName}
+                          data-testid={`claude-profile-chip-${pName}`}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-[var(--t-surface-2)] border border-[var(--t-border)] text-[var(--t-text)]"
+                        >
+                          <span className="font-semibold text-[var(--t-text-3)]">{idx + 1}.</span>
+                          <span>{pName}</span>
+                          {idx > 0 && (
+                            <button
+                              type="button"
+                              title="Move up"
+                              onClick={() => {
+                                const next = [...claudeProfiles];
+                                const tmp = next[idx - 1];
+                                next[idx - 1] = next[idx];
+                                next[idx] = tmp;
+                                setClaudeProfiles(next);
+                              }}
+                              className="text-[var(--t-text-3)] hover:text-[var(--t-text)] cursor-pointer"
+                            >
+                              ↑
+                            </button>
+                          )}
+                          {idx < claudeProfiles.length - 1 && (
+                            <button
+                              type="button"
+                              title="Move down"
+                              onClick={() => {
+                                const next = [...claudeProfiles];
+                                const tmp = next[idx + 1];
+                                next[idx + 1] = next[idx];
+                                next[idx] = tmp;
+                                setClaudeProfiles(next);
+                              }}
+                              className="text-[var(--t-text-3)] hover:text-[var(--t-text)] cursor-pointer"
+                            >
+                              ↓
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            title="Remove"
+                            onClick={() => {
+                              setClaudeProfiles(claudeProfiles.filter((name) => name !== pName));
+                            }}
+                            className="text-[var(--t-crit)] hover:opacity-80 ml-0.5 cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs">
@@ -652,6 +813,18 @@ export const SettingsPage: React.FC = () => {
                 onChange={(e) => setDesktopNotify(e.target.checked)}
                 className="rounded border-[var(--t-border)]"
               />
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] space-y-2">
+              <label htmlFor="desktop-notify-level" className="text-sm font-semibold text-[var(--t-text)]">
+                {t('settings.desktopNotifyLevelLabel')}
+              </label>
+              <select id="desktop-notify-level" data-testid="desktop-notify-level" value={desktopNotifyLevel} onChange={(e) => setDesktopNotifyLevel(e.target.value as typeof desktopNotifyLevel)} className="block rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm">
+                <option value="all">{t('settings.desktopNotifyLevelAll')}</option>
+                <option value="important">{t('settings.desktopNotifyLevelImportant')}</option>
+                <option value="critical">{t('settings.desktopNotifyLevelCritical')}</option>
+                <option value="off">{t('settings.desktopNotifyLevelOff')}</option>
+              </select>
             </div>
 
             <div className="py-2 border-b border-[var(--t-border)] space-y-2">
@@ -825,6 +998,14 @@ export const SettingsPage: React.FC = () => {
 
           <TelegramCard />
 
+          <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="shutdown-settings">
+            <h2 className="text-sm font-semibold">{t('settings.shutdownTitle')}</h2>
+            {shutdownDone ? <p className="text-sm text-[var(--t-ok)]">{t('settings.shutdownDone')} <code>agenthub start</code></p> : <>
+              <p className="text-xs text-[var(--t-text-3)]">{t('settings.shutdownDescription', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
+              <button type="button" onClick={() => setShutdownOpen(true)} className="rounded-lg bg-[var(--t-crit)] px-4 py-2 text-xs font-semibold text-white">{t('settings.shutdownButton')}</button>
+            </>}
+          </section>
+
           <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
             <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
@@ -848,6 +1029,14 @@ export const SettingsPage: React.FC = () => {
           </div>
         </form>
       )}
+      {shutdownOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+        <div className="max-w-md rounded-xl bg-[var(--t-surface)] p-6 shadow-xl space-y-4">
+          <h2 className="font-semibold">{t('settings.shutdownConfirmTitle')}</h2>
+          <p className="text-sm text-[var(--t-text-2)]">{t('settings.shutdownConfirm', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shutdownDisable} onChange={(e) => setShutdownDisable(e.target.checked)} />{t('settings.shutdownDisable')}</label>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setShutdownOpen(false)} className="rounded-lg border px-3 py-2 text-xs">{t('common.cancel')}</button><button type="button" onClick={() => shutdownMutation.mutate()} className="rounded-lg bg-[var(--t-crit)] px-3 py-2 text-xs text-white">{t('settings.shutdownButton')}</button></div>
+        </div>
+      </div>}
     </div>
   );
 };

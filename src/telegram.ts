@@ -14,7 +14,7 @@ import {
   DigestData,
   generateDigest,
   isQuietHours,
-  areAllProfilesQuotaExhausted,
+  isQuotaEventEngineWide,
   isSystemIncident,
   forwardDecisionToBrain,
   getMinutesSinceTime,
@@ -213,6 +213,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'shutdown', description: 'Tắt AgentHub (bật lại từ máy bằng agenthub start)' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
   { command: 'newtask', description: 'Tạo task từ một đoạn mô tả chung' },
@@ -247,6 +248,8 @@ export class TelegramBotService {
   private quotaMarkRepo?: QuotaMarkRepo;
   private ciRepo?: CiRepo;
   private lastSentCi = new Map<string, number>();
+  private lastSentDisk = new Map<'low' | 'ok', number>();
+  private lastSentLoadSummary = 0;
   private lastBroadcast = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
@@ -285,6 +288,7 @@ export class TelegramBotService {
   private lastNotificationTime = new Map<string, number>();
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
+  private reviewFallbackNotified = new Set<string>();
 
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
@@ -1018,6 +1022,19 @@ export class TelegramBotService {
       case '/stop':
         await this.stopChat(chatId);
         break;
+
+      case '/shutdown': {
+        const status = this.service.getStatus();
+        const running = status.tasks.running + status.tasks.checking;
+        await this.sendMessage(chatId,
+          `⚠️ <b>Tắt AgentHub?</b> ${running} task đang chạy sẽ được đưa về hàng chờ và tiếp tục khi bật lại. Sau đó chỉ có thể bật lại từ máy bằng lệnh <code>agenthub start</code>.`,
+          { inline_keyboard: [[
+            { text: '✅ Xác nhận tắt', callback_data: 'hubshutdown:confirm' },
+            { text: '❌ Hủy', callback_data: 'hubshutdown:cancel' },
+          ]] },
+        );
+        break;
+      }
 
       case '/compact':
         await this.sendMessage(chatId, 'ℹ️ Tính năng nén ngữ cảnh chưa được bật.');
@@ -1779,6 +1796,18 @@ export class TelegramBotService {
     const domain = parts[0];
     const action = parts[1];
     const taskIdOrParam = parts.slice(2).join(':');
+
+    if (domain === 'hubshutdown') {
+      if (action !== 'confirm') {
+        await this.answerCallbackQuery(query.id, 'Đã hủy.');
+        return;
+      }
+      await this.answerCallbackQuery(query.id, 'Đang tắt AgentHub...');
+      this.service.shutdownForUser();
+      await this.sendMessage(chatId, '🛑 AgentHub đã lưu trạng thái và đang tắt. Bật lại từ máy bằng: <code>agenthub start</code>.');
+      setImmediate(() => process.kill(process.pid, 'SIGTERM'));
+      return;
+    }
 
     if (domain === 'permission') {
       if (!this.chatService) {
@@ -3044,6 +3073,15 @@ export class TelegramBotService {
     };
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+
+    // Account-level exhaustion belongs in the dashboard. Telegram is an
+    // interrupt channel, so it only reports when every enabled account for
+    // the affected engine/family is unavailable.
+    if (type === 'quota.exhausted') {
+      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
+      if (!allExhausted) return;
+    }
+
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // Deduplication check: ignore duplicate events within 10 seconds
@@ -3069,7 +3107,7 @@ export class TelegramBotService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
+        isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
 
       const isAllowedInAuto =
         type === 'brain.notify' ||
@@ -3080,6 +3118,7 @@ export class TelegramBotService {
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
+        type === 'review.fallback' ||
         allExhausted;
 
       if (!isAllowedInAuto) {
@@ -3262,6 +3301,31 @@ export class TelegramBotService {
         break;
       }
 
+      case 'review.fallback': {
+        if (!notify.fallback) return;
+        if (taskId && this.reviewFallbackNotified.has(taskId)) return;
+        if (taskId) this.reviewFallbackNotified.add(taskId);
+
+        const task = taskId ? this.taskRepo.get(taskId) : null;
+        const dashboardUrl = this.getDashboardUrl(taskId ? `#/tasks/${toRouteId(taskId)}` : '');
+        const keyboard: InlineKeyboardButton[][] = [
+          [{ text: '🌐 Xem dashboard', url: dashboardUrl }],
+        ];
+
+        if (minimal) {
+          this.broadcastMessage(`${prefix}Codex hết quota, Claude đang duyệt …`, { inline_keyboard: keyboard });
+          break;
+        }
+
+        const title = this.resolveTaskTitle(taskId, p, task);
+        const header = '🔀 <b>Codex hết quota, Claude đang duyệt …</b>';
+        this.broadcastMessage(
+          `${prefix}${header}\nID: <code>${taskId}</code>\nTiêu đề: <b>${this.escapeHtml(title)}</b>`,
+          { inline_keyboard: keyboard },
+        );
+        break;
+      }
+
       case 'task.failed': {
         if (!notify.failed) return;
         if (minimal) {
@@ -3319,7 +3383,7 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now);
+        const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
@@ -3344,6 +3408,15 @@ export class TelegramBotService {
       case 'quota.low': {
         if (!notify.quota) return;
         this.broadcastMessage(`🔋 <b>Sắp hết quota</b>\n${this.escapeHtml(quotaLowText(p))}`);
+        break;
+      }
+
+      case 'task.paused':
+      case 'load.task_paused':
+      case 'load.high': {
+        if (now - this.lastSentLoadSummary < 15 * 60_000) break;
+        this.lastSentLoadSummary = now;
+        this.broadcastMessage(`⚠️ <b>AgentHub tạm dừng/gặp tải cao</b> — xem dashboard để biết chi tiết.`);
         break;
       }
 
@@ -3377,6 +3450,9 @@ export class TelegramBotService {
 
       case 'disk.low': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('low');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('low', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 3;
         const cacheDir = typeof p.cacheDir === 'string' ? `\nCache node_modules: <code>${this.escapeHtml(p.cacheDir)}</code>` : '';
@@ -3389,6 +3465,9 @@ export class TelegramBotService {
 
       case 'disk.ok': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('ok');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('ok', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         this.broadcastMessage(`💾 <b>Ổ đĩa đã đủ chỗ</b> (${freeGB} GB): tiếp tục chạy task.`);
         break;
@@ -3733,6 +3812,8 @@ export class TelegramBotService {
         return minimal ? `${prefix}CI thất bại` : `${prefix}CI thất bại: ${p?.workflow || 'CI'}`;
       case 'ci.passed':
         return minimal ? `${prefix}CI đã xanh` : `${prefix}CI đã xanh: ${p?.workflow || 'CI'}`;
+      case 'review.fallback':
+        return `${prefix}Codex hết quota, Claude đang duyệt …`;
       case 'quota.exhausted':
         return `Hồ sơ ${p?.profile || p?.profileName || 'tài khoản'} hết quota ${p?.family || ''}`;
       default:
@@ -3745,6 +3826,7 @@ export class TelegramBotService {
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/shutdown - Tắt AgentHub; bật lại từ máy bằng <code>agenthub start</code>
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi
