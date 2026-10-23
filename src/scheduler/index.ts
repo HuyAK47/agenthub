@@ -812,10 +812,7 @@ export class Scheduler {
 
   private emitReviewReadyIfReview(taskId: string, payload?: unknown): void {
     const task = this.taskRepo.get(taskId);
-    const hasActiveWorker = this.runRepo
-      .getByTask(taskId)
-      .some((candidate) => candidate.kind === 'worker' && candidate.outcome === null);
-    if (task?.status === 'review' && !this.running.has(taskId) && !hasActiveWorker) {
+    if (task?.status === 'review' && !this.running.has(taskId)) {
       this.eventBus.emit('task.review_ready', taskId, payload);
     }
   }
