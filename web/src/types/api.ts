@@ -141,6 +141,7 @@ export interface ProjectInspection {
   hasClaudeMemory: boolean;
   memoryPreview: string | null;
   suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
+}
 
 export interface DepartmentProfile {
   departmentId: string;

@@ -29,16 +29,7 @@ export function projectWorktreeRoot(
   }
   if (configured) return path.resolve(configured);
 
-  let sameDevice = true;
-  try {
-    sameDevice = fs.statSync(project.path).dev === fs.statSync(hubHome).dev;
-  } catch {
-    // Keep the historical location when the project or hub home is unavailable.
-  }
-  const base = !sameDevice || project.path === '/media' || project.path.startsWith('/media' + path.sep)
-    ? path.join(path.dirname(path.resolve(project.path)), '.agenthub-worktrees')
-    : legacyWorktreesDir;
-  return path.join(base, project.id);
+  return path.join(legacyWorktreesDir, project.id);
 }
 
 /** Both the current configured root and the historical root may contain a task. */
