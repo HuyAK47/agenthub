@@ -816,6 +816,29 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  it('uses an independent Codex arbiter when Claude reviewers are unavailable', async () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    profileRepo.upsert({ name: 'codex-2', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('arb-worker', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
+    // The rejection that caused escalation can share its second-resolution timestamp with the
+    // escalation event. It must not be mistaken for a new arbiter verdict.
+    reviewRepo.insert({ id: 'pre-escalation-review', taskId: 'test-project/review', verdict: 'changes_requested', feedback: 'old rejection', actor: 'codex-reviewer' });
+    for (let i = 0; i < 2; i++) {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    }
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+    (scheduler as unknown as { reviewerBackoffUntil: Map<string, number> }).reviewerBackoffUntil.set('claude-1', Date.now() + 60_000);
+
+    scheduler.tick();
+
+    const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
+    expect(reviewer?.profileName).toBe('codex-2');
+    expect(eventRepo.getRecent(30).some((event) => event.type === 'review.fallback' && event.payload?.includes('arbiter_unavailable'))).toBe(true);
+    await vi.waitFor(() => expect(reviewRepo.getByTask('test-project/review').at(-1)?.actor).toBe('codex-reviewer'));
+    scheduler.stop();
+  });
+
   it('clears an escalation once an automated reviewer approved, so the finished chain can merge', () => {
     const { scheduler, reviewRepo } = makeReviewer('reviewer-approved');
     projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
