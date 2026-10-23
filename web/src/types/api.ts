@@ -179,6 +179,7 @@ export interface DeployStatus {
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
+  commitConvention?: { branchTemplate: string; commitTemplate: string; commitRegex?: string; mergeMessageTemplate: string };
   brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
   worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
@@ -227,6 +228,7 @@ export interface Task {
   projectId: string;
   slug: string;
   title: string;
+  externalRef?: string | null;
   body?: string;
   level: TaskLevel;
   modelChain?: string | string[] | null;
@@ -825,6 +827,7 @@ export interface CreateTaskInput {
   project: string;
   slug: string;
   title: string;
+  externalRef?: string;
   body?: string;
   level: TaskLevel;
   dependsOn?: string[];
