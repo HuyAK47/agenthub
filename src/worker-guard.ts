@@ -282,7 +282,16 @@ export function workerEnvironment(
     writeShimFile(gitFile, gitContent);
 
     if (brainPolicy) {
-      for (const name of ['rm', 'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman', 'mkfs', 'dd', 'truncate', 'chown', 'chmod']) {
+      // Brain sessions do not get an interactive approval path that can be
+      // consulted by this process. Keep the command-level guard conservative:
+      // interpreters and filesystem mutation tools can all be used to bypass a
+      // name-based deny-list (for example `node -e`, `find -delete`, or
+      // `mv`), so they must not reach the real binary from a brain sandbox.
+      for (const name of [
+        'rm', 'mv', 'cp', 'install', 'find', 'xargs', 'sed', 'perl', 'python', 'python3', 'ruby', 'node',
+        'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman',
+        'mkfs', 'dd', 'truncate', 'chown', 'chmod', 'chgrp', 'mount', 'umount', 'tar', 'zip', 'unzip',
+      ]) {
         writeShimFile(path.join(workerDir, name), brainBlockedShimScript(name));
       }
       // serviceDir precedes workerDir in PATH, so replace the permissive worker

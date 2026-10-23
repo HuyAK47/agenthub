@@ -261,4 +261,43 @@ exit 0
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it('blocks mutation and interpreter bypasses in a brain sandbox', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-bypasses-'));
+    try {
+      const work = path.join(tmp, 'work');
+      fs.mkdirSync(work);
+      const marker = path.join(work, 'must-survive');
+      const moved = path.join(work, 'moved');
+      fs.writeFileSync(marker, 'keep');
+      const hubHome = path.join(tmp, 'hub');
+      fs.mkdirSync(hubHome, { recursive: true });
+      const fake = path.join(work, 'policy-bypasses.mjs');
+      fs.writeFileSync(fake, `#!/bin/sh
+/usr/bin/node -e "require('node:fs').unlinkSync('${marker}')" || true
+/bin/mv '${marker}' '${moved}' || true
+/usr/bin/cp '${marker}' '${moved}' || true
+/usr/bin/find '${work}' -name must-survive -delete || true
+test -f '${marker}'
+`, { mode: 0o700 });
+
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      const child = new CodexEngine(fake).spawn({
+        profile,
+        model: 'gpt-5.6-luna',
+        cwd: work,
+        prompt: 'policy bypass check',
+        logPath: path.join(tmp, 'policy-bypasses.log'),
+        hubHome,
+        brainPolicy: 'standard',
+        codexSandbox: 'workspace-write',
+      });
+      const exitCode = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      expect(exitCode).toBe(0);
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(fs.existsSync(moved)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

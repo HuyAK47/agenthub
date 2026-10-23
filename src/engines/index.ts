@@ -449,7 +449,15 @@ export class CodexEngine implements Engine {
         opts.cwd,
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         opts.profile.home,
-        ['rm', 'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman', 'mkfs', 'dd', 'truncate', 'chown', 'chmod'],
+        [
+          // Keep this list in sync with the brain shims in worker-guard.ts.
+          // These tools can mutate files or execute arbitrary code without
+          // going through Codex's approval prompt, including when invoked by
+          // absolute path or from `sh -c`.
+          'rm', 'mv', 'cp', 'install', 'find', 'xargs', 'sed', 'perl', 'python', 'python3', 'ruby', 'node',
+          'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman',
+          'mkfs', 'dd', 'truncate', 'chown', 'chmod', 'chgrp', 'mount', 'umount', 'tar', 'zip', 'unzip',
+        ],
         env.PATH,
       );
     }
