@@ -314,6 +314,7 @@ export const vi = {
     timeline: 'Dòng thời gian (Timeline)',
     noEvents: 'Chưa có sự kiện nào.',
     reviewFallbackLine: 'Codex hết quota, Claude đang duyệt ({profile})',
+    reviewHistory: 'Lịch sử duyệt', unknownReviewer: 'Reviewer không xác định', reviewApproved: 'Đã duyệt', reviewChangesRequested: 'Yêu cầu sửa',
   },
   profiles: {
     antigravitySubtitle: 'Tài khoản Google và quota Gemini', codexSubtitle: 'Tài khoản ChatGPT và device auth', claudeSubtitle: 'Tài khoản Claude Code',

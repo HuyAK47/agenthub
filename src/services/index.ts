@@ -2536,6 +2536,19 @@ export class AppService {
       };
     });
 
+    const completedReviewEvents = events.filter((event) => event.type === 'review.completed');
+    const reviewsWithModels = reviews.map((review) => {
+      const event = completedReviewEvents.find((candidate) => {
+        if (!candidate.payload || typeof candidate.payload !== 'object') return false;
+        const payload = candidate.payload as { actor?: string; verdict?: string; model?: string };
+        return payload.actor === review.actor && payload.verdict === review.verdict && typeof payload.model === 'string';
+      });
+      const model = event && typeof event.payload === 'object' && event.payload
+        ? (event.payload as { model?: string }).model
+        : undefined;
+      return model ? { ...review, model } : review;
+    });
+
     const isFallback = events.some((e) => e.type === 'review.fallback');
     const reviewerRun = this.scheduler?.getReviewerRun?.(taskId);
     const activeReviewChain: ReviewChainStep[] = (Array.isArray(reviewSettings?.chain) ? reviewSettings.chain as ReviewChainStep[] : undefined) || parseReviewChain(project?.reviewChain);
@@ -2567,7 +2580,7 @@ export class AppService {
         cpu: activeRun.cpu ?? 0,
       } : null,
       runs: runs.map(apiRun),
-      reviews: reviews.map(apiReview),
+      reviews: reviewsWithModels.map(apiReview),
       reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
       mergeAvailable: configuredMerge,
       mergeUnavailableReason: configuredMerge ? null : 'Project chưa cấu hình merge tự động. Mở Cài đặt dự án → Integration để bật.',

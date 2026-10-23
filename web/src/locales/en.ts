@@ -316,6 +316,7 @@ export const en: typeof vi = {
     timeline: 'Timeline',
     noEvents: 'No events recorded yet.',
     reviewFallbackLine: 'Codex out of quota, Claude is reviewing ({profile})',
+    reviewHistory: 'Review history', unknownReviewer: 'Unknown reviewer', reviewApproved: 'Approved', reviewChangesRequested: 'Changes requested',
   },
   profiles: {
     antigravitySubtitle: 'Google account and Gemini quota', codexSubtitle: 'ChatGPT account and device auth', claudeSubtitle: 'Claude Code account',

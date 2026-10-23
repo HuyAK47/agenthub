@@ -223,6 +223,7 @@ export interface Review {
   feedback?: string | null;
   createdAt: string;
   actor?: string;
+  model?: string;
 }
 
 export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
