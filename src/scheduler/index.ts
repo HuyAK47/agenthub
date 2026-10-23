@@ -40,7 +40,6 @@ import { ClaudeFailoverState } from '../chat/failover.js';
 import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { CLAUDE_REVIEW_ENGINE_KEY } from '../engines/claude-review.js';
-import { effectiveBrainMode } from '../brain/mode.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
@@ -2035,14 +2034,12 @@ export class Scheduler {
   }
 
   /**
-   * Without an auto brain, a task escalated a second time for reviewer change requests gets one
+   * A task escalated a second time for reviewer change requests gets one
    * final verdict from the Claude reviewer instead of waiting for a person. Its approval merges as
    * usual; a further change request leaves the task parked (it is already escalated).
    */
   private needsClaudeArbiter(task: TaskRow): boolean {
     if (this.config.reviewer?.claudeFallback === false || task.reviewerEscalationReason !== 'reviewer_changes_limit') return false;
-    const project = this.projectRepo.get(task.projectId);
-    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return false;
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
@@ -2051,14 +2048,12 @@ export class Scheduler {
   }
 
   /**
-   * The Claude arbiter asked for changes on an escalated task. With nobody to decide, send it back
+   * The Claude arbiter asked for changes on an escalated task. Send it back
    * with that feedback on the strongest model, at most ARBITER_ROUNDS times; then block it and say so.
    */
   private actOnArbiterRejection(task: TaskRow, last: { actor: string; verdict: string; feedback: string | null; createdAt: string } | undefined): void {
     if (!last || last.actor !== 'claude-reviewer' || last.verdict !== 'changes_requested') return;
     if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return;
-    const project = this.projectRepo.get(task.projectId);
-    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return;
     const rejections = this.reviewRepo?.getByTask(task.id)
       .filter((review) => review.actor === 'claude-reviewer' && review.verdict === 'changes_requested').length ?? 0;
     if (rejections > ARBITER_ROUNDS) {

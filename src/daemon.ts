@@ -483,6 +483,7 @@ export async function startDaemon(
 
   // Start scheduler
   ctx.scheduler.start();
+  void ctx.service.retryParkedEscalations();
 
   // Start notification service and claude transcript scanner
   ctx.notifier.start();

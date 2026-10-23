@@ -42,7 +42,6 @@ import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
-import { effectiveBrainMode } from '../brain/mode.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
 import type { BrainRunner } from '../brain/runner.js';
@@ -3238,16 +3237,23 @@ export class AppService {
   }
 
   /**
-   * Without an auto brain nobody picks up a Codex reviewer escalation, so the task would sit in
-   * review forever. Send it back once with the reviewer's feedback on the strongest model; a second
+   * Brains do not receive reviewer escalations, so without this the task would sit in review
+   * forever. Send it back once with the reviewer's feedback on the strongest model; a second
    * escalation stays parked for a person (the review.escalated notification already went out).
    */
+  /** Escalations raised before a restart never reach the event handler again; pick them up here. */
+  async retryParkedEscalations(): Promise<void> {
+    for (const task of this.taskRepo.getByStatus('review')) {
+      if (!task.reviewerEscalated) continue;
+      const feedback = this.reviewRepo.getByTask(task.id).at(-1)?.feedback ?? undefined;
+      await this.retryEscalatedReview(task.id, { reason: task.reviewerEscalationReason, feedback });
+    }
+  }
+
   async retryEscalatedReview(taskId: string, payload: { reason?: unknown; feedback?: unknown }): Promise<void> {
     if (payload.reason !== 'reviewer_changes_limit') return;
     const task = this.taskRepo.get(taskId);
     if (!task || task.status !== 'review' || !task.reviewerEscalated) return;
-    const project = this.projectRepo.get(task.projectId);
-    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return;
     const escalations = this.eventRepo.getByTask(taskId)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit')).length;
     if (escalations > 1) return;
