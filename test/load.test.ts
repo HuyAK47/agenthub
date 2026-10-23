@@ -21,6 +21,26 @@ describe('LoadGuard', () => {
     now = 300_000;
     expect(guard.update().overloaded).toBe(false);
   });
+
+  it('ignores background I/O pressure below 40% when CPU and memory pressure are low', () => {
+    const guard = new LoadGuard({ enabled: true, high: 100, ok: 100, minFreeMemGB: 1, recoverAfterSec: 100 }, {
+      readLoad: () => 6,
+      readFreeMemBytes: () => 6 * 1024 ** 3,
+      readPressure: () => ({ cpuSome: 0.1, memorySome: 0.3, ioSome: 22 }),
+    });
+
+    expect(guard.update().overloaded).toBe(false);
+  });
+
+  it('uses the I/O threshold only together with meaningful memory pressure', () => {
+    const guard = new LoadGuard({ enabled: true, high: 100, ok: 100, minFreeMemGB: 1, recoverAfterSec: 100 }, {
+      readLoad: () => 0,
+      readFreeMemBytes: () => 6 * 1024 ** 3,
+      readPressure: () => ({ cpuSome: 0.1, memorySome: 10, ioSome: 45 }),
+    });
+
+    expect(guard.update().overloaded).toBe(true);
+  });
   it('reduces effective parallelism without changing the configured value', () => {
     const load = 20;
     const memory = 4;
