@@ -5,12 +5,11 @@ import { afterAll, inject } from 'vitest';
 
 // globalSetup provides one root for the complete test run. Keep a fallback for
 // direct setup-file use, and place every test-created mkdtemp below that root.
-const injectedTestTmpRoot = inject('agenthubTestTmpRoot' as never) as string | undefined;
+const injectedTestTmpRoot = process.env.AGENTHUB_TEST_TMP_ROOT
+  || (inject('agenthubTestTmpRoot' as never) as string | undefined);
 const ownsTestTmpRoot = !injectedTestTmpRoot;
 const testTmpRoot = injectedTestTmpRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-test-worker-'));
-afterAll(() => {
-  if (ownsTestTmpRoot) fs.rmSync(testTmpRoot, { recursive: true, force: true });
-});
+process.env.AGENTHUB_TEST_TMP_ROOT = testTmpRoot;
 process.env.TMPDIR = testTmpRoot;
 const fallbackSafeHome = fs.mkdtempSync(path.join(testTmpRoot, 'agenthub-fallback-home-'));
 const fallbackAgyHomes = path.join(fallbackSafeHome, 'agy-homes');
@@ -29,6 +28,14 @@ for (const command of ['systemctl', 'launchctl']) {
   fs.writeFileSync(shim, '#!/bin/sh\necho "blocked test service command: ' + command + ' $*" >&2\nexit 1\n', { mode: 0o755 });
 }
 process.env.PATH = `${serviceShimDir}${path.delimiter}${process.env.PATH || ''}`;
+
+afterAll(() => {
+  try { fs.rmSync(fallbackSafeHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(serviceShimDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  if (ownsTestTmpRoot) {
+    try { fs.rmSync(testTmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
 
 // Every test worker and every child it starts gets a private home/config tree.
 // Do not inherit the developer's HOME even when the test runner was launched

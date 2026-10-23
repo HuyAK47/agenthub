@@ -90,6 +90,8 @@ function getAgentHubTempDirNames(): Set<string> {
 export function setup({ provide }: { provide: (key: string, value: string) => void }) {
   initialTempDirNames = getAgentHubTempDirNames();
   testTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-test-run-'));
+  process.env.AGENTHUB_TEST_TMP_ROOT = testTempRoot;
+  process.env.TMPDIR = testTempRoot;
   provide('agenthubTestTmpRoot', testTempRoot);
   const targetHomes = resolveTargetHomes();
   const realHome = os.userInfo().homedir;
@@ -122,6 +124,7 @@ export function setup({ provide }: { provide: (key: string, value: string) => vo
     if (testTempRoot) {
       try { fs.rmSync(testTempRoot, { recursive: true, force: true }); } catch { /* best effort */ }
     }
+    delete process.env.AGENTHUB_TEST_TMP_ROOT;
     const remainingNewTempDirs = [...getAgentHubTempDirNames()]
       .filter((name) => !initialTempDirNames.has(name));
     const leakedTempDirs = remainingNewTempDirs.length;
