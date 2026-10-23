@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { countAgentHubTempDirectories } from '../src/temp-cleanup.js';
 
 interface AgyHomesSnapshot {
   dir: string;
@@ -74,8 +75,13 @@ let initialAgyHomes: AgyHomesSnapshot[] = [];
 let initialHubHomes: HubHomeSnapshot[] = [];
 let initialWeb: WebSnapshot;
 let initialServices: ServiceSnapshot[] = [];
+let initialTempDirs = 0;
+let testTempRoot: string | undefined;
 
-export function setup() {
+export function setup({ provide }: { provide: (key: string, value: string) => void }) {
+  testTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-test-run-'));
+  provide('agenthubTestTmpRoot', testTempRoot);
+  initialTempDirs = countAgentHubTempDirectories(os.tmpdir());
   const targetHomes = resolveTargetHomes();
   const realHome = os.userInfo().homedir;
   initialServices = [
@@ -104,6 +110,18 @@ export function setup() {
   initialWeb = { path: webPath, checksum: getChecksum(webPath) };
 
   return () => {
+    if (testTempRoot) {
+      try { fs.rmSync(testTempRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    const leakedTempDirs = countAgentHubTempDirectories(os.tmpdir()) - initialTempDirs;
+    if (leakedTempDirs > 5) {
+      const prefixes = new Set(fs.readdirSync(os.tmpdir())
+        .filter((name) => name.startsWith('agenthub-'))
+        .map((name) => name.replace(/[^-]+$/, '')));
+      const message = `TEMP LEAK WARNING: ${leakedTempDirs} agenthub-* directories remain after tests; prefixes: ${[...prefixes].join(', ')}`;
+      console.warn(message);
+      if (process.env.AGENTHUB_TEST_TMP_FAIL === '1') throw new Error(message);
+    }
     // Teardown safety checks
     for (const snap of initialAgyHomes) {
       const currentSubdirs = getSubdirectories(snap.dir);

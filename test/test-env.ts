@@ -1,9 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { afterAll, inject } from 'vitest';
 
-// Fallback environment isolation before any test runs in worker
-const fallbackSafeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-fallback-home-'));
+// globalSetup provides one root for the complete test run. Keep a fallback for
+// direct setup-file use, and place every test-created mkdtemp below that root.
+const injectedTestTmpRoot = inject('agenthubTestTmpRoot' as never) as string | undefined;
+const ownsTestTmpRoot = !injectedTestTmpRoot;
+const testTmpRoot = injectedTestTmpRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-test-worker-'));
+afterAll(() => {
+  if (ownsTestTmpRoot) fs.rmSync(testTmpRoot, { recursive: true, force: true });
+});
+process.env.TMPDIR = testTmpRoot;
+const fallbackSafeHome = fs.mkdtempSync(path.join(testTmpRoot, 'agenthub-fallback-home-'));
 const fallbackAgyHomes = path.join(fallbackSafeHome, 'agy-homes');
 const fallbackXdgConfig = path.join(fallbackSafeHome, 'config');
 const fallbackAgenthubHome = path.join(fallbackSafeHome, '.agenthub');
@@ -14,7 +23,7 @@ fs.mkdirSync(fallbackAgenthubHome, { recursive: true });
 // Tests must never control the host's services, including when a platform
 // branch is mocked to macOS. Put fail-fast shims first in PATH for every worker
 // and every child process it starts.
-const serviceShimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-service-shims-'));
+const serviceShimDir = fs.mkdtempSync(path.join(testTmpRoot, 'agenthub-service-shims-'));
 for (const command of ['systemctl', 'launchctl']) {
   const shim = path.join(serviceShimDir, command);
   fs.writeFileSync(shim, '#!/bin/sh\necho "blocked test service command: ' + command + ' $*" >&2\nexit 1\n', { mode: 0o755 });
