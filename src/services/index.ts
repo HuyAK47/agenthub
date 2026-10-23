@@ -3609,7 +3609,21 @@ export class AppService {
   }
 
   pageEvents(options?: { taskId?: string; limit?: string | number; cursor?: string }) {
-    return this.eventRepo.page(options);
+    const page = this.eventRepo.page(options);
+    return {
+      ...page,
+      items: page.items.map((event) => {
+        let payload: unknown = null;
+        if (event.payload) {
+          try {
+            payload = JSON.parse(event.payload);
+          } catch {
+            payload = event.payload;
+          }
+        }
+        return { id: event.id, ts: toApiTime(event.ts)!, type: event.type, taskId: event.taskId, payload };
+      }),
+    };
   }
 
   listKnowledge(projectId: string): KnowledgeEntryRow[] {
