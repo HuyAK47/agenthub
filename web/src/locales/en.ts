@@ -250,7 +250,7 @@ export const en: typeof vi = {
     modelChainLabel: 'Model chain (comma-separated)',
     modelChainHint: 'Leave blank to use the default chain.',
     externalRefLabel: 'External reference',
-    externalRefPlaceholder: 'e.g. OP#123, PROJ-45',
+    externalRefPlaceholder: 'e.g. PROJ-45, OP-123',
   },
   taskDetail: {
     notFound: 'Task not found or an error occurred while loading data.',

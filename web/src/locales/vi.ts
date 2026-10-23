@@ -248,7 +248,7 @@ export const vi = {
     modelChainLabel: 'Chuỗi model (ngăn cách bằng dấu phẩy)',
     modelChainHint: 'Để trống để dùng chuỗi model mặc định.',
     externalRefLabel: 'Mã tham chiếu bên ngoài',
-    externalRefPlaceholder: 'vd: OP#123, PROJ-45',
+    externalRefPlaceholder: 'vd: PROJ-45, OP-123',
   },
   taskDetail: {
     notFound: 'Không tìm thấy task hoặc xảy ra lỗi khi tải dữ liệu.',
