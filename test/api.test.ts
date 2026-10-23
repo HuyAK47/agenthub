@@ -584,6 +584,23 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect((await server.inject({ method: 'GET', url: '/api/claude/sessions?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
   });
 
+  it('GET /api/batches supports cursor pagination and keeps the legacy response', async () => {
+    ctx.projectRepo.insert({ id: 'batchproj', name: 'Batch Project', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 2 });
+    ctx.service.taskBatchRepo?.create({ id: 'batch-old', projectId: 'batchproj', title: 'Old batch' });
+    ctx.service.taskBatchRepo?.create({ id: 'batch-new', projectId: 'batchproj', title: 'New batch' });
+    ctx.db.prepare("UPDATE task_batches SET createdAt = CASE id WHEN 'batch-old' THEN '2026-01-01' ELSE '2026-01-02' END WHERE id IN ('batch-old', 'batch-new')").run();
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/batches?project=batchproj', headers: authHeaders() });
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+    const first = await server.inject({ method: 'GET', url: '/api/batches?project=batchproj&limit=1', headers: authHeaders() });
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody.total).toBe(2);
+    expect(firstBody.items.map((batch: { id: string }) => batch.id)).toEqual(['batch-new']);
+    const next = await server.inject({ method: 'GET', url: `/api/batches?project=batchproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(next.body).items.map((batch: { id: string }) => batch.id)).toEqual(['batch-old']);
+    expect((await server.inject({ method: 'GET', url: '/api/batches?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
   it('Tasks workflow: create, start, cancel, review, retry, commits, and worktree removal', async () => {
     const repoPath = path.join(tmpDir, 'test-repo');
     initGitRepo(repoPath);
