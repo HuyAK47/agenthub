@@ -1827,7 +1827,7 @@ export class EventRepo {
       .all(taskId) as EventRow[];
   }
 
-  page(options?: { taskId?: string; limit?: string | number; cursor?: string }): PageResult<EventRow> {
+  page(options?: { taskId?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<EventRow> {
     const decoded = decodeCursor(options?.cursor);
     if (options?.cursor && !decoded) throw new Error('Invalid pagination cursor');
     const pageSize = parsePageSize(options?.limit);
@@ -1838,7 +1838,8 @@ export class EventRepo {
     const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
     const countConditions = options?.taskId ? ' WHERE taskId = ?' : '';
     const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM events${countConditions}`).get(...(options?.taskId ? [options.taskId] : [])) as { count: number }).count;
-    const rows = this.db.prepare(`SELECT * FROM events${where} ORDER BY id DESC LIMIT ?`).all(...values, pageSize + 1) as EventRow[];
+    const offset = decoded ? 0 : Math.max(0, Math.floor(Number(options?.offset) || 0));
+    const rows = this.db.prepare(`SELECT * FROM events${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...values, pageSize + 1, offset) as EventRow[];
     const hasMore = rows.length > pageSize;
     const items = hasMore ? rows.slice(0, pageSize) : rows;
     const last = items.at(-1);

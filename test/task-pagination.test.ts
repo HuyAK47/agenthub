@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { openDatabase, ProjectRepo, TaskRepo } from '../src/db/index.js';
+import { openDatabase, EventRepo, ProjectRepo, TaskRepo } from '../src/db/index.js';
 
 describe('TaskRepo.page', () => {
   const databases: ReturnType<typeof openDatabase>[] = [];
@@ -59,5 +59,19 @@ describe('TaskRepo.page', () => {
     const { repo } = setup();
     expect(() => repo.page({ limit: 1, cursor: 'not-a-cursor' })).toThrow('Invalid pagination cursor');
     expect(repo.list()).toHaveLength(3);
+  });
+
+  it('supports an offset for the first event page before switching to a cursor', () => {
+    const db = openDatabase(':memory:');
+    databases.push(db);
+    const repo = new EventRepo(db);
+    for (let index = 0; index < 3; index += 1) repo.insert(`event.${index}`);
+
+    const offsetPage = repo.page({ limit: 1, offset: 1 });
+    expect(offsetPage.total).toBe(3);
+    expect(offsetPage.items.map((event) => event.type)).toEqual(['event.1']);
+
+    const cursorPage = repo.page({ limit: 1, cursor: offsetPage.nextCursor! });
+    expect(cursorPage.items.map((event) => event.type)).toEqual(['event.0']);
   });
 });

@@ -483,9 +483,10 @@ export interface PageResponse<T> {
   nextCursor: string | null;
 }
 
-export async function getEventHistoryPage(params: { limit: number; cursor?: string; taskId?: string }): Promise<PageResponse<EventItem>> {
+export async function getEventHistoryPage(params: { limit: number; cursor?: string; offset?: number; taskId?: string }): Promise<PageResponse<EventItem>> {
   const query = new URLSearchParams({ limit: String(params.limit) });
   if (params.cursor) query.set('cursor', params.cursor);
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
   if (params.taskId) query.set('taskId', params.taskId);
   return apiFetch<PageResponse<EventItem>>(`/api/events/history?${query.toString()}`);
 }

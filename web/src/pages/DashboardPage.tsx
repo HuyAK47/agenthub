@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf, getEventHistoryPage } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage, retryChatLimitNow } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
@@ -30,6 +30,7 @@ import { DailyUsageTable } from '../components/DailyUsageTable';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { Pagination } from '../components/ui/Pagination';
 import { QuotaUsage } from '../components/QuotaUsage';
 import { Profile, QuotaUsageItem, ProjectBrain } from '../types/api';
 import { formatReset, formatTimeTitle } from '../lib/time';
@@ -80,6 +81,10 @@ export const DashboardPage: React.FC = () => {
   const [quickChatText, setQuickChatText] = useState('');
   const [isSubmittingQuickChat, setIsSubmittingQuickChat] = useState(false);
   const [isReaping, setIsReaping] = useState(false);
+  const [urlParams, setUrlParams] = useSearchParams();
+  const [eventPageNumber, setEventPageNumber] = useState(Math.max(1, Number(urlParams.get('eventsPage') || 1)));
+  const [eventCursors, setEventCursors] = useState<Record<number, string | undefined>>({});
+  const eventCursor = eventCursors[eventPageNumber - 1];
 
   const { data: status, isLoading, error } = useQuery({
     queryKey: ['status'],
@@ -87,10 +92,19 @@ export const DashboardPage: React.FC = () => {
     refetchInterval: 5000,
   });
   const { data: eventPage } = useQuery({
-    queryKey: ['event-history', 'dashboard'],
-    queryFn: () => getEventHistoryPage({ limit: 20 }),
+    queryKey: ['event-history', 'dashboard', eventPageNumber, eventCursor],
+    queryFn: () => getEventHistoryPage({ limit: 20, cursor: eventCursor, offset: eventCursor ? undefined : (eventPageNumber - 1) * 20 }),
     refetchInterval: 10_000,
   });
+  useEffect(() => {
+    if (eventPage?.nextCursor) setEventCursors((current) => ({ ...current, [eventPageNumber]: eventPage.nextCursor || undefined }));
+  }, [eventPage?.nextCursor, eventPageNumber]);
+  useEffect(() => {
+    const next = new URLSearchParams(urlParams);
+    if (eventPageNumber > 1) next.set('eventsPage', String(eventPageNumber));
+    else next.delete('eventsPage');
+    if (next.toString() !== urlParams.toString()) setUrlParams(next, { replace: true });
+  }, [eventPageNumber, setUrlParams, urlParams]);
   const { data: profiles = [], refetch: refetchProfiles } = useQuery({
     queryKey: ['profiles'],
     queryFn: getProfiles,
@@ -792,6 +806,14 @@ export const DashboardPage: React.FC = () => {
             }}
             </CollapsibleList>
           </ul>
+        )}
+        {eventPage && liveEvents.length === 0 && (
+          <Pagination
+            page={eventPageNumber}
+            pageSize={20}
+            total={eventPage.total}
+            onPageChange={setEventPageNumber}
+          />
         )}
       </div>
     </div>

@@ -286,7 +286,7 @@ export async function createServer(
   });
 
   fastify.get('/api/events/history', async (req: FastifyRequest) => {
-    const query = req.query as { taskId?: string; limit?: string; cursor?: string };
+    const query = req.query as { taskId?: string; limit?: string; cursor?: string; offset?: string };
     if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
     if (query.limit === undefined) return query.taskId ? service.eventRepo.getByTask(query.taskId) : service.eventRepo.getRecent(50);
     return service.pageEvents(query);

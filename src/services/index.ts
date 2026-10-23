@@ -3608,7 +3608,7 @@ export class AppService {
     return this.runRepo.pageByTask(taskId, options?.limit, options?.cursor, options?.offset);
   }
 
-  pageEvents(options?: { taskId?: string; limit?: string | number; cursor?: string }) {
+  pageEvents(options?: { taskId?: string; limit?: string | number; cursor?: string; offset?: string | number }) {
     const page = this.eventRepo.page(options);
     return {
       ...page,
