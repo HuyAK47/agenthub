@@ -31,7 +31,7 @@ export const en: typeof vi = {
     running: 'running',
     hard: 'Hard',
     easy: 'Easy',
-    focusBanner: 'Focused on {project} — other tasks are waiting',
+    focusBanner: 'Focused on {project} — {count} other task(s) are waiting',
     stopFocus: 'Stop focus',
   },
   status: {
@@ -47,6 +47,7 @@ export const en: typeof vi = {
     checking: 'Checking',
     paused: 'Paused',
     pausedOverload: 'Paused (overloaded)',
+    pausedFocus: 'Paused because another project is focused',
   },
   waitReason: {
     focus: 'Waiting because another project is focused',

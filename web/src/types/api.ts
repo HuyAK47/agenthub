@@ -241,12 +241,12 @@ export interface Task {
     model?: string;
     profileName?: string;
     paused?: boolean;
-    pauseReason?: 'manual' | 'load' | null;
+    pauseReason?: 'manual' | 'load' | 'focus' | null;
     rss?: number;
     cpu?: number;
   } | null;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
   checks?: CheckResult[];
   sourceRef?: {
     taskId: string;
@@ -353,7 +353,7 @@ export interface RunningWorker {
   rss?: number;
   cpu?: number;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
 }
 
 export type BrainActivity =

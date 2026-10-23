@@ -29,7 +29,7 @@ export const vi = {
     running: 'đang chạy',
     hard: 'Hard',
     easy: 'Easy',
-    focusBanner: 'Đang tập trung cho {project} — task khác đang chờ',
+    focusBanner: 'Đang tập trung cho {project} — {count} task khác đang chờ',
     stopFocus: 'Tắt tập trung',
   },
   status: {
@@ -45,6 +45,7 @@ export const vi = {
     checking: 'Đang kiểm tra',
     paused: 'Tạm dừng',
     pausedOverload: 'Tạm dừng do quá tải',
+    pausedFocus: 'Tạm dừng vì đang tập trung project khác',
   },
   waitReason: {
     focus: 'Chờ vì đang tập trung cho project khác',

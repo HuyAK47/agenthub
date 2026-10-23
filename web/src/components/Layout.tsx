@@ -62,9 +62,10 @@ const FocusBannerInner: React.FC = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['status'] }),
   });
   if (!status?.focus?.projectId) return null;
+  const waitingCount = status.tasks.focusWaiting ?? 0;
   return (
     <div className="flex items-center justify-between gap-3 px-6 py-2 text-sm bg-[var(--t-selected)] border-b border-[var(--t-accent)]/30">
-      <span>🎯 {t('common.focusBanner', { project: status.focus.projectId })}</span>
+      <span>🎯 {t('common.focusBanner', { project: status.focus.projectId, count: waitingCount })}</span>
       <button type="button" className="underline" onClick={() => clearFocus.mutate()} disabled={clearFocus.isPending}>{t('common.stopFocus')}</button>
     </div>
   );

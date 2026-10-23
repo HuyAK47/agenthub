@@ -1036,6 +1036,7 @@ export class AppService {
       done: 0,
       blocked: 0,
       cancelled: 0,
+      focusWaiting: 0,
     };
 
     const tasksByProject: Record<string, Record<string, number>> = {};
@@ -1054,8 +1055,10 @@ export class AppService {
       };
     }
 
+    const focusWaitingTaskIds = new Set<string>();
     for (const t of tasks) {
       byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+      if (t.waitReason === 'focus') focusWaitingTaskIds.add(t.id);
       if (!tasksByProject[t.projectId]) {
         tasksByProject[t.projectId] = {
           draft: 0,
@@ -1072,6 +1075,11 @@ export class AppService {
       }
       tasksByProject[t.projectId][t.status] = (tasksByProject[t.projectId][t.status] || 0) + 1;
     }
+
+    for (const [taskId, runtime] of runningMap.entries()) {
+      if (runtime.paused && runtime.pauseReason === 'focus') focusWaitingTaskIds.add(taskId);
+    }
+    byStatus.focusWaiting = focusWaitingTaskIds.size;
 
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
