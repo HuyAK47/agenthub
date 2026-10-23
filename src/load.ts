@@ -7,6 +7,7 @@ export interface LoadConfig {
   high: number;
   ok: number;
   pressureHigh?: number;
+  pressureIoHigh?: number;
   pressureOk?: number;
   minFreeMemGB: number;
   recoverAfterSec: number;
@@ -38,6 +39,7 @@ export const DEFAULT_LOAD_CONFIG: LoadConfig = {
   high: 16,
   ok: 11,
   pressureHigh: 20,
+  pressureIoHigh: 40,
   pressureOk: 10,
   minFreeMemGB: 1.5,
   recoverAfterSec: 300,
@@ -74,9 +76,20 @@ export class LoadGuard {
     const pressure = (this.options.readPressure || readPressure)();
     // Linux PSI reports percentages (not fractions). An injected reader is also
     // honored when load/memory are mocked, which keeps pressure behavior testable.
-    const pressureValues = [pressure.cpuSome, pressure.memorySome, pressure.ioSome];
-    const pressureHigh = pressureValues.some((value) => value !== null && value >= (this.config.pressureHigh ?? 20));
-    const pressureOk = pressureValues.every((value) => value === null || value < (this.config.pressureOk ?? 10));
+    const pressureHighThreshold = this.config.pressureHigh ?? 20;
+    const pressureIoHighThreshold = this.config.pressureIoHigh ?? 40;
+    const pressureOkThreshold = this.config.pressureOk ?? 10;
+    const cpuOrMemoryPressureHigh = [pressure.cpuSome, pressure.memorySome]
+      .some((value) => value !== null && value >= pressureHighThreshold);
+    // I/O PSI is often elevated by harmless background activity. Treat it as
+    // overload only when it is materially high and memory pressure is present.
+    const ioPressureHigh = pressure.ioSome !== null
+      && pressure.ioSome >= pressureIoHighThreshold
+      && pressure.memorySome !== null
+      && pressure.memorySome >= pressureOkThreshold;
+    const pressureHigh = cpuOrMemoryPressureHigh || ioPressureHigh;
+    const pressureOk = [pressure.cpuSome, pressure.memorySome]
+      .every((value) => value === null || value < pressureOkThreshold);
     const high = load1 > this.config.high || freeMemGB < this.config.minFreeMemGB || pressureHigh;
     const ok = load1 < this.config.ok && freeMemGB > this.config.minFreeMemGB && pressureOk;
 

@@ -9,6 +9,7 @@ import { ClaudeSessionRepo } from './repo.js';
 import { ClaudeFailoverState } from '../chat/failover.js';
 import { buildClaudeArgs, ensureChatMcpConfig, findClaudeBin, spawnClaude } from '../chat/claude.js';
 import { EventBus } from '../scheduler/index.js';
+import { projectWorktreeRoots } from '../projects/paths.js';
 
 export interface ClaudeScanOptions {
   dir: string;
@@ -289,10 +290,13 @@ export class ClaudeSessionScanner {
     return this.allowedRoots().some((root) => isWithin(event.cwd!, root));
   }
   private allowedRoots(): string[] {
+    const projectRoots = (this.db.prepare('SELECT id, path, settings FROM projects').all() as Array<{ id: string; path: string; settings?: string | null }>)
+      .flatMap((project) => projectWorktreeRoots(project, this.options.hubHome, this.options.worktreesDir));
     return [
       ...(this.options.include || []),
       this.options.hubHome,
       this.options.worktreesDir,
+      ...projectRoots,
       ...(this.db.prepare('SELECT path FROM projects').all() as Array<{ path: string }>).map((project) => project.path),
     ].filter((root): root is string => typeof root === 'string' && root.length > 0);
   }

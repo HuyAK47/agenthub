@@ -57,6 +57,13 @@ export class QuotaService {
     return this.quotaMarkRepo.isExhausted(profileName, family);
   }
 
+  /** Whether every enabled account for an engine is unavailable for a family. */
+  allProfilesForEngineExhausted(engine: string, family: string): boolean {
+    const profiles = this.profileRepo.getEnabled().filter((profile) => profile.engine === engine);
+    if (profiles.length === 0) return false;
+    return profiles.every((profile) => this.quotaMarkRepo.isExhausted(profile.name, family));
+  }
+
   /**
    * Get expired marks (for scheduler to re-queue waiting_quota tasks)
    */

@@ -27,6 +27,9 @@ process.env.PATH = `${serviceShimDir}${path.delimiter}${process.env.PATH || ''}`
 process.env.HOME = fallbackSafeHome;
 process.env.XDG_CONFIG_HOME = fallbackXdgConfig;
 process.env.AGENTHUB_HOME = fallbackAgenthubHome;
+// Keep tests safe even when an individual test temporarily clears the explicit
+// agy-homes override while constructing a fresh config.
+process.env.AGENTHUB_TEST_MODE = '1';
 // The test runner itself is not an AgentHub worker. Individual tests that
 // exercise worker behavior set this flag explicitly and restore it afterwards.
 delete process.env.AGENTHUB_WORKER;

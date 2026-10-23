@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf } from '../api/client';
+import { getStatus, getProfiles, getClaudeQuota, getClaudeFailover, clearClaudeFailover, getOrphans, reapOrphans, pauseTask, resumeTask, getBrain, getProjects, getPerf, getTasks } from '../api/client';
 import { getChatSessions, createChatSession, sendChatMessage, retryChatLimitNow } from '../api/chat';
 import { subscribeToEvents } from '../api/sse';
 import { EventItem } from '../types/api';
@@ -97,6 +97,7 @@ export const DashboardPage: React.FC = () => {
   const failoverMutation = useMutation({ mutationFn: clearClaudeFailover });
   const { data: orphans = [], refetch: refetchOrphans } = useQuery({ queryKey: ['system-orphans'], queryFn: getOrphans, refetchInterval: 30_000 });
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: getProjects, refetchInterval: 30_000 });
+  const { data: allTasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: () => getTasks(), refetchInterval: 10_000 });
   const { data: perf } = useQuery({ queryKey: ['perf'], queryFn: getPerf, refetchInterval: 30_000 });
 
   const queryClient = useQueryClient();
@@ -216,6 +217,16 @@ export const DashboardPage: React.FC = () => {
     },
   ];
 
+  const projectTaskSummary = projects.map((project) => {
+    const projectTasks = allTasks.filter((task) => task.projectId === project.id);
+    return {
+      project,
+      running: projectTasks.filter((task) => task.status === 'running').length,
+      waiting: projectTasks.filter((task) => ['queued', 'waiting_quota'].includes(task.status)).length,
+      attention: projectTasks.filter((task) => ['blocked', 'failed'].includes(task.status) || Boolean(task.reviewerEscalated)).length,
+    };
+  });
+
   return (
     <div className="space-y-8">
       {/* Page Title */}
@@ -291,12 +302,29 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
+      {status.worktrees && (
+        <section data-testid="worktree-usage" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div><h2 className="text-base font-semibold">Worktree</h2><p className="text-xs text-[var(--text-secondary)]">{status.worktrees.count} đang có · {(status.worktrees.bytes / 1024 ** 3).toFixed(2)} GB</p></div>
+            <HardDrive className="w-5 h-5 text-[var(--t-accent)]" />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {Object.entries(status.worktrees.byStatus).map(([taskStatus, usage]) => (
+              <div key={taskStatus} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2 text-xs">
+                <div className="font-medium">{taskStatus}</div>
+                <div className="text-[var(--text-secondary)]">{usage.count} · {(usage.bytes / 1024 ** 3).toFixed(2)} GB</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} />}
       {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
         <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
         {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
-          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('projects.brainPermissions')}: {brain.permissions} · Mode phiên: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--text-secondary)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
+          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('dashboard.brainEngine')}: {brain.engine || 'claude'} · {t('projects.brainPermissions')}: {brain.permissions} · Mode phiên: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--text-secondary)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
           <div className="flex items-center gap-3 text-xs"><span>{t('dashboard.brainTokens')}: {brain.tokensToday.toLocaleString()}</span><Link to={`/chat/${encodeURIComponent(brain.sessionId)}`} className="text-[var(--t-accent)] hover:underline">{t('dashboard.openBrainChat')}</Link></div>
         </div>)}
         {brainOverview.assistants?.map((assistant) => <div key={`assistant-${assistant.projectId || 'system'}`} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3" data-testid={`assistant-row-${assistant.projectId || 'system'}`}>
@@ -397,6 +425,21 @@ export const DashboardPage: React.FC = () => {
             </div>
           );
         })}
+      </div>
+
+      <div data-testid="dashboard-project-summary" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-base font-semibold">{t('dashboard.projectTaskSummary')}</h2>
+          <Link to="/projects" className="text-xs text-[var(--t-accent)] hover:underline">{t('common.view')}</Link>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {projectTaskSummary.map(({ project, running, waiting, attention }) => (
+            <Link key={project.id} to={`/tasks?project=${encodeURIComponent(project.id)}`} className="rounded-lg border border-[var(--border-default)] p-3 hover:border-[var(--t-accent)] transition-colors" data-testid={`dashboard-project-${project.id}`}>
+              <div className="mb-2 truncate text-sm font-semibold">{project.name}</div>
+              <div className="flex flex-wrap gap-2 text-xs"><span className="text-[var(--t-ok)]">{t('dashboard.projectRunning')}: {running}</span><span className="text-[var(--text-secondary)]">{t('dashboard.projectWaiting')}: {waiting}</span><span className="text-[var(--t-crit)]">{t('tasks.attention')}: {attention}</span></div>
+            </Link>
+          ))}
+        </div>
       </div>
 
       {/* Running workers */}

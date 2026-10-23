@@ -27,7 +27,7 @@ AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các wo
 | **Linux** | Đã kiểm chứng trên Ubuntu. Dùng `/proc`, `nice`/`ionice` và systemd user service. |
 | **macOS** | Được hỗ trợ: tiến trình đọc bằng `ps`/`lsof`, ưu tiên chỉ dùng `nice`, trình duyệt dùng `open`, service dùng LaunchAgent. `ionice` và systemd không có trên macOS. |
 | **Windows** | Không hỗ trợ trực tiếp. Dùng WSL2 và chạy AgentHub trong môi trường Linux. |
-| **Node.js 22** | Khuyến nghị cài qua [nvm](https://github.com/nvm-sh/nvm). |
+| **Node.js 22** | Installer release tự tải trên macOS/Linux khi PATH chưa có Node; cài thủ công có thể dùng [nvm](https://github.com/nvm-sh/nvm). |
 | **git** | Các dự án được giao việc phải là git repository. |
 | **Ít nhất một worker CLI** | `agy` (Antigravity CLI, đăng nhập Google) và/hoặc `codex` (Codex CLI, đăng nhập OpenAI). |
 | **Claude Code** | Bắt buộc nếu muốn để Claude điều phối (cài extension Claude Code cho VS Code, hoặc CLI `claude`). |
@@ -67,6 +67,8 @@ agenthub setup
 
 Installer kiểm tra `SHA256SUMS`, cài dependencies production theo máy hiện tại, và giữ lại hai bản cũ trong `~/.agenthub-app/` để rollback qua symlink `current`.
 
+Trên macOS, không cần cài Node, nvm hoặc Xcode Command Line Tools để cài từ release. Installer tải Node.js 22 chính thức đúng kiến trúc (`darwin-arm64`/`darwin-x64`), kiểm tra `SHASUMS256.txt` và lưu tại `~/.agenthub/runtime/node-v22.x`. Nếu muốn dùng nvm, truyền rõ `--use-nvm`. Các lỗi thường gặp gồm checksum hỏng, archive sai kiến trúc, thiếu `curl`/`tar`; nếu cài từ source báo thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại.
+
 ### Cài lỗi thì sao?
 
 Không cần dọn thủ công. Nếu tải, kiểm tra native module, `setup`, symlink hoặc service thất bại, bộ cài tự xoá thư mục tạm và hoàn tác `current`, CLI cùng service về bản trước (nếu có). Chi tiết lỗi được giữ tại `${TMPDIR:-/tmp}/agenthub-install-<time>.log`; hãy gửi file này khi cần hỗ trợ. Bản trước vẫn hoạt động.
@@ -91,6 +93,10 @@ Dữ liệu (DB SQLite, token, log, worktree) nằm ở `~/.agenthub/`. Muốn �
 
 ```bash
 agenthub install-service          # Linux: systemd; macOS: ~/Library/LaunchAgents/dev.agenthub.plist
+agenthub stop                     # tắt êm, task đang chạy sẽ resume
+agenthub stop --disable           # tắt và không tự bật khi đăng nhập
+agenthub start                    # bật lại
+# Đóng tab web không tắt hub; uninstall-service là gỡ service.
 loginctl enable-linger "$USER"    # (tuỳ chọn) chạy cả khi chưa đăng nhập màn hình
 systemctl --user status agenthub  # kiểm tra đang chạy
 
@@ -162,7 +168,9 @@ Trong AgentHub, một **project** là một git repository trên máy của bạ
 
 1. **Chuẩn bị repo**: Clone repo về máy (nếu chưa có). Đảm bảo repo đã được khởi tạo git và có nhánh mặc định (như `main`).
 2. **Đăng ký project vào hub**:
-   - **Trên Web Dashboard**: Truy cập trang **Thiết lập** (Setup) và bấm nút **"Thêm dự án"**, hoặc vào trang **Projects** bấm **"Đăng ký Project"** (hoặc mở trực tiếp đường dẫn `/projects?new=1`). Điền tên gợi nhớ và đường dẫn tuyệt đối tới thư mục repo git.
+   - **Đưa dự án có sẵn vào hub**: Truy cập trang **Projects**, mở **Trình hướng dẫn đăng ký**, chọn **Repo có sẵn trên máy**, nhập đường dẫn tuyệt đối rồi để AgentHub dò nhánh, lockfile, hooks, ngôn ngữ, tài liệu hướng dẫn và các phiên Claude Code cũ. Kiểm tra các gợi ý trước khi tạo; phần **Nâng cao** vẫn cho phép điền tay.
+   - **Tạo dự án mới**: Trong cùng trình hướng dẫn, chọn **Dự án mới**. AgentHub sẽ tạo thư mục mới, chạy `git init`, tạo commit rỗng và nhánh mặc định ngay trên máy trước khi đăng ký project.
+   - Luôn kiểm tra đường dẫn và nhánh gốc. Nhánh tích hợp (nếu bật) chỉ được hub merge local, không bao giờ tự push.
    - **Hoặc qua CLI**:
      ```bash
      agenthub project add <tên> /đường/dẫn/tuyệt/đối/tới/repo
@@ -401,7 +409,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 
 ```json
 {
-  "load": { "enabled": true, "high": 16, "ok": 11, "minFreeMemGB": 1.5, "recoverAfterSec": 300 },
+  "load": { "enabled": true, "high": 16, "ok": 11, "pressureHigh": 20, "pressureIoHigh": 40, "pressureOk": 10, "minFreeMemGB": 1.5, "recoverAfterSec": 300 },
   "disk": {
     "minFreeGB": 3,
     "extraPaths": [{ "path": "/var/lib/docker", "minFreeGB": 1.5, "label": "Docker" }]
@@ -411,7 +419,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 }
 ```
 
-- **load**: máy quá tải thì tạm giảm mỗi dự án xuống 1 task. Máy ổn định đủ `recoverAfterSec` thì trả lại.
+- **load**: máy quá tải thì tạm giảm mỗi dự án xuống 1 task. `pressureIoHigh` mặc định là 40% và I/O PSI chỉ được coi là quá tải khi memory PSI đồng thời đạt `pressureOk` (mặc định 10%); I/O nền thấp hơn ngưỡng không đánh thức brain. Máy ổn định đủ `recoverAfterSec` thì trả lại.
 - **disk**: ổ dưới ngưỡng thì không giao task mới. Thêm ổ chứa dữ liệu Docker nếu dự án dùng Docker.
 - **defaultTimeout**: giới hạn thời gian mỗi lượt chạy (giây). Ngoài ra hub cảnh báo khi task chạy lâu mà không commit, hoặc khi chạy lặp lại một lệnh.
 

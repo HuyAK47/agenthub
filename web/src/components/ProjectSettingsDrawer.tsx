@@ -26,6 +26,7 @@ import {
   StatTile,
 } from './ui';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
 import { Project, ProjectSettings, UpdateProjectInput } from '../types/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -81,6 +82,7 @@ export function changedSettings(
     'brain',
     'worktree',
     'integration',
+    'review',
     'ci',
     'references',
     'reviewChecklist',
@@ -570,14 +572,16 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 overflow-hidden"
+      className="fixed inset-0 overflow-hidden"
+      style={{ zIndex: UI_Z_INDEX.modal }}
       data-testid="project-settings-drawer"
     >
       {/* Toast Notification */}
       {toastMessage && (
         <div
           role="status"
-          className="fixed top-5 right-5 z-60 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-white font-medium text-xs shadow-xl flex items-center gap-2"
+          className="fixed top-5 right-5 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-white font-medium text-xs shadow-xl flex items-center gap-2"
+          style={{ zIndex: UI_Z_INDEX.toast }}
         >
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{toastMessage}</span>
@@ -591,7 +595,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       />
 
       {/* Slide-over Drawer Panel */}
-      <div className="fixed inset-y-0 right-0 w-full md:max-w-3xl bg-[var(--t-surface)] border-l border-[var(--t-border)] shadow-2xl flex flex-col z-50">
+      <div className="fixed inset-y-0 right-0 w-full md:max-w-3xl bg-[var(--t-surface)] border-l border-[var(--t-border)] shadow-2xl flex flex-col">
         {/* Drawer Header */}
         <div
           className={
@@ -873,6 +877,30 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] md:col-span-2">
+                <label className="text-xs font-semibold text-[var(--t-text)] block">{t('projects.worktreeRoot')}</label>
+                <Input
+                  aria-label={t('projects.worktreeRoot')}
+                  placeholder={t('projects.worktreeRootPlaceholder')}
+                  value={draftSettings.worktree.root ?? ''}
+                  onChange={(e) => setDraftSettings((prev) => ({
+                    ...prev,
+                    worktree: { ...prev.worktree, root: e.target.value || undefined },
+                  }))}
+                />
+                <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.worktreeRootDesc')}</p>
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={draftSettings.worktree.logsInRoot === true}
+                    onChange={(e) => setDraftSettings((prev) => ({
+                      ...prev,
+                      worktree: { ...prev.worktree, logsInRoot: e.target.checked },
+                    }))}
+                  />
+                  {t('projects.worktreeLogsInRoot')}
+                </label>
+              </div>
               {/* Dependency install */}
               <div className="space-y-2 p-3.5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]">
                 <div className="flex items-center justify-between">
