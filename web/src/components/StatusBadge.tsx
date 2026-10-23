@@ -47,6 +47,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       label = t('waitReason.profile_busy');
     } else if (waitReason === 'project_unavailable') {
       label = t('waitReason.project_unavailable');
+    } else if (waitReason === 'focus') {
+      label = t('waitReason.focus');
     }
   }
 

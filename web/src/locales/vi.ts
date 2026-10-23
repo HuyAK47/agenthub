@@ -29,6 +29,8 @@ export const vi = {
     running: 'đang chạy',
     hard: 'Hard',
     easy: 'Easy',
+    focusBanner: 'Đang tập trung cho {project} — task khác đang chờ',
+    stopFocus: 'Tắt tập trung',
   },
   status: {
     queued: 'Chờ chạy',
@@ -45,6 +47,7 @@ export const vi = {
     pausedOverload: 'Tạm dừng do quá tải',
   },
   waitReason: {
+    focus: 'Chờ vì đang tập trung cho project khác',
     disk: 'Chờ ổ đĩa (còn {free} GB / cần {min} GB)',
     diskNamed: 'Chờ {label} (còn {free} GB / cần {min} GB)',
     diskShort: 'Chờ ổ đĩa',
@@ -818,6 +821,8 @@ export const vi = {
   projects: {
     title: 'Quản lý Project',
     subtitle: 'Đăng ký và cấu hình các dự án phần mềm để AI workers tạo worktree và chạy tác vụ.',
+    focusProject: 'Ưu tiên project này',
+    unfocusProject: 'Tắt tập trung',
     registerBtn: 'Đăng ký Project',
     closeFormBtn: 'Đóng form',
     formTitle: 'Đăng ký Project mới',

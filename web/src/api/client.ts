@@ -187,6 +187,13 @@ export async function getStatus(): Promise<HubStatus> {
   return apiFetch<HubStatus>('/api/status');
 }
 
+export type FocusState = { projectId: string | null; since: string | null; pauseRunning: boolean };
+export const getFocus = () => apiFetch<FocusState>('/api/focus');
+export const setFocus = (projectId: string | null, pauseRunning?: boolean) => apiFetch<{ focus: FocusState }>('/api/focus', {
+  method: 'PUT',
+  body: JSON.stringify({ projectId, ...(pauseRunning === undefined ? {} : { pauseRunning }) }),
+});
+
 export async function getOrphans(): Promise<OrphanProcess[]> {
   return apiFetch<OrphanProcess[]>('/api/system/orphans');
 }

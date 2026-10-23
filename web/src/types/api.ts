@@ -200,7 +200,7 @@ export interface Review {
   createdAt: string;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
 
 export interface Task {
   id: string; // project~slug or project/slug
@@ -432,6 +432,7 @@ export interface TaskNote {
 }
 
 export interface HubStatus {
+  focus?: { projectId: string | null; since: string | null; pauseRunning: boolean };
   tasks: Record<string, number>;
   profiles?: Profile[];
   running: RunningWorker[];
