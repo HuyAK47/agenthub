@@ -344,4 +344,46 @@ describe('TasksPage & Kanban Long Lists', () => {
     expect(within(group).getByText('Matching task')).toBeInTheDocument();
     expect(within(group).queryByText('Other task')).not.toBeInTheDocument();
   });
+
+  it('sắp xếp task trong nhóm project theo thứ tự ưu tiên: running > checking > review > blocked > failed > queued > waiting_quota > draft > done', async () => {
+    const statuses: Task['status'][] = [
+      'done',
+      'queued',
+      'checking',
+      'failed',
+      'draft',
+      'waiting_quota',
+      'review',
+      'blocked',
+      'running',
+    ];
+    const tasks: Task[] = statuses.map((status) => ({
+      ...createDoneTasks(1)[0],
+      id: `p1~${status}`,
+      slug: `slug-${status}`,
+      title: `Title ${status}`,
+      status,
+    }));
+    vi.spyOn(client, 'getTasks').mockResolvedValue(tasks);
+
+    renderPage();
+
+    fireEvent.click(screen.getByTestId('view-toggle-project'));
+    const group = await screen.findByTestId('project-task-group-p1');
+
+    const renderedTitles = Array.from(
+      group.querySelectorAll('a[href^="/tasks/p1~"] .line-clamp-2'),
+    ).map((el) => el.textContent);
+    expect(renderedTitles).toEqual([
+      'Title running',
+      'Title checking',
+      'Title review',
+      'Title blocked',
+      'Title failed',
+      'Title queued',
+      'Title waiting_quota',
+      'Title draft',
+      'Title done',
+    ]);
+  });
 });

@@ -217,7 +217,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, tasks, 
 export const KanbanColumn = memo(KanbanColumnComponent);
 
 const PROJECT_VIEW_STORAGE_KEY = 'agenthub:tasks:view-mode';
-const PROJECT_TASK_ORDER: Task['status'][] = ['running', 'review', 'blocked', 'queued', 'waiting_quota', 'checking', 'draft', 'failed', 'done', 'cancelled'];
+const PROJECT_TASK_ORDER: Task['status'][] = ['running', 'checking', 'review', 'blocked', 'failed', 'queued', 'waiting_quota', 'draft', 'done', 'cancelled'];
 
 function readStoredTaskView(): 'kanban' | 'dag' | 'project' {
   try {
