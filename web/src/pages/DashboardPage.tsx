@@ -251,8 +251,8 @@ export const DashboardPage: React.FC = () => {
       {/* Page Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 data-tour="overview" className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">{t('dashboard.title')}</h1>
-          <p className="text-sm text-[var(--text-secondary)]">
+          <h1 data-tour="overview" className="text-2xl font-bold tracking-tight text-[var(--t-text)]">{t('dashboard.title')}</h1>
+          <p className="text-sm text-[var(--t-text-2)]">
             {t('dashboard.subtitle')}
           </p>
         </div>
@@ -299,21 +299,21 @@ export const DashboardPage: React.FC = () => {
 
       <GettingStartedChecklist />
 
-      <section data-testid="perf-card" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-4">
-        <div className="flex items-center justify-between"><div><h2 className="text-base font-semibold">Hiệu năng</h2><p className="text-xs text-[var(--text-secondary)]">CPU/RSS theo nhóm tiến trình · vòng 1 giờ gần nhất</p></div><Cpu className="w-5 h-5 text-[var(--t-accent)]" /></div>
-        {perf?.latest ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{Object.entries(perf.latest.groups).filter(([, value]) => value.processes > 0).sort((a, b) => b[1].cpuPercent - a[1].cpuPercent).map(([name, value]) => <div key={name} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2"><div className="flex justify-between text-xs"><span className="font-medium">{name}</span><span>{value.cpuPercent.toFixed(1)}% CPU</span></div><div className="mt-1 text-xs text-[var(--text-secondary)]">{(value.rssBytes / 1024 ** 3).toFixed(2)} GB · {value.processes} process</div></div>)}</div> : <p className="text-xs text-[var(--text-secondary)]">Chưa có mẫu đo.</p>}
+      <section data-testid="perf-card" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-4">
+        <div className="flex items-center justify-between"><div><h2 className="text-base font-semibold">Hiệu năng</h2><p className="text-xs text-[var(--t-text-2)]">CPU/RSS theo nhóm tiến trình · vòng 1 giờ gần nhất</p></div><Cpu className="w-5 h-5 text-[var(--t-accent)]" /></div>
+        {perf?.latest ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{Object.entries(perf.latest.groups).filter(([, value]) => value.processes > 0).sort((a, b) => b[1].cpuPercent - a[1].cpuPercent).map(([name, value]) => <div key={name} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2"><div className="flex justify-between text-xs"><span className="font-medium">{name}</span><span>{value.cpuPercent.toFixed(1)}% CPU</span></div><div className="mt-1 text-xs text-[var(--t-text-2)]">{(value.rssBytes / 1024 ** 3).toFixed(2)} GB · {value.processes} process</div></div>)}</div> : <p className="text-xs text-[var(--t-text-2)]">Chưa có mẫu đo.</p>}
         {perf?.samples?.length ? <div className="flex h-8 items-end gap-0.5" aria-label="Biểu đồ CPU 1 giờ">{perf.samples.map((sample, index) => <span key={`${sample.at}-${index}`} className="flex-1 rounded-t bg-[var(--t-accent)] opacity-70" style={{ height: `${Math.max(4, Math.min(100, Object.values(sample.groups).reduce((sum, group) => sum + group.cpuPercent, 0) / Math.max(1, sample.cpuCount)))}%` }} />)}</div> : null}
       </section>
 
       {status.disks && status.disks.length > 0 && (
         <div data-testid="monitored-disks" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {status.disks.map((disk) => (
-            <div key={`${disk.label}:${disk.path}`} className={`rounded-xl border p-4 ${disk.low ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
+            <div key={`${disk.label}:${disk.path}`} className={`rounded-xl border p-4 ${disk.low ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--t-border)] bg-[var(--t-surface)]'}`}>
               <div className="flex items-center justify-between gap-2">
                 <span className="font-semibold text-sm">{disk.label}</span>
                 <HardDrive className="w-4 h-4 text-[var(--t-text-2)]" />
               </div>
-              <div className="mt-2 text-xs text-[var(--text-secondary)]">
+              <div className="mt-2 text-xs text-[var(--t-text-2)]">
                 {disk.freeGB} / {disk.totalGB} GB trống · ngưỡng {disk.minFreeGB} GB
               </div>
             </div>
@@ -322,16 +322,16 @@ export const DashboardPage: React.FC = () => {
       )}
 
       {status.worktrees && (
-        <section data-testid="worktree-usage" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+        <section data-testid="worktree-usage" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
           <div className="flex items-center justify-between">
-            <div><h2 className="text-base font-semibold">Worktree</h2><p className="text-xs text-[var(--text-secondary)]">{status.worktrees.count} đang có · {(status.worktrees.bytes / 1024 ** 3).toFixed(2)} GB</p></div>
+            <div><h2 className="text-base font-semibold">Worktree</h2><p className="text-xs text-[var(--t-text-2)]">{status.worktrees.count} đang có · {(status.worktrees.bytes / 1024 ** 3).toFixed(2)} GB</p></div>
             <HardDrive className="w-5 h-5 text-[var(--t-accent)]" />
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {Object.entries(status.worktrees.byStatus).map(([taskStatus, usage]) => (
               <div key={taskStatus} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2 text-xs">
                 <div className="font-medium">{taskStatus}</div>
-                <div className="text-[var(--text-secondary)]">{usage.count} · {(usage.bytes / 1024 ** 3).toFixed(2)} GB</div>
+                <div className="text-[var(--t-text-2)]">{usage.count} · {(usage.bytes / 1024 ** 3).toFixed(2)} GB</div>
               </div>
             ))}
           </div>
@@ -340,29 +340,29 @@ export const DashboardPage: React.FC = () => {
 
       {/* Brain Card */}
       {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} />}
-      {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+      {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
         <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
         {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
-          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('dashboard.brainEngine')}: {brain.engine || 'claude'} · {t('projects.brainPermissions')}: {brain.permissions} · Mode phiên: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--text-secondary)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
+          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--t-text-2)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('dashboard.brainEngine')}: {brain.engine || 'claude'} · {t('projects.brainPermissions')}: {brain.permissions} · Mode phiên: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--t-text-2)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
           <div className="flex items-center gap-3 text-xs"><span>{t('dashboard.brainTokens')}: {brain.tokensToday.toLocaleString()}</span><Link to={`/chat/${encodeURIComponent(brain.sessionId)}`} className="text-[var(--t-accent)] hover:underline">{t('dashboard.openBrainChat')}</Link></div>
         </div>)}
         {brainOverview.assistants?.map((assistant) => <div key={`assistant-${assistant.projectId || 'system'}`} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3" data-testid={`assistant-row-${assistant.projectId || 'system'}`}>
-          <div><div className="font-medium text-sm">{t('dashboard.assistant')} · {assistant.projectName}</div><div className="text-xs text-[var(--text-secondary)]">{assistant.busy ? t('dashboard.assistantWorking') : t('dashboard.assistantReady')}</div></div>
+          <div><div className="font-medium text-sm">{t('dashboard.assistant')} · {assistant.projectName}</div><div className="text-xs text-[var(--t-text-2)]">{assistant.busy ? t('dashboard.assistantWorking') : t('dashboard.assistantReady')}</div></div>
           <Link to={`/chat/${encodeURIComponent(assistant.sessionId)}`} className="text-xs text-[var(--t-accent)] hover:underline">{t('dashboard.openAssistantChat')}</Link>
         </div>)}
       </div>}
 
       {/* CI Card */}
-      <div data-testid="dashboard-ci" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+      <div data-testid="dashboard-ci" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Activity className="w-5 h-5 text-[var(--t-accent)]" />
             <h2 className="text-base font-semibold">{t('dashboard.ciCardTitle')}</h2>
           </div>
-          <span className="text-xs text-[var(--text-secondary)]">{t('dashboard.ciCardSubtitle')}</span>
+          <span className="text-xs text-[var(--t-text-2)]">{t('dashboard.ciCardSubtitle')}</span>
         </div>
         {projects.length === 0 ? (
-          <p className="text-xs text-[var(--text-secondary)]">{t('dashboard.ciCardNoData')}</p>
+          <p className="text-xs text-[var(--t-text-2)]">{t('dashboard.ciCardNoData')}</p>
         ) : (
           <div className="space-y-2">
             {projects.map((proj) => {
@@ -375,11 +375,11 @@ export const DashboardPage: React.FC = () => {
                 >
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-sm">{proj.name}</span>
-                    <span className="font-mono text-[var(--text-secondary)]">({proj.id})</span>
+                    <span className="font-mono text-[var(--t-text-2)]">({proj.id})</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {!ci ? (
-                      <span className="text-[var(--text-secondary)] italic">{t('projects.ciNoRun')}</span>
+                      <span className="text-[var(--t-text-2)] italic">{t('projects.ciNoRun')}</span>
                     ) : ci.status !== 'completed' ? (
                       <span className="inline-flex items-center gap-1 text-[var(--t-warn)] font-medium">
                         <Clock className="w-3.5 h-3.5 animate-spin" />
@@ -425,11 +425,11 @@ export const DashboardPage: React.FC = () => {
           return (
             <div
               key={m.label}
-              className="p-5 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-xs flex items-center justify-between transition-colors"
+              className="p-5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-xs flex items-center justify-between transition-colors"
             >
               <div className="space-y-1">
-                <p className="text-xs font-medium text-[var(--text-secondary)]">{m.label}</p>
-                <p className="text-3xl font-extrabold tracking-tight text-[var(--text-primary)]">{m.value}</p>
+                <p className="text-xs font-medium text-[var(--t-text-2)]">{m.label}</p>
+                <p className="text-3xl font-extrabold tracking-tight text-[var(--t-text)]">{m.value}</p>
               </div>
               <div
                 style={{
@@ -446,41 +446,41 @@ export const DashboardPage: React.FC = () => {
         })}
       </div>
 
-      <div data-testid="dashboard-project-summary" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 space-y-3">
+      <div data-testid="dashboard-project-summary" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-base font-semibold">{t('dashboard.projectTaskSummary')}</h2>
           <Link to="/projects" className="text-xs text-[var(--t-accent)] hover:underline">{t('common.view')}</Link>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {projectTaskSummary.map(({ project, running, waiting, attention }) => (
-            <Link key={project.id} to={`/tasks?project=${encodeURIComponent(project.id)}`} className="rounded-lg border border-[var(--border-default)] p-3 hover:border-[var(--t-accent)] transition-colors" data-testid={`dashboard-project-${project.id}`}>
+            <Link key={project.id} to={`/tasks?project=${encodeURIComponent(project.id)}`} className="rounded-lg border border-[var(--t-border)] p-3 hover:border-[var(--t-accent)] transition-colors" data-testid={`dashboard-project-${project.id}`}>
               <div className="mb-2 truncate text-sm font-semibold">{project.name}</div>
-              <div className="flex flex-wrap gap-2 text-xs"><span className="text-[var(--t-ok)]">{t('dashboard.projectRunning')}: {running}</span><span className="text-[var(--text-secondary)]">{t('dashboard.projectWaiting')}: {waiting}</span><span className="text-[var(--t-crit)]">{t('tasks.attention')}: {attention}</span></div>
+              <div className="flex flex-wrap gap-2 text-xs"><span className="text-[var(--t-ok)]">{t('dashboard.projectRunning')}: {running}</span><span className="text-[var(--t-text-2)]">{t('dashboard.projectWaiting')}: {waiting}</span><span className="text-[var(--t-crit)]">{t('tasks.attention')}: {attention}</span></div>
             </Link>
           ))}
         </div>
       </div>
 
       {/* Running workers */}
-      <div data-tour="workers" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
-        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
+      <div data-tour="workers" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors">
+        <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Cpu className="w-5 h-5 text-[var(--t-accent)]" />
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('dashboard.runningWorkers')}</h2>
+            <h2 className="text-base font-semibold text-[var(--t-text)]">{t('dashboard.runningWorkers')}</h2>
           </div>
-          <span className="text-xs text-[var(--text-secondary)]">
+          <span className="text-xs text-[var(--t-text-2)]">
             {t('extra.workersExecuting', { count: workers.length })}
           </span>
         </div>
 
         {workers.length === 0 ? (
-          <div className="p-8 text-center text-[var(--text-secondary)] text-sm">
+          <div className="p-8 text-center text-[var(--t-text-2)] text-sm">
             {t('extra.noWorkers')}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] text-xs uppercase font-medium">
+              <thead className="bg-[var(--t-surface-2)] text-[var(--t-text-2)] text-xs uppercase font-medium">
                 <tr>
                   <th className="px-6 py-3">Task</th>
                   <th className="px-6 py-3">Project</th>
@@ -491,7 +491,7 @@ export const DashboardPage: React.FC = () => {
                   <th className="px-6 py-3 text-right">{t('dashboard.thDetails')}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[var(--border-subtle)]">
+              <tbody className="divide-y divide-[var(--t-border)]">
                 {workers.map((worker) => {
                   const parts = worker.taskId.includes('/')
                     ? worker.taskId.split('/')
@@ -502,7 +502,7 @@ export const DashboardPage: React.FC = () => {
                   const routeId = worker.taskId.replace('/', '~');
 
                   return (
-                    <tr key={worker.taskId} className="hover:bg-[var(--bg-surface-hover)] transition-colors">
+                    <tr key={worker.taskId} className="hover:bg-[var(--t-hover)] transition-colors">
                       <td className="px-6 py-4">
                         <Link
                           to={`/tasks/${encodeURIComponent(routeId)}`}
@@ -511,7 +511,7 @@ export const DashboardPage: React.FC = () => {
                           <span>{displayTitle}</span>
                         </Link>
                         {worker.title && worker.title !== worker.taskId && (
-                          <div className="text-xs text-[var(--text-muted)] font-mono mt-0.5">{worker.taskId}</div>
+                          <div className="text-xs text-[var(--t-text-3)] font-mono mt-0.5">{worker.taskId}</div>
                         )}
                         {worker.paused && (
                           <div className="mt-1.5">
@@ -520,7 +520,7 @@ export const DashboardPage: React.FC = () => {
                               className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium border ${
                                 worker.pauseReason === 'load'
                                   ? 'bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-warn)] border-[color-mix(in_srgb,var(--t-warn)_30%,transparent)]'
-                                  : 'bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border-[var(--border-subtle)]'
+                                  : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] border-[var(--t-border)]'
                               }`}
                             >
                               {worker.pauseReason === 'load'
@@ -547,22 +547,22 @@ export const DashboardPage: React.FC = () => {
                         )}
                       </td>
                       <td className="px-6 py-4">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[var(--t-surface-2)] text-[var(--t-text-2)] border border-[var(--t-border)]">
                           {projectId}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <ModelBadge model={worker.model} engine={worker.engine} />
                       </td>
-                      <td className="px-6 py-4 font-medium text-[var(--text-primary)]">{worker.profileName}</td>
-                      <td className="px-6 py-4 text-[var(--text-secondary)]">
+                      <td className="px-6 py-4 font-medium text-[var(--t-text)]">{worker.profileName}</td>
+                      <td className="px-6 py-4 text-[var(--t-text-2)]">
                         <RunningDuration startedAt={worker.startedAt} />
                       </td>
-                      <td className="px-6 py-4 text-xs text-[var(--text-secondary)] whitespace-nowrap">
+                      <td className="px-6 py-4 text-xs text-[var(--t-text-2)] whitespace-nowrap">
                         <div className="font-mono">
                           {worker.rss ? `${(worker.rss / (1024 * 1024)).toFixed(0)} MB` : '0 MB'}
                         </div>
-                        <div className="text-[11px] text-[var(--text-muted)] font-mono">
+                        <div className="text-[11px] text-[var(--t-text-3)] font-mono">
                           {(worker.cpu ?? 0).toFixed(1)}% CPU
                         </div>
                       </td>
@@ -584,7 +584,7 @@ export const DashboardPage: React.FC = () => {
                               type="button"
                               onClick={() => pauseMutation.mutate(worker.taskId)}
                               disabled={pauseMutation.isPending}
-                              className="px-2.5 py-1 text-xs font-medium rounded-md bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] inline-flex items-center gap-1 cursor-pointer"
+                              className="px-2.5 py-1 text-xs font-medium rounded-md bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] border border-[var(--t-border)] inline-flex items-center gap-1 cursor-pointer"
                               title={t('dashboard.btnPause')}
                             >
                               <Pause className="w-3 h-3" />
@@ -627,13 +627,13 @@ export const DashboardPage: React.FC = () => {
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>{t('dashboard.overlapWarningTitle')}</span>
           </div>
-          <p className="text-xs text-[var(--text-secondary)]">
+          <p className="text-xs text-[var(--t-text-2)]">
             {t('dashboard.overlapWarningDesc', { count: status.overlaps.length })}
           </p>
           <ul className="space-y-1.5 text-xs">
             {status.overlaps.map((ov) => (
-              <li key={ov.id} className="flex items-center gap-2 text-[var(--text-primary)]">
-                <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-default)]">
+              <li key={ov.id} className="flex items-center gap-2 text-[var(--t-text)]">
+                <span className="font-mono px-1.5 py-0.5 rounded bg-[var(--t-surface)] border border-[var(--t-border)]">
                   {ov.taskId}
                 </span>
                 <span>{ov.content}</span>
@@ -651,14 +651,14 @@ export const DashboardPage: React.FC = () => {
         ] as const).map(([engine, label]) => {
           const engineProfiles = profiles.filter((profile) => profile.engine === engine);
           return (
-            <div key={engine} className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-xs">
+            <div key={engine} className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-xs">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-[var(--text-primary)]">Quota {label}</h2>
-                <span className="text-[11px] text-[var(--text-secondary)]">{engineProfiles.length} hồ sơ</span>
+                <h2 className="text-sm font-semibold text-[var(--t-text)]">Quota {label}</h2>
+                <span className="text-[11px] text-[var(--t-text-2)]">{engineProfiles.length} hồ sơ</span>
               </div>
               <QuotaUsage usage={providerUsage(profiles, engine)} onRefresh={() => { void refetchProfiles(); }} />
               {engine === 'claude' && engineProfiles.some((profile) => profile.claudeTokens) && (
-                <div className="mt-2 text-xs text-[var(--text-secondary)]">
+                <div className="mt-2 text-xs text-[var(--t-text-2)]">
                   Token hôm nay: {Math.round(engineProfiles.reduce((sum, profile) => sum + (profile.claudeTokens?.today || 0), 0)).toLocaleString()}
                 </div>
               )}
@@ -666,27 +666,27 @@ export const DashboardPage: React.FC = () => {
           );
         })}
       </div>
-      {claudeQuota && <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 flex items-center justify-between">
+      {claudeQuota && <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
         <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p, index) => <React.Fragment key={p.profileName}><span title={formatTimeTitle(p.resetsAt, locale, p.source, p.observedAt)}>{p.profileName}: {p.status === 'allowed' ? t('extra.claudeQuotaAvailable') : p.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : p.limited ? t('extra.claudeQuotaRejected') : (p.status || t('extra.unknown'))}{p.resetsAt ? ` · ${formatReset(p.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {new Date(p.observedAt).toLocaleTimeString()}</span>{index < claudeQuota.profiles!.length - 1 ? ' · ' : ''}</React.Fragment>) : <span title={formatTimeTitle(claudeQuota.resetsAt, locale, '/usage', claudeQuota.observedAt || null)}>{claudeQuota.status === 'allowed' ? t('extra.claudeQuotaAvailable') : claudeQuota.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : claudeQuota.limited ? t('extra.claudeQuotaRejected') : (claudeQuota.status || t('extra.unknown'))}{claudeQuota.resetsAt ? ` · ${formatReset(claudeQuota.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {claudeQuota.observedAt ? new Date(claudeQuota.observedAt).toLocaleTimeString() : t('extra.unknown')}</span>}</span>
       </div>}
-      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--border-default)] bg-[var(--bg-surface)]'}`}>
+      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--t-border)] bg-[var(--t-surface)]'}`}>
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
             {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">Đang dùng: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? `tài khoản ${claudeFailover.step.profile || 'khác'}` : claudeFailover.step.type === 'apiKey' ? `API key (đã dùng $${claudeFailover.dailyCostUSD.toFixed(2)}/$${claudeFailover.step.dailyCapUSD ?? 0})` : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : 'chờ reset'}</div>}
             {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
-            {claudeFailover.evidence && <div className="text-xs text-[var(--text-secondary)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
+            {claudeFailover.evidence && <div className="text-xs text-[var(--t-text-2)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
           </div>
-          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-white text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
+          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-[var(--t-on-accent)] text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
         </div>
       </div>}
 
       {/* Compact quick chat */}
-      <div className="p-4 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-xs transition-colors">
+      <div className="p-4 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-xs transition-colors">
         <form onSubmit={handleQuickChat} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-[var(--text-primary)] shrink-0">
-            <div className="w-6 h-6 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shadow-xs">
+          <div className="flex items-center gap-2 text-xs font-semibold text-[var(--t-text)] shrink-0">
+            <div className="w-6 h-6 rounded-full bg-[var(--t-claude)] text-[var(--t-on-accent)] font-bold text-xs flex items-center justify-center shadow-xs">
               C
             </div>
             <span>{t('extra.quickChat')}</span>
@@ -699,14 +699,14 @@ export const DashboardPage: React.FC = () => {
               onChange={(e) => setQuickChatText(e.target.value)}
               placeholder={t('extra.quickChatPlaceholder')}
               disabled={isSubmittingQuickChat}
-              className="w-full text-xs rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-3 py-2 text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] disabled:opacity-50"
+              className="w-full text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] placeholder-[var(--t-text-3)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)] disabled:opacity-50"
             />
           </div>
 
           <button
             type="submit"
             disabled={!quickChatText.trim() || isSubmittingQuickChat}
-            className="px-4 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0 transition-colors"
+            className="px-4 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0 transition-colors"
           >
             <Send className="w-3.5 h-3.5" />
             <span>{isSubmittingQuickChat ? t('extra.sending') : t('extra.send')}</span>
@@ -714,23 +714,23 @@ export const DashboardPage: React.FC = () => {
         </form>
       </div>
 
-      <div data-testid="orphan-processes" className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs">
-        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between gap-3">
+      <div data-testid="orphan-processes" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs">
+        <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('extra.orphanProcesses')}</h2>
-            <p className="text-xs text-[var(--text-secondary)]">{t('extra.orphanProcessesDesc')}</p>
+            <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.orphanProcesses')}</h2>
+            <p className="text-xs text-[var(--t-text-2)]">{t('extra.orphanProcessesDesc')}</p>
           </div>
-          <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
+          <button type="button" onClick={handleReap} disabled={isReaping || orphans.length === 0} className="px-3 py-2 rounded-lg bg-[var(--t-crit)] text-[var(--t-on-accent)] text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
             {isReaping ? t('extra.cleanupRunning') : t('extra.cleanup')} ({orphans.length})
           </button>
         </div>
         {orphans.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)]">
+              <thead className="bg-[var(--t-surface-2)] text-[var(--t-text-2)]">
                 <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">Task</th></tr>
               </thead>
-              <tbody className="divide-y divide-[var(--border-subtle)]">
+              <tbody className="divide-y divide-[var(--t-border)]">
                 {orphans.map((orphan) => <tr key={orphan.pid}>
                   <td className="px-6 py-3 font-mono">{orphan.pid}</td>
                   <td className="px-6 py-3 font-mono max-w-sm truncate" title={orphan.cwd}>{orphan.cwd}</td>
@@ -748,21 +748,21 @@ export const DashboardPage: React.FC = () => {
       <DailyUsageTable />
 
       {/* Recent events */}
-      <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors">
-        <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
+      <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors">
+        <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Activity className="w-5 h-5 text-[var(--t-purple)]" />
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('dashboard.eventStream')}</h2>
+            <h2 className="text-base font-semibold text-[var(--t-text)]">{t('dashboard.eventStream')}</h2>
           </div>
-          <span className="text-xs text-[var(--text-secondary)]">{t('dashboard.realtime')}</span>
+          <span className="text-xs text-[var(--t-text-2)]">{t('dashboard.realtime')}</span>
         </div>
 
         {events.length === 0 ? (
-          <div className="p-8 text-center text-[var(--text-secondary)] text-sm">
+          <div className="p-8 text-center text-[var(--t-text-2)] text-sm">
             {t('dashboard.noEvents')}
           </div>
         ) : (
-          <ul className="divide-y divide-[var(--border-subtle)]">
+          <ul className="divide-y divide-[var(--t-border)]">
             <CollapsibleList items={events} initial={10} step={10} storageKey="agenthub:dashboard:events" className="contents">
             {(event) => {
               const isClaude =
@@ -774,20 +774,20 @@ export const DashboardPage: React.FC = () => {
               return (
                 <li
                   key={event.id}
-                  className="px-6 py-3.5 flex items-center justify-between gap-4 text-sm hover:bg-[var(--bg-surface-hover)] transition-colors"
+                  className="px-6 py-3.5 flex items-center justify-between gap-4 text-sm hover:bg-[var(--t-hover)] transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     {isClaude && (
                       <span
                         data-testid="claude-event-icon"
-                        className="w-5 h-5 rounded-full flex items-center justify-center font-bold text-white text-[10px] shrink-0 shadow-2xs select-none"
+                        className="w-5 h-5 rounded-full flex items-center justify-center font-bold text-[var(--t-on-accent)] text-[10px] shrink-0 shadow-2xs select-none"
                         style={{ backgroundColor: 'var(--t-claude)' }}
                         title="Claude Code"
                       >
                         C
                       </span>
                     )}
-                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-[var(--bg-surface-subtle)] text-[var(--text-primary)] border border-[var(--border-subtle)] shrink-0">
+                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] border border-[var(--t-border)] shrink-0">
                       {event.type}
                     </span>
                     {event.taskId && (
@@ -799,12 +799,12 @@ export const DashboardPage: React.FC = () => {
                       </Link>
                     )}
                     {event.payload && (
-                      <span className="text-xs text-[var(--text-secondary)] truncate font-mono">
+                      <span className="text-xs text-[var(--t-text-2)] truncate font-mono">
                         {JSON.stringify(event.payload)}
                       </span>
                     )}
                   </div>
-                  <span className="text-xs text-[var(--text-muted)] shrink-0" title={Number.isFinite(parseApiTime(event.ts)) ? new Date(parseApiTime(event.ts)).toISOString() : String(event.ts)}>{formatTimeAgo(event.ts)}</span>
+                  <span className="text-xs text-[var(--t-text-3)] shrink-0" title={Number.isFinite(parseApiTime(event.ts)) ? new Date(parseApiTime(event.ts)).toISOString() : String(event.ts)}>{formatTimeAgo(event.ts)}</span>
                 </li>
               );
             }}

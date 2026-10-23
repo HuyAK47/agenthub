@@ -10,7 +10,8 @@ const version = String(packageJson.version);
 const platform = process.platform === 'darwin' ? 'macos' : process.platform;
 const archiveName = `agenthub-${version}-${platform}-${process.arch}.tar.gz`;
 const outputDir = path.join(root, 'release');
-const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-package-'));
+const tmpRoot = process.env.AGENTHUB_TEST_TMP_ROOT || os.tmpdir();
+const staging = fs.mkdtempSync(path.join(tmpRoot, 'agenthub-package-'));
 
 const required = [
   'dist',

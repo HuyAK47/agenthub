@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LIMITED_TEST_ENV, lowPriority, runInProcessGroup, testThreadLimit } from '../src/priority.js';
+import { lowPriority, runInProcessGroup, testThreadLimit } from '../src/priority.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -50,7 +50,8 @@ describe('priority helpers', () => {
       timeoutMs: 10_000,
     });
     expect(r.code).toBe(0);
-    expect(r.output).toBe(LIMITED_TEST_ENV.VITEST_MAX_THREADS);
+    const expected = String(testThreadLimit(Number(process.env.AGENTHUB_WORKER_COUNT || 1)));
+    expect(r.output).toBe(expected);
   });
 
   it('kills grandchildren left behind after the main command exits', async () => {

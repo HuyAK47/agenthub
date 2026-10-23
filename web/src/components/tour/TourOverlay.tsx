@@ -377,7 +377,7 @@ export const TourOverlay: React.FC = () => {
       {/* Vùng khoét sáng đúng vị trí phần tử: bóng 9999px phủ tối toàn bộ phần còn lại */}
       <div
         data-testid="tour-spotlight"
-        className="absolute rounded-xl pointer-events-none border-2 border-[var(--t-accent)] shadow-[0_0_0_9999px_rgba(0,0,0,0.55)] transition-all duration-150"
+        className="absolute rounded-xl pointer-events-none border-2 border-[var(--t-accent)] shadow-[0_0_0_9999px_var(--t-overlay-strong)] transition-all duration-150"
         style={{
           top: rect.top - 4,
           left: rect.left - 4,
@@ -432,7 +432,7 @@ export const TourOverlay: React.FC = () => {
             <button
               type="button"
               onClick={next}
-              className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white"
+              className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--t-on-accent)]"
             >
               {stepIndex === active.steps.length - 1 ? t('tour.finish') : t('tour.next')}
             </button>

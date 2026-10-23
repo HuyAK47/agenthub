@@ -204,6 +204,7 @@ export interface DeployStatus {
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
+  commitConvention?: { branchTemplate: string; commitTemplate: string; commitRegex?: string; mergeMessageTemplate: string };
   brain: {
     engine?: 'inherit' | 'claude' | 'codex';
     codexProfile?: string;
@@ -262,6 +263,7 @@ export interface Task {
   projectId: string;
   slug: string;
   title: string;
+  externalRef?: string | null;
   body?: string;
   level: TaskLevel;
   modelChain?: string | string[] | null;
@@ -893,6 +895,7 @@ export interface CreateTaskInput {
   project: string;
   slug: string;
   title: string;
+  externalRef?: string;
   body?: string;
   level: TaskLevel;
   dependsOn?: string[];

@@ -146,7 +146,7 @@ export const ClaudeSessionsPage: React.FC = () => {
           type="button"
           onClick={() => rescan.mutate()}
           disabled={rescan.isPending}
-          className="rounded-lg bg-[var(--t-accent)] text-white px-3 py-2 text-sm disabled:opacity-50 self-start sm:self-auto cursor-pointer"
+          className="rounded-lg bg-[var(--t-accent)] text-[var(--t-on-accent)] px-3 py-2 text-sm disabled:opacity-50 self-start sm:self-auto cursor-pointer"
         >
           {rescan.isPending ? '…' : t('extra.rescan')}
         </button>

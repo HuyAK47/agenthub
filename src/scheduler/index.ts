@@ -21,6 +21,7 @@ import {
   TaskNoteRepo,
 } from '../db/index.js';
 import { projectSettings } from '../projects/settings.js';
+import { renderCommitTemplate, renderTaskBranch } from '../commit-convention.js';
 import { isProjectWorktreeRootAccessible, projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
@@ -45,6 +46,7 @@ import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } 
 import { LoadGuard, LoadSnapshot } from '../load.js';
 import { measureProcessTree } from '../process-tree.js';
 import { ReferenceSnapshot, takeReferenceSnapshots, detectReferenceModifications, ReferenceModification } from '../references.js';
+import { cleanupTaskRunArtifacts } from '../temp-cleanup.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -1212,6 +1214,9 @@ export class Scheduler {
   private checkQuotaExpiry(): void {
     const expired = this.quotaService.cleanupExpired();
     if (expired.length > 0) {
+      for (const mark of expired) {
+        this.eventBus.emit('quota.cleared', undefined, mark);
+      }
       this.wakeWaitingQuotaTasks('quota_expired');
     }
   }
@@ -1271,7 +1276,7 @@ export class Scheduler {
     if (!task) return;
     const project = this.projectRepo.get(task.projectId);
     const baseRef = task.baseRef || project?.defaultBranch || 'main';
-    const branch = task.branch || `agenthub/${task.slug}`;
+    const branch = task.branch || (project ? renderTaskBranch(project, task) : `agenthub/${task.slug}`);
 
     const repoPath = (task.worktreePath && fs.existsSync(path.join(task.worktreePath, '.git')))
       ? task.worktreePath
@@ -1644,7 +1649,7 @@ export class Scheduler {
     if (markers.done) {
       const project = this.projectRepo.get(task.projectId);
       const baseRef = task.baseRef || project?.defaultBranch || 'main';
-      const branch = task.branch || `agenthub/${task.slug}`;
+      const branch = task.branch || (project ? renderTaskBranch(project, task) : `agenthub/${task.slug}`);
       if (project?.path) {
         const stats = await measureTaskLines(project.path, baseRef, branch);
         if (stats) diffStats = stats;
@@ -2822,7 +2827,7 @@ export class Scheduler {
         this.locks.release(profile.name, lockFile);
         return this.logStartSkipped(task, error instanceof Error ? error.message : String(error));
       }
-      const branch = task.branch || `agenthub/${task.slug}`;
+      const branch = task.branch || renderTaskBranch(project, task);
       const settings = projectSettings(project);
       if (settings.integration?.enabled) {
         try {
@@ -2926,6 +2931,10 @@ export class Scheduler {
 
     // Write task.md
     let prompt = PROTOCOL_PROMPT;
+    const convention = projectSettings(project).commitConvention;
+    const branchExample = renderTaskBranch(project, task);
+    prompt += `\n\n## Quy ước commit\n- Nhánh task: \`${branchExample}\`\n- Commit message mẫu: \`${renderCommitTemplate(convention.commitTemplate, { type: 'feat', scope: 'scope', ref: task.externalRef || 'REF-123', summary: 'summary' })}\`\n- Merge message mẫu: \`${renderCommitTemplate(convention.mergeMessageTemplate, { branch: branchExample, target: task.baseRef || project.defaultBranch })}\``;
+    if (convention.commitTemplate.includes('{ref}') && task.externalRef) prompt += `\n- External ref bắt buộc: \`${task.externalRef}\``;
     if (task.resume) {
       prompt += '\n\nTask đã làm dở – kiểm tra git log/status rồi làm tiếp, không làm lại.';
     }
@@ -3337,10 +3346,12 @@ export class Scheduler {
   private onTaskDoneOrCancelled(taskId: string): void {
     this.invalidateChecks(taskId);
     this.reviewNotified.delete(taskId);
-    if (!this.config.cleanup?.nodeModulesOnDone) return;
     const task = this.taskRepo.get(taskId);
-    if (!task || !task.worktreePath) return;
-    this.worktreeService.cleanNodeModules(task.worktreePath);
+    if (!task) return;
+    cleanupTaskRunArtifacts(this.runRepo.getByTask(taskId).map((run) => run.logPath));
+    if (this.config.cleanup?.nodeModulesOnDone && task.worktreePath) {
+      this.worktreeService.cleanNodeModules(task.worktreePath);
+    }
   }
 
   private invalidateChecks(taskId: string): void {

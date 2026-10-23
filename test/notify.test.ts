@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config.js';
 import { openDatabase, TaskRepo, QuotaMarkRepo, EventRepo, ProjectRepo, ProfileRepo } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 import { NotificationService } from '../src/notify.js';
+import { areAllProfilesQuotaExhaustedForFamily } from '../src/brain/digest.js';
 
 describe('NotificationService (Desktop Notifications)', () => {
   let tmpDir: string;
@@ -117,13 +118,23 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
-  it('notifies when Claude changes fallback step without including credentials', () => {
+  it('notifies when Claude has no fallback step without including credentials', () => {
     const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
     notifier.start();
-    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'apiKey' }, reason: 'quota' });
+    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'wait' }, reason: 'quota' });
     expect(execCalls).toHaveLength(1);
-    expect(execCalls[0].args.at(-1)).toBe('Claude fallback: đang dùng API key');
+    expect(execCalls[0].args.at(-1)).toBe('Claude fallback: đang dùng chờ reset');
     expect(execCalls.join(' ')).not.toContain('sk-');
+  });
+
+  it('does not notify when Claude still has a fallback step', () => {
+    const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
+    notifier.start();
+
+    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'model', model: 'claude-sonnet' }, reason: 'quota' });
+
+    expect(execCalls).toHaveLength(0);
+    notifier.stop();
   });
 
   it('uses critical urgency only for task.failed', () => {
@@ -203,6 +214,7 @@ describe('NotificationService (Desktop Notifications)', () => {
       eventBus,
       config,
       taskRepo,
+      profileRepo,
       quotaMarkRepo,
       exec: fakeExec,
     });
@@ -216,13 +228,46 @@ describe('NotificationService (Desktop Notifications)', () => {
     });
     expect(execCalls).toHaveLength(0);
 
-    // A second individual profile is also suppressed.
-    quotaMarkRepo.mark('chinh', 'claude', resetEpoch, 'test');
+    // From an active quota mark, while another account remains available.
+    quotaMarkRepo.mark('g1', 'claude', resetEpoch, 'test');
     eventBus.emit('quota.exhausted', undefined, {
-      profile: 'chinh',
+      profile: 'g1',
       family: 'claude',
     });
     expect(execCalls).toHaveLength(0);
+
+    notifier.stop();
+  });
+
+  it('groups waiting quota tasks and notifies again after the blockage clears', async () => {
+    for (let i = 1; i <= 3; i += 1) {
+      taskRepo.insert({
+        id: `proj/quota-${i}`,
+        projectId: 'proj',
+        slug: `quota-${i}`,
+        title: `Quota ${i}`,
+        status: 'waiting_quota',
+        waitReason: 'quota',
+      });
+    }
+
+    const notifier = new NotificationService({ eventBus, config, taskRepo, quotaMarkRepo, exec: fakeExec });
+    notifier.start();
+    eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
+    eventBus.emit('task.waiting_quota', 'proj/quota-2', { reason: 'quota' });
+    eventBus.emit('task.waiting_quota', 'proj/quota-3', { reason: 'quota' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toContain('3 task đang chờ quota');
+
+    eventBus.emit('quota.cleared', undefined, { family: 'gemini' });
+    for (let i = 1; i <= 3; i += 1) taskRepo.updateStatus(`proj/quota-${i}`, 'queued');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    taskRepo.updateStatus('proj/quota-1', 'waiting_quota', 'quota');
+    eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(execCalls).toHaveLength(2);
 
     notifier.stop();
   });
@@ -281,6 +326,38 @@ describe('NotificationService (Desktop Notifications)', () => {
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0].args.at(-1)).toBe('AgentHub: Mọi tài khoản đều đã hết quota');
     notifier.stop();
+  });
+
+  it('areAllProfilesQuotaExhaustedForFamily does not conflate claude engine profiles with agy profiles', () => {
+    profileRepo.upsert({ name: 'claude-1', engine: 'claude', kind: 'isolated', home: tmpDir, email: null, enabled: 1 });
+    const future = Math.floor(Date.now() / 1000) + 3600;
+
+    // Only claude engine profile exhausted on claude family, agy profiles are still available
+    quotaMarkRepo.mark('claude-1', 'claude', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'agy')).toBe(false);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(false);
+    quotaMarkRepo.clear('claude-1', 'claude');
+
+    // Both agy profiles exhausted on claude family
+    quotaMarkRepo.mark('g1', 'claude', future);
+    quotaMarkRepo.mark('chinh', 'claude', future);
+
+    // agy engine is exhausted for claude, but claude engine is not
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'agy')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(false);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(false);
+
+    // When claude engine exhausts as well
+    quotaMarkRepo.mark('claude-1', 'claude', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(true);
+
+    // For gemini, claude-1 profile is not conflated with agy
+    quotaMarkRepo.mark('g1', 'gemini', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'gemini')).toBe(false);
+    quotaMarkRepo.mark('chinh', 'gemini', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'gemini')).toBe(true);
   });
 
   it('deduplicates identical notifications within 30 minutes', () => {

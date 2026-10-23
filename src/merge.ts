@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runInProcessGroup } from './priority.js';
 import { projectSettings } from './projects/settings.js';
+import { renderCommitTemplate, renderTaskBranch } from './commit-convention.js';
 import { ensureIntegrationWorktree } from './projects/integration.js';
 import { workerEnvironment } from './worker-guard.js';
 
@@ -21,6 +22,7 @@ interface MergeTask {
   slug: string;
   branch: string | null;
   baseRef: string | null;
+  externalRef?: string | null;
 }
 
 interface MergeProject {
@@ -121,7 +123,7 @@ export async function mergeTaskIntoBase(
     timeoutSec = config.timeoutSec;
   }
 
-  const branch = task.branch || `agenthub/${task.slug}`;
+  const branch = task.branch || renderTaskBranch(project, task);
   const status = await git(repo, ['status', '--porcelain']);
   if (status) throw new MergeError(409, 'conflict', 'worktree tích hợp có thay đổi chưa commit');
 
@@ -130,7 +132,8 @@ export async function mergeTaskIntoBase(
   const env = workerEnvironment(hubHome, process.env, { project, cwd: repo, guards: false });
   const identity = await gitIdentityArgs(repo, env);
   try {
-    await execFileAsync('git', [...identity, 'merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${targetBranch}`], { cwd: repo, env });
+    const message = renderCommitTemplate(settings.commitConvention.mergeMessageTemplate, { branch, target: targetBranch });
+    await execFileAsync('git', [...identity, 'merge', '--no-ff', branch, '-m', message], { cwd: repo, env });
   } catch {
     let conflicts = '';
     try { conflicts = await git(repo, ['diff', '--name-only', '--diff-filter=U']); } catch { /* keep original error */ }

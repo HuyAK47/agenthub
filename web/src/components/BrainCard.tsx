@@ -58,7 +58,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
   return (
     <div
       data-testid="brain-card"
-      className={`p-5 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-xs transition-all ${
+      className={`p-5 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-xs transition-all ${
         isStale ? 'opacity-60' : ''
       }`}
     >
@@ -67,7 +67,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
         <div className="flex items-start sm:items-center gap-3.5 min-w-0">
           {/* Claude avatar */}
           <div
-            className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white text-lg shrink-0 shadow-xs select-none"
+            className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-[var(--t-on-accent)] text-lg shrink-0 shadow-xs select-none"
             style={{ backgroundColor: 'var(--t-claude)' }}
             title={t('extra.coordinator')}
             data-testid="brain-avatar"
@@ -97,7 +97,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
             <div className="flex items-baseline gap-2 flex-wrap">
               <h2
                 data-testid="brain-activity"
-                className="text-base font-bold text-[var(--text-primary)]"
+                className="text-base font-bold text-[var(--t-text)]"
               >
                 {brain.state ? stateLabel(brain.state) : activityLabel}
               </h2>
@@ -105,7 +105,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
               {timeAgoText && (
                 <span
                   data-testid="brain-time-ago"
-                  className="text-xs text-[var(--text-muted)]"
+                  className="text-xs text-[var(--t-text-3)]"
                 >
                   · {timeAgoText}
                 </span>
@@ -115,7 +115,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
             {brain.detail && (
               <p
                 data-testid="brain-detail"
-                className="text-sm text-[var(--text-secondary)] break-words"
+                className="text-sm text-[var(--t-text-2)] break-words"
               >
                 {brain.detail}
               </p>
@@ -145,7 +145,7 @@ export const BrainCard: React.FC<BrainCardProps> = ({ brain, quota, onRetryLimit
       </div>}
       {brain.state === 'waiting' && onRetryLimit && <button type="button" onClick={onRetryLimit} className="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-warn)]/15 text-[var(--t-warn)] border border-[var(--t-warn)]/30">{t('extra.retryLimit')}</button>}
       {brain.sessions && brain.sessions.length > 0 && <div className="mt-4 pt-3 border-t border-[var(--t-border)] space-y-2" data-testid="brain-sessions">
-        {brain.sessions.map((session) => <div key={session.sessionId} className="text-xs text-[var(--text-secondary)]">
+        {brain.sessions.map((session) => <div key={session.sessionId} className="text-xs text-[var(--t-text-2)]">
           <a href={session.link} className="font-medium text-[var(--t-accent)] hover:underline">{session.title}</a>
           <span className="ml-2">· {stateLabel(session.state)}</span>
           {session.lastUserRequest && <div className="truncate" title={session.lastUserRequest}>{t('extra.requestLabel')}: {session.lastUserRequest}</div>}

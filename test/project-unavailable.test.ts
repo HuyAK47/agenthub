@@ -29,6 +29,7 @@ describe('Project availability and unmounted drive handling', () => {
 
     config = loadConfig(tmpDir);
     config.agyHomesDir = agyHomesDir;
+    config.disk.minFreeGB = 0;
 
     db = openDatabase(config.dbPath);
     projectRepo = new ProjectRepo(db);

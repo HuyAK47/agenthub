@@ -36,9 +36,9 @@ function formatDuration(ms: number): string {
 
 function getQuotaColor(pct: number | null): string {
   if (pct == null) return 'bg-[var(--t-border)] text-[var(--t-text-3)]';
-  if (pct >= 50) return 'bg-emerald-500 text-white';
-  if (pct >= 20) return 'bg-amber-500 text-white';
-  return 'bg-rose-500 text-white';
+  if (pct >= 50) return 'bg-[var(--t-ok)] text-[var(--t-on-accent)]';
+  if (pct >= 20) return 'bg-[var(--t-warn)] text-[var(--t-on-accent)]';
+  return 'bg-[var(--t-crit)] text-[var(--t-on-accent)]';
 }
 
 function formatDisplayDate(dateStr: string, isToday: boolean, todayLabel: string): string {
@@ -86,10 +86,10 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
     return (
       <div
         data-testid="daily-usage-error"
-        className={`rounded-2xl border border-red-500/20 bg-red-500/5 p-6 ${className}`}
+        className={`rounded-2xl border border-[var(--t-crit)]/20 bg-[var(--t-crit-bg)] p-6 ${className}`}
       >
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-red-500">
+          <div className="flex items-center gap-2 text-sm text-[var(--t-crit)]">
             <AlertTriangle className="w-4 h-4" />
             <span>{t('dailyUsage.loadError')}</span>
           </div>
@@ -124,7 +124,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
               {t('dailyUsage.title')}
             </h2>
             {idleCount > 0 && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[var(--t-ok-bg)] text-[var(--t-ok)] border border-[var(--t-ok)]/30">
                 <Sparkles className="w-3 h-3" />
                 {idleCount} {t('dailyUsage.suggestedIdle')}
               </span>
@@ -189,7 +189,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                   onClick={() => setSelectedDateIndex(idx)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 border ${
                     isSelected
-                      ? 'bg-[var(--t-accent)] text-white border-[var(--t-accent)] shadow-sm'
+                      ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] border-[var(--t-accent)] shadow-sm'
                       : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] border-[var(--t-border)] hover:bg-[var(--t-surface-3)]'
                   }`}
                 >
@@ -197,7 +197,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                   {runs > 0 && (
                     <span
                       className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                        isSelected ? 'bg-white/20 text-white' : 'bg-[var(--t-surface-1)] text-[var(--t-text-3)]'
+                        isSelected ? 'bg-[var(--t-on-accent)]/20 text-[var(--t-on-accent)]' : 'bg-[var(--t-surface-1)] text-[var(--t-text-3)]'
                       }`}
                     >
                       {runs}
@@ -229,13 +229,13 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
               </div>
               <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]/60 p-3">
                 <span className="text-[11px] text-[var(--t-text-3)] block">{t('dailyUsage.claudeTokens')}</span>
-                <span className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                <span className="text-lg font-bold text-[var(--t-purple)]">
                   {formatNumber(currentDayData.claudeTokens ?? 0)}
                 </span>
               </div>
               <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)]/60 p-3">
                 <span className="text-[11px] text-[var(--t-text-3)] block">{t('dailyUsage.suggestedIdle')}</span>
-                <span className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
+                <span className="text-lg font-bold text-[var(--t-ok)]">
                   {idleCount} / {profiles.length}
                 </span>
               </div>
@@ -267,7 +267,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                       data-testid={`daily-usage-row-${profile.name}`}
                       className={`transition-colors ${
                         isHighlighted
-                          ? 'bg-emerald-500/8 dark:bg-emerald-500/12 border-l-4 border-l-emerald-500 hover:bg-emerald-500/15'
+                          ? 'bg-[var(--t-ok-bg)] border-l-4 border-l-[var(--t-ok)] hover:bg-[var(--t-ok-bg)]'
                           : 'hover:bg-[var(--t-surface-2)]/50'
                       }`}
                     >
@@ -278,10 +278,10 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                           <span
                             className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
                               profile.engine === 'codex'
-                                ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30'
+                                ? 'bg-[var(--t-purple-bg)] text-[var(--t-purple)] border border-[var(--t-purple)]/30'
                                 : profile.engine === 'claude'
-                                  ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
-                                  : 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30'
+                                  ? 'bg-[var(--t-warn-bg)] text-[var(--t-warn)] border border-[var(--t-warn)]/30'
+                                  : 'bg-[var(--t-info-bg)] text-[var(--t-info)] border border-[var(--t-info)]/30'
                             }`}
                           >
                             {profile.engine}
@@ -385,11 +385,11 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                       {/* Claude Tokens */}
                       <td className="py-3.5 px-4 text-right font-mono font-medium text-[var(--t-text-1)]">
                         {(metric.claudeTokens ?? 0) > 0 ? (
-                          <span className="text-purple-600 dark:text-purple-400">
+                          <span className="text-[var(--t-purple)]">
                             {formatNumber(metric.claudeTokens!)}
                           </span>
                         ) : profile.engine === 'claude' && metric.tokens > 0 ? (
-                          <span className="text-purple-600 dark:text-purple-400">
+                          <span className="text-[var(--t-purple)]">
                             {formatNumber(metric.tokens)}
                           </span>
                         ) : (
@@ -400,7 +400,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                       {/* Status / Idle Suggestion */}
                       <td className="py-3.5 px-4">
                         {profile.isIdle ? (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-[var(--t-ok-bg)] text-[var(--t-ok)] border border-[var(--t-ok)]/30">
                             <Sparkles className="w-3.5 h-3.5 shrink-0" />
                             <span>{t('dailyUsage.suggestedIdle')}</span>
                           </div>
@@ -408,7 +408,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                           <span className="text-[var(--t-text-3)]">{t('dailyUsage.disabled')}</span>
                         ) : metric.runs > 0 ? (
                           <span className="inline-flex items-center gap-1 text-[var(--t-text-2)]">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[var(--t-info)]" />
                             <span>{t('dailyUsage.active')}</span>
                           </span>
                         ) : (
@@ -429,7 +429,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                     <td className="py-2.5 px-4 text-right font-mono text-[var(--t-accent)]">
                       {formatNumber(currentDayData.totalTokens)}
                     </td>
-                    <td className="py-2.5 px-4 text-right font-mono text-purple-600 dark:text-purple-400">
+                    <td className="py-2.5 px-4 text-right font-mono text-[var(--t-purple)]">
                       {formatNumber(currentDayData.claudeTokens ?? 0)}
                     </td>
                     <td className="py-2.5 px-4">—</td>
@@ -463,7 +463,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                   key={profile.name}
                   className={`transition-colors ${
                     profile.isIdle
-                      ? 'bg-emerald-500/8 dark:bg-emerald-500/12 border-l-4 border-l-emerald-500 hover:bg-emerald-500/15'
+                      ? 'bg-[var(--t-ok-bg)] border-l-4 border-l-[var(--t-ok)] hover:bg-[var(--t-ok-bg)]'
                       : 'hover:bg-[var(--t-surface-2)]/50'
                   }`}
                 >
@@ -477,7 +477,7 @@ export const DailyUsageTable: React.FC<DailyUsageTableProps> = ({
                   </td>
                   <td className="py-3 px-3">
                     {profile.isIdle ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[var(--t-ok-bg)] text-[var(--t-ok)]">
                         {t('dailyUsage.suggestedIdle')}
                       </span>
                     ) : (
