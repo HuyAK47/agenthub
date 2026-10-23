@@ -1,0 +1,27 @@
+# Hoàn thành task u-tasks-by-project
+
+## Tóm tắt
+
+- Cập nhật nhánh với `integration` mới nhất.
+- Giải quyết xung đột tại `web/src/types/api.ts`, giữ đủ cả `priority` và `departmentId` trong kiểu `Project`.
+- Không thêm tính năng mới; giữ nguyên phần triển khai project task view đã được duyệt.
+
+## Kiểm tra
+
+- `npm run lint`: đạt.
+- `npm run typecheck`: đạt.
+- `npm run test:web -- --run`: đạt, 49 test files, 341 tests.
+- `npm test -- --run`: đạt, 92 test files, 1007 tests passed, 1 skipped (1008 tests tổng).
+
+## Việc còn thiếu
+
+- Không có.
+
+## Commit
+
+- `828e5ee` feat(web): add project task views and summaries
+- `fb50795` fix(web): paginate project task groups
+- `c26ec00` fix(web): complete project task filtering i18n
+- `97f7641` fix(web): count only running and queued tasks in project summary
+- `cef649a` fix(web): prioritize project tasks by running review attention waiting done
+- `29ee2b3` Merge branch 'integration' into agenthub/u-tasks-by-project

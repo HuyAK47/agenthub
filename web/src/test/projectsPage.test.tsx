@@ -656,4 +656,25 @@ describe('ProjectsPage', () => {
     expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
     expect(offRadio).not.toBeChecked();
   });
+
+  it('19. Chỉ đếm task đang chạy hoặc chờ (running, queued, waiting_quota) trong thẻ tóm tắt task của project', async () => {
+    vi.spyOn(client, 'getTasks').mockResolvedValue([
+      { id: 'proj-1~t1', projectId: 'proj-1', slug: 't1', title: 'Running', status: 'running' } as any,
+      { id: 'proj-1~t2', projectId: 'proj-1', slug: 't2', title: 'Queued', status: 'queued' } as any,
+      { id: 'proj-1~t3', projectId: 'proj-1', slug: 't3', title: 'Quota', status: 'waiting_quota' } as any,
+      { id: 'proj-1~t4', projectId: 'proj-1', slug: 't4', title: 'Review', status: 'review' } as any,
+      { id: 'proj-1~t5', projectId: 'proj-1', slug: 't5', title: 'Checking', status: 'checking' } as any,
+      { id: 'proj-1~t6', projectId: 'proj-1', slug: 't6', title: 'Blocked', status: 'blocked' } as any,
+      { id: 'proj-1~t7', projectId: 'proj-1', slug: 't7', title: 'Done', status: 'done' } as any,
+      { id: 'other~t8', projectId: 'other', slug: 't8', title: 'Other running', status: 'running' } as any,
+    ]);
+
+    renderPage();
+    await screen.findByText('XFarm');
+
+    const summaryLink = await screen.findByTestId('project-task-summary-proj-1');
+    expect(summaryLink).toBeInTheDocument();
+    expect(summaryLink).toHaveAttribute('href', '/tasks?project=proj-1');
+    expect(summaryLink).toHaveTextContent('3 · Xem task');
+  });
 });
