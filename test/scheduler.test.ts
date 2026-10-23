@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
-import { openDatabase, ProjectRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, ReviewRepo } from '../src/db/index.js';
+import { openDatabase, ProjectRepo, DepartmentRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, ReviewRepo } from '../src/db/index.js';
 import { Scheduler } from '../src/scheduler/index.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
 import { QuotaService } from '../src/quota/index.js';
@@ -313,6 +313,44 @@ describe('maxParallel limit', () => {
       scheduler.stop();
       for (const child of workers) child.kill();
     }
+  });
+
+  it('enforces the department limit across projects', () => {
+    const firstProjectPath = path.join(tmpDir, 'repo-first');
+    createTestProject(firstProjectPath);
+    const secondProjectPath = path.join(tmpDir, 'repo-second');
+    fs.mkdirSync(secondProjectPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: secondProjectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
+    fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Test');
+    execFileSync('git', ['add', '.'], { cwd: secondProjectPath });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: secondProjectPath,
+      env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' },
+    });
+    projectRepo.insert({ id: 'second-project', name: 'Second Project', path: secondProjectPath, defaultBranch: 'main', maxParallel: 3 });
+
+    const departmentRepo = new DepartmentRepo(db);
+    departmentRepo.insert({ id: 'eng', name: 'Engineering', priority: 10, maxParallel: 1, claudeDailyTokenBudget: 0, telegramTopicId: null });
+    projectRepo.update('test-project', { departmentId: 'eng' });
+    projectRepo.update('second-project', { departmentId: 'eng' });
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    profileRepo.upsert({ name: 'p2', engine: 'agy', kind: 'isolated', home: '/tmp/p2', email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/low', projectId: 'test-project', slug: 'low', title: 'Low', status: 'queued' });
+    taskRepo.insert({ id: 'second-project/high', projectId: 'second-project', slug: 'high', title: 'High', status: 'queued' });
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]), undefined, undefined, undefined, undefined, undefined, undefined, departmentRepo,
+    );
+    scheduler.tick();
+
+    expect(taskRepo.get('test-project/low')?.status).toBe('running');
+    expect(taskRepo.get('second-project/high')?.status).toBe('queued');
+    expect(taskRepo.get('second-project/high')?.waitReason).toBe('parallel');
+    expect(scheduler.getRunning().size).toBe(1);
+    scheduler.stop();
   });
 });
 
