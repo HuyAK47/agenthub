@@ -1197,6 +1197,27 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     });
   });
 
+  it('paginates chat sessions through the HTTP API with a stable cursor and server-side search', async () => {
+    for (const [id, title] of [['page-a', 'Alpha'], ['page-b', 'Beta'], ['page-c', 'Alpha 100%']]) {
+      ctx.chatSessionRepo.insert({ id, title, busy: 0 });
+    }
+
+    const first = await server.inject({ method: 'GET', url: '/api/chat/sessions?limit=2', headers: authHeaders() });
+    expect(first.statusCode).toBe(200);
+    const firstPage = JSON.parse(first.body) as { items: Array<{ id: string }>; total: number; nextCursor: string | null };
+    expect(firstPage.items).toHaveLength(2);
+    expect(firstPage.total).toBe(3);
+    expect(firstPage.nextCursor).toBeTruthy();
+
+    const second = await server.inject({ method: 'GET', url: `/api/chat/sessions?limit=2&cursor=${encodeURIComponent(firstPage.nextCursor!)}`, headers: authHeaders() });
+    const secondPage = JSON.parse(second.body) as { items: Array<{ id: string }>; nextCursor: string | null };
+    expect(secondPage.items).toHaveLength(1);
+    expect(new Set([...firstPage.items, ...secondPage.items].map((item) => item.id)).size).toBe(3);
+
+    const search = await server.inject({ method: 'GET', url: '/api/chat/sessions?limit=20&search=100%25', headers: authHeaders() });
+    expect(JSON.parse(search.body).items.map((item: { id: string }) => item.id)).toEqual(['page-c']);
+  });
+
   it('supports cursor pagination for messages with default limit 50 and hasMore flag', async () => {
     const sRes = await server.inject({
       method: 'POST',

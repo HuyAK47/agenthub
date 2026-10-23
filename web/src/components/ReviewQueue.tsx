@@ -2,7 +2,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Task } from '../types/api';
-import { getTasks } from '../api/client';
+import { getTasksPage } from '../api/client';
 import { ClipboardCheck, ArrowRight, Eye } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { getReviewerEngine } from '../utils/reviewer';
@@ -19,7 +19,7 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
   const { t } = useLocale();
   const { data: fetchedTasks } = useQuery({
     queryKey: ['tasks', 'review'],
-    queryFn: () => getTasks({ status: 'review' }),
+    queryFn: async () => (await getTasksPage({ status: 'review', limit: 20, sort: 'createdAt', order: 'desc' })).items,
     enabled: propTasks === undefined,
     refetchInterval: 5000,
   });
