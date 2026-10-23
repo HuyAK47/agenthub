@@ -56,7 +56,7 @@ describe('SettingsPage Shutdown Controls', () => {
   });
 
   it('renders shutdown button and shows running task count inside confirmation modal', async () => {
-    const shutdownSpy = vi.spyOn(client, 'shutdownHub').mockResolvedValue({ ok: true, queued: 3 });
+    const shutdownSpy = vi.spyOn(client, 'shutdownHub').mockResolvedValue({ ok: true, queued: 3, reviewers: 0 });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -110,7 +110,7 @@ describe('SettingsPage Shutdown Controls', () => {
 
   it('renders in English when locale is en', async () => {
     localStorage.setItem('agenthub_locale', 'en');
-    vi.spyOn(client, 'shutdownHub').mockResolvedValue({ ok: true, queued: 3 });
+    vi.spyOn(client, 'shutdownHub').mockResolvedValue({ ok: true, queued: 3, reviewers: 0 });
 
     render(
       <QueryClientProvider client={queryClient}>

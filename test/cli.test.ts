@@ -1,13 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
 import {
   cmdInstallService,
   cmdMcpInstall,
   cmdOpen,
   cmdLink,
   findProjectRoot,
+  cmdStop,
+  cmdStart,
+  cmdStatus,
+  cleanRemainingProcesses,
 } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
 import { getOrCreateToken } from '../src/auth.js';
@@ -176,6 +182,222 @@ describe('AgentHub CLI and Installation', () => {
       await expect(cmdBrain(config, ['idle', 'a'.repeat(301)])).rejects.toThrow('300');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('cmdStop calls /api/hub/shutdown and stops service via mock systemctl', async () => {
+    const config = loadConfig(process.env.AGENTHUB_HOME);
+    getOrCreateToken(config.tokenPath);
+
+    let shutdownBody: Record<string, unknown> | null = null;
+    const testServer = http.createServer((req, res) => {
+      if (req.url === '/api/hub/shutdown' && req.method === 'POST') {
+        let bodyStr = '';
+        req.on('data', (c) => { bodyStr += c; });
+        req.on('end', () => {
+          shutdownBody = JSON.parse(bodyStr || '{}');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, queued: 1, reviewers: 0, daemonPid: 999999, childPids: [] }));
+        });
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    await new Promise<void>((resolve) => testServer.listen(0, '127.0.0.1', resolve));
+    const addr = testServer.address() as { port: number };
+    config.port = addr.port;
+
+    const fakeLog = path.join(tmpHome, 'systemctl.log');
+    const fakeSystemctl = path.join(tmpHome, 'mock-systemctl');
+    fs.writeFileSync(fakeSystemctl, `#!/bin/sh\nprintf "%s\\n" "$*" >> "${fakeLog}"\nexit 0\n`, { mode: 0o755 });
+
+    const prevBin = process.env.AGENTHUB_SYSTEMCTL_BIN;
+    const prevTimeout = process.env.AGENTHUB_STOP_TIMEOUT_MS;
+    process.env.AGENTHUB_SYSTEMCTL_BIN = fakeSystemctl;
+    process.env.AGENTHUB_STOP_TIMEOUT_MS = '500';
+
+    try {
+      await cmdStop(config, []);
+
+      expect(shutdownBody).toEqual({ disable: false });
+      const logContent = fs.readFileSync(fakeLog, 'utf8');
+      expect(logContent).toContain('--user stop agenthub');
+      expect(logContent).not.toContain('disable');
+    } finally {
+      if (prevBin !== undefined) process.env.AGENTHUB_SYSTEMCTL_BIN = prevBin;
+      else delete process.env.AGENTHUB_SYSTEMCTL_BIN;
+      if (prevTimeout !== undefined) process.env.AGENTHUB_STOP_TIMEOUT_MS = prevTimeout;
+      else delete process.env.AGENTHUB_STOP_TIMEOUT_MS;
+      testServer.close();
+    }
+  });
+
+  it('cmdStop with --disable stops and disables service via mock systemctl', async () => {
+    const config = loadConfig(process.env.AGENTHUB_HOME);
+    getOrCreateToken(config.tokenPath);
+
+    let shutdownBody: Record<string, unknown> | null = null;
+    const testServer = http.createServer((req, res) => {
+      if (req.url === '/api/hub/shutdown' && req.method === 'POST') {
+        let bodyStr = '';
+        req.on('data', (c) => { bodyStr += c; });
+        req.on('end', () => {
+          shutdownBody = JSON.parse(bodyStr || '{}');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, queued: 1, reviewers: 0, daemonPid: 999999, childPids: [] }));
+        });
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    await new Promise<void>((resolve) => testServer.listen(0, '127.0.0.1', resolve));
+    const addr = testServer.address() as { port: number };
+    config.port = addr.port;
+
+    const fakeLog = path.join(tmpHome, 'systemctl-disable.log');
+    const fakeSystemctl = path.join(tmpHome, 'mock-systemctl-disable');
+    fs.writeFileSync(fakeSystemctl, `#!/bin/sh\nprintf "%s\\n" "$*" >> "${fakeLog}"\nexit 0\n`, { mode: 0o755 });
+
+    const prevBin = process.env.AGENTHUB_SYSTEMCTL_BIN;
+    const prevTimeout = process.env.AGENTHUB_STOP_TIMEOUT_MS;
+    process.env.AGENTHUB_SYSTEMCTL_BIN = fakeSystemctl;
+    process.env.AGENTHUB_STOP_TIMEOUT_MS = '500';
+
+    try {
+      await cmdStop(config, ['--disable']);
+
+      expect(shutdownBody).toEqual({ disable: true });
+      const logContent = fs.readFileSync(fakeLog, 'utf8');
+      expect(logContent).toContain('--user stop agenthub');
+      expect(logContent).toContain('--user disable agenthub');
+    } finally {
+      if (prevBin !== undefined) process.env.AGENTHUB_SYSTEMCTL_BIN = prevBin;
+      else delete process.env.AGENTHUB_SYSTEMCTL_BIN;
+      if (prevTimeout !== undefined) process.env.AGENTHUB_STOP_TIMEOUT_MS = prevTimeout;
+      else delete process.env.AGENTHUB_STOP_TIMEOUT_MS;
+      testServer.close();
+    }
+  });
+
+  it('cleanRemainingProcesses terminates lingering child processes', async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      detached: true,
+    });
+    expect(child.pid).toBeDefined();
+    const pid = child.pid!;
+
+    expect(() => process.kill(pid, 0)).not.toThrow();
+
+    await cleanRemainingProcesses(undefined, [pid], undefined, 1500, 100);
+
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it('cmdStart invokes mock systemctl enable --now and waits for /health', async () => {
+    const config = loadConfig(process.env.AGENTHUB_HOME);
+
+    const testServer = http.createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, version: '1.0.0' }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    await new Promise<void>((resolve) => testServer.listen(0, '127.0.0.1', resolve));
+    const addr = testServer.address() as { port: number };
+    config.port = addr.port;
+
+    const fakeLog = path.join(tmpHome, 'systemctl-start.log');
+    const fakeSystemctl = path.join(tmpHome, 'mock-systemctl-start');
+    fs.writeFileSync(fakeSystemctl, `#!/bin/sh\nprintf "%s\\n" "$*" >> "${fakeLog}"\nexit 0\n`, { mode: 0o755 });
+
+    const prevBin = process.env.AGENTHUB_SYSTEMCTL_BIN;
+    process.env.AGENTHUB_SYSTEMCTL_BIN = fakeSystemctl;
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await cmdStart(config);
+
+      const logContent = fs.readFileSync(fakeLog, 'utf8');
+      expect(logContent).toContain('--user enable --now agenthub');
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining(`✓ AgentHub đang chạy: http://127.0.0.1:${config.port}`));
+    } finally {
+      if (prevBin !== undefined) process.env.AGENTHUB_SYSTEMCTL_BIN = prevBin;
+      else delete process.env.AGENTHUB_SYSTEMCTL_BIN;
+      testServer.close();
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('cmdStatus displays service status, enable status, and worker count', async () => {
+    const config = loadConfig(process.env.AGENTHUB_HOME);
+
+    const fakeSystemctl = path.join(tmpHome, 'mock-systemctl-status');
+    fs.writeFileSync(
+      fakeSystemctl,
+      `#!/bin/sh
+if [ "$2" = "is-active" ]; then
+  echo "active"
+  exit 0
+elif [ "$2" = "is-enabled" ]; then
+  echo "enabled"
+  exit 0
+fi
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const prevBin = process.env.AGENTHUB_SYSTEMCTL_BIN;
+    process.env.AGENTHUB_SYSTEMCTL_BIN = fakeSystemctl;
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await cmdStatus(config);
+
+      expect(consoleSpy).toHaveBeenCalledWith('Service: đang chạy');
+      expect(consoleSpy).toHaveBeenCalledWith('Tự bật khi đăng nhập: có');
+      expect(consoleSpy).toHaveBeenCalledWith('Worker đang chạy: 0');
+    } finally {
+      if (prevBin !== undefined) process.env.AGENTHUB_SYSTEMCTL_BIN = prevBin;
+      else delete process.env.AGENTHUB_SYSTEMCTL_BIN;
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('cmdStatus reports clear message when service is not installed', async () => {
+    const config = loadConfig(process.env.AGENTHUB_HOME);
+
+    const fakeSystemctl = path.join(tmpHome, 'mock-systemctl-not-installed');
+    fs.writeFileSync(
+      fakeSystemctl,
+      `#!/bin/sh
+echo "Unit agenthub.service could not be found." >&2
+exit 4
+`,
+      { mode: 0o755 },
+    );
+
+    const prevBin = process.env.AGENTHUB_SYSTEMCTL_BIN;
+    process.env.AGENTHUB_SYSTEMCTL_BIN = fakeSystemctl;
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await cmdStatus(config);
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Service: chưa cài đặt (chạy \'agenthub install-service\' để cài đặt)'),
+      );
+    } finally {
+      if (prevBin !== undefined) process.env.AGENTHUB_SYSTEMCTL_BIN = prevBin;
+      else delete process.env.AGENTHUB_SYSTEMCTL_BIN;
+      consoleSpy.mockRestore();
     }
   });
 });
