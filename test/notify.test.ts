@@ -332,6 +332,13 @@ describe('NotificationService (Desktop Notifications)', () => {
     profileRepo.upsert({ name: 'claude-1', engine: 'claude', kind: 'isolated', home: tmpDir, email: null, enabled: 1 });
     const future = Math.floor(Date.now() / 1000) + 3600;
 
+    // Only claude engine profile exhausted on claude family, agy profiles are still available
+    quotaMarkRepo.mark('claude-1', 'claude', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'agy')).toBe(false);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(false);
+    quotaMarkRepo.clear('claude-1', 'claude');
+
     // Both agy profiles exhausted on claude family
     quotaMarkRepo.mark('g1', 'claude', future);
     quotaMarkRepo.mark('chinh', 'claude', future);

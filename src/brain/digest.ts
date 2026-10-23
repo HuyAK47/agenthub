@@ -269,8 +269,12 @@ export function areAllProfilesQuotaExhaustedForFamily(
 ): boolean {
   if (!profileRepo || !quotaMarkRepo || !family) return false;
   const allEnabled = profileRepo.getAll(true);
-  const targetEngine = engine ?? (family === 'codex' ? 'codex' : family === 'claude' ? (allEnabled.some((p) => p.engine === 'claude') ? 'claude' : 'agy') : 'agy');
-  const profiles = allEnabled.filter((profile) => profile.engine === targetEngine);
+  const profiles = allEnabled.filter((profile) => {
+    if (engine) return profile.engine === engine;
+    if (family === 'codex') return profile.engine === 'codex';
+    if (family === 'claude') return profile.engine === 'claude' || profile.engine === 'agy';
+    return profile.engine === 'agy';
+  });
   if (profiles.length === 0) return false;
   const epoch = Math.floor(now / 1000);
   const exhausted = new Set(
