@@ -2783,19 +2783,46 @@ export class TelegramBotService {
   private parseLeadingExternalRef(text: string): { text: string; externalRef?: string } {
     const trimmed = text.trim();
     const match = trimmed.match(/^([^\s|]+)\s+(.+)$/);
-    // A leading token is a ref unless it is plainly the first word of the
-    // legacy natural-language description. Unicode letters-only refs remain
-    // unambiguous when they use CJK/kana or are written in uppercase (for
-    // example `営業` and `ĐỀ`).
-    const token = match?.[1] || '';
-    const isUnicodeLettersOnly = /[^\p{ASCII}]/u.test(token) && /^\p{L}+$/u.test(token);
-    const isNaturalLanguageWord = isUnicodeLettersOnly
-      && !/^\p{Lu}+$/u.test(token)
-      && !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(token);
-    if (!match || isNaturalLanguageWord) {
+    if (!match) {
       return { text: trimmed };
     }
-    return { externalRef: match[1], text: match[2].trim() };
+    const token = match[1];
+    const rest = match[2].trim();
+
+    // 1. Structured tokens (containing numbers or punctuation/symbols like #, -, _, :, /).
+    const hasPunctuationOrDigit = /[\p{N}\p{P}\p{S}]/u.test(token);
+    if (hasPunctuationOrDigit) {
+      return { externalRef: token, text: rest };
+    }
+
+    // 2. CJK / ideographic tokens (e.g. 営業).
+    const isCjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(token);
+    if (isCjk) {
+      return { externalRef: token, text: rest };
+    }
+
+    // 3. All uppercase letters (e.g. ĐỀ, PROJ, ABC).
+    const isAllUpper = /^\p{Lu}+$/u.test(token);
+    if (isAllUpper) {
+      return { externalRef: token, text: rest };
+    }
+
+    // 4. Mixed case with internal capital (e.g. ABCfoo, ticketId).
+    const hasInternalCapital = /^\p{L}+$/u.test(token) && /.\p{Lu}/u.test(token);
+    if (hasInternalCapital) {
+      return { externalRef: token, text: rest };
+    }
+
+    // 5. Letter-only token followed by a capitalized or CJK description (e.g. "đề Sửa lỗi").
+    // In natural language descriptions without a ref (e.g. "Sửa lỗi đăng nhập", "Không thể kết nối"),
+    // the first word is capitalized and followed by a lowercase word. When the remainder starts with
+    // an uppercase letter or CJK character, a leading lowercase/word token is an external reference.
+    const restStartsWithCapitalOrCjk = /^[\p{Lu}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(rest);
+    if (restStartsWithCapitalOrCjk) {
+      return { externalRef: token, text: rest };
+    }
+
+    return { text: trimmed };
   }
 
   private async handleNewTaskDescription(chatId: number, description: string, externalRef?: string): Promise<void> {

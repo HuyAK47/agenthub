@@ -1580,6 +1580,18 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         },
       });
       expect(ctx.taskRepo.get('proj-shop/cap-nhat-noi-dung')?.externalRef).toBe('営業');
+
+      await bot.handleUpdate({
+        update_id: 28,
+        message: {
+          message_id: 28,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask đề Sửa lỗi',
+        },
+      });
+      expect(ctx.taskRepo.get('proj-shop/sua-loi')?.externalRef).toBe('đề');
+      expect(ctx.taskRepo.get('proj-shop/sua-loi')?.title).toBe('Sửa lỗi');
     });
 
     it('allows cancelling wizard via /cancel', async () => {
