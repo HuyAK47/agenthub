@@ -220,6 +220,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'focus', description: 'Tập trung tài nguyên cho một dự án: /focus <dự án>|off' },
   { command: 'shutdown', description: 'Tắt AgentHub (bật lại từ máy bằng agenthub start)' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
@@ -300,6 +301,7 @@ export class TelegramBotService {
   private waitingQuotaCheckTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
+  private focusDigest = new Map<string, number>();
   private reviewFallbackNotified = new Set<string>();
 
   // Bound handler for EventBus
@@ -902,12 +904,25 @@ export class TelegramBotService {
 
   async periodicCheck(): Promise<void> {
     try {
+      this.flushFocusDigest();
       await this.checkDecisionReminders();
       await this.checkMorningSummary();
       await this.checkScheduledDigest();
     } catch {
       // ignore
     }
+  }
+
+  private isFocusDeferredEvent(type: string): boolean {
+    return type.startsWith('task.') || type.startsWith('assistant.') || type.startsWith('brain.');
+  }
+
+  private flushFocusDigest(): void {
+    const focusProjectId = this.config.focus?.projectId;
+    if (!focusProjectId || this.focusDigest.size === 0) return;
+    const parts = [...this.focusDigest.entries()].map(([project, count]) => `${this.escapeHtml(project)}: ${count}`);
+    this.focusDigest.clear();
+    this.broadcastMessage(`🎯 <b>Tóm tắt khi đang tập trung ${this.escapeHtml(focusProjectId)}</b>\n${parts.join('\n')} thông báo từ project khác`);
   }
 
   // --- Long Polling ---
@@ -1284,6 +1299,10 @@ export class TelegramBotService {
         await this.handleStatusCommand(chatId);
         break;
 
+      case '/focus':
+        await this.handleFocusCommand(chatId, argStr);
+        break;
+
       case '/digest':
         await this.handleDigestCommand(chatId);
         break;
@@ -1373,6 +1392,27 @@ export class TelegramBotService {
       default:
         await this.sendMessage(chatId, `Lệnh không hợp lệ: ${cmd}. Gõ /help để xem hướng dẫn.`);
         break;
+    }
+  }
+
+  private async handleFocusCommand(chatId: number, argStr: string): Promise<void> {
+    const target = argStr.trim();
+    const current = this.service.getFocus();
+    if (!target) {
+      await this.sendMessage(chatId, current.projectId
+        ? `🎯 Đang tập trung cho <b>${this.escapeHtml(current.projectId)}</b>\nTask khác đang chờ: ${this.taskRepo.getByStatus('queued').filter((task) => task.waitReason === 'focus').length}`
+        : '🎯 Chưa bật chế độ tập trung.');
+      return;
+    }
+    try {
+      const result = this.service.setFocus({ projectId: target.toLowerCase() === 'off' ? null : target });
+      if (!result.focus.projectId) {
+        await this.sendMessage(chatId, `▶️ Đã tắt tập trung. ${result.resumed} task được chạy lại.`);
+      } else {
+        await this.sendMessage(chatId, `🎯 Đã tập trung cho <b>${this.escapeHtml(result.focus.projectId)}</b>. ${result.paused} task bị tạm dừng, ${result.waiting} task khác đang chờ.`);
+      }
+    } catch (error) {
+      await this.sendMessage(chatId, `❌ ${this.escapeHtml(error instanceof Error ? error.message : String(error))}`);
     }
   }
 
@@ -3476,14 +3516,19 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     // 1. Brain auto mode: suppress raw task notifications
-    const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type.startsWith('deploy.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
+    try {
+      const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type.startsWith('deploy.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
     this.notificationProjectId = isSystemEvent ? null : projectId;
     this.notificationDedupProjectId = projectId;
-    try {
-      const prefix = this.projectPrefix(projectId);
-      const minimal = this.isMinimalProject(projectId);
-      const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
-      if (effectiveMode === 'auto') {
+    const focusProjectId = this.config.focus?.projectId;
+    if (focusProjectId && projectId && projectId !== focusProjectId && this.isFocusDeferredEvent(type)) {
+      this.focusDigest.set(projectId, (this.focusDigest.get(projectId) || 0) + 1);
+      return;
+    }
+    const prefix = this.projectPrefix(projectId);
+    const minimal = this.isMinimalProject(projectId);
+    const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
+    if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
         isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
@@ -4309,6 +4354,7 @@ export class TelegramBotService {
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/focus &lt;dự án&gt; - Tập trung tài nguyên cho dự án; /focus off để tắt
 /shutdown - Tắt AgentHub; bật lại từ máy bằng <code>agenthub start</code>
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /plans - Xem 5 kế hoạch gần nhất và tiến độ

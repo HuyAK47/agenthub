@@ -523,7 +523,11 @@ export const DashboardPage: React.FC = () => {
                                   : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] border-[var(--t-border)]'
                               }`}
                             >
-                              {worker.pauseReason === 'load' ? t('status.pausedOverload') : t('status.paused')}
+                              {worker.pauseReason === 'load'
+                                ? t('status.pausedOverload')
+                                : worker.pauseReason === 'focus'
+                                  ? t('status.pausedFocus')
+                                  : t('status.paused')}
                             </span>
                           </div>
                         )}

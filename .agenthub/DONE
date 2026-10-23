@@ -1,0 +1,24 @@
+# Hoàn tất task project focus
+
+## Tóm tắt
+
+- Cập nhật nhánh với `integration`, giải quyết merge conflict và giữ nguyên các thay đổi focus đã được duyệt.
+- Bổ sung các thay đổi focus/UI/Telegram và test đi kèm trong merge result.
+- Đã kiểm tra không còn conflict marker; sửa trailing whitespace phát hiện bởi `git diff --check`.
+
+## Kiểm tra
+
+- `npm run lint`: PASS.
+- `npm run typecheck`: PASS.
+- `npm test -- --run test/focus.test.ts test/telegram.test.ts`: PASS, 96 tests.
+- `npm test -- --run test/bulletin.test.ts`: PASS, 11 tests.
+- `npm run test:web -- --run`: PASS, 348 tests.
+- `npm test -- --run`: đã chạy trực tiếp với timeout 300 giây nhưng timeout trước khi hoàn tất toàn bộ suite; trong lượt đó `focus.test.ts` 9/9 và các suite đã chạy đều pass, một lần `bulletin.test.ts` gặp lỗi `disk I/O error` do môi trường. Chạy lại riêng bulletin đã pass 11/11.
+
+## Còn thiếu
+
+- Không còn thay đổi code nào cần xử lý trong phạm vi lượt này. Full backend suite chưa có một kết quả hoàn tất trong giới hạn 300 giây.
+
+## Commit
+
+- `fa811fe merge: integrate latest integration changes`

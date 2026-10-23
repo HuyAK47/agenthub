@@ -32,6 +32,8 @@ export const en: typeof vi = {
     running: 'running',
     hard: 'Hard',
     easy: 'Easy',
+    focusBanner: 'Focused on {project} — {count} other task(s) are waiting',
+    stopFocus: 'Stop focus',
   },
   status: {
     queued: 'Queued',
@@ -46,8 +48,10 @@ export const en: typeof vi = {
     checking: 'Checking',
     paused: 'Paused',
     pausedOverload: 'Paused (overloaded)',
+    pausedFocus: 'Paused because another project is focused',
   },
   waitReason: {
+    focus: 'Waiting because another project is focused',
     disk: 'Waiting for disk ({free} GB free / {min} GB needed)',
     diskNamed: 'Waiting for {label} ({free} GB free / {min} GB needed)',
     diskShort: 'Waiting for disk',
@@ -846,6 +850,8 @@ export const en: typeof vi = {
   projects: {
     title: 'Project Management',
     subtitle: 'Register and configure software projects for AI workers to create worktrees and run tasks.',
+    focusProject: 'Focus this project',
+    unfocusProject: 'Stop focus',
     registerBtn: 'Register Project',
     closeFormBtn: 'Close form',
     formTitle: 'Register New Project',

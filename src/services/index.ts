@@ -501,6 +501,11 @@ export const UpdateConfigSchema = z.object({
     fallback: ReviewerFallbackSchema.partial().optional(),
     arbiter: z.object({ engine: z.enum(['codex', 'claude']), model: z.string().min(1) }).optional(),
   }).optional(),
+  focus: z.object({
+    projectId: z.string().min(1).nullable().optional(),
+    since: z.string().nullable().optional(),
+    pauseRunning: z.boolean().optional(),
+  }).optional(),
   brain: z.object({
     engine: z.enum(['claude', 'codex']).optional(),
     fallback: z.array(z.discriminatedUnion('type', [
@@ -717,6 +722,9 @@ export function formatEventSummary(
       }
       if (reason === 'profile_busy') {
         return `${taskLabel} chờ tài khoản rảnh`;
+      }
+      if (reason === 'focus') {
+        return `${taskLabel} chờ vì đang tập trung cho project khác`;
       }
       return `${taskLabel} chờ quota khả dụng`;
     }
@@ -1164,6 +1172,7 @@ export class AppService {
       done: 0,
       blocked: 0,
       cancelled: 0,
+      focusWaiting: 0,
     };
 
     const tasksByProject: Record<string, Record<string, number>> = {};
@@ -1182,8 +1191,10 @@ export class AppService {
       };
     }
 
+    const focusWaitingTaskIds = new Set<string>();
     for (const t of tasks) {
       byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+      if (t.waitReason === 'focus') focusWaitingTaskIds.add(t.id);
       if (!tasksByProject[t.projectId]) {
         tasksByProject[t.projectId] = {
           draft: 0,
@@ -1200,6 +1211,11 @@ export class AppService {
       }
       tasksByProject[t.projectId][t.status] = (tasksByProject[t.projectId][t.status] || 0) + 1;
     }
+
+    for (const [taskId, runtime] of runningMap.entries()) {
+      if (runtime.paused && runtime.pauseReason === 'focus') focusWaitingTaskIds.add(taskId);
+    }
+    byStatus.focusWaiting = focusWaitingTaskIds.size;
 
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
@@ -1306,6 +1322,7 @@ export class AppService {
       recentEvents,
       brain: this.brainService?.getStatus(),
       schedulerPaused: this.scheduler.isPaused(),
+      focus: this.config.focus,
       disk: {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
@@ -3986,6 +4003,7 @@ export class AppService {
       },
       assistant: this.config.assistant,
       reviewer: this.config.reviewer,
+      focus: this.config.focus,
       notifications: this.config.notifications,
       savings: this.config.savings,
       load: this.config.load,
@@ -4001,6 +4019,28 @@ export class AppService {
       },
       ui: this.config.ui,
     };
+  }
+
+  getFocus() {
+    return this.config.focus;
+  }
+
+  setFocus(raw: unknown) {
+    const parsed = z.object({ projectId: z.string().min(1).nullable(), pauseRunning: z.boolean().optional() }).parse(raw);
+    if (parsed.projectId && !this.projectRepo.get(parsed.projectId)) {
+      throw new HttpError(404, 'not_found', `Project "${parsed.projectId}" không tồn tại`);
+    }
+    const focus = {
+      projectId: parsed.projectId,
+      since: parsed.projectId ? new Date().toISOString() : null,
+      pauseRunning: parsed.pauseRunning ?? this.config.focus.pauseRunning,
+    };
+    updateConfigInMemory(this.config, { focus });
+    saveConfig(this.config.hubHome, { focus });
+    const changes = this.scheduler.applyFocus();
+    this.scheduler.triggerTick();
+    this.scheduler.getEventBus().emit('focus.changed', undefined, { focus, ...changes });
+    return { focus, ...changes };
   }
 
   getModelOptions() {
@@ -4028,6 +4068,10 @@ export class AppService {
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
+    if (parsed.focus) {
+      this.scheduler.applyFocus();
+      this.scheduler.triggerTick();
+    }
 
     if (parsed.telegram?.enabled !== undefined && this.telegramBotService) {
       if (parsed.telegram.enabled) {

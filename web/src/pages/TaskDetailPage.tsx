@@ -537,6 +537,8 @@ export const TaskDetailPage: React.FC = () => {
                 >
                   {(task.pauseReason === 'load' || task.currentRun?.pauseReason === 'load')
                     ? t('status.pausedOverload')
+                    : (task.pauseReason === 'focus' || task.currentRun?.pauseReason === 'focus')
+                      ? t('status.pausedFocus')
                     : t('status.paused')}
                 </span>
               )}

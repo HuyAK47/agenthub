@@ -259,7 +259,7 @@ export interface Review {
   model?: string;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
 
 export interface Task {
   id: string; // project~slug or project/slug
@@ -302,12 +302,12 @@ export interface Task {
     model?: string;
     profileName?: string;
     paused?: boolean;
-    pauseReason?: 'manual' | 'load' | null;
+    pauseReason?: 'manual' | 'load' | 'focus' | null;
     rss?: number;
     cpu?: number;
   } | null;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
   checks?: CheckResult[];
   sourceRef?: {
     taskId: string;
@@ -415,7 +415,7 @@ export interface RunningWorker {
   rss?: number;
   cpu?: number;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
 }
 
 export type BrainActivity =
@@ -495,6 +495,7 @@ export interface TaskNote {
 }
 
 export interface HubStatus {
+  focus?: { projectId: string | null; since: string | null; pauseRunning: boolean };
   tasks: Record<string, number>;
   profiles?: Profile[];
   running: RunningWorker[];

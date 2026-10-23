@@ -125,7 +125,7 @@ interface RunningTask {
   lastTicks?: number;
   lastTicksAt?: number;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
   pausedAt?: number | null;
   referenceSnapshots?: ReferenceSnapshot[];
 }
@@ -341,9 +341,13 @@ export class Scheduler {
     return this.running;
   }
 
-  effectiveParallel(project: { maxParallel: number; departmentId?: string }): number {
+  effectiveParallel(project: { maxParallel: number; id?: string; departmentId?: string }): number {
     const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
-    return this.loadGuard.effectiveParallel(Math.min(project.maxParallel, department?.maxParallel || project.maxParallel));
+    const projectLimit = Math.min(project.maxParallel, department?.maxParallel || project.maxParallel);
+    const focus = this.getFocus();
+    const load = this.loadGuard.getStatus();
+    if (focus.projectId && project.id === focus.projectId && load.highSince === null) return projectLimit;
+    return this.loadGuard.effectiveParallel(projectLimit);
   }
 
   private parallelUsage(project: { id: string; departmentId?: string }): { project: number; department: number } {
@@ -396,7 +400,7 @@ export class Scheduler {
     return this.paused;
   }
 
-  pauseTask(taskId: string, reason: 'manual' | 'load' = 'manual'): boolean {
+  pauseTask(taskId: string, reason: 'manual' | 'load' | 'focus' = 'manual'): boolean {
     const rt = this.running.get(taskId);
     if (!rt) return false;
     if (rt.paused) return true;
@@ -452,6 +456,40 @@ export class Scheduler {
     return true;
   }
 
+  getFocus(): AgentHubConfig['focus'] {
+    return this.config.focus || { projectId: null, since: null, pauseRunning: true };
+  }
+
+  applyFocus(): { paused: number; resumed: number; waiting: number } {
+    const focus = this.getFocus();
+    let paused = 0;
+    let resumed = 0;
+    let waiting = 0;
+    for (const rt of this.running.values()) {
+      if (!focus.projectId || rt.projectId === focus.projectId) {
+        if (rt.paused && rt.pauseReason === 'focus' && this.resumeTask(rt.taskId)) resumed++;
+      } else if (focus.pauseRunning) {
+        if (!rt.paused && this.pauseTask(rt.taskId, 'focus')) paused++;
+      } else if (rt.paused && rt.pauseReason === 'focus' && this.resumeTask(rt.taskId)) {
+        resumed++;
+      }
+    }
+    for (const task of this.taskRepo.getByStatus('queued')) {
+      if (focus.projectId && task.projectId !== focus.projectId) {
+        if (task.waitReason !== 'focus') {
+          this.taskRepo.update(task.id, { status: 'queued', waitReason: 'focus' });
+          this.eventBus.emit('task.queued', task.id, { reason: 'focus', projectId: focus.projectId });
+        }
+        waiting++;
+      } else if (task.waitReason === 'focus') {
+        this.taskRepo.update(task.id, { status: 'queued', waitReason: null });
+        this.eventBus.emit('task.queued', task.id, { reason: 'focus_cleared' });
+      }
+    }
+    this.pumpChecks();
+    return { paused, resumed, waiting };
+  }
+
   measureTaskResources(rt: RunningTask): void {
     const task = this.taskRepo.get(rt.taskId);
     const prev = rt.lastTicks !== undefined && rt.lastTicksAt !== undefined
@@ -476,6 +514,7 @@ export class Scheduler {
     this.lastOrphanScan = 0;
     // Recover crashed runs on startup
     this.recoverOnStartup();
+    this.applyFocus();
     this.skipSchedulingOnce = true;
 
     // Start the scheduler loop (every 2 seconds)
@@ -822,6 +861,8 @@ export class Scheduler {
     while (!this.stopped && this.checkingActive.size < limit) {
       const index = this.checkingQueue.findIndex((entry) => {
         const task = this.taskRepo.get(entry.taskId);
+        const focus = this.getFocus();
+        if (focus.projectId && task && task.projectId !== focus.projectId) return false;
         const worktree = task?.worktreePath || `project:${task?.projectId || entry.taskId}`;
         return !this.checkingWorktrees.has(worktree);
       });
@@ -1919,6 +1960,15 @@ export class Scheduler {
     );
 
     for (const task of queuedTasks) {
+      const focus = this.getFocus();
+      if (focus.projectId && task.projectId !== focus.projectId) {
+        if (task.waitReason !== 'focus') {
+          this.taskRepo.update(task.id, { status: 'queued', waitReason: 'focus' });
+          this.eventBus.emit('task.queued', task.id, { reason: 'focus', projectId: focus.projectId });
+        }
+        continue;
+      }
+      if (task.waitReason === 'focus') this.taskRepo.update(task.id, { status: 'queued', waitReason: null });
       if (task.notBefore != null && task.notBefore > Math.floor(Date.now() / 1000)) continue;
       // Check dependencies
       if (!this.areDependenciesMet(task)) continue;
@@ -1991,6 +2041,8 @@ export class Scheduler {
     }
     this.failoverWasActive = snapshot.active;
     for (const task of this.taskRepo.getByStatus('review')) {
+      const focus = this.getFocus();
+      if (focus.projectId && task.projectId !== focus.projectId) continue;
       if (this.reviewerRuns.has(task.id)) continue;
       if (task.reviewerEscalated) {
         const last = this.reviewRepo.getByTask(task.id).at(-1);
@@ -2156,7 +2208,12 @@ export class Scheduler {
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
     const lastEscalationId = escalations[escalations.length - 1].id;
-    return !this.hasAutomatedVerdictAfter(task.id, lastEscalationId);
+    if (this.hasAutomatedVerdictAfter(task.id, lastEscalationId)) return false;
+    // Keep compatibility with durable review rows written by older daemons that did not
+    // emit review.completed. Restrict this fallback to the legacy Claude arbiter actor so
+    // a stale pre-escalation Codex review cannot satisfy the current escalation.
+    const lastReview = this.reviewRepo?.getByTask(task.id).at(-1);
+    return !(lastReview?.actor === 'claude-reviewer' && lastReview.verdict === 'changes_requested');
   }
 
   /**
@@ -2169,13 +2226,18 @@ export class Scheduler {
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     const lastEscalationId = escalations.at(-1)?.id;
-    if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    if (lastEscalationId == null) return;
+    const hasEventVerdict = this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested');
+    const legacyReviews = this.reviewRepo?.getByTask(task.id)
+      .filter((review) => review.actor === 'claude-reviewer' && review.verdict === 'changes_requested') ?? [];
+    if (!hasEventVerdict && legacyReviews.length === 0) return;
     // Count arbiter rejections across every arbiter round (from the second escalation on), so a task
     // that keeps getting re-escalated is still blocked after ARBITER_ROUNDS instead of looping forever.
     const arbiterStartId = escalations[1]?.id ?? lastEscalationId;
     const rejections = this.eventRepo.getByTask(task.id)
       .filter((event) => event.id > arbiterStartId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
-    if (rejections > ARBITER_ROUNDS) {
+    const totalRejections = rejections || legacyReviews.length;
+    if (totalRejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {
         reason: 'review_rounds_exhausted',
@@ -2187,7 +2249,7 @@ export class Scheduler {
     let chain: string[] = [];
     try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
     this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
-    this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Arbiter yêu cầu sửa.'}\n\n(Reviewer đã từ chối nhiều vòng và arbiter cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
+    this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Arbiter yêu cầu sửa.'}\n\n(Reviewer đã từ chối nhiều vòng và arbiter cũng yêu cầu sửa; giao lại lần ${totalRejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
   }
 
   private hasAutomatedVerdictAfter(taskId: string, eventId: number, verdict?: ReviewerVerdict): boolean {

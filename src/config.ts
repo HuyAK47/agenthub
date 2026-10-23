@@ -271,6 +271,11 @@ export interface AgentHubConfig {
     easy: string[];
   };
   defaultTimeout: number;
+  focus: {
+    projectId: string | null;
+    since: string | null;
+    pauseRunning: boolean;
+  };
   multiplePerProvider: boolean;
   multiplePerProviderConfigured: boolean;
   slotsPerAgyProfile: number;
@@ -345,6 +350,7 @@ export function saveConfig(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    focus?: Partial<AgentHubConfig['focus']>;
     multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
@@ -449,6 +455,9 @@ export function saveConfig(
     ...(patch.reviewer && typeof patch.reviewer === 'object'
       ? { reviewer: { ...((current.reviewer as Record<string, unknown>) || {}), ...patch.reviewer } }
       : {}),
+    ...(patch.focus && typeof patch.focus === 'object'
+      ? { focus: { ...((current.focus as Record<string, unknown>) || {}), ...patch.focus } }
+      : {}),
     ...(patch.disk ? { disk: { ...((current.disk as Record<string, unknown>) || {}), ...patch.disk } } : {}),
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
@@ -519,6 +528,7 @@ export function updateConfigInMemory(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    focus?: Partial<AgentHubConfig['focus']>;
     multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
@@ -569,6 +579,7 @@ export function updateConfigInMemory(
   if (patch.defaultTimeout !== undefined) {
     config.defaultTimeout = patch.defaultTimeout;
   }
+  if (patch.focus) config.focus = { ...config.focus, ...patch.focus };
   if (patch.multiplePerProvider !== undefined) {
     config.multiplePerProvider = patch.multiplePerProvider;
     config.multiplePerProviderConfigured = true;
@@ -793,6 +804,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
 
   const envPort = process.env.AGENTHUB_PORT ? parseInt(process.env.AGENTHUB_PORT, 10) : undefined;
   const port = (envPort && !isNaN(envPort)) ? envPort : ((userConfig.port as number) || 7700);
+  const rawFocus = (userConfig.focus && typeof userConfig.focus === 'object' ? userConfig.focus : {}) as Record<string, unknown>;
 
   const chatRaw = (userConfig.chat as Record<string, unknown>) || {};
   const chat: ChatConfig = {
@@ -1014,6 +1026,11 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
+    focus: {
+      projectId: typeof rawFocus.projectId === 'string' ? rawFocus.projectId : null,
+      since: typeof rawFocus.since === 'string' ? rawFocus.since : null,
+      pauseRunning: rawFocus.pauseRunning !== false,
+    },
     multiplePerProvider: userConfig.multiplePerProvider !== false,
     multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,

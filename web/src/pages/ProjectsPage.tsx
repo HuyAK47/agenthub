@@ -11,6 +11,8 @@ import {
   getCiRunsPage,
   getArchivedProjects,
   getProjects,
+  getFocus,
+  setFocus,
   getTasks,
   updateProjectKnowledge,
 } from '../api/client';
@@ -414,6 +416,14 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: focus } = useQuery({ queryKey: ['focus'], queryFn: getFocus });
+  const focusMutation = useMutation({
+    mutationFn: (projectId: string | null) => setFocus(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['focus'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
   });
   const { data: projectTasks = [] } = useQuery({
     queryKey: ['tasks'],
@@ -965,6 +975,16 @@ export const ProjectsPage: React.FC = () => {
                     >
                       <Settings2 className="w-3.5 h-3.5" />
                       <span>{t('projects.settings')}</span>
+                    </Button>
+                    <Button
+                      variant={focus?.projectId === proj.id ? 'primary' : 'ghost'}
+                      size="sm"
+                      onClick={() => focusMutation.mutate(focus?.projectId === proj.id ? null : proj.id)}
+                      disabled={focusMutation.isPending}
+                      className="gap-1.5"
+                    >
+                      <span aria-hidden="true">🎯</span>
+                      <span>{focus?.projectId === proj.id ? t('projects.unfocusProject') : t('projects.focusProject')}</span>
                     </Button>
 
                     <Button

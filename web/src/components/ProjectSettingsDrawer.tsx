@@ -35,6 +35,8 @@ import {
   rerunProjectDeploy,
   getProjectDeployStatus,
   getConfig,
+  getFocus,
+  setFocus,
   getReviewChecklistPreview,
   createTask,
 } from '../api/client';
@@ -182,6 +184,14 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 }) => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
+  const { data: focus } = useQuery({ queryKey: ['focus'], queryFn: getFocus });
+  const focusMutation = useMutation({
+    mutationFn: (projectId: string | null) => setFocus(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['focus'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
 
   const { data: config } = useQuery({
     queryKey: ['config'],
@@ -666,6 +676,16 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               {project.path}
             </p>
           </div>
+
+          <Button
+            variant={focus?.projectId === project.id ? 'primary' : 'secondary'}
+            size="sm"
+            onClick={() => focusMutation.mutate(focus?.projectId === project.id ? null : project.id)}
+            disabled={focusMutation.isPending}
+            className="shrink-0"
+          >
+            🎯 {focus?.projectId === project.id ? t('projects.unfocusProject') : t('projects.focusProject')}
+          </Button>
 
           <Button
             variant="ghost"
