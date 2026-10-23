@@ -7,13 +7,24 @@ import { TelegramCard } from '../components/TelegramCard';
 import { deletePermissionRule, getPermissionRules } from '../api/chat';
 import { useTour } from '../components/tour/TourContext';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
+import { DataTable } from '../components/ui';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
   const { openTour } = useTour();
   const queryClient = useQueryClient();
-  const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
+  const [permissionPage, setPermissionPage] = useState(1);
+  const [permissionCursors, setPermissionCursors] = useState<Record<number, string | undefined>>({});
+  const permissionRules = useQuery({
+    queryKey: ['permissionRules', permissionPage, permissionCursors[permissionPage - 1]],
+    queryFn: () => getPermissionRules({ limit: 20, cursor: permissionCursors[permissionPage - 1] }),
+  });
+  useEffect(() => {
+    if (permissionRules.data?.nextCursor) setPermissionCursors((current) => ({ ...current, [permissionPage]: permissionRules.data!.nextCursor || undefined }));
+  }, [permissionPage, permissionRules.data?.nextCursor]);
   const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
+  const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
+  const codexProfiles = profiles.filter((p) => p.engine === 'codex' && Boolean(p.enabled));
 
   const [hardChain, setHardChain] = useState<string>('');
   const [easyChain, setEasyChain] = useState<string>('');
@@ -35,6 +46,8 @@ export const SettingsPage: React.FC = () => {
   const [claudeOverhead, setClaudeOverhead] = useState<number>(40_000);
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
+  const [brainEngine, setBrainEngine] = useState<'claude' | 'codex'>('claude');
+  const [codexProfile, setCodexProfile] = useState<string>('');
   const [desktopNotifyLevel, setDesktopNotifyLevel] = useState<'all' | 'important' | 'critical' | 'off'>('important');
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
   const [brainPermissions, setBrainPermissions] = useState<'standard' | 'trusted' | 'full'>('standard');
@@ -132,6 +145,8 @@ export const SettingsPage: React.FC = () => {
         }
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
+      setBrainEngine(config.brain?.engine || 'claude');
+      setCodexProfile(config.brain?.codexProfile || '');
       setDesktopNotifyLevel(config.notifications?.desktopLevel ?? 'important');
       setBrainMode(config.brain?.mode ?? 'suggest');
       setBrainPermissions(config.brain?.permissions ?? 'standard');
@@ -227,6 +242,8 @@ export const SettingsPage: React.FC = () => {
         claudeOverheadPerTask: Number(claudeOverhead) || 40_000,
       },
       brain: {
+        engine: brainEngine,
+        codexProfile: codexProfile.trim() || undefined,
         mode: brainMode,
         permissions: brainPermissions,
         maxConcurrent: Number(brainMaxConcurrent) || 2,
@@ -830,6 +847,51 @@ export const SettingsPage: React.FC = () => {
             <div className="py-2 border-b border-[var(--t-border)] space-y-2">
               <div>
                 <label className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('settings.brainEngineLabel')}
+                </label>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('settings.brainEngineHint')}
+                </p>
+              </div>
+              <div className="flex gap-4">
+                {(['claude', 'codex'] as const).map((eng) => (
+                  <label key={eng} className="flex items-center gap-2 text-xs text-[var(--t-text)] cursor-pointer">
+                    <input
+                      type="radio"
+                      name="brainEngine"
+                      value={eng}
+                      checked={brainEngine === eng}
+                      onChange={() => setBrainEngine(eng)}
+                    />
+                    <span className="capitalize">{eng}</span>
+                  </label>
+                ))}
+              </div>
+              {brainEngine === 'codex' && (
+                <div className="pt-2">
+                  <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                    {t('settings.codexProfileLabel')}
+                  </label>
+                  <select
+                    value={codexProfile}
+                    onChange={(e) => setCodexProfile(e.target.value)}
+                    className="w-full max-w-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-xs"
+                  >
+                    <option value="">{t('settings.codexProfileAuto')}</option>
+                    {codexProfiles.map((p) => (
+                      <option key={p.name} value={p.name}>{p.name} {p.email ? `(${p.email})` : ''}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-[var(--t-text-3)] mt-1">
+                    {t('settings.codexProfileHint')}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] space-y-2">
+              <div>
+                <label className="text-sm font-semibold text-[var(--t-text)]">
                   {t('settings.brainModeLabel')}
                 </label>
                 <p className="text-xs text-[var(--t-text-3)]">
@@ -1009,12 +1071,19 @@ export const SettingsPage: React.FC = () => {
           <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
             <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
-            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">{t('extra.noPermissionRules')}</p> : permissionRules.data.map((rule) => (
-              <div key={rule.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs">
-                <code className="break-all">{rule.toolName} {rule.pattern}</code>
-                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button>
-              </div>
-            ))}
+            <DataTable
+              rows={permissionRules.data?.items || []}
+              emptyTitle={t('extra.noPermissionRules')}
+              columns={[
+                { key: 'tool', title: t('extra.permissionTool'), sortable: true, sortValue: (rule) => `${rule.toolName} ${rule.pattern}`, render: (rule) => <code className="break-all">{rule.toolName} {rule.pattern}</code> },
+                { key: 'scope', title: t('extra.permissionScope'), sortable: true, sortValue: (rule) => rule.scope, render: (rule) => <span>{rule.scope}</span> },
+                { key: 'actions', title: t('extra.actions'), render: (rule) => <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button> },
+              ]}
+              page={permissionPage}
+              pageSize={20}
+              total={permissionRules.data?.total || 0}
+              onPageChange={setPermissionPage}
+            />
           </section>
 
           <div className="flex justify-end">

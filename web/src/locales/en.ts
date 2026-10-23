@@ -106,6 +106,20 @@ export const en: typeof vi = {
     allProjects: 'All projects',
     createTask: 'New Task',
     filterQuick: 'Filter slug / title',
+    listView: 'List',
+    slug: 'Slug',
+    status: 'Status',
+    project: 'Project',
+    showMore: 'Show more',
+    remaining: '{count} remaining',
+  },
+  pagination: {
+    rowsPerPage: 'Rows/page',
+    pageOf: 'Page {page}/{pages}',
+    previous: 'Previous page',
+    next: 'Next page',
+    loading: 'Loading…',
+    empty: 'No data',
   },
   dag: {
     title: 'Dependency Diagram',
@@ -799,6 +813,7 @@ export const en: typeof vi = {
       "content": "Advanced settings contain concurrency, worktrees, checks, and environment variables. Open them for project-specific policy; increasing concurrency can overload the machine."
     }
   },
+  "modal-project-wizard": { "modal": { "title": "Project registration wizard", "content": "Inspect a repository and configure a new AgentHub project." } },
   "modal-create-task": {
     "task": {
       "title": "Task goal",
@@ -877,6 +892,8 @@ export const en: typeof vi = {
     integrationStatus: 'Integration status',
     integrationAhead: '{count} commits ahead',
     integrationBehind: '{count} commits behind',
+    activeTasks: 'Active tasks',
+    viewTasks: 'View tasks',
     integrationWorktreeCreated: 'Integration worktree created',
     emptyTitle: 'Get started with your first project',
     emptyDesc: 'A project is a git repository on this machine; workers operate in isolated worktrees (branch agenthub/<slug>) without touching your working directory.',
@@ -959,6 +976,7 @@ export const en: typeof vi = {
     deployRestart: 'Restart hub: {val}',
     deployPush: 'Push branch: {from} → {to} ({remote})',
     noDeployConfig: 'No post-merge deploy configuration found (afterMerge).',
+    wizardOpen: 'Open wizard', wizardTitle: 'Project registration wizard', wizardProgress: 'Wizard progress', wizardWhy0: 'Choose how to start so AgentHub can prepare the right setup.', wizardWhy1: 'AgentHub needs an absolute directory path to inspect safely.', wizardWhy2: 'A quick inspection helps choose the right branch and understand the repository.', wizardWhy3: 'Review and toggle these suggestions before creating the project.', wizardWhy4: 'Review references and previous context before pinning anything.', wizardWhy5: 'Configure the brain and notifications for this project.', wizardWhy6: 'Review every choice before creating the project.', wizardSizeTruncated: 'Size estimate stopped at the safety limit.', wizardExisting: 'Existing repository', wizardExistingDesc: 'Use an existing Git repository.', wizardNew: 'New project', wizardNewDesc: 'Create a directory, initialize Git, add an empty commit, and create the default branch.', wizardRepo: 'Repository', wizardNotGit: 'Not a Git repository', wizardLanguage: 'Primary language', wizardBranch: 'Current branch', wizardRemote: 'Remote host', wizardLockfiles: 'Lockfiles', wizardGuidance: 'Guidance files', wizardSessions: 'Previous sessions', wizardNewReady: 'The new directory will be created at the final step.', wizardSuggestionsDesc: 'Based on the repository inspection, these settings are recommended:', wizardSkipInstall: 'Do not install dependencies in worktrees', wizardSkipHooks: 'Skip Git hooks when workers commit', wizardIntegration: 'Enable a separate integration branch', wizardIntegrationReason: 'The hub merges locally and never pushes.', wizardSensitive: 'Mark as a sensitive project', wizardChecks: 'Suggested checks', wizardReasonLockfile: 'Lockfile detected', wizardReasonMonorepo: 'Monorepo detected', wizardReasonHooks: 'Git hooks or commitlint detected', wizardReasonMount: 'The repository is on temporary or encrypted storage', wizardReasonMedia: 'The repository is on removable storage (/media)', wizardContextDesc: 'Review AGENTS.md and previous Claude Code sessions. References are read-only.', wizardGuidanceFound: 'Guidance files were found in the repository.', wizardGuidanceDraft: 'No AGENTS.md exists; you can create a draft after registration.', wizardPinMemory: 'Pin MEMORY.md as project knowledge after approval', wizardSessionsFound: '{count} previous Claude Code session(s) are available to review.', wizardNoSessions: 'No previous Claude Code sessions were found for this directory.', wizardContextReadonly: 'Knowledge is only pinned after you approve the content.', wizardContextApprove: 'I have reviewed and approve pinning this content', wizardAgentsDraft: 'Create an AGENTS.md draft after registration', wizardAgentsDraftReason: 'No AGENTS.md exists in the repo; you can edit and commit it after the project is created.', wizardAgentsContent: 'AGENTS.md draft', wizardAgentsApprove: 'I reviewed and approve writing this AGENTS.md', wizardAgentsApproveReason: 'The file will be written only after project creation and your confirmation.', wizardViewSession: 'View preview', wizardNoSessionPreview: 'No readable conversation preview was found.', wizardPinMemoryLabel: 'Pin the MEMORY.md content shown below', wizardSessionsSelected: 'session(s) selected', wizardSummary: 'Selection summary', wizardBack: 'Back', wizardNext: 'Next', wizardCreate: 'Create project', wizardSummarizingTitle: 'Summarizing previous context', wizardSummarizingProgress: 'The assistant is reading and summarizing the selected Claude Code sessions...', wizardSummaryReviewTitle: 'Review summarized context knowledge', wizardSummaryReviewDesc: 'Review and edit the summarized knowledge before pinning it to the project.', wizardApproveAndPin: 'Approve and pin knowledge', wizardSkipPin: 'Skip without pinning', wizardSessionSelectAll: 'Select all sessions', wizardSessionDeselectAll: 'Deselect all',
     deployLatestStatus: 'Latest run',
     deployStatusQueued: 'Queued',
     deployStatusRunning: 'Deploying',
@@ -1100,6 +1118,7 @@ export const en: typeof vi = {
     compacted: 'Context compacted',
     compactError: 'Failed to compact context',
     skipToContent: 'Skip to content', brainStateWaiting: 'waiting for your reply', brainStateWorking: 'working', brainStateIdle: 'inactive', requestLabel: 'Request', toolLabel: 'Tool', toolUsed: '{count} tools used', expandSessions: 'Expand list', collapseSessions: 'Collapse list', addKnowledgePlaceholder: 'Add knowledge note...', pinKnowledge: 'Pin/unpin', closeProfile: 'Close', editProfileTitle: 'Edit profile {name}', renameProfileTitle: 'Rename {name}', deleteProfileTitle: 'Delete profile {name}', displayName: 'Display name', notes: 'Notes', priority: 'Priority', enableProfile: 'Enable profile', nameMismatch: 'The repeated name does not match', saveProfileError: 'Unable to save profile', renameError: 'Unable to rename', deleteError: 'Unable to delete profile', modelChatAria: 'Chat model', chatModelsLabel: 'Chat model list', defaultChatModel: 'Default chat model. Available choices:', reviewer: 'Reviewer', reviewerModel: 'Reviewer model', fallbackChain: 'Claude fallback chain', fallbackHint: 'Drag steps to reorder. The API key is write-only.', remove: 'Remove', addStep: 'Add step', apiKey: 'Anthropic API key', configuredReplace: 'Configured (enter to replace)', knowledgeAdd: 'Add', linkedTasks: 'Linked tasks', generatedFrom: 'Generated from', generatedTask: 'Generated task', orphanProcesses: 'Orphaned processes', orphanProcessesDesc: 'Processes that still held a cwd in a stopped worktree.', loadingOlderMessages: 'Loading older messages…', grantedPermissions: 'Granted permissions', grantedPermissionsDesc: 'Rules used to automatically allow tools.', noPermissionRules: 'No rules yet.', cleanup: 'Clean up', cleanupRunning: 'Cleaning…',
+    permissionTool: 'Tool / pattern', permissionScope: 'Scope',
     forkSummary: 'Open new session with summary',
     forkSummaryTooltip: 'Summarize and fork to new session',
     forkSummaryError: 'Failed to fork session',

@@ -23,6 +23,33 @@ export function resolveClaudeProfile(
   return existing?.name || configuredProfile || 'claude-default';
 }
 
+/** Resolve Codex profile: explicitly configured or the logged-in profile with the most remaining quota. */
+export function resolveCodexProfile(
+  profileRepo: Pick<ProfileRepo, 'getAll'>,
+  configuredProfile?: string,
+  quotaUsageRepo?: { getForProfile(profileName: string): { remainingPct: number }[] },
+  quotaMarkRepo?: { isExhausted(profileName: string, family: string): boolean },
+): string | null {
+  const allProfiles = profileRepo.getAll().filter((p) => p.engine === 'codex' && Boolean(p.enabled) && isProfileLoggedIn(p));
+  if (configuredProfile) {
+    const matched = allProfiles.find((p) => p.name === configuredProfile);
+    if (matched) return matched.name;
+  }
+  const unexhausted = allProfiles.filter((p) => !quotaMarkRepo?.isExhausted(p.name, 'codex'));
+  const candidates = unexhausted.length > 0 ? unexhausted : allProfiles;
+  if (candidates.length === 0) return null;
+
+  const remaining = (name: string): number => {
+    if (!quotaUsageRepo) return 100;
+    const usage = quotaUsageRepo.getForProfile(name);
+    if (!usage || usage.length === 0) return 100;
+    return Math.min(...usage.map((u) => u.remainingPct));
+  };
+
+  candidates.sort((a, b) => remaining(b.name) - remaining(a.name) || (b.priority ?? 0) - (a.priority ?? 0));
+  return candidates[0]?.name || null;
+}
+
 // Symlinks to create in isolated HOME per PLAN 2.1
 const SYMLINK_TARGETS = [
   '.nvm',

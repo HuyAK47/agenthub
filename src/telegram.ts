@@ -1203,6 +1203,18 @@ export class TelegramBotService {
   private async handleBrainCommand(chatId: number, argStr: string): Promise<void> {
     const current = this.config.brain;
     const parts = argStr.split(/\s+/).filter(Boolean);
+    if (parts[0] === 'engine') {
+      const engine = parts[1];
+      if (engine !== 'claude' && engine !== 'codex') {
+        await this.sendMessage(chatId, 'Cú pháp: /brain engine codex|claude');
+        return;
+      }
+      this.config.brain.engine = engine;
+      saveConfig(this.config.hubHome, { brain: { engine } });
+      this.eventBus.emit('config.updated', undefined, { brain: { engine }, source: 'telegram' });
+      await this.sendMessage(chatId, `🧠 Đã chuyển engine bộ não sang <b>${engine}</b>.`);
+      return;
+    }
     if (parts[0] === 'trust') {
       const projectId = parts[1];
       const permission = parts[2];
@@ -3118,6 +3130,8 @@ export class TelegramBotService {
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
+        type === 'merge.conflict' ||
+        type === 'merge.failed' ||
         type === 'review.fallback' ||
         allExhausted;
 
@@ -3423,6 +3437,20 @@ export class TelegramBotService {
       case 'claude.quota_exhausted': {
         if (!notify.quota) return;
         this.broadcastMessage('⏳ <b>Claude hết quota</b>\nĐã kích hoạt failover hoặc cần chờ reset quota.');
+        break;
+      }
+
+      case 'merge.conflict': {
+        const message = typeof p.message === 'string' ? p.message : 'Xung đột khi merge tự động';
+        const taskLabel = taskId || 'Task';
+        this.broadcastMessage(`${prefix}⚠️ <b>Xung đột tự động gộp: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
+        break;
+      }
+
+      case 'merge.failed': {
+        const message = typeof p.message === 'string' ? p.message : 'Lỗi khi merge tự động';
+        const taskLabel = taskId || 'Task';
+        this.broadcastMessage(`${prefix}❌ <b>Lỗi tự động gộp: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
         break;
       }
 
@@ -3812,6 +3840,10 @@ export class TelegramBotService {
         return minimal ? `${prefix}CI thất bại` : `${prefix}CI thất bại: ${p?.workflow || 'CI'}`;
       case 'ci.passed':
         return minimal ? `${prefix}CI đã xanh` : `${prefix}CI đã xanh: ${p?.workflow || 'CI'}`;
+      case 'merge.conflict':
+        return `${prefix}Xung đột khi merge tự động (${taskId || 'task'})`;
+      case 'merge.failed':
+        return `${prefix}Lỗi khi merge tự động (${taskId || 'task'})`;
       case 'review.fallback':
         return `${prefix}Codex hết quota, Claude đang duyệt …`;
       case 'quota.exhausted':

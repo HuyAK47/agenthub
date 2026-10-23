@@ -54,11 +54,14 @@ export const DEFAULT_BRAIN_DIGEST_CONFIG: BrainDigestConfig = {
 };
 
 export interface BrainConfig {
+  engine?: 'claude' | 'codex';
   fallback: ClaudeFallbackStep[];
   policy: string[];
   claudeProfile: string;
   claudeProfileExplicit?: boolean;
   model: string;
+  codexProfile?: string;
+  codexModel?: string;
   mode: 'off' | 'suggest' | 'auto';
   permissions: 'standard' | 'trusted' | 'full';
   maxConcurrent: number;
@@ -594,6 +597,9 @@ export function updateConfigInMemory(
     if (patch.brain.policy) config.brain.policy = [...patch.brain.policy];
     if (patch.brain.claudeProfile !== undefined) config.brain.claudeProfile = patch.brain.claudeProfile;
     if (patch.brain.model !== undefined) config.brain.model = patch.brain.model;
+    if (patch.brain.engine !== undefined) config.brain.engine = patch.brain.engine;
+    if (patch.brain.codexProfile !== undefined) config.brain.codexProfile = patch.brain.codexProfile;
+    if (patch.brain.codexModel !== undefined) config.brain.codexModel = patch.brain.codexModel;
     if (patch.brain.mode !== undefined) config.brain.mode = patch.brain.mode;
     if (patch.brain.permissions !== undefined) config.brain.permissions = patch.brain.permissions;
     if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
@@ -989,6 +995,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
     brain: {
+      engine: brainRaw.engine === 'codex' ? 'codex' : 'claude',
       fallback: normalizeFallbackSteps(brainRaw.fallback),
       policy: Array.isArray(brainRaw.policy)
         ? brainRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
@@ -1002,6 +1009,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       model: typeof brainRaw.model === 'string' && brainRaw.model
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
+      codexProfile: typeof brainRaw.codexProfile === 'string' && brainRaw.codexProfile.trim() ? brainRaw.codexProfile.trim() : undefined,
+      codexModel: typeof brainRaw.codexModel === 'string' && brainRaw.codexModel.trim() ? brainRaw.codexModel.trim() : undefined,
       mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
       permissions: brainRaw.permissions === 'trusted' || brainRaw.permissions === 'full' ? brainRaw.permissions : 'standard',
       maxConcurrent: typeof brainRaw.maxConcurrent === 'number' && brainRaw.maxConcurrent > 0
