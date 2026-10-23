@@ -106,6 +106,20 @@ export const en: typeof vi = {
     allProjects: 'All projects',
     createTask: 'New Task',
     filterQuick: 'Filter slug / title',
+    listView: 'List',
+    slug: 'Slug',
+    status: 'Status',
+    project: 'Project',
+    showMore: 'Show more',
+    remaining: '{count} remaining',
+  },
+  pagination: {
+    rowsPerPage: 'Rows/page',
+    pageOf: 'Page {page}/{pages}',
+    previous: 'Previous page',
+    next: 'Next page',
+    loading: 'Loading…',
+    empty: 'No data',
   },
   dag: {
     title: 'Dependency Diagram',
@@ -235,6 +249,8 @@ export const en: typeof vi = {
     createError: 'Failed to create task',
     modelChainLabel: 'Model chain (comma-separated)',
     modelChainHint: 'Leave blank to use the default chain.',
+    externalRefLabel: 'External reference',
+    externalRefPlaceholder: 'e.g. PROJ-45, OP-123',
   },
   taskDetail: {
     notFound: 'Task not found or an error occurred while loading data.',
@@ -782,6 +798,7 @@ export const en: typeof vi = {
       "content": "Advanced settings contain concurrency, worktrees, checks, and environment variables. Open them for project-specific policy; increasing concurrency can overload the machine."
     }
   },
+  "modal-project-wizard": { "modal": { "title": "Project registration wizard", "content": "Inspect a repository and configure a new AgentHub project." } },
   "modal-create-task": {
     "task": {
       "title": "Task goal",
@@ -860,6 +877,8 @@ export const en: typeof vi = {
     integrationStatus: 'Integration status',
     integrationAhead: '{count} commits ahead',
     integrationBehind: '{count} commits behind',
+    activeTasks: 'Active tasks',
+    viewTasks: 'View tasks',
     integrationWorktreeCreated: 'Integration worktree created',
     emptyTitle: 'Get started with your first project',
     emptyDesc: 'A project is a git repository on this machine; workers operate in isolated worktrees (branch agenthub/<slug>) without touching your working directory.',
@@ -880,6 +899,7 @@ export const en: typeof vi = {
     ciLabel: 'GitHub Actions CI Watch', ciEnabled: 'Enable CI Watch', ciBranch: 'CI Branch', ciStatusPassed: 'CI: Passed', ciStatusFailed: 'CI: Failed', ciStatusRunning: 'CI: Running', ciViewRun: 'View run on GitHub', ciNoRun: 'No runs recorded',
     knowledgeChecklistTitle: 'Knowledge & checklist', knowledgeChecklistHint: 'Choose up to 5 paths; each file is limited to 64KB. The brain must check them during review.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Review checklist', reviewerOverride: 'Reviewer override', reviewerOverrideHint: 'Optional project-specific reviewer order and fallback policy.', reviewerOrderOverride: 'Reviewer order override', reviewerFallbackOverride: 'Reviewer fallback override', checklistUnreadable: 'unreadable', checklistTooLarge: 'Warning: file exceeds 64KB; content was not injected.', suggestAutomaticChecks: 'Suggest automatic checks', draftChecksCreated: 'Draft task created to suggest automatic checks.',
     worktreeRoot: 'Worktree directory', worktreeRootPlaceholder: '/absolute/path', worktreeRootDesc: 'The configured root must be dedicated to this project and not shared with another project. Each task is created at <root>/<slug>, with the integration worktree at <root>/.integration. The directory must exist and be writable.', worktreeLogsInRoot: 'Store task logs in this directory/.logs',
+    commitConventionTitle: 'Commit convention', commitConventionDesc: 'Configure project-specific branch, commit message, and merge message templates.', branchTemplate: 'Branch template', commitTemplate: 'Commit message template', commitRegex: 'Commit message regex (optional)', mergeMessageTemplate: 'Merge message template', commitConventionPreview: 'Preview example',
     sectionBrainTitle: 'Brain',
     sectionBrainDesc: 'Configure automated agent permissions and token quota limits for this project.',
     sectionWorktreeTitle: 'Worktree',
@@ -942,6 +962,7 @@ export const en: typeof vi = {
     deployRestart: 'Restart hub: {val}',
     deployPush: 'Push branch: {from} → {to} ({remote})',
     noDeployConfig: 'No post-merge deploy configuration found (afterMerge).',
+    wizardOpen: 'Open wizard', wizardTitle: 'Project registration wizard', wizardProgress: 'Wizard progress', wizardWhy0: 'Choose how to start so AgentHub can prepare the right setup.', wizardWhy1: 'AgentHub needs an absolute directory path to inspect safely.', wizardWhy2: 'A quick inspection helps choose the right branch and understand the repository.', wizardWhy3: 'Review and toggle these suggestions before creating the project.', wizardWhy4: 'Review references and previous context before pinning anything.', wizardWhy5: 'Configure the brain and notifications for this project.', wizardWhy6: 'Review every choice before creating the project.', wizardSizeTruncated: 'Size estimate stopped at the safety limit.', wizardExisting: 'Existing repository', wizardExistingDesc: 'Use an existing Git repository.', wizardNew: 'New project', wizardNewDesc: 'Create a directory, initialize Git, add an empty commit, and create the default branch.', wizardRepo: 'Repository', wizardNotGit: 'Not a Git repository', wizardLanguage: 'Primary language', wizardBranch: 'Current branch', wizardRemote: 'Remote host', wizardLockfiles: 'Lockfiles', wizardGuidance: 'Guidance files', wizardSessions: 'Previous sessions', wizardNewReady: 'The new directory will be created at the final step.', wizardSuggestionsDesc: 'Based on the repository inspection, these settings are recommended:', wizardSkipInstall: 'Do not install dependencies in worktrees', wizardSkipHooks: 'Skip Git hooks when workers commit', wizardIntegration: 'Enable a separate integration branch', wizardIntegrationReason: 'The hub merges locally and never pushes.', wizardSensitive: 'Mark as a sensitive project', wizardChecks: 'Suggested checks', wizardReasonLockfile: 'Lockfile detected', wizardReasonMonorepo: 'Monorepo detected', wizardReasonHooks: 'Git hooks or commitlint detected', wizardReasonMount: 'The repository is on temporary or encrypted storage', wizardReasonMedia: 'The repository is on removable storage (/media)', wizardContextDesc: 'Review AGENTS.md and previous Claude Code sessions. References are read-only.', wizardGuidanceFound: 'Guidance files were found in the repository.', wizardGuidanceDraft: 'No AGENTS.md exists; you can create a draft after registration.', wizardPinMemory: 'Pin MEMORY.md as project knowledge after approval', wizardSessionsFound: '{count} previous Claude Code session(s) are available to review.', wizardNoSessions: 'No previous Claude Code sessions were found for this directory.', wizardContextReadonly: 'Knowledge is only pinned after you approve the content.', wizardContextApprove: 'I have reviewed and approve pinning this content', wizardAgentsDraft: 'Create an AGENTS.md draft after registration', wizardAgentsDraftReason: 'No AGENTS.md exists in the repo; you can edit and commit it after the project is created.', wizardAgentsContent: 'AGENTS.md draft', wizardAgentsApprove: 'I reviewed and approve writing this AGENTS.md', wizardAgentsApproveReason: 'The file will be written only after project creation and your confirmation.', wizardViewSession: 'View preview', wizardNoSessionPreview: 'No readable conversation preview was found.', wizardPinMemoryLabel: 'Pin the MEMORY.md content shown below', wizardSessionsSelected: 'session(s) selected', wizardSummary: 'Selection summary', wizardBack: 'Back', wizardNext: 'Next', wizardCreate: 'Create project', wizardSummarizingTitle: 'Summarizing previous context', wizardSummarizingProgress: 'The assistant is reading and summarizing the selected Claude Code sessions...', wizardSummaryReviewTitle: 'Review summarized context knowledge', wizardSummaryReviewDesc: 'Review and edit the summarized knowledge before pinning it to the project.', wizardApproveAndPin: 'Approve and pin knowledge', wizardSkipPin: 'Skip without pinning', wizardSessionSelectAll: 'Select all sessions', wizardSessionDeselectAll: 'Deselect all',
     deployLatestStatus: 'Latest run',
     deployStatusQueued: 'Queued',
     deployStatusRunning: 'Deploying',
@@ -1047,7 +1068,7 @@ export const en: typeof vi = {
     selectDay: 'Select day',
   },
   telegram: {
-    settingsTitle: 'Telegram settings', settingsDescription: 'Connect a Telegram bot for notifications and AgentHub control.', enabled: 'Enable Telegram', tokenLabel: 'Bot token', tokenConfigured: 'Token configured', saveToken: 'Save token', testButton: 'Test', tokenSaved: 'Token saved.', testSuccess: 'Telegram connection succeeded.', botFound: 'Bot', loadError: 'Unable to load Telegram settings.', pairTitle: 'Pair Telegram chat', pairInstructions: 'Open the bot and send /start {code}.', newCode: 'New code', chatsTitle: 'Paired chats', noChats: 'No paired chats yet.', removeChat: 'Remove chat', notifyTitle: 'Notification types', botFatherTitle: 'Create a bot with @BotFather', botFatherStep1: 'Open Telegram, find @BotFather, and send /newbot.', botFatherStep2: 'Choose a name, a username ending in bot, and copy the token.', botFatherStep3: 'Paste the token above, test it, and enable Telegram.', notify: { reviewReady: 'Review ready', failed: 'Task failed', blocked: 'Task blocked', quota: 'Quota exhausted', fallback: 'Model / profile fallback' },
+    settingsTitle: 'Telegram settings', settingsDescription: 'Connect a Telegram bot for notifications and AgentHub control.', enabled: 'Enable Telegram', tokenLabel: 'Bot token', tokenConfigured: 'Token configured', saveToken: 'Save token', testButton: 'Test', tokenSaved: 'Token saved.', testSuccess: 'Telegram connection succeeded.', botFound: 'Bot', loadError: 'Unable to load Telegram settings.', pairTitle: 'Pair Telegram chat', pairInstructions: 'Open the bot and send /start {code}.', newCode: 'New code', chatsTitle: 'Paired chats', noChats: 'No paired chats yet.', removeChat: 'Remove chat', projectsTitle: 'Projects and topics/chats', createTopic: 'Create topic', attachChat: 'Attach chat', chatLabel: 'chat', notConfigured: 'Not configured', notifyTitle: 'Notification types', botFatherTitle: 'Create a bot with @BotFather', botFatherStep1: 'Open Telegram, find @BotFather, and send /newbot.', botFatherStep2: 'Choose a name, a username ending in bot, and copy the token.', botFatherStep3: 'Paste the token above, test it, and enable Telegram.', notify: { reviewReady: 'Review ready', failed: 'Task failed', blocked: 'Task blocked', quota: 'Quota exhausted', quotaPerModel: 'Per-model/profile quota exhausted', quotaAllExhausted: 'All accounts for an engine exhausted', fallback: 'Model / profile fallback' },
     cardTitle: 'Telegram Bot Remote Control',
     pairingCode: 'Pairing code',
     expiresIn: 'Expires in {min}:{sec}',
@@ -1079,6 +1100,7 @@ export const en: typeof vi = {
     compacted: 'Context compacted',
     compactError: 'Failed to compact context',
     skipToContent: 'Skip to content', brainStateWaiting: 'waiting for your reply', brainStateWorking: 'working', brainStateIdle: 'inactive', requestLabel: 'Request', toolLabel: 'Tool', toolUsed: '{count} tools used', expandSessions: 'Expand list', collapseSessions: 'Collapse list', addKnowledgePlaceholder: 'Add knowledge note...', pinKnowledge: 'Pin/unpin', closeProfile: 'Close', editProfileTitle: 'Edit profile {name}', renameProfileTitle: 'Rename {name}', deleteProfileTitle: 'Delete profile {name}', displayName: 'Display name', notes: 'Notes', priority: 'Priority', enableProfile: 'Enable profile', nameMismatch: 'The repeated name does not match', saveProfileError: 'Unable to save profile', renameError: 'Unable to rename', deleteError: 'Unable to delete profile', modelChatAria: 'Chat model', chatModelsLabel: 'Chat model list', defaultChatModel: 'Default chat model. Available choices:', reviewer: 'Reviewer', reviewerModel: 'Reviewer model', fallbackChain: 'Claude fallback chain', fallbackHint: 'Drag steps to reorder. The API key is write-only.', remove: 'Remove', addStep: 'Add step', apiKey: 'Anthropic API key', configuredReplace: 'Configured (enter to replace)', knowledgeAdd: 'Add', linkedTasks: 'Linked tasks', generatedFrom: 'Generated from', generatedTask: 'Generated task', orphanProcesses: 'Orphaned processes', orphanProcessesDesc: 'Processes that still held a cwd in a stopped worktree.', loadingOlderMessages: 'Loading older messages…', grantedPermissions: 'Granted permissions', grantedPermissionsDesc: 'Rules used to automatically allow tools.', noPermissionRules: 'No rules yet.', cleanup: 'Clean up', cleanupRunning: 'Cleaning…',
+    permissionTool: 'Tool / pattern', permissionScope: 'Scope',
     forkSummary: 'Open new session with summary',
     forkSummaryTooltip: 'Summarize and fork to new session',
     forkSummaryError: 'Failed to fork session',

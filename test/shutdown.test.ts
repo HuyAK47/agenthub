@@ -466,4 +466,22 @@ describe('Daemon and server shutdown', () => {
     ctx.scheduler.stop();
     ctx.db.close();
   });
+
+  it('stops chat service and tears down active callbacks before database shutdown', async () => {
+    ctx = createContext(config, engines);
+    ctx.chatSessionRepo.insert({
+      id: 'session-shutdown',
+      mode: 'safe',
+      model: 'claude-3-7-sonnet',
+    });
+
+    const chatService = ctx.chatService;
+    chatService.sendMessage('session-shutdown', 'Test shutdown');
+
+    chatService.stop();
+    ctx.scheduler.stop();
+    ctx.db.close();
+
+    expect(ctx.chatSessionRepo.get('session-shutdown')).toBeUndefined();
+  });
 });

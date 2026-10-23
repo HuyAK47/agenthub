@@ -16,6 +16,7 @@ let ctx: ReturnType<typeof createContext>;
 let server: ReturnType<typeof createServer>;
 let token: string;
 let fakeEngine: FakeEngine;
+let previousHome: string | undefined;
 
 function authHeaders() {
   return {
@@ -49,6 +50,8 @@ describe('AgentHub API Extra Endpoints', () => {
     fs.mkdirSync(agyHomesDir, { recursive: true });
 
     process.env.AGENTHUB_HOME = tmpDir;
+    previousHome = process.env.HOME;
+    process.env.HOME = path.join(tmpDir, 'home');
     process.env.AGENTHUB_AGY_HOMES = agyHomesDir;
     process.env.AGENTHUB_DEFAULT_LOG_DIR = path.resolve(__dirname, 'fixtures', 'fake-gemini-log');
     process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-login.mjs');
@@ -81,6 +84,8 @@ describe('AgentHub API Extra Endpoints', () => {
       // ignore
     }
     delete process.env.AGENTHUB_HOME;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
     delete process.env.AGENTHUB_AGY_HOMES;
     delete process.env.AGENTHUB_DEFAULT_LOG_DIR;
     delete process.env.AGENTHUB_AGY_BIN;
@@ -1287,6 +1292,87 @@ describe('AgentHub API Extra Endpoints', () => {
       const reviewEvt = body.recentEvents.find((e: { type: string }) => e.type === 'task.review_ready');
       expect(reviewEvt).toBeDefined();
       expect(reviewEvt.taskId).toBe('proj-status-a/t3');
+    });
+  });
+
+  describe('project wizard context API', () => {
+    it('returns bounded inspect metadata and exposes context task status without raw transcript content', async () => {
+      const repoPath = path.join(tmpDir, 'wizard-api-repo');
+      initGitRepo(repoPath);
+      const sessionDir = path.join(process.env.HOME as string, '.claude', 'projects', repoPath.replace(/[^a-zA-Z0-9]/g, '-'));
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionDir, 'old.jsonl'), JSON.stringify({ message: { role: 'assistant', content: 'Use the stable API contract.' } }) + '\n');
+      ctx.projectRepo.insert({ id: 'wizard-api', name: 'Wizard API', path: repoPath, defaultBranch: 'main', maxParallel: 1 });
+
+      const inspect = await server.inject({ method: 'POST', url: '/api/projects/inspect', headers: authHeaders(), payload: { path: repoPath } });
+      expect(inspect.statusCode).toBe(200);
+      expect(JSON.parse(inspect.body)).toMatchObject({ path: repoPath, isGitRepo: true, sizeTruncated: false });
+
+      const start = await server.inject({
+        method: 'POST',
+        url: '/api/projects/wizard-api/summarize-context',
+        headers: authHeaders(),
+        payload: { sessions: ['old.jsonl'], selections: [{ session: 'old.jsonl', text: 'Use the stable API contract.' }] },
+      });
+      expect(start.statusCode).toBe(200);
+      const started = JSON.parse(start.body) as { taskId: string; status: string; summary: string | null };
+      expect(started.taskId).toContain('summarize-previous-context');
+      expect(started.summary).toBeNull();
+
+      const status = await server.inject({ method: 'GET', url: `/api/projects/wizard-api/summarize-context/${encodeURIComponent(started.taskId.replace('/', '~'))}`, headers: authHeaders() });
+      expect(status.statusCode).toBe(200);
+      expect(JSON.parse(status.body)).toMatchObject({ taskId: started.taskId, summary: null });
+      expect(status.body).not.toContain('Use the stable API contract.');
+    });
+
+    it('creates a sensitive new project and provisions its project-local worktree root', async () => {
+      const projectPath = path.join(tmpDir, 'sensitive-new');
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/projects/new',
+        headers: authHeaders(),
+        payload: {
+          name: 'Sensitive New',
+          path: projectPath,
+          defaultBranch: 'main',
+          settings: {
+            brain: { permissions: 'standard' },
+            worktree: { root: path.join(tmpDir, '.agenthub-worktrees'), logsInRoot: true },
+            notifications: { telegramContent: 'minimal' },
+          },
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body) as { settings: { worktree: { root: string; logsInRoot: boolean }; notifications: { telegramContent: string } } };
+      expect(fs.statSync(path.join(tmpDir, '.agenthub-worktrees')).isDirectory()).toBe(true);
+      expect(body.settings.worktree).toMatchObject({ root: path.join(tmpDir, '.agenthub-worktrees'), logsInRoot: true });
+      expect(body.settings.notifications.telegramContent).toBe('minimal');
+    });
+  });
+
+  describe('GET /api/tasks pagination', () => {
+    it('returns paged metadata/cursor and preserves the legacy array response', async () => {
+      ctx.projectRepo.insert({ id: 'page-api-a', name: 'Page A', path: path.join(tmpDir, 'page-a'), defaultBranch: 'main', maxParallel: 2 });
+      ctx.projectRepo.insert({ id: 'page-api-b', name: 'Page B', path: path.join(tmpDir, 'page-b'), defaultBranch: 'main', maxParallel: 2 });
+      for (const [projectId, slug, status] of [['page-api-a', 'first', 'queued'], ['page-api-a', 'second', 'running'], ['page-api-b', 'other', 'queued']] as const) {
+        ctx.taskRepo.insert({ id: `${projectId}/${slug}`, projectId, slug, title: `${projectId} ${slug}`, status });
+      }
+
+      const first = await server.inject({ method: 'GET', url: '/api/tasks?project=page-api-a&limit=1', headers: authHeaders() });
+      expect(first.statusCode).toBe(200);
+      const firstBody = JSON.parse(first.body) as { items: Array<{ projectId: string }>; total: number; nextCursor: string | null };
+      expect(firstBody.total).toBe(2);
+      expect(firstBody.items).toHaveLength(1);
+      expect(firstBody.items[0].projectId).toBe('page-api-a');
+      expect(firstBody.nextCursor).toBeTruthy();
+
+      const second = await server.inject({ method: 'GET', url: `/api/tasks?project=page-api-a&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor!)}`, headers: authHeaders() });
+      expect(second.statusCode).toBe(200);
+      expect(JSON.parse(second.body).items).toHaveLength(1);
+
+      const legacy = await server.inject({ method: 'GET', url: '/api/tasks?project=page-api-a', headers: authHeaders() });
+      expect(legacy.statusCode).toBe(200);
+      expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
     });
   });
 });

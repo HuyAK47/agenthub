@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
+import { Link, useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addProjectKnowledge,
@@ -7,9 +7,11 @@ import {
   deleteProject,
   restoreProject,
   deleteProjectKnowledge,
-  getProjectKnowledge,
+  getProjectKnowledgePage,
+  getCiRunsPage,
   getArchivedProjects,
   getProjects,
+  getTasks,
   updateProjectKnowledge,
 } from '../api/client';
 import {
@@ -26,7 +28,7 @@ import {
   ExternalLink,
   GitBranch,
 } from 'lucide-react';
-import { Card, Button, Input } from '../components/ui';
+import { Card, Button, Input, DataTable } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
@@ -35,6 +37,7 @@ import {
   ProjectSettingsDrawer,
   defaultProjectSettings,
 } from '../components/ProjectSettingsDrawer';
+import { ProjectWizard } from '../components/ProjectWizard';
 
 function parsePositiveInt(val: string): number | undefined {
   const trimmed = val.trim();
@@ -66,7 +69,31 @@ function ProjectSettingsForm({
 
   return (
     <div className="space-y-4" data-testid="project-settings-form" data-tour="project-register">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <label className="text-xs space-y-1">
+          <span className="font-semibold">{t('projects.brainEngine')}</span>
+          <select
+            value={value.brain.engine ?? 'inherit'}
+            onChange={(e) => update('brain', { engine: e.target.value })}
+            className="w-full rounded border p-2 bg-[var(--t-surface-2)]"
+          >
+            <option value="inherit">{t('projects.brainEngineInherit')}</option>
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+          </select>
+        </label>
+
+        <label className="text-xs space-y-1">
+          <span className="font-semibold">{t('projects.codexProfile')}</span>
+          <input
+            type="text"
+            value={value.brain.codexProfile ?? ''}
+            onChange={(e) => update('brain', { codexProfile: e.target.value.trim() || undefined })}
+            placeholder={t('projects.codexProfileAuto')}
+            className="w-full rounded border p-2 bg-[var(--t-surface-2)]"
+          />
+        </label>
+
         <label className="text-xs space-y-1">
           <span className="font-semibold">{t('projects.brainMode')}</span>
           <select
@@ -214,6 +241,17 @@ function ProjectSettingsForm({
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
+            checked={value.review?.autoMerge ?? false}
+            onChange={(e) => update('review', { autoMerge: e.target.checked })}
+          />
+          <span className="font-semibold">{t('projects.reviewAutoMerge')}</span>
+        </label>
+      </div>
+
+      <div className="space-y-2 text-xs">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
             checked={value.ci?.enabled ?? false}
             onChange={(e) => update('ci', { enabled: e.target.checked })}
           />
@@ -318,7 +356,7 @@ function ProjectSettingsForm({
         </p>
       )}
       {confirmFullPermission && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4" style={{ zIndex: UI_Z_INDEX.modal }} role="dialog" aria-modal="true" data-tour="modal-full-permission">
+        <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-4" style={{ zIndex: UI_Z_INDEX.modal }} role="dialog" aria-modal="true" data-tour="modal-full-permission">
           <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-2xl">
             <h2 className="text-base font-semibold">{t('common.confirm')}</h2>
             <p className="mt-2 text-sm text-[var(--t-text-2)]">{t('extra.fullModeConfirm')}</p>
@@ -343,6 +381,7 @@ export const ProjectsPage: React.FC = () => {
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   const [drawerProject, setDrawerProject] = useState<Project | null>(null);
 
   useEffect(() => {
@@ -363,6 +402,11 @@ export const ProjectsPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState('');
+  const [knowledgePage, setKnowledgePage] = useState(1);
+  const knowledgePageSize = 20;
+  const [ciProject, setCiProject] = useState<string | null>(null);
+  const [ciPage, setCiPage] = useState(1);
+  const ciPageSize = 20;
   useEffect(() => {
     if (showAddForm) suggestModalTour('modal-register-project');
   }, [showAddForm, suggestModalTour]);
@@ -370,6 +414,11 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: projectTasks = [] } = useQuery({
+    queryKey: ['tasks'],
+    queryFn: () => getTasks(),
+    refetchInterval: 10_000,
   });
   const { data: archivedProjects = [] } = useQuery({
     queryKey: ['projects', 'archived'],
@@ -421,9 +470,14 @@ export const ProjectsPage: React.FC = () => {
   });
 
   const knowledgeQuery = useQuery({
-    queryKey: ['project-knowledge', knowledgeProject],
-    queryFn: () => getProjectKnowledge(knowledgeProject!),
+    queryKey: ['project-knowledge', knowledgeProject, knowledgePage],
+    queryFn: () => getProjectKnowledgePage(knowledgeProject!, { limit: knowledgePageSize, offset: (knowledgePage - 1) * knowledgePageSize }),
     enabled: knowledgeProject !== null,
+  });
+  const ciRunsQuery = useQuery({
+    queryKey: ['ci-runs', ciProject, ciPage],
+    queryFn: () => getCiRunsPage(ciProject!, { limit: ciPageSize, offset: (ciPage - 1) * ciPageSize }),
+    enabled: ciProject !== null,
   });
 
   const addKnowledgeMutation = useMutation({
@@ -571,7 +625,12 @@ export const ProjectsPage: React.FC = () => {
               : t('projects.registerBtn')}
           </span>
         </Button>
+        <Button type="button" variant="secondary" onClick={() => { resetForm(); setShowWizard(true); }} className="gap-1.5 self-start sm:self-auto">
+          <span>{t('projects.wizardOpen')}</span>
+        </Button>
       </div>
+
+      {showWizard && <ProjectWizard onClose={() => setShowWizard(false)} />}
 
       <div>
         <Button type="button" variant="ghost" size="sm" onClick={() => setShowArchived((value) => !value)}>
@@ -825,7 +884,7 @@ export const ProjectsPage: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   1
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -834,7 +893,7 @@ export const ProjectsPage: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   2
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -843,7 +902,7 @@ export const ProjectsPage: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   3
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -1038,20 +1097,28 @@ export const ProjectsPage: React.FC = () => {
                       )}
                     </div>
                   )}
+                  {proj.ciStatus && (
+                    <button type="button" className="text-xs text-[var(--t-accent)] hover:underline" onClick={() => { setCiProject(ciProject === proj.id ? null : proj.id); setCiPage(1); }}>
+                      {t('projects.ciLabel')}
+                    </button>
+                  )}
                 </div>
               </div>
 
               {/* Card Footer: Knowledge button */}
               <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
+                {(() => {
+                  const activeCount = projectTasks.filter((task) => task.projectId === proj.id && ['running', 'queued', 'waiting_quota'].includes(task.status)).length;
+                  return <Link to={`/tasks?project=${encodeURIComponent(proj.id)}`} className="flex items-center justify-between rounded-lg border border-[var(--t-border)] px-2.5 py-2 text-xs hover:border-[var(--t-accent)] transition-colors" data-testid={`project-task-summary-${proj.id}`}><span className="text-[var(--t-text-2)]">{t('projects.activeTasks')}</span><span className="font-semibold text-[var(--t-accent)]">{activeCount} · {t('projects.viewTasks')}</span></Link>;
+                })()}
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    setKnowledgeProject(
-                      knowledgeProject === proj.id ? null : proj.id,
-                    )
-                  }
+                  onClick={() => {
+                    setKnowledgeProject(knowledgeProject === proj.id ? null : proj.id);
+                    setKnowledgePage(1);
+                  }}
                   className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] px-2 h-7"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
@@ -1081,11 +1148,21 @@ export const ProjectsPage: React.FC = () => {
                         {t('extra.knowledgeAdd')}
                       </Button>
                     </div>
-                    {(knowledgeQuery.data || []).map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="flex items-start gap-2 text-xs"
-                      >
+                    <DataTable
+                      rows={knowledgeQuery.data?.items || []}
+                      loading={knowledgeQuery.isLoading}
+                      error={knowledgeQuery.error instanceof Error ? knowledgeQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      page={knowledgePage}
+                      pageSize={knowledgePageSize}
+                      total={knowledgeQuery.data?.total || 0}
+                      onPageChange={setKnowledgePage}
+                      columns={[{
+                        key: 'content',
+                        title: t('extra.knowledge'),
+                        sortable: true,
+                        sortValue: (entry) => entry.content,
+                        render: (entry) => <div className="flex items-start gap-2 text-xs">
                         <button
                           type="button"
                           title={t('extra.pinKnowledge')}
@@ -1125,8 +1202,35 @@ export const ProjectsPage: React.FC = () => {
                         >
                           ×
                         </button>
-                      </div>
-                    ))}
+                        </div>,
+                      }, {
+                        key: 'createdAt',
+                        title: t('common.createdAt'),
+                        sortable: true,
+                        sortValue: (entry) => entry.createdAt,
+                        render: (entry) => <span className="whitespace-nowrap text-xs text-[var(--t-text-3)]">{entry.createdAt}</span>,
+                      }]}
+                    />
+                  </div>
+                )}
+                {ciProject === proj.id && (
+                  <div className="pt-2 border-t border-[var(--t-border)]">
+                    <DataTable
+                      rows={ciRunsQuery.data?.items || []}
+                      loading={ciRunsQuery.isLoading}
+                      error={ciRunsQuery.error instanceof Error ? ciRunsQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      columns={[
+                        { key: 'runId', title: 'Run', sortable: true, sortValue: (row) => row.runId, render: (row) => <span className="font-mono">#{row.runId}</span> },
+                        { key: 'workflow', title: 'Workflow', render: (row) => row.workflow },
+                        { key: 'status', title: 'Status', render: (row) => row.conclusion || row.status },
+                        { key: 'sha', title: 'SHA', render: (row) => <span className="font-mono">{row.sha.slice(0, 8)}</span> },
+                      ]}
+                      page={ciPage}
+                      pageSize={ciPageSize}
+                      total={ciRunsQuery.data?.total || 0}
+                      onPageChange={setCiPage}
+                    />
                   </div>
                 )}
               </div>

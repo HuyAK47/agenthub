@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import {
@@ -7,6 +7,7 @@ import {
   createTaskFromError,
   deleteWorktree,
   getTask,
+  getTaskRunsPage,
   getTasks,
   getTaskLog,
   retryTask,
@@ -32,6 +33,7 @@ import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { Pagination } from '../components/ui/Pagination';
 import { getReviewerEngine } from '../utils/reviewer';
 import {
   ArrowLeft,
@@ -98,6 +100,11 @@ export const TaskDetailPage: React.FC = () => {
   const [liveLog, setLiveLog] = useState<string>('');
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const logLines = React.useMemo(() => liveLog.split('\n'), [liveLog]);
+  const [logScrollTop, setLogScrollTop] = useState(0);
+  const logVirtualized = logLines.length > 500;
+  const logStart = logVirtualized ? Math.max(0, Math.floor(logScrollTop / 18) - 20) : 0;
+  const logEnd = logVirtualized ? Math.min(logLines.length, logStart + 80) : logLines.length;
 
   const { data: task, isLoading, error } = useQuery({
     queryKey: ['task', id],
@@ -105,6 +112,21 @@ export const TaskDetailPage: React.FC = () => {
     enabled: !!id,
     refetchInterval: 4000,
   });
+
+  const [runParams, setRunParams] = useSearchParams();
+  const [runsPage, setRunsPage] = useState(Math.max(1, Number(runParams.get('runsPage') || 1)));
+  const [runsCursors, setRunsCursors] = useState<Record<number, string | undefined>>({});
+  const runsCursor = runsCursors[runsPage - 1];
+  const runsQuery = useQuery({
+    queryKey: ['task-runs', id, runsPage, runsCursor],
+    queryFn: () => getTaskRunsPage(id, { limit: 20, offset: runsCursor ? undefined : (runsPage - 1) * 20, cursor: runsCursor }),
+    enabled: Boolean(id) && activeTab === 'runs',
+    placeholderData: (previous) => previous,
+  });
+  const runs = runsQuery.isSuccess ? runsQuery.data.items : task?.runs || [];
+  useEffect(() => {
+    if (runsQuery.data?.nextCursor) setRunsCursors((current) => ({ ...current, [runsPage]: runsQuery.data!.nextCursor || undefined }));
+  }, [runsPage, runsQuery.data?.nextCursor]);
 
   const { data: hubStatus } = useQuery({
     queryKey: ['status'],
@@ -195,6 +217,7 @@ export const TaskDetailPage: React.FC = () => {
   const handleScroll = () => {
     if (!logContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = logContainerRef.current;
+    setLogScrollTop(scrollTop);
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 30;
     setAutoScroll(isAtBottom);
   };
@@ -495,8 +518,8 @@ export const TaskDetailPage: React.FC = () => {
               {(task.status === 'review' || (task.reviews && task.reviews.length > 0) || task.reviewChain?.length) && (
                 <span
                   data-testid="reviewer-badge"
-                  className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-white shadow-2xs ${
-                    getReviewerEngine(task) === 'claude' ? 'bg-[var(--t-claude)]' : 'bg-emerald-600'
+                  className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-[var(--t-on-accent)] shadow-2xs ${
+                    getReviewerEngine(task) === 'claude' ? 'bg-[var(--t-claude)]' : 'bg-[var(--t-ok)]'
                   }`}
                   style={getReviewerEngine(task) === 'claude' ? { backgroundColor: 'var(--t-claude)' } : undefined}
                 >
@@ -563,7 +586,7 @@ export const TaskDetailPage: React.FC = () => {
               type="button"
               onClick={() => startMutation.mutate()}
               disabled={startMutation.isPending}
-              className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
             >
               <Play className="w-4 h-4" />
               <span>{t('taskDetail.btnStart')}</span>
@@ -577,7 +600,7 @@ export const TaskDetailPage: React.FC = () => {
                 type="button"
                 onClick={() => resumeMutation.mutate()}
                 disabled={resumeMutation.isPending}
-                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_25%,transparent)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_25%,transparent)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 <Play className="w-4 h-4" />
                 <span>{t('taskDetail.btnResume')}</span>
@@ -600,7 +623,7 @@ export const TaskDetailPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowCancelModal(true)}
-              className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
             >
               <XCircle className="w-4 h-4" />
               <span>{t('taskDetail.btnCancel')}</span>
@@ -610,7 +633,7 @@ export const TaskDetailPage: React.FC = () => {
           {/* Retry (if failed or blocked) */}
           {(task.status === 'failed' || task.status === 'blocked') && (
             <>
-              <button type="button" onClick={() => setShowRetryModal(true)} className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer">
+              <button type="button" onClick={() => setShowRetryModal(true)} className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer">
                 <RotateCcw className="w-4 h-4" /><span>{t('taskDetail.btnRetry')}</span>
               </button>
               <button type="button" onClick={() => { setRetryWithDifferentModel(true); openEditModal(); }} className="px-3.5 py-1.5 rounded-lg border border-[var(--t-accent)] text-[var(--t-accent)] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer">
@@ -627,7 +650,7 @@ export const TaskDetailPage: React.FC = () => {
                   type="button"
                   onClick={() => retryReviewerMutation.mutate()}
                   disabled={retryReviewerMutation.isPending}
-                  className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4" />
                   <span>{t('extra.retryReviewer')}</span>
@@ -637,7 +660,7 @@ export const TaskDetailPage: React.FC = () => {
                 type="button"
                 onClick={() => reviewMutation.mutate({ verdict: 'approved' })}
                 disabled={reviewMutation.isPending}
-                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />
               <span>{t('taskDetail.btnReview')}</span>
@@ -645,9 +668,9 @@ export const TaskDetailPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => reviewMutation.mutate({ verdict: 'approved', merge: true })}
+                className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
                 disabled={reviewMutation.isPending || task.mergeAvailable === false}
                 title={task.mergeAvailable === false ? (task.mergeUnavailableReason || 'Project chưa cấu hình merge tự động') : undefined}
-                className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 <GitCommit className="w-4 h-4" />
                 <span>{t('taskDetail.btnMerge')}</span>
@@ -668,7 +691,7 @@ export const TaskDetailPage: React.FC = () => {
                   setFeedbackError(null);
                   setShowChangesModal(true);
                 }}
-                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 <AlertCircle className="w-4 h-4" />
               <span>{t('taskDetail.btnRequestChanges')}</span>
@@ -839,10 +862,18 @@ export const TaskDetailPage: React.FC = () => {
             onScroll={handleScroll}
             className="w-full h-[520px] bg-[var(--t-log-bg)] text-[var(--t-log-text)] font-mono text-xs p-4 rounded-xl overflow-y-auto border border-[var(--t-border)] shadow-inner whitespace-pre-wrap leading-relaxed select-text"
           >
-            {liveLog ? liveLog : <span className="text-[var(--t-log-muted)]">{t('taskDetail.noLog')}</span>}
+            {liveLog ? (
+              logVirtualized ? (
+                <div style={{ height: `${logLines.length * 18}px`, position: 'relative' }}>
+                  <div style={{ position: 'absolute', top: `${logStart * 18}px`, left: 0, right: 0 }}>
+                    {logLines.slice(logStart, logEnd).map((line, index) => <div key={logStart + index} className="h-[18px]">{line || '\u00a0'}</div>)}
+                  </div>
+                </div>
+              ) : liveLog
+            ) : <span className="text-[var(--t-log-muted)]">{t('taskDetail.noLog')}</span>}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button type="button" disabled={!logSelection} title={t('extra.captureFromSelectionTip')} onClick={() => { if (logSelection) openCapture(logSelection, 'log'); }} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">{t('extra.captureFromSelection')}</button>
+            <button type="button" disabled={!logSelection} title={t('extra.captureFromSelectionTip')} onClick={() => { if (logSelection) openCapture(logSelection, 'log'); }} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">{t('extra.captureFromSelection')}</button>
             <span className="text-xs text-[var(--t-text-3)]">{logSelection ? t('extra.captureSelectedChars', { count: logSelection.length }) : t('extra.captureFromSelectionHint')}</span>
           </div>
 
@@ -850,7 +881,7 @@ export const TaskDetailPage: React.FC = () => {
             <button
               type="button"
               onClick={scrollToBottom}
-              className="absolute bottom-4 right-4 bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 transition-all cursor-pointer animate-bounce"
+              className="absolute bottom-4 right-4 bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 transition-all cursor-pointer animate-bounce"
             >
               <ArrowDown className="w-3.5 h-3.5" />
               <span>{t('taskDetail.scrollToBottom')}</span>
@@ -873,9 +904,12 @@ export const TaskDetailPage: React.FC = () => {
       {/* 3. Runs list */}
       {activeTab === 'runs' && (
         <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs">
-          {!task.runs || task.runs.length === 0 ? (
+          {runsQuery.isLoading && !task?.runs?.length ? (
+            <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('pagination.loading')}</div>
+          ) : runs.length === 0 ? (
             <div className="p-8 text-center text-sm text-[var(--t-text-3)]">{t('taskDetail.noRuns')}</div>
           ) : (
+            <>
             <table className="w-full text-left text-sm">
               <thead className="bg-[var(--t-surface-2)] text-xs text-[var(--t-text-3)] uppercase">
                 <tr>
@@ -889,7 +923,7 @@ export const TaskDetailPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y border-[var(--t-border)]">
-                <CollapsibleList items={task.runs || []} initial={10} step={10} storageKey={`agenthub:task:${id}:runs`} tableColSpan={7}>
+                <CollapsibleList items={runs} initial={20} step={20} storageKey={`agenthub:task:${id}:runs`} tableColSpan={7}>
                 {(r) => (
                   <tr key={r.id}>
                     <td className="px-6 py-3 font-mono text-xs">{r.id}</td>
@@ -916,6 +950,17 @@ export const TaskDetailPage: React.FC = () => {
                 </CollapsibleList>
               </tbody>
             </table>
+            {runsQuery.data && <Pagination
+              page={runsPage}
+              pageSize={20}
+              total={runsQuery.data.total}
+              onPageChange={(nextPage) => {
+                setRunsPage(nextPage);
+                setRunParams((current) => { if (nextPage === 1) current.delete('runsPage'); else current.set('runsPage', String(nextPage)); return current; }, { replace: true });
+              }}
+              onPageSizeChange={() => undefined}
+            />}
+            </>
           )}
         </div>
       )}
@@ -1033,7 +1078,7 @@ export const TaskDetailPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={!newNoteText.trim() || sendNoteMutation.isPending}
-                className="px-4 py-2 text-xs font-semibold rounded-lg bg-[var(--t-accent)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-[var(--t-accent)] text-[var(--t-on-accent)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {sendNoteMutation.isPending ? t('taskDetail.bulletinSendingBtn') : t('taskDetail.bulletinSendBtn')}
               </button>
@@ -1069,7 +1114,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Cancel Confirmation Modal */}
       {showCancelModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
+        <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-md w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.cancelTitle')}</h3>
             <p className="text-sm text-[var(--t-text-3)]">
@@ -1087,7 +1132,7 @@ export const TaskDetailPage: React.FC = () => {
                 type="button"
                 onClick={() => cancelMutation.mutate()}
                 disabled={cancelMutation.isPending}
-                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-white cursor-pointer"
+                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] text-[var(--t-on-accent)] cursor-pointer"
               >
                 {t('taskDetail.cancelConfirm')}
               </button>
@@ -1098,7 +1143,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Retry Modal with Note */}
       {showRetryModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
+        <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-md w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.retryTitle')}</h3>
             <div>
@@ -1125,7 +1170,7 @@ export const TaskDetailPage: React.FC = () => {
                 type="button"
                 onClick={() => retryMutation.mutate()}
                 disabled={retryMutation.isPending}
-                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white cursor-pointer"
+                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] cursor-pointer"
               >
                 {t('taskDetail.retryRunBtn')}
               </button>
@@ -1136,7 +1181,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Changes Requested Modal - MANDATORY FEEDBACK */}
       {showChangesModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
+        <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.changesTitle')}</h3>
             <p className="text-xs text-[var(--t-text-3)]">
@@ -1178,7 +1223,7 @@ export const TaskDetailPage: React.FC = () => {
                   type="submit"
                   data-testid="submit-feedback-btn"
                   disabled={!feedback.trim() || reviewMutation.isPending}
-                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] hover:bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)] text-[var(--t-on-accent)] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {t('taskDetail.changesSubmitBtn')}
                 </button>
@@ -1190,7 +1235,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Edit Task Modal */}
       {capture && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
+        <div className="fixed inset-0 bg-[var(--t-overlay)] flex items-center justify-center p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <form onSubmit={(event) => { event.preventDefault(); captureMutation.mutate(); }} className="w-full max-w-2xl bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4">
             <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.captureDesc')}</p>
@@ -1198,13 +1243,13 @@ export const TaskDetailPage: React.FC = () => {
             <label className="block text-xs font-semibold">Slug<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
             <pre className="max-h-48 overflow-auto rounded-lg bg-[var(--t-log-bg)] text-[var(--t-log-text)] p-3 text-xs whitespace-pre-wrap">{capture.excerpt}</pre>
             {captureMutation.error && <p className="text-sm text-[var(--t-crit)]">{(captureMutation.error as Error).message}</p>}
-            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">{t('extra.cancel')}</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white cursor-pointer disabled:opacity-50">{t('extra.captureSubmit')}</button></div>
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">{t('extra.cancel')}</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-[var(--t-on-accent)] cursor-pointer disabled:opacity-50">{t('extra.captureSubmit')}</button></div>
           </form>
         </div>
       )}
 
       {showEditModal && (
-        <div data-testid="edit-task-modal" className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
+        <div data-testid="edit-task-modal" className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-[var(--t-border)]">
               <div>
@@ -1249,7 +1294,7 @@ export const TaskDetailPage: React.FC = () => {
                     type="button"
                     data-testid="add-model-btn"
                     onClick={addModel}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white inline-flex items-center gap-1 cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] inline-flex items-center gap-1 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>{t('taskDetail.addModelBtn')}</span>
@@ -1396,7 +1441,7 @@ export const TaskDetailPage: React.FC = () => {
                   type="submit"
                   data-testid="save-edit-btn"
                   disabled={editMutation.isPending}
-                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white cursor-pointer disabled:opacity-50"
+                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] cursor-pointer disabled:opacity-50"
                 >
                   {editMutation.isPending ? t('taskDetail.saving') : t('taskDetail.btnSave')}
                 </button>

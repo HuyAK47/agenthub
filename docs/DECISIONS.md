@@ -88,3 +88,12 @@
   - `registerAll()` vẫn đếm cả hồ sơ đã xoá khi kiểm tra keyring, nên không tự tạo lại `agy-default`.
   - Hồ sơ `kind=system` (Claude) vẫn bị chặn như cũ.
 - **Hệ quả**: Popup xoá ẩn ô "Xoá cả thư mục dữ liệu đăng nhập" với hồ sơ keyring và giải thích chỉ ẩn hồ sơ.
+
+## DEC-009: Giới hạn nhận diện externalRef ở đầu câu trong Telegram bot
+
+- **Bối cảnh**: Lệnh Telegram `/newtask <ref> <mô tả>` cho phép nhập mã tham chiếu bên ngoài (`externalRef`) ở đầu câu. Nếu nhận diện các từ chỉ gồm chữ cái không có ký hiệu phân cách (như toàn chữ hoa, camelCase, hoặc từ thường non-ASCII đứng trước từ viết hoa), các mô tả kỹ thuật thông thường như `API timeout khi gọi`, `README cần cập nhật`, `GitHub Actions bị lỗi`, `iPhone crash`, `sửa Login bug` sẽ bị nhận nhầm từ đầu tiên là `externalRef`. Khi project cấu hình template commit có `{ref}`, điều này khiến autocheck commit-message fail trên các commit bình thường.
+- **Quyết định**:
+  1. Loại trừ token kết thúc bằng dấu câu thông thường (`:`, `,`, `.`, `;`, `!`, `?`) hoặc chỉ là số thứ tự / danh mục (`1.`, `1`).
+  2. Chỉ nhận diện token có marker rõ ràng (bắt đầu bằng `#` như `#abc`, `#123` hoặc bao bởi ngoặc vuông `[...]`), hoặc token có ký tự phân tách (`-`, `_`, `#`, `/`, `:`) giữa các thành phần chữ/số (như `PROJ-45`, `OP#123`, `ĐỀ-123`, `営業-1`, `ABC-foo`, `ref:đề`).
+  3. Từ chỉ gồm chữ cái không có dấu nối (kể cả chữ hoa, Unicode hay Han/kana như `ĐỀ`, `営業`, `đề`) sẽ không được tự động đoán là `externalRef` nhằm bảo vệ mô tả task thông thường; người dùng muốn đặt ref dạng này cần dùng cú pháp tường minh (`#đề`, `#営業`, `ref:đề` hoặc `ĐỀ-123`, `営業-1`).
+- **Hệ quả**: Đảm bảo 100% không nhận nhầm tiêu đề mô tả thường thành ref, đồng thời hỗ trợ đầy đủ mọi ref tự do có marker hoặc dấu nối quy chuẩn.

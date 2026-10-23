@@ -4,6 +4,7 @@ import {
   CheckProfileResponse,
   CreateProfileInput,
   CreateProjectInput,
+  CreateNewProjectInput,
   DeployStatus,
   CreateTaskInput,
   CaptureTaskInput,
@@ -11,6 +12,8 @@ import {
   LoginSessionResponse,
   Profile,
   Project,
+  Run,
+  ProjectInspection,
   RetryTaskInput,
   ReviewTaskInput,
   SystemConfig,
@@ -30,7 +33,22 @@ import {
   CreateBatchInput,
   PerfReport,
   Department,
+  EventItem,
 } from '../types/api';
+
+export interface ClaudeSession {
+  sessionId: string;
+  cwd: string;
+  title: string | null;
+  model: string | null;
+  messages: number;
+  effectiveTokens: number;
+  lastAt: string | null;
+  active: boolean;
+  topTasks: Array<{ taskId: string; effectiveTokens: number }>;
+  limitResetAt?: number | null;
+  autoResumeEnabled?: number;
+}
 
 export const getPerf = () => apiFetch<PerfReport>('/api/perf');
 
@@ -263,6 +281,23 @@ export async function getArchivedProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects?archived=true');
 }
 
+export const inspectProject = (path: string) => apiFetch<ProjectInspection>('/api/projects/inspect', { method: 'POST', body: JSON.stringify({ path }) });
+export const createNewProject = (data: CreateNewProjectInput) => apiFetch<Project>('/api/projects/new', { method: 'POST', body: JSON.stringify(data) });
+export const writeProjectGuidance = (projectId: string, content: string) =>
+  apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/guidance`, {
+    method: 'POST',
+    body: JSON.stringify({ content, confirm: true }),
+  });
+export const summarizeProjectContext = (projectId: string, data: { sessions: string[]; selections?: Array<{ session: string; text: string }>; notes?: string }) =>
+  apiFetch<{ taskId: string; status: string; summary: string | null }>(
+    `/api/projects/${encodeURIComponent(projectId)}/summarize-context`,
+    { method: 'POST', body: JSON.stringify(data) },
+  );
+export const getProjectContextSummary = (projectId: string, taskId: string) =>
+  apiFetch<{ taskId: string; status: string; summary: string | null }>(
+    `/api/projects/${encodeURIComponent(projectId)}/summarize-context/${encodeURIComponent(taskId.replace('/', '~'))}`,
+  );
+
 export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
 export const getProjectDeployStatus = (id: string) =>
   apiFetch<DeployStatus | null>(`/api/projects/${encodeURIComponent(id)}/deploy`);
@@ -294,6 +329,32 @@ export async function restoreProject(id: string): Promise<Project> {
 
 export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
   return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
+}
+
+export async function getProjectKnowledgePage(projectId: string, params: { limit: number; offset?: number; cursor?: string }): Promise<PageResponse<KnowledgeEntry>> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  if (params.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<KnowledgeEntry>>(`/api/projects/${encodeURIComponent(projectId)}/knowledge?${query.toString()}`);
+}
+
+export interface CiRun {
+  projectId: string;
+  runId: number;
+  workflow: string;
+  sha: string;
+  status: string;
+  conclusion: string | null;
+  jobs: string;
+  completedAt: string | null;
+  url?: string | null;
+}
+
+export async function getCiRunsPage(projectId: string, params: { limit: number; offset?: number; cursor?: string }): Promise<PageResponse<CiRun>> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  if (params.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<CiRun>>(`/api/projects/${encodeURIComponent(projectId)}/ci/runs?${query.toString()}`);
 }
 
 export const getReviewChecklistPreview = (projectId: string) =>
@@ -431,12 +492,65 @@ export async function deleteQuota(name: string, family: string): Promise<{ ok: b
   );
 }
 
-export async function getTasks(params?: { project?: string; status?: string }): Promise<Task[]> {
+export interface TaskQuery {
+  project?: string;
+  status?: string;
+  search?: string;
+  limit?: number;
+  cursor?: string;
+  offset?: number;
+  sort?: 'createdAt' | 'updatedAt' | 'title' | 'slug';
+  order?: 'asc' | 'desc';
+}
+
+export function getTasks(): Promise<Task[]>;
+export function getTasks(params: Omit<TaskQuery, 'limit'> & { limit?: undefined }): Promise<Task[]>;
+export async function getTasks(params?: Omit<TaskQuery, 'limit'> & { limit?: undefined }): Promise<Task[]> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.status) query.set('status', params.status);
+  if (params?.search) query.set('search', params.search);
+  if (params?.cursor) query.set('cursor', params.cursor);
   const qStr = query.toString();
   return apiFetch<Task[]>(`/api/tasks${qStr ? `?${qStr}` : ''}`);
+}
+
+export interface PageResponse<T> {
+  items: T[];
+  total: number;
+  nextCursor: string | null;
+}
+
+export async function getEventHistoryPage(params: { limit: number; cursor?: string; offset?: number; taskId?: string }): Promise<PageResponse<EventItem>> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.cursor) query.set('cursor', params.cursor);
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  if (params.taskId) query.set('taskId', params.taskId);
+  return apiFetch<PageResponse<EventItem>>(`/api/events/history?${query.toString()}`);
+}
+
+export async function getTasksPage(params?: TaskQuery): Promise<PageResponse<Task>> {
+  const query = new URLSearchParams();
+  if (params?.project) query.set('project', params.project);
+  if (params?.status) query.set('status', params.status);
+  if (params?.search) query.set('search', params.search);
+  query.set('limit', String(params?.limit ?? 20));
+  if (params?.cursor) query.set('cursor', params.cursor);
+  if (params?.offset !== undefined) query.set('offset', String(params.offset));
+  if (params?.sort) query.set('sort', params.sort);
+  if (params?.order) query.set('order', params.order);
+  return apiFetch<PageResponse<Task>>(`/api/tasks?${query.toString()}`);
+}
+
+export async function getAllTasksPaged(params?: Omit<TaskQuery, 'limit' | 'cursor' | 'offset'>): Promise<Task[]> {
+  const items: Task[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await getTasksPage({ ...params, limit: 100, cursor });
+    items.push(...page.items);
+    cursor = page.nextCursor || undefined;
+  } while (cursor);
+  return items;
 }
 
 export async function getTaskGraph(params?: {
@@ -448,6 +562,15 @@ export async function getTaskGraph(params?: {
   if (params?.includeDone !== undefined) query.set('includeDone', String(params.includeDone));
   const qStr = query.toString();
   return apiFetch<TaskGraphResponse>(`/api/tasks/graph${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getClaudeSessionsPage(params: { limit: number; offset?: number; cursor?: string; activeWithinMin?: number; sort?: 'lastAt' | 'title' | 'messages' | 'effectiveTokens'; order?: 'asc' | 'desc' }): Promise<PageResponse<ClaudeSession>> {
+  const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset ?? 0) });
+  if (params.activeWithinMin !== undefined) query.set('activeWithinMin', String(params.activeWithinMin));
+  if (params.cursor) query.set('cursor', params.cursor);
+  if (params.sort) query.set('sort', params.sort);
+  if (params.order) query.set('order', params.order);
+  return apiFetch<PageResponse<ClaudeSession>>(`/api/claude/sessions?${query.toString()}`);
 }
 
 export async function createTask(data: CreateTaskInput): Promise<Task> {
@@ -509,12 +632,23 @@ export async function deleteTask(id: string): Promise<{ ok: boolean }> {
   });
 }
 
+export interface TaskBatchPage { items: TaskBatch[]; total: number; nextCursor: string | null }
+
 export async function getBatches(params?: { project?: string; status?: string }): Promise<TaskBatch[]> {
   const query = new URLSearchParams();
   if (params?.project && params.project !== 'all') query.set('project', params.project);
   if (params?.status && params.status !== 'all') query.set('status', params.status);
   const qStr = query.toString();
   return apiFetch<TaskBatch[]>(`/api/batches${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getBatchesPage(params: { project?: string; status?: string; limit: number; offset?: number; cursor?: string }): Promise<TaskBatchPage> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.project && params.project !== 'all') query.set('project', params.project);
+  if (params.status && params.status !== 'all') query.set('status', params.status);
+  if (params.cursor) query.set('cursor', params.cursor);
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  return apiFetch<TaskBatchPage>(`/api/batches?${query.toString()}`);
 }
 
 export async function getBatch(id: string): Promise<TaskBatch & { tasks: Task[] }> {
@@ -595,6 +729,16 @@ export async function getTaskLog(
   return apiFetch<string>(`/api/tasks/${encodeURIComponent(id)}/log${qStr ? `?${qStr}` : ''}`);
 }
 
+export async function getTaskRunsPage(
+  id: string,
+  params?: { limit?: number; offset?: number; cursor?: string },
+): Promise<PageResponse<Run>> {
+  const query = new URLSearchParams({ limit: String(params?.limit ?? 20) });
+  if (params?.offset !== undefined) query.set('offset', String(params.offset));
+  if (params?.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<Run>>(`/api/tasks/${encodeURIComponent(id)}/runs?${query.toString()}`);
+}
+
 export async function getProjectNotes(
   projectId: string,
   params?: { since?: number; runningOnly?: boolean; taskId?: string },
@@ -653,10 +797,16 @@ export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; log
 export async function getSavings(params?: {
   project?: string;
   since?: string;
+  limit?: number;
+  offset?: number;
+  cursor?: string;
 }): Promise<SavingsReport> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.since) query.set('since', params.since);
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.offset !== undefined) query.set('offset', String(params.offset));
+  if (params?.cursor) query.set('cursor', params.cursor);
   const qStr = query.toString();
   return apiFetch<SavingsReport>(`/api/savings${qStr ? `?${qStr}` : ''}`);
 }
@@ -672,6 +822,12 @@ export interface TelegramChat {
   id: number;
   name: string;
   username?: string;
+  projectId?: string;
+}
+
+export interface TelegramProjectTopic {
+  chatId: number;
+  threadId: number;
 }
 
 export interface TelegramStatus {
@@ -679,11 +835,13 @@ export interface TelegramStatus {
   hasToken: boolean;
   chats: TelegramChat[];
   allowedChatIds: number[];
+  projectTopics: Record<string, TelegramProjectTopic>;
   notify: {
     reviewReady: boolean;
     failed: boolean;
     blocked: boolean;
-    quota: boolean;
+    quotaPerModel: boolean;
+    quotaAllExhausted: boolean;
     fallback: boolean;
   };
 }
@@ -725,6 +883,20 @@ export async function createTelegramPairCode(): Promise<TelegramPairingCode> {
 export async function removeTelegramChat(id: number): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/telegram/chats/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+  });
+}
+
+export async function createTelegramTopics(): Promise<Record<string, TelegramProjectTopic>> {
+  return apiFetch<Record<string, TelegramProjectTopic>>('/api/telegram/topics/setup', { method: 'POST' });
+}
+
+export async function createTelegramProjectTopic(projectId: string): Promise<TelegramProjectTopic> {
+  return apiFetch<TelegramProjectTopic>(`/api/telegram/projects/${encodeURIComponent(projectId)}/topic`, { method: 'POST' });
+}
+
+export async function attachTelegramProjectChat(projectId: string, chatId: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/telegram/projects/${encodeURIComponent(projectId)}/chat`, {
+    method: 'PUT', body: JSON.stringify({ chatId }),
   });
 }
 

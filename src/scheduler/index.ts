@@ -21,6 +21,7 @@ import {
   TaskNoteRepo,
 } from '../db/index.js';
 import { projectSettings } from '../projects/settings.js';
+import { renderCommitTemplate, renderTaskBranch } from '../commit-convention.js';
 import { isProjectWorktreeRootAccessible, projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
@@ -46,6 +47,7 @@ import { LoadGuard, LoadSnapshot } from '../load.js';
 import { measureProcessTree } from '../process-tree.js';
 import { ReferenceSnapshot, takeReferenceSnapshots, detectReferenceModifications, ReferenceModification } from '../references.js';
 import { normalizeReviewerModel, reviewerSettingsFromLegacy, type ReviewerOrderItem, type ReviewerFallback } from '../reviewer-config.js';
+import { cleanupTaskRunArtifacts } from '../temp-cleanup.js';
 
 type ActivitySource = 'log' | 'conversation' | 'worktree';
 
@@ -143,6 +145,8 @@ function isAutoReviewer(by: string | undefined): by is ReviewerActor {
 /** Times an arbiter rejection sends a task back before it is blocked for a person. */
 const ARBITER_ROUNDS = 2;
 const ARBITER_RETRY_MODEL = 'claude-opus-4-6-thinking';
+const REVIEWER_CRASH_BACKOFF_MS = 60_000;
+const REVIEWER_LOCK_BACKOFF_MS = 10_000;
 
 export interface ReviewerRun {
   taskId: string;
@@ -204,6 +208,8 @@ export class Scheduler {
   private failoverState?: ClaudeFailoverState;
   private bulletinService?: { updateBulletinForTask: (task: TaskRow) => void };
   private reviewerRuns = new Map<string, ReviewerRun>();
+  /** Prevent a broken reviewer profile from being respawned on every scheduler tick. */
+  private reviewerBackoffUntil = new Map<string, number>();
   private reviewNotified = new Map<string, string>();
   private failoverWasActive = false;
   private reviewerErrorCounts = new Map<string, number>();
@@ -215,6 +221,8 @@ export class Scheduler {
   private recheckWaitingOnDiskOk = true;
   private loadGuard: LoadGuard;
   private lastLoadOverloaded = false;
+  private lastLoadHighEventAt: number | null = null;
+  private lastLoadHighEventSnapshot: LoadSnapshot | null = null;
   private notifiedSkippedModels = new Set<string>();
   private resourceTimer: ReturnType<typeof setInterval> | null = null;
   private diskReader: (p: string) => DiskSpace = getDiskSpaceSync;
@@ -590,6 +598,17 @@ export class Scheduler {
       this.eventBus.emit('task.queued', task.id, { reason: 'orphaned_start' });
     }
 
+    // Checks interrupted by a restart left tasks 'checking' with nothing running. Re-run them when the
+    // task's latest worker run finished cleanly (the only state that could have started checks).
+    for (const task of this.taskRepo.getByStatus('checking')) {
+      if (!this.projectRepo.get(task.projectId)) continue;
+      const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+      if (!lastWorker || lastWorker.outcome !== 'done') continue;
+      void this.runChecksForTask(task.id, lastWorker.id).catch((error) => {
+        if (!this.stopped) console.error(`[scheduler] re-check after restart failed for ${task.id}:`, error);
+      });
+    }
+
     const shutdownRuns = this.runRepo.getShutdownRuns();
     for (const run of shutdownRuns) {
       const task = this.taskRepo.get(run.taskId);
@@ -891,7 +910,11 @@ export class Scheduler {
       if (this.stopped) return;
       this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
       if (this.reviewChainForTask(currentTask).length === 0) {
-        this.emitReviewReadyIfReview(taskId, { checksPassed: checks.passed, failed: checks.failed });
+        this.emitReviewReadyIfReview(taskId, {
+          reviewChainComplete: true,
+          checksPassed: checks.passed,
+          failed: checks.failed,
+        });
       } else {
         this.eventBus.emit('review.gate_started', taskId, { step: 0 });
       }
@@ -922,9 +945,25 @@ export class Scheduler {
   tick(): void {
     this.loadGuard.setConfig(this.config.load);
     const load = this.loadGuard.update();
+    const now = Date.now();
     if (load.overloaded !== this.lastLoadOverloaded) {
       this.lastLoadOverloaded = load.overloaded;
       this.eventBus.emit(load.overloaded ? 'load.high' : 'load.ok', undefined, load);
+      if (load.overloaded) {
+        this.lastLoadHighEventAt = now;
+        this.lastLoadHighEventSnapshot = load;
+      } else {
+        this.lastLoadHighEventAt = null;
+        this.lastLoadHighEventSnapshot = null;
+      }
+    } else if (load.overloaded && this.lastLoadHighEventAt !== null && this.lastLoadHighEventSnapshot !== null
+      && now - this.lastLoadHighEventAt >= 30 * 60 * 1000
+      && ((load.load1 > this.lastLoadHighEventSnapshot.load1
+        && load.load1 >= this.lastLoadHighEventSnapshot.load1 * 1.3)
+        || this.lastLoadHighEventSnapshot.freeMemGB - load.freeMemGB > 1)) {
+      this.eventBus.emit('load.high', undefined, load);
+      this.lastLoadHighEventAt = now;
+      this.lastLoadHighEventSnapshot = load;
     }
 
     // Auto-pause / resume by load guard
@@ -1139,6 +1178,9 @@ export class Scheduler {
   private checkQuotaExpiry(): void {
     const expired = this.quotaService.cleanupExpired();
     if (expired.length > 0) {
+      for (const mark of expired) {
+        this.eventBus.emit('quota.cleared', undefined, mark);
+      }
       this.wakeWaitingQuotaTasks('quota_expired');
     }
   }
@@ -1198,7 +1240,7 @@ export class Scheduler {
     if (!task) return;
     const project = this.projectRepo.get(task.projectId);
     const baseRef = task.baseRef || project?.defaultBranch || 'main';
-    const branch = task.branch || `agenthub/${task.slug}`;
+    const branch = task.branch || (project ? renderTaskBranch(project, task) : `agenthub/${task.slug}`);
 
     const repoPath = (task.worktreePath && fs.existsSync(path.join(task.worktreePath, '.git')))
       ? task.worktreePath
@@ -1571,7 +1613,7 @@ export class Scheduler {
     if (markers.done) {
       const project = this.projectRepo.get(task.projectId);
       const baseRef = task.baseRef || project?.defaultBranch || 'main';
-      const branch = task.branch || `agenthub/${task.slug}`;
+      const branch = task.branch || (project ? renderTaskBranch(project, task) : `agenthub/${task.slug}`);
       if (project?.path) {
         const stats = await measureTaskLines(project.path, baseRef, branch);
         if (stats) diffStats = stats;
@@ -1957,7 +1999,7 @@ export class Scheduler {
           this.resetReviewerEscalation(task.id);
           task.reviewerEscalated = 0;
         } else {
-          if (this.needsClaudeArbiter(task)) this.startClaudeFallbackReview(task);
+          if (this.needsEscalationArbiter(task)) this.startEscalationArbiter(task);
           else this.actOnArbiterRejection(task, last);
           continue;
         }
@@ -2020,6 +2062,7 @@ export class Scheduler {
         if (profile.engine !== item.engine || (item.profiles.length > 0 && !item.profiles.includes(profile.name))) return false;
         if (profile.authState != null && profile.authState !== 'ok') return false;
         if (this.quotaService.isExhausted(profile.name, item.engine === 'claude' ? 'claude' : 'codex')) return false;
+        if (this.reviewerInBackoff(profile.name)) return false;
         return true;
       });
       const free = candidates.filter((profile) => !this.reviewerRunsForProfile(profile.name) && this.locks.findFreeSlotSync(profile) !== null)
@@ -2061,7 +2104,7 @@ export class Scheduler {
     if (!engine) return { wait: true };
     const engineId = step?.reviewer === 'claude' ? 'claude' : 'codex';
     const family = engineId === 'claude' ? 'claude' : 'codex';
-    const profiles = this.profileRepo.getEnabled().filter((p) => p.engine === engineId && !this.quotaService.isExhausted(p.name, family) && (p.authState == null || p.authState === 'ok') && !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null && p.name !== avoidProfile);
+    const profiles = this.profileRepo.getEnabled().filter((p) => p.engine === engineId && !this.quotaService.isExhausted(p.name, family) && (p.authState == null || p.authState === 'ok') && !this.reviewerInBackoff(p.name) && !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null && p.name !== avoidProfile);
     const profile = profiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
     return profile ? { engine, model, profile } : { wait: true };
   }
@@ -2104,30 +2147,34 @@ export class Scheduler {
   }
 
   /**
-   * A task escalated a second time for reviewer change requests gets one
-   * final verdict from the Claude reviewer instead of waiting for a person. Its approval merges as
-   * usual; a further change request leaves the task parked (it is already escalated).
+   * A task escalated a second time gets a final automated verdict instead of waiting for a person.
+   * Claude is preferred; an independent Codex account takes over when Claude is unavailable.
    */
-  private needsClaudeArbiter(task: TaskRow): boolean {
+  private needsEscalationArbiter(task: TaskRow): boolean {
     if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return false;
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
-    const lastEscalation = escalations[escalations.length - 1].ts;
-    const arbiterActor = this.config.reviewer?.arbiter?.engine === 'codex' ? 'codex-reviewer' : 'claude-reviewer';
-    return !this.reviewRepo?.getByTask(task.id).some((review) => review.actor === arbiterActor && review.createdAt >= lastEscalation);
+    const lastEscalationId = escalations[escalations.length - 1].id;
+    return !this.hasAutomatedVerdictAfter(task.id, lastEscalationId);
   }
 
   /**
-   * The Claude arbiter asked for changes on an escalated task. Send it back
+   * The arbiter asked for changes on an escalated task. Send it back
    * with that feedback on the strongest model, at most ARBITER_ROUNDS times; then block it and say so.
    */
   private actOnArbiterRejection(task: TaskRow, last: { actor: string; verdict: string; feedback: string | null; createdAt: string } | undefined): void {
-    const arbiterActor = this.config.reviewer?.arbiter?.engine === 'codex' ? 'codex-reviewer' : 'claude-reviewer';
-    if (!last || last.actor !== arbiterActor || last.verdict !== 'changes_requested') return;
+    if (!last || !isAutoReviewer(last.actor) || last.verdict !== 'changes_requested') return;
     if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return;
-    const rejections = this.reviewRepo?.getByTask(task.id)
-        .filter((review) => review.actor === arbiterActor && review.verdict === 'changes_requested').length ?? 0;
+    const escalations = this.eventRepo.getByTask(task.id)
+      .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
+    const lastEscalationId = escalations.at(-1)?.id;
+    if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    // Count arbiter rejections across every arbiter round (from the second escalation on), so a task
+    // that keeps getting re-escalated is still blocked after ARBITER_ROUNDS instead of looping forever.
+    const arbiterStartId = escalations[1]?.id ?? lastEscalationId;
+    const rejections = this.eventRepo.getByTask(task.id)
+      .filter((event) => event.id > arbiterStartId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
     if (rejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {
@@ -2141,6 +2188,18 @@ export class Scheduler {
     try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
     this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
     this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Arbiter yêu cầu sửa.'}\n\n(Reviewer đã từ chối nhiều vòng và arbiter cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
+  }
+
+  private hasAutomatedVerdictAfter(taskId: string, eventId: number, verdict?: ReviewerVerdict): boolean {
+    return this.eventRepo.getByTask(taskId).some((event) => {
+      if (event.id <= eventId || event.type !== 'review.completed' || !event.payload) return false;
+      try {
+        const payload = JSON.parse(event.payload) as { actor?: string; verdict?: ReviewerVerdict };
+        return isAutoReviewer(payload.actor) && (!verdict || payload.verdict === verdict);
+      } catch {
+        return false;
+      }
+    });
   }
 
   private reviewWaitedTooLong(task: TaskRow): boolean {
@@ -2168,6 +2227,7 @@ export class Scheduler {
       .filter((p) => p.engine === arbiter.engine && (p.authState == null || p.authState === 'ok') &&
         (preferred.length === 0 || preferred.includes(p.name)) &&
         !this.quotaService.isExhausted(p.name, arbiter.engine === 'claude' ? 'claude' : 'codex') &&
+        !this.reviewerInBackoff(p.name) &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null)
       .sort((a, b) => Number(a.name === lastRun?.profileName) - Number(b.name === lastRun?.profileName) ||
         rank(a.name) - rank(b.name) || (b.priority ?? 0) - (a.priority ?? 0));
@@ -2175,6 +2235,59 @@ export class Scheduler {
     if (!profile) return;
     this.eventBus.emit('review.fallback', task.id, { from: 'reviewer', to: arbiter.engine, reason: 'arbiter', profile: profile.name });
     this.startReview(task, profile.name, engine, normalizeReviewerModel(arbiter.engine, arbiter.model), arbiter.engine === 'claude' ? 'claude-reviewer' : 'codex-reviewer');
+  }
+
+  /** Prefer Claude as arbiter, but immediately fall back to an independent Codex account. */
+  private startEscalationArbiter(task: TaskRow): void {
+    const before = this.reviewerRuns.size;
+    if (this.config.reviewer?.arbiter?.engine === 'codex' || this.config.reviewer?.claudeFallback !== false) {
+      this.startClaudeFallbackReview(task);
+    }
+    if (this.reviewerRuns.size > before) return;
+
+    const arbiterEngine = this.config.reviewer?.arbiter?.engine ?? 'claude';
+    if (arbiterEngine === 'codex') {
+      const claude = this.engines.get(CLAUDE_REVIEW_ENGINE_KEY);
+      if (!claude || !task.worktreePath || !this.claudeBudgetAvailable(task)) return;
+      const candidates = this.profileRepo.getEnabled()
+        .filter((profile) => profile.engine === 'claude'
+          && (profile.authState == null || profile.authState === 'ok')
+          && !this.quotaService.isExhausted(profile.name, 'claude')
+          && !this.reviewerInBackoff(profile.name)
+          && !this.reviewerRunsForProfile(profile.name)
+          && this.locks.findFreeSlotSync(profile) !== null)
+        .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+      const profile = candidates[0];
+      if (!profile) return;
+      this.eventBus.emit('review.fallback', task.id, { from: 'codex', to: 'claude', profile: profile.name, reason: 'arbiter_unavailable' });
+      this.startReview(task, profile.name, claude, `claude:${this.config.reviewer?.claudeModel || 'sonnet'}`, 'claude-reviewer');
+      return;
+    }
+
+    const codex = this.engines.get('codex');
+    if (!codex || !task.worktreePath) return;
+    const lastWorker = this.runRepo.getByTask(task.id).filter((run) => run.kind === 'worker').at(-1);
+    const candidates = this.profileRepo.getEnabled()
+      .filter((profile) => profile.engine === 'codex'
+        && profile.name !== lastWorker?.profileName
+        && !this.quotaService.isExhausted(profile.name, 'codex')
+        && !this.reviewerInBackoff(profile.name)
+        && !this.reviewerRunsForProfile(profile.name)
+        && this.locks.findFreeSlotSync(profile) !== null)
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    const profile = candidates[0];
+    if (!profile) return;
+    this.eventBus.emit('review.fallback', task.id, { from: 'claude', to: 'codex', profile: profile.name, reason: 'arbiter_unavailable' });
+    this.startReview(task, profile.name, codex, this.config.reviewer?.model || 'codex:gpt-5.6-luna', 'codex-reviewer');
+  }
+
+  private reviewerInBackoff(profileName: string): boolean {
+    const until = this.reviewerBackoffUntil.get(profileName) || 0;
+    if (until <= Date.now()) {
+      this.reviewerBackoffUntil.delete(profileName);
+      return false;
+    }
+    return true;
   }
 
   private skippedCodexGate(task: TaskRow, chain: ReviewChainStep[]): boolean {
@@ -2290,16 +2403,19 @@ export class Scheduler {
       try { logOutput = fs.readFileSync(run.logPath, 'utf8'); } catch { logOutput = ''; }
     }
     try { output = fs.readFileSync(active.outputPath, 'utf8'); } catch { output = ''; }
-    const quota = active.engine.detectQuota(logOutput).exhausted;
+    // The Claude CLI prints its limit notice on stdout, which lands in the output file, not the log.
+    const quota = active.engine.detectQuota(`${logOutput}\n${output}`).exhausted;
     const duration = Date.now() - active.startedAt;
     const isLockBusy = duration < 3000 && logOutput.trim() === '' && Boolean(active.lockFile) && exitCode === 1;
     if (isLockBusy) {
+      this.reviewerBackoffUntil.set(profileName, Date.now() + REVIEWER_LOCK_BACKOFF_MS);
       this.runRepo.finish(runId, 'crashed', undefined, 'lock_busy');
       this.eventBus.emit('review.waiting', taskId, { actor: active.actor, reason: 'lock_busy' });
       return;
     }
     if (reason === 'timeout' || reason === 'error' || exitCode !== 0 || quota) {
       if (!quota) this.reviewerErrorCounts.set(taskId, (this.reviewerErrorCounts.get(taskId) || 0) + 1);
+      this.reviewerBackoffUntil.set(profileName, Date.now() + REVIEWER_CRASH_BACKOFF_MS);
       this.runRepo.finish(runId, quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crashed');
       if (quota) this.quotaService.mark(profileName, active.actor === 'claude-reviewer' ? 'claude' : 'codex', this.config.reviewer?.failoverSec || 5 * 60 * 60, `${active.actor} quota`);
       this.eventBus.emit('review.waiting', taskId, { actor: active.actor, reason: quota ? 'quota' : reason === 'timeout' ? 'timeout' : 'crash' });
@@ -2733,7 +2849,7 @@ export class Scheduler {
         this.locks.release(profile.name, lockFile);
         return this.logStartSkipped(task, error instanceof Error ? error.message : String(error));
       }
-      const branch = task.branch || `agenthub/${task.slug}`;
+      const branch = task.branch || renderTaskBranch(project, task);
       const settings = projectSettings(project);
       if (settings.integration?.enabled) {
         try {
@@ -2837,6 +2953,10 @@ export class Scheduler {
 
     // Write task.md
     let prompt = PROTOCOL_PROMPT;
+    const convention = projectSettings(project).commitConvention;
+    const branchExample = renderTaskBranch(project, task);
+    prompt += `\n\n## Quy ước commit\n- Nhánh task: \`${branchExample}\`\n- Commit message mẫu: \`${renderCommitTemplate(convention.commitTemplate, { type: 'feat', scope: 'scope', ref: task.externalRef || 'REF-123', summary: 'summary' })}\`\n- Merge message mẫu: \`${renderCommitTemplate(convention.mergeMessageTemplate, { branch: branchExample, target: task.baseRef || project.defaultBranch })}\``;
+    if (convention.commitTemplate.includes('{ref}') && task.externalRef) prompt += `\n- External ref bắt buộc: \`${task.externalRef}\``;
     if (task.resume) {
       prompt += '\n\nTask đã làm dở – kiểm tra git log/status rồi làm tiếp, không làm lại.';
     }
@@ -3026,6 +3146,15 @@ export class Scheduler {
       if ((isAutoReviewer(by) || by === 'claude-review') && step?.mode === 'gate') {
         this.advanceReviewStep(task, chain, 'approved');
         return;
+      }
+      if (isAutoReviewer(by) && chain.length === 0) {
+        const project = this.projectRepo.get(task.projectId);
+        const settings = project ? projectSettings(project) : null;
+        const checks = this.getCheckResults(task.id);
+        if ((settings?.review.autoMerge || settings?.integration.autoMerge) && checks.length > 0 && checks.every((check) => check.ok)) {
+          this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true, reason: 'review_approved' });
+          return;
+        }
       }
       if (!isAutoReviewer(by)) this.resetReviewerEscalation(taskId);
       this.taskRepo.updateStatus(taskId, 'done');
@@ -3239,10 +3368,12 @@ export class Scheduler {
   private onTaskDoneOrCancelled(taskId: string): void {
     this.invalidateChecks(taskId);
     this.reviewNotified.delete(taskId);
-    if (!this.config.cleanup?.nodeModulesOnDone) return;
     const task = this.taskRepo.get(taskId);
-    if (!task || !task.worktreePath) return;
-    this.worktreeService.cleanNodeModules(task.worktreePath);
+    if (!task) return;
+    cleanupTaskRunArtifacts(this.runRepo.getByTask(taskId).map((run) => run.logPath));
+    if (this.config.cleanup?.nodeModulesOnDone && task.worktreePath) {
+      this.worktreeService.cleanNodeModules(task.worktreePath);
+    }
   }
 
   private invalidateChecks(taskId: string): void {

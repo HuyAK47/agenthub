@@ -384,7 +384,7 @@ export const SetupPage: React.FC = () => {
         action: projects.length < 1 ? (
           <Link
             to="/projects?new=1"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold cursor-pointer"
           >
             <span>{t('setup.addProject')}</span>
           </Link>

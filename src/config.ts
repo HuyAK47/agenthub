@@ -50,11 +50,14 @@ export const DEFAULT_BRAIN_DIGEST_CONFIG: BrainDigestConfig = {
 };
 
 export interface BrainConfig {
+  engine?: 'claude' | 'codex';
   fallback: ClaudeFallbackStep[];
   policy: string[];
   claudeProfile: string;
   claudeProfileExplicit?: boolean;
   model: string;
+  codexProfile?: string;
+  codexModel?: string;
   mode: 'off' | 'suggest' | 'auto';
   permissions: 'standard' | 'trusted' | 'full';
   maxConcurrent: number;
@@ -62,6 +65,14 @@ export interface BrainConfig {
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
   digest: BrainDigestConfig;
+  /** Optional cross-department coordinator. Disabled unless explicitly enabled. */
+  director?: {
+    enabled: boolean;
+    engine: 'claude' | 'codex';
+    model: string;
+    codexProfile?: string;
+    permissions: 'standard' | 'trusted' | 'full';
+  };
 }
 
 export interface AssistantConfig {
@@ -108,7 +119,8 @@ export interface TelegramNotifyConfig {
   reviewReady: boolean;
   failed: boolean;
   blocked: boolean;
-  quota: boolean;
+  quotaPerModel: boolean;
+  quotaAllExhausted: boolean;
   fallback: boolean;
   brainWaiting?: boolean;
 }
@@ -122,11 +134,17 @@ export interface TelegramChat {
   projectId?: string;
 }
 
+export interface TelegramProjectTopic {
+  chatId: number;
+  threadId: number;
+}
+
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
   chats: TelegramChat[];
+  projectTopics: Record<string, TelegramProjectTopic>;
   notify: TelegramNotifyConfig;
 }
 
@@ -154,7 +172,8 @@ export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
   reviewReady: true,
   failed: true,
   blocked: true,
-  quota: true,
+  quotaPerModel: false,
+  quotaAllExhausted: true,
   fallback: true,
   brainWaiting: true,
 };
@@ -354,6 +373,7 @@ export function saveConfig(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      projectTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -524,6 +544,7 @@ export function updateConfigInMemory(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      projectTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -579,12 +600,16 @@ export function updateConfigInMemory(
     if (patch.brain.policy) config.brain.policy = [...patch.brain.policy];
     if (patch.brain.claudeProfile !== undefined) config.brain.claudeProfile = patch.brain.claudeProfile;
     if (patch.brain.model !== undefined) config.brain.model = patch.brain.model;
+    if (patch.brain.engine !== undefined) config.brain.engine = patch.brain.engine;
+    if (patch.brain.codexProfile !== undefined) config.brain.codexProfile = patch.brain.codexProfile;
+    if (patch.brain.codexModel !== undefined) config.brain.codexModel = patch.brain.codexModel;
     if (patch.brain.mode !== undefined) config.brain.mode = patch.brain.mode;
     if (patch.brain.permissions !== undefined) config.brain.permissions = patch.brain.permissions;
     if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
     if (patch.brain.maxConcurrent !== undefined) config.brain.maxConcurrent = patch.brain.maxConcurrent;
+    if (patch.brain.director) config.brain.director = { ...config.brain.director, ...patch.brain.director };
     if (patch.brain.digest) {
       config.brain.digest = {
         ...config.brain.digest,
@@ -682,6 +707,7 @@ export function updateConfigInMemory(
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
       chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
+      projectTopics: patch.telegram.projectTopics !== undefined ? { ...patch.telegram.projectTopics } : config.telegram.projectTopics,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -876,11 +902,20 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
           Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
         )
       : [],
+    projectTopics: rawTelegram.projectTopics && typeof rawTelegram.projectTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.projectTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([projectId, topic]) => [projectId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,
       failed: rawTelegramNotify.failed !== false,
       blocked: rawTelegramNotify.blocked !== false,
-      quota: rawTelegramNotify.quota !== false,
+      // `quota` was the old switch for per-model notifications.
+      quotaPerModel: typeof rawTelegramNotify.quotaPerModel === 'boolean'
+        ? rawTelegramNotify.quotaPerModel
+        : rawTelegramNotify.quota === true,
+      quotaAllExhausted: rawTelegramNotify.quotaAllExhausted !== false,
       fallback: rawTelegramNotify.fallback !== false,
       brainWaiting: rawTelegramNotify.brainWaiting !== false,
     },
@@ -975,6 +1010,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
     brain: {
+      engine: brainRaw.engine === 'codex' ? 'codex' : 'claude',
       fallback: normalizeFallbackSteps(brainRaw.fallback),
       policy: Array.isArray(brainRaw.policy)
         ? brainRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
@@ -988,6 +1024,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       model: typeof brainRaw.model === 'string' && brainRaw.model
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
+      codexProfile: typeof brainRaw.codexProfile === 'string' && brainRaw.codexProfile.trim() ? brainRaw.codexProfile.trim() : undefined,
+      codexModel: typeof brainRaw.codexModel === 'string' && brainRaw.codexModel.trim() ? brainRaw.codexModel.trim() : undefined,
       mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
       permissions: brainRaw.permissions === 'trusted' || brainRaw.permissions === 'full' ? brainRaw.permissions : 'standard',
       maxConcurrent: typeof brainRaw.maxConcurrent === 'number' && brainRaw.maxConcurrent > 0
@@ -1012,6 +1050,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
               : DEFAULT_BRAIN_DIGEST_CONFIG.time,
           }
         : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
+      director: {
+        enabled: (brainRaw.director as Record<string, unknown> | undefined)?.enabled === true,
+        engine: (brainRaw.director as Record<string, unknown> | undefined)?.engine === 'codex' ? 'codex' : 'claude',
+        model: typeof (brainRaw.director as Record<string, unknown> | undefined)?.model === 'string'
+          ? (brainRaw.director as Record<string, unknown>).model as string : 'opus',
+        codexProfile: typeof (brainRaw.director as Record<string, unknown> | undefined)?.codexProfile === 'string'
+          ? (brainRaw.director as Record<string, unknown>).codexProfile as string : undefined,
+        permissions: (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'full'
+          ? 'full' : (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'trusted' ? 'trusted' : 'standard',
+      },
     },
     assistant: {
       enabled: assistantRaw.enabled !== false,
@@ -1108,6 +1156,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
       pressureHigh: typeof rawLoad.pressureHigh === 'number' ? rawLoad.pressureHigh : DEFAULT_LOAD_CONFIG.pressureHigh,
+      pressureIoHigh: typeof rawLoad.pressureIoHigh === 'number' ? rawLoad.pressureIoHigh : DEFAULT_LOAD_CONFIG.pressureIoHigh,
       pressureOk: typeof rawLoad.pressureOk === 'number' ? rawLoad.pressureOk : DEFAULT_LOAD_CONFIG.pressureOk,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,

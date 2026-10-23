@@ -168,7 +168,9 @@ Trong AgentHub, một **project** là một git repository trên máy của bạ
 
 1. **Chuẩn bị repo**: Clone repo về máy (nếu chưa có). Đảm bảo repo đã được khởi tạo git và có nhánh mặc định (như `main`).
 2. **Đăng ký project vào hub**:
-   - **Trên Web Dashboard**: Truy cập trang **Thiết lập** (Setup) và bấm nút **"Thêm dự án"**, hoặc vào trang **Projects** bấm **"Đăng ký Project"** (hoặc mở trực tiếp đường dẫn `/projects?new=1`). Điền tên gợi nhớ và đường dẫn tuyệt đối tới thư mục repo git.
+   - **Đưa dự án có sẵn vào hub**: Truy cập trang **Projects**, mở **Trình hướng dẫn đăng ký**, chọn **Repo có sẵn trên máy**, nhập đường dẫn tuyệt đối rồi để AgentHub dò nhánh, lockfile, hooks, ngôn ngữ, tài liệu hướng dẫn và các phiên Claude Code cũ. Kiểm tra các gợi ý trước khi tạo; phần **Nâng cao** vẫn cho phép điền tay.
+   - **Tạo dự án mới**: Trong cùng trình hướng dẫn, chọn **Dự án mới**. AgentHub sẽ tạo thư mục mới, chạy `git init`, tạo commit rỗng và nhánh mặc định ngay trên máy trước khi đăng ký project.
+   - Luôn kiểm tra đường dẫn và nhánh gốc. Nhánh tích hợp (nếu bật) chỉ được hub merge local, không bao giờ tự push.
    - **Hoặc qua CLI**:
      ```bash
      agenthub project add <tên> /đường/dẫn/tuyệt/đối/tới/repo
@@ -407,7 +409,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 
 ```json
 {
-  "load": { "enabled": true, "high": 16, "ok": 11, "minFreeMemGB": 1.5, "recoverAfterSec": 300 },
+  "load": { "enabled": true, "high": 16, "ok": 11, "pressureHigh": 20, "pressureIoHigh": 40, "pressureOk": 10, "minFreeMemGB": 1.5, "recoverAfterSec": 300 },
   "disk": {
     "minFreeGB": 3,
     "extraPaths": [{ "path": "/var/lib/docker", "minFreeGB": 1.5, "label": "Docker" }]
@@ -417,7 +419,7 @@ Trang **Settings** (hoặc `PUT /api/config`):
 }
 ```
 
-- **load**: máy quá tải thì tạm giảm mỗi dự án xuống 1 task. Máy ổn định đủ `recoverAfterSec` thì trả lại.
+- **load**: máy quá tải thì tạm giảm mỗi dự án xuống 1 task. `pressureIoHigh` mặc định là 40% và I/O PSI chỉ được coi là quá tải khi memory PSI đồng thời đạt `pressureOk` (mặc định 10%); I/O nền thấp hơn ngưỡng không đánh thức brain. Máy ổn định đủ `recoverAfterSec` thì trả lại.
 - **disk**: ổ dưới ngưỡng thì không giao task mới. Thêm ổ chứa dữ liệu Docker nếu dự án dùng Docker.
 - **defaultTimeout**: giới hạn thời gian mỗi lượt chạy (giây). Ngoài ra hub cảnh báo khi task chạy lâu mà không commit, hoặc khi chạy lặp lại một lệnh.
 

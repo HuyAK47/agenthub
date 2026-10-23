@@ -1072,7 +1072,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(calls).toHaveLength(1);
     });
 
-    it('sends an identical notification text at most once per 30 minutes', async () => {
+    it('sends an all-quota notification once until the blockage clears', async () => {
       const emit = () => ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, { profile: 'g9', family: 'gemini-pro', allExhausted: true, time: '18:30' });
       emit();
       await bot.flushQueue(CHAT_ID);
@@ -1081,6 +1081,11 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
       currentTime += 16 * 60_000;
+      emit();
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
+
+      ctx.scheduler.getEventBus().emit('quota.cleared', undefined, { family: 'gemini-pro' });
       emit();
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(2);
@@ -1493,6 +1498,216 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
 
       task = ctx.taskRepo.get('proj-shop/dang-xuat-tai-khoan');
       expect(['queued', 'waiting_quota']).toContain(task?.status);
+    });
+
+    it('stores a leading external reference from the short description format', async () => {
+      await bot.handleUpdate({
+        update_id: 22,
+        message: {
+          message_id: 22,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask OP#123 Đăng xuất tài khoản',
+        },
+      });
+
+      const task = ctx.taskRepo.get('proj-shop/dang-xuat-tai-khoan');
+      expect(task?.externalRef).toBe('OP#123');
+      expect(task?.title).toBe('Đăng xuất tài khoản');
+      expect(task?.body).toBe('Đăng xuất tài khoản');
+    });
+
+    it('accepts free-form leading external references', async () => {
+      await bot.handleUpdate({
+        update_id: 23,
+        message: {
+          message_id: 23,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask ABC-foo Sửa lỗi đăng nhập',
+        },
+      });
+
+      const task = ctx.taskRepo.get('proj-shop/sua-loi-dang-nhap');
+      expect(task?.externalRef).toBe('ABC-foo');
+      expect(task?.title).toBe('Sửa lỗi đăng nhập');
+    });
+
+    it('accepts structured and Unicode leading external references', async () => {
+      await bot.handleUpdate({
+        update_id: 24,
+        message: {
+          message_id: 24,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask ĐỀ-123 Cập nhật thanh toán',
+        },
+      });
+
+      const vietnameseTask = ctx.taskRepo.get('proj-shop/cap-nhat-thanh-toan');
+      expect(vietnameseTask?.externalRef).toBe('ĐỀ-123');
+      expect(vietnameseTask?.title).toBe('Cập nhật thanh toán');
+
+      await bot.handleUpdate({
+        update_id: 25,
+        message: {
+          message_id: 25,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask 営業-1 Sửa nội dung bán hàng',
+        },
+      });
+
+      const japaneseTask = ctx.taskRepo.get('proj-shop/sua-noi-dung-ban-hang');
+      expect(japaneseTask?.externalRef).toBe('営業-1');
+      expect(japaneseTask?.title).toBe('Sửa nội dung bán hàng');
+
+      await bot.handleUpdate({
+        update_id: 26,
+        message: {
+          message_id: 26,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask PROJ-45 Sửa giao diện thanh toán',
+        },
+      });
+
+      const projTask = ctx.taskRepo.get('proj-shop/sua-giao-dien-thanh-toan');
+      expect(projTask?.externalRef).toBe('PROJ-45');
+      expect(projTask?.title).toBe('Sửa giao diện thanh toán');
+
+      await bot.handleUpdate({
+        update_id: 27,
+        message: {
+          message_id: 27,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask #abc Tối ưu hóa truy vấn',
+        },
+      });
+
+      const markerTask = ctx.taskRepo.get('proj-shop/toi-uu-hoa-truy-van');
+      expect(markerTask?.externalRef).toBe('#abc');
+      expect(markerTask?.title).toBe('Tối ưu hóa truy vấn');
+    });
+
+    it('does not treat normal descriptions or trailing punctuation as external references', async () => {
+      // Direct parser checks ensuring externalRef is undefined and text is preserved
+      expect(bot['parseLeadingExternalRef']('Lỗi: không đăng nhập')).toEqual({ text: 'Lỗi: không đăng nhập' });
+      expect(bot['parseLeadingExternalRef']('Hello, world')).toEqual({ text: 'Hello, world' });
+      expect(bot['parseLeadingExternalRef']('1. Sửa login')).toEqual({ text: '1. Sửa login' });
+      expect(bot['parseLeadingExternalRef']('Fix Login bug')).toEqual({ text: 'Fix Login bug' });
+      expect(bot['parseLeadingExternalRef']('Add Dashboard page')).toEqual({ text: 'Add Dashboard page' });
+      expect(bot['parseLeadingExternalRef']('sửa Login bug')).toEqual({ text: 'sửa Login bug' });
+      expect(bot['parseLeadingExternalRef']('API timeout khi gọi')).toEqual({ text: 'API timeout khi gọi' });
+      expect(bot['parseLeadingExternalRef']('GitHub Actions bị lỗi')).toEqual({ text: 'GitHub Actions bị lỗi' });
+      expect(bot['parseLeadingExternalRef']('iPhone crash')).toEqual({ text: 'iPhone crash' });
+      expect(bot['parseLeadingExternalRef']('README cần cập nhật')).toEqual({ text: 'README cần cập nhật' });
+
+      // End-to-end task creation via bot
+      await bot.handleUpdate({
+        update_id: 281,
+        message: {
+          message_id: 281,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Lỗi: không đăng nhập',
+        },
+      });
+      const taskPunctuation = ctx.taskRepo.get('proj-shop/loi-khong-dang-nhap');
+      expect(taskPunctuation?.externalRef).toBeNull();
+      expect(taskPunctuation?.title).toBe('Lỗi: không đăng nhập');
+
+      await bot.handleUpdate({
+        update_id: 282,
+        message: {
+          message_id: 282,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Hello, world',
+        },
+      });
+      const taskComma = ctx.taskRepo.get('proj-shop/hello-world');
+      expect(taskComma?.externalRef).toBeNull();
+      expect(taskComma?.title).toBe('Hello, world');
+
+      await bot.handleUpdate({
+        update_id: 283,
+        message: {
+          message_id: 283,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask 1. Sửa login',
+        },
+      });
+      const taskOrdinal = ctx.taskRepo.get('proj-shop/1-sua-login');
+      expect(taskOrdinal?.externalRef).toBeNull();
+      expect(taskOrdinal?.title).toBe('1. Sửa login');
+
+      await bot.handleUpdate({
+        update_id: 284,
+        message: {
+          message_id: 284,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Fix Login bug',
+        },
+      });
+      const taskFix = ctx.taskRepo.get('proj-shop/fix-login-bug');
+      expect(taskFix?.externalRef).toBeNull();
+      expect(taskFix?.title).toBe('Fix Login bug');
+
+      await bot.handleUpdate({
+        update_id: 285,
+        message: {
+          message_id: 285,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Add Dashboard page',
+        },
+      });
+      const taskAdd = ctx.taskRepo.get('proj-shop/add-dashboard-page');
+      expect(taskAdd?.externalRef).toBeNull();
+      expect(taskAdd?.title).toBe('Add Dashboard page');
+
+      await bot.handleUpdate({
+        update_id: 286,
+        message: {
+          message_id: 286,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask sửa Login bug',
+        },
+      });
+      const taskSua = ctx.taskRepo.get('proj-shop/sua-login-bug');
+      expect(taskSua?.externalRef).toBeNull();
+      expect(taskSua?.title).toBe('sửa Login bug');
+
+      await bot.handleUpdate({
+        update_id: 287,
+        message: {
+          message_id: 287,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask API timeout khi gọi',
+        },
+      });
+      const taskApi = ctx.taskRepo.get('proj-shop/api-timeout-khi-goi');
+      expect(taskApi?.externalRef).toBeNull();
+      expect(taskApi?.title).toBe('API timeout khi gọi');
+
+      await bot.handleUpdate({
+        update_id: 288,
+        message: {
+          message_id: 288,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask GitHub Actions bị lỗi',
+        },
+      });
+      const taskGithub = ctx.taskRepo.get('proj-shop/github-actions-bi-loi');
+      expect(taskGithub?.externalRef).toBeNull();
+      expect(taskGithub?.title).toBe('GitHub Actions bị lỗi');
     });
 
     it('allows cancelling wizard via /cancel', async () => {
@@ -2715,7 +2930,61 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(sysBrainSession?.kind).toBe('brain');
   });
 
-  it('2. /newtask dung du an dang chon lam mac dinh', async () => {
+  it('2. thong bao project vao topic, thong bao he thong vao General', async () => {
+    createProject('p-topic', 'Topic App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-topic': { chatId: CHAT_ID, threadId: 42 } };
+    const bot = createProjectBot('suggest');
+
+    bot.broadcastMessage('project notification', undefined, 'p-topic');
+    await bot.flushQueue(CHAT_ID);
+    const projectCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(projectCall?.body?.message_thread_id).toBe(42);
+
+    bot.broadcastMessage('system notification');
+    await bot.flushQueue(CHAT_ID);
+    const systemCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(systemCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('4. chat duoc gan project dinh tuyen ngay va event he thong luon vao General', async () => {
+    createProject('p-attached', 'Attached App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-attached': { chatId: CHAT_ID, threadId: 77 } };
+    const bot = createProjectBot('suggest');
+
+    bot.setProjectChat('p-attached', CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-attached');
+
+    bot.handleEvent('task.failed', 'p-attached/task-1');
+    await bot.flushQueue(CHAT_ID);
+    bot.broadcastMessage('system after project event', undefined);
+    await bot.flushQueue(CHAT_ID);
+    const systemCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(systemCall?.body?.message_thread_id).toBeUndefined();
+
+    bot.handleEvent('quota.exhausted', undefined, { projectId: 'p-attached', profile: 'p1', family: 'gemini' });
+    await bot.flushQueue(CHAT_ID);
+    const quotaCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(quotaCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('deploy event co projectId van duoc gui vao General', async () => {
+    createProject('p-deploy', 'Deploy App', 'suggest', 'full');
+    createProject('p-deploy-other', 'Other Deploy App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-deploy': { chatId: CHAT_ID, threadId: 88 } };
+    const bot = createProjectBot('suggest');
+
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy', error: 'build failed' });
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy-other', error: 'build failed' });
+    await bot.flushQueue(CHAT_ID);
+
+    const deployCalls = recordedCalls.filter((call) => call.url.includes('/sendMessage'));
+    expect(deployCalls).toHaveLength(2);
+    const deployCall = deployCalls.at(-1);
+    expect(deployCall?.body?.text).toContain('Triển khai thất bại');
+    expect(deployCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('3. /newtask dung du an dang chon lam mac dinh', async () => {
     createProject('p-alpha', 'Project Alpha', 'suggest', 'full');
     createProject('p-beta', 'Project Beta', 'suggest', 'full');
 

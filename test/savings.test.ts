@@ -326,6 +326,18 @@ describe('SavingsService and GET /api/savings integration', () => {
 
     // Tasks list
     expect(body.tasks.length).toBe(2);
+    expect(body.tasksTotal).toBe(2);
+
+    const pageRes = await server.inject({
+      method: 'GET',
+      url: '/api/savings?project=proj-a&limit=1&offset=1',
+      headers: authHeaders(),
+    });
+    expect(pageRes.statusCode).toBe(200);
+    const pageBody = JSON.parse(pageRes.body);
+    expect(pageBody.tasks).toHaveLength(1);
+    expect(pageBody.tasksTotal).toBe(2);
+    expect(pageBody.tasksNextCursor).toBeNull();
   });
 
   it('filters savings report by project and since date', async () => {

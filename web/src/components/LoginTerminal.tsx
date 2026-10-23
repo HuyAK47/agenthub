@@ -241,7 +241,7 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
       role="dialog"
       aria-modal="true"
       aria-labelledby="login-terminal-title"
-      className="fixed inset-0 flex items-center justify-center bg-black/75 p-3"
+      className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-3"
       style={{ zIndex: UI_Z_INDEX.modal }}
       data-testid="login-terminal"
     >
@@ -289,7 +289,7 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
                 href={loginUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-sm font-medium text-white hover:bg-[var(--t-accent-hover)] transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-sm font-medium text-[var(--t-on-accent)] hover:bg-[var(--t-accent-hover)] transition-colors"
               >
                 <ExternalLink className="h-4 w-4" /> {t('extra.loginOpen')}
               </a>
@@ -335,7 +335,7 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
             type="button"
             onClick={submitCode}
             disabled={conn !== 'open' || !code.trim()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--t-accent-hover)] disabled:opacity-40 cursor-pointer transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-medium text-[var(--t-on-accent)] hover:bg-[var(--t-accent-hover)] disabled:opacity-40 cursor-pointer transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
           >
             <Send className="h-4 w-4" /> {t('extra.send')}
           </button>
@@ -352,7 +352,7 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
           <button
             type="button"
             onClick={finish}
-            className="rounded-lg bg-[var(--t-ok)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 cursor-pointer transition-opacity focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
+            className="rounded-lg bg-[var(--t-ok)] px-4 py-2 text-sm font-medium text-[var(--t-on-accent)] hover:opacity-90 cursor-pointer transition-opacity focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
           >
             {t('extra.finish')}
           </button>

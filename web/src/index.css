@@ -1,17 +1,46 @@
 @import 'tailwindcss';
 
+/* Compact, theme-aware scrollbars for the app and nested log/table panes. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar:hover {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--t-border-strong);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--t-text-3);
+}
+
 @layer components {
   .field {
     @apply w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-bg)] px-3 py-2 text-sm text-[var(--t-text)] outline-hidden focus:border-[var(--t-accent)] focus:ring-2 focus:ring-[var(--t-accent)];
   }
   .button-primary {
-    @apply inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-3 py-2 text-sm font-semibold text-white hover:bg-[var(--t-accent-hover)];
+    @apply inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-accent)] px-3 py-2 text-sm font-semibold text-[var(--t-on-accent)] hover:bg-[var(--t-accent-hover)];
   }
   .button-secondary {
     @apply rounded-lg border border-[var(--t-border)] px-3 py-2 text-sm hover:bg-[var(--t-hover)];
   }
   .button-danger {
-    @apply inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-crit)] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex items-center gap-1.5 rounded-lg bg-[var(--t-crit)] px-3 py-2 text-sm font-semibold text-[var(--t-on-accent)] disabled:cursor-not-allowed disabled:opacity-40;
   }
   .menu-item {
     @apply block w-full rounded px-3 py-2 text-left text-xs hover:bg-[var(--t-hover)];
@@ -108,21 +137,35 @@
   --t-border-strong: #c4c7d4;
   --t-text: #21232c;
   --t-text-2: #21232c;
-  --t-text-3: #6c7393;
+  --t-text-3: #68708f;
   --t-accent: #0066ff;
   --t-accent-hover: #005ce6;
   --t-accent-bg: #edf3ff;
   --t-chip: #dce7ff;
   --t-crit: #c91a03;
   --t-crit-fill: #fc4d36;
-  --t-warn: #a86b00;
+  --t-warn: #9a6200;
   --t-warn-fill: #ffa100;
   --t-ok: #367d1c;
   --t-ok-fill: #50bc29;
   --t-purple: hsl(277, 72%, 50%);
   --t-checking: #14b8a6;
   --t-claude: #d97757;
+  --t-info: var(--t-accent);
+  --t-on-accent: #ffffff;
+  --t-info-bg: color-mix(in srgb, var(--t-info) 12%, transparent);
+  --t-ok-bg: color-mix(in srgb, var(--t-ok) 15%, transparent);
+  --t-warn-bg: color-mix(in srgb, var(--t-warn) 15%, transparent);
+  --t-crit-bg: color-mix(in srgb, var(--t-crit) 12%, transparent);
+  --t-purple-bg: color-mix(in srgb, var(--t-purple) 15%, transparent);
+  --t-chart-1: #3b82f6;
+  --t-chart-2: #1d4ed8;
+  --t-chart-3: #10b981;
+  --t-chart-4: #047857;
   --t-overlay: rgba(0, 0, 0, 0.6);
+  --t-overlay-strong: rgba(0, 0, 0, 0.55);
+  --t-shadow: rgba(0, 0, 0, 0.04);
+  --t-warn-glow: rgba(245, 158, 11, 0.25);
   --t-terminal-bg: #f6f7f8;
   --t-terminal-text: #21232c;
   --t-terminal-cursor: #0066ff;
@@ -130,6 +173,9 @@
   --t-log-bg: #f6f7f8;
   --t-log-text: #21232c;
   --t-log-muted: #6c7393;
+  --t-surface-1: var(--t-surface);
+  --t-surface-3: var(--t-surface-2);
+  --t-text-1: var(--t-text);
 
   /* Backward Compatibility Aliases */
   --bg: var(--t-bg);
@@ -269,8 +315,22 @@
   --t-purple: hsl(277, 60%, 65%);
   --t-checking: #2dd4bf;
   --t-claude: #d97757;
+  --t-info: var(--t-accent);
+  --t-on-accent: #ffffff;
+  --t-info-bg: color-mix(in srgb, var(--t-info) 15%, transparent);
+  --t-ok-bg: color-mix(in srgb, var(--t-ok) 15%, transparent);
+  --t-warn-bg: color-mix(in srgb, var(--t-warn) 15%, transparent);
+  --t-crit-bg: color-mix(in srgb, var(--t-crit) 15%, transparent);
+  --t-purple-bg: color-mix(in srgb, var(--t-purple) 15%, transparent);
+  --t-chart-1: #60a5fa;
+  --t-chart-2: #1d4ed8;
+  --t-chart-3: #34d399;
+  --t-chart-4: #047857;
   color-scheme: dark;
   --t-overlay: rgba(0, 0, 0, 0.72);
+  --t-overlay-strong: rgba(0, 0, 0, 0.55);
+  --t-shadow: rgba(0, 0, 0, 0.25);
+  --t-warn-glow: rgba(245, 158, 11, 0.35);
   --t-terminal-bg: #1a1c23;
   --t-terminal-text: #dcdfe8;
   --t-terminal-cursor: #4d94ff;
@@ -278,6 +338,9 @@
   --t-log-bg: #0b0d12;
   --t-log-text: #e6e8ee;
   --t-log-muted: #8b93a7;
+  --t-surface-1: var(--t-surface);
+  --t-surface-3: var(--t-surface-2);
+  --t-text-1: var(--t-text);
 
   /* Backward Compatibility Aliases */
   --bg: var(--t-bg);
@@ -423,7 +486,20 @@ body {
 
 html {
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border) transparent;
 }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--t-border) transparent;
+}
+
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar:hover { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--t-border); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--t-text-3); }
 
 .theme-transition,
 .theme-transition * {

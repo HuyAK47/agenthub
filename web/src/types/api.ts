@@ -108,6 +108,7 @@ export interface Project {
   defaultBranch: string;
   envTemplate?: string | null;
   maxParallel: number;
+  priority?: number;
   departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
@@ -119,6 +120,30 @@ export interface Project {
   ciStatus?: CiStatusSummary | null;
   createdAt?: string;
   afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
+}
+
+export interface ProjectInspection {
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  isGitRepo: boolean;
+  currentBranch: string | null;
+  branches: string[];
+  remoteHost: string | null;
+  estimatedSizeBytes: number;
+  sizeTruncated: boolean;
+  lockfiles: string[];
+  monorepo: { detected: boolean; type: string | null };
+  gitHooks: { husky: boolean; commitlint: boolean };
+  language: string;
+  projectFiles: string[];
+  guidanceFiles: string[];
+  mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
+  claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
+  claudeSessionPreviews: Array<{ name: string; content: string }>;
+  hasClaudeMemory: boolean;
+  memoryPreview: string | null;
+  suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
 }
 
 export interface DepartmentProfile {
@@ -181,10 +206,18 @@ export interface DeployStatus {
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
-  review?: { order?: ReviewerOrderItem[]; fallback?: Partial<ReviewerFallback> };
-  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  commitConvention?: { branchTemplate: string; commitTemplate: string; commitRegex?: string; mergeMessageTemplate: string };
+  brain: {
+    engine?: 'inherit' | 'claude' | 'codex';
+    codexProfile?: string;
+    mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+    permissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+    dailyTokenBudget?: number;
+    maxTurnsPerHour?: number;
+  };
   worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
+  review?: { autoMerge?: boolean; order?: ReviewerOrderItem[]; fallback?: Partial<ReviewerFallback> };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
   reviewChecklist?: string[];
@@ -233,6 +266,7 @@ export interface Task {
   projectId: string;
   slug: string;
   title: string;
+  externalRef?: string | null;
   body?: string;
   level: TaskLevel;
   modelChain?: string | string[] | null;
@@ -411,6 +445,7 @@ export interface ProjectBrain {
   projectId: string | null;
   projectName: string;
   mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  engine?: 'claude' | 'codex';
   permissions?: 'standard' | 'trusted' | 'full';
   sessionMode?: 'safe' | 'full';
   sessionId: string;
@@ -572,6 +607,8 @@ export interface SavingsReport {
   byModel: Record<string, { tokens: number; taskCount: number }>;
   byDay: SavingsDailyItem[];
   tasks: SavingsTaskItem[];
+  tasksTotal?: number;
+  tasksNextCursor?: string | null;
 }
 
 export interface ProfileQuotaInfo {
@@ -660,6 +697,9 @@ export interface SystemConfig {
     arbiter?: { engine: 'codex' | 'claude'; model: string };
   };
   brain?: {
+    engine?: 'claude' | 'codex';
+    codexProfile?: string;
+    codexModel?: string;
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
     maxConcurrent?: number;
@@ -809,6 +849,15 @@ export interface CreateProjectInput {
   settings?: ProjectSettings;
 }
 
+export interface CreateNewProjectInput {
+  name: string;
+  path: string;
+  defaultBranch?: string;
+  maxParallel?: number;
+  checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
+  settings?: ProjectSettings;
+}
+
 export interface UpdateProjectInput {
   name?: string;
   defaultBranch?: string;
@@ -852,6 +901,7 @@ export interface CreateTaskInput {
   project: string;
   slug: string;
   title: string;
+  externalRef?: string;
   body?: string;
   level: TaskLevel;
   dependsOn?: string[];
