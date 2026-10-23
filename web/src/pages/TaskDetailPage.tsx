@@ -727,6 +727,25 @@ export const TaskDetailPage: React.FC = () => {
 
       <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} onCreateTask={(check) => openCapture(check.outputTail, check.name)} />
 
+      {task.reviews.length > 0 && (
+        <section data-testid="task-reviews" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 shadow-xs space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-[var(--t-text-3)]">{t('taskDetail.reviewHistory')}</h2>
+          <ul className="space-y-2">
+            {task.reviews.map((review) => (
+              <li key={review.id} className="flex items-center justify-between gap-3 flex-wrap text-sm">
+                <span className="font-medium text-[var(--t-text)]">
+                  {review.actor || t('taskDetail.unknownReviewer')}
+                  {review.model ? <span className="ml-2 text-xs font-mono text-[var(--t-text-3)]">({review.model})</span> : null}
+                </span>
+                <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${review.verdict === 'approved' ? 'text-[var(--t-ok)] bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)]' : 'text-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)]'}`}>
+                  {review.verdict === 'approved' ? t('taskDetail.reviewApproved') : t('taskDetail.reviewChangesRequested')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {(task.sourceRef || (task.derivedTasks && task.derivedTasks.length > 0)) && <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 text-sm space-y-2"><h2 className="font-semibold">{t('extra.linkedTasks')}</h2>{task.sourceRef && <p>{t('extra.generatedFrom')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(task.sourceRef!.taskId.replace('/', '~'))}`)}>{task.sourceRef.taskId}</button></p>}{task.derivedTasks?.map((derived) => <p key={derived.id}>{t('extra.generatedTask')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(derived.id.replace('/', '~'))}`)}>{derived.id}</button></p>)}</section>}
 
       {/* Timeline */}
