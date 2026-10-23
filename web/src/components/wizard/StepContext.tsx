@@ -43,7 +43,7 @@ export function StepContext({
       references: draft.references.filter((_, i) => i !== index),
     });
 
-  const hasGuidance = Boolean(inspection?.guidanceFiles.length);
+  const hasGuidance = inspection?.guidanceFiles.includes('AGENTS.md') ?? false;
   const hasAnythingToPin =
     draft.pinMemory || draft.selectedSessions.length > 0;
 

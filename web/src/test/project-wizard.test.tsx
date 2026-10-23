@@ -77,6 +77,22 @@ describe('ProjectWizard', () => {
     expect(screen.getByText(/Repo nằm trên thiết bị lưu trữ ngoài/i)).toBeInTheDocument();
   });
 
+  it('offers an AGENTS.md draft when the repository only has CLAUDE.md guidance', async () => {
+    const guidanceInspection = { ...inspection, guidanceFiles: ['CLAUDE.md'] };
+    const inspectSpy = vi.spyOn(client, 'inspectProject').mockResolvedValue(guidanceInspection);
+    renderWizard();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.change(screen.getByPlaceholderText(/vd: XFarm/), { target: { value: 'Guidance project' } });
+    fireEvent.change(screen.getByPlaceholderText(/vd: \/home/), { target: { value: guidanceInspection.path } });
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    await waitFor(() => expect(inspectSpy).toHaveBeenCalledWith(guidanceInspection.path));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    expect(screen.getByRole('checkbox', { name: /Tạo bản nháp AGENTS/i })).toBeInTheDocument();
+  });
+
   it('summarization flow: displays progress, presents summary for review, and only pins transcript knowledge after user approval', async () => {
     const inspectSpy = vi.spyOn(client, 'inspectProject').mockResolvedValue(inspection);
     vi.spyOn(client, 'createProject').mockResolvedValue(project);
