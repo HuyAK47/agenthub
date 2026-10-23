@@ -132,11 +132,17 @@ export interface TelegramChat {
   projectId?: string;
 }
 
+export interface TelegramProjectTopic {
+  chatId: number;
+  threadId: number;
+}
+
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
   chats: TelegramChat[];
+  projectTopics: Record<string, TelegramProjectTopic>;
   notify: TelegramNotifyConfig;
 }
 
@@ -356,6 +362,7 @@ export function saveConfig(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      projectTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -526,6 +533,7 @@ export function updateConfigInMemory(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      projectTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -681,6 +689,7 @@ export function updateConfigInMemory(
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
       chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
+      projectTopics: patch.telegram.projectTopics !== undefined ? { ...patch.telegram.projectTopics } : config.telegram.projectTopics,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -875,6 +884,11 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
           Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
         )
       : [],
+    projectTopics: rawTelegram.projectTopics && typeof rawTelegram.projectTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.projectTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([projectId, topic]) => [projectId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,
       failed: rawTelegramNotify.failed !== false,
