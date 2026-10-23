@@ -67,7 +67,31 @@ function ProjectSettingsForm({
 
   return (
     <div className="space-y-4" data-testid="project-settings-form" data-tour="project-register">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <label className="text-xs space-y-1">
+          <span className="font-semibold">{t('projects.brainEngine')}</span>
+          <select
+            value={value.brain.engine ?? 'inherit'}
+            onChange={(e) => update('brain', { engine: e.target.value })}
+            className="w-full rounded border p-2 bg-[var(--t-surface-2)]"
+          >
+            <option value="inherit">{t('projects.brainEngineInherit')}</option>
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+          </select>
+        </label>
+
+        <label className="text-xs space-y-1">
+          <span className="font-semibold">{t('projects.codexProfile')}</span>
+          <input
+            type="text"
+            value={value.brain.codexProfile ?? ''}
+            onChange={(e) => update('brain', { codexProfile: e.target.value.trim() || undefined })}
+            placeholder={t('projects.codexProfileAuto')}
+            className="w-full rounded border p-2 bg-[var(--t-surface-2)]"
+          />
+        </label>
+
         <label className="text-xs space-y-1">
           <span className="font-semibold">{t('projects.brainMode')}</span>
           <select
@@ -209,6 +233,17 @@ function ProjectSettingsForm({
             />
           </div>
         )}
+      </div>
+
+      <div className="space-y-2 text-xs">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={value.review?.autoMerge ?? false}
+            onChange={(e) => update('review', { autoMerge: e.target.checked })}
+          />
+          <span className="font-semibold">{t('projects.reviewAutoMerge')}</span>
+        </label>
       </div>
 
       <div className="space-y-2 text-xs">

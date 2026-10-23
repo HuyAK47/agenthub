@@ -271,7 +271,8 @@ function allowedCommand(command: string, roots: string[], cwd: string, permissio
       return (args[0] === 'vitest' && args[1] === 'run') || (args[0] === 'tsc' && args[1] === '--noEmit');
     }
     if (executable === 'grep') {
-      if (args.some((arg) => arg === '-f' || arg === '--file' || arg.startsWith('--file='))) return false;
+      if (args.some((arg) => arg === '-f' || arg === '--file' || arg.startsWith('--file=') || /^-f./u.test(arg))) return false;
+      if (args.some((arg) => arg === '-r' || arg === '-R' || arg === '--recursive' || arg === '--dereference-recursive' || /^-[^-]*[rR]/u.test(arg))) return false;
       let hasExplicitPattern = false;
       let skipNext = false;
       const operands: string[] = [];

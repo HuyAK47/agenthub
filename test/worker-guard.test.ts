@@ -161,6 +161,65 @@ describe('worker service guard', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('enforces brain policy shims independently of Codex approvals', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-guard-'));
+    const hub = path.join(root, 'hub');
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    execFileSync('git', ['init'], { cwd: repo });
+    const standard = workerEnvironment(hub, { ...process.env }, { cwd: repo, brainPolicy: 'standard' });
+
+    for (const command of ['rm', 'systemctl', 'sudo']) {
+      expect(() => execFileSync(command, ['-rf', path.join(repo, 'missing')], { cwd: repo, env: standard, stdio: 'pipe' }))
+        .toThrow(`AgentHub: brain policy chặn lệnh '${command}'`);
+    }
+    expect(() => execFileSync('git', ['commit', '-m', 'blocked'], { cwd: repo, env: standard, stdio: 'pipe' }))
+      .toThrow('AgentHub: brain standard policy chặn git commit');
+    expect(execFileSync('git', ['status', '--short'], { cwd: repo, env: standard, encoding: 'utf8' })).toBe('');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('resolves read-command symlinks before allowing access', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-read-links-'));
+    const hub = path.join(root, 'hub');
+    const repo = path.join(root, 'repo');
+    const outside = path.join(root, 'outside');
+    const secret = path.join(repo, 'secrets');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(outside);
+    fs.mkdirSync(secret);
+    fs.writeFileSync(path.join(outside, 'outside.txt'), 'outside\n');
+    fs.mkdirSync(path.join(outside, 'nested'));
+    fs.writeFileSync(path.join(outside, 'nested', 'token.txt'), 'outside-secret\n');
+    fs.writeFileSync(path.join(secret, 'auth.json'), '{"token":"do-not-read"}\n');
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, 'outside-link'));
+    fs.symlinkSync(path.join(secret, 'auth.json'), path.join(repo, 'secret-link'));
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, '-secret-link'));
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, '1secret-link'));
+    fs.symlinkSync(path.join(outside, 'nested'), path.join(repo, 'outside-dir-link'));
+
+    const env = workerEnvironment(hub, { ...process.env }, { cwd: repo, brainPolicy: 'standard' });
+    expect(() => execFileSync('cat', ['outside-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
+    expect(() => execFileSync('cat', ['secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc secret hoặc .git');
+    expect(() => execFileSync('cat', ['--', '-secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
+    expect(() => execFileSync('cat', ['1secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
+    for (const args of [
+      ['grep', '--file=' + path.join(outside, 'outside.txt'), 'outside', 'package.json'],
+      ['grep', '-f', path.join(outside, 'outside.txt'), 'outside', 'package.json'],
+      ['grep', '-R', 'outside-secret', 'outside-dir-link'],
+    ]) {
+      expect(() => execFileSync(args[0], args.slice(1), { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+        .toThrow('AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file');
+    }
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('can disable worker command guards for hub git operations while keeping service shims', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-hub-env-'));
     const hub = path.join(root, 'hub');

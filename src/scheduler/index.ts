@@ -899,7 +899,11 @@ export class Scheduler {
       if (this.stopped) return;
       this.taskRepo.update(taskId, { status: 'review', transientRetries: 0, notBefore: null, reviewStep: 0 });
       if (this.reviewChainForTask(currentTask).length === 0) {
-        this.emitReviewReadyIfReview(taskId, { checksPassed: checks.passed, failed: checks.failed });
+        this.emitReviewReadyIfReview(taskId, {
+          reviewChainComplete: true,
+          checksPassed: checks.passed,
+          failed: checks.failed,
+        });
       } else {
         this.eventBus.emit('review.gate_started', taskId, { step: 0 });
       }
@@ -2989,6 +2993,15 @@ export class Scheduler {
       if ((isAutoReviewer(by) || by === 'claude-review') && step?.mode === 'gate') {
         this.advanceReviewStep(task, chain, 'approved');
         return;
+      }
+      if (isAutoReviewer(by) && chain.length === 0) {
+        const project = this.projectRepo.get(task.projectId);
+        const settings = project ? projectSettings(project) : null;
+        const checks = this.getCheckResults(task.id);
+        if ((settings?.review.autoMerge || settings?.integration.autoMerge) && checks.length > 0 && checks.every((check) => check.ok)) {
+          this.eventBus.emit('task.review_ready', task.id, { reviewChainComplete: true, reason: 'review_approved' });
+          return;
+        }
       }
       if (!isAutoReviewer(by)) this.resetReviewerEscalation(taskId);
       this.taskRepo.updateStatus(taskId, 'done');
