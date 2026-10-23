@@ -58,6 +58,7 @@ export const en: typeof vi = {
     quota: 'Waiting for model quota',
     parallel: 'Waiting for parallel slot',
     profile_busy: 'Waiting for free account',
+    department_parallel: 'Waiting for a slot in {department}',
     project_unavailable: 'Project unavailable (drive not mounted?)',
   },
   timer: {
@@ -845,7 +846,7 @@ export const en: typeof vi = {
   },
   departments: {
     title: 'Departments', subtitle: 'Group projects, accounts, and execution limits by department.',
-    create: 'Create department', name: 'Department name', priority: 'Priority', maxParallel: 'Max parallel', budget: 'Claude tokens/day budget', topic: 'Telegram topic ID', projects: 'Projects', profiles: 'Accounts', save: 'Save', delete: 'Delete', chung: 'General', empty: 'No departments yet.', confirmDelete: 'Delete this department? Projects will move to General.',
+    create: 'Create department', name: 'Department name', priority: 'Priority', maxParallel: 'Max parallel', maxParallelHint: 'Applies to every project in this department; 0 means unlimited.', budget: 'Claude tokens/day budget', topic: 'Telegram topic ID', projects: 'Projects', profiles: 'Accounts', save: 'Save', delete: 'Delete', chung: 'General', empty: 'No departments yet.', confirmDelete: 'Delete this department? Projects will move to General.',
   },
   projects: {
     title: 'Project Management',

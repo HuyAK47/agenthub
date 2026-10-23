@@ -259,7 +259,7 @@ export interface Review {
   model?: string;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
+export type WaitReason = 'disk' | 'quota' | 'parallel' | 'department_parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
 
 export interface Task {
   id: string; // project~slug or project/slug

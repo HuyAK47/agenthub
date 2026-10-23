@@ -56,6 +56,7 @@ export const vi = {
     quota: 'Chờ quota model',
     parallel: 'Chờ slot song song',
     profile_busy: 'Chờ tài khoản rảnh',
+    department_parallel: 'Chờ slot của phòng ban {department}',
     project_unavailable: 'Dự án không truy cập được (ổ chưa mount?)',
   },
   timer: {
@@ -844,7 +845,7 @@ export const vi = {
   },
   departments: {
     title: 'Phòng ban', subtitle: 'Gom project, tài khoản và giới hạn chạy theo phòng ban.',
-    create: 'Tạo phòng ban', name: 'Tên phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.',
+    create: 'Tạo phòng ban', name: 'Tên phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', maxParallelHint: 'Áp dụng cho mọi project trong phòng; 0 nghĩa là không giới hạn.', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.',
   },
   projects: {
     title: 'Quản lý Project',

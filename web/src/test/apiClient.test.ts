@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { apiFetch, AuthError, clearToken, setToken } from '../api/client';
+import { apiFetch, AuthError, clearToken, getTasksPage, setToken } from '../api/client';
 
 describe('API Client', () => {
   const originalFetch = window.fetch;
@@ -53,5 +53,19 @@ describe('API Client', () => {
 
     await expect(apiFetch('/api/protected')).rejects.toThrow(AuthError);
     expect(sessionStorage.getItem('agenthub_token')).toBeNull();
+  });
+
+  it('bọc phản hồi mảng cũ của /api/tasks thành một trang', async () => {
+    setToken('legacy_token');
+    window.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([{ id: 'p/t', title: 'Legacy' }]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(getTasksPage({ limit: 20 })).resolves.toEqual({
+      items: [{ id: 'p/t', title: 'Legacy' }],
+      total: 1,
+      nextCursor: null,
+    });
   });
 });

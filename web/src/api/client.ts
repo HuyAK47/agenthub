@@ -546,7 +546,10 @@ export async function getTasksPage(params?: TaskQuery): Promise<PageResponse<Tas
   if (params?.offset !== undefined) query.set('offset', String(params.offset));
   if (params?.sort) query.set('sort', params.sort);
   if (params?.order) query.set('order', params.order);
-  return apiFetch<PageResponse<Task>>(`/api/tasks?${query.toString()}`);
+  const response = await apiFetch<PageResponse<Task> | Task[]>(`/api/tasks?${query.toString()}`);
+  return Array.isArray(response)
+    ? { items: response, total: response.length, nextCursor: null }
+    : response;
 }
 
 export async function getAllTasksPaged(params?: Omit<TaskQuery, 'limit' | 'cursor' | 'offset'>): Promise<Task[]> {
