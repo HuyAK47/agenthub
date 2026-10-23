@@ -1049,7 +1049,7 @@ export const ProjectsPage: React.FC = () => {
               {/* Card Footer: Knowledge button */}
               <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
                 {(() => {
-                  const activeCount = projectTasks.filter((task) => task.projectId === proj.id && ['running', 'queued', 'waiting_quota', 'review', 'checking'].includes(task.status)).length;
+                  const activeCount = projectTasks.filter((task) => task.projectId === proj.id && ['running', 'queued', 'waiting_quota'].includes(task.status)).length;
                   return <Link to={`/tasks?project=${encodeURIComponent(proj.id)}`} className="flex items-center justify-between rounded-lg border border-[var(--t-border)] px-2.5 py-2 text-xs hover:border-[var(--t-accent)] transition-colors" data-testid={`project-task-summary-${proj.id}`}><span className="text-[var(--t-text-2)]">{t('projects.activeTasks')}</span><span className="font-semibold text-[var(--t-accent)]">{activeCount} · {t('projects.viewTasks')}</span></Link>;
                 })()}
                 <Button
