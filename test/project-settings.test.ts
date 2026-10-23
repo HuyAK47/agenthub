@@ -177,4 +177,16 @@ describe('project settings through the service', () => {
     }) as unknown as { settings: { worktree: { root?: string } } };
     expect(created.settings.worktree.root).toBe(root);
   });
+
+  it('creates the project-local worktree root used by sensitive projects', () => {
+    const root = path.join(tmpDir, '.agenthub-worktrees');
+    const created = ctx.service.createProject({
+      name: 'sensitive',
+      path: path.join(tmpDir, 'repo'),
+      settings: { worktree: { root, logsInRoot: true } },
+    }) as unknown as { settings: { worktree: { root?: string; logsInRoot?: boolean } } };
+
+    expect(fs.statSync(root).isDirectory()).toBe(true);
+    expect(created.settings.worktree).toMatchObject({ root, logsInRoot: true });
+  });
 });

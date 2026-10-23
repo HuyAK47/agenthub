@@ -62,6 +62,7 @@ import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
+import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
 import type { PerfCollector } from '../perf.js';
 
@@ -1326,6 +1327,86 @@ export class AppService {
     return projects.map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
   }
 
+  inspectProject(raw: unknown) {
+    const input = z.object({ path: z.string().min(1) }).parse(raw);
+    if (!path.isAbsolute(input.path)) throw new HttpError(400, 'bad_request', 'Đường dẫn phải là đường dẫn tuyệt đối');
+    return inspectProject(input.path);
+  }
+
+  writeProjectGuidance(id: string, raw: unknown) {
+    const input = z.object({ content: z.string().min(1).max(32_000), confirm: z.literal(true) }).parse(raw);
+    const project = this.projectRepo.get(id);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+    const target = path.join(project.path, 'AGENTS.md');
+    if (fs.existsSync(target)) throw new HttpError(409, 'conflict', 'AGENTS.md đã tồn tại trong project');
+    fs.writeFileSync(target, input.content, { encoding: 'utf8', flag: 'wx', mode: 0o644 });
+    return { ok: true };
+  }
+
+  summarizeProjectContext(id: string, raw: unknown): { taskId: string; status: string; summary: string | null } {
+    const input = z.object({
+      sessions: z.array(z.string().min(1)).min(1),
+      selections: z.array(z.object({ session: z.string().min(1), text: z.string().min(1).max(4_000) })).max(100).optional(),
+      notes: z.string().optional(),
+    }).parse(raw);
+    const project = this.projectRepo.get(id);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+
+    const sessionContext = input.sessions.map((session) => {
+      const excerpt = readClaudeSessionExcerpt(project.path, session);
+      if (excerpt === null) {
+        throw new HttpError(400, 'bad_request', `Phiên Claude không hợp lệ hoặc không còn tồn tại: ${session}`);
+      }
+      return [`### ${session}`, excerpt || 'Phiên không có nội dung văn bản; chỉ dùng các mục người dùng đã chọn bên dưới.'].join('\n');
+    });
+
+    const task = this.createTask({
+      project: project.id,
+      slug: 'summarize-previous-context',
+      title: 'Review and summarize previous Claude Code context',
+      body: [
+        'Read the selected previous session files and summarize durable project knowledge.',
+        'The session excerpts below are the approved input. Do not access ~/.claude or any other session file directly.',
+        '',
+        'Selected session excerpts:',
+        ...sessionContext,
+        ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
+        ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
+      ].join('\n'),
+      level: 'easy',
+      start: true,
+    });
+    return { taskId: task.id, status: task.status, summary: null };
+  }
+
+  async getProjectContextSummary(projectId: string, taskIdParam: string) {
+    const project = this.projectRepo.get(projectId);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    const taskId = toTaskId(taskIdParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.projectId !== projectId || task.slug !== 'summarize-previous-context') {
+      throw new HttpError(404, 'not_found', 'Task tóm tắt không tồn tại');
+    }
+    const detail = await this.getTask(taskId);
+    const summary = detail.doneContent?.trim() || null;
+    return { taskId, status: task.status, summary };
+  }
+
+  createNewProject(raw: unknown): ProjectRow {
+    const input = z.object({
+      name: z.string().min(1), path: z.string().min(1), defaultBranch: z.string().min(1).default('main'),
+      maxParallel: z.number().int().positive().default(3), checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(), settings: ProjectSettingsInputSchema.optional(),
+    }).parse(raw);
+    if (!path.isAbsolute(input.path)) throw new HttpError(400, 'bad_request', 'Đường dẫn phải là đường dẫn tuyệt đối');
+    try { createNewGitProject(input.path, input.defaultBranch); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    try {
+      return this.createProject({ ...input, path: path.resolve(input.path) });
+    } catch (error) {
+      try { fs.rmSync(path.resolve(input.path), { recursive: true, force: true }); } catch { /* best effort cleanup */ }
+      throw error;
+    }
+  }
+
   getProject(id: string): ProjectRow {
     const proj = this.projectRepo.get(id);
     if (!proj) {
@@ -1377,6 +1458,15 @@ export class AppService {
 
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
     if (effectiveSettings.worktree.root) {
+      const worktreeRoot = path.resolve(effectiveSettings.worktree.root);
+      const projectStorageRoot = path.join(path.dirname(resolvedPath), '.agenthub-worktrees');
+      if (worktreeRoot === projectStorageRoot && !fs.existsSync(worktreeRoot)) {
+        try {
+          fs.mkdirSync(worktreeRoot, { recursive: true, mode: 0o700 });
+        } catch (error) {
+          throw new HttpError(400, 'bad_request', `Không thể tạo thư mục worktree: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       try { validateProjectWorktreeRoot(effectiveSettings.worktree.root, resolvedPath, this.config.hubHome); }
       catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
     }

@@ -140,6 +140,7 @@ export const modalTourDefinitions: TourDefinition[] = [
     { id: 'branch', selector: '[data-tour="project-default-branch"]', title: 'tour.steps.modal-register-project.branch.title', content: 'tour.steps.modal-register-project.branch.content' },
     { id: 'advanced', selector: '[data-tour="project-register-advanced"]', title: 'tour.steps.modal-register-project.advanced.title', content: 'tour.steps.modal-register-project.advanced.content' },
   ] },
+  { id: 'modal-project-wizard', steps: [{ id: 'modal', selector: '[data-tour="modal-project-wizard"]', title: 'tour.steps.modal-project-wizard.modal.title', content: 'tour.steps.modal-project-wizard.modal.content' }] },
   { id: 'modal-create-task', steps: [
     { id: 'task', selector: '[data-tour="modal-create-task"]', title: 'tour.steps.modal-create-task.task.title', content: 'tour.steps.modal-create-task.task.content' },
     { id: 'difficulty', selector: '[data-tour="task-difficulty"]', title: 'tour.steps.modal-create-task.difficulty.title', content: 'tour.steps.modal-create-task.difficulty.content' },

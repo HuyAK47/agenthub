@@ -120,6 +120,30 @@ export interface Project {
   afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
 }
 
+export interface ProjectInspection {
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  isGitRepo: boolean;
+  currentBranch: string | null;
+  branches: string[];
+  remoteHost: string | null;
+  estimatedSizeBytes: number;
+  sizeTruncated: boolean;
+  lockfiles: string[];
+  monorepo: { detected: boolean; type: string | null };
+  gitHooks: { husky: boolean; commitlint: boolean };
+  language: string;
+  projectFiles: string[];
+  guidanceFiles: string[];
+  mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
+  claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
+  claudeSessionPreviews: Array<{ name: string; content: string }>;
+  hasClaudeMemory: boolean;
+  memoryPreview: string | null;
+  suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
+}
+
 export interface DepartmentProfile {
   departmentId: string;
   profileName: string;
@@ -811,6 +835,15 @@ export interface CreateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: ProjectSettings;
+}
+
+export interface CreateNewProjectInput {
+  name: string;
+  path: string;
+  defaultBranch?: string;
+  maxParallel?: number;
+  checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   settings?: ProjectSettings;
 }
 
