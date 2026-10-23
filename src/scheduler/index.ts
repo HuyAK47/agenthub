@@ -2144,7 +2144,12 @@ export class Scheduler {
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
     const lastEscalationId = escalations[escalations.length - 1].id;
-    return !this.hasAutomatedVerdictAfter(task.id, lastEscalationId);
+    if (this.hasAutomatedVerdictAfter(task.id, lastEscalationId)) return false;
+    // Keep compatibility with durable review rows written by older daemons that did not
+    // emit review.completed. Restrict this fallback to the legacy Claude arbiter actor so
+    // a stale pre-escalation Codex review cannot satisfy the current escalation.
+    const lastReview = this.reviewRepo?.getByTask(task.id).at(-1);
+    return !(lastReview?.actor === 'claude-reviewer' && lastReview.verdict === 'changes_requested');
   }
 
   /**
@@ -2157,10 +2162,15 @@ export class Scheduler {
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     const lastEscalationId = escalations.at(-1)?.id;
-    if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    if (lastEscalationId == null) return;
+    const hasEventVerdict = this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested');
+    const legacyReviews = this.reviewRepo?.getByTask(task.id)
+      .filter((review) => review.actor === 'claude-reviewer' && review.verdict === 'changes_requested') ?? [];
+    if (!hasEventVerdict && legacyReviews.length === 0) return;
     const rejections = this.eventRepo.getByTask(task.id)
       .filter((event) => event.id > lastEscalationId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
-    if (rejections > ARBITER_ROUNDS) {
+    const totalRejections = rejections || legacyReviews.length;
+    if (totalRejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {
         reason: 'review_rounds_exhausted',
@@ -2172,7 +2182,7 @@ export class Scheduler {
     let chain: string[] = [];
     try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
     this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
-    this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
+    this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${totalRejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
   }
 
   private hasAutomatedVerdictAfter(taskId: string, eventId: number, verdict?: ReviewerVerdict): boolean {
