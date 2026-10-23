@@ -14,7 +14,7 @@ import {
   DigestData,
   generateDigest,
   isQuietHours,
-  areAllProfilesQuotaExhausted,
+  areAllProfilesQuotaExhaustedForFamily,
   isSystemIncident,
   forwardDecisionToBrain,
   getMinutesSinceTime,
@@ -282,6 +282,8 @@ export class TelegramBotService {
 
   // Deduplication for event notifications
   private lastNotificationTime = new Map<string, number>();
+  private allQuotaNotified = new Set<string>();
+  private waitingQuotaQueued = false;
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
 
@@ -3038,11 +3040,30 @@ export class TelegramBotService {
       reviewReady: true,
       failed: true,
       blocked: true,
-      quota: true,
+      quotaPerModel: false,
+      quotaAllExhausted: true,
       fallback: true,
     };
+    const notifyPerModel = typeof notify.quotaPerModel === 'boolean' ? notify.quotaPerModel : (notify as unknown as { quota?: boolean }).quota === true;
+    const notifyAllExhausted = notify.quotaAllExhausted !== false;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (type === 'quota.cleared' && typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+    if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
+      if (!this.waitingQuotaQueued) {
+        this.waitingQuotaQueued = true;
+        queueMicrotask(() => {
+          this.waitingQuotaQueued = false;
+          const waiting = this.taskRepo?.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota') || [];
+          if (waiting.length === 0) return;
+          const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
+          const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
+          const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
+          this.broadcastMessage(`⏳ <b>${waiting.length} task đang chờ quota</b>\nSớm nhất mở lại lúc <b>${time}</b>.`);
+        });
+      }
+      return;
+    }
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // Deduplication check: ignore duplicate events within 10 seconds
@@ -3068,7 +3089,7 @@ export class TelegramBotService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
+        (p.allExhausted === true || areAllProfilesQuotaExhaustedForFamily(this.profileRepo, this.quotaMarkRepo, typeof p.family === 'string' ? p.family : undefined, now));
 
       const isAllowedInAuto =
         type === 'brain.notify' ||
@@ -3318,20 +3339,25 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now);
+        const family = typeof p.family === 'string' ? p.family : typeof p.model === 'string' ? p.model : '';
+        const quotaKey = family || 'all';
+        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhaustedForFamily(this.profileRepo, this.quotaMarkRepo, family, now);
+        if (!isAllExhausted) this.allQuotaNotified.delete(quotaKey);
         if (effectiveMode === 'auto') {
-          if (isAllExhausted) {
+          if (isAllExhausted && notifyAllExhausted && !this.allQuotaNotified.has(quotaKey)) {
+            this.allQuotaNotified.add(quotaKey);
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
           }
           break;
         }
-        if (!notify.quota) return;
         if (isAllExhausted) {
+          if (!notifyAllExhausted || this.allQuotaNotified.has(quotaKey)) return;
+          this.allQuotaNotified.add(quotaKey);
           this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
           break;
         }
+        if (!notifyPerModel) return;
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
-        const family = (p.family || p.model || '') as string;
         const resetStr = this.resolveResetTime(p, name, family);
         const text = resetStr
           ? `⏳ <b>Hết Quota</b>\nHồ sơ <b>${name}</b> hết quota <code>${family}</code> đến ${resetStr}`
@@ -3341,8 +3367,8 @@ export class TelegramBotService {
       }
 
       case 'claude.quota_exhausted': {
-        if (!notify.quota) return;
-        this.broadcastMessage('⏳ <b>Claude hết quota</b>\nĐã kích hoạt failover hoặc cần chờ reset quota.');
+        if (!notifyAllExhausted || p.fallbackAvailable === true) return;
+        this.broadcastMessage('⏳ <b>Claude hết quota</b>\nKhông còn bước fallback khả dụng, cần chờ reset quota.');
         break;
       }
 
@@ -3362,7 +3388,7 @@ export class TelegramBotService {
       }
 
       case 'chat.limit_waiting': {
-        if (!notify.quota || !this.chatService || typeof p.sessionId !== 'string') return;
+        if (!notifyAllExhausted || !this.chatService || typeof p.sessionId !== 'string') return;
         const resetAt = typeof p.resetAt === 'number' ? formatReset(p.resetAt * 1000 + 60_000, this.now(), 'vi') : 'sau khi reset';
         this.broadcastMessage(`⏳ <b>Claude đạt giới hạn 5 giờ</b>\nTự gửi lại lúc <b>${resetAt}</b>.`, { inline_keyboard: [[{ text: '⏹ Huỷ', callback_data: `chatlimit:cancel:${p.sessionId}` }, { text: '▶️ Gửi lại ngay', callback_data: `chatlimit:now:${p.sessionId}` }]] });
         break;

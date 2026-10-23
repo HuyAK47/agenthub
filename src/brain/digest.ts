@@ -183,6 +183,21 @@ export function areAllProfilesQuotaExhausted(
   return profiles.every((p) => exhaustedProfiles.has(p.name));
 }
 
+/** Whether every enabled profile for the engine/family has an active mark. */
+export function areAllProfilesQuotaExhaustedForFamily(
+  profileRepo?: ProfileRepo,
+  quotaMarkRepo?: QuotaMarkRepo,
+  family?: string,
+  now = Date.now(),
+): boolean {
+  if (!profileRepo || !quotaMarkRepo || !family) return false;
+  const profiles = profileRepo.getAll(true).filter((profile) => profile.engine === (family === 'codex' ? 'codex' : 'agy'));
+  if (profiles.length === 0) return false;
+  const epoch = Math.floor(now / 1000);
+  const exhausted = new Set(quotaMarkRepo.getActive(epoch).filter((mark) => mark.family === family && mark.until > epoch).map((mark) => mark.profileName));
+  return profiles.every((profile) => exhausted.has(profile.name));
+}
+
 /**
  * Checks whether an event qualifies as a system incident that should bypass quiet hours and auto-mode suppression.
  */

@@ -520,6 +520,8 @@ export const UpdateConfigSchema = z.object({
       failed: z.boolean().optional(),
       blocked: z.boolean().optional(),
       quota: z.boolean().optional(),
+      quotaPerModel: z.boolean().optional(),
+      quotaAllExhausted: z.boolean().optional(),
       fallback: z.boolean().optional(),
     }).optional(),
   }).optional(),
