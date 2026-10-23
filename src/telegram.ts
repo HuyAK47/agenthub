@@ -166,7 +166,7 @@ export type PendingChatState =
 
 interface SendQueueItem {
   chatId: number;
-  threadId?: number;
+  threadId?: number | null;
   text: string;
   replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] };
   resolve: (res: unknown) => void;
@@ -176,6 +176,7 @@ interface SendQueueItem {
 interface ChatReplyState {
   chatId: number;
   messageId: number;
+  threadId?: number;
   text: string;
   lastEditAt: number;
   editTimer?: NodeJS.Timeout;
@@ -293,7 +294,7 @@ export class TelegramBotService {
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private chatReplies = new Map<string, ChatReplyState>();
   /** Telegram messages waiting for a busy session; each gets the reply of its queued turn. */
-  private queuedChatTurns = new Map<string, Array<{ chatId: number; messageId: number }>>();
+  private queuedChatTurns = new Map<string, Array<{ chatId: number; messageId: number; threadId?: number }>>();
   private brainQuestions = new Map<string, Map<string, {
     chatId: number;
     userMessageId?: string;
@@ -1545,6 +1546,7 @@ export class TelegramBotService {
     const isBrain = sessionId === 'brain' || sessionId.startsWith('brain:');
     const isAssistant = sessionId === 'assistant' || sessionId.startsWith('assistant:');
     const selectedProjId = this.selectedProject.get(chatId);
+    const threadId = this.activeThreadByChat.get(chatId);
     const projectId = sessionId.startsWith('brain:') || sessionId.startsWith('assistant:')
       ? sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length) === 'global'
         ? null
@@ -1564,7 +1566,7 @@ export class TelegramBotService {
     });
     let initial: unknown;
     try {
-      initial = await this.sendMessage(chatId, placeholder);
+      initial = await this.sendMessage(chatId, placeholder, undefined, threadId);
       const messageId = this.telegramMessageId(initial);
       if (messageId === null) throw new Error('Telegram không trả về message_id');
       const result = this.chatService.sendMessage(sessionId, text, { queueIfBusy: true, ...(isAssistant ? { telegramChatId: chatId } : {}) });
@@ -1572,12 +1574,12 @@ export class TelegramBotService {
         // The session (usually a brain busy with an event turn) answers this message right after the
         // current turn; keep the placeholder and attach the reply to it when the queued turn starts.
         const queued = this.queuedChatTurns.get(sessionId) ?? [];
-        queued.push({ chatId, messageId });
+        queued.push({ chatId, messageId, ...(threadId !== undefined ? { threadId } : {}) });
         this.queuedChatTurns.set(sessionId, queued);
         await this.editMessage(chatId, messageId, `📥 Đang bận một việc khác. Tin nhắn đã xếp hàng (thứ ${result.position ?? queued.length}), sẽ trả lời ngay sau.`);
         return;
       }
-      this.chatReplies.set(sessionId, { chatId, messageId, text: placeholder, lastEditAt: this.now(), editing: false });
+      this.chatReplies.set(sessionId, { chatId, messageId, ...(threadId !== undefined ? { threadId } : {}), text: placeholder, lastEditAt: this.now(), editing: false });
     } catch (err) {
       const reply = this.chatReplies.get(sessionId);
       if (reply?.editTimer) clearTimeout(reply.editTimer);
@@ -1627,7 +1629,7 @@ export class TelegramBotService {
       const next = this.queuedChatTurns.get(sessionId)?.shift();
       if (next) {
         if (this.queuedChatTurns.get(sessionId)?.length === 0) this.queuedChatTurns.delete(sessionId);
-        this.chatReplies.set(sessionId, { chatId: next.chatId, messageId: next.messageId, text: '⏳ Đang xử lý…', lastEditAt: 0, editing: false });
+        this.chatReplies.set(sessionId, { chatId: next.chatId, messageId: next.messageId, ...(next.threadId !== undefined ? { threadId: next.threadId } : {}), text: '⏳ Đang xử lý…', lastEditAt: 0, editing: false });
         this.scheduleChatEdit(sessionId);
       }
       return;
@@ -1742,7 +1744,7 @@ export class TelegramBotService {
     }
     const chunks = this.splitTelegramText(text || '');
     await this.editMessage(reply.chatId, reply.messageId, chunks.shift() || '');
-    for (const chunk of chunks) await this.sendMessage(reply.chatId, chunk);
+    for (const chunk of chunks) await this.sendMessage(reply.chatId, chunk, undefined, reply.threadId);
   }
 
   private async sendPermissionRequest(chatId: number, data: Record<string, unknown>): Promise<void> {
@@ -1753,6 +1755,7 @@ export class TelegramBotService {
     try { input = typeof data.input === 'string' ? JSON.parse(data.input) as Record<string, unknown> : (data.input as Record<string, unknown> || {}); } catch { /* malformed input is still shown as a generic request */ }
     const command = typeof input.command === 'string' ? input.command : undefined;
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+    const threadId = sessionId ? this.chatReplies.get(sessionId)?.threadId : undefined;
     const session = this.chatService?.listSessions().find((item) => item.id === sessionId);
     const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
     const label = command ? commandPermissionLabel(command) : tool;
@@ -1772,7 +1775,7 @@ export class TelegramBotService {
         ...(canAlwaysAllow ? [{ text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` }] : []),
         { text: 'Từ chối', callback_data: `permission:deny:${id}` },
       ]],
-    });
+    }, threadId);
   }
 
   private async handlePermissionRules(chatId: number, args: string[]): Promise<void> {
@@ -3558,13 +3561,13 @@ export class TelegramBotService {
     this.lastBroadcast.set(text, now);
     for (const [key, at] of this.lastBroadcast) if (now - at >= NOTIFY_REPEAT_WINDOW_MS) this.lastBroadcast.delete(key);
     const allowed = this.config.telegram?.allowedChatIds || [];
-    let targets = projectId && this.config.telegram.projectTopics?.[projectId] && allowed.includes(this.config.telegram.projectTopics[projectId].chatId)
+    let targets: Array<{ chatId: number; threadId?: number | null }> = projectId && this.config.telegram.projectTopics?.[projectId] && allowed.includes(this.config.telegram.projectTopics[projectId].chatId)
       ? [this.config.telegram.projectTopics[projectId]]
       : projectId
-        ? (this.config.telegram.chats || []).filter((chat) => chat.projectId === projectId && allowed.includes(chat.id)).map((chat) => ({ chatId: chat.id, threadId: undefined as number | undefined }))
-        : allowed.map((chatId) => ({ chatId, threadId: undefined as number | undefined }));
+        ? (this.config.telegram.chats || []).filter((chat) => chat.projectId === projectId && allowed.includes(chat.id)).map((chat) => ({ chatId: chat.id, threadId: null }))
+        : allowed.map((chatId) => ({ chatId, threadId: null }));
     // Legacy configurations have allowedChatIds but no per-project mapping.
-    if (projectId && targets.length === 0) targets = allowed.map((chatId) => ({ chatId, threadId: undefined as number | undefined }));
+    if (projectId && targets.length === 0) targets = allowed.map((chatId) => ({ chatId, threadId: null }));
     for (const target of targets) {
       void this.sendMessage(target.chatId, text, replyMarkup, target.threadId);
     }
@@ -3577,7 +3580,7 @@ export class TelegramBotService {
     chatId: number,
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
-    threadId = this.activeThreadByChat?.get(chatId),
+    threadId: number | null | undefined = this.activeThreadByChat?.get(chatId),
   ): Promise<unknown> {
     const promise = new Promise<unknown>((resolve, reject) => {
       let queue = this.chatQueues.get(chatId);
@@ -3669,7 +3672,7 @@ export class TelegramBotService {
     chatId: number,
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
-    threadId?: number,
+    threadId?: number | null,
   ): Promise<unknown> {
     if (!this.token) {
       return null;
@@ -3681,7 +3684,7 @@ export class TelegramBotService {
       text,
       parse_mode: 'HTML',
     };
-    if (threadId !== undefined && threadId > 0) body.message_thread_id = threadId;
+    if (threadId !== undefined && threadId !== null && threadId > 0) body.message_thread_id = threadId;
     if (replyMarkup) {
       body.reply_markup = replyMarkup;
     }
