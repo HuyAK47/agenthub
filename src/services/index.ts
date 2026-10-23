@@ -1261,6 +1261,129 @@ export class AppService {
     return this.deployService.pushNow(id);
   }
 
+  inspectGitRepo(raw: unknown): {
+    valid: boolean;
+    error?: string;
+    message?: string;
+    suggestedName?: string;
+    defaultBranch?: string;
+    currentBranch?: string;
+    branches: string[];
+    remoteUrl?: string | null;
+  } {
+    const body = (raw && typeof raw === 'object' ? raw : {}) as { path?: unknown };
+    let inputPath = typeof body.path === 'string' ? body.path.trim() : '';
+    if (!inputPath) {
+      return { valid: false, error: 'empty_path', message: 'Đường dẫn không được để trống', branches: [] };
+    }
+
+    if (inputPath.startsWith('~/') || inputPath === '~') {
+      inputPath = path.join(os.homedir(), inputPath.slice(1));
+    }
+    const resolvedPath = path.resolve(inputPath);
+
+    if (!fs.existsSync(resolvedPath)) {
+      return { valid: false, error: 'not_found', message: `Thư mục không tồn tại: ${resolvedPath}`, branches: [] };
+    }
+
+    try {
+      const stat = fs.statSync(resolvedPath);
+      if (!stat.isDirectory()) {
+        return { valid: false, error: 'not_directory', message: `Đường dẫn không phải thư mục: ${resolvedPath}`, branches: [] };
+      }
+    } catch {
+      return { valid: false, error: 'cannot_read', message: 'Không thể đọc thư mục', branches: [] };
+    }
+
+    let topLevel = '';
+    try {
+      topLevel = execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--show-toplevel'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      return { valid: false, error: 'not_git_repo', message: 'Thư mục không phải là git repository', branches: [] };
+    }
+
+    const suggestedName = path.basename(topLevel || resolvedPath);
+
+    let remoteUrl: string | null = null;
+    try {
+      remoteUrl = execFileSync('git', ['-C', resolvedPath, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      remoteUrl = null;
+    }
+
+    let currentBranch = '';
+    try {
+      currentBranch = execFileSync('git', ['-C', resolvedPath, 'branch', '--show-current'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      currentBranch = '';
+    }
+
+    let defaultBranch = '';
+    try {
+      const originHead = execFileSync('git', ['-C', resolvedPath, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      defaultBranch = originHead.replace(/^origin\//, '');
+    } catch {
+      // ignore
+    }
+
+    const branchSet = new Set<string>();
+    try {
+      const output = execFileSync(
+        'git',
+        ['-C', resolvedPath, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/', 'refs/remotes/origin/'],
+        {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        },
+      );
+      const lines = output.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.includes('origin/HEAD')) continue;
+        const name = trimmed.startsWith('origin/') ? trimmed.slice(7) : trimmed;
+        if (name) branchSet.add(name);
+      }
+    } catch {
+      // ignore
+    }
+
+    if (!defaultBranch) {
+      if (branchSet.has('main')) defaultBranch = 'main';
+      else if (branchSet.has('master')) defaultBranch = 'master';
+      else defaultBranch = currentBranch || (branchSet.size > 0 ? Array.from(branchSet)[0] : 'main');
+    }
+
+    if (currentBranch) branchSet.add(currentBranch);
+    if (defaultBranch) branchSet.add(defaultBranch);
+
+    const branches = Array.from(branchSet).sort((a, b) => {
+      if (a === defaultBranch) return -1;
+      if (b === defaultBranch) return 1;
+      return a.localeCompare(b);
+    });
+
+    return {
+      valid: true,
+      suggestedName,
+      defaultBranch,
+      currentBranch,
+      branches,
+      remoteUrl,
+    };
+  }
+
   createProject(raw: unknown): ProjectRow {
     const parsed = CreateProjectSchema.parse(raw);
     const id = parsed.id || parsed.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');

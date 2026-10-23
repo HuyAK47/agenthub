@@ -221,6 +221,10 @@ export async function createServer(
     return reply.status(202).send(service.rerunDeploy(id));
   });
 
+  fastify.post('/api/git/inspect', async (req: FastifyRequest) => {
+    return service.inspectGitRepo(req.body);
+  });
+
   fastify.post('/api/projects', async (req: FastifyRequest, reply: FastifyReply) => {
     const project = service.createProject(req.body);
     return reply.status(201).send(project);
