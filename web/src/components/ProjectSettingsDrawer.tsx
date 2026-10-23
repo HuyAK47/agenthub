@@ -922,7 +922,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               {t('projects.commitConventionPreview')}
             </Button>
             {showCommitExample && (
-              <pre className="rounded border p-3 text-xs whitespace-pre-wrap">{`Branch: ${draftSettings.commitConvention!.branchTemplate.replaceAll('{slug}', 'add-login').replaceAll('{ref}', 'PROJ-45')}\nCommit: ${draftSettings.commitConvention!.commitTemplate.replaceAll('{type}', 'feat').replaceAll('{scope}', 'auth').replaceAll('{ref}', 'PROJ-45').replaceAll('{summary}', 'add login')}\nMerge: ${draftSettings.commitConvention!.mergeMessageTemplate.replaceAll('{branch}', 'agenthub/add-login').replaceAll('{target}', 'main')}`}</pre>
+              <pre className="rounded border p-3 text-xs whitespace-pre-wrap">{`Branch: ${draftSettings.commitConvention!.branchTemplate.replaceAll('{slug}', 'add-login').replaceAll('{ref}', 'PROJ-45')}\nCommit: ${draftSettings.commitConvention!.commitTemplate.replaceAll('{type}', 'feat').replaceAll('{scope}', 'auth').replaceAll('{ref}', 'PROJ-45').replaceAll('{summary}', 'add login')}\nMerge: ${draftSettings.commitConvention!.mergeMessageTemplate.replaceAll('{branch}', draftSettings.commitConvention!.branchTemplate.replaceAll('{slug}', 'add-login').replaceAll('{ref}', 'PROJ-45')).replaceAll('{target}', 'main')}`}</pre>
             )}
           </Card>
 

@@ -2554,7 +2554,10 @@ export class TelegramBotService {
 
     const beforePipe = trimmed.slice(0, pipeIdx).trim();
     const body = trimmed.slice(pipeIdx + 1).trim();
-    const parsedTitle = this.parseLeadingExternalRef(beforePipe);
+    const firstToken = beforePipe.split(/\s+/, 1)[0];
+    const parsedTitle = this.projectRepo.get(firstToken)
+      ? { text: beforePipe }
+      : this.parseLeadingExternalRef(beforePipe);
     const externalRef = parsedTitle.externalRef;
     const titlePart = parsedTitle.text;
 
@@ -2648,8 +2651,10 @@ export class TelegramBotService {
   }
 
   private parseLeadingExternalRef(text: string): { text: string; externalRef?: string } {
-    const match = text.trim().match(/^([A-Za-z][A-Za-z0-9]*#[A-Za-z0-9_-]+|[A-Za-z][A-Za-z0-9]*-\d+)\s+(.+)$/);
-    return match ? { externalRef: match[1], text: match[2].trim() } : { text: text.trim() };
+    const trimmed = text.trim();
+    const match = trimmed.match(/^([^\s|]+)\s+(.+)$/);
+    if (!match || !/[#_:/-]/.test(match[1])) return { text: trimmed };
+    return { externalRef: match[1], text: match[2].trim() };
   }
 
   private async handleNewTaskDescription(chatId: number, description: string, externalRef?: string): Promise<void> {
