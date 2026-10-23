@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, ProfileRepo, QuotaMarkRepo, QuotaUsageRepo } from '../src/db/index.js';
 import { hasClaudeQuotaAvailable, parseUsage, QuotaUsageService } from '../src/quota/usage.js';
 import { ProfileLockService } from '../src/profiles/locks.js';
 import { AppService } from '../src/services/index.js';
 import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
 
-const sampleResetAt = Math.floor(Date.now() / 1000) + 3600;
+const sampleResetAt = Math.floor(new Date('2026-10-23T11:00:00+07:00').getTime() / 1000);
 const sample = [
   `Gemini Models\tWeekly Limit Remaining\t85%\t${new Date((sampleResetAt + 7 * 3600) * 1000).toISOString()}`,
   `Gemini Models\tFive Hour Limit Remaining\t45%\t${new Date((sampleResetAt + 60) * 1000).toISOString()}`,
@@ -18,6 +18,15 @@ const sample = [
 ].join('\n');
 
 describe('quota usage', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('requires every Claude window to have quota remaining', () => {
     expect(hasClaudeQuotaAvailable([
       { grp: 'Claude and GPT models', remainingPct: 0 },

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -21,6 +21,8 @@ describe('NotificationService (Desktop Notifications)', () => {
   let execCalls: Array<{ file: string; args: string[] }>;
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-notify-test-'));
     process.env.AGENTHUB_HOME = tmpDir;
     config = loadConfig(tmpDir);
@@ -43,6 +45,7 @@ describe('NotificationService (Desktop Notifications)', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     db.close();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
