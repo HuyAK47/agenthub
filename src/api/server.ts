@@ -130,7 +130,7 @@ export async function createServer(
     const disable = body.disable === true;
     const result = service.shutdownForUser();
     options?.onShutdown?.(disable);
-    return { ok: true, ...result };
+    return { ok: true, daemonPid: process.pid, ...result };
   });
 
   fastify.get('/api/perf', async () => service.getPerf());

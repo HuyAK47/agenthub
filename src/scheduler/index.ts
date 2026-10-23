@@ -487,9 +487,11 @@ export class Scheduler {
   }
 
   /** Persist a resumable state before the service manager terminates the daemon. */
-  shutdownForUser(): { queued: number; reviewers: number } {
+  shutdownForUser(): { queued: number; reviewers: number; childPids: number[] } {
+    const childPids: number[] = [];
     let queued = 0;
     for (const rt of [...this.running.values()]) {
+      if (rt.pid) childPids.push(rt.pid);
       this.killProcessGroup(rt.pid, 'SIGTERM');
       this.running.delete(rt.taskId);
       if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
@@ -515,6 +517,7 @@ export class Scheduler {
 
     let reviewers = 0;
     for (const active of [...this.reviewerRuns.values()]) {
+      if (active.pid) childPids.push(active.pid);
       this.killProcessGroup(active.pid, 'SIGTERM');
       clearTimeout(active.timeout);
       if (active.exitTimeout) clearTimeout(active.exitTimeout);
@@ -524,7 +527,7 @@ export class Scheduler {
       reviewers++;
     }
     this.eventBus.emit('daemon.shutdown_requested', undefined, { queued, reviewers, note: 'dừng bởi người dùng' });
-    return { queued, reviewers };
+    return { queued, reviewers, childPids };
   }
 
   /**

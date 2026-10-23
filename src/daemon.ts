@@ -45,6 +45,7 @@ import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { SetupManager } from './tools/setup.js';
 import { ClaudeReviewEngine, CLAUDE_REVIEW_ENGINE_KEY } from './engines/claude-review.js';
@@ -499,7 +500,7 @@ export async function startDaemon(
         try {
           const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
           const args = process.platform === 'darwin'
-            ? ['bootout', `gui/${process.getuid?.() ?? ''}/dev.agenthub`]
+            ? ['unload', path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist')]
             : ['--user', 'disable', 'agenthub'];
           execFileSync(command, args, { stdio: 'ignore' });
         } catch {
