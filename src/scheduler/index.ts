@@ -2021,7 +2021,9 @@ export class Scheduler {
         continue;
       }
       const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex' &&
+        (p.authState == null || p.authState === 'ok') &&
         !this.quotaService.isExhausted(p.name, 'codex') &&
+        !this.reviewerInBackoff(p.name) &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
       if (!task.worktreePath) continue;
       if (codexProfiles.length === 0) {
