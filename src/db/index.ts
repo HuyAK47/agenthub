@@ -709,7 +709,30 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
   PRAGMA foreign_keys = ON;
   `,
-  // Migration 52: project focus wait reason.
+  // Migration 52: departments group projects and optionally assign worker profiles.
+  `
+  CREATE TABLE IF NOT EXISTS departments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    priority INTEGER NOT NULL DEFAULT 0,
+    maxParallel INTEGER NOT NULL DEFAULT 3,
+    claudeDailyTokenBudget INTEGER NOT NULL DEFAULT 0,
+    telegramTopicId INTEGER,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  INSERT OR IGNORE INTO departments (id, name) VALUES ('chung', 'Chung');
+  ALTER TABLE projects ADD COLUMN departmentId TEXT NOT NULL DEFAULT 'chung';
+  CREATE INDEX IF NOT EXISTS idx_projects_department ON projects(departmentId);
+  CREATE TABLE IF NOT EXISTS department_profiles (
+    departmentId TEXT NOT NULL,
+    profileName TEXT NOT NULL,
+    share REAL,
+    PRIMARY KEY (departmentId, profileName),
+    FOREIGN KEY (departmentId) REFERENCES departments(id) ON DELETE CASCADE,
+    FOREIGN KEY (profileName) REFERENCES profiles(name) ON DELETE CASCADE
+  );
+  `,
+  // Migration 53: project focus wait reason.
   `
   PRAGMA foreign_keys = OFF;
   CREATE TABLE tasks_focus_new AS SELECT * FROM tasks;
@@ -734,29 +757,6 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, createdAt);
   CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
   PRAGMA foreign_keys = ON;
-  `,
-  // Migration 53: departments group projects and optionally assign worker profiles.
-  `
-  CREATE TABLE IF NOT EXISTS departments (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    priority INTEGER NOT NULL DEFAULT 0,
-    maxParallel INTEGER NOT NULL DEFAULT 3,
-    claudeDailyTokenBudget INTEGER NOT NULL DEFAULT 0,
-    telegramTopicId INTEGER,
-    createdAt TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  INSERT OR IGNORE INTO departments (id, name) VALUES ('chung', 'Chung');
-  ALTER TABLE projects ADD COLUMN departmentId TEXT NOT NULL DEFAULT 'chung';
-  CREATE INDEX IF NOT EXISTS idx_projects_department ON projects(departmentId);
-  CREATE TABLE IF NOT EXISTS department_profiles (
-    departmentId TEXT NOT NULL,
-    profileName TEXT NOT NULL,
-    share REAL,
-    PRIMARY KEY (departmentId, profileName),
-    FOREIGN KEY (departmentId) REFERENCES departments(id) ON DELETE CASCADE,
-    FOREIGN KEY (profileName) REFERENCES profiles(name) ON DELETE CASCADE
-  );
   `,
 ];
 
