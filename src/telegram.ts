@@ -285,6 +285,7 @@ export class TelegramBotService {
   private lastNotificationTime = new Map<string, number>();
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
+  private focusDigest = new Map<string, number>();
 
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
@@ -722,12 +723,25 @@ export class TelegramBotService {
 
   async periodicCheck(): Promise<void> {
     try {
+      this.flushFocusDigest();
       await this.checkDecisionReminders();
       await this.checkMorningSummary();
       await this.checkScheduledDigest();
     } catch {
       // ignore
     }
+  }
+
+  private isFocusDeferredEvent(type: string): boolean {
+    return type.startsWith('task.') || type.startsWith('assistant.') || type.startsWith('brain.');
+  }
+
+  private flushFocusDigest(): void {
+    const focusProjectId = this.config.focus?.projectId;
+    if (!focusProjectId || this.focusDigest.size === 0) return;
+    const parts = [...this.focusDigest.entries()].map(([project, count]) => `${this.escapeHtml(project)}: ${count}`);
+    this.focusDigest.clear();
+    this.broadcastMessage(`🎯 <b>Tóm tắt khi đang tập trung ${this.escapeHtml(focusProjectId)}</b>\n${parts.join('\n')} thông báo từ project khác`);
   }
 
   // --- Long Polling ---
@@ -3088,6 +3102,11 @@ export class TelegramBotService {
 
     // 1. Brain auto mode: suppress raw task notifications
     const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
+    const focusProjectId = this.config.focus?.projectId;
+    if (focusProjectId && projectId && projectId !== focusProjectId && this.isFocusDeferredEvent(type)) {
+      this.focusDigest.set(projectId, (this.focusDigest.get(projectId) || 0) + 1);
+      return;
+    }
     const prefix = this.projectPrefix(projectId);
     const minimal = this.isMinimalProject(projectId);
     const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);

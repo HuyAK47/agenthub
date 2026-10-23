@@ -40,6 +40,7 @@ export class NotificationService {
   private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
+  private focusDigest = new Map<string, number>();
   private get appName(): string { return this.config.branding?.name || 'AgentHub'; }
   private checkTimer?: NodeJS.Timeout;
 
@@ -95,6 +96,7 @@ export class NotificationService {
     this.eventBus.on('*', this.boundHandler);
     this.checkTimer = setInterval(() => {
       this.checkQuietHoursEnd();
+      this.flushFocusDigest();
     }, 60_000);
     this.checkTimer.unref?.();
   }
@@ -120,6 +122,11 @@ export class NotificationService {
 
     // 1. In brain auto mode: suppress raw task notifications
     const taskProjectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
+    const focusProjectId = this.config.focus?.projectId;
+    if (focusProjectId && taskProjectId && taskProjectId !== focusProjectId && this.isFocusDeferredEvent(type)) {
+      this.focusDigest.set(taskProjectId, (this.focusDigest.get(taskProjectId) || 0) + 1);
+      return;
+    }
     const effectiveMode = effectiveBrainMode(taskProjectId, taskProjectId ? this.projectRepo?.get(taskProjectId) : null, this.config.brain);
     if (effectiveMode === 'auto') {
       const allExhausted =
@@ -337,6 +344,17 @@ export class NotificationService {
         break;
       }
     }
+  }
+
+  private isFocusDeferredEvent(type: string): boolean {
+    return type.startsWith('task.') || type.startsWith('assistant.') || type.startsWith('brain.');
+  }
+
+  private flushFocusDigest(): void {
+    if (this.focusDigest.size === 0) return;
+    const parts = [...this.focusDigest.entries()].map(([project, count]) => `${project}: ${count}`);
+    this.focusDigest.clear();
+    this.notify(`${this.appName}: ${parts.join(', ')} thông báo từ project khác trong lúc đang tập trung`, 'normal');
   }
 
   private resolveTaskTitle(taskId?: string, payload?: Record<string, unknown>): string {
