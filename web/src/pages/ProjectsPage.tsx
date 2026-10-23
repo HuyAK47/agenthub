@@ -11,6 +11,8 @@ import {
   getArchivedProjects,
   getProjects,
   updateProjectKnowledge,
+  inspectGitRepo,
+  GitInspectResult,
 } from '../api/client';
 import {
   FolderGit2,
@@ -25,6 +27,7 @@ import {
   Clock,
   ExternalLink,
   GitBranch,
+  RefreshCw,
 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
@@ -362,6 +365,53 @@ export const ProjectsPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState('');
+  const [gitBranches, setGitBranches] = useState<string[]>([]);
+  const [gitInspectResult, setGitInspectResult] = useState<GitInspectResult | null>(null);
+  const [isInspectingGit, setIsInspectingGit] = useState(false);
+  const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
+
+  useEffect(() => {
+    const trimmedPath = path.trim();
+    if (!trimmedPath || trimmedPath.length < 2) {
+      setGitInspectResult(null);
+      setGitBranches([]);
+      setIsInspectingGit(false);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      setIsInspectingGit(true);
+      try {
+        const res = await inspectGitRepo(trimmedPath);
+        if (!active) return;
+        setGitInspectResult(res);
+        if (res.valid) {
+          setGitBranches(res.branches || []);
+          if (!nameManuallyEdited && res.suggestedName) {
+            setName(res.suggestedName);
+          }
+          if (res.defaultBranch && (defaultBranch === 'main' || !defaultBranch.trim())) {
+            setDefaultBranch(res.defaultBranch);
+          }
+        } else {
+          setGitBranches([]);
+        }
+      } catch {
+        if (!active) return;
+        setGitInspectResult({ valid: false, message: 'Không thể kiểm tra đường dẫn', branches: [] });
+        setGitBranches([]);
+      } finally {
+        if (active) setIsInspectingGit(false);
+      }
+    }, 400);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [path, nameManuallyEdited, defaultBranch]);
+
   useEffect(() => {
     if (showAddForm) suggestModalTour('modal-register-project');
   }, [showAddForm, suggestModalTour]);
@@ -474,6 +524,10 @@ export const ProjectsPage: React.FC = () => {
     setNewSettings(defaultProjectSettings());
     setJsonError(null);
     setFormError(null);
+    setGitBranches([]);
+    setGitInspectResult(null);
+    setIsInspectingGit(false);
+    setNameManuallyEdited(false);
   };
 
   const handleEnvTemplateChange = (val: string) => {
@@ -620,7 +674,10 @@ export const ProjectsPage: React.FC = () => {
                   type="text"
                   placeholder={t('projects.namePlaceholder')}
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setNameManuallyEdited(Boolean(e.target.value.trim()));
+                  }}
                 />
               </div>
 
@@ -637,6 +694,27 @@ export const ProjectsPage: React.FC = () => {
                   value={path}
                   onChange={(e) => setPath(e.target.value)}
                 />
+                {isInspectingGit && (
+                  <p className="mt-1.5 text-xs text-[var(--t-text-3)] flex items-center gap-1.5 animate-pulse">
+                    <RefreshCw className="h-3 w-3 animate-spin text-[var(--t-accent)]" />
+                    <span>Đang kiểm tra Git repository...</span>
+                  </p>
+                )}
+                {!isInspectingGit && gitInspectResult?.valid && (
+                  <p className="mt-1.5 text-xs text-[var(--t-ok)] flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      Đã nhận diện Git repository ({gitBranches.length} nhánh)
+                      {gitInspectResult.currentBranch && ` • Nhánh hiện tại: ${gitInspectResult.currentBranch}`}
+                    </span>
+                  </p>
+                )}
+                {!isInspectingGit && gitInspectResult && !gitInspectResult.valid && (
+                  <p className="mt-1.5 text-xs text-[var(--t-warn)] flex items-center gap-1">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    <span>{gitInspectResult.message || 'Thư mục không phải Git repository'}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -649,10 +727,41 @@ export const ProjectsPage: React.FC = () => {
                 <Input
                   data-tour="project-default-branch"
                   type="text"
+                  list="project-git-branches"
                   placeholder="main"
                   value={defaultBranch}
                   onChange={(e) => setDefaultBranch(e.target.value)}
                 />
+                <datalist id="project-git-branches">
+                  {gitBranches.map((b) => (
+                    <option key={b} value={b} />
+                  ))}
+                </datalist>
+                {gitBranches.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                    <span className="text-[11px] text-[var(--t-text-3)] flex items-center gap-1">
+                      <GitBranch className="h-3 w-3" />
+                      Gợi ý:
+                    </span>
+                    {gitBranches.slice(0, 6).map((b) => (
+                      <button
+                        key={b}
+                        type="button"
+                        onClick={() => setDefaultBranch(b)}
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors cursor-pointer ${
+                          defaultBranch === b
+                            ? 'bg-[var(--t-accent)] text-white font-semibold'
+                            : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]'
+                        }`}
+                      >
+                        {b}
+                      </button>
+                    ))}
+                    {gitBranches.length > 6 && (
+                      <span className="text-[10px] text-[var(--t-text-3)]">+{gitBranches.length - 6} nhánh khác</span>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>

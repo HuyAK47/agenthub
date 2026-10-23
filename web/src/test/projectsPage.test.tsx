@@ -656,4 +656,44 @@ describe('ProjectsPage', () => {
     expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
     expect(offRadio).not.toBeChecked();
   });
+
+  it('19. Tự động kiểm tra Git repo khi nhập path, điền tên project và gợi ý các nhánh', async () => {
+    const inspectSpy = vi.spyOn(client, 'inspectGitRepo').mockResolvedValue({
+      valid: true,
+      suggestedName: 'drone-strike',
+      defaultBranch: 'main',
+      currentBranch: 'develop',
+      branches: ['main', 'develop', 'feature/ep6'],
+      remoteUrl: 'git@github.com:example/drone-strike.git',
+    });
+
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: /Đăng ký Project/i }));
+
+    const pathInput = screen.getByPlaceholderText('vd: /home/user/projects/xfarm');
+    fireEvent.change(pathInput, { target: { value: '/home/user/projects/drone-strike' } });
+
+    await waitFor(() => {
+      expect(inspectSpy).toHaveBeenCalledWith('/home/user/projects/drone-strike');
+    });
+
+    // Tên project được tự động gợi ý
+    const nameInput = screen.getByPlaceholderText('vd: XFarm, AgentHub');
+    await waitFor(() => {
+      expect(nameInput).toHaveValue('drone-strike');
+    });
+
+    // Thông báo nhận diện thành công
+    expect(await screen.findByText(/Đã nhận diện Git repository/)).toBeInTheDocument();
+
+    // Các chip gợi ý branch xuất hiện
+    expect(screen.getByRole('button', { name: 'feature/ep6' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'develop' })).toBeInTheDocument();
+
+    // Bấm vào chip 'feature/ep6' sẽ cập nhật ô nhánh mặc định
+    fireEvent.click(screen.getByRole('button', { name: 'feature/ep6' }));
+    const branchInput = screen.getByPlaceholderText('main');
+    expect(branchInput).toHaveValue('feature/ep6');
+  });
 });

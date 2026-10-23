@@ -260,6 +260,24 @@ export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${enco
 export const getProjectDeployStatus = (id: string) =>
   apiFetch<DeployStatus | null>(`/api/projects/${encodeURIComponent(id)}/deploy`);
 
+export interface GitInspectResult {
+  valid: boolean;
+  error?: string;
+  message?: string;
+  suggestedName?: string;
+  defaultBranch?: string;
+  currentBranch?: string;
+  branches: string[];
+  remoteUrl?: string | null;
+}
+
+export async function inspectGitRepo(path: string): Promise<GitInspectResult> {
+  return apiFetch<GitInspectResult>('/api/git/inspect', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
 export async function createProject(data: CreateProjectInput): Promise<Project> {
   return apiFetch<Project>('/api/projects', {
     method: 'POST',
