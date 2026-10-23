@@ -31,7 +31,9 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
   const { data, isLoading } = useQuery({
     queryKey: ['tasks-kanban', project, statusKey, search, pageSize],
     queryFn: () => getTasksPage({ project, status: statusKey, search, limit: pageSize, sort: 'createdAt', order: 'desc' }),
-    refetchInterval: 5000,
+    // Columns are cursor-paged. Polling page one would discard loaded pages
+    // and make cards move unexpectedly; SSE invalidation refreshes this view.
+    staleTime: 30_000,
     placeholderData: keepPreviousData,
   });
   const [visibleItems, setVisibleItems] = useState<Task[]>([]);

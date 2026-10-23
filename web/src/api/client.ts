@@ -311,6 +311,13 @@ export async function getProjectKnowledge(projectId: string): Promise<KnowledgeE
   return apiFetch<KnowledgeEntry[]>(`/api/projects/${encodeURIComponent(projectId)}/knowledge`);
 }
 
+export async function getProjectKnowledgePage(projectId: string, params: { limit: number; offset?: number; cursor?: string }): Promise<PageResponse<KnowledgeEntry>> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  if (params.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<KnowledgeEntry>>(`/api/projects/${encodeURIComponent(projectId)}/knowledge?${query.toString()}`);
+}
+
 export const getReviewChecklistPreview = (projectId: string) =>
   apiFetch<Array<{ path: string; resolvedPath: string; size: number | null; truncated: boolean; content: string | null; warning?: string }>>(`/api/projects/${encodeURIComponent(projectId)}/review-checklist/preview`);
 
@@ -743,10 +750,16 @@ export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; log
 export async function getSavings(params?: {
   project?: string;
   since?: string;
+  limit?: number;
+  offset?: number;
+  cursor?: string;
 }): Promise<SavingsReport> {
   const query = new URLSearchParams();
   if (params?.project) query.set('project', params.project);
   if (params?.since) query.set('since', params.since);
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.offset !== undefined) query.set('offset', String(params.offset));
+  if (params?.cursor) query.set('cursor', params.cursor);
   const qStr = query.toString();
   return apiFetch<SavingsReport>(`/api/savings${qStr ? `?${qStr}` : ''}`);
 }

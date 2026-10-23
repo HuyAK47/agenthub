@@ -240,6 +240,7 @@ export function connectSSE(queryClient: QueryClient): () => void {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
           }
           queryClient.invalidateQueries({ queryKey: ['status'] });
+          queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
           if (taskId) {
             queryClient.invalidateQueries({ queryKey: ['task', taskId] });
             queryClient.invalidateQueries({ queryKey: ['task', taskId.replace('/', '~')] });
@@ -250,6 +251,7 @@ export function connectSSE(queryClient: QueryClient): () => void {
           }
         } else if (type.startsWith('run.')) {
           queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
           queryClient.invalidateQueries({ queryKey: ['status'] });
           if (taskId) {
             queryClient.invalidateQueries({ queryKey: ['task', taskId] });

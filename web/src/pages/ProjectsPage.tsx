@@ -7,7 +7,7 @@ import {
   deleteProject,
   restoreProject,
   deleteProjectKnowledge,
-  getProjectKnowledge,
+  getProjectKnowledgePage,
   getArchivedProjects,
   getProjects,
   updateProjectKnowledge,
@@ -26,7 +26,7 @@ import {
   ExternalLink,
   GitBranch,
 } from 'lucide-react';
-import { Card, Button, Input } from '../components/ui';
+import { Card, Button, Input, DataTable } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
@@ -363,6 +363,8 @@ export const ProjectsPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState('');
+  const [knowledgePage, setKnowledgePage] = useState(1);
+  const knowledgePageSize = 20;
   useEffect(() => {
     if (showAddForm) suggestModalTour('modal-register-project');
   }, [showAddForm, suggestModalTour]);
@@ -421,8 +423,8 @@ export const ProjectsPage: React.FC = () => {
   });
 
   const knowledgeQuery = useQuery({
-    queryKey: ['project-knowledge', knowledgeProject],
-    queryFn: () => getProjectKnowledge(knowledgeProject!),
+    queryKey: ['project-knowledge', knowledgeProject, knowledgePage],
+    queryFn: () => getProjectKnowledgePage(knowledgeProject!, { limit: knowledgePageSize, offset: (knowledgePage - 1) * knowledgePageSize }),
     enabled: knowledgeProject !== null,
   });
 
@@ -1047,11 +1049,10 @@ export const ProjectsPage: React.FC = () => {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    setKnowledgeProject(
-                      knowledgeProject === proj.id ? null : proj.id,
-                    )
-                  }
+                  onClick={() => {
+                    setKnowledgeProject(knowledgeProject === proj.id ? null : proj.id);
+                    setKnowledgePage(1);
+                  }}
                   className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] px-2 h-7"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
@@ -1081,11 +1082,21 @@ export const ProjectsPage: React.FC = () => {
                         {t('extra.knowledgeAdd')}
                       </Button>
                     </div>
-                    {(knowledgeQuery.data || []).map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="flex items-start gap-2 text-xs"
-                      >
+                    <DataTable
+                      rows={knowledgeQuery.data?.items || []}
+                      loading={knowledgeQuery.isLoading}
+                      error={knowledgeQuery.error instanceof Error ? knowledgeQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      page={knowledgePage}
+                      pageSize={knowledgePageSize}
+                      total={knowledgeQuery.data?.total || 0}
+                      onPageChange={setKnowledgePage}
+                      columns={[{
+                        key: 'content',
+                        title: t('extra.knowledge'),
+                        sortable: true,
+                        sortValue: (entry) => entry.content,
+                        render: (entry) => <div className="flex items-start gap-2 text-xs">
                         <button
                           type="button"
                           title={t('extra.pinKnowledge')}
@@ -1125,8 +1136,15 @@ export const ProjectsPage: React.FC = () => {
                         >
                           ×
                         </button>
-                      </div>
-                    ))}
+                        </div>,
+                      }, {
+                        key: 'createdAt',
+                        title: t('common.createdAt'),
+                        sortable: true,
+                        sortValue: (entry) => entry.createdAt,
+                        render: (entry) => <span className="whitespace-nowrap text-xs text-[var(--t-text-3)]">{entry.createdAt}</span>,
+                      }]}
+                    />
                   </div>
                 )}
               </div>
