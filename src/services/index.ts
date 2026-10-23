@@ -814,6 +814,15 @@ export class AppService {
   ) {}
 
   setPerfCollector(collector: PerfCollector): void { this.perfCollector = collector; }
+
+  shutdownForUser(): { queued: number; reviewers: number } {
+    const result = this.scheduler.shutdownForUser();
+    this.chatService?.stop();
+    this.deployService?.stop();
+    this.ciService?.stop();
+    void this.telegramBotService?.stop();
+    return result;
+  }
   getPerf() { return { samples: this.perfCollector?.getSamples() || [], latest: this.perfCollector?.latest() || null }; }
 
   async getSetupStatus() {

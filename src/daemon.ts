@@ -45,6 +45,7 @@ import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { SetupManager } from './tools/setup.js';
 import { ClaudeReviewEngine, CLAUDE_REVIEW_ENGINE_KEY } from './engines/claude-review.js';
 import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
@@ -492,7 +493,22 @@ export async function startDaemon(
   }
 
   // Start Fastify HTTP server with security and API endpoints
-  const fastify = await createServer(ctx.service, config);
+  const fastify = await createServer(ctx.service, config, {
+    onShutdown: (disable) => {
+      if (disable) {
+        try {
+          const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+          const args = process.platform === 'darwin'
+            ? ['bootout', `gui/${process.getuid?.() ?? ''}/dev.agenthub`]
+            : ['--user', 'disable', 'agenthub'];
+          execFileSync(command, args, { stdio: 'ignore' });
+        } catch {
+          // The CLI reports service-manager errors; the daemon must still exit cleanly.
+        }
+      }
+      setImmediate(() => { void shutdown(); });
+    },
+  });
 
   const port = config.port;
   try {
