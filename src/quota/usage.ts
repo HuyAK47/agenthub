@@ -185,9 +185,12 @@ export class QuotaUsageService {
         resetAt: w.resetAt,
         fetchedAt,
       }));
+      const previousRows = this.usage.getForProfile(profile.name);
+      const wasAvailable = hasClaudeQuotaAvailable(previousRows);
       for (const row of rows) this.usage.upsert(row);
-      const claudeRows = rows.filter((row) => row.grp.startsWith('Claude'));
-      if (hasClaudeQuotaAvailable(claudeRows)) this.eventBus?.emit('claude.quota_available', undefined, { profileName: profile.name, observedAt: new Date(fetchedAt * 1000).toISOString(), remainingPct: Math.min(...claudeRows.map((row) => row.remainingPct)) });
+      if (previousRows.length > 0 && !wasAvailable && hasClaudeQuotaAvailable(this.usage.getForProfile(profile.name))) {
+        this.eventBus?.emit('claude.quota_available', undefined, { profileName: profile.name, observedAt: new Date(fetchedAt * 1000).toISOString(), source: 'claude-usage' });
+      }
       return rows;
     } catch {
       return [];
@@ -236,26 +239,47 @@ export class QuotaUsageService {
   }
 
   private saveEntries(profile: ProfileRow, entries: UsageEntry[], fetchedAt = Math.floor(Date.now() / 1000)): void {
+    const previousRows = this.usage.getForProfile(profile.name);
+    const wasAvailable = hasClaudeQuotaAvailable(previousRows);
     for (const entry of entries) {
       const row: QuotaUsageRow = { profileName: profile.name, grp: entry.group, window: entry.window, remainingPct: entry.remainingPct, resetAt: entry.resetAt, fetchedAt };
       this.usage.upsert(row);
       if (entry.remainingPct === 0) {
         for (const family of entry.families) {
-          this.markForEmail(profile, family, entry.resetAt);
+          const markChanged = this.markForEmail(profile, family, entry.resetAt);
           // Polls keep seeing 0% until reset; announce each exhausted window once.
           const key = `${profile.name}|${family}|${entry.resetAt}`;
-          if (this.announcedExhausted.has(key)) continue;
+          if (!markChanged || this.announcedExhausted.has(key)) continue;
           this.announcedExhausted.add(key);
-          this.eventBus?.emit('quota.exhausted', undefined, { profile: profile.name, family, reason: 'usage' });
+          this.eventBus?.emit('quota.exhausted', undefined, {
+            profile: profile.name,
+            family,
+            engine: profile.engine,
+            allExhausted: this.allProfilesForEngineExhausted(profile, family),
+            reason: 'usage',
+          });
         }
       }
     }
+    const isAvailable = hasClaudeQuotaAvailable(this.usage.getForProfile(profile.name));
+    if (profile.engine === 'agy' && previousRows.length > 0 && !wasAvailable && isAvailable) {
+      this.eventBus?.emit('claude.quota_available', undefined, { profileName: profile.name, observedAt: new Date(fetchedAt * 1000).toISOString(), source: 'usage' });
+    }
   }
 
-  private markForEmail(profile: ProfileRow, family: string, until: number): void {
+  private markForEmail(profile: ProfileRow, family: string, until: number): boolean {
+    let changed = false;
     for (const p of this.profiles.getAll().filter((p) => p.name === profile.name || sameAccount(p, profile))) {
-      this.marks.mark(p.name, family, until, 'usage');
+      changed = this.marks.mark(p.name, family, until, 'usage') || changed;
     }
+    return changed;
+  }
+
+  private allProfilesForEngineExhausted(profile: ProfileRow, family: string): boolean {
+    const active = this.profiles.getEnabled().filter((candidate) => candidate.engine === profile.engine);
+    const now = Math.floor(Date.now() / 1000);
+    const marks = this.marks.getActive(now);
+    return active.length > 0 && active.every((candidate) => marks.some((mark) => mark.profileName === candidate.name && mark.family === family));
   }
 
   bestRemaining(profile: ProfileRow, family: string): number | null {

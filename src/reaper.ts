@@ -6,7 +6,7 @@ import { isDeletableWorktreePath, resolveReal } from './worktrees/index.js';
 import { getPlatform } from './platform/index.js';
 
 export interface ReaperOptions {
-  worktreesDir?: string;
+  worktreesDir?: string | string[];
   protectedPaths?: Array<string | null | undefined>;
   graceMs?: number;
 }
@@ -150,12 +150,13 @@ export function reapSyncForWorktree(dir: string, options: ReaperOptions = {}): n
 
 export function listAllWorktreeProcesses(options: ReaperOptions = {}): ProcessInfo[] {
   const worktreesDir = options.worktreesDir || defaultWorktreesDir();
-  if (!fs.existsSync(worktreesDir)) return [];
+  const roots = Array.isArray(worktreesDir) ? worktreesDir : [worktreesDir];
+  if (!roots.some((root) => fs.existsSync(root))) return [];
   const excluded = processAncestors();
   const result: ProcessInfo[] = [];
   for (const info of getPlatform().process.listProcesses()) {
     if (excluded.has(info.pid)) continue;
-    if (info && isInside(info.cwd, worktreesDir) && isDeletableWorktreePath(worktreesDir, cleanCwd(info.cwd), options.protectedPaths || [])) {
+    if (info && roots.some((root) => isInside(info.cwd, root)) && isDeletableWorktreePath(roots, cleanCwd(info.cwd), options.protectedPaths || [])) {
       result.push(info);
     }
   }

@@ -267,12 +267,12 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect(updated.defaultTimeout).toBe(7200);
     expect(updated.slotsPerCodexProfile).toBe(3);
     expect(updated.watchdog).toEqual({ stallMinutes: 4, waitingMinutes: 2 });
-    expect(updated.notifications).toEqual({ desktop: false });
+    expect(updated.notifications).toEqual({ desktop: false, desktopLevel: 'important' });
 
     // 4. Verify in-memory config updated immediately
     expect(config.defaultModelChains.hard).toEqual(['claude-opus-4-6-thinking', 'gemini-3.8-flash-high']);
     expect(config.defaultTimeout).toBe(7200);
-    expect(config.notifications).toEqual({ desktop: false });
+    expect(config.notifications).toEqual({ desktop: false, desktopLevel: 'important' });
 
     // 5. Verify saved to config.json
     const diskConfig = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
@@ -628,6 +628,37 @@ describe('AgentHub HTTP API Endpoints', () => {
     const next = await server.inject({ method: 'GET', url: `/api/batches?project=batchproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
     expect(JSON.parse(next.body).items.map((batch: { id: string }) => batch.id)).toEqual(['batch-old']);
     expect((await server.inject({ method: 'GET', url: '/api/batches?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  it('keeps the Claude reviewer in task lists after older fallback events leave the global recent window', async () => {
+    ctx.projectRepo.insert({
+      id: 'fallback-list',
+      name: 'Fallback list',
+      path: '/tmp',
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    ctx.taskRepo.insert({
+      id: 'fallback-list/task',
+      projectId: 'fallback-list',
+      slug: 'task',
+      title: 'Fallback task',
+      status: 'review',
+    });
+    ctx.eventRepo.insert('review.fallback', 'fallback-list/task', { from: 'codex', to: 'claude' });
+    for (let i = 0; i < 201; i += 1) {
+      ctx.eventRepo.insert('unrelated.event');
+    }
+
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/tasks?project=fallback-list',
+      headers: authHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual([
+      expect.objectContaining({ id: 'fallback-list/task', reviewer: 'claude' }),
+    ]);
   });
 
   it('Tasks workflow: create, start, cancel, review, retry, commits, and worktree removal', async () => {

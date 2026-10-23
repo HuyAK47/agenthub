@@ -452,6 +452,17 @@ export class ChatService {
     this.claudeBinOverride = bin;
   }
 
+  getRunningPids(): number[] {
+    const pids: number[] = [];
+    for (const turn of this.runningTurns.values()) {
+      if (turn.child.pid) pids.push(turn.child.pid);
+    }
+    for (const proc of this.persistentProcesses.values()) {
+      if (proc.child.pid) pids.push(proc.child.pid);
+    }
+    return pids;
+  }
+
   stop(): void {
     for (const turn of this.runningTurns.values()) {
       clearTimeout(turn.timeoutTimer);

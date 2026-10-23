@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
+import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../projects/paths.js';
 import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
@@ -12,6 +13,7 @@ import { z, ZodError } from 'zod';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
 import {
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   TaskRepo,
@@ -37,10 +39,10 @@ import { ProfileService as CoreProfileService, accountKey, isProfileLoggedIn, ex
 import { Scheduler } from '../scheduler/index.js';
 import { CodexEngine } from '../engines/index.js';
 import { hasClaudeQuotaAvailable, QuotaUsageService } from '../quota/usage.js';
+import { QuotaService } from '../quota/index.js';
 import { ProfileLockService } from '../profiles/locks.js';
 import { CheckRunner } from '../checks.js';
 import { BrainService } from '../brain.js';
-import { effectiveBrainMode } from '../brain/mode.js';
 import { toApiTime } from '../db/time.js';
 import { ChatService } from '../chat/service.js';
 import type { BrainRunner } from '../brain/runner.js';
@@ -59,7 +61,7 @@ import { mergeTaskIntoBase, MergeError } from '../merge.js';
 import { computeTaskGraph, filterTasksForGraph, detectCycle, parseDependsOn } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
-import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
+import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
 import type { DeployService } from '../deploy.js';
@@ -68,6 +70,22 @@ import type { PerfCollector } from '../perf.js';
 const execFileAsync = promisify(execFile);
 const CODEX_EMAIL_RECHECK_MS = 10 * 60 * 1000;
 const ESCALATION_MODEL = 'claude-opus-4-6-thinking';
+
+function worktreeBytes(root: string): number {
+  let total = 0;
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return 0; }
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    try {
+      if (entry.isDirectory()) total += worktreeBytes(fullPath);
+      else if (entry.isFile()) total += fs.statSync(fullPath).size;
+    } catch {
+      // Files can disappear while the status snapshot is being collected.
+    }
+  }
+  return total;
+}
 
 function apiProject(project: ProjectRow, hubHome?: string, ciRepo?: CiRepo): ProjectRow {
   let merge: unknown = null;
@@ -252,6 +270,15 @@ export const ProjectReviewSchema = z.object({
   maxRounds: z.number().int().positive().default(2),
 });
 
+export const DepartmentInputSchema = z.object({
+  id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  name: z.string().min(1).max(120),
+  priority: z.number().int().default(0),
+  maxParallel: z.number().int().positive().default(3),
+  claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
+  telegramTopicId: z.number().int().positive().nullable().default(null),
+});
+
 export const CreateProjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1),
@@ -259,6 +286,7 @@ export const CreateProjectSchema = z.object({
   defaultBranch: z.string().default('main'),
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().default(3),
+  departmentId: z.string().min(1).default('chung'),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
@@ -272,6 +300,7 @@ export const UpdateProjectSchema = z.object({
   defaultBranch: z.string().min(1).optional(),
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().optional(),
+  departmentId: z.string().min(1).optional(),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
@@ -457,6 +486,7 @@ export const UpdateConfigSchema = z.object({
     claudeFallback: z.boolean().optional(),
     claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
     claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+    claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
   }).optional(),
   brain: z.object({
     fallback: z.array(z.discriminatedUnion('type', [
@@ -769,6 +799,13 @@ export function formatEventSummary(
       return `${taskLabel} ghi chú: ${content.length > 50 ? content.slice(0, 50) + '...' : content}`;
     }
 
+    case 'review.fallback': {
+      const to = p.to || 'claude';
+      const from = p.from || 'codex';
+      const profile = p.profile ? ` (${p.profile})` : '';
+      return `${taskLabel} fallback review từ ${from} sang ${to}${profile}`;
+    }
+
     default:
       if (taskId) {
         return `${taskLabel}: ${type}`;
@@ -784,6 +821,7 @@ export class AppService {
   private perfCollector?: PerfCollector;
   private profileChecks = new Set<string>();
   private reviewingTasks = new Set<string>();
+  private worktreeUsageCache: { at: number; value: { count: number; bytes: number; byStatus: Record<string, { count: number; bytes: number }> } } | null = null;
   private gitVersion: { value: string | null; checkedAt: number } | null = null;
   private gitVersionCheck?: Promise<string | null>;
   private static readonly SETUP_VERSION_CACHE_MS = 10 * 60 * 1000;
@@ -813,9 +851,68 @@ export class AppService {
     public setupManager?: SetupManager,
     public brainRunner?: BrainRunner,
     public directiveRepo?: BrainDirectiveRepo,
+    public departmentRepo?: DepartmentRepo,
   ) {}
 
+  // --- Departments ---
+  listDepartments() {
+    if (!this.departmentRepo) throw new HttpError(503, 'unavailable', 'Department service chưa sẵn sàng');
+    return this.departmentRepo.getAll().map((department) => ({ ...department, profiles: this.departmentRepo!.profiles(department.id), projects: this.departmentRepo!.projects(department.id) }));
+  }
+
+  getDepartment(id: string) {
+    const department = this.departmentRepo?.get(id);
+    if (!department) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    return { ...department, profiles: this.departmentRepo!.profiles(id), projects: this.departmentRepo!.projects(id) };
+  }
+
+  createDepartment(raw: unknown) {
+    if (!this.departmentRepo) throw new HttpError(503, 'unavailable', 'Department service chưa sẵn sàng');
+    const parsed = DepartmentInputSchema.parse(raw);
+    const id = parsed.id || parsed.name.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id) throw new HttpError(400, 'bad_request', 'Tên phòng ban không hợp lệ');
+    if (this.departmentRepo.get(id)) throw new HttpError(409, 'conflict', `Department ID "${id}" đã tồn tại`);
+    this.departmentRepo.insert({ id, ...parsed });
+    return this.getDepartment(id);
+  }
+
+  updateDepartment(id: string, raw: unknown) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    const parsed = DepartmentInputSchema.partial().parse(raw);
+    this.departmentRepo!.update(id, parsed);
+    return this.getDepartment(id);
+  }
+
+  deleteDepartment(id: string) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    try { this.departmentRepo.delete(id); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : 'Không thể xóa phòng ban'); }
+    return { ok: true };
+  }
+
+  updateDepartmentProfiles(id: string, raw: unknown) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    const parsed = z.object({ profiles: z.array(z.object({ profileName: z.string().min(1), share: z.number().min(0).max(1).nullable().optional() })) }).parse(raw);
+    for (const profile of parsed.profiles) {
+      if (!this.profileRepo.get(profile.profileName)) throw new HttpError(404, 'not_found', `Profile "${profile.profileName}" không tồn tại`);
+    }
+    this.departmentRepo.setProfiles(id, parsed.profiles);
+    return this.getDepartment(id);
+  }
+
   setPerfCollector(collector: PerfCollector): void { this.perfCollector = collector; }
+
+  shutdownForUser(): { queued: number; reviewers: number; childPids: number[] } {
+    const result = this.scheduler.shutdownForUser();
+    const chatPids = this.chatService?.getRunningPids?.() || [];
+    this.chatService?.stop();
+    this.deployService?.stop();
+    this.ciService?.stop();
+    void this.telegramBotService?.stop();
+    return {
+      ...result,
+      childPids: [...(result.childPids || []), ...chatPids],
+    };
+  }
   getPerf() { return { samples: this.perfCollector?.getSamples() || [], latest: this.perfCollector?.latest() || null }; }
 
   async getSetupStatus() {
@@ -1083,6 +1180,24 @@ export class AppService {
 
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
+    const now = Date.now();
+    if (!this.worktreeUsageCache || now - this.worktreeUsageCache.at >= 15_000) {
+      const byStatus: Record<string, { count: number; bytes: number }> = {};
+      let count = 0;
+      let bytes = 0;
+      for (const task of tasks) {
+        if (!task.worktreePath || !fs.existsSync(task.worktreePath)) continue;
+        const size = worktreeBytes(task.worktreePath);
+        const current = byStatus[task.status] || { count: 0, bytes: 0 };
+        current.count += 1;
+        current.bytes += size;
+        byStatus[task.status] = current;
+        count += 1;
+        bytes += size;
+      }
+      this.worktreeUsageCache = { at: now, value: { count, bytes, byStatus } };
+    }
+
     const runningTasks = Array.from(runningMap.values()).map((r) => {
       const task = taskMap.get(r.taskId) || taskMap.get(toTaskId(r.taskId)) || taskMap.get(r.taskId.replace('/', '~'));
       return {
@@ -1125,6 +1240,7 @@ export class AppService {
           limitedSessions: this.getClaudeProfileLimitedSessions(p),
         } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
+        duplicateEmailWith: (dupes.get(accountKey(p) || '') || []).filter((name) => name !== p.name),
       };
     });
 
@@ -1149,7 +1265,8 @@ export class AppService {
 
     const diskReader = this.scheduler ? this.scheduler.getDiskReader() : getDiskSpaceSync;
     const disk = diskReader(this.config.worktreesDir);
-    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
+    const worktreeRoots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const disks = getMonitoredDisks(worktreeRoots, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
     const runningTaskIds = runningTasks.map((r) => r.taskId);
     const overlaps = this.taskNoteRepo
       ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)
@@ -1172,6 +1289,7 @@ export class AppService {
         minFreeGB: this.config.disk.minFreeGB,
       },
       disks,
+      worktrees: this.worktreeUsageCache.value,
       load: this.scheduler.getLoadStatus(),
       telegram: {
         enabled: this.config.telegram?.enabled ?? false,
@@ -1187,7 +1305,8 @@ export class AppService {
     const running = new Set(this.scheduler.getRunning().keys());
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
-    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths });
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const processes = listAllWorktreeProcesses({ worktreesDir: roots, protectedPaths });
     return processes
       .map((process) => {
         const cwd = process.cwd.replace(/ \(deleted\)$/, '');
@@ -1201,10 +1320,11 @@ export class AppService {
     const orphans = this.getOrphans();
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
     const reaped: number[] = [];
     for (const orphan of orphans) {
       reaped.push(...reapSyncForWorktree(orphan.cwd.replace(/ \(deleted\)$/, ''), {
-        worktreesDir: this.config.worktreesDir,
+        worktreesDir: roots,
         protectedPaths,
       }));
     }
@@ -1248,6 +1368,9 @@ export class AppService {
 
   createProject(raw: unknown): ProjectRow {
     const parsed = CreateProjectSchema.parse(raw);
+    if (this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
+      throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
+    }
     const id = parsed.id || parsed.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     const existing = this.projectRepo.getIncludingArchived(id);
     if (existing && !existing.archivedAt) {
@@ -1264,6 +1387,10 @@ export class AppService {
     }
 
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
+    if (effectiveSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(effectiveSettings.worktree.root, resolvedPath, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
     if (effectiveSettings.integration.enabled || effectiveSettings.integration.branch) {
       validateIntegrationBranch(effectiveSettings.integration.branch || 'agenthub/integration', parsed.defaultBranch);
     }
@@ -1324,6 +1451,7 @@ export class AppService {
         defaultBranch: parsed.defaultBranch,
         envTemplate: parsed.envTemplate || null,
         maxParallel: parsed.maxParallel,
+        departmentId: parsed.departmentId,
       });
       this.invalidateOutOfScopeClaudeScanStates();
       return this.getProject(archived.id);
@@ -1342,6 +1470,7 @@ export class AppService {
       reviewChain: parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
       review: parsed.review ? JSON.stringify(parsed.review) : null,
       settings: parsed.settings ? JSON.stringify(effectiveSettings) : null,
+      departmentId: parsed.departmentId,
     });
 
     if (effectiveSettings.integration.enabled) {
@@ -1359,10 +1488,18 @@ export class AppService {
     this.getProject(id);
     const parsed = UpdateProjectSchema.parse(raw);
     const current = this.projectRepo.get(id)!;
+    if (parsed.departmentId && this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
+      throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
+    }
     const effectiveDefaultBranch = parsed.defaultBranch ?? current.defaultBranch;
     const mergedSettings = parsed.settings === undefined
       ? projectSettings(current)
       : mergeProjectSettings(projectSettings(current), parsed.settings);
+
+    if (mergedSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(mergedSettings.worktree.root, current.path, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
 
     if (mergedSettings.integration.enabled || mergedSettings.integration.branch) {
       validateIntegrationBranch(mergedSettings.integration.branch || 'agenthub/integration', effectiveDefaultBranch);
@@ -1474,7 +1611,12 @@ export class AppService {
         warnings.push(`Giữ worktree ${task.worktreePath} vì có thay đổi chưa commit`);
         continue;
       }
-      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(proj.path, task.worktreePath, { projectId: id, taskId: task.id, slug: task.slug });
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(
+        proj.path,
+        task.worktreePath,
+        { projectId: id, taskId: task.id, slug: task.slug },
+        projectWorktreeRoots(proj, this.config.hubHome, this.config.worktreesDir),
+      );
       if (!removed) warnings.push(`Không thể gỡ worktree ${task.worktreePath}; đã giữ nguyên`);
     }
 
@@ -1654,6 +1796,7 @@ export class AppService {
           limitedSessions: this.getClaudeProfileLimitedSessions(p),
         } : {}),
         duplicateWarning: dupes.has(accountKey(p) || ''),
+        duplicateEmailWith: (dupes.get(accountKey(p) || '') || []).filter((name) => name !== p.name),
         ...(claudeAccount?.plan ? { claudePlan: claudeAccount.plan } : {}),
       };
     });
@@ -2251,9 +2394,13 @@ export class AppService {
     const parsed = MarkQuotaSchema.parse(raw);
     const seconds = parsed.seconds || 5 * 3600;
     if (this.coreProfileService.markQuota(name, parsed.family, seconds, parsed.reason)) {
+      const engine = profile.engine;
       this.scheduler.getEventBus().emit('quota.exhausted', undefined, {
         profile: name,
         family: parsed.family,
+        engine,
+        allExhausted: new QuotaService(this.quotaMarkRepo, this.profileRepo)
+          .allProfilesForEngineExhausted(engine, parsed.family),
       });
     }
     return { ok: true };
@@ -2281,9 +2428,17 @@ export class AppService {
       if (project?.review) {
         try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
       }
+      // Keep this lookup scoped to the task. A global recent-event window can
+      // forget an older fallback after unrelated events push it out of that window.
+      const isFallback = this.eventRepo?.getByTask(task.id).some((event) => event.type === 'review.fallback') ?? false;
+      const reviewerRun = this.scheduler?.getReviewerRun?.(task.id);
+      const reviewer = reviewerRun
+        ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
+        : (isFallback ? 'claude' : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex'));
       return {
         ...apiTask(task),
         reviewChain,
+        reviewer,
         checks: this.scheduler.getCheckResults(task.id),
         paused: Boolean(run?.paused),
         pauseReason: run?.pauseReason ?? null,
@@ -2375,8 +2530,36 @@ export class AppService {
     } catch {
       modelWarnings = ['modelChain không phải JSON hợp lệ'];
     }
+
+    const events = (this.eventRepo ? this.eventRepo.getByTask(taskId) : []).map((e) => {
+      let parsedPayload: unknown = null;
+      if (e.payload) {
+        try {
+          parsedPayload = JSON.parse(e.payload);
+        } catch {
+          parsedPayload = e.payload;
+        }
+      }
+      return {
+        id: e.id,
+        ts: toApiTime(e.ts)!,
+        type: e.type,
+        taskId: e.taskId,
+        payload: parsedPayload,
+      };
+    });
+
+    const isFallback = events.some((e) => e.type === 'review.fallback');
+    const reviewerRun = this.scheduler?.getReviewerRun?.(taskId);
+    const activeReviewChain: ReviewChainStep[] = (Array.isArray(reviewSettings?.chain) ? reviewSettings.chain as ReviewChainStep[] : undefined) || parseReviewChain(project?.reviewChain);
+    const reviewer = reviewerRun
+      ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
+      : (isFallback ? 'claude' : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex')));
+
     return {
       ...apiTask(task),
+      reviewer,
+      events,
       paused: Boolean(activeRun?.paused),
       pauseReason: activeRun?.pauseReason ?? null,
       currentRun: activeRun ? {
@@ -3131,16 +3314,23 @@ export class AppService {
   }
 
   /**
-   * Without an auto brain nobody picks up a Codex reviewer escalation, so the task would sit in
-   * review forever. Send it back once with the reviewer's feedback on the strongest model; a second
+   * Brains do not receive reviewer escalations, so without this the task would sit in review
+   * forever. Send it back once with the reviewer's feedback on the strongest model; a second
    * escalation stays parked for a person (the review.escalated notification already went out).
    */
+  /** Escalations raised before a restart never reach the event handler again; pick them up here. */
+  async retryParkedEscalations(): Promise<void> {
+    for (const task of this.taskRepo.getByStatus('review')) {
+      if (!task.reviewerEscalated) continue;
+      const feedback = this.reviewRepo.getByTask(task.id).at(-1)?.feedback ?? undefined;
+      await this.retryEscalatedReview(task.id, { reason: task.reviewerEscalationReason, feedback });
+    }
+  }
+
   async retryEscalatedReview(taskId: string, payload: { reason?: unknown; feedback?: unknown }): Promise<void> {
     if (payload.reason !== 'reviewer_changes_limit') return;
     const task = this.taskRepo.get(taskId);
     if (!task || task.status !== 'review' || !task.reviewerEscalated) return;
-    const project = this.projectRepo.get(task.projectId);
-    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return;
     const escalations = this.eventRepo.getByTask(taskId)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit')).length;
     if (escalations > 1) return;
@@ -3292,6 +3482,7 @@ export class AppService {
           taskId: task.id,
           hooks,
         },
+        project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir,
       );
       if (!removed) {
         throw new HttpError(

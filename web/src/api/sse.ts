@@ -1,6 +1,8 @@
 import { QueryClient } from '@tanstack/react-query';
 import { getToken } from './client';
 import { EventItem } from '../types/api';
+import { notifyBrowserEvent, shouldNotifyBrowserEvent } from '../notifications';
+import type { BrowserNotificationOptions, BrowserQuotaProfile } from '../notifications';
 
 export type EventCallback = (event: EventItem) => void;
 export type RunOutputCallback = (taskId: string, chunk: string, runId?: string) => void;
@@ -206,6 +208,23 @@ export function connectSSE(queryClient: QueryClient): () => void {
           payload: parsed.payload !== undefined ? parsed.payload : parsed,
         };
 
+        const appConfig = queryClient.getQueryData<{ brain?: { mode?: BrowserNotificationOptions['brainMode'] }; notifications?: { desktop?: boolean; desktopLevel?: 'all' | 'important' | 'critical' | 'off'; quietHours?: BrowserNotificationOptions['quietHours'] } }>(['config']);
+        const notificationConfig = appConfig?.notifications;
+        const notificationLevel = notificationConfig?.desktopLevel || 'important';
+        const profilesData = queryClient.getQueryData<unknown>(['profiles']);
+        const profiles = Array.isArray(profilesData)
+          ? profilesData
+          : profilesData && typeof profilesData === 'object' && Array.isArray((profilesData as { profiles?: unknown }).profiles)
+          ? (profilesData as { profiles: unknown[] }).profiles
+          : [];
+        const notificationOptions: BrowserNotificationOptions = {
+          quietHours: notificationConfig?.quietHours,
+          brainMode: appConfig?.brain?.mode,
+        };
+        if (notificationConfig?.desktop !== false && shouldNotifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[], notificationOptions)) {
+          notifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[], notificationOptions);
+        }
+
         // Notify raw event listeners
         for (const listener of eventListeners) {
           try {
@@ -287,6 +306,12 @@ export function connectSSE(queryClient: QueryClient): () => void {
       'profile.updated',
       'profile.check',
       'quota.exhausted',
+      'disk.low',
+      'disk.ok',
+      'disk.docker_low',
+      'brain.notify',
+      'ci.failed',
+      'review.escalated',
       'quota.cleared',
       'config.updated',
       'brain.status',
