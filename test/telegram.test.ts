@@ -1519,12 +1519,12 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
           message_id: 23,
           date: 123456,
           chat: { id: CHAT_ID, type: 'private' },
-          text: '/newtask ABC-foo Sửa lỗi đăng nhập',
+          text: '/newtask ABCfoo Sửa lỗi đăng nhập',
         },
       });
 
       const task = ctx.taskRepo.get('proj-shop/sua-loi-dang-nhap');
-      expect(task?.externalRef).toBe('ABC-foo');
+      expect(task?.externalRef).toBe('ABCfoo');
       expect(task?.title).toBe('Sửa lỗi đăng nhập');
     });
 
