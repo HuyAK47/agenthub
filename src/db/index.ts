@@ -1156,6 +1156,21 @@ export class DepartmentRepo {
     return this.db.prepare('SELECT id, name FROM projects WHERE departmentId = ? AND archivedAt IS NULL ORDER BY name').all(departmentId) as DepartmentProjectRow[];
   }
 
+  claudeUsageToday(departmentId: string): number {
+    const row = this.db.prepare(`
+      SELECT COALESCE(SUM(ctu.effectiveTokens), 0) AS tokens
+      FROM claude_task_usage ctu
+      JOIN tasks t ON t.id = ctu.taskId
+      JOIN projects p ON p.id = t.projectId
+      WHERE p.departmentId = ? AND EXISTS (
+        SELECT 1 FROM claude_usage cu
+        WHERE cu.sessionId = ctu.sessionId AND cu.turnId = ctu.turnId
+          AND date(cu.ts, 'localtime') = date('now', 'localtime')
+      )
+    `).get(departmentId) as { tokens: number };
+    return Number(row?.tokens || 0);
+  }
+
   setProfiles(departmentId: string, profiles: Array<{ profileName: string; share?: number | null }>): void {
     const transaction = this.db.transaction(() => {
       this.db.prepare('DELETE FROM department_profiles WHERE departmentId = ?').run(departmentId);
