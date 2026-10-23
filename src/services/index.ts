@@ -2776,6 +2776,18 @@ export class AppService {
     }));
   }
 
+  pageBatches(params?: { project?: string; status?: string; limit?: string | number; cursor?: string }): PageResult<TaskBatchRow & { progress: BatchProgress }> {
+    if (!this.taskBatchRepo) return { items: [], total: 0, nextCursor: null };
+    const page = this.taskBatchRepo.page(params);
+    return {
+      ...page,
+      items: page.items.map((batch) => ({
+        ...apiBatch(batch),
+        progress: batchProgress(this.taskRepo.getByBatch(batch.id)),
+      })),
+    };
+  }
+
   dispatchBatch(id: string): { ok: boolean; batchId: string; dispatchedCount: number } {
     if (!this.taskBatchRepo) {
       throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');

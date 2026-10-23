@@ -1550,6 +1550,26 @@ export class TaskBatchRepo {
     return this.db.prepare(query).all(...params) as TaskBatchRow[];
   }
 
+  page(options?: { project?: string; status?: string; limit?: string | number; cursor?: string }): PageResult<TaskBatchRow> {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (options?.project && options.project !== 'all') { conditions.push('projectId = ?'); values.push(options.project); }
+    if (options?.status && options.status !== 'all') { conditions.push('status = ?'); values.push(options.status); }
+    const cursor = decodeCursor(options?.cursor);
+    if (options?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    if (cursor) { conditions.push('(createdAt < ? OR (createdAt = ? AND id < ?))'); values.push(cursor.value, cursor.value, cursor.id); }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = cursor ? conditions.slice(0, -1) : conditions;
+    const countValues = cursor ? values.slice(0, -3) : values;
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM task_batches${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
+    const limit = parsePageSize(options?.limit);
+    const rows = this.db.prepare(`SELECT * FROM task_batches${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, limit + 1) as TaskBatchRow[];
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null };
+  }
+
   updateStatus(id: string, status: BatchStatus): void {
     this.db.prepare('UPDATE task_batches SET status = ? WHERE id = ?').run(status, id);
   }

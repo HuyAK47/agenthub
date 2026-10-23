@@ -570,12 +570,22 @@ export async function deleteTask(id: string): Promise<{ ok: boolean }> {
   });
 }
 
+export interface TaskBatchPage { items: TaskBatch[]; total: number; nextCursor: string | null }
+
 export async function getBatches(params?: { project?: string; status?: string }): Promise<TaskBatch[]> {
   const query = new URLSearchParams();
   if (params?.project && params.project !== 'all') query.set('project', params.project);
   if (params?.status && params.status !== 'all') query.set('status', params.status);
   const qStr = query.toString();
   return apiFetch<TaskBatch[]>(`/api/batches${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getBatchesPage(params: { project?: string; status?: string; limit: number; cursor?: string }): Promise<TaskBatchPage> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.project && params.project !== 'all') query.set('project', params.project);
+  if (params.status && params.status !== 'all') query.set('status', params.status);
+  if (params.cursor) query.set('cursor', params.cursor);
+  return apiFetch<TaskBatchPage>(`/api/batches?${query.toString()}`);
 }
 
 export async function getBatch(id: string): Promise<TaskBatch & { tasks: Task[] }> {
