@@ -30,6 +30,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 import { CollapsibleList } from '../components/CollapsibleList';
 import {
   ArrowLeft,
@@ -972,7 +973,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Cancel Confirmation Modal */}
       {showCancelModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-md w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.cancelTitle')}</h3>
             <p className="text-sm text-[var(--t-text-3)]">
@@ -1001,7 +1002,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Retry Modal with Note */}
       {showRetryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-md w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.retryTitle')}</h3>
             <div>
@@ -1039,7 +1040,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Changes Requested Modal - MANDATORY FEEDBACK */}
       {showChangesModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl">
             <h3 className="text-lg font-bold text-[var(--t-text)]">{t('taskDetail.changesTitle')}</h3>
             <p className="text-xs text-[var(--t-text-3)]">
@@ -1093,7 +1094,7 @@ export const TaskDetailPage: React.FC = () => {
 
       {/* Edit Task Modal */}
       {capture && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <form onSubmit={(event) => { event.preventDefault(); captureMutation.mutate(); }} className="w-full max-w-2xl bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4">
             <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.captureDesc')}</p>
@@ -1107,7 +1108,7 @@ export const TaskDetailPage: React.FC = () => {
       )}
 
       {showEditModal && (
-        <div data-testid="edit-task-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div data-testid="edit-task-modal" className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div className="bg-[var(--t-surface)] rounded-xl max-w-lg w-full p-6 space-y-4 border border-[var(--t-border)] shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-[var(--t-border)]">
               <div>

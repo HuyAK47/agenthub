@@ -360,6 +360,7 @@ export const vi = {
     needsLogin: 'Cần đăng nhập lại',
     loginNow: 'Đăng nhập ngay',
     duplicateEmail: 'Trùng email với: {emails}',
+    duplicateEmailNoProfiles: 'Trùng email với hồ sơ khác',
     duplicateTip: 'Gợi ý: Bấm đăng nhập lại bằng tài khoản Google khác!',
     ready: 'Sẵn sàng',
     clearQuota: 'Xóa',

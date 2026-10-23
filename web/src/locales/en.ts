@@ -361,6 +361,7 @@ export const en: typeof vi = {
     notLoggedIn: 'Not logged in', needsLogin: 'Sign in again',
     loginNow: 'Log in now',
     duplicateEmail: 'Duplicate email with: {emails}',
+    duplicateEmailNoProfiles: 'Duplicate email with another profile',
     duplicateTip: 'Tip: Log in again using a different Google account!',
     ready: 'Ready',
     clearQuota: 'Clear',

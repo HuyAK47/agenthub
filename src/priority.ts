@@ -48,7 +48,10 @@ export function runInProcessGroup(
     let output = '';
     let timedOut = false;
     let settled = false;
-    const threadLimit = testThreadLimit(Number(opts.env.AGENTHUB_WORKER_COUNT || 1));
+    // Nested checks already run inside one process group; cap their own test
+    // runner at the shared two-thread limit regardless of the parent worker
+    // pool or the host's reported CPU count.
+    const threadLimit = Number(LIMITED_TEST_ENV.VITEST_MAX_THREADS);
     const limitedEnv = {
       ...opts.env,
       VITEST_MAX_THREADS: String(threadLimit), VITEST_MIN_THREADS: '1',
