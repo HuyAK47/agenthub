@@ -1205,6 +1205,24 @@ export class DepartmentRepo {
     });
     transaction();
   }
+
+  transferProfile(profileName: string, fromDepartmentId: string, toDepartmentId: string): void {
+    if (fromDepartmentId === toDepartmentId) return;
+    const transaction = this.db.transaction(() => {
+      const assignment = this.db.prepare(
+        'SELECT share FROM department_profiles WHERE departmentId = ? AND profileName = ?',
+      ).get(fromDepartmentId, profileName) as { share: number | null } | undefined;
+      if (!assignment) throw new Error(`Profile ${profileName} is not assigned to ${fromDepartmentId}`);
+      this.db.prepare(
+        'DELETE FROM department_profiles WHERE departmentId = ? AND profileName = ?',
+      ).run(fromDepartmentId, profileName);
+      this.db.prepare(
+        `INSERT INTO department_profiles (departmentId, profileName, share) VALUES (?, ?, ?)
+         ON CONFLICT(departmentId, profileName) DO UPDATE SET share = excluded.share`,
+      ).run(toDepartmentId, profileName, assignment.share);
+    });
+    transaction();
+  }
 }
 
 export class ProfileRepo {
@@ -2147,6 +2165,11 @@ export class BrainTurnRepo {
       ? 'SELECT * FROM brain_turns ORDER BY startedAt DESC LIMIT 1'
       : 'SELECT * FROM brain_turns WHERE projectId IS ? ORDER BY startedAt DESC LIMIT 1';
     return (projectId === undefined ? this.db.prepare(query).get() : this.db.prepare(query).get(projectId)) as BrainTurnRow | undefined;
+  }
+
+  latestDepartment(departmentId: string): BrainTurnRow | undefined {
+    return this.db.prepare('SELECT * FROM brain_turns WHERE departmentId = ? ORDER BY startedAt DESC LIMIT 1')
+      .get(departmentId) as BrainTurnRow | undefined;
   }
 
   finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {

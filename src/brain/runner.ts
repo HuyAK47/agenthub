@@ -9,7 +9,7 @@ import { projectSettings } from '../projects/settings.js';
 import { buildProjectKnowledgeContext } from '../projects/knowledge-context.js';
 import { effectiveBrainCodexProfile, effectiveBrainEngine } from './engine.js';
 
-const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high', 'brain.directive_added', 'ci.failed', 'brain.trust_changed', 'config.updated']);
+const EVENT_TYPES = new Set(['task.review_ready', 'task.failed', 'task.blocked', 'task.done', 'batch.created', 'batch.dispatched', 'merge.failed', 'merge.conflict', 'quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high', 'brain.directive_added', 'brain.department_summary', 'brain.profile_transfer', 'ci.failed', 'brain.trust_changed', 'config.updated']);
 const SYSTEM_EVENTS = new Set(['quota.exhausted', 'claude.quota_exhausted', 'disk.low', 'load.high']);
 const MAX_RETRIES = 3;
 
@@ -70,12 +70,6 @@ export class BrainRunner {
 
   stopProject(projectId: string): void {
     this.pending = this.pending.filter((event) => (event.projectId ?? null) !== projectId);
-    const sessionId = this.sessionIdFor(projectId);
-    const turn = this.active.get(sessionId);
-    if (turn?.timer) clearTimeout(turn.timer);
-    this.active.delete(sessionId);
-    this.userBusy.delete(sessionId);
-    this.retryCounts.delete(sessionId);
   }
 
   getQueuedEvents(): BrainQueuedEvent[] { return [...this.pending]; }
@@ -83,8 +77,12 @@ export class BrainRunner {
   getUsage(projectId: string | null): { queued: boolean; lastTurnAt: string | null; tokensToday: number } {
     const day = new Date(this.now());
     day.setHours(0, 0, 0, 0);
-    const latest = this.opts.turnRepo.latest(projectId);
-    return { queued: this.isQueued(projectId), lastTurnAt: latest?.finishedAt || latest?.startedAt || null, tokensToday: this.opts.turnRepo.tokensSince(day.toISOString(), projectId) };
+    const departmentId = this.department(projectId)?.id;
+    const latest = departmentId ? this.opts.turnRepo.latestDepartment(departmentId) : this.opts.turnRepo.latest(projectId);
+    const tokensToday = departmentId
+      ? this.opts.turnRepo.tokensSinceDepartment(day.toISOString(), departmentId)
+      : this.opts.turnRepo.tokensSince(day.toISOString(), projectId);
+    return { queued: this.isQueued(projectId), lastTurnAt: latest?.finishedAt || latest?.startedAt || null, tokensToday };
   }
 
   flush(): void {
@@ -182,7 +180,7 @@ export class BrainRunner {
     return project?.departmentId ? this.opts.departmentRepo?.get(project.departmentId) : undefined;
   }
   private mode(projectId: string | null): EffectiveBrainMode {
-    if (this.opts.config.mode === 'off') return 'off';
+    if (this.opts.config.mode === 'off' && !this.opts.config.director?.enabled) return 'off';
     const project = projectId ? this.opts.projectRepo?.get(projectId) : null;
     const projectMode = effectiveBrainMode(projectId, project, this.opts.config);
     const departmentMode = this.department(projectId)?.brainMode;
@@ -227,20 +225,30 @@ export class BrainRunner {
     this.opts.chatService.getOrCreateSession(id, {
       title: department ? `Bộ não · ${department.name}` : project ? `Bộ não · ${project.name}` : director ? 'Bộ não Giám đốc' : 'Bộ não', mode,
       model: resolvedModel,
-      profileName: resolvedEngine === 'codex' ? this.codexProfile(project, director?.codexProfile || department?.brainCodexProfile || undefined) : this.profileName(), kind: 'brain', projectId: department ? null : projectId,
+      profileName: resolvedEngine === 'codex'
+        ? this.codexProfile(project, director?.codexProfile || department?.brainCodexProfile || undefined, department)
+        : this.profileName(department), kind: 'brain', projectId: department ? null : projectId,
     } as never);
     this.opts.chatSessionRepo.updatePinned(id, 1);
     return this.opts.chatSessionRepo.get(id)!;
   }
 
-  private profileName(): string { return resolveClaudeProfile(this.opts.profileRepo || { getAll: () => [] }, this.opts.config.claudeProfile, this.opts.config.claudeProfileExplicit); }
+  private profileName(department?: { id: string }): string {
+    const assigned = department && this.opts.departmentRepo?.profiles(department.id)
+      .map((item) => this.opts.profileRepo?.getAll().find((profile) => profile.name === item.profileName && profile.engine === 'claude' && profile.enabled)?.name)
+      .find((name): name is string => Boolean(name));
+    return assigned || resolveClaudeProfile(this.opts.profileRepo || { getAll: () => [] }, this.opts.config.claudeProfile, this.opts.config.claudeProfileExplicit);
+  }
 
-  private codexProfile(project?: { settings?: string | null }, override?: string): string | null {
+  private codexProfile(project?: { settings?: string | null }, override?: string, department?: { id: string }): string | null {
+    const assigned = department && this.opts.departmentRepo?.profiles(department.id)
+      .map((item) => this.opts.profileRepo?.getAll().find((profile) => profile.name === item.profileName && profile.engine === 'codex' && profile.enabled)?.name)
+      .find((name): name is string => Boolean(name));
     return resolveCodexProfile(
       this.opts.profileRepo || { getAll: () => [] },
       effectiveBrainCodexProfile(
         project,
-        { ...this.opts.config, codexProfile: override || this.opts.config.codexProfile },
+        { ...this.opts.config, codexProfile: override || assigned || this.opts.config.codexProfile },
       ),
     );
   }
@@ -272,6 +280,15 @@ export class BrainRunner {
     }
     if (type === 'chat.done' || type === 'chat.error') { this.finishChatEvent(type, data); return; }
     if (!this.started || !EVENT_TYPES.has(type)) return;
+    if (type === 'brain.profile_transfer') {
+      const transfer = data;
+      if (!this.opts.config.director?.enabled || !this.opts.departmentRepo
+        || typeof transfer.profileName !== 'string' || typeof transfer.fromDepartmentId !== 'string'
+        || typeof transfer.toDepartmentId !== 'string') return;
+      this.opts.departmentRepo.transferProfile(transfer.profileName, transfer.fromDepartmentId, transfer.toDepartmentId);
+      this.opts.eventBus.emit('brain.notify', undefined, { level: 'info', text: `Đã điều chuyển profile ${transfer.profileName} từ ${transfer.fromDepartmentId} sang ${transfer.toDepartmentId}.` });
+      return;
+    }
     if (SYSTEM_EVENTS.has(type) && (type === 'quota.exhausted' || type === 'claude.quota_exhausted') && this.opts.taskRepo) {
       const affectedTask = taskId ? this.opts.taskRepo.get(taskId) : undefined;
       if (!affectedTask || (affectedTask.status !== 'running' && affectedTask.status !== 'queued')) return;
@@ -292,6 +309,13 @@ export class BrainRunner {
     const usage = data.usage && typeof data.usage === 'object' ? data.usage as Record<string, unknown> : {};
     const quota = type === 'chat.error' && /quota|rate.?limit|429|usage limit|limit reached/i.test(String(data.message || ''));
     this.opts.turnRepo.finish(active.id, { status: type === 'chat.done' ? 'done' : quota ? 'quota' : 'failed', summary: typeof data.message === 'string' ? data.message : undefined, inputTokens: typeof usage.inputTokens === 'number' ? usage.inputTokens : 0, outputTokens: typeof usage.outputTokens === 'number' ? usage.outputTokens : 0, error: type === 'chat.error' ? String(data.message || 'brain turn failed') : undefined });
+    if (type === 'chat.done' && active.departmentId && this.opts.config.director?.enabled) {
+      this.opts.eventBus.emit('brain.department_summary', undefined, {
+        departmentId: active.departmentId,
+        summary: typeof data.message === 'string' ? data.message : 'Đã hoàn tất lượt điều phối phòng ban.',
+        events: active.events.map((event) => ({ type: event.type, taskId: event.taskId })),
+      });
+    }
     this.active.delete(sessionId);
     const session = this.opts.chatSessionRepo.get(sessionId);
     if (type === 'chat.done') for (const event of active.events) this.retryCounts.delete(event.id || '');
@@ -320,7 +344,9 @@ export class BrainRunner {
   private formatEvents(events: BrainQueuedEvent[], mode: EffectiveBrainMode, projectId: string | null): { text: string; knowledgeHash?: string } {
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
     const department = this.department(projectId);
-    const context = department
+    const context = this.opts.config.director?.enabled && !projectId
+      ? 'Bạn là bộ não Giám đốc. Tổng hợp tiến độ và rủi ro từ các bộ não phòng ban; khi cần điều chuyển profile, phát ra chỉ thị brain.profile_transfer có đủ profileName, fromDepartmentId và toDepartmentId.'
+      : department
       ? `Bạn là bộ não của phòng ban ${department.name}. Điều phối các project thuộc phòng này; đọc AGENTS.md/CLAUDE.md của từng repo khi cần.`
       : project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
     const seenQuota = new Set<string>();
