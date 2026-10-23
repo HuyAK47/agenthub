@@ -26,6 +26,7 @@ describe('GitHub Actions CI Watch (p-ci-watch)', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-ci-test-'));
     process.env.AGENTHUB_HOME = tmpDir;
     config = loadConfig(tmpDir);
+    config.notifications.desktopLevel = 'all';
 
     db = openDatabase(config.dbPath);
     projectRepo = new ProjectRepo(db);

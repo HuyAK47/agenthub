@@ -988,6 +988,8 @@ export const en: typeof vi = {
     notificationsTitle: 'Notifications & Digest',
     notificationsDescription: 'Configure desktop notifications, brain mode, quiet hours, and periodic digest.',
     desktopNotifyLabel: 'Desktop Notifications',
+    desktopNotifyLevelLabel: 'Desktop notification level',
+    desktopNotifyLevelAll: 'All', desktopNotifyLevelImportant: 'Important', desktopNotifyLevelCritical: 'Critical only', desktopNotifyLevelOff: 'Off',
     desktopNotifyHint: 'Send desktop notifications via notify-send / osascript on critical events.',
     brainModeLabel: 'Brain Operating Mode',
     brainModeHint: 'In Auto mode, raw task notifications are suppressed, sending only key events and incidents.', brainMaxConcurrent: 'Maximum concurrent brain turns',

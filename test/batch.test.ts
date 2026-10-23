@@ -40,6 +40,7 @@ describe('Batch Planning & Drafts (c-plan-drafts)', () => {
     token = getOrCreateToken(tokenPath);
 
     const config = loadConfig(tmpDir);
+    config.notifications.desktopLevel = 'all';
     config.agyHomesDir = agyHomesDir;
     config.defaultLogDir = process.env.AGENTHUB_DEFAULT_LOG_DIR;
     ctx = createContext(config);

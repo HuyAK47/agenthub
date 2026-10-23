@@ -55,6 +55,7 @@ export class DeployService {
   private latest = new Map<string, DeployStatus>();
   private pushStates = new Map<string, ProjectPushState>();
   private deferredPushes = new Map<string, { dueTime: number; timer?: NodeJS.Timeout }>();
+  private lastRestartBlockers = new Map<string, string>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -512,9 +513,14 @@ export class DeployService {
       const waiting = `chờ khởi động lại (đang có ${blockers.checks} lượt kiểm tra, ${blockers.editing} worker)`;
       const current = this.latest.get(status.projectId) || status;
       this.latest.set(status.projectId, { ...current, status: 'restarting', error: waiting });
-      this.eventBus.emit('deploy.restart_waiting', undefined, { projectId: status.projectId, checks: blockers.checks, editing: blockers.editing, message: waiting });
+      const blockerKey = `${blockers.checks}:${blockers.editing}`;
+      if (this.lastRestartBlockers.get(status.projectId) !== blockerKey) {
+        this.lastRestartBlockers.set(status.projectId, blockerKey);
+        this.eventBus.emit('deploy.restart_waiting', undefined, { projectId: status.projectId, checks: blockers.checks, editing: blockers.editing, message: waiting });
+      }
       await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, Math.max(1, maxWaitMs))));
     }
+    this.lastRestartBlockers.delete(status.projectId);
     const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
     const args = process.platform === 'darwin' ? ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] : ['--user', 'restart', 'agenthub', '--no-block'];
     const statePath = path.join(this.config.hubHome, 'deploy-restart.json');

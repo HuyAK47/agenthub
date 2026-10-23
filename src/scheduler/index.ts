@@ -967,7 +967,8 @@ export class Scheduler {
     } else {
       const diskSpace = disks.find((disk) => disk.source === 'worktrees')!;
       this.dockerDiskLow = false;
-      if (this.diskLow) {
+      const recovered = diskSpace.freeGB >= diskSpace.minFreeGB + 1;
+      if (this.diskLow && recovered) {
         this.diskLow = false;
         this.eventBus.emit('disk.ok', undefined, {
           freeGB: diskSpace.freeGB,
@@ -1722,7 +1723,13 @@ export class Scheduler {
 
           // Mark quota for profile and same-email profiles
           if (this.quotaService.mark(rt.profileName, family, resetSeconds, `quota exhausted on ${rt.model}`)) {
-            this.eventBus.emit('quota.exhausted', taskId, { profile: rt.profileName, family });
+            const profile = this.profileRepo.get(rt.profileName);
+            this.eventBus.emit('quota.exhausted', taskId, {
+              profile: rt.profileName,
+              family,
+              engine: profile?.engine,
+              allExhausted: profile ? this.quotaService.allProfilesForEngineExhausted(profile.engine, family) : false,
+            });
           }
 
           // Try to find another profile/model

@@ -666,6 +666,7 @@ export interface SystemConfig {
   };
   notifications?: {
     desktop: boolean;
+    desktopLevel?: 'all' | 'important' | 'critical' | 'off';
     quietHours?: {
       enabled: boolean;
       start: string;

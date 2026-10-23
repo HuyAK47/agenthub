@@ -1073,7 +1073,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
     });
 
     it('sends an identical notification text at most once per 30 minutes', async () => {
-      const emit = () => ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, { profile: 'g9', family: 'gemini-pro', time: '18:30' });
+      const emit = () => ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, { profile: 'g9', family: 'gemini-pro', allExhausted: true, time: '18:30' });
       emit();
       await bot.flushQueue(CHAT_ID);
       currentTime += 15 * 60_000;
@@ -1090,13 +1090,13 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, {
         profile: 'g1',
         family: 'gemini-pro',
+        allExhausted: true,
         time: '18:30',
       });
       await bot.flushQueue(CHAT_ID);
 
       let calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
-      expect(calls[0].body?.text).toContain('Hết Quota');
-      expect(calls[0].body?.text).toContain('g1');
+      expect(calls[0].body?.text).toContain('Mọi tài khoản đều đã hết quota');
 
       recordedCalls = [];
       currentTime += 15_000;

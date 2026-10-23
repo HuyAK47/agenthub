@@ -14,7 +14,7 @@ import {
   DigestData,
   generateDigest,
   isQuietHours,
-  areAllProfilesQuotaExhausted,
+  isQuotaEventEngineWide,
   isSystemIncident,
   forwardDecisionToBrain,
   getMinutesSinceTime,
@@ -247,6 +247,8 @@ export class TelegramBotService {
   private quotaMarkRepo?: QuotaMarkRepo;
   private ciRepo?: CiRepo;
   private lastSentCi = new Map<string, number>();
+  private lastSentDisk = new Map<'low' | 'ok', number>();
+  private lastSentLoadSummary = 0;
   private lastBroadcast = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
@@ -3070,6 +3072,15 @@ export class TelegramBotService {
     };
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+
+    // Account-level exhaustion belongs in the dashboard. Telegram is an
+    // interrupt channel, so it only reports when every enabled account for
+    // the affected engine/family is unavailable.
+    if (type === 'quota.exhausted') {
+      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
+      if (!allExhausted) return;
+    }
+
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // Deduplication check: ignore duplicate events within 10 seconds
@@ -3095,7 +3106,7 @@ export class TelegramBotService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
+        isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
 
       const isAllowedInAuto =
         type === 'brain.notify' ||
@@ -3371,7 +3382,7 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now);
+        const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
@@ -3390,6 +3401,15 @@ export class TelegramBotService {
           ? `⏳ <b>Hết Quota</b>\nHồ sơ <b>${name}</b> hết quota <code>${family}</code> đến ${resetStr}`
           : `⏳ <b>Hết Quota</b>\nHồ sơ <b>${name}</b> hết quota <code>${family}</code>`;
         this.broadcastMessage(text);
+        break;
+      }
+
+      case 'task.paused':
+      case 'load.task_paused':
+      case 'load.high': {
+        if (now - this.lastSentLoadSummary < 15 * 60_000) break;
+        this.lastSentLoadSummary = now;
+        this.broadcastMessage(`⚠️ <b>AgentHub tạm dừng/gặp tải cao</b> — xem dashboard để biết chi tiết.`);
         break;
       }
 
@@ -3423,6 +3443,9 @@ export class TelegramBotService {
 
       case 'disk.low': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('low');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('low', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 3;
         const cacheDir = typeof p.cacheDir === 'string' ? `\nCache node_modules: <code>${this.escapeHtml(p.cacheDir)}</code>` : '';
@@ -3435,6 +3458,9 @@ export class TelegramBotService {
 
       case 'disk.ok': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('ok');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('ok', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         this.broadcastMessage(`💾 <b>Ổ đĩa đã đủ chỗ</b> (${freeGB} GB): tiếp tục chạy task.`);
         break;
