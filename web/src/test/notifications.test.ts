@@ -77,4 +77,26 @@ describe('browser notification policy', () => {
     expect(browserNotificationBody(event('load.high'))).toContain('tải cao');
     expect(browserNotificationBody(event('task.paused'))).toBe(browserNotificationBody(event('load.task_paused')));
   });
+
+  it('applies quiet hours and automatic brain mode before browser delivery', () => {
+    const duringQuietHours = new Date(2026, 0, 1, 23, 30).toISOString();
+    expect(shouldNotifyBrowserEvent(
+      { ...event('task.failed'), ts: duringQuietHours },
+      'all',
+      [],
+      { quietHours: { enabled: true, start: '22:00', end: '07:00' } },
+    )).toBe(false);
+    expect(shouldNotifyBrowserEvent(
+      event('task.failed'),
+      'all',
+      [],
+      { brainMode: 'auto' },
+    )).toBe(false);
+    expect(shouldNotifyBrowserEvent(
+      event('brain.notify', { text: 'Cần chú ý' }),
+      'all',
+      [],
+      { brainMode: 'auto' },
+    )).toBe(true);
+  });
 });

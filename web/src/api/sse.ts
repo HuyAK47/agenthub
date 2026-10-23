@@ -2,7 +2,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { getToken } from './client';
 import { EventItem } from '../types/api';
 import { notifyBrowserEvent, shouldNotifyBrowserEvent } from '../notifications';
-import type { BrowserQuotaProfile } from '../notifications';
+import type { BrowserNotificationOptions, BrowserQuotaProfile } from '../notifications';
 
 export type EventCallback = (event: EventItem) => void;
 export type RunOutputCallback = (taskId: string, chunk: string, runId?: string) => void;
@@ -147,7 +147,8 @@ export function connectSSE(queryClient: QueryClient): () => void {
           payload: parsed.payload !== undefined ? parsed.payload : parsed,
         };
 
-        const notificationConfig = queryClient.getQueryData<{ notifications?: { desktop?: boolean; desktopLevel?: 'all' | 'important' | 'critical' | 'off' } }>(['config'])?.notifications;
+        const appConfig = queryClient.getQueryData<{ brain?: { mode?: BrowserNotificationOptions['brainMode'] }; notifications?: { desktop?: boolean; desktopLevel?: 'all' | 'important' | 'critical' | 'off'; quietHours?: BrowserNotificationOptions['quietHours'] } }>(['config']);
+        const notificationConfig = appConfig?.notifications;
         const notificationLevel = notificationConfig?.desktopLevel || 'important';
         const profilesData = queryClient.getQueryData<unknown>(['profiles']);
         const profiles = Array.isArray(profilesData)
@@ -155,8 +156,12 @@ export function connectSSE(queryClient: QueryClient): () => void {
           : profilesData && typeof profilesData === 'object' && Array.isArray((profilesData as { profiles?: unknown }).profiles)
           ? (profilesData as { profiles: unknown[] }).profiles
           : [];
-        if (notificationConfig?.desktop !== false && shouldNotifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[])) {
-          notifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[]);
+        const notificationOptions: BrowserNotificationOptions = {
+          quietHours: notificationConfig?.quietHours,
+          brainMode: appConfig?.brain?.mode,
+        };
+        if (notificationConfig?.desktop !== false && shouldNotifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[], notificationOptions)) {
+          notifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[], notificationOptions);
         }
 
         // Notify raw event listeners

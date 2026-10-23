@@ -11,6 +11,11 @@ const WINDOW_MS = 30 * 60 * 1000;
 const DISK_WINDOW_MS = 60 * 60 * 1000;
 const LOAD_WINDOW_MS = 15 * 60 * 1000;
 
+export interface BrowserNotificationOptions {
+  quietHours?: { enabled?: boolean; start?: string; end?: string };
+  brainMode?: 'manual' | 'auto' | 'trusted' | 'full';
+}
+
 export interface BrowserQuotaProfile {
   name?: string;
   engine?: string;
@@ -157,10 +162,15 @@ export function shouldNotifyBrowserEvent(
   event: EventItem,
   level: 'all' | 'important' | 'critical' | 'off' = 'important',
   profiles: BrowserQuotaProfile[] = [],
+  options: BrowserNotificationOptions = {},
 ): boolean {
   if (level === 'off' || !DESKTOP_EVENTS.has(event.type)) return false;
   if (level === 'important' && !IMPORTANT.has(event.type)) return false;
   const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
+  if (options.brainMode === 'auto' && !new Set([
+    'brain.notify', 'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed',
+  ]).has(event.type)) return false;
+  if (isBrowserQuietHours(options.quietHours, event.ts) && event.type !== 'disk.low' && event.type !== 'disk.docker_low' && event.type !== 'quota.exhausted') return false;
   if (event.type === 'quota.exhausted') {
     return isEngineWideQuotaExhausted(event, profiles);
   }
@@ -181,8 +191,9 @@ export function notifyBrowserEvent(
   event: EventItem,
   level: 'all' | 'important' | 'critical' | 'off' = 'important',
   profiles: BrowserQuotaProfile[] = [],
+  options: BrowserNotificationOptions = {},
 ): void {
-  if (typeof window === 'undefined' || !shouldNotifyBrowserEvent(event, level, profiles) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (typeof window === 'undefined' || !shouldNotifyBrowserEvent(event, level, profiles, options) || !('Notification' in window) || Notification.permission !== 'granted') return;
   const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
   if (event.type === 'quota.exhausted' && !shouldNotifyBrowserEvent(event, level, profiles)) return;
 
@@ -224,4 +235,21 @@ export function notifyBrowserEvent(
   } catch {
     // Browser notification APIs may be unavailable or blocked by policy.
   }
+}
+
+function isBrowserQuietHours(
+  quietHours: BrowserNotificationOptions['quietHours'],
+  timestamp: string,
+): boolean {
+  if (!quietHours?.enabled || !quietHours.start || !quietHours.end) return false;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return false;
+  const toMinutes = (value: string): number => {
+    const [hours, minutes] = value.split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+  const current = date.getHours() * 60 + date.getMinutes();
+  const start = toMinutes(quietHours.start);
+  const end = toMinutes(quietHours.end);
+  return start <= end ? current >= start && current < end : current >= start || current < end;
 }

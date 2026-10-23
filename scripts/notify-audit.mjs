@@ -118,16 +118,11 @@ if (!fs.existsSync(dbPath)) {
       quotaMarkRepo,
       ciRepo,
       now: () => auditNow,
-      fetch: async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })),
+      fetch: async () => {
+        telegramSent++;
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+      },
     });
-    const origBroadcast = telegramService.broadcastMessage.bind(telegramService);
-    telegramService.broadcastMessage = (text, replyMarkup) => {
-      const now = auditNow;
-      const last = telegramService.lastBroadcast.get(text);
-      if (last !== undefined && now - last < 30 * 60 * 1000) return;
-      telegramSent++;
-      origBroadcast(text, replyMarkup);
-    };
 
     const mockStorage = new Map();
     globalThis.localStorage = {
