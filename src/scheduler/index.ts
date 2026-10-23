@@ -495,6 +495,15 @@ export class Scheduler {
    * Re-queue their tasks.
    */
   private recoverOnStartup(): void {
+    // A restart while startTask was preparing the worktree (status already 'running', no run row
+    // yet) left tasks 'running' forever with nothing behind them; put them back in the queue.
+    const liveRunTasks = new Set(this.runRepo.getRunning().map((run) => run.taskId));
+    for (const task of this.taskRepo.getByStatus('running')) {
+      if (liveRunTasks.has(task.id) || !this.projectRepo.get(task.projectId)) continue;
+      this.taskRepo.update(task.id, { status: 'queued', resume: task.worktreePath ? 1 : 0 });
+      this.eventBus.emit('task.queued', task.id, { reason: 'orphaned_start' });
+    }
+
     const shutdownRuns = this.runRepo.getShutdownRuns();
     for (const run of shutdownRuns) {
       const task = this.taskRepo.get(run.taskId);

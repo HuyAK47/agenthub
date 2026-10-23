@@ -387,6 +387,16 @@ describe('Scheduler regression fixes', () => {
     delete process.env.FAKE_MODE;
   });
 
+  it('requeues a task left running without any run after a restart', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    taskRepo.insert({ id: 'test-project/orphan', projectId: 'test-project', slug: 'orphan', title: 'Orphan', status: 'running' });
+    const scheduler = makeScheduler();
+    scheduler.start();
+    expect(taskRepo.get('test-project/orphan')?.status).not.toBe('running');
+    scheduler.stop();
+  });
+
   it('recovers a live worker into the running map', async () => {
     const projectPath = path.join(tmpDir, 'repo');
     createTestProject(projectPath);
