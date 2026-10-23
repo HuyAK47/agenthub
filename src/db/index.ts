@@ -749,6 +749,8 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE brain_turns ADD COLUMN departmentId TEXT;
   CREATE INDEX IF NOT EXISTS idx_brain_turns_department ON brain_turns(departmentId, startedAt);
   `,
+  // Migration 54: external references for task/project commit conventions.
+  `ALTER TABLE tasks ADD COLUMN externalRef TEXT;`,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -924,6 +926,7 @@ export interface TaskRow {
   projectId: string;
   slug: string;
   title: string;
+  externalRef: string | null;
   body: string | null;
   level: string;
   modelChain: string | null;
@@ -1538,6 +1541,7 @@ export class TaskRepo {
     projectId: string;
     slug: string;
     title: string;
+    externalRef?: string | null;
     body?: string;
     level?: string;
     modelChain?: string;
@@ -1558,14 +1562,15 @@ export class TaskRepo {
     const deps = JSON.stringify(row.dependsOn || []);
     this.db
       .prepare(
-        `INSERT INTO tasks (id, projectId, slug, title, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, projectId, slug, title, externalRef, body, level, modelChain, baseRef, branch, dependsOn, status, waitReason, worktreePath, doneReport, diffStat, sourceRef, batchId, creationSessionId, creationGoal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
         row.projectId,
         row.slug,
         row.title,
+        row.externalRef || null,
         row.body || null,
         row.level || 'easy',
         row.modelChain || null,
@@ -1623,7 +1628,7 @@ export class TaskRepo {
 
   update(
     id: string,
-    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
+    fields: Partial<Pick<TaskRow, 'status' | 'waitReason' | 'worktreePath' | 'attempt' | 'resume' | 'branch' | 'baseRef' | 'body' | 'notBefore' | 'transientRetries' | 'checkFixAttempts' | 'slot' | 'reviewerChangesRequested' | 'reviewerEscalated' | 'reviewerEscalatedAt' | 'reviewerEscalationReason' | 'reviewStep' | 'doneReport' | 'diffStat' | 'title' | 'externalRef' | 'level' | 'modelChain' | 'dependsOn' | 'batchId'>>,
   ): void {
     const sets: string[] = ["updatedAt = datetime('now')"];
     const values: unknown[] = [];
@@ -1974,6 +1979,7 @@ export class ChatSessionRepo {
       ? null
       : session.id.slice('assistant:'.length);
     if (session.kind === 'assistant' && session.projectId === projectId) return session;
+    if (!this.db.open) return session;
     try {
       this.db.prepare("UPDATE chat_sessions SET kind = 'assistant', projectId = ?, updatedAt = datetime('now') WHERE id = ?")
         .run(projectId, session.id);
@@ -2065,6 +2071,7 @@ export class ChatSessionRepo {
   }
 
   get(id: string): ChatSessionRow | undefined {
+    if (!this.db.open) return undefined;
     const session = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined;
     return session ? this.normalizeAssistantSession(session) : undefined;
   }

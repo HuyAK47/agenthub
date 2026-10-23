@@ -8,6 +8,8 @@ import { effectiveBrainMode } from './brain/mode.js';
 import { formatReset } from './time-format.js';
 import { NotificationDeduper } from './notification-dedupe.js';
 
+const WAITING_QUOTA_BATCH_DELAY_MS = 100;
+
 export type NotifyExecFn = (
   file: string,
   args: string[],
@@ -37,6 +39,9 @@ export class NotificationService {
   private now: () => number;
   private lastSent = new Map<string, number>();
   private lastSentCi = new Map<string, number>();
+  private allQuotaNotified = new Set<string>();
+  private waitingQuotaNotified = false;
+  private waitingQuotaCheckTimer: ReturnType<typeof setTimeout> | undefined;
   private lastSentSummary = new Map<string, number>();
   private lastSentDisk = new Map<'low' | 'ok', number>();
   private diskState: 'low' | 'ok' | undefined;
@@ -111,6 +116,10 @@ export class NotificationService {
       clearInterval(this.checkTimer);
       this.checkTimer = undefined;
     }
+    if (this.waitingQuotaCheckTimer) {
+      clearTimeout(this.waitingQuotaCheckTimer);
+      this.waitingQuotaCheckTimer = undefined;
+    }
   }
 
   handleEvent(type: string, taskId?: string, payload?: unknown): void {
@@ -127,12 +136,21 @@ export class NotificationService {
     ]).has(type)) return;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    if (type === 'quota.exhausted') {
-      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
-      // Individual quota exhaustion remains visible in the dashboard. Desktop
-      // should only interrupt the user when an entire engine is unavailable.
-      if (!allExhausted) return;
+    const notifyConfig = this.config.telegram?.notify;
+    const notifyPerModel = notifyConfig
+      ? typeof notifyConfig.quotaPerModel === 'boolean' ? notifyConfig.quotaPerModel : (notifyConfig as unknown as { quota?: boolean }).quota === true
+      : false;
+    const notifyAllExhausted = notifyConfig?.quotaAllExhausted !== false;
+    if (type === 'quota.cleared') {
+      this.allQuotaNotified.delete('all');
+      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+      this.lastSent.delete('critical:AgentHub: Mọi tài khoản đều đã hết quota');
     }
+    if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
+      this.queueWaitingQuotaCheck(notifyAllExhausted);
+      return;
+    }
+    if ((type === 'quota.cleared' || type === 'task.queued') && this.taskRepo) this.queueWaitingQuotaCheck(notifyAllExhausted);
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // 1. In brain auto mode: suppress raw task notifications
@@ -268,16 +286,25 @@ export class NotificationService {
       }
 
       case 'quota.exhausted': {
+        const family = typeof p.family === 'string' ? p.family : typeof p.model === 'string' ? p.model : '';
+        const quotaKey = family || 'all';
         const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
+        if (!isAllExhausted) this.allQuotaNotified.delete(quotaKey);
         if (effectiveMode === 'auto') {
-          if (isAllExhausted) {
+          if (isAllExhausted && notifyAllExhausted && !this.allQuotaNotified.has(quotaKey)) {
+            this.allQuotaNotified.add(quotaKey);
             this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
           }
           break;
         }
-        if (level === 'important' && !isAllExhausted) break;
+        if (isAllExhausted) {
+          if (!notifyAllExhausted || this.allQuotaNotified.has(quotaKey)) break;
+          this.allQuotaNotified.add(quotaKey);
+          this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
+          break;
+        }
+        if (!notifyPerModel) break;
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
-        const family = (p.family || p.model || '') as string;
         const resetTimeStr = this.resolveResetTime(p, name, family);
         const msg = isAllExhausted
           ? 'AgentHub: Mọi tài khoản đều đã hết quota'
@@ -290,6 +317,7 @@ export class NotificationService {
 
       case 'claude.fallback_changed': {
         const step = p.step && typeof p.step === 'object' ? p.step as Record<string, unknown> : null;
+        if (p.fallbackAvailable === true || (step && step.type !== 'wait')) break;
         const label = step?.type === 'model' ? `model ${String(step.model)}`
           : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
           : step?.type === 'apiKey' ? 'API key'
@@ -354,6 +382,24 @@ export class NotificationService {
         break;
       }
     }
+  }
+
+  private queueWaitingQuotaCheck(notifyAllExhausted: boolean): void {
+    if (this.waitingQuotaCheckTimer || !this.taskRepo) return;
+    this.waitingQuotaCheckTimer = setTimeout(() => {
+      this.waitingQuotaCheckTimer = undefined;
+      const waiting = this.taskRepo?.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota') || [];
+      if (waiting.length === 0) {
+        this.waitingQuotaNotified = false;
+        return;
+      }
+      if (!notifyAllExhausted || this.waitingQuotaNotified) return;
+      this.waitingQuotaNotified = true;
+      const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
+      const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
+      const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
+      this.notify(`${waiting.length} task đang chờ quota, sớm nhất mở lại lúc ${time}`, 'warning');
+    }, WAITING_QUOTA_BATCH_DELAY_MS);
   }
 
   private resolveTaskTitle(taskId?: string, payload?: Record<string, unknown>): string {

@@ -56,6 +56,7 @@ import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
 import { PerfCollector } from './perf.js';
 import { pruneNodeModulesCache } from './cache.js';
+import { cleanupStaleAgentHubTempDirs } from './temp-cleanup.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -465,6 +466,11 @@ export function closeContext(ctx: DaemonContext): void {
     // ignore
   }
   try {
+    ctx.chatService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
     ctx.db?.close();
   } catch {
     // ignore
@@ -480,6 +486,9 @@ export async function startDaemon(
   shutdown: () => Promise<void>;
 }> {
   const ctx = createContext(config, engineOverrides);
+  cleanupStaleAgentHubTempDirs();
+  const tempCleanupTimer = setInterval(() => cleanupStaleAgentHubTempDirs(), 6 * 60 * 60 * 1000);
+  tempCleanupTimer.unref?.();
 
   // Register profiles on startup
   ctx.profileService.registerAll();
@@ -560,6 +569,7 @@ export async function startDaemon(
     } catch (err) {
       console.error('Error during shutdown:', err);
     } finally {
+      clearInterval(tempCleanupTimer);
       clearTimeout(forceTimer);
       const elapsed = Date.now() - startTime;
       console.log(`Shutdown completed in ${elapsed}ms`);

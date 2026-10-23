@@ -247,6 +247,8 @@ export const vi = {
     createError: 'Không thể tạo task',
     modelChainLabel: 'Chuỗi model (ngăn cách bằng dấu phẩy)',
     modelChainHint: 'Để trống để dùng chuỗi model mặc định.',
+    externalRefLabel: 'Mã tham chiếu bên ngoài',
+    externalRefPlaceholder: 'vd: PROJ-45, OP-123',
   },
   taskDetail: {
     notFound: 'Không tìm thấy task hoặc xảy ra lỗi khi tải dữ liệu.',
@@ -895,6 +897,7 @@ export const vi = {
     ciLabel: 'Theo dõi CI GitHub Actions', ciEnabled: 'Bật theo dõi CI', ciBranch: 'Nhánh theo dõi CI', ciStatusPassed: 'CI: Thành công', ciStatusFailed: 'CI: Thất bại', ciStatusRunning: 'CI: Đang chạy', ciViewRun: 'Xem run trên GitHub', ciNoRun: 'Chưa có run',
     knowledgeChecklistTitle: 'Kiến thức & checklist', knowledgeChecklistHint: 'Chọn tối đa 5 đường dẫn, mỗi file tối đa 64KB. Bộ não bắt buộc đối chiếu khi duyệt.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Checklist khi duyệt', checklistUnreadable: 'không đọc được', checklistTooLarge: 'Cảnh báo: file vượt 64KB, nội dung không được inject.', suggestAutomaticChecks: 'Gợi ý chuyển thành kiểm tra tự động', draftChecksCreated: 'Đã tạo task nháp gợi ý kiểm tra tự động.',
     worktreeRoot: 'Thư mục worktree', worktreeRootPlaceholder: '/đường/dẫn/tuyệt/đối', worktreeRootDesc: 'Root cấu hình phải là thư mục riêng cho dự án này, không dùng chung với dự án khác. Mỗi task sẽ tạo tại <root>/<slug>, worktree tích hợp tại <root>/.integration. Thư mục phải tồn tại và ghi được.', worktreeLogsInRoot: 'Lưu log task trong thư mục này/.logs',
+    commitConventionTitle: 'Quy ước commit', commitConventionDesc: 'Thiết lập tên nhánh, commit message và merge message riêng cho project.', branchTemplate: 'Mẫu tên nhánh', commitTemplate: 'Mẫu commit message', commitRegex: 'Regex commit message (tuỳ chọn)', mergeMessageTemplate: 'Mẫu merge message', commitConventionPreview: 'Xem trước ví dụ',
     sectionBrainTitle: 'Bộ não',
     sectionBrainDesc: 'Cấu hình quyền tự động và giới hạn quota của Claude đối với dự án.',
     sectionWorktreeTitle: 'Worktree',
@@ -1062,7 +1065,7 @@ export const vi = {
     selectDay: 'Chọn ngày',
   },
   telegram: {
-    settingsTitle: 'Cài đặt Telegram', settingsDescription: 'Kết nối bot Telegram để nhận thông báo và điều khiển AgentHub.', enabled: 'Bật Telegram', tokenLabel: 'Bot token', tokenConfigured: 'Đã cấu hình token', saveToken: 'Lưu token', testButton: 'Kiểm tra', tokenSaved: 'Đã lưu token.', testSuccess: 'Kết nối Telegram thành công.', botFound: 'Bot', loadError: 'Không thể tải cài đặt Telegram.', pairTitle: 'Ghép chat Telegram', pairInstructions: 'Mở bot và gửi /start {code}.', newCode: 'Tạo mã mới', chatsTitle: 'Chat đã ghép', noChats: 'Chưa có chat nào.', removeChat: 'Gỡ chat', projectsTitle: 'Project và topic/chat', departmentsTitle: 'Phòng ban và topic', topicModeTitle: 'Chế độ topic', topicModeProject: 'Theo dự án', topicModeDepartment: 'Theo phòng ban', createTopic: 'Tạo topic', attachChat: 'Gắn chat', chatLabel: 'chat', notConfigured: 'Chưa cấu hình', notifyTitle: 'Loại thông báo', botFatherTitle: 'Tạo bot với @BotFather', botFatherStep1: 'Mở Telegram, tìm @BotFather và gửi /newbot.', botFatherStep2: 'Đặt tên, username kết thúc bằng bot và sao chép token.', botFatherStep3: 'Dán token ở trên, bấm Kiểm tra rồi bật Telegram.', notify: { reviewReady: 'Có task chờ review', failed: 'Task thất bại', blocked: 'Task bị chặn', quota: 'Hết quota', fallback: 'Chuyển model / tài khoản' },
+    settingsTitle: 'Cài đặt Telegram', settingsDescription: 'Kết nối bot Telegram để nhận thông báo và điều khiển AgentHub.', enabled: 'Bật Telegram', tokenLabel: 'Bot token', tokenConfigured: 'Đã cấu hình token', saveToken: 'Lưu token', testButton: 'Kiểm tra', tokenSaved: 'Đã lưu token.', testSuccess: 'Kết nối Telegram thành công.', botFound: 'Bot', loadError: 'Không thể tải cài đặt Telegram.', pairTitle: 'Ghép chat Telegram', pairInstructions: 'Mở bot và gửi /start {code}.', newCode: 'Tạo mã mới', chatsTitle: 'Chat đã ghép', noChats: 'Chưa có chat nào.', removeChat: 'Gỡ chat', projectsTitle: 'Project và topic/chat', departmentsTitle: 'Phòng ban và topic', topicModeTitle: 'Chế độ topic', topicModeProject: 'Theo dự án', topicModeDepartment: 'Theo phòng ban', createTopic: 'Tạo topic', attachChat: 'Gắn chat', chatLabel: 'chat', notConfigured: 'Chưa cấu hình', notifyTitle: 'Loại thông báo', botFatherTitle: 'Tạo bot với @BotFather', botFatherStep1: 'Mở Telegram, tìm @BotFather và gửi /newbot.', botFatherStep2: 'Đặt tên, username kết thúc bằng bot và sao chép token.', botFatherStep3: 'Dán token ở trên, bấm Kiểm tra rồi bật Telegram.', notify: { reviewReady: 'Có task chờ review', failed: 'Task thất bại', blocked: 'Task bị chặn', quota: 'Hết quota', quotaPerModel: 'Hết quota từng model/tài khoản', quotaAllExhausted: 'Mọi tài khoản cùng engine hết quota', fallback: 'Chuyển model / tài khoản' },
     cardTitle: 'Điều khiển Telegram Bot',
     pairingCode: 'Mã ghép đôi',
     expiresIn: 'Hết hạn sau {min}:{sec}',
