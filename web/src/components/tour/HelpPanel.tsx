@@ -3,6 +3,7 @@ import { Search, X } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
 import { TourDefinition, tourDefinitions, modalTourDefinitions, useTour } from './TourContext';
 import { UI_Z_INDEX } from '../ui/layers';
+import { UsageModes } from '../UsageModes';
 
 type HelpPanelProps = { open: boolean; onClose: () => void };
 
@@ -32,6 +33,7 @@ export const HelpPanel: React.FC<HelpPanelProps> = ({ open, onClose }) => {
           <Search size={16} className="text-[var(--t-text-3)]" />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('tour.search')} aria-label={t('tour.search')} className="min-w-0 flex-1 bg-transparent text-sm outline-none" />
         </label>
+        <div className="mt-5 border-b border-[var(--t-border)] pb-5"><UsageModes compact /></div>
         <div className="mt-5 space-y-2">
           {tours.map((tour) => (
             <button key={tour.id} type="button" onClick={() => { openTour(tour.id); onClose(); }} className="w-full rounded-lg border border-[var(--t-border)] p-3 text-left hover:bg-[var(--t-hover)]">

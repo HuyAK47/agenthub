@@ -23,6 +23,9 @@ export interface SetupToolStatus {
 
 export class SetupManager {
   private installing = new Set<SetupTool>();
+  private readonly versionCache = new Map<SetupTool, { bin: string; version: string | null; checkedAt: number }>();
+  private readonly versionChecks = new Map<SetupTool, Promise<string | null>>();
+  private static readonly VERSION_CACHE_MS = 10 * 60 * 1000;
   constructor(private config: AgentHubConfig, private events?: EventSink, private onInstallSuccess?: InstallSuccessHandler) {}
 
   private binary(tool: SetupTool): string | null {
@@ -41,17 +44,35 @@ export class SetupManager {
       const bin = this.binary(id);
       let version: string | null = null;
       if (bin) {
-        try {
-          const output = await execFileAsync(bin, this.installer(id).versionArgs || ['--version'], { timeout: 10_000 });
-          version = `${output.stdout || output.stderr}`.trim().split(/\r?\n/)[0] || null;
-        } catch {
-          version = null;
+        const cached = this.versionCache.get(id);
+        if (cached && cached.bin === bin && Date.now() - cached.checkedAt < SetupManager.VERSION_CACHE_MS) {
+          version = cached.version;
+        } else {
+          version = await this.checkVersion(id, bin);
         }
       }
       const installer = this.installer(id);
       result.push({ id, installed: Boolean(bin), version, path: bin, manual: id === 'agy' && !installer.command, docsUrl: installer.docsUrl, installing: this.installing.has(id) });
     }
     return result;
+  }
+
+  private async checkVersion(id: SetupTool, bin: string): Promise<string | null> {
+    const existing = this.versionChecks.get(id);
+    if (existing) return existing;
+    const check = (async () => {
+      let version: string | null = null;
+      try {
+        const output = await execFileAsync(bin, this.installer(id).versionArgs || ['--version'], { timeout: 10_000 });
+        version = `${output.stdout}`.trim().split(/\r?\n/)[0] || null;
+      } catch {
+        version = null;
+      }
+      this.versionCache.set(id, { bin, version, checkedAt: Date.now() });
+      return version;
+    })();
+    this.versionChecks.set(id, check);
+    try { return await check; } finally { this.versionChecks.delete(id); }
   }
 
   async install(tool: string): Promise<{ jobId: string }> {
@@ -79,6 +100,7 @@ export class SetupManager {
       clearTimeout(timer); log.end(); this.installing.delete(id);
       if (code === 0) {
         try {
+          this.versionCache.delete(id);
           this.onInstallSuccess?.(id);
         } catch (error) {
           emit('setup.install_refresh_error', { error: error instanceof Error ? error.message : String(error) });

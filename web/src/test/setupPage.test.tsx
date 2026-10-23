@@ -104,6 +104,20 @@ describe('SetupPage', () => {
     expect(screen.getByText('4/8 mục đã sẵn sàng')).toBeInTheDocument();
   });
 
+  it('hiển thị đúng nội dung khi chuyển giữa hai cách dùng', async () => {
+    renderPage();
+
+    expect(await screen.findByRole('tab', { name: /A — Hub độc lập/ })).toBeInTheDocument();
+    expect(screen.getByText(/Để brain.mode là auto hoặc suggest/)).toBeInTheDocument();
+    expect(screen.queryByText(/Chạy agenthub mcp-install/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: /B — Dùng qua MCP/ }));
+
+    expect(screen.getByText(/Chạy agenthub mcp-install/)).toBeInTheDocument();
+    expect(screen.getByText('agenthub mcp-install')).toBeInTheDocument();
+    expect(screen.queryByText(/Để brain.mode là auto hoặc suggest/)).not.toBeInTheDocument();
+  });
+
   it('2. Hiển thị trạng thái đạt và cần làm cho từng mục kiểm tra', async () => {
     renderPage();
 

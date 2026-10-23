@@ -6,6 +6,7 @@ import { toTaskId } from './services/index.js';
 import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { formatReset } from './time-format.js';
+import { NotificationDeduper } from './notification-dedupe.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -36,6 +37,7 @@ export class NotificationService {
   private now: () => number;
   private lastSent = new Map<string, number>();
   private lastSentCi = new Map<string, number>();
+  private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
   private get appName(): string { return this.config.branding?.name || 'AgentHub'; }
@@ -50,6 +52,7 @@ export class NotificationService {
     this.projectRepo = opts.projectRepo;
     this.execFn = opts.exec;
     this.now = opts.now || (() => Date.now());
+    this.eventDeduper = new NotificationDeduper({ now: this.now });
   }
 
   getQuietHoursQueue(): Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> {
@@ -113,6 +116,7 @@ export class NotificationService {
     }
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // 1. In brain auto mode: suppress raw task notifications
     const taskProjectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
@@ -223,7 +227,11 @@ export class NotificationService {
       case 'disk.low': {
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 0;
-        this.notify(`Ổ đĩa còn ${freeGB} GB (< ${minFreeGB} GB): tạm dừng khởi chạy task`, 'normal');
+        const cacheDir = typeof p.cacheDir === 'string' ? ` Cache node_modules: ${p.cacheDir}.` : '';
+        const largest = typeof p.largestCacheEntry === 'string'
+          ? ` Bản lớn nhất: ${p.largestCacheEntry}${typeof p.largestCacheEntryBytes === 'number' ? ` (${(p.largestCacheEntryBytes / 1024 ** 3).toFixed(2)} GB)` : ''}.`
+          : '';
+        this.notify(`Ổ đĩa còn ${freeGB} GB (< ${minFreeGB} GB): tạm dừng khởi chạy task${cacheDir}${largest}`, 'normal');
         break;
       }
 

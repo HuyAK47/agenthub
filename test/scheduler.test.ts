@@ -657,6 +657,60 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  function withClaudeReviewer(scheduler: Scheduler) {
+    profileRepo.upsert({ name: 'claude-1', engine: 'claude', kind: 'isolated', home: path.join(tmpDir, 'claude-1'), email: null, enabled: 1 });
+    const claude = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    (claude as unknown as { id: string }).id = 'claude';
+    (scheduler as unknown as { engines: Map<string, Engine> }).engines.set('claude-review', claude);
+  }
+
+  it('falls back to a Claude reviewer when every Codex account is out of quota', async () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-chatter');
+    withClaudeReviewer(scheduler);
+    new QuotaService(quotaMarkRepo, profileRepo).mark('codex-1', 'codex', 3600, 'test');
+    scheduler.tick();
+    const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
+    expect(reviewer?.profileName).toBe('claude-1');
+    expect(reviewer?.engine).toBe('claude');
+    await vi.waitFor(() => expect(taskRepo.get('test-project/review')?.status).toBe('done'));
+    expect(reviewRepo.getByTask('test-project/review').at(-1)?.actor).toBe('claude-reviewer');
+    expect(eventRepo.getRecent(30).some((event) => event.type === 'review.fallback')).toBe(true);
+    scheduler.stop();
+  });
+
+  it('lets the Claude reviewer give a final verdict after a second escalation', async () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-chatter');
+    withClaudeReviewer(scheduler);
+    for (let i = 0; i < 2; i++) {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    }
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+    scheduler.tick();
+    const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
+    expect(reviewer?.profileName).toBe('claude-1');
+    await vi.waitFor(() => expect(reviewRepo.getByTask('test-project/review').at(-1)?.actor).toBe('claude-reviewer'));
+    scheduler.stop();
+  });
+
+  it('leaves a first escalation for the retry path, not the arbiter', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('keeps waiting for Codex when its accounts are only busy', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    (scheduler as unknown as { reviewerRunsForProfile: (name: string) => boolean }).reviewerRunsForProfile = (name) => name === 'codex-1';
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    scheduler.stop();
+  });
+
   it('escalates before spawning when autocheck results are missing', () => {
     const { scheduler } = makeReviewer('reviewer-approved', false);
     scheduler.tick();

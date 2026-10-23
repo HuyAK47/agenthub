@@ -16,7 +16,7 @@ Hướng dẫn cho người mới: cài AgentHub, kết nối tài khoản AI v�
 
 AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các worker AI (Gemini qua Antigravity CLI, Codex CLI). Mỗi task chạy trong một git worktree riêng. Hub theo dõi quota, tải máy, dung lượng ổ đĩa và tự chạy kiểm tra (lint, test…) khi worker làm xong. **Claude Code** đóng vai trò "bộ não": lên kế hoạch, giao việc, review và merge.
 
-> **Các phương thức điều khiển hub:** Bạn có thể điều khiển AgentHub (giao việc, review, quản lý task) thông qua **Chat với Claude trực tiếp trên Web Dashboard**, **điều khiển từ xa qua Telegram Bot** trên điện thoại, hoặc **dùng Claude Code trong VS Code** qua giao thức MCP (xem mục 7 và 8). Dashboard web cung cấp đầy đủ công cụ theo dõi tiến độ, log thời gian thực, quota tài khoản, tải máy và quản lý task.
+> **Chọn cách dùng:** Xem [Hai cách dùng AgentHub](USAGE-MODES.md) để chọn hub độc lập qua Web/Telegram hoặc Claude Code qua MCP. Tài liệu đó cũng nêu điều kiện, thiết lập `brain.mode` và vòng làm việc hoàn chỉnh.
 
 ---
 
@@ -205,6 +205,8 @@ Trong AgentHub, một **project** là một git repository trên máy của bạ
 > **Quy ước dự án**: Trong repo dự án nên có file `AGENTS.md` mô tả quy ước (cách chạy, cách test, những gì không được làm). Worker đọc file này trước khi làm việc.
 
 ## 7. Điều khiển hub: Web Dashboard, Telegram và Claude Code trong VS Code
+
+Chi tiết lựa chọn giữa hai mô hình và cách kết hợp theo từng project nằm trong [USAGE-MODES.md](USAGE-MODES.md). Phần dưới đây giữ lại tham chiếu lệnh MCP và hướng dẫn Telegram cụ thể.
 
 Bạn có thể tương tác và điều khiển Claude theo 3 phương thức linh hoạt:
 
