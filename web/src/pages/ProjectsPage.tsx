@@ -8,6 +8,7 @@ import {
   restoreProject,
   deleteProjectKnowledge,
   getProjectKnowledgePage,
+  getCiRunsPage,
   getArchivedProjects,
   getProjects,
   getTasks,
@@ -403,6 +404,9 @@ export const ProjectsPage: React.FC = () => {
   const [knowledgeDraft, setKnowledgeDraft] = useState('');
   const [knowledgePage, setKnowledgePage] = useState(1);
   const knowledgePageSize = 20;
+  const [ciProject, setCiProject] = useState<string | null>(null);
+  const [ciPage, setCiPage] = useState(1);
+  const ciPageSize = 20;
   useEffect(() => {
     if (showAddForm) suggestModalTour('modal-register-project');
   }, [showAddForm, suggestModalTour]);
@@ -469,6 +473,11 @@ export const ProjectsPage: React.FC = () => {
     queryKey: ['project-knowledge', knowledgeProject, knowledgePage],
     queryFn: () => getProjectKnowledgePage(knowledgeProject!, { limit: knowledgePageSize, offset: (knowledgePage - 1) * knowledgePageSize }),
     enabled: knowledgeProject !== null,
+  });
+  const ciRunsQuery = useQuery({
+    queryKey: ['ci-runs', ciProject, ciPage],
+    queryFn: () => getCiRunsPage(ciProject!, { limit: ciPageSize, offset: (ciPage - 1) * ciPageSize }),
+    enabled: ciProject !== null,
   });
 
   const addKnowledgeMutation = useMutation({
@@ -1088,6 +1097,11 @@ export const ProjectsPage: React.FC = () => {
                       )}
                     </div>
                   )}
+                  {proj.ciStatus && (
+                    <button type="button" className="text-xs text-[var(--t-accent)] hover:underline" onClick={() => { setCiProject(ciProject === proj.id ? null : proj.id); setCiPage(1); }}>
+                      {t('projects.ciLabel')}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1196,6 +1210,26 @@ export const ProjectsPage: React.FC = () => {
                         sortValue: (entry) => entry.createdAt,
                         render: (entry) => <span className="whitespace-nowrap text-xs text-[var(--t-text-3)]">{entry.createdAt}</span>,
                       }]}
+                    />
+                  </div>
+                )}
+                {ciProject === proj.id && (
+                  <div className="pt-2 border-t border-[var(--t-border)]">
+                    <DataTable
+                      rows={ciRunsQuery.data?.items || []}
+                      loading={ciRunsQuery.isLoading}
+                      error={ciRunsQuery.error instanceof Error ? ciRunsQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      columns={[
+                        { key: 'runId', title: 'Run', sortable: true, sortValue: (row) => row.runId, render: (row) => <span className="font-mono">#{row.runId}</span> },
+                        { key: 'workflow', title: 'Workflow', render: (row) => row.workflow },
+                        { key: 'status', title: 'Status', render: (row) => row.conclusion || row.status },
+                        { key: 'sha', title: 'SHA', render: (row) => <span className="font-mono">{row.sha.slice(0, 8)}</span> },
+                      ]}
+                      page={ciPage}
+                      pageSize={ciPageSize}
+                      total={ciRunsQuery.data?.total || 0}
+                      onPageChange={setCiPage}
                     />
                   </div>
                 )}

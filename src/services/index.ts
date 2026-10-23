@@ -3739,6 +3739,11 @@ export class AppService {
     return { ...page, items: page.items.map(apiKnowledgeEntry) };
   }
 
+  pageCiRuns(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
+    if (!this.ciRepo) return { items: [], total: 0, nextCursor: null };
+    return this.ciRepo.pageByProject(projectId, options);
+  }
+
   reviewChecklistPreview(projectId: string) {
     const project = this.projectRepo.get(projectId);
     if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);

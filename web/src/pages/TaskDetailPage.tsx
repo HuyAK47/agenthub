@@ -100,6 +100,11 @@ export const TaskDetailPage: React.FC = () => {
   const [liveLog, setLiveLog] = useState<string>('');
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const logLines = React.useMemo(() => liveLog.split('\n'), [liveLog]);
+  const [logScrollTop, setLogScrollTop] = useState(0);
+  const logVirtualized = logLines.length > 500;
+  const logStart = logVirtualized ? Math.max(0, Math.floor(logScrollTop / 18) - 20) : 0;
+  const logEnd = logVirtualized ? Math.min(logLines.length, logStart + 80) : logLines.length;
 
   const { data: task, isLoading, error } = useQuery({
     queryKey: ['task', id],
@@ -212,6 +217,7 @@ export const TaskDetailPage: React.FC = () => {
   const handleScroll = () => {
     if (!logContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = logContainerRef.current;
+    setLogScrollTop(scrollTop);
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 30;
     setAutoScroll(isAtBottom);
   };
@@ -837,7 +843,15 @@ export const TaskDetailPage: React.FC = () => {
             onScroll={handleScroll}
             className="w-full h-[520px] bg-[var(--t-log-bg)] text-[var(--t-log-text)] font-mono text-xs p-4 rounded-xl overflow-y-auto border border-[var(--t-border)] shadow-inner whitespace-pre-wrap leading-relaxed select-text"
           >
-            {liveLog ? liveLog : <span className="text-[var(--t-log-muted)]">{t('taskDetail.noLog')}</span>}
+            {liveLog ? (
+              logVirtualized ? (
+                <div style={{ height: `${logLines.length * 18}px`, position: 'relative' }}>
+                  <div style={{ position: 'absolute', top: `${logStart * 18}px`, left: 0, right: 0 }}>
+                    {logLines.slice(logStart, logEnd).map((line, index) => <div key={logStart + index} className="h-[18px]">{line || '\u00a0'}</div>)}
+                  </div>
+                </div>
+              ) : liveLog
+            ) : <span className="text-[var(--t-log-muted)]">{t('taskDetail.noLog')}</span>}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button type="button" disabled={!logSelection} title={t('extra.captureFromSelectionTip')} onClick={() => { if (logSelection) openCapture(logSelection, 'log'); }} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-white text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">{t('extra.captureFromSelection')}</button>

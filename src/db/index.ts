@@ -2811,6 +2811,28 @@ export class CiRepo {
       .all(projectId, limit) as CiRunRow[];
   }
 
+  pageByProject(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }): PageResult<CiRunRow> {
+    const limit = parsePageSize(options?.limit);
+    const cursor = decodeCursor(options?.cursor);
+    if (options?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    const offset = cursor ? 0 : Math.max(0, Number(options?.offset) || 0);
+    const params: Array<string | number> = [projectId];
+    let where = 'projectId = ?';
+    if (cursor) {
+      where += ' AND (runId < ? OR (runId = ? AND projectId < ?))';
+      params.push(Number(cursor.value), Number(cursor.value), cursor.id);
+    }
+    const rows = this.db.prepare(`SELECT * FROM ci_runs WHERE ${where} ORDER BY runId DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit + 1, offset) as CiRunRow[];
+    const items = rows.slice(0, limit);
+    const last = items[items.length - 1];
+    return {
+      items,
+      total: (this.db.prepare('SELECT COUNT(*) AS count FROM ci_runs WHERE projectId = ?').get(projectId) as { count: number }).count,
+      nextCursor: rows.length > limit && last ? encodeCursor(last.runId, String(last.runId)) : null,
+    };
+  }
+
   getLatestForAllProjects(): Map<string, CiRunRow> {
     const rows = this.db
       .prepare(

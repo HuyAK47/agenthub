@@ -308,6 +308,14 @@ export async function createServer(
     return query.limit === undefined ? service.listKnowledge(id) : service.pageKnowledge(id, query);
   });
 
+  fastify.get('/api/projects/:id/ci/runs', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit === undefined) return service.ciRepo?.listByProject(id) || [];
+    return service.pageCiRuns(id, query);
+  });
+
   fastify.get('/api/events/history', async (req: FastifyRequest) => {
     const query = req.query as { taskId?: string; limit?: string; cursor?: string; offset?: string };
     if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');

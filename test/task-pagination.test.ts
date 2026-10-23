@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { openDatabase, EventRepo, ProjectRepo, TaskRepo } from '../src/db/index.js';
+import { openDatabase, EventRepo, ProjectRepo, TaskRepo, CiRepo } from '../src/db/index.js';
 
 describe('TaskRepo.page', () => {
   const databases: ReturnType<typeof openDatabase>[] = [];
@@ -73,5 +73,25 @@ describe('TaskRepo.page', () => {
 
     const cursorPage = repo.page({ limit: 1, cursor: offsetPage.nextCursor! });
     expect(cursorPage.items.map((event) => event.type)).toEqual(['event.0']);
+  });
+});
+
+describe('CiRepo.pageByProject', () => {
+  it('uses a stable run cursor and reports the filtered total', () => {
+    const db = openDatabase(':memory:');
+    const repo = new CiRepo(db);
+    const projects = new ProjectRepo(db);
+    for (const id of ['p1', 'p2']) projects.insert({ id, name: id, path: `/tmp/${id}`, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    for (const runId of [1, 2, 3]) {
+      repo.insert({ projectId: 'p1', runId, workflow: 'ci', sha: `sha-${runId}`, status: 'completed', conclusion: 'success', jobs: '[]', completedAt: '2026-01-01' });
+    }
+    repo.insert({ projectId: 'p2', runId: 99, workflow: 'ci', sha: 'other', status: 'completed', conclusion: 'success', jobs: '[]', completedAt: '2026-01-01' });
+    const first = repo.pageByProject('p1', { limit: 1 });
+    expect(first.total).toBe(3);
+    expect(first.items.map((row) => row.runId)).toEqual([3]);
+    const page = repo.pageByProject('p1', { limit: 1, cursor: first.nextCursor! });
+    expect(page.items.map((row) => row.runId)).toEqual([2]);
+    expect(() => repo.pageByProject('p1', { limit: 1, cursor: 'broken' })).toThrow('Invalid pagination cursor');
+    db.close();
   });
 });

@@ -338,6 +338,25 @@ export async function getProjectKnowledgePage(projectId: string, params: { limit
   return apiFetch<PageResponse<KnowledgeEntry>>(`/api/projects/${encodeURIComponent(projectId)}/knowledge?${query.toString()}`);
 }
 
+export interface CiRun {
+  projectId: string;
+  runId: number;
+  workflow: string;
+  sha: string;
+  status: string;
+  conclusion: string | null;
+  jobs: string;
+  completedAt: string | null;
+  url?: string | null;
+}
+
+export async function getCiRunsPage(projectId: string, params: { limit: number; offset?: number; cursor?: string }): Promise<PageResponse<CiRun>> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  if (params.cursor) query.set('cursor', params.cursor);
+  return apiFetch<PageResponse<CiRun>>(`/api/projects/${encodeURIComponent(projectId)}/ci/runs?${query.toString()}`);
+}
+
 export const getReviewChecklistPreview = (projectId: string) =>
   apiFetch<Array<{ path: string; resolvedPath: string; size: number | null; truncated: boolean; content: string | null; warning?: string }>>(`/api/projects/${encodeURIComponent(projectId)}/review-checklist/preview`);
 

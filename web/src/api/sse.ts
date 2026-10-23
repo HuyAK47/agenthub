@@ -19,9 +19,7 @@ function patchTaskCaches(queryClient: QueryClient, taskId: string, payload: unkn
     : payload;
   if (!task || typeof task !== 'object' || !('id' in task)) return false;
   let patched = false;
-  queryClient.setQueriesData<{ items: Array<{ id: string }>; total: number; nextCursor: string | null }>(
-    { queryKey: ['tasks'] },
-    (current) => {
+  const patchPage = (current: { items: Array<{ id: string }>; total: number; nextCursor: string | null } | undefined) => {
       if (!current || !Array.isArray(current.items)) return current;
       const index = current.items.findIndex((item) => item.id === taskId || item.id === (task as { id: string }).id);
       if (index < 0) return current;
@@ -29,8 +27,9 @@ function patchTaskCaches(queryClient: QueryClient, taskId: string, payload: unkn
       const items = [...current.items];
       items[index] = { ...items[index], ...(task as object) };
       return { ...current, items };
-    },
-  );
+  };
+  queryClient.setQueriesData<{ items: Array<{ id: string }>; total: number; nextCursor: string | null }>({ queryKey: ['tasks'] }, patchPage);
+  queryClient.setQueriesData<{ items: Array<{ id: string }>; total: number; nextCursor: string | null }>({ queryKey: ['tasks-kanban'] }, patchPage);
   return patched;
 }
 
@@ -236,11 +235,15 @@ export function connectSSE(queryClient: QueryClient): () => void {
 
         // Cache invalidation based on event type
         if (type.startsWith('task.')) {
-          if (!patchTaskCaches(queryClient, taskId || '', eventItem.payload)) {
+          const patched = patchTaskCaches(queryClient, taskId || '', eventItem.payload);
+          if (!patched) {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
+          } else if (['task.queued', 'task.running', 'task.review_ready', 'task.done', 'task.blocked', 'task.failed', 'task.cancelled', 'task.waiting_quota'].includes(type)) {
+            // A status transition can move a card between columns; refresh only then.
+            queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
           }
           queryClient.invalidateQueries({ queryKey: ['status'] });
-          queryClient.invalidateQueries({ queryKey: ['tasks-kanban'] });
           if (taskId) {
             queryClient.invalidateQueries({ queryKey: ['task', taskId] });
             queryClient.invalidateQueries({ queryKey: ['task', taskId.replace('/', '~')] });
