@@ -191,10 +191,13 @@ export function areAllProfilesQuotaExhaustedForFamily(
   now = Date.now(),
 ): boolean {
   if (!profileRepo || !quotaMarkRepo || !family) return false;
-  const profiles = profileRepo.getAll(true).filter((profile) => profile.engine === (family === 'codex' ? 'codex' : 'agy'));
+  const profiles = profileRepo.getAll(true).filter((profile) => family === 'codex' ? profile.engine === 'codex' : profile.engine !== 'codex');
   if (profiles.length === 0) return false;
   const epoch = Math.floor(now / 1000);
-  const exhausted = new Set(quotaMarkRepo.getActive(epoch).filter((mark) => mark.family === family && mark.until > epoch).map((mark) => mark.profileName));
+  // A quota mark means the account cannot currently serve that engine's
+  // fallback chain; the notification is about the engine being blocked, not a
+  // particular model family.
+  const exhausted = new Set(quotaMarkRepo.getActive(epoch).filter((mark) => mark.until > epoch).map((mark) => mark.profileName));
   return profiles.every((profile) => exhausted.has(profile.name));
 }
 

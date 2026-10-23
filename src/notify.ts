@@ -119,7 +119,9 @@ export class NotificationService {
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     const notifyConfig = this.config.telegram?.notify;
-    const notifyPerModel = typeof notifyConfig?.quotaPerModel === 'boolean' ? notifyConfig.quotaPerModel : (notifyConfig as unknown as { quota?: boolean } | undefined)?.quota === true;
+    const notifyPerModel = notifyConfig
+      ? typeof notifyConfig.quotaPerModel === 'boolean' ? notifyConfig.quotaPerModel : (notifyConfig as unknown as { quota?: boolean }).quota === true
+      : true;
     const notifyAllExhausted = notifyConfig?.quotaAllExhausted !== false;
     if (type === 'quota.cleared' && typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
     if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
@@ -300,7 +302,6 @@ export class NotificationService {
       }
 
       case 'claude.fallback_changed': {
-        if (p.step && typeof p.step === 'object' && (p.step as Record<string, unknown>).type !== 'wait') break;
         const step = p.step && typeof p.step === 'object' ? p.step as Record<string, unknown> : null;
         const label = step?.type === 'model' ? `model ${String(step.model)}`
           : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
