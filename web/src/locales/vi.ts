@@ -104,6 +104,20 @@ export const vi = {
     allProjects: 'Tất cả project',
     createTask: 'Tạo Task',
     filterQuick: 'Lọc slug / tiêu đề',
+    listView: 'Danh sách',
+    slug: 'Slug',
+    status: 'Trạng thái',
+    project: 'Project',
+    showMore: 'Xem thêm',
+    remaining: 'còn {count}',
+  },
+  pagination: {
+    rowsPerPage: 'Số dòng/trang',
+    pageOf: 'Trang {page}/{pages}',
+    previous: 'Trang trước',
+    next: 'Trang sau',
+    loading: 'Đang tải…',
+    empty: 'Không có dữ liệu',
   },
   dag: {
     title: 'Sơ đồ phụ thuộc',
@@ -313,6 +327,9 @@ export const vi = {
     retryWithModel: 'Chạy lại bằng model khác',
     modelWarningTitle: 'Cảnh báo chuỗi model',
     modelWarningItem: 'Model "{model}" không thuộc engine đã cấu hình và sẽ bị bỏ qua.',
+    timeline: 'Dòng thời gian (Timeline)',
+    noEvents: 'Chưa có sự kiện nào.',
+    reviewFallbackLine: 'Codex hết quota, Claude đang duyệt ({profile})',
   },
   profiles: {
     antigravitySubtitle: 'Tài khoản Google và quota Gemini', codexSubtitle: 'Tài khoản ChatGPT và device auth', claudeSubtitle: 'Tài khoản Claude Code',
@@ -779,6 +796,7 @@ export const vi = {
       "content": "Phần Nâng cao chứa giới hạn chạy cùng lúc, worktree, checks và biến môi trường. Mở khi cần chính sách riêng; tăng song song có thể làm máy quá tải."
     }
   },
+  "modal-project-wizard": { "modal": { "title": "Trình hướng dẫn đăng ký dự án", "content": "Kiểm tra repository và cấu hình project AgentHub mới." } },
   "modal-create-task": {
     "task": {
       "title": "Mục tiêu task",
@@ -857,6 +875,8 @@ export const vi = {
     integrationStatus: 'Trạng thái tích hợp',
     integrationAhead: '{count} commit phía trước',
     integrationBehind: '{count} commit phía sau',
+    activeTasks: 'Task đang hoạt động',
+    viewTasks: 'Xem task',
     integrationWorktreeCreated: 'Worktree tích hợp đã tạo',
     emptyTitle: 'Bắt đầu với Project đầu tiên',
     emptyDesc: 'Project là một repo git trên máy này; worker làm việc trong worktree riêng (nhánh agenthub/<slug>), không đụng thư mục bạn đang code.',
@@ -940,6 +960,7 @@ export const vi = {
     deployRestart: 'Khởi động lại hub: {val}',
     deployPush: 'Đẩy nhánh: {from} → {to} ({remote})',
     noDeployConfig: 'Chưa có cấu hình deploy sau khi merge (afterMerge).',
+    wizardOpen: 'Mở trình hướng dẫn', wizardTitle: 'Đăng ký dự án từng bước', wizardProgress: 'Tiến độ trình hướng dẫn', wizardWhy0: 'Chọn cách bắt đầu để AgentHub biết cần chuẩn bị gì.', wizardWhy1: 'AgentHub chỉ cần một thư mục tuyệt đối để kiểm tra an toàn.', wizardWhy2: 'Kiểm tra nhanh giúp chọn đúng nhánh và hiểu cấu trúc repo.', wizardWhy3: 'Các gợi ý này có thể bật/tắt trước khi tạo dự án.', wizardWhy4: 'Chọn tài liệu tham khảo và xem lại ngữ cảnh cũ trước khi ghim.', wizardWhy5: 'Thiết lập bộ não và thông báo cho riêng dự án này.', wizardWhy6: 'Kiểm tra lại mọi lựa chọn trước khi tạo.', wizardSizeTruncated: 'Đã dừng ước tính kích thước theo giới hạn an toàn.', wizardExisting: 'Repo có sẵn trên máy', wizardExistingDesc: 'Dùng một repository Git hiện có.', wizardNew: 'Dự án mới', wizardNewDesc: 'Tạo thư mục, git init, commit rỗng và nhánh mặc định.', wizardRepo: 'Repository', wizardNotGit: 'Chưa phải Git', wizardLanguage: 'Ngôn ngữ chính', wizardBranch: 'Nhánh hiện tại', wizardRemote: 'Remote host', wizardLockfiles: 'Lockfile', wizardGuidance: 'Tài liệu hướng dẫn', wizardSessions: 'Phiên cũ', wizardNewReady: 'Thư mục mới sẽ được tạo ở bước cuối.', wizardSuggestionsDesc: 'Dựa trên kết quả dò repo, đây là các thiết lập được đề xuất:', wizardSkipInstall: 'Không cài phụ thuộc trong worktree', wizardSkipHooks: 'Bỏ qua git hooks khi worker commit', wizardIntegration: 'Bật nhánh tích hợp riêng', wizardIntegrationReason: 'Hub chỉ merge local, không bao giờ push.', wizardSensitive: 'Đánh dấu dự án nhạy cảm', wizardChecks: 'Checks đề xuất', wizardReasonLockfile: 'Có lockfile', wizardReasonMonorepo: 'Có monorepo', wizardReasonHooks: 'Repo có git hooks hoặc commitlint', wizardReasonMount: 'Repo nằm trên ổ tạm hoặc ổ mã hóa', wizardReasonMedia: 'Repo nằm trên thiết bị lưu trữ ngoài (/media)', wizardContextDesc: 'Kiểm tra AGENTS.md và các phiên Claude Code cũ. Nội dung tham chiếu chỉ được đọc.', wizardGuidanceFound: 'Đã tìm thấy tài liệu hướng dẫn trong repo.', wizardGuidanceDraft: 'Chưa có AGENTS.md; bạn có thể tạo bản nháp sau khi đăng ký.', wizardPinMemory: 'Đưa MEMORY.md vào kiến thức ghim sau khi duyệt', wizardSessionsFound: 'Có {count} phiên Claude Code cũ để xem lại.', wizardNoSessions: 'Chưa có phiên Claude Code cũ cho thư mục này.', wizardContextReadonly: 'Việc ghim kiến thức chỉ thực hiện sau khi bạn duyệt nội dung.', wizardContextApprove: 'Tôi đã duyệt nội dung để ghim', wizardAgentsDraft: 'Tạo bản nháp AGENTS.md sau khi đăng ký', wizardAgentsDraftReason: 'Chưa có AGENTS.md trong repo; sau khi tạo dự án bạn có thể chỉnh sửa rồi commit.', wizardAgentsContent: 'Bản nháp AGENTS.md', wizardAgentsApprove: 'Tôi đã xem và duyệt ghi AGENTS.md', wizardAgentsApproveReason: 'File chỉ được ghi sau khi tạo project và bạn xác nhận.', wizardViewSession: 'Xem bản xem trước', wizardNoSessionPreview: 'Không tìm thấy nội dung hội thoại đọc được.', wizardPinMemoryLabel: 'Ghim nội dung MEMORY.md dưới đây', wizardSessionsSelected: 'phiên được chọn', wizardSummary: 'Tóm tắt lựa chọn', wizardBack: 'Quay lại', wizardNext: 'Tiếp', wizardCreate: 'Tạo dự án', wizardSummarizingTitle: 'Đang tóm tắt ngữ cảnh cũ', wizardSummarizingProgress: 'Trợ lý đang đọc và tóm tắt các phiên Claude Code đã chọn...', wizardSummaryReviewTitle: 'Duyệt kiến thức tóm tắt từ ngữ cảnh cũ', wizardSummaryReviewDesc: 'Xem lại và chỉnh sửa kiến thức đã tóm tắt trước khi ghim vào dự án.', wizardApproveAndPin: 'Duyệt và ghim kiến thức', wizardSkipPin: 'Bỏ qua, không ghim', wizardSessionSelectAll: 'Chọn tất cả phiên', wizardSessionDeselectAll: 'Bỏ chọn tất cả',
     deployLatestStatus: 'Lượt gần nhất',
     deployStatusQueued: 'Chờ thực hiện',
     deployStatusRunning: 'Đang deploy',
@@ -960,6 +981,7 @@ export const vi = {
   },
   settings: {
     title: 'Cài đặt hệ thống',
+    shutdownTitle: 'Tắt AgentHub', shutdownDescription: '{count} task đang chạy sẽ được đưa về hàng chờ.', shutdownButton: 'Tắt AgentHub', shutdownConfirmTitle: 'Xác nhận tắt AgentHub', shutdownConfirm: '{count} task đang chạy sẽ được đưa về hàng chờ để tiếp tục sau. AgentHub sẽ dừng daemon, worker, reviewer và chat nền.', shutdownDisable: 'Không tự bật khi đăng nhập', shutdownDone: 'AgentHub đã tắt. Bật lại từ máy bằng lệnh',
     brandingTitle: 'Tên ứng dụng', brandingDescription: 'Chỉ đổi tên hiển thị; lệnh CLI, service, thư mục và biến môi trường kỹ thuật không thay đổi.', brandingName: 'Tên hiển thị', brandingShortName: 'Tên ngắn', brandingTagline: 'Slogan (tuỳ chọn)', brandingAccent: 'Màu nhấn (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, tối đa 256KB', brandingLogoError: 'Không thể tải logo',
     subtitle: 'Cấu hình chuỗi model ưu tiên và thời gian timeout tối đa cho các lượt chạy (DEC-001).',
     saveSuccess: 'Cài đặt hệ thống đã được cập nhật thành công!',
@@ -986,6 +1008,8 @@ export const vi = {
     notificationsTitle: 'Thông báo & Tóm tắt',
     notificationsDescription: 'Cấu hình thông báo máy tính, chế độ bộ não, giờ yên tĩnh và tóm tắt định kỳ.',
     desktopNotifyLabel: 'Thông báo trên máy tính (Desktop Notifications)',
+    desktopNotifyLevelLabel: 'Mức thông báo trên máy tính',
+    desktopNotifyLevelAll: 'Tất cả', desktopNotifyLevelImportant: 'Quan trọng', desktopNotifyLevelCritical: 'Chỉ khẩn cấp', desktopNotifyLevelOff: 'Tắt',
     desktopNotifyHint: 'Gửi thông báo desktop qua notify-send / osascript khi có sự kiện quan trọng.',
     brainModeLabel: 'Chế độ hoạt động của Bộ não',
     brainModeHint: 'Trong chế độ Tự động, các thông báo thô từng task được chặn, chỉ gửi thông báo quan trọng và sự cố.', brainMaxConcurrent: 'Số lượt bộ não chạy đồng thời tối đa',
@@ -1001,6 +1025,12 @@ export const vi = {
     digestTitle: 'Tóm tắt định kỳ (Daily Digest)',
     digestHint: 'Tự động tổng hợp số lượng task, các thay đổi đã merge và tình trạng quota mỗi ngày.',
     digestTime: 'Giờ gửi tóm tắt',
+    claudeFallback: 'Fallback sang Claude khi Codex hết quota',
+    claudeFallbackHint: 'Khi mọi tài khoản Codex đều hết quota hoặc lỗi đăng nhập, tự động dùng Claude reviewer để tiếp tục duyệt.',
+    claudeModel: 'Model Claude cho review',
+    claudeProfiles: 'Hồ sơ Claude review (theo thứ tự ưu tiên)',
+    claudeProfilesHint: 'Chọn các hồ sơ Claude dùng cho review fallback (để trống để dùng bất kỳ hồ sơ nào).',
+    claudeProfilesOrder: 'Thứ tự ưu tiên',
   },
   savings: { title: 'Hiệu quả ủy quyền', subtitle: 'Đo phần việc Claude (bộ não) không phải tự làm nhờ giao cho worker (Gemini, Codex).', clearFilters: 'Xóa bộ lọc', loadError: 'Không thể tải dữ liệu hiệu quả ủy quyền.', claudeSaved: 'Claude không phải làm', savingRate: 'tỷ lệ tiết kiệm', codeWritten: 'Code do worker viết', lines: 'dòng', linesDeleted: 'dòng đã xóa', approvedTasks: 'Task đã duyệt', totalTasks: 'Tổng {count} task trong hệ thống', avgReviewRounds: 'Trung bình vòng review', rounds: 'vòng', changesRound: 'Mỗi lần changes_requested tính 1 vòng', tokensByDay: 'Token worker theo từng ngày', tokensByDayDesc: 'Phân bố khối lượng token tiêu thụ theo ngày giữa Gemini (agy) và Codex.', noDailyData: 'Chưa có dữ liệu lượt chạy theo ngày.', byTask: 'Bảng theo task', byTaskDesc: 'Dòng code viết, token worker tiêu thụ và số vòng review của từng task.', linesChange: 'Dòng (+/-)', reviewRounds: 'Vòng review', noMatchingTasks: 'Không có task nào phù hợp.', estimatedTitle: 'Số liệu ước tính từ mức giảm quota 5h', methodTitle: 'Về phương pháp đo lường và hệ số quy đổi', methodDesc: 'Số liệu agy là ước tính dựa trên mức giảm quota của cửa sổ 5 giờ và dung lượng bucketTokens ước tính. Số liệu Codex được phân tích chính xác từ log lượt chạy.', },
   dailyUsage: {
@@ -1035,7 +1065,7 @@ export const vi = {
     selectDay: 'Chọn ngày',
   },
   telegram: {
-    settingsTitle: 'Cài đặt Telegram', settingsDescription: 'Kết nối bot Telegram để nhận thông báo và điều khiển AgentHub.', enabled: 'Bật Telegram', tokenLabel: 'Bot token', tokenConfigured: 'Đã cấu hình token', saveToken: 'Lưu token', testButton: 'Kiểm tra', tokenSaved: 'Đã lưu token.', testSuccess: 'Kết nối Telegram thành công.', botFound: 'Bot', loadError: 'Không thể tải cài đặt Telegram.', pairTitle: 'Ghép chat Telegram', pairInstructions: 'Mở bot và gửi /start {code}.', newCode: 'Tạo mã mới', chatsTitle: 'Chat đã ghép', noChats: 'Chưa có chat nào.', removeChat: 'Gỡ chat', notifyTitle: 'Loại thông báo', botFatherTitle: 'Tạo bot với @BotFather', botFatherStep1: 'Mở Telegram, tìm @BotFather và gửi /newbot.', botFatherStep2: 'Đặt tên, username kết thúc bằng bot và sao chép token.', botFatherStep3: 'Dán token ở trên, bấm Kiểm tra rồi bật Telegram.', notify: { reviewReady: 'Có task chờ review', failed: 'Task thất bại', blocked: 'Task bị chặn', quota: 'Hết quota', fallback: 'Chuyển model / tài khoản' },
+    settingsTitle: 'Cài đặt Telegram', settingsDescription: 'Kết nối bot Telegram để nhận thông báo và điều khiển AgentHub.', enabled: 'Bật Telegram', tokenLabel: 'Bot token', tokenConfigured: 'Đã cấu hình token', saveToken: 'Lưu token', testButton: 'Kiểm tra', tokenSaved: 'Đã lưu token.', testSuccess: 'Kết nối Telegram thành công.', botFound: 'Bot', loadError: 'Không thể tải cài đặt Telegram.', pairTitle: 'Ghép chat Telegram', pairInstructions: 'Mở bot và gửi /start {code}.', newCode: 'Tạo mã mới', chatsTitle: 'Chat đã ghép', noChats: 'Chưa có chat nào.', removeChat: 'Gỡ chat', projectsTitle: 'Project và topic/chat', createTopic: 'Tạo topic', attachChat: 'Gắn chat', chatLabel: 'chat', notConfigured: 'Chưa cấu hình', notifyTitle: 'Loại thông báo', botFatherTitle: 'Tạo bot với @BotFather', botFatherStep1: 'Mở Telegram, tìm @BotFather và gửi /newbot.', botFatherStep2: 'Đặt tên, username kết thúc bằng bot và sao chép token.', botFatherStep3: 'Dán token ở trên, bấm Kiểm tra rồi bật Telegram.', notify: { reviewReady: 'Có task chờ review', failed: 'Task thất bại', blocked: 'Task bị chặn', quota: 'Hết quota', fallback: 'Chuyển model / tài khoản' },
     cardTitle: 'Điều khiển Telegram Bot',
     pairingCode: 'Mã ghép đôi',
     expiresIn: 'Hết hạn sau {min}:{sec}',
@@ -1096,6 +1126,7 @@ export const vi = {
     compacted: 'Đã nén ngữ cảnh',
     compactError: 'Không thể nén ngữ cảnh',
     skipToContent: 'Bỏ qua tới nội dung', brainStateWaiting: 'chờ bạn trả lời', brainStateWorking: 'đang làm', brainStateIdle: 'không hoạt động', requestLabel: 'Yêu cầu', toolLabel: 'Công cụ', toolUsed: 'Đã dùng {count} công cụ', expandSessions: 'Mở rộng danh sách', collapseSessions: 'Thu gọn danh sách', addKnowledgePlaceholder: 'Thêm ghi chú kiến thức...', pinKnowledge: 'Ghim/bỏ ghim', closeProfile: 'Đóng', editProfileTitle: 'Sửa hồ sơ {name}', renameProfileTitle: 'Đổi tên {name}', deleteProfileTitle: 'Xoá hồ sơ {name}', displayName: 'Tên hiển thị', notes: 'Ghi chú', priority: 'Ưu tiên', enableProfile: 'Bật hồ sơ', nameMismatch: 'Tên nhập lại chưa khớp', saveProfileError: 'Không thể lưu hồ sơ', renameError: 'Không thể đổi tên', deleteError: 'Không thể xoá hồ sơ', modelChatAria: 'Model chat', chatModelsLabel: 'Danh sách model chat', defaultChatModel: 'Model chat mặc định. Danh sách chọn:', reviewer: 'Reviewer', reviewerModel: 'Model reviewer', fallbackChain: 'Claude fallback chain', fallbackHint: 'Kéo các bước để sắp xếp lại. API key chỉ được ghi.', remove: 'Xoá', addStep: 'Thêm bước', apiKey: 'Anthropic API key', configuredReplace: 'Đã cấu hình (nhập để thay thế)', knowledgeAdd: 'Thêm', linkedTasks: 'Liên kết task', generatedFrom: 'Sinh từ', generatedTask: 'Đã sinh task', orphanProcesses: 'Tiến trình mồ côi', orphanProcessesDesc: 'Các tiến trình còn giữ cwd trong worktree đã dừng.', loadingOlderMessages: 'Đang tải thêm tin nhắn cũ…', grantedPermissions: 'Quyền đã cấp', grantedPermissionsDesc: 'Các quy tắc được dùng để tự động cho phép công cụ.', noPermissionRules: 'Chưa có quy tắc.', cleanup: 'Dọn', cleanupRunning: 'Đang dọn…',
+    permissionTool: 'Công cụ / mẫu', permissionScope: 'Phạm vi',
     forkSummary: 'Mở phiên mới kèm tóm tắt',
     forkSummaryTooltip: 'Tóm tắt và tách sang phiên mới',
     forkSummaryError: 'Không thể tách phiên',

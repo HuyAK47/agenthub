@@ -116,8 +116,26 @@ exit 1
 `;
 }
 
-export function gitShimScript(realBinary: string): string {
-  return `#!/bin/sh
+/**
+ * Interpreter guard used by brain sandboxes. The Codex executable may be a
+ * JavaScript fixture (or a managed JS launcher), so permit only the exact
+ * entrypoint that AgentHub started; all other interpreter invocations remain
+ * blocked, including `node -e` and arbitrary scripts.
+ */
+export function brainInterpreterShimScript(name: string, realBinary: string, interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
+shim_path="$1"
+shift
+if [ "$1" = "$AGENTHUB_BRAIN_ENTRYPOINT" ] && [ -n "$AGENTHUB_BRAIN_ENTRYPOINT" ]; then
+  exec ${shellQuote(realBinary)} "$@"
+fi
+echo ${shellQuote(`AgentHub: brain policy chặn interpreter '${name}'`)} >&2
+exit 1
+`;
+}
+
+export function gitShimScript(realBinary: string, interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
 # Shim git: chặn push và remote set-url, chuyển tiếp nguyên vẹn mọi lệnh khác.
 # Lưu ý: shim chỉ chặn lệnh gọi theo tên 'git', không chặn đường dẫn tuyệt đối (hàng rào chống nhầm, không phải sandbox).
 
@@ -174,12 +192,264 @@ exec ${shellQuote(realBinary)} "$@"
 `;
 }
 
+export function brainGitShimScript(realBinary: string, permissions: 'standard' | 'trusted', interpreter = '/bin/sh'): string {
+  if (permissions === 'trusted') return gitShimScript(realBinary, interpreter);
+  return `#!${interpreter}
+# Brain standard policy: only read-only git commands are autonomous.
+subcmd=""
+skip_next=0
+for arg in "$@"; do
+  if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+  case "$arg" in
+    -C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path) skip_next=1; continue ;;
+    --git-dir=*|--work-tree=*|--namespace=*|--super-prefix=*|--exec-path=*|-c*) continue ;;
+    -*) continue ;;
+    *) subcmd="$arg"; break ;;
+  esac
+done
+case "$subcmd" in
+  status|log|diff|show|branch|rev-parse|merge-base|merge-tree) exec ${shellQuote(realBinary)} "$@" ;;
+  *) echo ${shellQuote('AgentHub: brain standard policy chặn git')} "$subcmd" >&2; exit 1 ;;
+esac
+`;
+}
+
+function brainBlockedShimScript(name: string, interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
+# AgentHub BrainPolicy enforcement. Codex approvals cannot override this guard.
+echo ${shellQuote(`AgentHub: brain policy chặn lệnh '${name}'`)} >&2
+exit 1
+`;
+}
+
+/**
+ * Shells are a particularly important escape hatch: even if every mutating
+ * utility is hidden, `sh -c` can still use builtins such as redirection.  A
+ * brain may use a shell only for one of the commands that BrainPolicy can
+ * autonomously allow, without shell operators or indirection.
+ */
+export function brainShellShimScript(interpreter = '/bin/sh'): string {
+  return `#!${interpreter}
+shim_path="$1"
+shift
+script="$2"
+shell_option="$1"
+shell_script="$2"
+case "$1" in
+  -c|--command)
+    case "$script" in
+      *';'*|*'|'*|*'&'*|*'>'*|*'<'*)
+        echo 'AgentHub: brain policy chặn shell syntax' >&2
+        exit 1
+        ;;
+    esac
+    # Shell commands do not go through BrainPolicy's parser.  Keep this
+    # fallback deliberately conservative: commands containing path
+    # indirection or an absolute path are denied here and must be invoked by
+    # the Codex tool runner through the dedicated read-command shims below.
+    case "$script" in
+      */*|*..*|*'~'*)
+        echo 'AgentHub: brain policy chặn đường dẫn shell không an toàn' >&2
+        exit 1
+        ;;
+    esac
+    case "$script" in
+      *'$('*)
+        echo 'AgentHub: brain policy chặn shell syntax' >&2
+        exit 1
+        ;;
+    esac
+    case "$script" in
+      git[[:space:]]*|grep[[:space:]]*|cat[[:space:]]*|head[[:space:]]*|tail[[:space:]]*|wc[[:space:]]*|ls[[:space:]]*|npm[[:space:]]*|pnpm[[:space:]]*|npx[[:space:]]*)
+        exec ${interpreter} "$shell_option" "$shell_script"
+        ;;
+      curl[[:space:]]*)
+        set -f
+        set -- $script
+        shift
+        curl_url=''
+        curl_header=0
+        for curl_arg in "$@"; do
+          if [ "$curl_header" -eq 1 ]; then
+            case "$curl_arg" in @*|*'$'*|*'\`'*) echo 'AgentHub: brain policy chặn curl header' >&2; exit 1 ;; esac
+            curl_header=0
+            continue
+          fi
+          case "$curl_arg" in
+            -s|-S|-L|--silent|--show-error|--location) ;;
+            -X|--request) curl_header=2 ;;
+            --request=GET) ;;
+            -H|--header) curl_header=1 ;;
+            http://*|https://*)
+              case "$curl_arg" in https://api.github.com|https://api.github.com/*) [ -z "$curl_url" ] || { echo 'AgentHub: brain policy chặn curl' >&2; exit 1; }; curl_url="$curl_arg" ;; *) echo 'AgentHub: brain policy chặn curl đích' >&2; exit 1 ;; esac
+              ;;
+            *)
+              if [ "$curl_header" -eq 2 ] && [ "$(printf '%s' "$curl_arg" | tr '[:lower:]' '[:upper:]')" = GET ]; then curl_header=0; else echo 'AgentHub: brain policy chặn curl' >&2; exit 1; fi
+              ;;
+          esac
+        done
+        [ "$curl_header" -eq 0 ] && [ -n "$curl_url" ] || { echo 'AgentHub: brain policy chặn curl' >&2; exit 1; }
+        exec ${interpreter} "$shell_option" "$shell_script"
+        ;;
+      *)
+        echo 'AgentHub: brain policy chặn lệnh shell' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo 'AgentHub: brain policy chặn interactive shell' >&2
+    exit 1
+    ;;
+esac
+`;
+}
+
+/** Direct command shims mirror the BrainPolicy allowlist instead of relying on
+ * Codex's approval prompt.  In particular, a direct `npm run arbitrary` must
+ * be rejected just like the same command through `sh -c`.
+ */
+export function brainAllowlistedShimScript(name: 'npm' | 'pnpm' | 'npx' | 'curl', realBinary: string, interpreter = '/bin/sh'): string {
+  const denied = 'AgentHub: brain policy chặn tham số lệnh';
+  if (name === 'npx') {
+    return `#!${interpreter}
+case "$1 $2" in
+  "vitest run"|"tsc --noEmit") ;;
+  *) echo ${shellQuote(denied)} >&2; exit 1 ;;
+esac
+exec ${shellQuote(realBinary)} "$@"
+`;
+  }
+  if (name === 'npm' || name === 'pnpm') {
+    return `#!${interpreter}
+case "$1 $2" in
+  "test "|"test "*|"run test"|"run test "*|"lint "|"lint "*|"run lint"|"run lint "*|"typecheck "|"typecheck "*|"run typecheck"|"run typecheck "*|"build "|"build "*|"run build"|"run build "*|"build:web "|"build:web "*|"run build:web"|"run build:web "*) ;;
+  *) echo ${shellQuote(denied)} >&2; exit 1 ;;
+esac
+exec ${shellQuote(realBinary)} "$@"
+`;
+  }
+  return `#!${interpreter}
+url=''
+request='GET'
+header=0
+for arg in "$@"; do
+  if [ "$header" -eq 1 ]; then
+    case "$arg" in @*|*'$'*|*'\`'*) echo 'AgentHub: brain policy chặn curl header' >&2; exit 1 ;; esac
+    header=0
+    continue
+  fi
+  case "$arg" in
+    -s|-S|-L|--silent|--show-error|--location) ;;
+    -X|--request) request='__next__' ;;
+    --request=*) request="\${arg#--request=}" ;;
+    -H|--header) header=1 ;;
+    http://*|https://*) case "$arg" in https://api.github.com|https://api.github.com/*) [ -z "$url" ] || { echo 'AgentHub: brain policy chặn curl' >&2; exit 1; }; url="$arg" ;; *) echo 'AgentHub: brain policy chặn curl đích' >&2; exit 1 ;; esac ;;
+    *)
+      if [ "$request" = '__next__' ]; then request="$arg"; else echo ${shellQuote(denied)} >&2; exit 1; fi
+      ;;
+  esac
+done
+case "$request" in GET|get) ;; *) echo ${shellQuote(denied)} >&2; exit 1 ;; esac
+[ "$header" -eq 0 ] && [ -n "$url" ] || { echo ${shellQuote(denied)} >&2; exit 1; }
+exec ${shellQuote(realBinary)} "$@"
+`;
+}
+
+/**
+ * Read-only utilities still need a guard when Codex invokes them by absolute
+ * path.  The sandbox makes writes outside the worktree impossible, while
+ * this shim prevents reads of credentials and unrelated host files.
+ */
+export function brainReadShimScript(name: string, realBinary: string, interpreter = '/bin/sh'): string {
+  const optionSpec = {
+    cat: { flags: ['-A', '-b', '-e', '-E', '-n', '-s', '-t', '-T', '-v', '--show-all', '--number-nonblank', '--number', '--squeeze-blank', '--show-tabs', '--show-nonprinting'], values: [] },
+    // Recursive grep can follow a symlink inside the worktree to a secret or
+    // unrelated host directory. File-backed patterns are denied by
+    // BrainPolicy too, so reject those options before they reach grep.
+    grep: { flags: ['-E', '-F', '-G', '-P', '-i', '-v', '-w', '-x', '-m', '-n', '-b', '-H', '-h', '-s', '-o', '-q', '-a', '--extended-regexp', '--fixed-strings', '--basic-regexp', '--perl-regexp', '--ignore-case', '--invert-match', '--word-regexp', '--line-regexp', '--line-number', '--byte-offset', '--with-filename', '--no-filename', '--silent', '--only-matching', '--quiet', '--binary-files'], values: ['-e', '--regexp', '--max-count', '--binary-files'] },
+    head: { flags: ['-q', '-v', '--quiet', '--verbose'], values: ['-n', '-c', '--lines', '--bytes'] },
+    tail: { flags: ['-q', '-v', '--quiet', '--verbose', '--follow', '--retry', '--pid'], values: ['-n', '-c', '-s', '--lines', '--bytes', '--sleep-interval', '--pid'] },
+    wc: { flags: ['-c', '-m', '-l', '-L', '-w', '--bytes', '--chars', '--lines', '--max-line-length', '--words'], values: [] },
+    ls: { flags: ['-a', '-A', '-b', '-B', '-c', '-C', '-d', '-f', '-F', '-g', '-G', '-h', '-H', '-i', '-l', '-m', '-n', '-N', '-o', '-p', '-q', '-Q', '-r', '-R', '-s', '-S', '-t', '-u', '-U', '-v', '-w', '-x', '-X', '-Z', '--all', '--almost-all', '--author', '--color', '--directory', '--classify', '--human-readable', '--inode', '--long', '--reverse', '--recursive', '--size', '--sort', '--time', '--version-sort'], values: [] },
+  }[name as 'cat' | 'grep' | 'head' | 'tail' | 'wc' | 'ls'] ?? { flags: [], values: [] };
+  const flags = optionSpec.flags.map(shellQuote).join('|');
+  const values = optionSpec.values.map(shellQuote).join('|');
+  const valueCase = values ? `      ${values}) option_value=1; continue ;;\n` : '';
+  const grepSafetyCase = name === 'grep' ? `
+      -r|-R|--recursive|--dereference-recursive)
+        echo 'AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file' >&2
+        exit 1 ;;
+      -f|--file|--file=*|-f*)
+        echo 'AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file' >&2
+        exit 1 ;;
+` : '';
+  return `#!${interpreter}
+root="${'${AGENTHUB_BRAIN_ROOT:-$PWD}'}"
+root="$(readlink -f -- "$root" 2>/dev/null)"
+if [ -z "$root" ]; then
+  echo 'AgentHub: brain policy không xác định được project root' >&2
+  exit 1
+fi
+end_options=0
+option_value=0
+for arg in "$@"; do
+  if [ "$option_value" -eq 1 ]; then
+    option_value=0
+    continue
+  fi
+  if [ "$end_options" -eq 1 ]; then
+    :
+  else
+${name === 'grep' ? `    case "$arg" in
+      -*)
+        case "$arg" in
+          --*) ;;
+          -*) case "\${arg#-}" in *r*|*R*) echo 'AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file' >&2; exit 1 ;; esac ;;
+        esac ;;
+    esac
+` : ''}
+    case "$arg" in
+      --) end_options=1; continue ;;
+${grepSafetyCase}      # Only known options are skipped. Unknown dash-prefixed
+      # arguments remain operands and are resolved below.
+      ${flags}) continue ;;
+${valueCase}      *) ;;
+    esac
+  fi
+  # Numeric names and unknown dash-prefixed values are operands.  Only the
+  # command's known options above are skipped.
+  resolved="$(readlink -f -- "$arg" 2>/dev/null)"
+  if [ -z "$resolved" ]; then
+    echo 'AgentHub: brain policy không xác định được đường dẫn đọc' >&2
+    exit 1
+  fi
+  case "$resolved" in
+    "$root"|"$root"/*) ;;
+    *)
+      echo 'AgentHub: brain policy chặn đọc ngoài project/worktree' >&2
+      exit 1
+      ;;
+  esac
+  case "$resolved" in
+    */.git|*/.git/*|*/auth.json|*/.credentials.json|*oauth*token*|*/.agenthub/token|*/secrets|*/secrets/*|*/.ssh|*/.ssh/*|*/.codex|*/.codex/*|*/.agy-homes|*/.agy-homes/*)
+      echo 'AgentHub: brain policy chặn đọc secret hoặc .git' >&2
+      exit 1
+      ;;
+  esac
+done
+exec ${shellQuote(realBinary)} "$@"
+`;
+}
+
 export interface WorkerEnvOptions {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null } | null;
   guards?: boolean;
   cwd?: string;
   workerCount?: number;
+  brainPolicy?: 'standard' | 'trusted';
+  brainInterpreter?: string;
 }
 
 const HUB_GIT_NAME = 'AgentHub';
@@ -246,8 +516,56 @@ export function workerEnvironment(
     // 3. git wrapper shim
     const realGit = findExecutable('git', env, hubHome) || findExecutable('git', process.env, hubHome) || '/usr/bin/git';
     const gitFile = path.join(workerDir, 'git');
-    const gitContent = gitShimScript(realGit);
+    const brainPolicy = options && 'brainPolicy' in options ? options.brainPolicy : undefined;
+    const brainInterpreter = options && 'brainInterpreter' in options ? options.brainInterpreter : '/bin/sh';
+    const gitContent = brainPolicy ? brainGitShimScript(realGit, brainPolicy, brainInterpreter) : gitShimScript(realGit);
     writeShimFile(gitFile, gitContent);
+
+    if (brainPolicy) {
+      if (options && 'cwd' in options && options.cwd) env.AGENTHUB_BRAIN_ROOT = path.resolve(options.cwd);
+      // Brain sessions do not get an interactive approval path that can be
+      // consulted by this process. Keep the command-level guard conservative:
+      // interpreters and filesystem mutation tools can all be used to bypass a
+      // name-based deny-list (for example `node -e`, `find -delete`, or
+      // `mv`), so they must not reach the real binary from a brain sandbox.
+      const brainShells = ['sh', 'bash', 'zsh', 'dash', 'fish'];
+      for (const name of brainShells) {
+        writeShimFile(path.join(workerDir, name), brainShellShimScript(brainInterpreter));
+      }
+
+      const blockedNames = new Set([
+        'rm', 'mv', 'cp', 'install', 'find', 'xargs', 'sed', 'perl', 'python', 'python3', 'ruby', 'node',
+        'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman',
+        'mkfs', 'dd', 'truncate', 'chown', 'chmod', 'chgrp', 'mount', 'umount', 'tar', 'zip', 'unzip',
+        'sh', 'bash', 'zsh', 'dash', 'fish', 'echo', 'printf', 'touch', 'mkdir', 'rmdir', 'ln', 'tee', 'awk', 'gawk',
+        'busybox', 'env', 'nohup', 'timeout', 'watch', 'yes', 'sort', 'uniq', 'xargs',
+        'ed', 'ex', 'vim', 'vi', 'nvim', 'emacs', 'make', 'cmake', 'gcc', 'clang', 'go', 'java', 'php',
+        ...brainShells,
+      ]);
+      const brainReadCommands = ['cat', 'grep', 'head', 'tail', 'wc', 'ls'];
+      for (const name of brainReadCommands) {
+        const realBinary = findExecutable(name, env, hubHome);
+        if (realBinary) writeShimFile(path.join(workerDir, name), brainReadShimScript(name, realBinary, brainInterpreter));
+      }
+      for (const name of blockedNames) {
+        const content = name === 'node'
+          ? brainInterpreterShimScript(name, findExecutable(name, env, hubHome) || process.execPath, brainInterpreter)
+          : brainShells.includes(name) ? brainShellShimScript(brainInterpreter) : brainBlockedShimScript(name, brainInterpreter);
+        writeShimFile(path.join(workerDir, name), content);
+      }
+      // These commands are useful for the small read/build checks BrainPolicy
+      // allows, but their arguments are security-sensitive.  Wrap the real
+      // binaries so direct execution cannot bypass the shell shim.
+      for (const name of ['npm', 'pnpm', 'npx', 'curl'] as const) {
+        const realBinary = findExecutable(name, env, hubHome);
+        if (realBinary) writeShimFile(path.join(workerDir, name), brainAllowlistedShimScript(name, realBinary, brainInterpreter));
+      }
+      // serviceDir precedes workerDir in PATH, so replace the permissive worker
+      // service guard for brain sessions with the same unconditional policy.
+      for (const name of ['systemctl', 'launchctl']) {
+        writeShimFile(path.join(serviceDir, name), brainBlockedShimScript(name, brainInterpreter));
+      }
+    }
   }
 
   const existingPath = (env.PATH || '')

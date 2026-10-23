@@ -106,6 +106,7 @@ export interface Project {
   defaultBranch: string;
   envTemplate?: string | null;
   maxParallel: number;
+  priority?: number;
   departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
@@ -117,6 +118,30 @@ export interface Project {
   ciStatus?: CiStatusSummary | null;
   createdAt?: string;
   afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
+}
+
+export interface ProjectInspection {
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  isGitRepo: boolean;
+  currentBranch: string | null;
+  branches: string[];
+  remoteHost: string | null;
+  estimatedSizeBytes: number;
+  sizeTruncated: boolean;
+  lockfiles: string[];
+  monorepo: { detected: boolean; type: string | null };
+  gitHooks: { husky: boolean; commitlint: boolean };
+  language: string;
+  projectFiles: string[];
+  guidanceFiles: string[];
+  mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
+  claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
+  claudeSessionPreviews: Array<{ name: string; content: string }>;
+  hasClaudeMemory: boolean;
+  memoryPreview: string | null;
+  suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
 }
 
 export interface DepartmentProfile {
@@ -180,9 +205,17 @@ export interface DeployStatus {
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
   commitConvention?: { branchTemplate: string; commitTemplate: string; commitRegex?: string; mergeMessageTemplate: string };
-  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  brain: {
+    engine?: 'inherit' | 'claude' | 'codex';
+    codexProfile?: string;
+    mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+    permissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+    dailyTokenBudget?: number;
+    maxTurnsPerHour?: number;
+  };
   worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
+  review?: { autoMerge?: boolean };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
   reviewChecklist?: string[];
@@ -205,6 +238,7 @@ export interface Run {
   model: string;
   profileName: string;
   pid?: number | null;
+  kind?: string | null;
   startedAt: string;
   endedAt?: string | null;
   outcome?: 'done' | 'blocked' | 'quota' | 'crashed' | 'cancelled' | 'timeout' | 'stalled' | null;
@@ -219,6 +253,7 @@ export interface Review {
   verdict: 'approved' | 'changes_requested';
   feedback?: string | null;
   createdAt: string;
+  actor?: string;
 }
 
 export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
@@ -252,6 +287,7 @@ export interface Task {
   reviewChain?: ReviewChainStep[];
   createdAt: string;
   updatedAt: string;
+  reviewer?: 'codex' | 'claude';
   currentRun?: {
     startedAt: string;
     lastOutputAt: string;
@@ -331,6 +367,7 @@ export interface TaskDetail extends Task {
   reviewMaxRounds?: number;
   runs: Run[];
   reviews: Review[];
+  events?: EventItem[];
   doneContent?: string | null;
   blockedContent?: string | null;
   commits?: string[] | null;
@@ -405,6 +442,7 @@ export interface ProjectBrain {
   projectId: string | null;
   projectName: string;
   mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  engine?: 'claude' | 'codex';
   permissions?: 'standard' | 'trusted' | 'full';
   sessionMode?: 'safe' | 'full';
   sessionId: string;
@@ -473,6 +511,11 @@ export interface HubStatus {
     low: boolean;
     source: 'worktrees' | 'extra';
   }>;
+  worktrees?: {
+    count: number;
+    bytes: number;
+    byStatus: Record<string, { count: number; bytes: number }>;
+  };
   load?: {
     load1: number;
     freeMemGB: number;
@@ -561,6 +604,8 @@ export interface SavingsReport {
   byModel: Record<string, { tokens: number; taskCount: number }>;
   byDay: SavingsDailyItem[];
   tasks: SavingsTaskItem[];
+  tasksTotal?: number;
+  tasksNextCursor?: string | null;
 }
 
 export interface ProfileQuotaInfo {
@@ -634,8 +679,20 @@ export interface SystemConfig {
   };
   runTimeoutHours?: number;
   chat?: ChatConfig;
-  reviewer?: { model: string; enabled?: boolean; timeoutSec?: number; failoverSec?: number; maxChangesRequested?: number };
+  reviewer?: {
+    model: string;
+    enabled?: boolean;
+    timeoutSec?: number;
+    failoverSec?: number;
+    maxChangesRequested?: number;
+    claudeFallback?: boolean;
+    claudeProfiles?: string[];
+    claudeModel?: string;
+  };
   brain?: {
+    engine?: 'claude' | 'codex';
+    codexProfile?: string;
+    codexModel?: string;
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
     maxConcurrent?: number;
@@ -655,6 +712,7 @@ export interface SystemConfig {
   };
   notifications?: {
     desktop: boolean;
+    desktopLevel?: 'all' | 'important' | 'critical' | 'off';
     quietHours?: {
       enabled: boolean;
       start: string;
@@ -781,6 +839,15 @@ export interface CreateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: ProjectSettings;
+}
+
+export interface CreateNewProjectInput {
+  name: string;
+  path: string;
+  defaultBranch?: string;
+  maxParallel?: number;
+  checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   settings?: ProjectSettings;
 }
 

@@ -46,6 +46,8 @@ import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { SetupManager } from './tools/setup.js';
 import { ClaudeReviewEngine, CLAUDE_REVIEW_ENGINE_KEY } from './engines/claude-review.js';
 import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
@@ -267,6 +269,7 @@ export function createContext(
     taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
+    departmentRepo,
     directiveRepo,
     knowledgeRepo,
   });
@@ -316,7 +319,14 @@ export function createContext(
   service.deployService = deployService;
   scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {
     const data = payload && typeof payload === 'object' ? payload as { reviewChainComplete?: unknown } : {};
-    if (taskId && data.reviewChainComplete === true) void service.autoMergeReviewedTask(taskId);
+    if (taskId && data.reviewChainComplete === true) {
+      // ReviewTask emits this event before it releases its reviewingTasks guard.
+      // Defer the merge so the normal service path can finish first.
+      setImmediate(() => void service.autoMergeReviewedTask(taskId));
+    }
+  });
+  scheduler.getEventBus().on('task.queued', (taskId) => {
+    if (taskId) service.clearFailedAutoMerge(taskId);
   });
   scheduler.getEventBus().on('review.escalated', (taskId, payload) => {
     if (taskId) void service.retryEscalatedReview(taskId, (payload && typeof payload === 'object' ? payload : {}) as { reason?: unknown; feedback?: unknown });
@@ -486,6 +496,7 @@ export async function startDaemon(
 
   // Start scheduler
   ctx.scheduler.start();
+  void ctx.service.retryParkedEscalations();
 
   // Start notification service and claude transcript scanner
   ctx.notifier.start();
@@ -501,7 +512,22 @@ export async function startDaemon(
   }
 
   // Start Fastify HTTP server with security and API endpoints
-  const fastify = await createServer(ctx.service, config);
+  const fastify = await createServer(ctx.service, config, {
+    onShutdown: (disable) => {
+      if (disable) {
+        try {
+          const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+          const args = process.platform === 'darwin'
+            ? ['unload', path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist')]
+            : ['--user', 'disable', 'agenthub'];
+          execFileSync(command, args, { stdio: 'ignore' });
+        } catch {
+          // The CLI reports service-manager errors; the daemon must still exit cleanly.
+        }
+      }
+      setImmediate(() => { void shutdown(); });
+    },
+  });
 
   const port = config.port;
   try {

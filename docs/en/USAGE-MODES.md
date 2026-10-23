@@ -26,6 +26,8 @@ Choose A when you want to give a goal from the web or phone, do not want to open
 - Worker quota is available.
 - Telegram is optional; remote control requires a bot token and a paired chat.
 
+For per-project routing, use a Telegram group with Topics. In Settings, click **Create topic** for each project or send `/topics setup`; project notifications and messages then stay in that topic and use the project assistant session. Without Topics, use **Attach chat** to assign a paired private chat to a project. Only chats in `allowedChatIds` are accepted.
+
 ### Setup
 
 1. Open the Dashboard, complete Setup, sign in to a worker, and register a project such as `my-app`.

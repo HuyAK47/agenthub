@@ -61,7 +61,7 @@ export class ClaudeReviewEngine implements Engine {
 
   detectQuota(logTail: string): QuotaDetection {
     const tail = lastNLines(logTail, 8);
-    if (/usage limit|limit reached|rate limit|\b429\b/i.test(tail)) {
+    if (/usage limit|limit reached|rate limit|hit your (session|usage|weekly|daily) limit|\b429\b/i.test(tail)) {
       return { exhausted: true, resetSeconds: parseResetTime(tail) };
     }
     return { exhausted: false };

@@ -343,7 +343,7 @@ export const CreateTaskPage: React.FC = () => {
           <button
             type="submit"
             disabled={mutation.isPending}
-            className="px-5 py-2 text-sm font-medium rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white shadow-xs inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
+            className="px-5 py-2 text-sm font-medium rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] shadow-xs inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
           >
             {mutation.isPending ? (
               t('createTask.creatingBtn')

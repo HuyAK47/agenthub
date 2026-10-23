@@ -1,4 +1,9 @@
 import Database from 'better-sqlite3';
+import { decodeCursor, encodeCursor, parsePageSize, PageResult } from '../pagination.js';
+
+function normalizeSearchText(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, (c) => c === 'đ' ? 'd' : 'D').toLowerCase();
+}
 
 export const MIGRATIONS: string[] = [
   // Migration 0: initial schema
@@ -732,7 +737,19 @@ export const MIGRATIONS: string[] = [
     FOREIGN KEY (profileName) REFERENCES profiles(name) ON DELETE CASCADE
   );
   `,
-  // Migration 53: external references for task/project commit conventions.
+  // Migration 53: resident brain settings and department-scoped turn accounting.
+  `
+  ALTER TABLE departments ADD COLUMN brainEngine TEXT NOT NULL DEFAULT 'claude';
+  ALTER TABLE departments ADD COLUMN brainModel TEXT NOT NULL DEFAULT 'sonnet';
+  ALTER TABLE departments ADD COLUMN brainCodexProfile TEXT;
+  ALTER TABLE departments ADD COLUMN brainMode TEXT NOT NULL DEFAULT 'inherit';
+  ALTER TABLE departments ADD COLUMN brainPermissions TEXT NOT NULL DEFAULT 'full';
+  ALTER TABLE departments ADD COLUMN brainDailyTokenBudget INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE departments ADD COLUMN brainMaxTurnsPerHour INTEGER NOT NULL DEFAULT 20;
+  ALTER TABLE brain_turns ADD COLUMN departmentId TEXT;
+  CREATE INDEX IF NOT EXISTS idx_brain_turns_department ON brain_turns(departmentId, startedAt);
+  `,
+  // Migration 54: external references for task/project commit conventions.
   `ALTER TABLE tasks ADD COLUMN externalRef TEXT;`,
 ];
 
@@ -740,6 +757,7 @@ export function openDatabase(dbPath: string): Database.Database {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  db.function('agenthub_normalize', normalizeSearchText);
 
   // Run migrations
   const versionRow = (() => {
@@ -829,6 +847,13 @@ export interface DepartmentRow {
   maxParallel: number;
   claudeDailyTokenBudget: number;
   telegramTopicId: number | null;
+  brainEngine?: 'claude' | 'codex';
+  brainModel?: string;
+  brainCodexProfile?: string | null;
+  brainMode?: 'inherit' | 'off' | 'suggest' | 'auto';
+  brainPermissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+  brainDailyTokenBudget?: number;
+  brainMaxTurnsPerHour?: number;
   createdAt: string;
   profiles?: DepartmentProfileRow[];
   projectCount?: number;
@@ -1134,11 +1159,18 @@ export class DepartmentRepo {
 
   insert(row: Omit<DepartmentRow, 'createdAt' | 'profiles' | 'projectCount'>): void {
     this.db.prepare(
-      'INSERT INTO departments (id, name, priority, maxParallel, claudeDailyTokenBudget, telegramTopicId) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(row.id, row.name, row.priority, row.maxParallel, row.claudeDailyTokenBudget, row.telegramTopicId);
+      `INSERT INTO departments
+       (id, name, priority, maxParallel, claudeDailyTokenBudget, telegramTopicId,
+        brainEngine, brainModel, brainCodexProfile, brainMode, brainPermissions,
+        brainDailyTokenBudget, brainMaxTurnsPerHour)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(row.id, row.name, row.priority, row.maxParallel, row.claudeDailyTokenBudget, row.telegramTopicId,
+      row.brainEngine || 'claude', row.brainModel || 'sonnet', row.brainCodexProfile || null,
+      row.brainMode || 'inherit', row.brainPermissions || 'full', row.brainDailyTokenBudget || 0,
+      row.brainMaxTurnsPerHour || 20);
   }
 
-  update(id: string, fields: Partial<Pick<DepartmentRow, 'name' | 'priority' | 'maxParallel' | 'claudeDailyTokenBudget' | 'telegramTopicId'>>): void {
+  update(id: string, fields: Partial<Pick<DepartmentRow, 'name' | 'priority' | 'maxParallel' | 'claudeDailyTokenBudget' | 'telegramTopicId' | 'brainEngine' | 'brainModel' | 'brainCodexProfile' | 'brainMode' | 'brainPermissions' | 'brainDailyTokenBudget' | 'brainMaxTurnsPerHour'>>): void {
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
     if (!entries.length) return;
     this.db.prepare(`UPDATE departments SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
@@ -1179,6 +1211,24 @@ export class DepartmentRepo {
       this.db.prepare('DELETE FROM department_profiles WHERE departmentId = ?').run(departmentId);
       const insert = this.db.prepare('INSERT INTO department_profiles (departmentId, profileName, share) VALUES (?, ?, ?)');
       for (const profile of profiles) insert.run(departmentId, profile.profileName, profile.share ?? null);
+    });
+    transaction();
+  }
+
+  transferProfile(profileName: string, fromDepartmentId: string, toDepartmentId: string): void {
+    if (fromDepartmentId === toDepartmentId) return;
+    const transaction = this.db.transaction(() => {
+      const assignment = this.db.prepare(
+        'SELECT share FROM department_profiles WHERE departmentId = ? AND profileName = ?',
+      ).get(fromDepartmentId, profileName) as { share: number | null } | undefined;
+      if (!assignment) throw new Error(`Profile ${profileName} is not assigned to ${fromDepartmentId}`);
+      this.db.prepare(
+        'DELETE FROM department_profiles WHERE departmentId = ? AND profileName = ?',
+      ).run(fromDepartmentId, profileName);
+      this.db.prepare(
+        `INSERT INTO department_profiles (departmentId, profileName, share) VALUES (?, ?, ?)
+         ON CONFLICT(departmentId, profileName) DO UPDATE SET share = excluded.share`,
+      ).run(toDepartmentId, profileName, assignment.share);
     });
     transaction();
   }
@@ -1429,6 +1479,39 @@ export class TaskRepo {
     return this.db.prepare(`SELECT * FROM tasks${where} ORDER BY createdAt`).all(...values) as TaskRow[];
   }
 
+  page(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number; sort?: string; order?: string }): PageResult<TaskRow> {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (filter?.project && filter.project !== 'all') { conditions.push('projectId = ?'); values.push(filter.project); }
+    if (filter?.status && filter.status !== 'all') { conditions.push('status = ?'); values.push(filter.status); }
+    if (filter?.search?.trim()) {
+      const search = `%${filter.search.trim().replace(/[\\%_]/g, '\\$&')}%`;
+      conditions.push("(agenthub_normalize(slug) LIKE agenthub_normalize(?) ESCAPE '\\' OR agenthub_normalize(title) LIKE agenthub_normalize(?) ESCAPE '\\')");
+      values.push(search, search);
+    }
+    const cursor = decodeCursor(filter?.cursor);
+    if (filter?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    const sortColumn = filter?.sort === 'updatedAt' ? 'updatedAt' : filter?.sort === 'title' ? 'title' : filter?.sort === 'slug' ? 'slug' : 'createdAt';
+    const descending = filter?.order !== 'asc';
+    const comparison = descending ? '<' : '>';
+    if (cursor) {
+      conditions.push(`(${sortColumn} ${comparison} ? OR (${sortColumn} = ? AND id ${comparison} ?))`);
+      values.push(cursor.value, cursor.value, cursor.id);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = conditions.slice(0, cursor ? -1 : undefined);
+    const countValues = values.slice(0, cursor ? -3 : undefined);
+    const total = (this.db.prepare(`SELECT COUNT(*) as count FROM tasks${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
+    const limit = parsePageSize(filter?.limit);
+    const offset = typeof filter?.offset === 'number' ? filter.offset : Number(filter?.offset || 0);
+    const safeOffset = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+    const rows = this.db.prepare(`SELECT * FROM tasks${where} ORDER BY ${sortColumn} ${descending ? 'DESC' : 'ASC'}, id ${descending ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`).all(...values, limit + 1, safeOffset) as TaskRow[];
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor((last[sortColumn as keyof TaskRow] as string | number | null) ?? '', last.id) : null };
+  }
+
   getByProject(projectId: string): TaskRow[] {
     return this.db
       .prepare('SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt')
@@ -1632,6 +1715,27 @@ export class TaskBatchRepo {
     return this.db.prepare(query).all(...params) as TaskBatchRow[];
   }
 
+  page(options?: { project?: string; status?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskBatchRow> {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (options?.project && options.project !== 'all') { conditions.push('projectId = ?'); values.push(options.project); }
+    if (options?.status && options.status !== 'all') { conditions.push('status = ?'); values.push(options.status); }
+    const cursor = decodeCursor(options?.cursor);
+    if (options?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    if (cursor) { conditions.push('(createdAt < ? OR (createdAt = ? AND id < ?))'); values.push(cursor.value, cursor.value, cursor.id); }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = cursor ? conditions.slice(0, -1) : conditions;
+    const countValues = cursor ? values.slice(0, -3) : values;
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM task_batches${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
+    const limit = parsePageSize(options?.limit);
+    const offset = Number.isFinite(Number(options?.offset)) && Number(options?.offset) > 0 ? Math.floor(Number(options?.offset)) : 0;
+    const rows = this.db.prepare(`SELECT * FROM task_batches${where} ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit + 1, offset) as TaskBatchRow[];
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null };
+  }
+
   updateStatus(id: string, status: BatchStatus): void {
     this.db.prepare('UPDATE task_batches SET status = ? WHERE id = ?').run(status, id);
   }
@@ -1678,6 +1782,24 @@ export class RunRepo {
       // second cannot be mistaken for the previous completion.
       .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt, rowid')
       .all(taskId) as RunRow[];
+  }
+
+  pageByTask(taskId: string, limit: string | number | undefined, cursor?: string, offset: string | number | undefined = 0): PageResult<RunRow> {
+    const decoded = decodeCursor(cursor);
+    if (cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(limit);
+    const values: unknown[] = [taskId];
+    const where = decoded
+      ? ' WHERE taskId = ? AND (startedAt < ? OR (startedAt = ? AND id < ?))'
+      : ' WHERE taskId = ?';
+    if (decoded) values.push(decoded.value, decoded.value, decoded.id);
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM runs WHERE taskId = ?').get(taskId) as { count: number }).count;
+    const safeOffset = Number.isFinite(Number(offset)) && Number(offset) > 0 ? Math.floor(Number(offset)) : 0;
+    const rows = this.db.prepare(`SELECT * FROM runs${where} ORDER BY startedAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, pageSize + 1, safeOffset) as RunRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.startedAt, last.id) : null };
   }
 
   getRunning(): RunRow[] {
@@ -1752,6 +1874,25 @@ export class EventRepo {
     return this.db
       .prepare('SELECT * FROM events WHERE taskId = ? ORDER BY id')
       .all(taskId) as EventRow[];
+  }
+
+  page(options?: { taskId?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<EventRow> {
+    const decoded = decodeCursor(options?.cursor);
+    if (options?.cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(options?.limit);
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (options?.taskId) { conditions.push('taskId = ?'); values.push(options.taskId); }
+    if (decoded) { conditions.push('id < ?'); values.push(Number(decoded.value)); }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = options?.taskId ? ' WHERE taskId = ?' : '';
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM events${countConditions}`).get(...(options?.taskId ? [options.taskId] : [])) as { count: number }).count;
+    const offset = decoded ? 0 : Math.max(0, Math.floor(Number(options?.offset) || 0));
+    const rows = this.db.prepare(`SELECT * FROM events${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...values, pageSize + 1, offset) as EventRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.id, String(last.id)) : null };
   }
 }
 
@@ -1888,6 +2029,44 @@ export class ChatSessionRepo {
          ORDER BY s.pinned DESC, s.updatedAt DESC, s.createdAt DESC`
       )
       .all(archived, pattern, pattern).map((session) => this.normalizeAssistantSession(session as ChatSessionRow));
+  }
+
+  page(options?: {
+    search?: string;
+    archived?: number | null;
+    limit?: string | number;
+    cursor?: string;
+  }): PageResult<ChatSessionRow> {
+    const archived = options?.archived !== undefined ? options.archived : 0;
+    const search = options?.search?.trim();
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (archived !== null) {
+      conditions.push('s.archived = ?');
+      values.push(archived);
+    }
+    if (search) {
+      const escaped = search.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+      const pattern = `%${escaped}%`;
+      conditions.push("(s.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM chat_messages m WHERE m.sessionId = s.id AND m.content LIKE ? ESCAPE '\\'))");
+      values.push(pattern, pattern);
+    }
+    const cursor = decodeCursor(options?.cursor);
+    if (options?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    if (cursor) {
+      conditions.push('(s.updatedAt < ? OR (s.updatedAt = ? AND s.id < ?))');
+      values.push(cursor.value, cursor.value, cursor.id);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const countConditions = cursor ? conditions.slice(0, -1) : conditions;
+    const countValues = cursor ? values.slice(0, -3) : values;
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM chat_sessions s${countConditions.length ? ` WHERE ${countConditions.join(' AND ')}` : ''}`).get(...countValues) as { count: number }).count;
+    const limit = parsePageSize(options?.limit);
+    const rows = this.db.prepare(`SELECT s.* FROM chat_sessions s${where} ORDER BY s.updatedAt DESC, s.id DESC LIMIT ?`).all(...values, limit + 1) as ChatSessionRow[];
+    const hasMore = rows.length > limit;
+    const items = (hasMore ? rows.slice(0, limit) : rows).map((session) => this.normalizeAssistantSession(session));
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.updatedAt, last.id) : null };
   }
 
   get(id: string): ChatSessionRow | undefined {
@@ -2105,14 +2284,15 @@ export interface BrainTurnRow {
   finishedAt: string | null;
   error: string | null;
   projectId: string | null;
+  departmentId: string | null;
 }
 
 export class BrainTurnRepo {
   constructor(private db: Database.Database) {}
 
-  insert(row: { id: string; trigger: string; input: string; projectId?: string | null; status?: BrainTurnRow['status'] }): BrainTurnRow {
-    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, projectId, status) VALUES (?, ?, ?, ?, ?)')
-      .run(row.id, row.trigger, row.input, row.projectId || null, row.status || 'running');
+  insert(row: { id: string; trigger: string; input: string; projectId?: string | null; departmentId?: string | null; status?: BrainTurnRow['status'] }): BrainTurnRow {
+    this.db.prepare('INSERT INTO brain_turns (id, trigger, input, projectId, departmentId, status) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.trigger, row.input, row.projectId || null, row.departmentId || null, row.status || 'running');
     return this.get(row.id)!;
   }
 
@@ -2125,6 +2305,11 @@ export class BrainTurnRepo {
       ? 'SELECT * FROM brain_turns ORDER BY startedAt DESC LIMIT 1'
       : 'SELECT * FROM brain_turns WHERE projectId IS ? ORDER BY startedAt DESC LIMIT 1';
     return (projectId === undefined ? this.db.prepare(query).get() : this.db.prepare(query).get(projectId)) as BrainTurnRow | undefined;
+  }
+
+  latestDepartment(departmentId: string): BrainTurnRow | undefined {
+    return this.db.prepare('SELECT * FROM brain_turns WHERE departmentId = ? ORDER BY startedAt DESC LIMIT 1')
+      .get(departmentId) as BrainTurnRow | undefined;
   }
 
   finish(id: string, fields: { status: Exclude<BrainTurnRow['status'], 'running'>; summary?: string; inputTokens?: number; outputTokens?: number; error?: string }): void {
@@ -2150,6 +2335,18 @@ export class BrainTurnRepo {
       ? this.db.prepare(query).get(isoDate)
       : this.db.prepare(query).get(isoDate, projectId);
     return (row as { total: number }).total;
+  }
+
+  countSinceDepartment(epochMs: number, departmentId: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM brain_turns WHERE startedAt >= datetime(?, 'unixepoch') AND departmentId = ?")
+      .get(Math.floor(epochMs / 1000), departmentId) as { count: number };
+    return row.count;
+  }
+
+  tokensSinceDepartment(isoDate: string, departmentId: string): number {
+    const row = this.db.prepare('SELECT COALESCE(SUM(inputTokens + outputTokens), 0) AS total FROM brain_turns WHERE startedAt >= ? AND departmentId = ?')
+      .get(isoDate, departmentId) as { total: number };
+    return row.total;
   }
 }
 
@@ -2254,6 +2451,21 @@ export class PermissionRuleRepo {
 
   listAll(): PermissionRuleRow[] {
     return this.db.prepare('SELECT * FROM permission_rules ORDER BY createdAt, id').all() as PermissionRuleRow[];
+  }
+
+  page(limit: string | number | undefined, cursor?: string): PageResult<PermissionRuleRow> {
+    const decoded = decodeCursor(cursor);
+    if (cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(limit);
+    const values: unknown[] = [];
+    const where = decoded ? ' WHERE (createdAt < ? OR (createdAt = ? AND id < ?))' : '';
+    if (decoded) values.push(decoded.value, decoded.value, decoded.id);
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM permission_rules').get() as { count: number }).count;
+    const rows = this.db.prepare(`SELECT * FROM permission_rules${where} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...values, pageSize + 1) as PermissionRuleRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null };
   }
 
   insert(row: Omit<PermissionRuleRow, 'createdAt'>): PermissionRuleRow {
@@ -2482,6 +2694,24 @@ export class KnowledgeRepo {
       .all(projectId) as KnowledgeEntryRow[];
   }
 
+  pageByProject(projectId: string, limit: string | number | undefined, cursor?: string, offset?: string | number): PageResult<KnowledgeEntryRow> {
+    const decoded = decodeCursor(cursor);
+    if (cursor && !decoded) throw new Error('Invalid pagination cursor');
+    const pageSize = parsePageSize(limit);
+    const values: unknown[] = [projectId];
+    const where = decoded
+      ? ' WHERE projectId = ? AND (createdAt < ? OR (createdAt = ? AND id < ?))'
+      : ' WHERE projectId = ?';
+    if (decoded) values.push(decoded.value, decoded.value, decoded.id);
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM knowledge_entries WHERE projectId = ?').get(projectId) as { count: number }).count;
+    const safeOffset = Number.isFinite(Number(offset)) && Number(offset) > 0 ? Math.floor(Number(offset)) : 0;
+    const rows = this.db.prepare(`SELECT * FROM knowledge_entries${where} ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`).all(...values, pageSize + 1, safeOffset) as KnowledgeEntryRow[];
+    const hasMore = rows.length > pageSize;
+    const items = hasMore ? rows.slice(0, pageSize) : rows;
+    const last = items.at(-1);
+    return { items, total, nextCursor: hasMore && last ? encodeCursor(last.createdAt, String(last.id)) : null };
+  }
+
   get(id: number): KnowledgeEntryRow | undefined {
     return this.db.prepare('SELECT * FROM knowledge_entries WHERE id = ?').get(id) as KnowledgeEntryRow | undefined;
   }
@@ -2646,6 +2876,28 @@ export class CiRepo {
         'SELECT * FROM ci_runs WHERE projectId = ? ORDER BY runId DESC LIMIT ?',
       )
       .all(projectId, limit) as CiRunRow[];
+  }
+
+  pageByProject(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }): PageResult<CiRunRow> {
+    const limit = parsePageSize(options?.limit);
+    const cursor = decodeCursor(options?.cursor);
+    if (options?.cursor && !cursor) throw new Error('Invalid pagination cursor');
+    const offset = cursor ? 0 : Math.max(0, Number(options?.offset) || 0);
+    const params: Array<string | number> = [projectId];
+    let where = 'projectId = ?';
+    if (cursor) {
+      where += ' AND (runId < ? OR (runId = ? AND projectId < ?))';
+      params.push(Number(cursor.value), Number(cursor.value), cursor.id);
+    }
+    const rows = this.db.prepare(`SELECT * FROM ci_runs WHERE ${where} ORDER BY runId DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit + 1, offset) as CiRunRow[];
+    const items = rows.slice(0, limit);
+    const last = items[items.length - 1];
+    return {
+      items,
+      total: (this.db.prepare('SELECT COUNT(*) AS count FROM ci_runs WHERE projectId = ?').get(projectId) as { count: number }).count,
+      nextCursor: rows.length > limit && last ? encodeCursor(last.runId, String(last.runId)) : null,
+    };
   }
 
   getLatestForAllProjects(): Map<string, CiRunRow> {

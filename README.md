@@ -153,6 +153,12 @@ node dist/cli.js link && agenthub doctor
 # 4. Install background daemon service
 agenthub install-service
 
+# Tắt / bật AgentHub: đóng tab web không tắt daemon
+agenthub stop
+agenthub stop --disable
+agenthub start
+# uninstall-service là gỡ service, không phải tắt tạm.
+
 # 5. Open Web Dashboard and connect worker profiles
 agenthub open
 ```

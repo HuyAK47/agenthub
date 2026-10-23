@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from './config.js';
+import { AgentHubConfig, TelegramChat, TelegramProjectTopic, saveConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { BrainDirectiveRepo, TaskRepo, ProjectRepo, TaskRow, ProjectRow, QuotaMarkRepo, TaskBatchRow, ProfileRepo, EventRepo, CiRepo } from './db/index.js';
 import { AppService, toTaskId, toRouteId } from './services/index.js';
@@ -14,7 +14,7 @@ import {
   DigestData,
   generateDigest,
   isQuietHours,
-  areAllProfilesQuotaExhausted,
+  isQuotaEventEngineWide,
   isSystemIncident,
   forwardDecisionToBrain,
   getMinutesSinceTime,
@@ -88,6 +88,7 @@ export interface TelegramUpdate {
       username?: string;
       first_name?: string;
     };
+    message_thread_id?: number;
     date: number;
     text?: string;
   };
@@ -100,6 +101,7 @@ export interface TelegramUpdate {
     };
     message?: {
       message_id: number;
+      message_thread_id?: number;
       chat: {
         id: number;
       };
@@ -164,6 +166,7 @@ export type PendingChatState =
 
 interface SendQueueItem {
   chatId: number;
+  threadId?: number | null;
   text: string;
   replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] };
   resolve: (res: unknown) => void;
@@ -173,6 +176,7 @@ interface SendQueueItem {
 interface ChatReplyState {
   chatId: number;
   messageId: number;
+  threadId?: number;
   text: string;
   lastEditAt: number;
   editTimer?: NodeJS.Timeout;
@@ -212,6 +216,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'shutdown', description: 'Tắt AgentHub (bật lại từ máy bằng agenthub start)' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
   { command: 'newtask', description: 'Tạo task từ một đoạn mô tả chung' },
@@ -231,6 +236,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'compact', description: 'Nén ngữ cảnh phiên chat' },
   { command: 'help', description: 'Hướng dẫn sử dụng' },
   { command: 'rules', description: 'Quy tắc quyền đã cấp: /rules · /rules del <số>' },
+  { command: 'topics', description: 'Tạo topic cho các dự án: /topics setup' },
 ];
 
 
@@ -246,6 +252,8 @@ export class TelegramBotService {
   private quotaMarkRepo?: QuotaMarkRepo;
   private ciRepo?: CiRepo;
   private lastSentCi = new Map<string, number>();
+  private lastSentDisk = new Map<'low' | 'ok', number>();
+  private lastSentLoadSummary = 0;
   private lastBroadcast = new Map<string, number>();
   private fetchFn: typeof fetch;
   private now: () => number;
@@ -284,12 +292,13 @@ export class TelegramBotService {
   private lastNotificationTime = new Map<string, number>();
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
+  private reviewFallbackNotified = new Set<string>();
 
   // Bound handler for EventBus
   private boundEventHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private chatReplies = new Map<string, ChatReplyState>();
   /** Telegram messages waiting for a busy session; each gets the reply of its queued turn. */
-  private queuedChatTurns = new Map<string, Array<{ chatId: number; messageId: number }>>();
+  private queuedChatTurns = new Map<string, Array<{ chatId: number; messageId: number; threadId?: number }>>();
   private brainQuestions = new Map<string, Map<string, {
     chatId: number;
     userMessageId?: string;
@@ -299,6 +308,10 @@ export class TelegramBotService {
   private pendingAutoTasks = new Map<string, { chatId: number; projectId: string; description: string; externalRef?: string }>();
   /** Per-chat selected project (persisted in config.telegram.chats). */
   private selectedProject = new Map<number, string>();
+  private activeThreadByChat = new Map<number, number | undefined>();
+  private notificationProjectId: string | null = null;
+  /** Keeps same-text system events from different projects independently deduplicated. */
+  private notificationDedupProjectId: string | null = null;
 
   constructor(opts: TelegramServiceOptions) {
     this.config = opts.config;
@@ -422,6 +435,64 @@ export class TelegramBotService {
       }
     }
 
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+  }
+
+  getProjectTopics(): Record<string, TelegramProjectTopic> {
+    return { ...(this.config.telegram.projectTopics || {}) };
+  }
+
+  async createProjectTopic(projectId: string): Promise<TelegramProjectTopic> {
+    const project = this.projectRepo.get(projectId);
+    if (!project) throw new Error(`Không tìm thấy dự án "${projectId}"`);
+    const existing = this.config.telegram.projectTopics?.[projectId];
+    if (existing) return existing;
+    const chatId = this.config.telegram.allowedChatIds.find((id) => {
+      const chat = this.config.telegram.chats.find((item) => item.id === id);
+      return !chat?.projectId;
+    }) ?? this.config.telegram.allowedChatIds[0];
+    if (chatId === undefined) throw new Error('Chưa có chat Telegram được cho phép');
+    if (!this.token) throw new Error('Chưa cấu hình Telegram bot token');
+    const response = await this.fetchFn(`https://api.telegram.org/bot${this.token}/createForumTopic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, name: project.name }),
+    });
+    const data = await response.json() as { ok: boolean; description?: string; result?: { message_thread_id?: number } };
+    if (!response.ok || !data.ok || typeof data.result?.message_thread_id !== 'number') {
+      throw new Error(data.description || `Telegram createForumTopic failed with status ${response.status}`);
+    }
+    const topic = { chatId, threadId: data.result.message_thread_id };
+    this.config.telegram.projectTopics = { ...(this.config.telegram.projectTopics || {}), [projectId]: topic };
+    updateConfigInMemory(this.config, { telegram: this.config.telegram });
+    saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+    return topic;
+  }
+
+  async setupProjectTopics(): Promise<Record<string, TelegramProjectTopic>> {
+    for (const project of this.projectRepo.getAll()) {
+      if (!this.config.telegram.projectTopics?.[project.id]) {
+        try { await this.createProjectTopic(project.id); } catch (error) {
+          console.error(`[telegram] topic setup failed for ${project.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+    return this.getProjectTopics();
+  }
+
+  async ensureProjectTopic(projectId: string): Promise<void> {
+    if (!this.config.telegram.enabled || this.config.telegram.projectTopics?.[projectId]) return;
+    try { await this.createProjectTopic(projectId); } catch { /* topic setup is best effort */ }
+  }
+
+  setProjectChat(projectId: string, chatId: number): void {
+    if (!this.config.telegram.allowedChatIds.includes(chatId)) throw new Error('Chat chưa được cho phép');
+    const chats = this.config.telegram.chats.filter((chat) => chat.id !== chatId);
+    const existing = this.config.telegram.chats.find((chat) => chat.id === chatId);
+    chats.push({ id: chatId, name: existing?.name || `Chat ${chatId}`, ...(existing?.username ? { username: existing.username } : {}), kind: 'chat', projectId });
+    this.config.telegram.chats = chats;
+    this.selectedProject.set(chatId, projectId);
     updateConfigInMemory(this.config, { telegram: this.config.telegram });
     saveConfig(this.config.hubHome, { telegram: this.config.telegram });
   }
@@ -820,6 +891,10 @@ export class TelegramBotService {
 
   private async handleMessage(msg: NonNullable<TelegramUpdate['message']>): Promise<void> {
     const chatId = msg.chat.id;
+    const threadId = msg.message_thread_id;
+    this.activeThreadByChat.set(chatId, threadId);
+    const topicProject = threadId === undefined ? undefined : Object.entries(this.config.telegram.projectTopics || {}).find(([, topic]) => topic.chatId === chatId && topic.threadId === threadId)?.[0];
+    if (topicProject) this.selectedProject.set(chatId, topicProject);
     const rawText = (msg.text || '').trim();
     const isAllowed = this.config.telegram?.allowedChatIds?.includes(chatId);
 
@@ -1016,9 +1091,32 @@ export class TelegramBotService {
         await this.sendMessage(chatId, '🆕 Đã mở phiên chat mới.');
         break;
 
+      case '/topics':
+        if (args[0]?.toLowerCase() !== 'setup') {
+          await this.sendMessage(chatId, 'Cú pháp: /topics setup');
+          break;
+        }
+        await this.sendMessage(chatId, '⏳ Đang tạo topic cho các dự án…');
+        await this.setupProjectTopics();
+        await this.sendMessage(chatId, `✅ Đã đồng bộ ${Object.keys(this.config.telegram.projectTopics || {}).length} topic dự án.`);
+        break;
+
       case '/stop':
         await this.stopChat(chatId);
         break;
+
+      case '/shutdown': {
+        const status = this.service.getStatus();
+        const running = status.tasks.running + status.tasks.checking;
+        await this.sendMessage(chatId,
+          `⚠️ <b>Tắt AgentHub?</b> ${running} task đang chạy sẽ được đưa về hàng chờ và tiếp tục khi bật lại. Sau đó chỉ có thể bật lại từ máy bằng lệnh <code>agenthub start</code>.`,
+          { inline_keyboard: [[
+            { text: '✅ Xác nhận tắt', callback_data: 'hubshutdown:confirm' },
+            { text: '❌ Hủy', callback_data: 'hubshutdown:cancel' },
+          ]] },
+        );
+        break;
+      }
 
       case '/compact':
         await this.sendMessage(chatId, 'ℹ️ Tính năng nén ngữ cảnh chưa được bật.');
@@ -1187,6 +1285,18 @@ export class TelegramBotService {
   private async handleBrainCommand(chatId: number, argStr: string): Promise<void> {
     const current = this.config.brain;
     const parts = argStr.split(/\s+/).filter(Boolean);
+    if (parts[0] === 'engine') {
+      const engine = parts[1];
+      if (engine !== 'claude' && engine !== 'codex') {
+        await this.sendMessage(chatId, 'Cú pháp: /brain engine codex|claude');
+        return;
+      }
+      this.config.brain.engine = engine;
+      saveConfig(this.config.hubHome, { brain: { engine } });
+      this.eventBus.emit('config.updated', undefined, { brain: { engine }, source: 'telegram' });
+      await this.sendMessage(chatId, `🧠 Đã chuyển engine bộ não sang <b>${engine}</b>.`);
+      return;
+    }
     if (parts[0] === 'trust') {
       const projectId = parts[1];
       const permission = parts[2];
@@ -1470,6 +1580,7 @@ export class TelegramBotService {
     const isBrain = sessionId === 'brain' || sessionId.startsWith('brain:');
     const isAssistant = sessionId === 'assistant' || sessionId.startsWith('assistant:');
     const selectedProjId = this.selectedProject.get(chatId);
+    const threadId = this.activeThreadByChat.get(chatId);
     const projectId = sessionId.startsWith('brain:') || sessionId.startsWith('assistant:')
       ? sessionId.slice(sessionId.startsWith('assistant:') ? 'assistant:'.length : 'brain:'.length) === 'global'
         ? null
@@ -1489,7 +1600,7 @@ export class TelegramBotService {
     });
     let initial: unknown;
     try {
-      initial = await this.sendMessage(chatId, placeholder);
+      initial = await this.sendMessage(chatId, placeholder, undefined, threadId);
       const messageId = this.telegramMessageId(initial);
       if (messageId === null) throw new Error('Telegram không trả về message_id');
       const result = this.chatService.sendMessage(sessionId, text, { queueIfBusy: true, ...(isAssistant ? { telegramChatId: chatId } : {}) });
@@ -1497,12 +1608,12 @@ export class TelegramBotService {
         // The session (usually a brain busy with an event turn) answers this message right after the
         // current turn; keep the placeholder and attach the reply to it when the queued turn starts.
         const queued = this.queuedChatTurns.get(sessionId) ?? [];
-        queued.push({ chatId, messageId });
+        queued.push({ chatId, messageId, ...(threadId !== undefined ? { threadId } : {}) });
         this.queuedChatTurns.set(sessionId, queued);
         await this.editMessage(chatId, messageId, `📥 Đang bận một việc khác. Tin nhắn đã xếp hàng (thứ ${result.position ?? queued.length}), sẽ trả lời ngay sau.`);
         return;
       }
-      this.chatReplies.set(sessionId, { chatId, messageId, text: placeholder, lastEditAt: this.now(), editing: false });
+      this.chatReplies.set(sessionId, { chatId, messageId, ...(threadId !== undefined ? { threadId } : {}), text: placeholder, lastEditAt: this.now(), editing: false });
     } catch (err) {
       const reply = this.chatReplies.get(sessionId);
       if (reply?.editTimer) clearTimeout(reply.editTimer);
@@ -1552,7 +1663,7 @@ export class TelegramBotService {
       const next = this.queuedChatTurns.get(sessionId)?.shift();
       if (next) {
         if (this.queuedChatTurns.get(sessionId)?.length === 0) this.queuedChatTurns.delete(sessionId);
-        this.chatReplies.set(sessionId, { chatId: next.chatId, messageId: next.messageId, text: '⏳ Đang xử lý…', lastEditAt: 0, editing: false });
+        this.chatReplies.set(sessionId, { chatId: next.chatId, messageId: next.messageId, ...(next.threadId !== undefined ? { threadId: next.threadId } : {}), text: '⏳ Đang xử lý…', lastEditAt: 0, editing: false });
         this.scheduleChatEdit(sessionId);
       }
       return;
@@ -1667,7 +1778,7 @@ export class TelegramBotService {
     }
     const chunks = this.splitTelegramText(text || '');
     await this.editMessage(reply.chatId, reply.messageId, chunks.shift() || '');
-    for (const chunk of chunks) await this.sendMessage(reply.chatId, chunk);
+    for (const chunk of chunks) await this.sendMessage(reply.chatId, chunk, undefined, reply.threadId);
   }
 
   private async sendPermissionRequest(chatId: number, data: Record<string, unknown>): Promise<void> {
@@ -1678,6 +1789,7 @@ export class TelegramBotService {
     try { input = typeof data.input === 'string' ? JSON.parse(data.input) as Record<string, unknown> : (data.input as Record<string, unknown> || {}); } catch { /* malformed input is still shown as a generic request */ }
     const command = typeof input.command === 'string' ? input.command : undefined;
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+    const threadId = sessionId ? this.chatReplies.get(sessionId)?.threadId : undefined;
     const session = this.chatService?.listSessions().find((item) => item.id === sessionId);
     const project = session?.projectId ? this.projectRepo.get(session.projectId) : undefined;
     const label = command ? commandPermissionLabel(command) : tool;
@@ -1697,7 +1809,7 @@ export class TelegramBotService {
         ...(canAlwaysAllow ? [{ text: `Luôn cho phép ${label.slice(0, 30)}`, callback_data: `permission:always:${id}` }] : []),
         { text: 'Từ chối', callback_data: `permission:deny:${id}` },
       ]],
-    });
+    }, threadId);
   }
 
   private async handlePermissionRules(chatId: number, args: string[]): Promise<void> {
@@ -1763,6 +1875,12 @@ export class TelegramBotService {
 
   private async handleCallbackQuery(query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
     const chatId = query.message?.chat.id;
+    const threadId = query.message?.message_thread_id;
+    if (chatId !== undefined) {
+      this.activeThreadByChat.set(chatId, threadId);
+      const topicProject = threadId === undefined ? undefined : Object.entries(this.config.telegram.projectTopics || {}).find(([, topic]) => topic.chatId === chatId && topic.threadId === threadId)?.[0];
+      if (topicProject) this.selectedProject.set(chatId, topicProject);
+    }
     const userId = query.from.id;
     const isAllowed = Boolean(
       chatId &&
@@ -1780,6 +1898,18 @@ export class TelegramBotService {
     const domain = parts[0];
     const action = parts[1];
     const taskIdOrParam = parts.slice(2).join(':');
+
+    if (domain === 'hubshutdown') {
+      if (action !== 'confirm') {
+        await this.answerCallbackQuery(query.id, 'Đã hủy.');
+        return;
+      }
+      await this.answerCallbackQuery(query.id, 'Đang tắt AgentHub...');
+      this.service.shutdownForUser();
+      await this.sendMessage(chatId, '🛑 AgentHub đã lưu trạng thái và đang tắt. Bật lại từ máy bằng: <code>agenthub start</code>.');
+      setImmediate(() => process.kill(process.pid, 'SIGTERM'));
+      return;
+    }
 
     if (domain === 'permission') {
       if (!this.chatService) {
@@ -3061,6 +3191,9 @@ export class TelegramBotService {
 
   handleEvent(type: string, taskId?: string, payload?: unknown): void {
     if (!this.config.telegram?.enabled) return;
+    // Routing is scoped to this event only. Scheduled summaries and other direct
+    // broadcasts must never inherit the last project's destination.
+    this.notificationProjectId = null;
     const allowedChats = this.config.telegram?.allowedChatIds || [];
     if (allowedChats.length === 0) return;
 
@@ -3073,6 +3206,16 @@ export class TelegramBotService {
     };
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+
+    // Account-level exhaustion belongs in the dashboard. Telegram is an
+    // interrupt channel, so it only reports when every enabled account for
+    // the affected engine/family is unavailable.
+    if (type === 'quota.exhausted') {
+      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
+      if (!allExhausted) return;
+    }
+
+    const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // Deduplication check: ignore duplicate events within 10 seconds
@@ -3082,7 +3225,7 @@ export class TelegramBotService {
     const decisionKey = (p.decisionId || '') as string;
     const textKey = typeof p.text === 'string' ? p.text.slice(0, 32) : '';
     const levelKey = (p.level || '') as string;
-    const dedupKey = `${type}:${taskId || batchKey || decisionKey}:${profileKey}:${familyKey}:${levelKey}:${textKey}`;
+    const dedupKey = `${type}:${projectId || ''}:${taskId || batchKey || decisionKey}:${profileKey}:${familyKey}:${levelKey}:${textKey}`;
     const now = this.now();
     const lastTime = this.lastNotificationTime.get(dedupKey) || 0;
     if (now - lastTime < 10_000) {
@@ -3091,14 +3234,17 @@ export class TelegramBotService {
     this.lastNotificationTime.set(dedupKey, now);
 
     // 1. Brain auto mode: suppress raw task notifications
-    const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
-    const prefix = this.projectPrefix(projectId);
-    const minimal = this.isMinimalProject(projectId);
-    const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
-    if (effectiveMode === 'auto') {
+    const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type.startsWith('deploy.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
+    this.notificationProjectId = isSystemEvent ? null : projectId;
+    this.notificationDedupProjectId = projectId;
+    try {
+      const prefix = this.projectPrefix(projectId);
+      const minimal = this.isMinimalProject(projectId);
+      const effectiveMode = effectiveBrainMode(projectId, projectId ? this.projectRepo.get(projectId) : null, this.config.brain);
+      if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now));
+        isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
 
       const isAllowedInAuto =
         type === 'brain.notify' ||
@@ -3106,18 +3252,22 @@ export class TelegramBotService {
         type === 'disk.docker_low' ||
         type === 'claude.quota_exhausted' ||
         type === 'hub.restart_failed' ||
+        type.startsWith('deploy.') ||
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
+        type === 'merge.conflict' ||
+        type === 'merge.failed' ||
+        type === 'review.fallback' ||
         allExhausted;
 
-      if (!isAllowedInAuto) {
-        return;
+        if (!isAllowedInAuto) {
+          return;
+        }
       }
-    }
 
-    // 2. Quiet hours: only send level 'incident'
-    if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
+      // 2. Quiet hours: only send level 'incident'
+      if (isQuietHours(this.config.notifications?.quietHours, new Date(now))) {
       const isIncident = isSystemIncident(type, payload, this.profileRepo, this.quotaMarkRepo, now);
       if (!isIncident) {
         if (type === 'brain.notify' && p.level === 'decision') {
@@ -3138,9 +3288,9 @@ export class TelegramBotService {
         }
         return;
       }
-    }
+      }
 
-    switch (type) {
+      switch (type) {
       case 'brain.notify': {
         const text = typeof p.text === 'string' ? p.text : '';
         if (!text) break;
@@ -3291,6 +3441,31 @@ export class TelegramBotService {
         break;
       }
 
+      case 'review.fallback': {
+        if (!notify.fallback) return;
+        if (taskId && this.reviewFallbackNotified.has(taskId)) return;
+        if (taskId) this.reviewFallbackNotified.add(taskId);
+
+        const task = taskId ? this.taskRepo.get(taskId) : null;
+        const dashboardUrl = this.getDashboardUrl(taskId ? `#/tasks/${toRouteId(taskId)}` : '');
+        const keyboard: InlineKeyboardButton[][] = [
+          [{ text: '🌐 Xem dashboard', url: dashboardUrl }],
+        ];
+
+        if (minimal) {
+          this.broadcastMessage(`${prefix}Codex hết quota, Claude đang duyệt …`, { inline_keyboard: keyboard });
+          break;
+        }
+
+        const title = this.resolveTaskTitle(taskId, p, task);
+        const header = '🔀 <b>Codex hết quota, Claude đang duyệt …</b>';
+        this.broadcastMessage(
+          `${prefix}${header}\nID: <code>${taskId}</code>\nTiêu đề: <b>${this.escapeHtml(title)}</b>`,
+          { inline_keyboard: keyboard },
+        );
+        break;
+      }
+
       case 'task.failed': {
         if (!notify.failed) return;
         if (minimal) {
@@ -3348,7 +3523,7 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, now);
+        const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
@@ -3370,9 +3545,32 @@ export class TelegramBotService {
         break;
       }
 
+      case 'task.paused':
+      case 'load.task_paused':
+      case 'load.high': {
+        if (now - this.lastSentLoadSummary < 15 * 60_000) break;
+        this.lastSentLoadSummary = now;
+        this.broadcastMessage(`⚠️ <b>AgentHub tạm dừng/gặp tải cao</b> — xem dashboard để biết chi tiết.`);
+        break;
+      }
+
       case 'claude.quota_exhausted': {
         if (!notify.quota) return;
         this.broadcastMessage('⏳ <b>Claude hết quota</b>\nĐã kích hoạt failover hoặc cần chờ reset quota.');
+        break;
+      }
+
+      case 'merge.conflict': {
+        const message = typeof p.message === 'string' ? p.message : 'Xung đột khi merge tự động';
+        const taskLabel = taskId || 'Task';
+        this.broadcastMessage(`${prefix}⚠️ <b>Xung đột tự động gộp: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
+        break;
+      }
+
+      case 'merge.failed': {
+        const message = typeof p.message === 'string' ? p.message : 'Lỗi khi merge tự động';
+        const taskLabel = taskId || 'Task';
+        this.broadcastMessage(`${prefix}❌ <b>Lỗi tự động gộp: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
         break;
       }
 
@@ -3398,8 +3596,26 @@ export class TelegramBotService {
         break;
       }
 
+      case 'deploy.started':
+      case 'deploy.restarting':
+      case 'deploy.restart_waiting':
+      case 'deploy.succeeded':
+      case 'deploy.failed': {
+        if (!notify.fallback) return;
+        const isFailure = type === 'deploy.failed';
+        const isSuccess = type === 'deploy.succeeded';
+        const title = isFailure ? 'Triển khai thất bại' : isSuccess ? 'Triển khai thành công' : type === 'deploy.started' ? 'Bắt đầu triển khai' : 'Đang chờ triển khai';
+        const icon = isFailure ? '🚨' : isSuccess ? '✅' : '🚀';
+        const details = typeof p.error === 'string' ? `\n${this.escapeHtml(p.error)}` : typeof p.message === 'string' ? `\n${this.escapeHtml(p.message)}` : '';
+        this.broadcastMessage(`${icon} <b>${title}</b>${details}`);
+        break;
+      }
+
       case 'disk.low': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('low');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('low', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 3;
         const cacheDir = typeof p.cacheDir === 'string' ? `\nCache node_modules: <code>${this.escapeHtml(p.cacheDir)}</code>` : '';
@@ -3412,6 +3628,9 @@ export class TelegramBotService {
 
       case 'disk.ok': {
         if (!notify.fallback) return;
+        const last = this.lastSentDisk.get('ok');
+        if (last !== undefined && now - last < 60 * 60_000) return;
+        this.lastSentDisk.set('ok', now);
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         this.broadcastMessage(`💾 <b>Ổ đĩa đã đủ chỗ</b> (${freeGB} GB): tiếp tục chạy task.`);
         break;
@@ -3489,22 +3708,35 @@ export class TelegramBotService {
         this.broadcastMessage(text, keyboard.length > 0 ? { inline_keyboard: keyboard } : undefined);
         break;
       }
+      }
+    } finally {
+      this.notificationProjectId = null;
+      this.notificationDedupProjectId = null;
     }
   }
 
   broadcastMessage(
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
+    projectId = this.notificationProjectId,
   ): void {
     // Event notifications can fire repeatedly for the same state (quota polls, scheduler ticks).
     const now = this.now();
-    const last = this.lastBroadcast.get(text);
+    const dedupKey = `${this.notificationDedupProjectId || projectId || ''}:${text}`;
+    const last = this.lastBroadcast.get(dedupKey);
     if (last !== undefined && now - last < NOTIFY_REPEAT_WINDOW_MS) return;
-    this.lastBroadcast.set(text, now);
+    this.lastBroadcast.set(dedupKey, now);
     for (const [key, at] of this.lastBroadcast) if (now - at >= NOTIFY_REPEAT_WINDOW_MS) this.lastBroadcast.delete(key);
     const allowed = this.config.telegram?.allowedChatIds || [];
-    for (const chatId of allowed) {
-      void this.sendMessage(chatId, text, replyMarkup);
+    let targets: Array<{ chatId: number; threadId?: number | null }> = projectId && this.config.telegram.projectTopics?.[projectId] && allowed.includes(this.config.telegram.projectTopics[projectId].chatId)
+      ? [this.config.telegram.projectTopics[projectId]]
+      : projectId
+        ? (this.config.telegram.chats || []).filter((chat) => chat.projectId === projectId && allowed.includes(chat.id)).map((chat) => ({ chatId: chat.id, threadId: null }))
+        : allowed.map((chatId) => ({ chatId, threadId: null }));
+    // Legacy configurations have allowedChatIds but no per-project mapping.
+    if (projectId && targets.length === 0) targets = allowed.map((chatId) => ({ chatId, threadId: null }));
+    for (const target of targets) {
+      void this.sendMessage(target.chatId, text, replyMarkup, target.threadId);
     }
   }
 
@@ -3515,6 +3747,7 @@ export class TelegramBotService {
     chatId: number,
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
+    threadId: number | null | undefined = this.activeThreadByChat?.get(chatId),
   ): Promise<unknown> {
     const promise = new Promise<unknown>((resolve, reject) => {
       let queue = this.chatQueues.get(chatId);
@@ -3523,7 +3756,7 @@ export class TelegramBotService {
         this.chatQueues.set(chatId, queue);
       }
 
-      queue.push({ chatId, text, replyMarkup, resolve, reject });
+      queue.push({ chatId, threadId, text, replyMarkup, resolve, reject });
       void this.processChatQueue(chatId);
     });
     // Many callers fire and forget (notifications). A network blip must never become an
@@ -3564,7 +3797,7 @@ export class TelegramBotService {
           let res: unknown;
           for (let attempt = 1; ; attempt += 1) {
             try {
-              res = await this.sendDirectMessage(item.chatId, item.text, item.replyMarkup);
+              res = await this.sendDirectMessage(item.chatId, item.text, item.replyMarkup, item.threadId);
               break;
             } catch (err) {
               // Retry transient network errors (fetch failed, timeouts) a couple of times.
@@ -3593,7 +3826,7 @@ export class TelegramBotService {
       while (queue && queue.length > 0) {
         const item = queue.shift()!;
         try {
-          const res = await this.sendDirectMessage(item.chatId, item.text, item.replyMarkup);
+          const res = await this.sendDirectMessage(item.chatId, item.text, item.replyMarkup, item.threadId);
           item.resolve(res);
         } catch (err) {
           item.reject(err);
@@ -3606,6 +3839,7 @@ export class TelegramBotService {
     chatId: number,
     text: string,
     replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] },
+    threadId?: number | null,
   ): Promise<unknown> {
     if (!this.token) {
       return null;
@@ -3617,6 +3851,7 @@ export class TelegramBotService {
       text,
       parse_mode: 'HTML',
     };
+    if (threadId !== undefined && threadId !== null && threadId > 0) body.message_thread_id = threadId;
     if (replyMarkup) {
       body.reply_markup = replyMarkup;
     }
@@ -3756,6 +3991,12 @@ export class TelegramBotService {
         return minimal ? `${prefix}CI thất bại` : `${prefix}CI thất bại: ${p?.workflow || 'CI'}`;
       case 'ci.passed':
         return minimal ? `${prefix}CI đã xanh` : `${prefix}CI đã xanh: ${p?.workflow || 'CI'}`;
+      case 'merge.conflict':
+        return `${prefix}Xung đột khi merge tự động (${taskId || 'task'})`;
+      case 'merge.failed':
+        return `${prefix}Lỗi khi merge tự động (${taskId || 'task'})`;
+      case 'review.fallback':
+        return `${prefix}Codex hết quota, Claude đang duyệt …`;
       case 'quota.exhausted':
         return `Hồ sơ ${p?.profile || p?.profileName || 'tài khoản'} hết quota ${p?.family || ''}`;
       default:
@@ -3768,6 +4009,7 @@ export class TelegramBotService {
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/shutdown - Tắt AgentHub; bật lại từ máy bằng <code>agenthub start</code>
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi

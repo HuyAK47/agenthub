@@ -89,7 +89,7 @@ export function CollapsibleList<T>({
         <button
           type="button"
           onClick={list.collapse}
-          className="text-xs text-[var(--text-secondary)] hover:underline"
+          className="text-xs text-[var(--t-text-2)] hover:underline"
         >
           Thu gọn
         </button>

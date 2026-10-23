@@ -194,7 +194,7 @@ describe('DailyUsageTable Component', () => {
 
     // Check row highlighting
     const g1Row = screen.getByTestId('daily-usage-row-g1');
-    expect(g1Row.className).toContain('border-l-emerald-500');
+    expect(g1Row.className).toContain('border-l-[var(--t-ok)]');
 
     // Check metric values for today (2026-10-20)
     // chinh has 3 runs, 65,000 tokens

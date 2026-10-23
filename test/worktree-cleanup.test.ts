@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { createContext } from '../src/daemon.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
+import { WorktreeService } from '../src/worktrees/index.js';
 
 describe('Worktree Auto-Cleanup', () => {
   let tmpDir: string;
@@ -208,5 +209,93 @@ describe('Worktree Auto-Cleanup', () => {
 
     expect(fs.existsSync(blockedWorktree)).toBe(true);
     expect(ctx.taskRepo.get('proj/t-old-blocked')?.worktreePath).toBe(blockedWorktree);
+  });
+
+  it('prunes cancelled tasks and keeps dirty worktrees', () => {
+    const cancelledWorktree = path.join(tmpDir, 'worktrees', 'proj', 't-cancelled');
+    execFileSync('git', ['-C', projectPath, 'worktree', 'add', cancelledWorktree, '-b', 'agenthub/t-cancelled', 'main']);
+    const dirtyWorktree = path.join(tmpDir, 'worktrees', 'proj', 't-dirty');
+    execFileSync('git', ['-C', projectPath, 'worktree', 'add', dirtyWorktree, '-b', 'agenthub/t-dirty', 'main']);
+    fs.writeFileSync(path.join(dirtyWorktree, 'uncommitted.txt'), 'keep me');
+    ctx.taskRepo.insert({ id: 'proj/t-cancelled', projectId: 'proj', slug: 't-cancelled', title: 'Cancelled', status: 'cancelled' });
+    ctx.taskRepo.update('proj/t-cancelled', { worktreePath: cancelledWorktree });
+    ctx.taskRepo.insert({ id: 'proj/t-dirty', projectId: 'proj', slug: 't-dirty', title: 'Dirty', status: 'done' });
+    ctx.taskRepo.update('proj/t-dirty', { worktreePath: dirtyWorktree });
+    const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
+    ctx.db.prepare("UPDATE tasks SET updatedAt = ? WHERE id IN ('proj/t-cancelled', 'proj/t-dirty')").run(oldTime);
+
+    ctx.scheduler.tick();
+
+    expect(fs.existsSync(cancelledWorktree)).toBe(false);
+    expect(ctx.taskRepo.get('proj/t-cancelled')?.worktreePath).toBeNull();
+    expect(fs.existsSync(dirtyWorktree)).toBe(true);
+    expect(ctx.taskRepo.get('proj/t-dirty')?.worktreePath).toBe(dirtyWorktree);
+  });
+
+  it('keeps the DB path and backs off when worktree removal fails', () => {
+    const worktreePath = path.join(tmpDir, 'worktrees', 'proj', 't-failing-remove');
+    execFileSync('git', ['-C', projectPath, 'worktree', 'add', worktreePath, '-b', 'agenthub/t-failing-remove', 'main']);
+    ctx.taskRepo.insert({ id: 'proj/t-failing-remove', projectId: 'proj', slug: 't-failing-remove', title: 'Failing remove', status: 'done' });
+    ctx.taskRepo.update('proj/t-failing-remove', { worktreePath });
+    const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
+    ctx.db.prepare("UPDATE tasks SET updatedAt = ? WHERE id = 'proj/t-failing-remove'").run(oldTime);
+    const remove = vi.spyOn(WorktreeService.prototype, 'remove').mockReturnValue(false);
+
+    ctx.scheduler.tick();
+    ctx.scheduler.tick();
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(worktreePath)).toBe(true);
+    expect(ctx.taskRepo.get('proj/t-failing-remove')?.worktreePath).toBe(worktreePath);
+  });
+
+  it('cleans expired worktrees before parking queued work when disk is low', () => {
+    config.disk.minFreeGB = Number.MAX_SAFE_INTEGER;
+    ctx.profileRepo.upsert({
+      name: 'p1',
+      engine: 'agy',
+      kind: 'isolated',
+      home: path.join(tmpDir, 'agy-homes', 'p1'),
+      email: 'p1@example.com',
+      enabled: 1,
+    });
+    const worktreePath = path.join(tmpDir, 'worktrees', 'proj', 't-low-disk-cleanup');
+    execFileSync('git', ['-C', projectPath, 'worktree', 'add', worktreePath, '-b', 'agenthub/t-low-disk-cleanup', 'main']);
+    ctx.taskRepo.insert({
+      id: 'proj/t-low-disk-cleanup',
+      projectId: 'proj',
+      slug: 't-low-disk-cleanup',
+      title: 'Low disk cleanup',
+      status: 'done',
+    });
+    ctx.taskRepo.update('proj/t-low-disk-cleanup', { worktreePath });
+    ctx.taskRepo.insert({ id: 'proj/queued', projectId: 'proj', slug: 'queued', title: 'Queued', status: 'queued', level: 'easy' });
+    const oldTime = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
+    ctx.db.prepare("UPDATE tasks SET updatedAt = ? WHERE id = 'proj/t-low-disk-cleanup'").run(oldTime);
+
+    ctx.scheduler.tick();
+
+    expect(fs.existsSync(worktreePath)).toBe(false);
+    expect(ctx.taskRepo.get('proj/t-low-disk-cleanup')?.worktreePath).toBeNull();
+    expect(ctx.taskRepo.get('proj/queued')?.status).toBe('waiting_quota');
+    expect(ctx.taskRepo.get('proj/queued')?.waitReason).toBe('disk');
+  });
+
+  it('removes an orphan git worktree while preserving its branch and ignores outside paths', () => {
+    const orphanWorktree = path.join(tmpDir, 'worktrees', 'proj', 'orphan');
+    execFileSync('git', ['-C', projectPath, 'worktree', 'add', orphanWorktree, '-b', 'agenthub/orphan', 'main']);
+    const outside = path.join(tmpDir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    ctx.taskRepo.insert({ id: 'proj/outside', projectId: 'proj', slug: 'outside', title: 'Outside', status: 'done' });
+    ctx.taskRepo.update('proj/outside', { worktreePath: outside });
+    const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
+    ctx.db.prepare("UPDATE tasks SET updatedAt = ? WHERE id = 'proj/outside'").run(oldTime);
+
+    ctx.scheduler.start();
+    ctx.scheduler.stop();
+
+    expect(fs.existsSync(orphanWorktree)).toBe(false);
+    expect(execFileSync('git', ['-C', projectPath, 'branch', '--list', 'agenthub/orphan'], { encoding: 'utf8' })).toContain('agenthub/orphan');
+    expect(fs.existsSync(outside)).toBe(true);
   });
 });

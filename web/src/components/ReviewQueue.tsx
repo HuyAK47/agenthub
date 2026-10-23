@@ -2,9 +2,10 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Task } from '../types/api';
-import { getTasks } from '../api/client';
+import { getTasksPage } from '../api/client';
 import { ClipboardCheck, ArrowRight, Eye } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
+import { getReviewerEngine } from '../utils/reviewer';
 
 export interface ReviewQueueProps {
   tasks?: Task[];
@@ -18,7 +19,7 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
   const { t } = useLocale();
   const { data: fetchedTasks } = useQuery({
     queryKey: ['tasks', 'review'],
-    queryFn: () => getTasks({ status: 'review' }),
+    queryFn: async () => (await getTasksPage({ status: 'review', limit: 20, sort: 'createdAt', order: 'desc' })).items,
     enabled: propTasks === undefined,
     refetchInterval: 5000,
   });
@@ -36,12 +37,12 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
   return (
     <div
       data-testid="review-queue"
-      className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors"
+      className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors"
     >
-      <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
+      <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ClipboardCheck className="w-5 h-5 text-[var(--t-purple)]" />
-          <h2 className="text-base font-semibold text-[var(--text-primary)]">
+          <h2 className="text-base font-semibold text-[var(--t-text)]">
             {t('extra.reviewQueue')}
           </h2>
         </div>
@@ -56,12 +57,12 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
       {reviewTasks.length === 0 ? (
         <div
           data-testid="review-queue-empty"
-          className="p-8 text-center text-[var(--text-secondary)] text-sm"
+          className="p-8 text-center text-[var(--t-text-2)] text-sm"
         >
           {t('extra.noReview')}
         </div>
       ) : (
-        <ul className="divide-y divide-[var(--border-subtle)]">
+        <ul className="divide-y divide-[var(--t-border)]">
           {reviewTasks.map((task) => {
             const routeId = task.id.replace('/', '~');
             const watching = isCurrentTask(task.id);
@@ -71,8 +72,8 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
               <li
                 key={task.id}
                 data-testid={`review-task-${routeId}`}
-                className={`px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[var(--bg-surface-hover)] transition-colors ${
-                  watching ? 'bg-[var(--bg-surface-subtle)]' : ''
+                className={`px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[var(--t-hover)] transition-colors ${
+                  watching ? 'bg-[var(--t-surface-2)]' : ''
                 }`}
               >
                 <div className="min-w-0 space-y-1">
@@ -84,10 +85,20 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({
                       {displayTitle}
                     </Link>
 
+                    <span
+                      data-testid="reviewer-badge"
+                      className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-[var(--t-on-accent)] shadow-2xs ${
+                        getReviewerEngine(task) === 'claude' ? 'bg-[var(--t-claude)]' : 'bg-[var(--t-ok)]'
+                      }`}
+                      style={getReviewerEngine(task) === 'claude' ? { backgroundColor: 'var(--t-claude)' } : undefined}
+                    >
+                      {getReviewerEngine(task) === 'claude' ? 'Claude' : 'Codex'}
+                    </span>
+
                     {watching ? (
                       <span
                         data-testid="review-watching-badge"
-                        className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-white shadow-2xs"
+                        className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-[var(--t-on-accent)] shadow-2xs"
                         style={{ backgroundColor: 'var(--t-claude)' }}
                       >
                         <Eye className="w-3 h-3" />

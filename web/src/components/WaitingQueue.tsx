@@ -2,7 +2,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Task } from '../types/api';
-import { getTasks } from '../api/client';
+import { getTasksPage } from '../api/client';
 import { Clock, ArrowRight } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { StatusBadge } from './StatusBadge';
@@ -23,7 +23,13 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
   const { t } = useLocale();
   const { data: fetchedTasks } = useQuery({
     queryKey: ['tasks', 'waiting'],
-    queryFn: () => getTasks(),
+    queryFn: async () => {
+      const [quota, queued] = await Promise.all([
+        getTasksPage({ status: 'waiting_quota', limit: 20, sort: 'createdAt', order: 'desc' }),
+        getTasksPage({ status: 'queued', limit: 20, sort: 'createdAt', order: 'desc' }),
+      ]);
+      return [...quota.items, ...queued.items].filter((task, index, items) => items.findIndex((item) => item.id === task.id) === index);
+    },
     enabled: propTasks === undefined,
     refetchInterval: 5000,
   });
@@ -34,12 +40,12 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
   return (
     <div
       data-testid="waiting-queue"
-      className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border-default)] overflow-hidden shadow-xs transition-colors"
+      className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors"
     >
-      <div className="px-6 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
+      <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Clock className="w-5 h-5 text-[var(--t-warn)]" />
-          <h2 className="text-base font-semibold text-[var(--text-primary)]">
+          <h2 className="text-base font-semibold text-[var(--t-text)]">
             {t('extra.waitingQueue')}
           </h2>
         </div>
@@ -54,12 +60,12 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
       {waitingTasks.length === 0 ? (
         <div
           data-testid="waiting-queue-empty"
-          className="p-8 text-center text-[var(--text-secondary)] text-sm"
+          className="p-8 text-center text-[var(--t-text-2)] text-sm"
         >
           {t('extra.noWaitingTasks')}
         </div>
       ) : (
-        <ul className="divide-y divide-[var(--border-subtle)]">
+        <ul className="divide-y divide-[var(--t-border)]">
           {waitingTasks.map((task) => {
             const routeId = task.id.replace('/', '~');
             const displayTitle = task.title || task.id;
@@ -68,7 +74,7 @@ export const WaitingQueue: React.FC<WaitingQueueProps> = ({
               <li
                 key={task.id}
                 data-testid={`waiting-task-${routeId}`}
-                className="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[var(--bg-surface-hover)] transition-colors"
+                className="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[var(--t-hover)] transition-colors"
               >
                 <div className="min-w-0 space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
