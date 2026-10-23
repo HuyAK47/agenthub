@@ -233,6 +233,8 @@ export function brainShellShimScript(interpreter = '/bin/sh'): string {
 shim_path="$1"
 shift
 script="$2"
+shell_option="$1"
+shell_script="$2"
 case "$1" in
   -c|--command)
     case "$script" in
@@ -258,8 +260,36 @@ case "$1" in
         ;;
     esac
     case "$script" in
-      git[[:space:]]*|grep[[:space:]]*|curl[[:space:]]*|cat[[:space:]]*|head[[:space:]]*|tail[[:space:]]*|wc[[:space:]]*|ls[[:space:]]*|npm[[:space:]]*|pnpm[[:space:]]*|npx[[:space:]]*)
-        exec ${interpreter} "$@"
+      git[[:space:]]*|grep[[:space:]]*|cat[[:space:]]*|head[[:space:]]*|tail[[:space:]]*|wc[[:space:]]*|ls[[:space:]]*|npm[[:space:]]*|pnpm[[:space:]]*|npx[[:space:]]*)
+        exec ${interpreter} "$shell_option" "$shell_script"
+        ;;
+      curl[[:space:]]*)
+        set -f
+        set -- $script
+        shift
+        curl_url=''
+        curl_header=0
+        for curl_arg in "$@"; do
+          if [ "$curl_header" -eq 1 ]; then
+            case "$curl_arg" in @*|*'$'*|*'\`'*) echo 'AgentHub: brain policy chặn curl header' >&2; exit 1 ;; esac
+            curl_header=0
+            continue
+          fi
+          case "$curl_arg" in
+            -s|-S|-L|--silent|--show-error|--location) ;;
+            -X|--request) curl_header=2 ;;
+            --request=GET) ;;
+            -H|--header) curl_header=1 ;;
+            http://*|https://*)
+              case "$curl_arg" in https://api.github.com|https://api.github.com/*) [ -z "$curl_url" ] || { echo 'AgentHub: brain policy chặn curl' >&2; exit 1; }; curl_url="$curl_arg" ;; *) echo 'AgentHub: brain policy chặn curl đích' >&2; exit 1 ;; esac
+              ;;
+            *)
+              if [ "$curl_header" -eq 2 ] && [ "$(printf '%s' "$curl_arg" | tr '[:lower:]' '[:upper:]')" = GET ]; then curl_header=0; else echo 'AgentHub: brain policy chặn curl' >&2; exit 1; fi
+              ;;
+          esac
+        done
+        [ "$curl_header" -eq 0 ] && [ -n "$curl_url" ] || { echo 'AgentHub: brain policy chặn curl' >&2; exit 1; }
+        exec ${interpreter} "$shell_option" "$shell_script"
         ;;
       *)
         echo 'AgentHub: brain policy chặn lệnh shell' >&2
@@ -272,6 +302,57 @@ case "$1" in
     exit 1
     ;;
 esac
+`;
+}
+
+/** Direct command shims mirror the BrainPolicy allowlist instead of relying on
+ * Codex's approval prompt.  In particular, a direct `npm run arbitrary` must
+ * be rejected just like the same command through `sh -c`.
+ */
+export function brainAllowlistedShimScript(name: 'npm' | 'pnpm' | 'npx' | 'curl', realBinary: string, interpreter = '/bin/sh'): string {
+  const denied = 'AgentHub: brain policy chặn tham số lệnh';
+  if (name === 'npx') {
+    return `#!${interpreter}
+case "$1 $2" in
+  "vitest run"|"tsc --noEmit") ;;
+  *) echo ${shellQuote(denied)} >&2; exit 1 ;;
+esac
+exec ${shellQuote(realBinary)} "$@"
+`;
+  }
+  if (name === 'npm' || name === 'pnpm') {
+    return `#!${interpreter}
+case "$1 $2" in
+  "test "|"test "*|"run test"|"run test "*|"lint "|"lint "*|"run lint"|"run lint "*|"typecheck "|"typecheck "*|"run typecheck"|"run typecheck "*|"build "|"build "*|"run build"|"run build "*|"build:web "|"build:web "*|"run build:web"|"run build:web "*) ;;
+  *) echo ${shellQuote(denied)} >&2; exit 1 ;;
+esac
+exec ${shellQuote(realBinary)} "$@"
+`;
+  }
+  return `#!${interpreter}
+url=''
+request='GET'
+header=0
+for arg in "$@"; do
+  if [ "$header" -eq 1 ]; then
+    case "$arg" in @*|*'$'*|*'\`'*) echo 'AgentHub: brain policy chặn curl header' >&2; exit 1 ;; esac
+    header=0
+    continue
+  fi
+  case "$arg" in
+    -s|-S|-L|--silent|--show-error|--location) ;;
+    -X|--request) request='__next__' ;;
+    --request=*) request="\${arg#--request=}" ;;
+    -H|--header) header=1 ;;
+    http://*|https://*) case "$arg" in https://api.github.com|https://api.github.com/*) [ -z "$url" ] || { echo 'AgentHub: brain policy chặn curl' >&2; exit 1; }; url="$arg" ;; *) echo 'AgentHub: brain policy chặn curl đích' >&2; exit 1 ;; esac ;;
+    *)
+      if [ "$request" = '__next__' ]; then request="$arg"; else echo ${shellQuote(denied)} >&2; exit 1; fi
+      ;;
+  esac
+done
+case "$request" in GET|get) ;; *) echo ${shellQuote(denied)} >&2; exit 1 ;; esac
+[ "$header" -eq 0 ] && [ -n "$url" ] || { echo ${shellQuote(denied)} >&2; exit 1; }
+exec ${shellQuote(realBinary)} "$@"
 `;
 }
 
@@ -416,6 +497,13 @@ export function workerEnvironment(
           ? brainInterpreterShimScript(name, findExecutable(name, env, hubHome) || process.execPath, brainInterpreter)
           : brainShells.includes(name) ? brainShellShimScript(brainInterpreter) : brainBlockedShimScript(name, brainInterpreter);
         writeShimFile(path.join(workerDir, name), content);
+      }
+      // These commands are useful for the small read/build checks BrainPolicy
+      // allows, but their arguments are security-sensitive.  Wrap the real
+      // binaries so direct execution cannot bypass the shell shim.
+      for (const name of ['npm', 'pnpm', 'npx', 'curl'] as const) {
+        const realBinary = findExecutable(name, env, hubHome);
+        if (realBinary) writeShimFile(path.join(workerDir, name), brainAllowlistedShimScript(name, realBinary, brainInterpreter));
       }
       // serviceDir precedes workerDir in PATH, so replace the permissive worker
       // service guard for brain sessions with the same unconditional policy.

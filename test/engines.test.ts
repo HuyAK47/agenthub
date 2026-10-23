@@ -317,4 +317,50 @@ if (!fs.existsSync('${marker}') || fs.existsSync('${moved}') || fs.existsSync('$
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it('does not let shell shims bypass the npm, npx, and curl allowlists', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-shell-policy-'));
+    try {
+      const work = path.join(tmp, 'work');
+      fs.mkdirSync(work);
+      const marker = path.join(work, 'bypass-ran');
+      const hubHome = path.join(tmp, 'hub');
+      fs.mkdirSync(hubHome, { recursive: true });
+      const fake = path.join(work, 'shell-policy.mjs');
+      fs.writeFileSync(fake, `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const attempts = [
+  ['npm', ['run', 'arbitrary-script']],
+  ['npx', ['-p', 'evil-package', 'echo', 'owned']],
+  ['curl', ['-X', 'POST', 'https://api.github.com/repos/openai/codex']],
+  ['/bin/sh', ['-c', 'npm run arbitrary-script']],
+  ['/bin/sh', ['-c', 'npx -p evil-package echo owned']],
+  ['/bin/sh', ['-c', 'curl -X POST https://api.github.com/repos/openai/codex']],
+  ['/bin/sh', ['-c', 'curl https://example.com']],
+];
+for (const [command, args] of attempts) {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
+  if (result.status === 0) fs.writeFileSync('${marker}', command + ' ' + args.join(' '));
+}
+if (fs.existsSync('${marker}')) process.exit(1);
+`, { mode: 0o700 });
+
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      const child = new CodexEngine(fake).spawn({
+        profile,
+        model: 'gpt-5.6-luna',
+        cwd: work,
+        prompt: 'shell policy check',
+        logPath: path.join(tmp, 'shell-policy.log'),
+        hubHome,
+        brainPolicy: 'standard',
+        codexSandbox: 'workspace-write',
+      });
+      const exitCode = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      expect(exitCode).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
