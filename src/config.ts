@@ -271,6 +271,8 @@ export interface AgentHubConfig {
     /** Claude profiles to use for that fallback, in order; empty = any logged-in Claude profile. */
     claudeProfiles: string[];
     claudeModel: string;
+    /** Minutes a review may wait for a busy Codex account before Claude reviews instead. */
+    claudeFallbackAfterMin: number;
   };
   notifications: NotificationsConfig;
   disk: {
@@ -717,9 +719,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
   if (!fs.existsSync(worktreesDir)) fs.mkdirSync(worktreesDir, { recursive: true });
 
+  const testAgyHomesDir = process.env.AGENTHUB_TEST_MODE === '1'
+    ? path.join(path.dirname(hubHome), 'agy-homes')
+    : undefined;
   const agyHomesDir =
     (userConfig.agyHomesDir as string) ||
     process.env.AGENTHUB_AGY_HOMES ||
+    testAgyHomesDir ||
     path.join(os.homedir(), '.agy-homes');
 
   const defaultLogDir =
@@ -1021,6 +1027,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         ? reviewerRaw.claudeProfiles.filter((name): name is string => typeof name === 'string' && name.length > 0)
         : [],
       claudeModel: typeof reviewerRaw.claudeModel === 'string' && reviewerRaw.claudeModel ? reviewerRaw.claudeModel : 'sonnet',
+      claudeFallbackAfterMin: typeof reviewerRaw.claudeFallbackAfterMin === 'number' ? reviewerRaw.claudeFallbackAfterMin : 10,
     },
     notifications: {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'

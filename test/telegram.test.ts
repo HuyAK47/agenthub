@@ -2055,6 +2055,31 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
     expect(sends[1].body?.text).toContain('P2 failed');
   });
 
+  it('thông báo review.fallback một lần cho mỗi task ("Codex hết quota, Claude đang duyệt …")', async () => {
+    const bot = createBot('suggest');
+
+    bot.handleEvent('review.fallback', 'p1/task-fb', { title: 'Task fallback review', from: 'codex', to: 'claude', profile: 'claude-1' });
+    await bot.flushQueue(CHAT_ID);
+
+    let sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(1);
+    expect(sends[0].body?.text).toContain('Codex hết quota, Claude đang duyệt …');
+    expect(sends[0].body?.text).toContain('Task fallback review');
+
+    // Subsequent review.fallback event for the same task is deduplicated (not sent again)
+    bot.handleEvent('review.fallback', 'p1/task-fb', { title: 'Task fallback review', from: 'codex', to: 'claude', profile: 'claude-1' });
+    await bot.flushQueue(CHAT_ID);
+    sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(1);
+
+    // Another task gets its notification
+    bot.handleEvent('review.fallback', 'p1/task-fb-2', { title: 'Task 2', from: 'codex', to: 'claude' });
+    await bot.flushQueue(CHAT_ID);
+    sends = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+    expect(sends).toHaveLength(2);
+    expect(sends[1].body?.text).toContain('Task 2');
+  });
+
   it('2. gio yen tinh notifications.quietHours: chi gui level incident, tin khac don lai', async () => {
     config.notifications.quietHours = { enabled: true, start: '22:00', end: '07:00' };
     const quietDate = new Date();

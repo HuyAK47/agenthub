@@ -564,6 +564,39 @@ describe('AgentHub HTTP API Endpoints', () => {
   });
 
   // --- Tasks API ---
+  it('keeps the Claude reviewer in task lists after older fallback events leave the global recent window', async () => {
+    ctx.projectRepo.insert({
+      id: 'fallback-list',
+      name: 'Fallback list',
+      path: '/tmp',
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+    });
+    ctx.taskRepo.insert({
+      id: 'fallback-list/task',
+      projectId: 'fallback-list',
+      slug: 'task',
+      title: 'Fallback task',
+      status: 'review',
+    });
+    ctx.eventRepo.insert('review.fallback', 'fallback-list/task', { from: 'codex', to: 'claude' });
+    for (let i = 0; i < 201; i += 1) {
+      ctx.eventRepo.insert('unrelated.event');
+    }
+
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/tasks?project=fallback-list',
+      headers: authHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual([
+      expect.objectContaining({ id: 'fallback-list/task', reviewer: 'claude' }),
+    ]);
+  });
+
   it('Tasks workflow: create, start, cancel, review, retry, commits, and worktree removal', async () => {
     const repoPath = path.join(tmpDir, 'test-repo');
     initGitRepo(repoPath);

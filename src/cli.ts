@@ -22,6 +22,7 @@ import { measureProcessTree } from './process-tree.js';
 import { getPlatform } from './platform/index.js';
 import { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver } from './update.js';
 import { PerfCollector, formatPerfTable } from './perf.js';
+import { projectWorktreeRoots } from './projects/paths.js';
 
 export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
 import { assertWorkerMayControlHub } from './worker-guard.js';
@@ -762,6 +763,21 @@ export async function cmdClean(
           }
         } catch {
           // ignore
+        }
+      }
+      for (const project of ctx.projectRepo.getAll()) {
+        const roots = projectWorktreeRoots(project, config.hubHome, config.worktreesDir);
+        for (const root of roots) {
+          try {
+            if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) continue;
+            for (const slug of fs.readdirSync(root)) {
+              if (slug === '.integration' || slug === '.logs') continue;
+              const wtDir = path.join(root, slug);
+              if (fs.existsSync(wtDir) && fs.statSync(wtDir).isDirectory()) worktreePaths.add(wtDir);
+            }
+          } catch {
+            // ignore
+          }
         }
       }
 

@@ -198,6 +198,28 @@ export async function createServer(
     registerBrainRoutes(fastify, service.brainService, service);
   }
 
+  // --- Departments API ---
+  fastify.get('/api/departments', async () => service.listDepartments());
+  fastify.get('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getDepartment(id);
+  });
+  fastify.post('/api/departments', async (req: FastifyRequest, reply: FastifyReply) => {
+    return reply.status(201).send(service.createDepartment(req.body));
+  });
+  fastify.patch('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.updateDepartment(id, req.body);
+  });
+  fastify.delete('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.deleteDepartment(id);
+  });
+  fastify.put('/api/departments/:id/profiles', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.updateDepartmentProfiles(id, req.body);
+  });
+
   // --- Projects API ---
   fastify.get('/api/projects', async (req: FastifyRequest) => {
     const query = req.query as { archived?: string | boolean };

@@ -52,9 +52,15 @@ sh /tmp/agenthub-install.sh
 
 Script có thể cập nhật/gỡ cài đặt an toàn; dùng `--dry-run` để xem lệnh trước. Dữ liệu `~/.agenthub/` chỉ bị xoá khi chạy `--uninstall --purge` và xác nhận.
 
+### Cài đặt trên macOS
+
+Máy Mac mới không cần cài Node.js, nvm hay Xcode Command Line Tools khi cài từ release. Installer chỉ dùng `curl` và `tar`, tự tải Node.js 22 chính thức đúng kiến trúc (`darwin-arm64` hoặc `darwin-x64`), kiểm tra `SHASUMS256.txt` và lưu runtime riêng tại `~/.agenthub/runtime/node-v22.x`. Linux cũng dùng runtime riêng nếu PATH không có Node 22.
+
+Nếu muốn dùng nvm, chọn rõ bằng `--use-nvm`. Nếu cài từ source gặp lỗi thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại. Các lỗi checksum hoặc archive sai kiến trúc thường được khắc phục bằng cách tải lại release đúng máy.
+
 ### Cài đặt thủ công
 
-Yêu cầu môi trường: **Node.js >= 22** (khuyến nghị thông qua NVM) và **npm**.
+Yêu cầu môi trường: **Node.js >= 22** (hoặc dùng installer release để tự tải) và **npm**.
 
 ```bash
 # Kích hoạt môi trường Node 22

@@ -4,6 +4,7 @@ import { AgentHubConfig } from './config.js';
 import {
   openDatabase,
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   TaskRepo,
@@ -122,6 +123,7 @@ export function createContext(
   }
   const db = openDatabase(config.dbPath);
   const projectRepo = new ProjectRepo(db);
+  const departmentRepo = new DepartmentRepo(db);
   const profileRepo = new ProfileRepo(db);
   const quotaMarkRepo = new QuotaMarkRepo(db);
   const taskRepo = new TaskRepo(db);
@@ -224,6 +226,7 @@ export function createContext(
     runMetricsRepo,
     knowledgeRepo,
     diskFn ? { diskSpace: diskFn } : undefined,
+    departmentRepo,
   );
   usageService.setEventBus(scheduler.getEventBus());
   const setupManager = new SetupManager(config, scheduler.getEventBus(), (tool) => {
@@ -310,6 +313,7 @@ export function createContext(
     setupManager,
     brainRunner,
     directiveRepo,
+    departmentRepo,
   );
   service.deployService = deployService;
   scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {

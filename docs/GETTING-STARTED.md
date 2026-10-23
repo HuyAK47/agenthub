@@ -27,7 +27,7 @@ AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các wo
 | **Linux** | Đã kiểm chứng trên Ubuntu. Dùng `/proc`, `nice`/`ionice` và systemd user service. |
 | **macOS** | Được hỗ trợ: tiến trình đọc bằng `ps`/`lsof`, ưu tiên chỉ dùng `nice`, trình duyệt dùng `open`, service dùng LaunchAgent. `ionice` và systemd không có trên macOS. |
 | **Windows** | Không hỗ trợ trực tiếp. Dùng WSL2 và chạy AgentHub trong môi trường Linux. |
-| **Node.js 22** | Khuyến nghị cài qua [nvm](https://github.com/nvm-sh/nvm). |
+| **Node.js 22** | Installer release tự tải trên macOS/Linux khi PATH chưa có Node; cài thủ công có thể dùng [nvm](https://github.com/nvm-sh/nvm). |
 | **git** | Các dự án được giao việc phải là git repository. |
 | **Ít nhất một worker CLI** | `agy` (Antigravity CLI, đăng nhập Google) và/hoặc `codex` (Codex CLI, đăng nhập OpenAI). |
 | **Claude Code** | Bắt buộc nếu muốn để Claude điều phối (cài extension Claude Code cho VS Code, hoặc CLI `claude`). |
@@ -66,6 +66,8 @@ agenthub setup
 ```
 
 Installer kiểm tra `SHA256SUMS`, cài dependencies production theo máy hiện tại, và giữ lại hai bản cũ trong `~/.agenthub-app/` để rollback qua symlink `current`.
+
+Trên macOS, không cần cài Node, nvm hoặc Xcode Command Line Tools để cài từ release. Installer tải Node.js 22 chính thức đúng kiến trúc (`darwin-arm64`/`darwin-x64`), kiểm tra `SHASUMS256.txt` và lưu tại `~/.agenthub/runtime/node-v22.x`. Nếu muốn dùng nvm, truyền rõ `--use-nvm`. Các lỗi thường gặp gồm checksum hỏng, archive sai kiến trúc, thiếu `curl`/`tar`; nếu cài từ source báo thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại.
 
 ### Cài lỗi thì sao?
 

@@ -42,14 +42,15 @@ export function resetDockerRootCache(): void {
   dockerRootCache = { at: 0, path: null };
 }
 
-export function getMonitoredDisks(worktreesDir: string, worktreesMinFreeGB = 3, extraPaths: ExtraDiskPath[] = [], includeDocker = true, diskReader: (p: string) => DiskSpace = getDiskSpaceSync): MonitoredDisk[] {
+export function getMonitoredDisks(worktreesDir: string | string[], worktreesMinFreeGB = 3, extraPaths: ExtraDiskPath[] = [], includeDocker = true, diskReader: (p: string) => DiskSpace = getDiskSpaceSync): MonitoredDisk[] {
   const configured = [...extraPaths];
   const dockerRoot = includeDocker ? discoverDockerRootDir() : null;
   if (dockerRoot && !configured.some((entry) => path.resolve(entry.path) === path.resolve(dockerRoot))) {
     configured.push({ path: dockerRoot, minFreeGB: 5, label: 'Docker' });
   }
+  const worktreePaths = [...new Set(Array.isArray(worktreesDir) ? worktreesDir : [worktreesDir])];
   const paths: Array<ExtraDiskPath & { source: MonitoredDisk['source'] }> = [
-    { path: worktreesDir, minFreeGB: worktreesMinFreeGB, label: 'Worktrees', source: 'worktrees' },
+    ...worktreePaths.map((worktreePath) => ({ path: worktreePath, minFreeGB: worktreesMinFreeGB, label: 'Worktrees', source: 'worktrees' as const })),
     ...configured.map((entry) => ({ ...entry, source: 'extra' as const })),
   ];
   return paths.map((entry) => {

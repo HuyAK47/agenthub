@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub } from '../api/client';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles } from '../api/client';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
@@ -24,6 +24,9 @@ export const SettingsPage: React.FC = () => {
   const [chatModel, setChatModel] = useState<string>('sonnet');
   const [chatModels, setChatModels] = useState<string[]>(['opus', 'sonnet', 'haiku']);
   const [reviewerModel, setReviewerModel] = useState<string>('codex:gpt-5.6-luna');
+  const [claudeFallback, setClaudeFallback] = useState<boolean>(true);
+  const [claudeProfiles, setClaudeProfiles] = useState<string[]>([]);
+  const [claudeModel, setClaudeModel] = useState<string>('sonnet');
   const [maxConcurrent, setMaxConcurrent] = useState<number>(2);
   const [autoCompactPercent, setAutoCompactPercent] = useState<number>(85);
   const [bucketGemini, setBucketGemini] = useState<number>(5_000_000);
@@ -63,6 +66,21 @@ export const SettingsPage: React.FC = () => {
     queryFn: getConfig,
   });
 
+  const { data: allProfiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: getProfiles,
+  });
+
+  const availableClaudeProfiles = useMemo(
+    () => allProfiles.filter((p) => p.engine === 'claude'),
+    [allProfiles],
+  );
+
+  const allClaudeOptions = useMemo(() => {
+    const fromProfiles = availableClaudeProfiles.map((p) => p.name);
+    return Array.from(new Set([...fromProfiles, ...claudeProfiles]));
+  }, [availableClaudeProfiles, claudeProfiles]);
+
   useEffect(() => {
     if (config) {
       setBrandingName(config.branding?.name || 'AgentHub');
@@ -86,6 +104,9 @@ export const SettingsPage: React.FC = () => {
       setChatModel(config.chat?.model || 'sonnet');
       setChatModels(config.chat?.models?.length ? config.chat.models : ['opus', 'sonnet', 'haiku']);
       setReviewerModel(config.reviewer?.model || 'codex:gpt-5.6-luna');
+      setClaudeFallback(config.reviewer?.claudeFallback !== false);
+      setClaudeProfiles(config.reviewer?.claudeProfiles || []);
+      setClaudeModel(config.reviewer?.claudeModel || 'sonnet');
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
       setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);
       setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
@@ -183,7 +204,12 @@ export const SettingsPage: React.FC = () => {
         autoCompactPercent: Number(autoCompactPercent) || 85,
         models: chatModels,
       },
-      reviewer: { model: reviewerModel },
+      reviewer: {
+        model: reviewerModel,
+        claudeFallback,
+        claudeProfiles,
+        claudeModel,
+      },
       savings: {
         bucketTokens: {
           gemini: Number(bucketGemini) || 5_000_000,
@@ -499,10 +525,137 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-2 shadow-xs">
-                <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
-            <label className="block text-xs font-semibold text-[var(--t-text)]">{t('extra.reviewerModel')}</label>
-            <input value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
+          <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs" data-testid="reviewer-settings">
+            <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
+            <div>
+              <label htmlFor="reviewer-model-input" className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.reviewerModel')}</label>
+              <input id="reviewer-model-input" value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
+            </div>
+
+            <div className="pt-2 border-t border-[var(--t-border)] space-y-4">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="claude-fallback-toggle"
+                    checked={claudeFallback}
+                    onChange={(e) => setClaudeFallback(e.target.checked)}
+                    className="rounded border-[var(--t-border)] text-[var(--t-accent)] focus:ring-[var(--t-accent)] h-4 w-4 cursor-pointer"
+                  />
+                  <span className="text-sm font-medium text-[var(--t-text)]">
+                    {t('settings.claudeFallback')}
+                  </span>
+                </label>
+                <p className="text-xs text-[var(--t-text-3)] mt-1 ml-6">
+                  {t('settings.claudeFallbackHint')}
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="claude-model-select" className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                  {t('settings.claudeModel')}
+                </label>
+                <select
+                  id="claude-model-select"
+                  data-testid="claude-model-select"
+                  value={claudeModel}
+                  onChange={(e) => setClaudeModel(e.target.value)}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]"
+                >
+                  <option value="sonnet">sonnet</option>
+                  <option value="opus">opus</option>
+                  <option value="haiku">haiku</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="claude-profiles-select" className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                  {t('settings.claudeProfiles')}
+                </label>
+                <p className="text-xs text-[var(--t-text-3)] mb-2">
+                  {t('settings.claudeProfilesHint')}
+                </p>
+                <select
+                  id="claude-profiles-select"
+                  data-testid="claude-profiles-select"
+                  multiple
+                  value={claudeProfiles}
+                  onChange={(e) => {
+                    const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
+                    setClaudeProfiles(selected);
+                  }}
+                  className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] min-h-[90px]"
+                >
+                  {allClaudeOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+
+                {claudeProfiles.length > 0 && (
+                  <div className="mt-2 space-y-1.5" data-testid="claude-profiles-priority-list">
+                    <span className="text-xs text-[var(--t-text-3)]">
+                      {t('settings.claudeProfilesOrder')}:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {claudeProfiles.map((pName, idx) => (
+                        <span
+                          key={pName}
+                          data-testid={`claude-profile-chip-${pName}`}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-[var(--t-surface-2)] border border-[var(--t-border)] text-[var(--t-text)]"
+                        >
+                          <span className="font-semibold text-[var(--t-text-3)]">{idx + 1}.</span>
+                          <span>{pName}</span>
+                          {idx > 0 && (
+                            <button
+                              type="button"
+                              title="Move up"
+                              onClick={() => {
+                                const next = [...claudeProfiles];
+                                const tmp = next[idx - 1];
+                                next[idx - 1] = next[idx];
+                                next[idx] = tmp;
+                                setClaudeProfiles(next);
+                              }}
+                              className="text-[var(--t-text-3)] hover:text-[var(--t-text)] cursor-pointer"
+                            >
+                              ↑
+                            </button>
+                          )}
+                          {idx < claudeProfiles.length - 1 && (
+                            <button
+                              type="button"
+                              title="Move down"
+                              onClick={() => {
+                                const next = [...claudeProfiles];
+                                const tmp = next[idx + 1];
+                                next[idx + 1] = next[idx];
+                                next[idx] = tmp;
+                                setClaudeProfiles(next);
+                              }}
+                              className="text-[var(--t-text-3)] hover:text-[var(--t-text)] cursor-pointer"
+                            >
+                              ↓
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            title="Remove"
+                            onClick={() => {
+                              setClaudeProfiles(claudeProfiles.filter((name) => name !== pName));
+                            }}
+                            className="text-[var(--t-crit)] hover:opacity-80 ml-0.5 cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs">

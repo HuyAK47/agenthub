@@ -280,6 +280,21 @@ describe('Claude session privacy and quota handling', () => {
     db.close();
   });
 
+  it('allows transcripts from a project worktree root configured outside hubHome', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-configured-root-')); dirs.push(root);
+    const transcriptDir = path.join(root, 'projects');
+    const projectDir = path.join(root, 'project');
+    const configuredRoot = path.join(root, 'encrypted-worktrees');
+    fs.mkdirSync(path.join(transcriptDir, encodeProjectDir(configuredRoot)), { recursive: true });
+    fs.mkdirSync(projectDir); fs.mkdirSync(configuredRoot);
+    const db = openDatabase(path.join(root, 'hub.db'));
+    db.prepare('INSERT INTO projects (id,name,path,settings) VALUES (?,?,?,?)').run('p', 'Project', projectDir, JSON.stringify({ worktree: { root: configuredRoot } }));
+    transcript(path.join(transcriptDir, encodeProjectDir(configuredRoot)), configuredRoot, new Date().toISOString());
+    await new ClaudeSessionScanner(db, { dir: transcriptDir, hubHome: path.join(root, 'hub-home'), worktreesDir: path.join(root, 'worktrees') }).scan();
+    expect(db.prepare('SELECT COUNT(*) count FROM claude_sessions').get()).toEqual({ count: 1 });
+    db.close();
+  });
+
   it('migration forgets previously recorded paths of unmanaged transcripts', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-claude-')); dirs.push(root);
     const db = openDatabase(path.join(root, 'hub.db'));

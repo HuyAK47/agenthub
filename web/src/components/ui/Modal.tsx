@@ -2,6 +2,7 @@ import React, { useId } from 'react';
 import { X } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
 import { useFocusTrap } from './useFocusTrap';
+import { UI_Z_INDEX } from './layers';
 
 export interface ModalProps {
   isOpen: boolean;
@@ -37,8 +38,8 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'var(--t-overlay)' }}
+      className="fixed inset-0 flex items-center justify-center p-4"
+      style={{ zIndex: UI_Z_INDEX.modal, backgroundColor: 'var(--t-overlay)' }}
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
