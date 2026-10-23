@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { useLocale } from '../../context/LocaleContext';
 import { useTour } from './TourContext';
+import { UI_Z_INDEX } from '../ui/layers';
 
 export type Rect = {
   top: number;
@@ -253,11 +254,16 @@ export const TourOverlay: React.FC = () => {
     const locate = () => {
       if (cancelled) return;
       const target = document.querySelector(step.selector) as HTMLElement | null;
-      if (target) {
+      if (target && target.isConnected) {
         target.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
 
         const update = () => {
           if (cancelled) return;
+          if (!target.isConnected) {
+            setRect(null);
+            next();
+            return;
+          }
           const box = target.getBoundingClientRect();
           setRect((prev) => {
             if (
@@ -322,6 +328,8 @@ export const TourOverlay: React.FC = () => {
       } else {
         next();
       }
+
+
     };
 
     setRect(null);
@@ -353,13 +361,18 @@ export const TourOverlay: React.FC = () => {
     height: popoverSize.height || 200,
   };
   const position = computePopoverPosition(rect, effectiveSize, viewport);
+  const target = document.querySelector(step.selector);
+  const targetIsInModal = target instanceof HTMLElement && Boolean(target.closest('[role="dialog"]'));
+  const zIndex = targetIsInModal ? UI_Z_INDEX.modalTour : UI_Z_INDEX.tour;
 
   return (
     <div
-      className="fixed inset-0 z-[100] overflow-hidden"
+      className="pointer-events-none fixed inset-0 overflow-hidden"
+      style={{ zIndex }}
       role="dialog"
       aria-modal="true"
       aria-label={title}
+      data-testid="tour-overlay"
     >
       {/* Vùng khoét sáng đúng vị trí phần tử: bóng 9999px phủ tối toàn bộ phần còn lại */}
       <div
@@ -377,7 +390,7 @@ export const TourOverlay: React.FC = () => {
       <section
         ref={popoverRef}
         data-testid="tour-popover"
-        className="absolute flex flex-col rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-2xl text-[var(--t-text)] overflow-visible"
+        className="pointer-events-auto absolute flex flex-col rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-2xl text-[var(--t-text)] overflow-visible max-sm:!left-3 max-sm:!right-3 max-sm:!bottom-3 max-sm:!top-auto max-sm:!w-auto"
         style={{
           top: position.top,
           left: position.left,
@@ -430,6 +443,7 @@ export const TourOverlay: React.FC = () => {
             >
               {t('tour.skip')}
             </button>
+
           </div>
         </div>
 

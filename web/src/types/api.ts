@@ -106,6 +106,7 @@ export interface Project {
   defaultBranch: string;
   envTemplate?: string | null;
   maxParallel: number;
+  departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
   merge?: ProjectMerge | string | null;
@@ -116,6 +117,25 @@ export interface Project {
   ciStatus?: CiStatusSummary | null;
   createdAt?: string;
   afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
+}
+
+export interface DepartmentProfile {
+  departmentId: string;
+  profileName: string;
+  share: number | null;
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  priority: number;
+  maxParallel: number;
+  claudeDailyTokenBudget: number;
+  telegramTopicId: number | null;
+  createdAt: string;
+  projectCount?: number;
+  profiles: DepartmentProfile[];
+  projects: Array<{ id: string; name: string }>;
 }
 
 export interface CiJobAnnotation {
@@ -160,7 +180,7 @@ export interface DeployStatus {
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
   brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
-  worktree: { install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
+  worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;

@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
-import { openDatabase, ProjectRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, ReviewRepo } from '../src/db/index.js';
+import { openDatabase, ProjectRepo, DepartmentRepo, ProfileRepo, QuotaMarkRepo, TaskRepo, RunRepo, EventRepo, ReviewRepo } from '../src/db/index.js';
 import { Scheduler } from '../src/scheduler/index.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
 import { QuotaService } from '../src/quota/index.js';
@@ -314,6 +314,44 @@ describe('maxParallel limit', () => {
       for (const child of workers) child.kill();
     }
   });
+
+  it('enforces the department limit across projects', () => {
+    const firstProjectPath = path.join(tmpDir, 'repo-first');
+    createTestProject(firstProjectPath);
+    const secondProjectPath = path.join(tmpDir, 'repo-second');
+    fs.mkdirSync(secondProjectPath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: secondProjectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
+    fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Test');
+    execFileSync('git', ['add', '.'], { cwd: secondProjectPath });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: secondProjectPath,
+      env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' },
+    });
+    projectRepo.insert({ id: 'second-project', name: 'Second Project', path: secondProjectPath, defaultBranch: 'main', maxParallel: 3 });
+
+    const departmentRepo = new DepartmentRepo(db);
+    departmentRepo.insert({ id: 'eng', name: 'Engineering', priority: 10, maxParallel: 1, claudeDailyTokenBudget: 0, telegramTopicId: null });
+    projectRepo.update('test-project', { departmentId: 'eng' });
+    projectRepo.update('second-project', { departmentId: 'eng' });
+    profileRepo.upsert({ name: 'p1', engine: 'agy', kind: 'isolated', home: '/tmp/p1', email: null, enabled: 1 });
+    profileRepo.upsert({ name: 'p2', engine: 'agy', kind: 'isolated', home: '/tmp/p2', email: null, enabled: 1 });
+    taskRepo.insert({ id: 'test-project/low', projectId: 'test-project', slug: 'low', title: 'Low', status: 'queued' });
+    taskRepo.insert({ id: 'second-project/high', projectId: 'second-project', slug: 'high', title: 'High', status: 'queued' });
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]), undefined, undefined, undefined, undefined, undefined, undefined, departmentRepo,
+    );
+    scheduler.tick();
+
+    expect(taskRepo.get('test-project/low')?.status).toBe('running');
+    expect(taskRepo.get('second-project/high')?.status).toBe('queued');
+    expect(taskRepo.get('second-project/high')?.waitReason).toBe('parallel');
+    expect(scheduler.getRunning().size).toBe(1);
+    scheduler.stop();
+  });
 });
 
 describe('Profile uses both agy slots', () => {
@@ -385,6 +423,16 @@ describe('Scheduler regression fixes', () => {
     expect(runRepo.getByTask('test-project/a')[0].outcome).toBeNull();
     scheduler.cancelAll();
     delete process.env.FAKE_MODE;
+  });
+
+  it('requeues a task left running without any run after a restart', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    taskRepo.insert({ id: 'test-project/orphan', projectId: 'test-project', slug: 'orphan', title: 'Orphan', status: 'running' });
+    const scheduler = makeScheduler();
+    scheduler.start();
+    expect(taskRepo.get('test-project/orphan')?.status).not.toBe('running');
+    scheduler.stop();
   });
 
   it('recovers a live worker into the running map', async () => {
@@ -692,6 +740,40 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  it('clears an escalation once an automated reviewer approved, so the finished chain can merge', () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit', reviewStep: 1 });
+    reviewRepo.insert({ id: 'arb-ok', taskId: 'test-project/review', verdict: 'approved', feedback: 'ok', actor: 'claude-reviewer' });
+    scheduler.tick();
+    expect(taskRepo.get('test-project/review')?.reviewerEscalated).toBe(0);
+    expect(eventRepo.getRecent(30).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/review')).toHaveLength(1);
+    scheduler.stop();
+  });
+
+  it('sends an arbiter rejection back to the worker, then blocks after the allowed rounds', () => {
+    const { scheduler, reviewRepo } = makeReviewer('reviewer-approved');
+    const escalate = () => {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+      taskRepo.update('test-project/review', { status: 'review', reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+    };
+    escalate(); escalate();
+    for (let round = 1; round <= 3; round++) {
+      reviewRepo.insert({ id: `arb-no-${round}`, taskId: 'test-project/review', verdict: 'changes_requested', feedback: `thiếu test ${round}`, actor: 'claude-reviewer' });
+      if (round > 1) escalate();
+      scheduler.tick();
+      const task = taskRepo.get('test-project/review')!;
+      if (round <= 2) {
+        // Back in the queue; the same tick may already mark it waiting for a free account.
+        expect(['queued', 'waiting_quota']).toContain(task.status);
+        expect(JSON.parse(task.modelChain!)[0]).toBe('claude-opus-4-6-thinking');
+      } else {
+        expect(task.status).toBe('blocked');
+      }
+    }
+    scheduler.stop();
+  });
+
   it('leaves a first escalation for the retry path, not the arbiter', () => {
     const { scheduler } = makeReviewer('reviewer-approved');
     withClaudeReviewer(scheduler);
@@ -699,6 +781,16 @@ describe('Codex reviewer failover lifecycle', () => {
     taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
     scheduler.tick();
     expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('lets Claude review once a busy Codex has kept the task waiting too long', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    (scheduler as unknown as { reviewerRunsForProfile: (name: string) => boolean }).reviewerRunsForProfile = (name) => name === 'codex-1';
+    db.prepare("UPDATE tasks SET updatedAt = datetime('now', '-30 minutes') WHERE id = 'test-project/review'").run();
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.profileName).toBe('claude-1');
     scheduler.stop();
   });
 
@@ -923,6 +1015,26 @@ describe('Review: DONE → review, changes_requested → re-queue', () => {
     // DONE marker should be deleted
     expect(fs.existsSync(path.join(worktreePath, '.agenthub', 'DONE'))).toBe(false);
 
+    scheduler.stop();
+  });
+
+  it('does not check again after changes_requested until a new worker completion', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-retry');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'old done');
+    taskRepo.insert({ id: 'test-project/retry-check', projectId: 'test-project', slug: 'retry-check', title: 'Retry check', body: 'body', status: 'review', worktreePath: worktreePath });
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map(), undefined, undefined, db);
+    const run = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run };
+
+    scheduler.reviewTask('test-project/retry-check', 'changes_requested', 'Fix it');
+    await scheduler.recoverCheckingTasks();
+
+    expect(taskRepo.get('test-project/retry-check')?.status).toBe('queued');
+    expect(run).not.toHaveBeenCalled();
+    expect(eventRepo.getRecent(20).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/retry-check')).toHaveLength(0);
     scheduler.stop();
   });
 });
@@ -1270,7 +1382,7 @@ describe('Checking after worker completion', () => {
       projectId: 'test-project',
       slug: 't1',
       title: 'Task 1',
-      status: 'running',
+      status: 'checking',
       worktreePath: projectPath,
     });
     runRepo.insert({
@@ -1280,6 +1392,7 @@ describe('Checking after worker completion', () => {
       model: 'gemini-3.8-flash-medium',
       profileName: 'p1',
     });
+    db.prepare("UPDATE runs SET outcome = 'done' WHERE id = 'run-1'").run();
 
     const scheduler = new Scheduler(
       config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
@@ -1289,7 +1402,7 @@ describe('Checking after worker completion', () => {
     await scheduler.runChecksForTask('test-project/t1', 'run-1');
 
     expect(taskRepo.get('test-project/t1')?.status).toBe('review');
-    expect(eventRepo.getRecent(10).map((event) => event.type)).toContain('task.checking');
+    expect(eventRepo.getRecent(10).map((event) => event.type)).toContain('task.review_ready');
     scheduler.stop();
   });
 
@@ -1360,7 +1473,7 @@ describe('Checking after worker completion', () => {
       model: 'gemini-3.8-flash-medium',
       profileName: 'p1',
       projectId: 'test-project',
-      startTime: Date.now(),
+      startTime: Date.now() - 5000,
       timeoutMs: 60000,
       timeoutAt: Date.now() + 60000,
       retryCount: 0,
@@ -1404,6 +1517,8 @@ describe('Checking after worker completion', () => {
         scheduler.stop();
         throw new Error('simulated check error');
       });
+      taskRepo.update('test-project/t1', { status: 'running' });
+      db.prepare("UPDATE runs SET outcome = NULL WHERE id = 'run-1'").run();
       schedulerInternal.running.set('test-project/t1', fakeRt);
       await schedulerInternal.checkRunningTasks();
       await vi.waitFor(() => {
@@ -1416,6 +1531,326 @@ describe('Checking after worker completion', () => {
       scheduler.stop();
       errorSpy.mockRestore();
     }
+  });
+
+  it('does not re-check queued task when an old worker finishes after changes_requested until a new worker completes', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-live-changes');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+
+    taskRepo.insert({
+      id: 'test-project/live-changes',
+      projectId: 'test-project',
+      slug: 'live-changes',
+      title: 'Live Changes',
+      body: 'Task body',
+      status: 'review',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-old',
+      taskId: 'test-project/live-changes',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const checkSpy = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run: checkSpy };
+
+    // 1. Reviewer rejects task: changes_requested -> queued
+    scheduler.reviewTask('test-project/live-changes', 'changes_requested', 'Please fix issues');
+    expect(taskRepo.get('test-project/live-changes')?.status).toBe('queued');
+
+    // 2. Old worker process now completes and writes DONE
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'old worker done');
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+      running: Map<string, unknown>;
+    };
+    const fakeRtOld = {
+      runId: 'run-old',
+      taskId: 'test-project/live-changes',
+      pid: 999991,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }), detectAuthError: () => ({ expired: false }), detectTransientError: () => false },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 10000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+
+    await schedulerInternal.handleRunCompletion('test-project/live-changes', fakeRtOld);
+
+    // Verify: Task MUST REMAIN queued, checks MUST NOT run, no review_ready event
+    expect(taskRepo.get('test-project/live-changes')?.status).toBe('queued');
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-changes' && (e.type === 'task.review_ready' || e.type === 'task.checking'))).toHaveLength(0);
+    expect(runRepo.get('run-old')?.outcome).toBe('crashed');
+
+    // 3. Now a new worker run starts for the queued task
+    taskRepo.update('test-project/live-changes', { status: 'running' });
+    runRepo.insert({
+      id: 'run-new',
+      taskId: 'test-project/live-changes',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+    const fakeRtNew = {
+      ...fakeRtOld,
+      runId: 'run-new',
+      pid: 999992,
+      startTime: Date.now() - 2000,
+    };
+    schedulerInternal.running.set('test-project/live-changes', fakeRtNew);
+    // Write fresh DONE marker
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'new worker done');
+
+    await schedulerInternal.handleRunCompletion('test-project/live-changes', fakeRtNew);
+
+    // Verify: Now checks run, task goes to review, review_ready is emitted
+    expect(taskRepo.get('test-project/live-changes')?.status).toBe('review');
+    expect(checkSpy).toHaveBeenCalledTimes(1);
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-changes' && e.type === 'task.review_ready')).toHaveLength(1);
+    expect(runRepo.get('run-new')?.outcome).toBe('done');
+
+    scheduler.stop();
+  });
+
+  it('does not check or emit review_ready when an older worker finishes while a newer worker is actively running', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-live-overlap');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+
+    taskRepo.insert({
+      id: 'test-project/live-overlap',
+      projectId: 'test-project',
+      slug: 'live-overlap',
+      title: 'Live Overlap',
+      status: 'running',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-old-overlap',
+      taskId: 'test-project/live-overlap',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+    runRepo.insert({
+      id: 'run-active-overlap',
+      taskId: 'test-project/live-overlap',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const checkSpy = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run: checkSpy };
+
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+      running: Map<string, unknown>;
+    };
+
+    const fakeRtActive = {
+      runId: 'run-active-overlap',
+      taskId: 'test-project/live-overlap',
+      pid: 999994,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }), detectAuthError: () => ({ expired: false }), detectTransientError: () => false },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 1000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+    // The newer worker is registered as running in scheduler
+    schedulerInternal.running.set('test-project/live-overlap', fakeRtActive);
+
+    const fakeRtOld = {
+      ...fakeRtActive,
+      runId: 'run-old-overlap',
+      pid: 999993,
+      startTime: Date.now() - 10000,
+    };
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'done');
+
+    // Old worker finishes
+    await schedulerInternal.handleRunCompletion('test-project/live-overlap', fakeRtOld);
+
+    // Verify: Task remains running, the active worker is NOT deleted from running map, checks do not run
+    expect(taskRepo.get('test-project/live-overlap')?.status).toBe('running');
+    expect(schedulerInternal.running.get('test-project/live-overlap')).toBe(fakeRtActive);
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-overlap' && e.type === 'task.review_ready')).toHaveLength(0);
+    expect(runRepo.get('run-old-overlap')?.outcome).toBe('crashed');
+    expect(runRepo.get('run-active-overlap')?.outcome).toBeNull();
+
+    scheduler.stop();
+  });
+
+  it('ignores stale completion before reference modifications can block the retried task', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-stale-reference');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+    const referencePath = path.join(tmpDir, 'reference.txt');
+    fs.writeFileSync(referencePath, 'before');
+
+    taskRepo.insert({
+      id: 'test-project/stale-reference',
+      projectId: 'test-project',
+      slug: 'stale-reference',
+      title: 'Stale Reference',
+      status: 'review',
+      body: 'Task body',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-stale-reference',
+      taskId: 'test-project/stale-reference',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+    };
+
+    scheduler.reviewTask('test-project/stale-reference', 'changes_requested', 'Retry this task');
+    fs.writeFileSync(referencePath, 'after');
+    await schedulerInternal.handleRunCompletion('test-project/stale-reference', {
+      runId: 'run-stale-reference',
+      taskId: 'test-project/stale-reference',
+      pid: 999996,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }) },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 5000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+      referenceSnapshots: [{ kind: 'file', name: 'reference', path: referencePath, mtimeMs: 0, size: 6 }],
+    });
+
+    expect(taskRepo.get('test-project/stale-reference')?.status).toBe('queued');
+    expect(runRepo.get('run-stale-reference')?.outcome).toBe('crashed');
+    expect(runRepo.get('run-stale-reference')?.reason).toBe('stale_worker');
+    expect(fs.existsSync(path.join(worktreePath, '.agenthub', 'BLOCKED'))).toBe(false);
+    expect(eventRepo.getRecent(20).filter((event) => event.taskId === 'test-project/stale-reference' && event.type === 'task.blocked')).toHaveLength(0);
+
+    scheduler.stop();
+  });
+
+  it('does not check or emit review_ready when worker finishes on a done task during live execution', async () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    const worktreePath = path.join(tmpDir, 'worktree-live-done');
+    fs.mkdirSync(path.join(worktreePath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, '.agenthub', 'DONE'), 'done');
+
+    taskRepo.insert({
+      id: 'test-project/live-done',
+      projectId: 'test-project',
+      slug: 'live-done',
+      title: 'Live Done',
+      status: 'done',
+      worktreePath,
+    });
+    runRepo.insert({
+      id: 'run-done-live',
+      taskId: 'test-project/live-done',
+      engine: 'agy',
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+    });
+
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>(), undefined, undefined, db,
+    );
+    const checkSpy = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run: checkSpy };
+
+    const schedulerInternal = scheduler as unknown as {
+      handleRunCompletion: (taskId: string, rt: unknown) => Promise<void>;
+      running: Map<string, unknown>;
+    };
+
+    const fakeRt = {
+      runId: 'run-done-live',
+      taskId: 'test-project/live-done',
+      pid: 999995,
+      pidStart: null,
+      engine: { detectQuota: () => ({ exhausted: false }), detectAuthError: () => ({ expired: false }), detectTransientError: () => false },
+      model: 'gemini-3.8-flash-medium',
+      profileName: 'p1',
+      projectId: 'test-project',
+      startTime: Date.now() - 5000,
+      timeoutMs: 60000,
+      timeoutAt: Date.now() + 60000,
+      retryCount: 0,
+      lastOutputAt: Date.now(),
+      lastActivityAt: Date.now(),
+      activitySource: 'terminal',
+      activityCheckedAt: Date.now(),
+      cachedConversationMtime: 0,
+      cachedWorktreeMtime: 0,
+      usageBefore: null,
+    };
+
+    await schedulerInternal.handleRunCompletion('test-project/live-done', fakeRt);
+
+    expect(taskRepo.get('test-project/live-done')?.status).toBe('done');
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(eventRepo.getRecent(20).filter((e) => e.taskId === 'test-project/live-done' && e.type === 'task.review_ready')).toHaveLength(0);
+
+    scheduler.stop();
   });
 });
 
@@ -1432,9 +1867,13 @@ describe('Checking queue lifecycle', () => {
     return scheduler as Scheduler & { checkRunner: { run: (...args: unknown[]) => Promise<unknown> } };
   }
 
-  function addCheckTask(slug: string, worktreePath = path.join(tmpDir, slug), status: 'review' | 'done' | 'cancelled' = 'review') {
+  function addCheckTask(slug: string, worktreePath = path.join(tmpDir, slug), status: 'checking' | 'done' | 'cancelled' = 'checking') {
     fs.mkdirSync(worktreePath, { recursive: true });
     taskRepo.insert({ id: `test-project/${slug}`, projectId: 'test-project', slug, title: slug, status, worktreePath });
+    if (status === 'checking') {
+      runRepo.insert({ id: `run-${slug}`, taskId: `test-project/${slug}`, engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+      runRepo.finish(`run-${slug}`, 'done');
+    }
   }
 
   it('runs at most maxConcurrent checks and starts the FIFO third after one completes', async () => {
@@ -1464,6 +1903,10 @@ describe('Checking queue lifecycle', () => {
 
   it('deduplicates the same runId but queues a newer runId after the old run releases the worktree', async () => {
     addCheckTask('same');
+    runRepo.insert({ id: 'old', taskId: 'test-project/same', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    runRepo.insert({ id: 'new', taskId: 'test-project/same', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    runRepo.finish('old', 'done');
+    runRepo.finish('new', 'done');
     const scheduler = makeCheckingScheduler();
     let calls = 0; let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -1473,11 +1916,11 @@ describe('Checking queue lifecycle', () => {
     expect(duplicate).toBeDefined();
     const newer = scheduler.runChecksForTask('test-project/same', 'new');
     release();
-    await vi.waitFor(() => expect(calls).toBe(2));
-    expect(taskRepo.get('test-project/same')?.status).toBe('review');
+    await vi.waitFor(() => expect(calls).toBe(1));
     release = () => {};
     await Promise.all([old, newer]);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
+    expect(taskRepo.get('test-project/same')?.status).toBe('review');
     scheduler.stop();
   });
 
@@ -1530,6 +1973,46 @@ describe('Checking queue lifecycle', () => {
     expect(taskRepo.get('test-project/cancelled')?.status).toBe('cancelled');
     scheduler.stop();
   });
+
+  it('does not re-check a stale checking task without the completed worker run', async () => {
+    addCheckTask('stale', path.join(tmpDir, 'stale'), 'review');
+    taskRepo.update('test-project/stale', { status: 'checking' });
+    const scheduler = makeCheckingScheduler();
+    const run = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run };
+
+    await scheduler.recoverCheckingTasks();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(taskRepo.get('test-project/stale')?.status).toBe('checking');
+    scheduler.stop();
+  });
+
+  it('rejects an unknown or stale run and a task that is still running', async () => {
+    addCheckTask('strict');
+    const scheduler = makeCheckingScheduler();
+    const run = vi.fn(async () => ({ passed: true, failed: [], results: [] }));
+    scheduler.checkRunner = { run };
+
+    await scheduler.runChecksForTask('test-project/strict', 'missing-run');
+    expect(run).not.toHaveBeenCalled();
+
+    taskRepo.update('test-project/strict', { status: 'running' });
+    await scheduler.runChecksForTask('test-project/strict', 'run-strict');
+    expect(run).not.toHaveBeenCalled();
+
+    taskRepo.update('test-project/strict', { status: 'checking' });
+    runRepo.insert({ id: 'stale-run', taskId: 'test-project/strict', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', outcome: 'crashed' });
+    await scheduler.runChecksForTask('test-project/strict', 'stale-run');
+    expect(run).not.toHaveBeenCalled();
+
+    runRepo.insert({ id: 'completed-strict', taskId: 'test-project/strict', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    runRepo.finish('completed-strict', 'done');
+    runRepo.insert({ id: 'active-strict', taskId: 'test-project/strict', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1' });
+    await scheduler.runChecksForTask('test-project/strict', 'completed-strict');
+    expect(run).not.toHaveBeenCalled();
+    scheduler.stop();
+  });
 });
 
 describe('Crash recovery on startup', () => {
@@ -1575,6 +2058,55 @@ describe('Crash recovery on startup', () => {
     expect(task.status).toBe('queued');
     expect(task.resume).toBe(1);
 
+    scheduler.stop();
+  });
+
+  it('keeps a done task terminal when daemon recovery finds an old worker row', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'DONE'), 'old done');
+    taskRepo.insert({ id: 'test-project/done-old', projectId: 'test-project', slug: 'done-old', title: 'Done', status: 'done', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-done-old', taskId: 'test-project/done-old', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map());
+    scheduler.start();
+
+    expect(taskRepo.get('test-project/done-old')?.status).toBe('done');
+    expect(eventRepo.getRecent(20).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/done-old')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('does not treat a stale marker on a queued task as a new completion', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'DONE'), 'stale done');
+    taskRepo.insert({ id: 'test-project/queued-old', projectId: 'test-project', slug: 'queued-old', title: 'Queued', status: 'queued', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-queued-old', taskId: 'test-project/queued-old', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999999 });
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map());
+    scheduler.start();
+
+    expect(taskRepo.get('test-project/queued-old')?.status).toBe('queued');
+    expect(eventRepo.getRecent(20).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/queued-old')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('does not let an older worker run claim a marker when a newer run is active', () => {
+    const projectPath = path.join(tmpDir, 'repo');
+    createTestProject(projectPath);
+    fs.mkdirSync(path.join(projectPath, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, '.agenthub', 'DONE'), 'stale done');
+    taskRepo.insert({ id: 'test-project/overlap', projectId: 'test-project', slug: 'overlap', title: 'Overlap', status: 'running', worktreePath: projectPath });
+    runRepo.insert({ id: 'run-old-overlap', taskId: 'test-project/overlap', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999998 });
+    runRepo.insert({ id: 'run-new-overlap', taskId: 'test-project/overlap', engine: 'agy', model: 'gemini-3.8-flash-medium', profileName: 'p1', pid: 999997 });
+
+    const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo, new Map());
+    scheduler.start();
+
+    expect(taskRepo.get('test-project/overlap')?.status).toBe('queued');
+    expect(eventRepo.getRecent(20).filter((event) => event.type === 'task.review_ready' && event.taskId === 'test-project/overlap')).toHaveLength(0);
     scheduler.stop();
   });
 

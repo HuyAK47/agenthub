@@ -207,6 +207,7 @@ DRY_RUN=0
 FROM_RELEASE=0
 RELEASE_VERSION=""
 RELEASE_VERSION_SET=0
+USE_NVM=0
 
 while [ "$#" -gt 0 ]; do
   arg="$1"
@@ -228,6 +229,9 @@ while [ "$#" -gt 0 ]; do
         shift
       fi
       ;;
+    --use-nvm)
+      USE_NVM=1
+      ;;
     --help|-h)
       echo "AgentHub Installer"
       echo ""
@@ -237,6 +241,7 @@ while [ "$#" -gt 0 ]; do
       echo "  ./scripts/install.sh --uninstall --purge  Gỡ cài đặt và xoá sạch dữ liệu (hỏi xác nhận)"
       echo "  ./scripts/install.sh --dry-run            Chỉ in các lệnh, không thay đổi hệ thống"
       echo "  ./scripts/install.sh --from-release [version]  Cài từ GitHub Release"
+      echo "  ./scripts/install.sh --from-release --use-nvm  Dùng nvm thay vì runtime Node tích hợp"
       echo ""
       echo "Biến môi trường:"
       echo "  AGENTHUB_DIR       Thư mục clone mã nguồn (mặc định: ~/.agenthub-app)"
@@ -277,27 +282,97 @@ release_checksum() {
 }
 
 # Find a Node binary of the given major version (the one the release's native modules were built
-# for). Uses `node` from PATH if it matches, otherwise nvm (installing nvm/Node after asking).
-# Prints the absolute path of the node binary.
+# for). Release installs use a self-contained runtime when PATH has no suitable Node. nvm is only
+# considered after the user explicitly passes --use-nvm. Prints the absolute path of the node.
+install_node_runtime() {
+  _want="$1"
+  _os="$2"
+  _machine="$3"
+  case "$_os:$_machine" in
+    Darwin:arm64) _node_platform=darwin-arm64 ;;
+    Darwin:x86_64|Darwin:amd64) _node_platform=darwin-x64 ;;
+    Linux:arm64|Linux:aarch64) _node_platform=linux-arm64 ;;
+    Linux:x86_64|Linux:amd64) _node_platform=linux-x64 ;;
+    *)
+      echo "Lỗi: không có Node.js $_want tích hợp cho $_os/$_machine." >&2
+      _failure_reason="không có Node.js $_want tích hợp cho $_os/$_machine"
+      return 1
+      ;;
+  esac
+
+  _runtime_root="$AGENTHUB_DATA_DIR/runtime"
+  _runtime_dir="$_runtime_root/node-v${_want}.x"
+  if [ -x "$_runtime_dir/bin/node" ]; then
+    printf '%s' "$_runtime_dir/bin/node"
+    return 0
+  fi
+
+  _node_tmp="${TMPDIR:-/tmp}/agenthub-node.$$"
+  mkdir -p "$_node_tmp"
+  _node_base="https://nodejs.org/dist/latest-v${_want}.x"
+  _install_step="tải Node.js runtime"
+  if ! curl -fsSL "$_node_base/SHASUMS256.txt" -o "$_node_tmp/SHASUMS256.txt"; then
+    _failure_reason="không tải được danh sách checksum Node.js $_want"
+    echo "Lỗi: không tải được Node.js $_want từ $_node_base." >&2
+    rm -rf "$_node_tmp"
+    return 1
+  fi
+  _node_archive="$(awk -v suffix="-${_node_platform}.tar.gz" '$2 ~ ("^node-v[0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*" suffix "$") { print $2; exit }' "$_node_tmp/SHASUMS256.txt")"
+  if [ -z "$_node_archive" ]; then
+    _failure_reason="không tìm được archive Node.js $_want cho $_node_platform"
+    echo "Lỗi: không tìm được Node.js $_want cho kiến trúc $_node_platform." >&2
+    rm -rf "$_node_tmp"
+    return 1
+  fi
+  if ! curl -fsSL "$_node_base/$_node_archive" -o "$_node_tmp/$_node_archive"; then
+    _failure_reason="không tải được $_node_archive"
+    echo "Lỗi: không tải được $_node_archive." >&2
+    rm -rf "$_node_tmp"
+    return 1
+  fi
+  _expected="$(awk -v file="$_node_archive" '$2 == file { print $1; exit }' "$_node_tmp/SHASUMS256.txt")"
+  _actual="$(release_checksum "$_node_tmp/$_node_archive" | awk '{print $1}')"
+  if [ -z "$_expected" ] || [ "$_expected" != "$_actual" ]; then
+    _failure_reason="kiểm tra SHA256 thất bại cho $_node_archive"
+    echo "Lỗi: kiểm tra SHA256 thất bại cho $_node_archive." >&2
+    rm -rf "$_node_tmp"
+    return 1
+  fi
+  _node_extract="$_node_tmp/extract"
+  mkdir -p "$_node_extract" "$_runtime_root"
+  tar -xzf "$_node_tmp/$_node_archive" -C "$_node_extract"
+  _node_source="$_node_extract/${_node_archive%.tar.gz}"
+  if [ ! -x "$_node_source/bin/node" ]; then
+    _failure_reason="archive Node.js thiếu bin/node"
+    echo "Lỗi: archive Node.js tải xuống không hợp lệ." >&2
+    rm -rf "$_node_tmp"
+    return 1
+  fi
+  rm -rf "$_runtime_dir"
+  mv "$_node_source" "$_runtime_dir"
+  rm -rf "$_node_tmp"
+  printf '%s' "$_runtime_dir/bin/node"
+}
+
 find_node_major() {
   _want="$1"
   _cur="$(command -v node 2>/dev/null || true)"
   if [ -n "$_cur" ] && [ "$("$_cur" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" = "$_want" ]; then
     printf '%s' "$_cur"; return 0
   fi
+  if [ "$USE_NVM" != "1" ]; then
+    install_node_runtime "$_want" "$(uname -s)" "$(uname -m)"
+    return $?
+  fi
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   # shellcheck source=/dev/null
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
   if ! command -v nvm >/dev/null 2>&1; then
     echo "AgentHub cần Node $_want (máy đang có: ${_cur:+$("$_cur" -v)}${_cur:-không có Node})." >&2
-    if prompt_yes_no "Cài nvm để cài Node $_want riêng cho AgentHub (không đổi Node mặc định của bạn)?" "y"; then
-      curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash >&2
-      # shellcheck source=/dev/null
-      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
-    fi
+    echo "AgentHub không tự cài nvm. Hãy dùng --use-nvm hoặc cài Node $_want rồi chạy lại." >&2
   fi
   if ! command -v nvm >/dev/null 2>&1; then
-    echo "Lỗi: cần Node $_want. Cài Node $_want hoặc nvm rồi chạy lại." >&2
+    echo "Lỗi: cần Node $_want. Cài Node $_want, hoặc chạy lại với --use-nvm." >&2
     return 1
   fi
   _path="$(nvm which "$_want" 2>/dev/null || true)"
@@ -308,7 +383,7 @@ find_node_major() {
     fi
   fi
   if [ -z "$_path" ] || [ ! -x "$_path" ]; then
-    echo "Lỗi: không tìm được Node $_want." >&2
+    echo "Lỗi: không tìm được Node $_want qua nvm." >&2
     return 1
   fi
   printf '%s' "$_path"
@@ -666,8 +741,8 @@ echo " Thư mục ứng dụng : $AGENTHUB_DIR"
 echo " Thư mục dữ liệu  : $AGENTHUB_DATA_DIR"
 echo "========================================="
 
-# 1. Kiểm tra / cài đặt Node 22 qua nvm nếu thiếu
-if [ -s "$HOME/.nvm/nvm.sh" ]; then
+# 1. Kiểm tra / cài đặt Node 22 (nvm chỉ khi có --use-nvm)
+if [ "$USE_NVM" = "1" ] && [ -s "$HOME/.nvm/nvm.sh" ]; then
   export NVM_DIR="$HOME/.nvm"
   # shellcheck source=/dev/null
   . "$NVM_DIR/nvm.sh"
@@ -677,28 +752,23 @@ fi
 if ! node_is_v22_or_higher; then
   echo ""
   echo "AgentHub yêu cầu Node.js >= 22."
-
-  # Kiểm tra xem nvm có sẵn không
-  if ! command -v nvm >/dev/null 2>&1; then
-    if prompt_yes_no "Không tìm thấy nvm. Bạn có muốn cài đặt nvm để quản lý Node 22 không?" "y"; then
-      echo "==> Đang cài đặt nvm..."
-      curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | sh
-      export NVM_DIR="$HOME/.nvm"
-      # shellcheck source=/dev/null
-      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-    else
-      echo "Lỗi: Vui lòng cài đặt Node.js >= 22 trước khi tiếp tục." >&2
+  if [ "$USE_NVM" = "1" ]; then
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+    if ! command -v nvm >/dev/null 2>&1; then
+      echo "Lỗi: không tìm thấy nvm. Cài nvm hoặc bỏ --use-nvm để dùng runtime tích hợp." >&2
       exit 1
     fi
-  fi
-
-  if prompt_yes_no "Cài đặt Node 22 qua nvm ngay bây giờ?" "y"; then
     echo "==> Đang cài đặt Node 22 qua nvm..."
     nvm install 22
     nvm use 22
   else
-    echo "Lỗi: Cần Node 22 để tiếp tục." >&2
-    exit 1
+    _node_bin="$(find_node_major 22)" || {
+      echo "Lỗi: không tìm được Node.js 22. Cài Node 22, hoặc chạy lại với --use-nvm." >&2
+      exit 1
+    }
+    PATH="$(dirname "$_node_bin"):$PATH"
+    export PATH
   fi
 
   if ! node_is_v22_or_higher; then
@@ -710,6 +780,16 @@ fi
 echo "✓ Sử dụng Node.js $(node -v) (npm $(npm -v))"
 
 # 2. Clone hoặc cập nhật vào AGENTHUB_DIR
+if ! command -v git >/dev/null 2>&1 || ! git --version >/dev/null 2>&1; then
+  if [ "$OS" = "Darwin" ] && command -v xcode-select >/dev/null 2>&1 && ! xcode-select -p >/dev/null 2>&1; then
+    echo "Lỗi: macOS chưa có Xcode Command Line Tools nên git chưa sẵn sàng." >&2
+    echo "Cần chạy: xcode-select --install, xong chạy lại lệnh cài." >&2
+    echo "Lệnh cài release không cần git: curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh | sh -s -- --from-release" >&2
+  else
+    echo "Lỗi: cần git để cài từ mã nguồn. Hãy cài git rồi chạy lại lệnh cài." >&2
+  fi
+  exit 1
+fi
 if [ ! -d "$AGENTHUB_DIR" ]; then
   echo "==> Đang clone mã nguồn vào $AGENTHUB_DIR..."
   git clone "$AGENTHUB_REPO" "$AGENTHUB_DIR"
@@ -734,7 +814,7 @@ fi
 echo "==> Cài đặt dependencies và build..."
 (
   cd "$AGENTHUB_DIR"
-  if [ -s "$HOME/.nvm/nvm.sh" ]; then
+  if [ "$USE_NVM" = "1" ] && [ -s "$HOME/.nvm/nvm.sh" ]; then
     export NVM_DIR="$HOME/.nvm"
     # shellcheck source=/dev/null
     . "$NVM_DIR/nvm.sh"
