@@ -88,6 +88,8 @@ export interface ProjectMerge {
 }
 export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
 export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
+export interface ReviewerOrderItem { engine: 'codex' | 'claude'; model: string; profiles: string[]; }
+export interface ReviewerFallback { onUnavailable: boolean; onBusyAfterMin: number; onError: boolean; }
 
 export interface IntegrationStatus {
   path: string;
@@ -215,7 +217,7 @@ export interface ProjectSettings {
   };
   worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
-  review?: { autoMerge?: boolean };
+  review?: { autoMerge?: boolean; order?: ReviewerOrderItem[]; fallback?: Partial<ReviewerFallback> };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
   reviewChecklist?: string[];
@@ -254,6 +256,7 @@ export interface Review {
   feedback?: string | null;
   createdAt: string;
   actor?: string;
+  model?: string;
 }
 
 export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
@@ -688,6 +691,10 @@ export interface SystemConfig {
     claudeFallback?: boolean;
     claudeProfiles?: string[];
     claudeModel?: string;
+    claudeFallbackAfterMin?: number;
+    order?: ReviewerOrderItem[];
+    fallback?: Partial<ReviewerFallback>;
+    arbiter?: { engine: 'codex' | 'claude'; model: string };
   };
   brain?: {
     engine?: 'claude' | 'codex';

@@ -5,6 +5,7 @@ import { DEFAULT_LOAD_CONFIG, LoadConfig } from './load.js';
 import type { ExtraDiskPath } from './disk.js';
 import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
 import { BrandingConfig, parseBranding } from './branding.js';
+import { DEFAULT_REVIEWER_ARBITER, reviewerSettingsFromLegacy, type ReviewerArbiter, type ReviewerFallback, type ReviewerOrderItem } from './reviewer-config.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -297,6 +298,9 @@ export interface AgentHubConfig {
     claudeModel: string;
     /** Minutes a review may wait for a busy Codex account before Claude reviews instead. */
     claudeFallbackAfterMin: number;
+    order: ReviewerOrderItem[];
+    fallback: ReviewerFallback;
+    arbiter: ReviewerArbiter;
   };
   notifications: NotificationsConfig;
   disk: {
@@ -325,6 +329,11 @@ export interface AgentHubConfig {
   deploy: Record<string, DeployProjectConfig>;
 }
 
+type ReviewerConfigPatch = Partial<Omit<AgentHubConfig['reviewer'], 'fallback' | 'arbiter'>> & {
+  fallback?: Partial<ReviewerFallback>;
+  arbiter?: Partial<ReviewerArbiter>;
+};
+
 const DEFAULT_MODEL_CHAINS = {
   hard: ['codex:gpt-5.6-luna', 'gemini-3.8-flash-high'],
   easy: ['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna'],
@@ -345,7 +354,7 @@ export function saveConfig(
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
     assistant?: Partial<AssistantConfig>;
-    reviewer: Partial<AgentHubConfig['reviewer']>;
+    reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
       desktop: boolean;
       desktopLevel: NotificationsConfig['desktopLevel'];
@@ -518,7 +527,7 @@ export function updateConfigInMemory(
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
     assistant?: Partial<AssistantConfig>;
-    reviewer: Partial<AgentHubConfig['reviewer']>;
+    reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
       desktop: boolean;
       desktopLevel: NotificationsConfig['desktopLevel'];
@@ -619,7 +628,14 @@ export function updateConfigInMemory(
   if (patch.assistant) {
     config.assistant = { ...config.assistant, ...patch.assistant };
   }
-  if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
+  if (patch.reviewer) {
+    config.reviewer = {
+      ...config.reviewer,
+      ...patch.reviewer,
+      fallback: { ...config.reviewer.fallback, ...patch.reviewer.fallback },
+      arbiter: { ...config.reviewer.arbiter, ...patch.reviewer.arbiter },
+    };
+  }
   if (patch.notifications) {
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
@@ -1098,6 +1114,22 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : [],
       claudeModel: typeof reviewerRaw.claudeModel === 'string' && reviewerRaw.claudeModel ? reviewerRaw.claudeModel : 'sonnet',
       claudeFallbackAfterMin: typeof reviewerRaw.claudeFallbackAfterMin === 'number' ? reviewerRaw.claudeFallbackAfterMin : 10,
+      ...(() => {
+        const migrated = reviewerSettingsFromLegacy(reviewerRaw);
+        return {
+          order: migrated.order,
+          fallback: migrated.fallback,
+          arbiter: (() => {
+            const raw = reviewerRaw.arbiter;
+            if (!raw || typeof raw !== 'object') return DEFAULT_REVIEWER_ARBITER;
+            const value = raw as Record<string, unknown>;
+            return {
+              engine: value.engine === 'codex' ? 'codex' : 'claude',
+              model: typeof value.model === 'string' && value.model ? value.model : DEFAULT_REVIEWER_ARBITER.model,
+            };
+          })(),
+        };
+      })(),
     },
     notifications: {
       desktop: typeof (userConfig.notifications as { desktop?: boolean } | undefined)?.desktop === 'boolean'

@@ -63,6 +63,7 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
+import { ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
 import { SetupManager } from '../tools/setup.js';
 import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
@@ -496,6 +497,9 @@ export const UpdateConfigSchema = z.object({
     claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
     claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
     claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
+    order: ReviewerOrderSchema.optional(),
+    fallback: ReviewerFallbackSchema.partial().optional(),
+    arbiter: z.object({ engine: z.enum(['codex', 'claude']), model: z.string().min(1) }).optional(),
   }).optional(),
   brain: z.object({
     engine: z.enum(['claude', 'codex']).optional(),
@@ -2541,10 +2545,17 @@ export class AppService {
       // Keep this lookup scoped to the task. A global recent-event window can
       // forget an older fallback after unrelated events push it out of that window.
       const isFallback = this.eventRepo?.getByTask(task.id).some((event) => event.type === 'review.fallback') ?? false;
+      const fallbackEvent = this.eventRepo?.getByTask(task.id).filter((event) => event.type === 'review.fallback').at(-1);
+      let fallbackReviewer: 'codex' | 'claude' = 'claude';
+      if (fallbackEvent?.payload) {
+        try { fallbackReviewer = JSON.parse(fallbackEvent.payload).to === 'codex' ? 'codex' : 'claude'; } catch { /* legacy payload */ }
+      }
+      const configuredOrder = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>).order;
+      const projectOrder = project ? projectSettings(project).review?.order : undefined;
       const reviewerRun = this.scheduler?.getReviewerRun?.(task.id);
       const reviewer = reviewerRun
         ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
-        : (isFallback ? 'claude' : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex'));
+        : (isFallback ? fallbackReviewer : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : (projectOrder || configuredOrder)[task.reviewStep ?? 0]?.engine || 'codex'));
       return {
         ...apiTask(task),
         reviewChain,
@@ -2659,12 +2670,29 @@ export class AppService {
       };
     });
 
+    const completedReviewEvents = events.filter((event) => event.type === 'review.completed');
+    const reviewsWithModels = reviews.map((review) => {
+      const event = completedReviewEvents.find((candidate) => {
+        if (!candidate.payload || typeof candidate.payload !== 'object') return false;
+        const payload = candidate.payload as { actor?: string; verdict?: string; model?: string };
+        return payload.actor === review.actor && payload.verdict === review.verdict && typeof payload.model === 'string';
+      });
+      const model = event && typeof event.payload === 'object' && event.payload
+        ? (event.payload as { model?: string }).model
+        : undefined;
+      return model ? { ...review, model } : review;
+    });
+
     const isFallback = events.some((e) => e.type === 'review.fallback');
     const reviewerRun = this.scheduler?.getReviewerRun?.(taskId);
     const activeReviewChain: ReviewChainStep[] = (Array.isArray(reviewSettings?.chain) ? reviewSettings.chain as ReviewChainStep[] : undefined) || parseReviewChain(project?.reviewChain);
+    const fallbackEvent = events.filter((event) => event.type === 'review.fallback').at(-1);
+    const fallbackReviewer = fallbackEvent && typeof fallbackEvent.payload === 'object' && fallbackEvent.payload && (fallbackEvent.payload as { to?: string }).to === 'codex' ? 'codex' : 'claude';
+    const configuredOrder = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>).order;
+    const projectOrder = project ? projectSettings(project).review?.order : undefined;
     const reviewer = reviewerRun
       ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
-      : (isFallback ? 'claude' : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex')));
+      : (isFallback ? fallbackReviewer : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : (projectOrder || configuredOrder)[task.reviewStep ?? 0]?.engine || 'codex')));
 
     return {
       ...apiTask(task),
@@ -2686,7 +2714,7 @@ export class AppService {
         cpu: activeRun.cpu ?? 0,
       } : null,
       runs: runs.map(apiRun),
-      reviews: reviews.map(apiReview),
+      reviews: reviewsWithModels.map(apiReview),
       reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
       mergeAvailable: configuredMerge,
       mergeUnavailableReason: configuredMerge ? null : 'Project chưa cấu hình merge tự động. Mở Cài đặt dự án → Integration để bật.',

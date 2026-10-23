@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles } from '../api/client';
+import type { ReviewerFallback, ReviewerOrderItem } from '../types/api';
 import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
@@ -38,6 +39,13 @@ export const SettingsPage: React.FC = () => {
   const [claudeFallback, setClaudeFallback] = useState<boolean>(true);
   const [claudeProfiles, setClaudeProfiles] = useState<string[]>([]);
   const [claudeModel, setClaudeModel] = useState<string>('sonnet');
+  const [reviewOrder, setReviewOrder] = useState<ReviewerOrderItem[]>([
+    { engine: 'codex', model: 'gpt-5.6-luna', profiles: [] },
+    { engine: 'claude', model: 'sonnet', profiles: [] },
+  ]);
+  const [reviewFallback, setReviewFallback] = useState<ReviewerFallback>({ onUnavailable: true, onBusyAfterMin: 10, onError: true });
+  const [arbiter, setArbiter] = useState<{ engine: 'codex' | 'claude'; model: string }>({ engine: 'claude', model: 'opus' });
+  const [draggedReviewer, setDraggedReviewer] = useState<number | null>(null);
   const [maxConcurrent, setMaxConcurrent] = useState<number>(2);
   const [autoCompactPercent, setAutoCompactPercent] = useState<number>(85);
   const [bucketGemini, setBucketGemini] = useState<number>(5_000_000);
@@ -121,6 +129,16 @@ export const SettingsPage: React.FC = () => {
       setClaudeFallback(config.reviewer?.claudeFallback !== false);
       setClaudeProfiles(config.reviewer?.claudeProfiles || []);
       setClaudeModel(config.reviewer?.claudeModel || 'sonnet');
+      setReviewOrder(config.reviewer?.order || [
+        { engine: 'codex', model: (config.reviewer?.model || 'codex:gpt-5.6-luna').replace(/^codex:/, ''), profiles: [] },
+        ...(config.reviewer?.claudeFallback === false ? [] : [{ engine: 'claude' as const, model: config.reviewer?.claudeModel || 'sonnet', profiles: config.reviewer?.claudeProfiles || [] }]),
+      ]);
+      setReviewFallback({
+        onUnavailable: config.reviewer?.fallback?.onUnavailable ?? true,
+        onBusyAfterMin: config.reviewer?.fallback?.onBusyAfterMin ?? config.reviewer?.claudeFallbackAfterMin ?? 10,
+        onError: config.reviewer?.fallback?.onError ?? true,
+      });
+      setArbiter(config.reviewer?.arbiter || { engine: 'claude', model: 'opus' });
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
       setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);
       setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
@@ -226,6 +244,9 @@ export const SettingsPage: React.FC = () => {
         claudeFallback,
         claudeProfiles,
         claudeModel,
+        order: reviewOrder,
+        fallback: reviewFallback,
+        arbiter,
       },
       savings: {
         bucketTokens: {
@@ -547,6 +568,72 @@ export const SettingsPage: React.FC = () => {
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs" data-testid="reviewer-settings">
             <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
+            <div className="space-y-3" data-testid="reviewer-order">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--t-text)]">{t('settings.reviewerOrder')}</h3>
+                <p className="text-xs text-[var(--t-text-3)]">{t('settings.reviewerOrderHint')}</p>
+              </div>
+              {reviewOrder.map((item, index) => {
+                const profiles = allProfiles.filter((profile) => profile.engine === item.engine);
+                return (
+                  <div
+                    key={`${item.engine}-${index}`}
+                    draggable
+                    onDragStart={() => setDraggedReviewer(index)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => {
+                      if (draggedReviewer === null || draggedReviewer === index) return;
+                      setReviewOrder((current) => {
+                        const next = [...current];
+                        const [moved] = next.splice(draggedReviewer, 1);
+                        next.splice(index, 0, moved);
+                        return next;
+                      });
+                      setDraggedReviewer(null);
+                    }}
+                    className="rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 space-y-2 cursor-grab"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-[var(--t-text-3)]">{index + 1}.</span>
+                      <select
+                        aria-label={`${t('settings.reviewerOrder')} ${index + 1}`}
+                        value={item.engine}
+                        onChange={(event) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, engine: event.target.value as ReviewerOrderItem['engine'], profiles: [] } : row))}
+                        className="text-sm rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1 text-[var(--t-text)]"
+                      >
+                        <option value="codex">Codex</option>
+                        <option value="claude">Claude</option>
+                      </select>
+                      <input
+                        aria-label={`${t('settings.reviewerModel')} ${index + 1}`}
+                        value={item.model}
+                        onChange={(event) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, model: event.target.value } : row))}
+                        className="min-w-0 flex-1 text-sm font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1 text-[var(--t-text)]"
+                      />
+                    </div>
+                    <select
+                      aria-label={`${t('settings.claudeProfiles')} ${index + 1}`}
+                      multiple
+                      value={item.profiles}
+                      onChange={(event) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, profiles: Array.from(event.target.selectedOptions).map((option) => option.value) } : row))}
+                      className="w-full text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1 text-[var(--t-text)] min-h-[56px]"
+                    >
+                      {profiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <label className="flex items-center gap-2"><input type="checkbox" checked={reviewFallback.onUnavailable} onChange={(event) => setReviewFallback((value) => ({ ...value, onUnavailable: event.target.checked }))} />{t('settings.fallbackUnavailable')}</label>
+                <label className="flex items-center gap-2"><input type="checkbox" checked={reviewFallback.onError} onChange={(event) => setReviewFallback((value) => ({ ...value, onError: event.target.checked }))} />{t('settings.fallbackError')}</label>
+                <label className="flex items-center gap-2">{t('settings.fallbackBusy')}<input type="number" min={0} max={1440} value={reviewFallback.onBusyAfterMin} onChange={(event) => setReviewFallback((value) => ({ ...value, onBusyAfterMin: Number(event.target.value) || 0 }))} className="w-16 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-1 py-1" /></label>
+              </div>
+              <div className="flex gap-2 items-center text-xs">
+                <label>{t('settings.arbiter')}</label>
+                <select value={arbiter.engine} onChange={(event) => setArbiter((value) => ({ ...value, engine: event.target.value as 'codex' | 'claude' }))} className="rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+                <input value={arbiter.model} onChange={(event) => setArbiter((value) => ({ ...value, model: event.target.value }))} className="w-32 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1" />
+              </div>
+            </div>
             <div>
               <label htmlFor="reviewer-model-input" className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.reviewerModel')}</label>
               <input id="reviewer-model-input" value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
