@@ -82,6 +82,7 @@ export function changedSettings(
     'brain',
     'worktree',
     'integration',
+    'review',
     'ci',
     'references',
     'reviewChecklist',

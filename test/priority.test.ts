@@ -42,9 +42,11 @@ describe('priority helpers', () => {
   it('passes vitest worker limits to the child', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-prio-'));
     dirs.push(dir);
+    const env = { ...process.env };
+    delete env.AGENTHUB_WORKER_COUNT;
     const r = await runInProcessGroup(process.execPath, ['-e', 'process.stdout.write(process.env.VITEST_MAX_THREADS || "")'], {
       cwd: dir,
-      env: process.env,
+      env,
       timeoutMs: 10_000,
     });
     expect(r.code).toBe(0);

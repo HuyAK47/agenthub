@@ -157,8 +157,11 @@ describe('BrainPolicy', () => {
     ]) {
       expect(policy.decide({ toolName: 'Bash', input: { command, cwd: root } })?.action ?? null).not.toBe('allow');
     }
-    for (const command of ['grep -rn foo src', 'grep -ie foo package.json']) {
+    for (const command of ['grep -ie foo package.json']) {
       expect(policy.decide({ toolName: 'Bash', input: { command, cwd: root } })?.action).toBe('allow');
+    }
+    for (const command of ['grep -rn foo src', 'grep -R foo src']) {
+      expect(policy.decide({ toolName: 'Bash', input: { command, cwd: root } })?.action ?? null).not.toBe('allow');
     }
     expect(policy.decide({ toolName: 'Bash', input: { command: 'git status && npm test', cwd: root } })).toMatchObject({ action: 'deny' });
   });
