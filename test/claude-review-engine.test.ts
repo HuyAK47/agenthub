@@ -52,6 +52,7 @@ process.stdin.on('end', () => {
   it('recognises Claude usage limits as quota exhaustion', () => {
     const engine = new ClaudeReviewEngine();
     expect(engine.detectQuota('Claude AI usage limit reached|1792700000').exhausted).toBe(true);
+    expect(engine.detectQuota("You've hit your session limit · resets 7:10pm (Asia/Ho_Chi_Minh)").exhausted).toBe(true);
     expect(engine.detectQuota('all good').exhausted).toBe(false);
   });
 });
