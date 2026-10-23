@@ -34,6 +34,18 @@ describe('browser notification policy', () => {
     expect(shouldNotifyBrowserEvent(event('quota.exhausted', { allExhausted: true, engine: 'agy', family: 'gemini' }), 'all')).toBe(true);
   });
 
+  it('derives engine-wide quota from enabled profiles and normalized families', () => {
+    const profiles = [
+      { name: 'g1', engine: 'agy', enabled: true, quotaMarks: [{ family: 'gemini', until: 2_000 }] },
+      { name: 'g2', engine: 'agy', enabled: true, quotaMarks: [{ family: 'gemini', until: 2_000 }] },
+      { name: 'c1', engine: 'codex', enabled: true, quotaMarks: [] },
+    ];
+    vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { engine: 'agy', family: 'gemini-2.5' }), 'important', profiles)).toBe(true);
+    expect(shouldNotifyBrowserEvent(event('quota.exhausted', { engine: 'codex', family: 'codex' }), 'important', profiles)).toBe(false);
+    vi.restoreAllMocks();
+  });
+
   it('throttles changing disk messages by state for one hour', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     notifyBrowserEvent(event('disk.low', { freeGB: 1, minFreeGB: 3 }), 'all');

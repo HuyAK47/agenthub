@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { getToken } from './client';
 import { EventItem } from '../types/api';
 import { notifyBrowserEvent, shouldNotifyBrowserEvent } from '../notifications';
+import type { BrowserQuotaProfile } from '../notifications';
 
 export type EventCallback = (event: EventItem) => void;
 export type RunOutputCallback = (taskId: string, chunk: string, runId?: string) => void;
@@ -148,8 +149,14 @@ export function connectSSE(queryClient: QueryClient): () => void {
 
         const notificationConfig = queryClient.getQueryData<{ notifications?: { desktop?: boolean; desktopLevel?: 'all' | 'important' | 'critical' | 'off' } }>(['config'])?.notifications;
         const notificationLevel = notificationConfig?.desktopLevel || 'important';
-        if (notificationConfig?.desktop !== false && shouldNotifyBrowserEvent(eventItem, notificationLevel)) {
-          notifyBrowserEvent(eventItem, notificationLevel);
+        const profilesData = queryClient.getQueryData<unknown>(['profiles']);
+        const profiles = Array.isArray(profilesData)
+          ? profilesData
+          : profilesData && typeof profilesData === 'object' && Array.isArray((profilesData as { profiles?: unknown }).profiles)
+          ? (profilesData as { profiles: unknown[] }).profiles
+          : [];
+        if (notificationConfig?.desktop !== false && shouldNotifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[])) {
+          notifyBrowserEvent(eventItem, notificationLevel, profiles as BrowserQuotaProfile[]);
         }
 
         // Notify raw event listeners
