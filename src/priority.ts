@@ -48,7 +48,7 @@ export function runInProcessGroup(
     let output = '';
     let timedOut = false;
     let settled = false;
-    const threadLimit = testThreadLimit(Number(opts.env.AGENTHUB_WORKER_COUNT || 1));
+    const threadLimit = testThreadLimit(Number(opts.env.AGENTHUB_WORKER_COUNT || process.env.AGENTHUB_WORKER_COUNT || 1));
     const limitedEnv = {
       ...opts.env,
       VITEST_MAX_THREADS: String(threadLimit), VITEST_MIN_THREADS: '1',
