@@ -2021,7 +2021,9 @@ export class Scheduler {
         continue;
       }
       const codexProfiles = this.profileRepo.getEnabled().filter((p) => p.engine === 'codex' &&
+        (p.authState == null || p.authState === 'ok') &&
         !this.quotaService.isExhausted(p.name, 'codex') &&
+        !this.reviewerInBackoff(p.name) &&
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
       if (!task.worktreePath) continue;
       if (codexProfiles.length === 0) {
@@ -2091,8 +2093,8 @@ export class Scheduler {
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     if (escalations.length < 2) return false;
-    const lastEscalation = escalations[escalations.length - 1].ts;
-    return !this.reviewRepo?.getByTask(task.id).some((review) => isAutoReviewer(review.actor) && review.createdAt >= lastEscalation);
+    const lastEscalationId = escalations[escalations.length - 1].id;
+    return !this.hasAutomatedVerdictAfter(task.id, lastEscalationId);
   }
 
   /**
@@ -2104,9 +2106,10 @@ export class Scheduler {
     if (task.reviewerEscalationReason !== 'reviewer_changes_limit') return;
     const escalations = this.eventRepo.getByTask(task.id)
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
-    const arbiterStartedAt = escalations.at(-1)?.ts || '';
-    const rejections = this.reviewRepo?.getByTask(task.id)
-      .filter((review) => isAutoReviewer(review.actor) && review.verdict === 'changes_requested' && review.createdAt >= arbiterStartedAt).length ?? 0;
+    const lastEscalationId = escalations.at(-1)?.id;
+    if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    const rejections = this.eventRepo.getByTask(task.id)
+      .filter((event) => event.id > lastEscalationId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
     if (rejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {
@@ -2120,6 +2123,18 @@ export class Scheduler {
     try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
     this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
     this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
+  }
+
+  private hasAutomatedVerdictAfter(taskId: string, eventId: number, verdict?: ReviewerVerdict): boolean {
+    return this.eventRepo.getByTask(taskId).some((event) => {
+      if (event.id <= eventId || event.type !== 'review.completed' || !event.payload) return false;
+      try {
+        const payload = JSON.parse(event.payload) as { actor?: string; verdict?: ReviewerVerdict };
+        return isAutoReviewer(payload.actor) && (!verdict || payload.verdict === verdict);
+      } catch {
+        return false;
+      }
+    });
   }
 
   private reviewWaitedTooLong(task: TaskRow): boolean {
