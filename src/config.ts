@@ -282,6 +282,8 @@ export interface AgentHubConfig {
     worktreeOnDoneAfterHours: number;
   };
   cacheDir: string;
+  cacheMaxEntries: number;
+  cacheMaxGB: number;
   savings: SavingsConfig;
   load: LoadConfig;
   stall: StallConfig;
@@ -325,6 +327,8 @@ export function saveConfig(
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
@@ -492,6 +496,8 @@ export function updateConfigInMemory(
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
@@ -603,6 +609,8 @@ export function updateConfigInMemory(
   if (patch.cacheDir !== undefined) {
     config.cacheDir = patch.cacheDir;
   }
+  if (patch.cacheMaxEntries !== undefined) config.cacheMaxEntries = patch.cacheMaxEntries;
+  if (patch.cacheMaxGB !== undefined) config.cacheMaxGB = patch.cacheMaxGB;
   if (patch.savings) {
     if (patch.savings.bucketTokens) {
       config.savings.bucketTokens = {
@@ -775,6 +783,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     process.env.AGENTHUB_CACHE_DIR ||
     path.join(hubHome, 'cache', 'node_modules');
   if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+  const cacheMaxEntries = typeof userConfig.cacheMaxEntries === 'number' && userConfig.cacheMaxEntries > 0
+    ? Math.floor(userConfig.cacheMaxEntries) : 3;
+  const cacheMaxGB = typeof userConfig.cacheMaxGB === 'number' && userConfig.cacheMaxGB > 0
+    ? userConfig.cacheMaxGB : 3;
 
   const rawSavings = (userConfig.savings as Record<string, unknown>) || {};
   const rawLoad = (userConfig.load as Record<string, unknown>) || {};
@@ -1039,6 +1051,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     disk,
     cleanup,
     cacheDir,
+    cacheMaxEntries,
+    cacheMaxGB,
     savings,
     load: {
       enabled: typeof rawLoad.enabled === 'boolean' ? rawLoad.enabled : DEFAULT_LOAD_CONFIG.enabled,

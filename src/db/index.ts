@@ -1611,7 +1611,10 @@ export class RunRepo {
 
   getByTask(taskId: string): RunRow[] {
     return this.db
-      .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt')
+      // startedAt used to be second-precision for older rows. Keep rowid as a
+      // deterministic tiebreaker so a newer worker inserted in the same
+      // second cannot be mistaken for the previous completion.
+      .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt, rowid')
       .all(taskId) as RunRow[];
   }
 
@@ -1640,13 +1643,14 @@ export class RunRepo {
     pid?: number;
     logPath?: string;
     pidStart?: number;
+    startedAt?: string;
     kind?: 'worker' | 'reviewer';
   }): void {
     this.db
       .prepare(
-        'INSERT INTO runs (id, taskId, engine, model, profileName, pid, logPath, pidStart, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO runs (id, taskId, engine, model, profileName, pid, startedAt, logPath, pidStart, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(row.id, row.taskId, row.engine, row.model, row.profileName, row.pid || null, row.logPath || null, row.pidStart || null, row.kind || 'worker');
+      .run(row.id, row.taskId, row.engine, row.model, row.profileName, row.pid || null, row.startedAt || new Date().toISOString(), row.logPath || null, row.pidStart || null, row.kind || 'worker');
   }
 
   finish(id: string, outcome: string, resetAt?: number, reason?: string): void {

@@ -23,6 +23,7 @@ import { effectiveBrainMode } from './brain/mode.js';
 import { projectSettings, mergeProjectSettings } from './projects/settings.js';
 import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permissions.js';
 import { formatReset } from './time-format.js';
+import { NotificationDeduper } from './notification-dedupe.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -281,6 +282,7 @@ export class TelegramBotService {
 
   // Deduplication for event notifications
   private lastNotificationTime = new Map<string, number>();
+  private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
 
   // Bound handler for EventBus
@@ -309,6 +311,7 @@ export class TelegramBotService {
     this.ciRepo = opts.ciRepo;
     this.fetchFn = opts.fetch || globalThis.fetch;
     this.now = opts.now || (() => Date.now());
+    this.eventDeduper = new NotificationDeduper({ now: this.now });
     this.sleepFn = opts.sleep || opts.sleepFn || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.execFileFn = (opts.execFile || execFileAsync) as GitDiffFn;
     this.chatService = opts.chatService;
@@ -3040,6 +3043,7 @@ export class TelegramBotService {
     };
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // Deduplication check: ignore duplicate events within 10 seconds
     const profileKey = (p.profile || p.worker || p.profileName || '') as string;
@@ -3368,7 +3372,11 @@ export class TelegramBotService {
         if (!notify.fallback) return;
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 3;
-        this.broadcastMessage(`💾 <b>Ổ đĩa thấp</b>\nCòn ${freeGB} GB (&lt; ${minFreeGB} GB): tạm dừng khởi chạy task mới.`);
+        const cacheDir = typeof p.cacheDir === 'string' ? `\nCache node_modules: <code>${this.escapeHtml(p.cacheDir)}</code>` : '';
+        const largest = typeof p.largestCacheEntry === 'string'
+          ? `\nBản cache lớn nhất: <code>${this.escapeHtml(p.largestCacheEntry)}</code>${typeof p.largestCacheEntryBytes === 'number' ? ` (${(p.largestCacheEntryBytes / 1024 ** 3).toFixed(2)} GB)` : ''}`
+          : '';
+        this.broadcastMessage(`💾 <b>Ổ đĩa thấp</b>\nCòn ${freeGB} GB (&lt; ${minFreeGB} GB): tạm dừng khởi chạy task mới.${cacheDir}${largest}`);
         break;
       }
 

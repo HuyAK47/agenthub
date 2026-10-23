@@ -52,6 +52,7 @@ import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
 import { PerfCollector } from './perf.js';
+import { pruneNodeModulesCache } from './cache.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -102,6 +103,7 @@ export function createContext(
   engineOverrides?: Map<string, Engine> | CreateContextOptions,
   diskReader?: ((p: string) => DiskSpace) | CreateContextOptions,
 ): DaemonContext {
+  pruneNodeModulesCache(config.cacheDir, { maxEntries: config.cacheMaxEntries, maxBytes: config.cacheMaxGB * 1024 ** 3 });
   let enginesOverride: Map<string, Engine> | undefined;
   let diskFn: ((p: string) => DiskSpace) | undefined;
 

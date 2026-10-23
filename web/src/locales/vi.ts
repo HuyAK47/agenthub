@@ -269,6 +269,7 @@ export const vi = {
     btnRetry: 'Thử lại',
     btnReview: 'Duyệt',
     btnMerge: 'Duyệt & merge',
+    mergeSettingsLink: 'Mở cài đặt Integration',
     btnRequestChanges: 'Yêu cầu sửa',
     btnDeleteWorktree: 'Xóa worktree',
     noLog: 'Chưa có log từ worker...',

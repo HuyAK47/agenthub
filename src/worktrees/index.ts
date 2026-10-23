@@ -94,6 +94,8 @@ function shellWord(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : shellQuote(value);
 }
 
+
+export const MAX_WORKTREE_SLOTS = 30;
 export class WorktreeService {
   constructor(
     private config: AgentHubConfig,
@@ -105,10 +107,11 @@ export class WorktreeService {
    * Uses the smallest number not taken by currently running tasks.
    */
   allocateSlot(projectId: string, usedSlots: number[]): number {
-    for (let i = 1; i <= 9; i++) {
+    // Tasks parked in review keep their slot, so a small pool silently froze the queue.
+    for (let i = 1; i <= MAX_WORKTREE_SLOTS; i++) {
       if (!usedSlots.includes(i)) return i;
     }
-    throw new Error(`All 9 slots for project ${projectId} are in use`);
+    throw new Error(`All ${MAX_WORKTREE_SLOTS} slots for project ${projectId} are in use`);
   }
 
   /**

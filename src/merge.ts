@@ -32,19 +32,19 @@ interface MergeProject {
 }
 
 export class MergeError extends Error {
-  constructor(public statusCode: 409 | 422, public error: 'conflict' | 'unprocessable_entity', message: string) {
+  constructor(public statusCode: 409 | 422, public error: 'conflict' | 'unprocessable_entity', message: string, public configuration = false) {
     super(message);
     this.name = 'MergeError';
   }
 }
 
 function parseConfig(value: string | null | undefined): MergeConfig {
-  if (!value) throw new MergeError(409, 'conflict', 'Project chưa cấu hình merge tự động');
+  if (!value) throw new MergeError(409, 'conflict', 'Project chưa cấu hình merge tự động', true);
   let parsed: unknown;
-  try { parsed = JSON.parse(value); } catch { throw new MergeError(409, 'conflict', 'Cấu hình merge không hợp lệ'); }
+  try { parsed = JSON.parse(value); } catch { throw new MergeError(409, 'conflict', 'Cấu hình merge không hợp lệ', true); }
   const config = parsed as Partial<MergeConfig>;
   if (config.enabled !== true || !config.worktrees || typeof config.worktrees !== 'object') {
-    throw new MergeError(409, 'conflict', 'Merge tự động chưa được bật hoặc chưa có worktree tích hợp');
+    throw new MergeError(409, 'conflict', 'Merge tự động chưa được bật hoặc chưa có worktree tích hợp', true);
   }
   return {
     enabled: true,
@@ -114,7 +114,7 @@ export async function mergeTaskIntoBase(
     targetBranch = task.baseRef || project.defaultBranch;
     const integrationPath = config.worktrees[targetBranch];
     if (!integrationPath || !path.isAbsolute(integrationPath)) {
-      throw new MergeError(409, 'conflict', `Chưa khai báo worktree tích hợp cho baseRef "${targetBranch}"`);
+      throw new MergeError(409, 'conflict', `Chưa khai báo worktree tích hợp cho baseRef "${targetBranch}"`, true);
     }
     repo = path.resolve(integrationPath);
     checks = config.checks;

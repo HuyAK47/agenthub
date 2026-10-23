@@ -96,6 +96,35 @@ describe('AgentHub HTTP API Endpoints', () => {
     expect(res.body).toContain('chưa build web');
   });
 
+  it('marks legacy merge unavailable when its base worktree is missing', async () => {
+    ctx.projectRepo.insert({
+      id: 'legacy-merge',
+      name: 'Legacy merge',
+      path: '/tmp',
+      defaultBranch: 'main',
+      envTemplate: null,
+      maxParallel: 1,
+      merge: JSON.stringify({ enabled: true, worktrees: {} }),
+    });
+    ctx.taskRepo.insert({
+      id: 'legacy-merge/review-task',
+      projectId: 'legacy-merge',
+      slug: 'review-task',
+      title: 'Review task',
+      status: 'review',
+      baseRef: 'main',
+    });
+
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/tasks/legacy-merge~review-task',
+      headers: authHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).mergeAvailable).toBe(false);
+  });
+
   it('serves newly added static assets dynamically without server restart', async () => {
     const webDir = process.env.AGENTHUB_WEB_DIR!;
     const assetsDir = path.join(webDir, 'assets');

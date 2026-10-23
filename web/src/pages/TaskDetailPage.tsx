@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import {
@@ -606,12 +606,22 @@ export const TaskDetailPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => reviewMutation.mutate({ verdict: 'approved', merge: true })}
-                disabled={reviewMutation.isPending}
+                disabled={reviewMutation.isPending || task.mergeAvailable === false}
+                title={task.mergeAvailable === false ? (task.mergeUnavailableReason || 'Project chưa cấu hình merge tự động') : undefined}
                 className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 <GitCommit className="w-4 h-4" />
                 <span>{t('taskDetail.btnMerge')}</span>
               </button>
+              {task.mergeAvailable === false && (
+                <span className="text-xs text-[var(--t-text-3)] max-w-xs">
+                  {task.mergeUnavailableReason || 'Bật Integration trong Cài đặt dự án để dùng merge.'}
+                  {' '}
+                  <Link className="underline text-[var(--t-accent)]" to={`/projects/${encodeURIComponent(task.projectId)}/settings`}>
+                    {t('taskDetail.mergeSettingsLink')}
+                  </Link>
+                </span>
+              )}
 
               <button
                 type="button"
