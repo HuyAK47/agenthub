@@ -105,17 +105,36 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         });
       }
 
+      if (urlStr.endsWith('/createForumTopic')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: {
+            message_thread_id: 555,
+            name: bodyObj?.name || 'Topic',
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
       return new Response(JSON.stringify({ ok: true, result: { message_id: 101 } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }) as unknown as typeof fetch;
 
+    vi.stubGlobal('fetch', fakeFetch);
+    if (ctx.telegramService) {
+      (ctx.telegramService as unknown as { fetch: typeof fetch }).fetch = fakeFetch;
+    }
+
     server = await createServer(ctx.service, config);
     await server.ready();
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await server.close();
     closeContext(ctx);
     try {
@@ -135,6 +154,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       eventBus: ctx.scheduler.getEventBus(),
       taskRepo: ctx.taskRepo,
       projectRepo: ctx.projectRepo,
+      departmentRepo: ctx.departmentRepo,
       quotaMarkRepo: ctx.quotaMarkRepo,
       fetch: fakeFetch,
       now: () => currentTime,
@@ -2196,6 +2216,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
       eventBus: ctx.scheduler.getEventBus(),
       taskRepo: ctx.taskRepo,
       projectRepo: ctx.projectRepo,
+      departmentRepo: ctx.departmentRepo,
       profileRepo: ctx.profileRepo,
       quotaMarkRepo: ctx.quotaMarkRepo,
       fetch: fakeFetch,
@@ -2724,6 +2745,7 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
   let tmpDir: string;
   let ctx: ReturnType<typeof createContext>;
   let config: ReturnType<typeof loadConfig>;
+  let server: Awaited<ReturnType<typeof createServer>> | undefined;
   let recordedCalls: Array<{ url: string; body?: Record<string, unknown> }>;
   let fakeFetch: typeof fetch;
   const CHAT_ID = 88888;
@@ -2771,11 +2793,18 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
       if (urlStr.includes('/answerCallbackQuery')) {
         return new Response(JSON.stringify({ ok: true, result: true }));
       }
+      if (urlStr.includes('/createForumTopic')) {
+        return new Response(JSON.stringify({ ok: true, result: { message_thread_id: 555, name: bodyObj?.name || 'Topic' } }));
+      }
       return new Response(JSON.stringify({ ok: true, result: {} }));
     }) as unknown as typeof fetch;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (server) {
+      await server.close();
+      server = undefined;
+    }
     ctx.chatService.stop();
     closeContext(ctx);
     try {
@@ -2811,6 +2840,7 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
       eventBus: ctx.scheduler.getEventBus(),
       taskRepo: ctx.taskRepo,
       projectRepo: ctx.projectRepo,
+      departmentRepo: ctx.departmentRepo,
       profileRepo: ctx.profileRepo,
       quotaMarkRepo: ctx.quotaMarkRepo,
       fetch: fakeFetch,
@@ -3329,5 +3359,345 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(bot.getSelectedProject(CHAT_ID)).toBe('p-keep');
     const newBot = createProjectBot('suggest');
     expect(newBot.getSelectedProject(CHAT_ID)).toBe('p-keep');
+  });
+
+  describe('13. Telegram Topics per Department & Group Pairing (d-telegram-topics)', () => {
+    const SUPERGROUP_ID = -100987654321;
+    const AUTHORIZED_USER_ID = 777111;
+    const UNAUTHORIZED_USER_ID = 999888;
+
+    function createDeptBot(opts?: { allowedChatIds?: number[]; topicMode?: 'project' | 'department'; directorEnabled?: boolean }) {
+      config.telegram.allowedChatIds = opts?.allowedChatIds ? [...opts.allowedChatIds] : [AUTHORIZED_USER_ID];
+      config.telegram.topicMode = opts?.topicMode ?? 'department';
+      if (opts?.directorEnabled !== undefined) {
+        config.brain.director = {
+          enabled: opts.directorEnabled,
+          engine: 'claude',
+          model: 'sonnet',
+          cron: '0 8 * * *',
+          timezone: 'Asia/Ho_Chi_Minh',
+        };
+      }
+      return new TelegramBotService({
+        config,
+        service: ctx.service,
+        eventBus: ctx.scheduler.getEventBus(),
+        taskRepo: ctx.taskRepo,
+        projectRepo: ctx.projectRepo,
+        departmentRepo: ctx.departmentRepo,
+        profileRepo: ctx.profileRepo,
+        quotaMarkRepo: ctx.quotaMarkRepo,
+        fetch: fakeFetch,
+        now: () => currentTime,
+        sleep: async () => {},
+        sleepFn: async () => {},
+        tokenOverride: 'test-token',
+        chatService: ctx.chatService,
+        brainSession: true,
+      });
+    }
+
+    it('1. Group pairing: rejects pairing from unauthorized sender in group chat', async () => {
+      const bot = createDeptBot({ allowedChatIds: [AUTHORIZED_USER_ID] });
+      const pairData = bot.getPairingCode(true);
+
+      // Unauthorized user in supergroup attempts pairing
+      await bot.handleUpdate({
+        update_id: 1,
+        message: {
+          message_id: 10,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Tech Team Supergroup' },
+          from: { id: UNAUTHORIZED_USER_ID, is_bot: false, first_name: 'Hacker' },
+          text: `/pair ${pairData.code}`,
+        },
+      });
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      // Group is NOT added to allowedChatIds
+      expect(config.telegram.allowedChatIds).not.toContain(SUPERGROUP_ID);
+    });
+
+    it('2. Group pairing: accepts pairing from authorized sender and registers supergroup', async () => {
+      const bot = createDeptBot({ allowedChatIds: [AUTHORIZED_USER_ID] });
+      const pairData = bot.getPairingCode(true);
+
+      // Authorized user in supergroup pairs the group
+      await bot.handleUpdate({
+        update_id: 2,
+        message: {
+          message_id: 20,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Tech Team Supergroup' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false, first_name: 'Admin' },
+          text: `/pair ${pairData.code}`,
+        },
+      });
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      // Group IS added to allowedChatIds and chats list with kind 'supergroup'
+      expect(config.telegram.allowedChatIds).toContain(SUPERGROUP_ID);
+      const chatEntry = config.telegram.chats?.find((c) => c.id === SUPERGROUP_ID);
+      expect(chatEntry).toBeDefined();
+      expect(chatEntry?.kind).toBe('supergroup');
+      const sentMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(sentMsg?.body?.text).toContain('Ghép đôi nhóm thành công');
+    });
+
+    it('3. Department topic creation and setupDepartmentTopics', async () => {
+      const bot = createDeptBot({ allowedChatIds: [AUTHORIZED_USER_ID, SUPERGROUP_ID] });
+
+      ctx.departmentRepo.insert({
+        id: 'dept-mobile',
+        name: 'Phòng Di động',
+        priority: 2,
+        maxParallel: 3,
+        claudeDailyTokenBudget: 0,
+        telegramTopicId: null,
+      });
+
+      const topic = await bot.createDepartmentTopic('dept-mobile');
+      expect(topic.chatId).toBe(SUPERGROUP_ID);
+      expect(topic.threadId).toBe(555);
+
+      // Check config and DB
+      expect(config.telegram.departmentTopics?.['dept-mobile']?.threadId).toBe(555);
+      const row = ctx.departmentRepo.get('dept-mobile');
+      expect(row?.telegramTopicId).toBe(555);
+
+      // setupDepartmentTopics creates topics for 'chung' and missing departments
+      const created = await bot.setupDepartmentTopics();
+      expect(created['chung']).toBeDefined();
+      expect(config.telegram.departmentTopics?.['chung']?.threadId).toBeDefined();
+    });
+
+    it('4. Message routing in department topics to brain:department:<deptId> and brain:director', async () => {
+      ctx.departmentRepo.insert({
+        id: 'dept-ai',
+        name: 'Phòng AI',
+        priority: 3,
+        maxParallel: 2,
+        claudeDailyTokenBudget: 0,
+        telegramTopicId: null,
+        brainEngine: 'claude',
+        brainModel: 'sonnet',
+        brainMode: 'suggest',
+        brainPermissions: 'full',
+      });
+
+      config.telegram.departmentTopics = {
+        'dept-ai': { chatId: SUPERGROUP_ID, threadId: 101 },
+        'chung': { chatId: SUPERGROUP_ID, threadId: 102 },
+      };
+
+      const bot = createDeptBot({
+        allowedChatIds: [SUPERGROUP_ID],
+        topicMode: 'department',
+        directorEnabled: true,
+      });
+
+      // Message in AI department topic (threadId 101)
+      await bot.handleUpdate({
+        update_id: 30,
+        message: {
+          message_id: 301,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Company Supergroup' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false },
+          message_thread_id: 101,
+          text: 'Xin chào phòng AI',
+        },
+      });
+
+      const aiSession = ctx.chatService?.chatSessionRepo.get('brain:department:dept-ai');
+      expect(aiSession).toBeDefined();
+      expect(aiSession?.kind).toBe('brain');
+      expect(aiSession?.title).toBe('Bộ não · Phòng AI');
+
+      // Message in Chung topic (threadId 102) with director enabled -> routes to brain:director
+      await bot.handleUpdate({
+        update_id: 31,
+        message: {
+          message_id: 302,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Company Supergroup' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false },
+          message_thread_id: 102,
+          text: 'Báo cáo tổng quan hôm nay',
+        },
+      });
+
+      const dirSession = ctx.chatService?.chatSessionRepo.get('brain:director');
+      expect(dirSession).toBeDefined();
+      expect(dirSession?.kind).toBe('brain');
+      expect(dirSession?.title).toBe('Bộ não Giám đốc');
+    });
+
+    it('5. Notification routing in topicMode: department routes task events to department topic with prefix', async () => {
+      ctx.departmentRepo.insert({
+        id: 'dept-backend',
+        name: 'Phòng Backend',
+        priority: 1,
+        maxParallel: 2,
+        claudeDailyTokenBudget: 0,
+        telegramTopicId: 201,
+      });
+
+      ctx.projectRepo.insert({
+        id: 'p-be-api',
+        name: 'Backend API Service',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 1,
+        departmentId: 'dept-backend',
+      });
+
+      ctx.taskRepo.insert({
+        id: 'p-be-api/task-login',
+        projectId: 'p-be-api',
+        slug: 'task-login',
+        title: 'Thêm xác thực JWT',
+        status: 'review',
+      });
+
+      config.telegram.departmentTopics = {
+        'dept-backend': { chatId: SUPERGROUP_ID, threadId: 201 },
+        'chung': { chatId: SUPERGROUP_ID, threadId: 202 },
+      };
+
+      const bot = createDeptBot({
+        allowedChatIds: [SUPERGROUP_ID],
+        topicMode: 'department',
+      });
+
+      // Task notification routes to dept-backend topic (threadId 201) and includes project prefix
+      bot.handleEvent('task.review_ready', 'p-be-api/task-login');
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const taskCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(taskCall?.body?.message_thread_id).toBe(201);
+      expect(taskCall?.body?.text).toContain('[Backend API Service]');
+      expect(taskCall?.body?.text).toContain('Task chờ review');
+
+      currentTime += 15_000;
+
+      // Project without department routes to Chung topic (threadId 202)
+      ctx.projectRepo.insert({
+        id: 'p-orphan',
+        name: 'Orphan Project',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 1,
+      });
+      ctx.taskRepo.insert({
+        id: 'p-orphan/task-doc',
+        projectId: 'p-orphan',
+        slug: 'task-doc',
+        title: 'Cập nhật tài liệu',
+        status: 'failed',
+      });
+
+      bot.handleEvent('task.failed', 'p-orphan/task-doc');
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const orphanCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(orphanCall?.body?.message_thread_id).toBe(202);
+      expect(orphanCall?.body?.text).toContain('[Orphan Project]');
+
+      currentTime += 15_000;
+
+      // System notification routes to Chung topic
+      bot.broadcastMessage('Hệ thống khởi động hoàn tất', undefined);
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const sysCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(sysCall?.body?.message_thread_id).toBe(202);
+      expect(sysCall?.body?.text).toContain('Hệ thống khởi động hoàn tất');
+    });
+
+    it('6. /topics command supports setup in department mode', async () => {
+      config.telegram.departmentTopics = {
+        'chung': { chatId: SUPERGROUP_ID, threadId: 301 },
+      };
+
+      const bot = createDeptBot({
+        allowedChatIds: [SUPERGROUP_ID],
+        topicMode: 'project',
+      });
+
+      // /topics setup department
+      await bot.handleUpdate({
+        update_id: 41,
+        message: {
+          message_id: 402,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Team Group' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false },
+          text: '/topics setup department',
+        },
+      });
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const setupCalls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      const lastSetupCall = setupCalls.at(-1);
+      expect(lastSetupCall?.body?.text).toContain('Đã đồng bộ');
+      expect(lastSetupCall?.body?.text).toContain('topic phòng ban');
+      expect(config.telegram.topicMode).toBe('department');
+    });
+
+    it('7. HTTP API endpoints for department topics and setup', async () => {
+      config.telegram.allowedChatIds = [SUPERGROUP_ID];
+      config.telegram.chats = [{ id: SUPERGROUP_ID, name: 'Supergroup', kind: 'supergroup' }];
+
+      if (ctx.telegramService) {
+        (ctx.telegramService as unknown as { token?: string; fetchFn?: typeof fetch }).token = 'test-token';
+        (ctx.telegramService as unknown as { token?: string; fetchFn?: typeof fetch }).fetchFn = fakeFetch;
+      }
+
+      server = await createServer(ctx.service, config);
+      await server.ready();
+      const token = getOrCreateToken(config.tokenPath);
+      const testHeaders = {
+        host: '127.0.0.1:4321',
+        authorization: `Bearer ${token}`,
+      };
+
+      // POST /api/telegram/departments/:id/topic
+      const deptRes = await server.inject({
+        method: 'POST',
+        url: '/api/telegram/departments/chung/topic',
+        headers: testHeaders,
+      });
+      expect(deptRes.statusCode).toBe(200);
+      const deptJson = JSON.parse(deptRes.body);
+      expect(deptJson.chatId).toBe(SUPERGROUP_ID);
+      expect(deptJson.threadId).toBe(555);
+
+      // POST /api/telegram/topics/setup with department mode
+      const setupRes = await server.inject({
+        method: 'POST',
+        url: '/api/telegram/topics/setup',
+        headers: {
+          ...testHeaders,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ mode: 'department' }),
+      });
+      expect(setupRes.statusCode).toBe(200);
+      const setupJson = JSON.parse(setupRes.body);
+      expect(setupJson['chung']).toBeDefined();
+      expect(setupJson['chung'].threadId).toBe(555);
+
+      // GET /api/telegram/status contains topicMode and departmentTopics
+      const statusRes = await server.inject({
+        method: 'GET',
+        url: '/api/telegram/status',
+        headers: testHeaders,
+      });
+      expect(statusRes.statusCode).toBe(200);
+      const statusJson = JSON.parse(statusRes.body);
+      expect(statusJson.topicMode).toBe('department');
+      expect(statusJson.departmentTopics).toBeDefined();
+    });
   });
 });

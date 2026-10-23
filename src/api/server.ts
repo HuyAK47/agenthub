@@ -190,10 +190,17 @@ export async function createServer(
   fastify.get('/api/telegram/status', async () => {
     return service.getTelegramStatus();
   });
-  fastify.post('/api/telegram/topics/setup', async () => service.setupTelegramTopics());
+  fastify.post('/api/telegram/topics/setup', async (req) => {
+    const body = req.body as { mode?: 'project' | 'department' } | undefined;
+    return service.setupTelegramTopics(body?.mode);
+  });
   fastify.post('/api/telegram/projects/:id/topic', async (req) => {
     const { id } = req.params as { id: string };
     return service.createTelegramProjectTopic(id);
+  });
+  fastify.post('/api/telegram/departments/:id/topic', async (req) => {
+    const { id } = req.params as { id: string };
+    return service.createTelegramDepartmentTopic(id);
   });
   fastify.put('/api/telegram/projects/:id/chat', async (req) => {
     const { id } = req.params as { id: string };

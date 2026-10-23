@@ -267,12 +267,26 @@ function brainSandboxCommand(
   ];
   for (const masked of maskedDirs) {
     if (fs.existsSync(masked) && masked !== hubHome && !isDescendant(masked, hubHome)) {
-      sandboxArgs.push('--tmpfs', masked);
+      try {
+        const mount = fs.lstatSync(masked).isSymbolicLink() ? fs.realpathSync(masked) : masked;
+        if (fs.statSync(mount).isDirectory()) {
+          sandboxArgs.push('--tmpfs', mount);
+        }
+      } catch {
+        // ignore broken symlinks
+      }
     }
   }
   for (const maskedFile of [path.join(home, '.npmrc'), path.join(home, '.netrc')]) {
     if (fs.existsSync(maskedFile) && maskedFile !== hubHome && !isDescendant(maskedFile, hubHome)) {
-      sandboxArgs.push('--ro-bind', '/dev/null', maskedFile);
+      try {
+        const mount = fs.lstatSync(maskedFile).isSymbolicLink() ? fs.realpathSync(maskedFile) : maskedFile;
+        if (fs.statSync(mount).isFile()) {
+          sandboxArgs.push('--ro-bind', '/dev/null', mount);
+        }
+      } catch {
+        // ignore broken symlinks
+      }
     }
   }
 
