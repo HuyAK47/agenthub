@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -17,6 +17,8 @@ let profileService: ProfileService;
 
 describe('Profile import from ~/.agy-homes', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-profile-test-'));
     agyHomesDir = path.join(tmpDir, 'agy-homes');
     fs.mkdirSync(agyHomesDir, { recursive: true });
@@ -89,6 +91,7 @@ describe('Profile import from ~/.agy-homes', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     db.close();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
