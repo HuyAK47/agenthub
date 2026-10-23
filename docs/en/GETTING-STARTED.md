@@ -172,7 +172,9 @@ In AgentHub, a **project** represents a local git repository on your machine. Wh
 
 1. **Prepare the repository**: Clone the repo onto your machine (if not already present). Ensure it is initialized as a git repository with a default branch (such as `main`).
 2. **Register the project in AgentHub**:
-   - **Via Web Dashboard**: Open the **Setup** page and click **"Add project"**, or visit the **Projects** page and click **"Register Project"** (or go directly to `/projects?new=1`). Enter a project name and the absolute path to the repository directory.
+   - **Bring an existing project into the hub**: Open **Projects**, launch the **registration wizard**, choose **Existing repository**, and enter an absolute path. AgentHub inspects branches, lockfiles, hooks, language, guidance files, and previous Claude Code sessions. Review the suggestions before creating; the **Advanced** form remains available for manual settings.
+   - **Create a new project**: In the same wizard, choose **New project**. AgentHub creates the directory, runs `git init`, makes an empty initial commit, and creates the default branch before registering the project.
+   - Always verify the path and base branch. An enabled integration branch is local-only: the hub merges locally and never pushes it automatically.
    - **Or via CLI**:
      ```bash
      agenthub project add <project_name> /absolute/path/to/git/repository

@@ -120,6 +120,30 @@ export interface Project {
   afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
 }
 
+export interface ProjectInspection {
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  isGitRepo: boolean;
+  currentBranch: string | null;
+  branches: string[];
+  remoteHost: string | null;
+  estimatedSizeBytes: number;
+  sizeTruncated: boolean;
+  lockfiles: string[];
+  monorepo: { detected: boolean; type: string | null };
+  gitHooks: { husky: boolean; commitlint: boolean };
+  language: string;
+  projectFiles: string[];
+  guidanceFiles: string[];
+  mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
+  claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
+  claudeSessionPreviews: Array<{ name: string; content: string }>;
+  hasClaudeMemory: boolean;
+  memoryPreview: string | null;
+  suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
+}
+
 export interface DepartmentProfile {
   departmentId: string;
   profileName: string;
@@ -180,9 +204,17 @@ export interface DeployStatus {
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
-  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  brain: {
+    engine?: 'inherit' | 'claude' | 'codex';
+    codexProfile?: string;
+    mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+    permissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+    dailyTokenBudget?: number;
+    maxTurnsPerHour?: number;
+  };
   worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
+  review?: { autoMerge?: boolean };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
   reviewChecklist?: string[];
@@ -408,6 +440,7 @@ export interface ProjectBrain {
   projectId: string | null;
   projectName: string;
   mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  engine?: 'claude' | 'codex';
   permissions?: 'standard' | 'trusted' | 'full';
   sessionMode?: 'safe' | 'full';
   sessionId: string;
@@ -655,6 +688,9 @@ export interface SystemConfig {
     claudeModel?: string;
   };
   brain?: {
+    engine?: 'claude' | 'codex';
+    codexProfile?: string;
+    codexModel?: string;
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
     maxConcurrent?: number;
@@ -801,6 +837,15 @@ export interface CreateProjectInput {
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: ProjectSettings;
+}
+
+export interface CreateNewProjectInput {
+  name: string;
+  path: string;
+  defaultBranch?: string;
+  maxParallel?: number;
+  checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   settings?: ProjectSettings;
 }
 

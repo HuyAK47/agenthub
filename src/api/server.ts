@@ -228,6 +228,29 @@ export async function createServer(
     return service.listProjects(includeArchived);
   });
 
+  fastify.post('/api/projects/inspect', async (req: FastifyRequest) => service.inspectProject(req.body));
+
+  fastify.post('/api/projects/:id/guidance', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.writeProjectGuidance(id, req.body);
+  });
+
+  fastify.post('/api/projects/:id/summarize-context', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.summarizeProjectContext(id, req.body);
+  });
+
+  fastify.get('/api/projects/:id/summarize-context/:taskId', async (req: FastifyRequest) => {
+    const { id, taskId } = req.params as { id: string; taskId: string };
+    return service.getProjectContextSummary(id, taskId);
+  });
+
+  // Creating a repository is intentionally separate from registering an existing one.
+  // Keep both spellings for clients that adopted the early wizard contract.
+  for (const route of ['/api/projects/new', '/api/projects/create']) {
+    fastify.post(route, async (req: FastifyRequest, reply: FastifyReply) => reply.status(201).send(service.createNewProject(req.body)));
+  }
+
   fastify.get('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.getProject(id);

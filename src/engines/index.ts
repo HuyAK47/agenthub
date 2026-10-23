@@ -22,7 +22,12 @@ export interface SpawnOpts {
   gitHooks?: 'run' | 'skip';
   project?: { settings?: string | null };
   codexSandbox?: 'off' | 'workspace-write';
+  /** Approval policy for interactive brain runs. Full bypasses approvals; safe modes do not. */
+  codexApproval?: 'never' | 'on-request' | 'untrusted';
   workerCount?: number;
+  streamOutput?: boolean;
+  mcpConfigPath?: string;
+  brainPolicy?: 'standard' | 'trusted';
 }
 
 export interface QuotaDetection {
@@ -200,6 +205,136 @@ export class AgyEngine implements Engine {
   }
 }
 
+function findBubblewrap(): string | null {
+  const configured = process.env.AGENTHUB_BWRAP_BIN;
+  if (configured && fs.existsSync(configured)) return configured;
+  for (const candidate of ['/usr/bin/bwrap', '/bin/bwrap']) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function brainSandboxCommand(
+  bwrap: string,
+  command: string,
+  args: string[],
+  cwd: string,
+  hubHome: string,
+  profileHome: string | null | undefined,
+  blockedNames: string[],
+  envPath = process.env.PATH || '',
+): [string, string[]] {
+  const shimRoot = path.join(hubHome, 'shims', 'worker');
+  const home = os.homedir();
+  const addDirs = (target: string, stopAt?: string) => {
+    const dirs: string[] = [];
+    let current = path.resolve(target);
+    const stop = stopAt ? path.resolve(stopAt) : path.parse(current).root;
+    while (current !== stop && current !== path.parse(current).root) {
+      dirs.unshift(current);
+      current = path.dirname(current);
+    }
+    for (const dir of dirs) sandboxArgs.push('--dir', dir);
+  };
+  const sandboxArgs = [
+    '--ro-bind', '/', '/',
+    '--tmpfs', '/tmp',
+    // The daemon database, token and other profiles must not be visible to a
+    // brain. Only the selected profile, session files and read-only shims are
+    // mounted back below.
+    '--bind', cwd, cwd,
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--share-net',
+    '--die-with-parent',
+  ];
+  // Brain shim scripts use a private interpreter because /bin/sh itself is
+  // overlaid with a policy shim below. This keeps the guards executable while
+  // still preventing an untrusted `sh -c` from reaching the host shell.
+  if (fs.existsSync('/bin/sh')) sandboxArgs.push('--ro-bind', '/bin/sh', '/tmp/agenthub-brain-sh');
+  const sessionDir = path.join(hubHome, 'sessions');
+  // Apply this after the cwd bind as tests and some
+  // deployments keep the hub directory below the project/home tree.
+  sandboxArgs.push('--tmpfs', hubHome);
+
+  // Hide common credential stores. A selected CODEX_HOME is restored after
+  // these mounts, so isolated profiles continue to work without exposing the
+  // user's other accounts.
+  const maskedDirs = [
+    path.join(home, '.ssh'), path.join(home, '.codex'), path.join(home, '.agy-homes'),
+    path.join(home, '.aws'), path.join(home, '.kube'), path.join(home, '.docker'),
+    path.join(home, '.config', 'gh'), path.join(home, '.config', 'gcloud'),
+  ];
+  for (const masked of maskedDirs) {
+    if (fs.existsSync(masked) && masked !== hubHome && !isDescendant(masked, hubHome)) {
+      sandboxArgs.push('--tmpfs', masked);
+    }
+  }
+  for (const maskedFile of [path.join(home, '.npmrc'), path.join(home, '.netrc')]) {
+    if (fs.existsSync(maskedFile) && maskedFile !== hubHome && !isDescendant(maskedFile, hubHome)) {
+      sandboxArgs.push('--ro-bind', '/dev/null', maskedFile);
+    }
+  }
+
+  if (fs.existsSync(sessionDir)) {
+    addDirs(sessionDir, hubHome);
+    sandboxArgs.push('--bind', sessionDir, sessionDir);
+  }
+  if (fs.existsSync(shimRoot)) {
+    addDirs(shimRoot, hubHome);
+    sandboxArgs.push('--ro-bind', shimRoot, shimRoot);
+  }
+  if (profileHome && fs.existsSync(profileHome) && profileHome !== hubHome && !isDescendant(profileHome, hubHome)) {
+    addDirs(profileHome, isDescendant(hubHome, profileHome) ? hubHome : path.dirname(profileHome));
+    sandboxArgs.push('--bind', profileHome, profileHome);
+  }
+
+  // PATH shims do not protect against /bin/rm or `sh -c /bin/rm`. Overlay the
+  // policy shims in a private mount namespace so absolute paths hit the same
+  // guard without changing the host filesystem.
+  for (const name of blockedNames) {
+    const shim = path.join(shimRoot, name);
+    if (!fs.existsSync(shim)) continue;
+    const targets = new Set([
+      `/bin/${name}`,
+      `/usr/bin/${name}`,
+      ...envPath.split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, name)),
+    ]);
+    for (const target of targets) {
+      if (target.startsWith(`${shimRoot}${path.sep}`)) continue;
+      try {
+        // bubblewrap cannot replace a symlink with a bind mount. Mount the
+        // canonical target instead so `/bin/sh` and similar absolute aliases
+        // receive the same policy guard.
+        const mountTarget = fs.lstatSync(target).isSymbolicLink() ? fs.realpathSync(target) : target;
+        if (fs.lstatSync(mountTarget).isFile()) sandboxArgs.push('--ro-bind', shim, mountTarget);
+      } catch { /* target is optional on this host */ }
+    }
+  }
+
+  const gitShim = path.join(shimRoot, 'git');
+  if (fs.existsSync(gitShim)) {
+    for (const target of ['/bin/git', '/usr/bin/git']) {
+      if (fs.existsSync(target)) sandboxArgs.push('--ro-bind', gitShim, target);
+    }
+  }
+  let sandboxCommand = command;
+  // Keep the primary JS launcher out of the interpreter shim overlay. This
+  // private mount is only the process AgentHub started; child `node` commands
+  // still resolve through the policy shim in /bin and /usr/bin.
+  if (command === process.execPath && fs.existsSync(command)) {
+    const runtime = '/tmp/agenthub-brain-node';
+    sandboxArgs.push('--ro-bind', command, runtime);
+    sandboxCommand = runtime;
+  }
+  return [bwrap, [...sandboxArgs, '--', sandboxCommand, ...args]];
+}
+
+function isDescendant(parent: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 export class CodexEngine implements Engine {
   id = 'codex' as const;
 
@@ -213,6 +348,7 @@ export class CodexEngine implements Engine {
 
   static findCodexPath(): string | null {
     try {
+      if (process.env.AGENTHUB_CODEX_BIN && fs.existsSync(process.env.AGENTHUB_CODEX_BIN)) return process.env.AGENTHUB_CODEX_BIN;
       const managed = process.env.AGENTHUB_TOOLS_DIR ? path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'codex') : null;
       if (managed && fs.existsSync(managed)) return managed;
       const homeDir = os.homedir();
@@ -253,6 +389,7 @@ export class CodexEngine implements Engine {
 
     const args = [
       'exec',
+      ...(opts.streamOutput ? ['--json'] : []),
       '--skip-git-repo-check',
       '-m',
       model,
@@ -262,6 +399,20 @@ export class CodexEngine implements Engine {
       opts.cwd,
       opts.prompt,
     ];
+    if (opts.mcpConfigPath) {
+      // Codex accepts MCP overrides as CLI config values. The JSON file is the
+      // same per-session definition used by Claude and keeps the command out
+      // of the user's global Codex configuration.
+      try {
+        const mcp = JSON.parse(fs.readFileSync(opts.mcpConfigPath, 'utf8')) as { mcpServers?: { agenthub?: { command?: string; args?: string[]; env?: Record<string, string> } } };
+        const server = mcp.mcpServers?.agenthub;
+        if (server?.command) {
+          args.splice(-1, 0, '-c', `mcp_servers.agenthub.command=${server.command}`);
+          if (server.args?.length) args.splice(-1, 0, '-c', `mcp_servers.agenthub.args=${JSON.stringify(server.args)}`);
+          if (server.env) args.splice(-1, 0, '-c', `mcp_servers.agenthub.env=${JSON.stringify(server.env)}`);
+        }
+      } catch { /* malformed optional MCP config is handled by Codex */ }
+    }
     const sandboxMode = opts.codexSandbox ?? this.codexSandbox;
     if (opts.readOnly) {
       args.splice(2, 0, '--sandbox', 'read-only');
@@ -269,6 +420,11 @@ export class CodexEngine implements Engine {
       args.splice(2, 0, '--sandbox', 'workspace-write');
     } else {
       args.splice(2, 0, '--dangerously-bypass-approvals-and-sandbox');
+    }
+    // Keep Codex behind its approval broker for standard/trusted brain sessions.
+    // `never` is only used together with the explicit full-permission bypass.
+    if (opts.codexApproval) {
+      args.splice(-1, 0, '-c', `approval_policy=${opts.codexApproval}`);
     }
     if (opts.outputPath) args.splice(-1, 0, '--output-last-message', opts.outputPath);
 
@@ -283,33 +439,72 @@ export class CodexEngine implements Engine {
     }
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>), ...LIMITED_TEST_ENV };
-    if (opts.profile.kind === 'isolated' && opts.profile.home) {
+    if (opts.profile.engine === 'codex' && opts.profile.home) {
       env.CODEX_HOME = opts.profile.home;
     }
     if (opts.env) {
       Object.assign(env, opts.env);
     }
+    // A JS Codex launcher (used by managed installs and tests) needs to pass
+    // through the node interpreter shim. The shim only permits this exact
+    // entrypoint; arbitrary `node -e`/script invocations remain denied.
+    env.AGENTHUB_BRAIN_ENTRYPOINT = codexPath;
     Object.assign(
       env,
       workerEnvironment(
         opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
         env,
-        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount },
+        { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount, brainPolicy: opts.brainPolicy, brainInterpreter: opts.brainPolicy ? '/tmp/agenthub-brain-sh' : undefined },
       ),
     );
 
-    const [codexExe, codexArgs] = lowPriority(codexPath, args);
-    const [executable, command] = opts.lockFile ? lockCommand(opts.lockFile, [codexExe, ...codexArgs]) : [codexExe, codexArgs];
+    // Managed/test launchers can be JavaScript files with a `/usr/bin/env
+    // node` shebang. Start those through the node executable explicitly so
+    // the brain interpreter shim can identify the approved entrypoint instead
+    // of seeing the Codex subcommand as its first argument.
+    const isJavaScriptLauncher = /\.(?:c|m)?js$/i.test(codexPath);
+    const launchPath = isJavaScriptLauncher ? process.execPath : codexPath;
+    const launchArgs = isJavaScriptLauncher ? [codexPath, ...args] : args;
+    const [codexExe, codexArgs] = isJavaScriptLauncher && opts.brainPolicy
+      ? [launchPath, launchArgs] as [string, string[]]
+      : lowPriority(launchPath, launchArgs);
+    const locked = opts.lockFile ? lockCommand(opts.lockFile, [codexExe, ...codexArgs]) : [codexExe, codexArgs] as [string, string[]];
+    let executable = locked[0];
+    let command = locked[1];
+    if (opts.brainPolicy) {
+      const bwrap = findBubblewrap();
+      if (!bwrap) throw new Error('Codex brain policy requires bubblewrap (bwrap)');
+      [executable, command] = brainSandboxCommand(
+        bwrap,
+        executable,
+        command,
+        opts.cwd,
+        opts.hubHome || process.env.AGENTHUB_HOME || path.join(os.homedir(), '.agenthub'),
+        opts.profile.home,
+        [
+          // Keep this list in sync with the brain shims in worker-guard.ts.
+          // These tools can mutate files or execute arbitrary code without
+          // going through Codex's approval prompt, including when invoked by
+          // absolute path or from `sh -c`.
+          'rm', 'mv', 'cp', 'install', 'find', 'xargs', 'sed', 'perl', 'python', 'python3', 'ruby', 'node',
+          'systemctl', 'launchctl', 'sudo', 'su', 'ssh', 'scp', 'sftp', 'docker', 'docker-compose', 'podman',
+          'mkfs', 'dd', 'truncate', 'chown', 'chmod', 'chgrp', 'mount', 'umount', 'tar', 'zip', 'unzip',
+          'sh', 'bash', 'zsh', 'dash', 'fish', 'echo', 'printf', 'touch', 'mkdir', 'rmdir', 'ln', 'tee', 'awk', 'gawk',
+          'busybox', 'env', 'nohup', 'timeout', 'watch', 'yes', 'sort', 'uniq', 'xargs',
+          'ed', 'ex', 'vim', 'vi', 'nvim', 'emacs', 'make', 'cmake', 'gcc', 'clang', 'go', 'java', 'php',
+          'cat', 'grep', 'head', 'tail', 'wc', 'ls',
+        ],
+        env.PATH,
+      );
+    }
     const child = spawn(executable, command, {
       cwd: opts.cwd,
       env,
       detached: true,
-      stdio: ['ignore', logFd, logFd],
+      stdio: opts.streamOutput ? ['ignore', 'pipe', 'pipe'] : ['ignore', logFd, logFd],
     });
 
-    child.on('spawn', () => {
-      fs.closeSync(logFd);
-    });
+    child.on('spawn', () => { try { fs.closeSync(logFd); } catch { /* pipe mode */ } });
     child.on('error', () => {
       try { fs.closeSync(logFd); } catch { /* ignore */ }
     });

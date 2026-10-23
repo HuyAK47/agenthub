@@ -21,6 +21,8 @@ const ReferenceSchema = z.object({
 
 export const ProjectSettingsSchema = z.object({
   brain: z.object({
+    engine: z.enum(['inherit', 'claude', 'codex']).default('inherit'),
+    codexProfile: z.string().min(1).optional(),
     /**
      * Who coordinates this project:
      * - inherit: follow the global `brain.mode`
@@ -54,6 +56,10 @@ export const ProjectSettingsSchema = z.object({
     /** Merge (and so self-deploy) on its own once a Codex reviewer approves the last review-chain step. */
     autoMerge: z.boolean().default(false),
   }).default({}),
+  review: z.object({
+    /** Merge automatically after the final reviewer approves and hub checks pass. */
+    autoMerge: z.boolean().default(false),
+  }).default({}),
   ci: z.object({
     /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */
     enabled: z.boolean().optional(),
@@ -77,6 +83,7 @@ export const ProjectSettingsInputSchema = z.object({
   brain: ProjectSettingsSchema.shape.brain.removeDefault().partial().optional(),
   worktree: ProjectSettingsSchema.shape.worktree.removeDefault().partial().optional(),
   integration: ProjectSettingsSchema.shape.integration.removeDefault().partial().optional(),
+  review: ProjectSettingsSchema.shape.review.removeDefault().partial().optional(),
   ci: ProjectSettingsSchema.shape.ci.removeDefault().partial().optional(),
   references: z.array(ReferenceSchema).max(20).optional(),
   reviewChecklist: z.array(z.string().min(1).max(500).refine(isSafeProjectRelativePath, 'phải là đường dẫn tương đối trong project, không được chứa ..')).max(5).optional(),
@@ -109,6 +116,7 @@ export function mergeProjectSettings(current: ProjectSettings, input: ProjectSet
     brain: { ...current.brain, ...input.brain },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },
+    review: { ...current.review, ...input.review },
     ci: { ...current.ci, ...input.ci },
     references: input.references ?? current.references,
     reviewChecklist: input.reviewChecklist ?? current.reviewChecklist,
