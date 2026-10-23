@@ -2653,12 +2653,16 @@ export class TelegramBotService {
   private parseLeadingExternalRef(text: string): { text: string; externalRef?: string } {
     const trimmed = text.trim();
     const match = trimmed.match(/^([^\s|]+)\s+(.+)$/);
-    // References are free-form tokens, including Unicode identifiers. A
-    // Unicode word made only of letters is kept as natural-language text so
-    // the legacy `/newtask <description>` form remains intact; Unicode refs
-    // such as `ĐỀ-123` and `営業-1` are still accepted.
-    const isUnicodeWord = match && !/^\p{ASCII}+$/u.test(match[1]) && /^\p{L}+$/u.test(match[1]);
-    if (!match || isUnicodeWord) {
+    // A leading token is a ref unless it is plainly the first word of the
+    // legacy natural-language description. Unicode letters-only refs remain
+    // unambiguous when they use CJK/kana or are written in uppercase (for
+    // example `営業` and `ĐỀ`).
+    const token = match?.[1] || '';
+    const isUnicodeLettersOnly = /[^\p{ASCII}]/u.test(token) && /^\p{L}+$/u.test(token);
+    const isNaturalLanguageWord = isUnicodeLettersOnly
+      && !/^\p{Lu}+$/u.test(token)
+      && !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(token);
+    if (!match || isNaturalLanguageWord) {
       return { text: trimmed };
     }
     return { externalRef: match[1], text: match[2].trim() };

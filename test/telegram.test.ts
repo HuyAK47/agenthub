@@ -1558,6 +1558,30 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(japaneseTask?.title).toBe('Sửa nội dung bán hàng');
     });
 
+    it('accepts Unicode letters-only leading external references', async () => {
+      await bot.handleUpdate({
+        update_id: 26,
+        message: {
+          message_id: 26,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask ĐỀ Sửa lỗi thanh toán',
+        },
+      });
+      expect(ctx.taskRepo.get('proj-shop/sua-loi-thanh-toan')?.externalRef).toBe('ĐỀ');
+
+      await bot.handleUpdate({
+        update_id: 27,
+        message: {
+          message_id: 27,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask 営業 Cập nhật nội dung',
+        },
+      });
+      expect(ctx.taskRepo.get('proj-shop/cap-nhat-noi-dung')?.externalRef).toBe('営業');
+    });
+
     it('allows cancelling wizard via /cancel', async () => {
       await bot.handleUpdate({
         update_id: 30,
