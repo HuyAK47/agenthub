@@ -6,7 +6,6 @@ import { loadConfig } from '../src/config.js';
 import { openDatabase, TaskRepo, QuotaMarkRepo, EventRepo, ProjectRepo, ProfileRepo } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 import { NotificationService } from '../src/notify.js';
-import { formatReset } from '../src/time-format.js';
 
 describe('NotificationService (Desktop Notifications)', () => {
   let tmpDir: string;
@@ -99,12 +98,12 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
-  it('notifies when Claude changes fallback step without including credentials', () => {
+  it('notifies when Claude has no fallback step without including credentials', () => {
     const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
     notifier.start();
-    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'apiKey' }, reason: 'quota' });
+    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'wait' }, reason: 'quota' });
     expect(execCalls).toHaveLength(1);
-    expect(execCalls[0].args.at(-1)).toBe('Claude fallback: đang dùng API key');
+    expect(execCalls[0].args.at(-1)).toBe('Claude fallback: đang dùng chờ reset');
     expect(execCalls.join(' ')).not.toContain('sk-');
   });
 
@@ -180,12 +179,12 @@ describe('NotificationService (Desktop Notifications)', () => {
 
   it('notifies on quota.exhausted with profile, family, and readable reset time', () => {
     const resetEpoch = Math.floor(Date.now() / 1000) + 3600;
-    const expectedTime = formatReset(resetEpoch, Date.now(), 'vi');
 
     const notifier = new NotificationService({
       eventBus,
       config,
       taskRepo,
+      profileRepo,
       quotaMarkRepo,
       exec: fakeExec,
     });
@@ -197,22 +196,19 @@ describe('NotificationService (Desktop Notifications)', () => {
       family: 'gemini',
       resetAt: resetEpoch,
     });
-    expect(execCalls).toHaveLength(1);
-    expect(execCalls[0]).toEqual({
-      file: 'notify-send',
-      args: ['-t', '10000', '-a', 'AgentHub', `Hồ sơ g1 hết quota gemini tới ${expectedTime}`],
-    });
+    expect(execCalls).toHaveLength(0);
 
     // From active quota mark
+    quotaMarkRepo.mark('g1', 'claude', resetEpoch, 'test');
     quotaMarkRepo.mark('chinh', 'claude', resetEpoch, 'test');
     eventBus.emit('quota.exhausted', undefined, {
       profile: 'chinh',
       family: 'claude',
     });
-    expect(execCalls).toHaveLength(2);
-    expect(execCalls[1]).toEqual({
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]).toEqual({
       file: 'notify-send',
-      args: ['-t', '10000', '-a', 'AgentHub', `Hồ sơ chinh hết quota claude tới ${expectedTime}`],
+      args: ['-u', 'critical', '-t', '10000', '-a', 'AgentHub', 'AgentHub: Mọi tài khoản đều đã hết quota'],
     });
 
     notifier.stop();
@@ -356,6 +352,7 @@ describe('NotificationService (Desktop Notifications)', () => {
     expect(execCalls[1].args.at(-1)).toContain('Ổ đĩa còn 1 GB');
 
     // 4. All profiles quota exhausted is a system incident and should be notified
+    quotaMarkRepo.mark('g1', 'claude', Math.floor(Date.now() / 1000) + 3600);
     quotaMarkRepo.mark('chinh', 'claude', Math.floor(Date.now() / 1000) + 3600);
     eventBus.emit('quota.exhausted', undefined, { profile: 'chinh', family: 'claude' });
     expect(execCalls).toHaveLength(3);
