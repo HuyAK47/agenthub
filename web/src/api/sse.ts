@@ -54,6 +54,21 @@ function patchChatSessionCaches(queryClient: QueryClient, sessionId: string, pay
     items[index] = { ...items[index], ...(data.state ? { state: data.state } : {}), ...(data.busy !== undefined ? { busy: data.busy } : {}) };
     return { ...page, items };
   });
+  queryClient.setQueriesData<{ pages: Array<{ items: Array<Record<string, unknown>> }>; pageParams: unknown[] }>({ queryKey: ['chatSessions'] }, (current) => {
+    if (!current || !Array.isArray(current.pages)) return current;
+    let changed = false;
+    const pages = current.pages.map((page) => {
+      if (!page || !Array.isArray(page.items)) return page;
+      const index = page.items.findIndex((item) => item?.id === sessionId);
+      if (index < 0) return page;
+      changed = true;
+      patched = true;
+      const items = [...page.items];
+      items[index] = { ...items[index], ...(data.state ? { state: data.state } : {}), ...(data.busy !== undefined ? { busy: data.busy } : {}) };
+      return { ...page, items };
+    });
+    return changed ? { ...current, pages } : current;
+  });
   return patched;
 }
 

@@ -31,6 +31,9 @@ export interface SessionListProps {
   onRenameSession?: (sessionId: string, newTitle: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => void;
   onExportSession?: (session: ChatSession) => void;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   isDeletingId?: string | null;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -65,6 +68,9 @@ export const SessionList: React.FC<SessionListProps> = ({
   onRenameSession,
   onArchiveSession,
   onExportSession,
+  hasMore = false,
+  isLoadingMore = false,
+  onLoadMore,
   isDeletingId,
   isCollapsed = false,
   onToggleCollapse,
@@ -480,6 +486,16 @@ export const SessionList: React.FC<SessionListProps> = ({
               </React.Fragment>
             );
           })
+        )}
+        {hasMore && onLoadMore && (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={isLoadingMore}
+            className="w-full rounded-lg px-3 py-2 text-xs font-medium text-[var(--t-accent)] hover:bg-[var(--bg-surface-hover)] disabled:opacity-50"
+          >
+            {isLoadingMore ? t('pagination.loading') : t('tasks.showMore')}
+          </button>
         )}
       </div>
 
