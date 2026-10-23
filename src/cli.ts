@@ -88,6 +88,70 @@ export async function cmdInstallService(extraArgs: string[], projectRootOverride
   return result.content;
 }
 
+function serviceManager(): { bin: string; args: (action: string, disable?: boolean) => string[] } {
+  if (process.platform === 'darwin') {
+    const uid = process.getuid?.() ?? '';
+    return { bin: process.env.AGENTHUB_LAUNCHCTL || 'launchctl', args: (action) => action === 'start'
+      ? ['bootstrap', `gui/${uid}`, path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist')]
+      : ['bootout', `gui/${uid}/dev.agenthub`] };
+  }
+  const bin = process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL || 'systemctl';
+  return { bin, args: (action, disable) => action === 'start'
+    ? ['--user', 'enable', '--now', 'agenthub']
+    : disable ? ['--user', 'stop', 'agenthub'] : ['--user', 'stop', 'agenthub'] };
+}
+
+async function hubRequest(config: AgentHubConfig, method: string, endpoint: string, body?: unknown): Promise<Response> {
+  const token = readExistingToken(config.tokenPath || getTokenPath());
+  if (!token) throw new Error('Không tìm thấy token AgentHub; service có thể chưa được cài đặt.');
+  return fetch(`http://127.0.0.1:${config.port}${endpoint}`, {
+    method,
+    headers: { authorization: `Bearer ${token}`, host: `127.0.0.1:${config.port}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+export async function cmdStop(config: AgentHubConfig, extraArgs: string[] = []): Promise<void> {
+  const disable = extraArgs.includes('--disable');
+  try {
+    const response = await hubRequest(config, 'POST', '/api/hub/shutdown', { disable });
+    if (!response.ok) throw new Error(`API shutdown trả về HTTP ${response.status}`);
+    const result = await response.json() as { queued?: number; reviewers?: number };
+    console.log(`✓ Đã lưu trạng thái và tắt AgentHub (${result.queued || 0} task sẽ tiếp tục từ hàng chờ).`);
+  } catch (error) {
+    console.error(`! Không gọi được daemon: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const manager = serviceManager();
+  try {
+    execFileSync(manager.bin, manager.args('stop', disable), { stdio: 'inherit', timeout: 30_000 });
+    if (disable && process.platform !== 'darwin') execFileSync(manager.bin, ['--user', 'disable', 'agenthub'], { stdio: 'inherit', timeout: 30_000 });
+    console.log(`✓ AgentHub đã tắt${disable ? ' và không tự bật khi đăng nhập' : ''}.`);
+  } catch (error) {
+    throw new Error(`Không thể dừng service (${manager.bin}): ${error instanceof Error ? error.message : String(error)}. Service đã cài chưa?`);
+  }
+}
+
+export async function cmdStart(config: AgentHubConfig): Promise<void> {
+  const manager = serviceManager();
+  try {
+    execFileSync(manager.bin, manager.args('start'), { stdio: 'inherit', timeout: 30_000 });
+  } catch (error) {
+    throw new Error(`Không thể khởi động service (${manager.bin}): ${error instanceof Error ? error.message : String(error)}. Hãy chạy agenthub install-service.`);
+  }
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${config.port}/health`);
+      if (response.ok && (await response.json() as { ok?: boolean }).ok) {
+        console.log(`✓ AgentHub đang chạy: http://127.0.0.1:${config.port}`);
+        return;
+      }
+    } catch { /* daemon is still starting */ }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error('AgentHub đã được bật nhưng /health chưa trả về ok sau 30 giây.');
+}
+
 export async function cmdMcpInstall(extraArgs: string[]): Promise<string> {
   const isPrint = extraArgs.includes('--print');
   const projectRoot = findProjectRoot();
@@ -214,7 +278,7 @@ export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = [])
 
 async function main() {
   const config = loadConfig();
-  if (command === 'install-service' || command === 'uninstall' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
+  if (command === 'install-service' || command === 'uninstall' || command === 'stop' || command === 'start' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
     assertWorkerMayControlHub(command === 'daemon' ? 'daemon stop' : command);
   }
 
@@ -251,6 +315,14 @@ async function main() {
 
     case 'install-service':
       await cmdInstallService(args.slice(1));
+      break;
+
+    case 'stop':
+      await cmdStop(config, args.slice(1));
+      break;
+
+    case 'start':
+      await cmdStart(config);
       break;
 
     case 'uninstall-service':
@@ -338,6 +410,8 @@ Cách dùng:
   agenthub version [--check]          Xem phiên bản và kiểm tra cập nhật mới
   agenthub install-service [--print]  Cài đặt systemd/LaunchAgent user service
   agenthub uninstall-service          Gỡ bỏ service chạy nền của AgentHub
+  agenthub stop [--disable]           Tắt AgentHub và lưu task đang chạy để tiếp tục
+  agenthub start                       Bật AgentHub và chờ daemon sẵn sàng
   agenthub mcp-install [--print]      Đăng ký MCP server với Claude Code
   agenthub link                       Tạo symlink vào ~/.local/bin/agenthub
   agenthub doctor [--json]            Kiểm tra môi trường và cấu hình hệ thống
@@ -429,6 +503,21 @@ async function cmdStatus(config: ReturnType<typeof loadConfig>) {
   }
 
   console.log('=== AgentHub Status ===\n');
+  const manager = serviceManager();
+  let serviceRunning = false;
+  let serviceEnabled = false;
+  try {
+    if (process.platform === 'darwin') {
+      serviceRunning = execFileSync(manager.bin, ['print', `gui/${process.getuid?.() ?? ''}/dev.agenthub`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).length > 0;
+      serviceEnabled = fs.existsSync(path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist'));
+    } else {
+      serviceRunning = execFileSync(manager.bin, ['--user', 'is-active', 'agenthub'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'active';
+      serviceEnabled = execFileSync(manager.bin, ['--user', 'is-enabled', 'agenthub'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'enabled';
+    }
+  } catch { /* service may not be installed */ }
+  console.log(`Service: ${serviceRunning ? 'đang chạy' : 'đã tắt'}`);
+  console.log(`Tự bật khi đăng nhập: ${serviceEnabled ? 'có' : 'không'}`);
+  console.log(`Worker đang chạy: ${tasks.filter((task) => task.status === 'running' || task.status === 'checking').length}`);
   console.log(`Hồ sơ: ${profiles.length}`);
   console.log(`Quota marks đang hoạt động: ${quotaMarks.length}`);
   console.log(`\nTask:`);
