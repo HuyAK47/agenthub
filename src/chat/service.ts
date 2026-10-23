@@ -349,6 +349,7 @@ export class ChatService {
       this.eventBus.emit('claude.quota_exhausted', undefined, {
         until: snapshot.until,
         reason: snapshot.reason,
+        fallbackAvailable: snapshot.step !== null && snapshot.step.type !== 'wait',
       });
     }
     this.eventBus.emit('claude.fallback_changed', undefined, { step: snapshot.step, reason: snapshot.reason, resetAt: snapshot.resetAt });

@@ -1072,7 +1072,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(calls).toHaveLength(1);
     });
 
-    it('sends an identical notification text at most once per 30 minutes', async () => {
+    it('sends an all-quota notification once until the blockage clears', async () => {
       const emit = () => ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, { profile: 'g9', family: 'gemini-pro', allExhausted: true, time: '18:30' });
       emit();
       await bot.flushQueue(CHAT_ID);
@@ -1081,6 +1081,11 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
       currentTime += 16 * 60_000;
+      emit();
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
+
+      ctx.scheduler.getEventBus().emit('quota.cleared', undefined, { family: 'gemini-pro' });
       emit();
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(2);

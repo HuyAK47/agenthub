@@ -1171,6 +1171,9 @@ export class Scheduler {
   private checkQuotaExpiry(): void {
     const expired = this.quotaService.cleanupExpired();
     if (expired.length > 0) {
+      for (const mark of expired) {
+        this.eventBus.emit('quota.cleared', undefined, mark);
+      }
       this.wakeWaitingQuotaTasks('quota_expired');
     }
   }

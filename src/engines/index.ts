@@ -306,7 +306,8 @@ function brainSandboxCommand(
         // bubblewrap cannot replace a symlink with a bind mount. Mount the
         // canonical target instead so `/bin/sh` and similar absolute aliases
         // receive the same policy guard.
-        const mountTarget = fs.lstatSync(target).isSymbolicLink() ? fs.realpathSync(target) : target;
+        const mountTarget = fs.realpathSync(target);
+        if (maskedDirs.some((masked) => isDescendant(masked, mountTarget))) continue;
         if (fs.lstatSync(mountTarget).isFile()) sandboxArgs.push('--ro-bind', shim, mountTarget);
       } catch { /* target is optional on this host */ }
     }

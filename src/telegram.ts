@@ -25,6 +25,8 @@ import { canAlwaysAllowCommand, commandPermissionLabel } from './chat/permission
 import { formatReset } from './time-format.js';
 import { NotificationDeduper } from './notification-dedupe.js';
 
+const WAITING_QUOTA_BATCH_DELAY_MS = 100;
+
 const execFileAsync = promisify(execFile);
 
 export type GitDiffFn = (
@@ -290,6 +292,9 @@ export class TelegramBotService {
 
   // Deduplication for event notifications
   private lastNotificationTime = new Map<string, number>();
+  private allQuotaNotified = new Set<string>();
+  private waitingQuotaNotified = false;
+  private waitingQuotaCheckTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly eventDeduper: NotificationDeduper;
   private brainWaitingNotified = new Set<string>();
   private reviewFallbackNotified = new Set<string>();
@@ -558,6 +563,10 @@ export class TelegramBotService {
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
       this.timerInterval = undefined;
+    }
+    if (this.waitingQuotaCheckTimer) {
+      clearTimeout(this.waitingQuotaCheckTimer);
+      this.waitingQuotaCheckTimer = undefined;
     }
 
     if (this.pollAbortController) {
@@ -3171,19 +3180,29 @@ export class TelegramBotService {
       reviewReady: true,
       failed: true,
       blocked: true,
-      quota: true,
+      quotaPerModel: false,
+      quotaAllExhausted: true,
       fallback: true,
     };
+    const notifyPerModel = typeof notify.quotaPerModel === 'boolean' ? notify.quotaPerModel : (notify as unknown as { quota?: boolean }).quota === true;
+    const notifyAllExhausted = notify.quotaAllExhausted !== false;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-
-    // Account-level exhaustion belongs in the dashboard. Telegram is an
-    // interrupt channel, so it only reports when every enabled account for
-    // the affected engine/family is unavailable.
-    if (type === 'quota.exhausted') {
-      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
-      if (!allExhausted) return;
+    if (type === 'quota.cleared') {
+      this.allQuotaNotified.delete('all');
+      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+      for (const key of this.lastNotificationTime.keys()) {
+        if (key.startsWith('quota.exhausted:')) this.lastNotificationTime.delete(key);
+      }
+      for (const key of this.lastBroadcast.keys()) {
+        if (key.includes('Mọi tài khoản đều đã hết quota')) this.lastBroadcast.delete(key);
+      }
     }
+    if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
+      this.queueWaitingQuotaCheck(notifyAllExhausted);
+      return;
+    }
+    if ((type === 'quota.cleared' || type === 'task.queued') && this.taskRepo) this.queueWaitingQuotaCheck(notifyAllExhausted);
 
     const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
@@ -3493,20 +3512,25 @@ export class TelegramBotService {
       }
 
       case 'quota.exhausted': {
+        const family = typeof p.family === 'string' ? p.family : typeof p.model === 'string' ? p.model : '';
+        const quotaKey = family || 'all';
         const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, now);
+        if (!isAllExhausted) this.allQuotaNotified.delete(quotaKey);
         if (effectiveMode === 'auto') {
-          if (isAllExhausted) {
+          if (isAllExhausted && notifyAllExhausted && !this.allQuotaNotified.has(quotaKey)) {
+            this.allQuotaNotified.add(quotaKey);
             this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
           }
           break;
         }
-        if (!notify.quota) return;
         if (isAllExhausted) {
+          if (!notifyAllExhausted || this.allQuotaNotified.has(quotaKey)) return;
+          this.allQuotaNotified.add(quotaKey);
           this.broadcastMessage('🚨 <b>Mọi tài khoản đều đã hết quota</b>\nHệ thống tạm dừng thực thi task.');
           break;
         }
+        if (!notifyPerModel) return;
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
-        const family = (p.family || p.model || '') as string;
         const resetStr = this.resolveResetTime(p, name, family);
         const text = resetStr
           ? `⏳ <b>Hết Quota</b>\nHồ sơ <b>${name}</b> hết quota <code>${family}</code> đến ${resetStr}`
@@ -3525,8 +3549,8 @@ export class TelegramBotService {
       }
 
       case 'claude.quota_exhausted': {
-        if (!notify.quota) return;
-        this.broadcastMessage('⏳ <b>Claude hết quota</b>\nĐã kích hoạt failover hoặc cần chờ reset quota.');
+        if (!notifyAllExhausted || p.fallbackAvailable !== false) return;
+        this.broadcastMessage('⏳ <b>Claude hết quota</b>\nKhông còn bước fallback khả dụng, cần chờ reset quota.');
         break;
       }
 
@@ -3560,7 +3584,7 @@ export class TelegramBotService {
       }
 
       case 'chat.limit_waiting': {
-        if (!notify.quota || !this.chatService || typeof p.sessionId !== 'string') return;
+        if (!notifyAllExhausted || !this.chatService || typeof p.sessionId !== 'string') return;
         const resetAt = typeof p.resetAt === 'number' ? formatReset(p.resetAt * 1000 + 60_000, this.now(), 'vi') : 'sau khi reset';
         this.broadcastMessage(`⏳ <b>Claude đạt giới hạn 5 giờ</b>\nTự gửi lại lúc <b>${resetAt}</b>.`, { inline_keyboard: [[{ text: '⏹ Huỷ', callback_data: `chatlimit:cancel:${p.sessionId}` }, { text: '▶️ Gửi lại ngay', callback_data: `chatlimit:now:${p.sessionId}` }]] });
         break;
@@ -3683,6 +3707,24 @@ export class TelegramBotService {
       this.notificationProjectId = null;
       this.notificationDedupProjectId = null;
     }
+  }
+
+  private queueWaitingQuotaCheck(notifyAllExhausted: boolean): void {
+    if (this.waitingQuotaCheckTimer || !this.taskRepo) return;
+    this.waitingQuotaCheckTimer = setTimeout(() => {
+      this.waitingQuotaCheckTimer = undefined;
+      const waiting = this.taskRepo?.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota') || [];
+      if (waiting.length === 0) {
+        this.waitingQuotaNotified = false;
+        return;
+      }
+      if (!notifyAllExhausted || this.waitingQuotaNotified) return;
+      this.waitingQuotaNotified = true;
+      const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
+      const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
+      const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
+      this.broadcastMessage(`⏳ <b>${waiting.length} task đang chờ quota</b>\nSớm nhất mở lại lúc <b>${time}</b>.`);
+    }, WAITING_QUOTA_BATCH_DELAY_MS);
   }
 
   broadcastMessage(
