@@ -1495,6 +1495,23 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(['queued', 'waiting_quota']).toContain(task?.status);
     });
 
+    it('stores a leading external reference from the short description format', async () => {
+      await bot.handleUpdate({
+        update_id: 22,
+        message: {
+          message_id: 22,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask OP#123 Đăng xuất tài khoản',
+        },
+      });
+
+      const task = ctx.taskRepo.get('proj-shop/dang-xuat-tai-khoan');
+      expect(task?.externalRef).toBe('OP#123');
+      expect(task?.title).toBe('Đăng xuất tài khoản');
+      expect(task?.body).toBe('Đăng xuất tài khoản');
+    });
+
     it('allows cancelling wizard via /cancel', async () => {
       await bot.handleUpdate({
         update_id: 30,
