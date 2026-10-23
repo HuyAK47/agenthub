@@ -2656,7 +2656,7 @@ export class TelegramBotService {
     // References are free-form tokens. Keep the legacy natural-language
     // description flow for Vietnamese (or other non-ASCII) first words, while
     // allowing refs such as `ABCfoo` that have no punctuation at all.
-    if (!match || !/^[\x00-\x7F]+$/.test(match[1])) return { text: trimmed };
+    if (!match || [...match[1]].some((char) => char.charCodeAt(0) > 0x7f)) return { text: trimmed };
     return { externalRef: match[1], text: match[2].trim() };
   }
 
