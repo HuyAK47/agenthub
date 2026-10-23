@@ -364,7 +364,10 @@ exec ${shellQuote(realBinary)} "$@"
 export function brainReadShimScript(name: string, realBinary: string, interpreter = '/bin/sh'): string {
   const optionSpec = {
     cat: { flags: ['-A', '-b', '-e', '-E', '-n', '-s', '-t', '-T', '-v', '--show-all', '--number-nonblank', '--number', '--squeeze-blank', '--show-tabs', '--show-nonprinting'], values: [] },
-    grep: { flags: ['-E', '-F', '-G', '-P', '-i', '-v', '-w', '-x', '-m', '-n', '-b', '-H', '-h', '-s', '-o', '-q', '-r', '-R', '-a', '--extended-regexp', '--fixed-strings', '--basic-regexp', '--perl-regexp', '--ignore-case', '--invert-match', '--word-regexp', '--line-regexp', '--line-number', '--byte-offset', '--with-filename', '--no-filename', '--silent', '--only-matching', '--quiet', '--recursive', '--dereference-recursive', '--binary-files'], values: ['-e', '-f', '--regexp', '--file', '--max-count', '--binary-files'] },
+    // Recursive grep can follow a symlink inside the worktree to a secret or
+    // unrelated host directory. File-backed patterns are denied by
+    // BrainPolicy too, so reject those options before they reach grep.
+    grep: { flags: ['-E', '-F', '-G', '-P', '-i', '-v', '-w', '-x', '-m', '-n', '-b', '-H', '-h', '-s', '-o', '-q', '-a', '--extended-regexp', '--fixed-strings', '--basic-regexp', '--perl-regexp', '--ignore-case', '--invert-match', '--word-regexp', '--line-regexp', '--line-number', '--byte-offset', '--with-filename', '--no-filename', '--silent', '--only-matching', '--quiet', '--binary-files'], values: ['-e', '--regexp', '--max-count', '--binary-files'] },
     head: { flags: ['-q', '-v', '--quiet', '--verbose'], values: ['-n', '-c', '--lines', '--bytes'] },
     tail: { flags: ['-q', '-v', '--quiet', '--verbose', '--follow', '--retry', '--pid'], values: ['-n', '-c', '-s', '--lines', '--bytes', '--sleep-interval', '--pid'] },
     wc: { flags: ['-c', '-m', '-l', '-L', '-w', '--bytes', '--chars', '--lines', '--max-line-length', '--words'], values: [] },
@@ -373,6 +376,14 @@ export function brainReadShimScript(name: string, realBinary: string, interprete
   const flags = optionSpec.flags.map(shellQuote).join('|');
   const values = optionSpec.values.map(shellQuote).join('|');
   const valueCase = values ? `      ${values}) option_value=1; continue ;;\n` : '';
+  const grepSafetyCase = name === 'grep' ? `
+      -r|-R|--recursive|--dereference-recursive)
+        echo 'AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file' >&2
+        exit 1 ;;
+      -f|--file|--file=*|-f*)
+        echo 'AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file' >&2
+        exit 1 ;;
+` : '';
   return `#!${interpreter}
 root="${'${AGENTHUB_BRAIN_ROOT:-$PWD}'}"
 root="$(readlink -f -- "$root" 2>/dev/null)"
@@ -390,8 +401,18 @@ for arg in "$@"; do
   if [ "$end_options" -eq 1 ]; then
     :
   else
+${name === 'grep' ? `    case "$arg" in
+      -*)
+        case "$arg" in
+          --*) ;;
+          -*) case "\${arg#-}" in *r*|*R*) echo 'AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file' >&2; exit 1 ;; esac ;;
+        esac ;;
+    esac
+` : ''}
     case "$arg" in
       --) end_options=1; continue ;;
+${grepSafetyCase}      # Only known options are skipped. Unknown dash-prefixed
+      # arguments remain operands and are resolved below.
       ${flags}) continue ;;
 ${valueCase}      *) ;;
     esac
