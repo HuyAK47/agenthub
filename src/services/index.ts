@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
+import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../projects/paths.js';
 import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
@@ -1135,7 +1136,8 @@ export class AppService {
 
     const diskReader = this.scheduler ? this.scheduler.getDiskReader() : getDiskSpaceSync;
     const disk = diskReader(this.config.worktreesDir);
-    const disks = getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
+    const worktreeRoots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const disks = getMonitoredDisks(worktreeRoots, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', diskReader);
     const runningTaskIds = runningTasks.map((r) => r.taskId);
     const overlaps = this.taskNoteRepo
       ? this.taskNoteRepo.getActiveOverlaps(runningTaskIds).map(apiTaskNote)
@@ -1173,7 +1175,8 @@ export class AppService {
     const running = new Set(this.scheduler.getRunning().keys());
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
-    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths });
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const processes = listAllWorktreeProcesses({ worktreesDir: roots, protectedPaths });
     return processes
       .map((process) => {
         const cwd = process.cwd.replace(/ \(deleted\)$/, '');
@@ -1187,10 +1190,11 @@ export class AppService {
     const orphans = this.getOrphans();
     const projects = this.projectRepo.getAll();
     const protectedPaths = [this.config.hubHome, ...projects.map((project) => project.path)];
+    const roots = [this.config.worktreesDir, ...projects.flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
     const reaped: number[] = [];
     for (const orphan of orphans) {
       reaped.push(...reapSyncForWorktree(orphan.cwd.replace(/ \(deleted\)$/, ''), {
-        worktreesDir: this.config.worktreesDir,
+        worktreesDir: roots,
         protectedPaths,
       }));
     }
@@ -1250,6 +1254,10 @@ export class AppService {
     }
 
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
+    if (effectiveSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(effectiveSettings.worktree.root, resolvedPath, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
     if (effectiveSettings.integration.enabled || effectiveSettings.integration.branch) {
       validateIntegrationBranch(effectiveSettings.integration.branch || 'agenthub/integration', parsed.defaultBranch);
     }
@@ -1349,6 +1357,11 @@ export class AppService {
     const mergedSettings = parsed.settings === undefined
       ? projectSettings(current)
       : mergeProjectSettings(projectSettings(current), parsed.settings);
+
+    if (mergedSettings.worktree.root) {
+      try { validateProjectWorktreeRoot(mergedSettings.worktree.root, current.path, this.config.hubHome); }
+      catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    }
 
     if (mergedSettings.integration.enabled || mergedSettings.integration.branch) {
       validateIntegrationBranch(mergedSettings.integration.branch || 'agenthub/integration', effectiveDefaultBranch);
@@ -1460,7 +1473,12 @@ export class AppService {
         warnings.push(`Giữ worktree ${task.worktreePath} vì có thay đổi chưa commit`);
         continue;
       }
-      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(proj.path, task.worktreePath, { projectId: id, taskId: task.id, slug: task.slug });
+      const removed = new WorktreeService(this.config, this.scheduler.getEventBus()).remove(
+        proj.path,
+        task.worktreePath,
+        { projectId: id, taskId: task.id, slug: task.slug },
+        projectWorktreeRoots(proj, this.config.hubHome, this.config.worktreesDir),
+      );
       if (!removed) warnings.push(`Không thể gỡ worktree ${task.worktreePath}; đã giữ nguyên`);
     }
 
@@ -3259,6 +3277,7 @@ export class AppService {
           taskId: task.id,
           hooks,
         },
+        project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir,
       );
       if (!removed) {
         throw new HttpError(

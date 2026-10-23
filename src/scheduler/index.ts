@@ -20,6 +20,7 @@ import {
   TaskNoteRepo,
 } from '../db/index.js';
 import { projectSettings } from '../projects/settings.js';
+import { isProjectWorktreeRootAccessible, projectWorktreeRoot, projectWorktreeRoots } from '../projects/paths.js';
 import { Engine, AgyEngine, CodexEngine } from '../engines/index.js';
 import { getModelFamily, getModelEngine, isKnownModel, QuotaService } from '../quota/index.js';
 import { DependencyContext, WorktreeService } from '../worktrees/index.js';
@@ -999,7 +1000,8 @@ export class Scheduler {
   /** Reap worker descendants left behind after a worktree is deleted or a task stops. */
   reapOrphans(): void {
     const oldProcessCutoff = Date.now() - 30 * 60 * 1000;
-    const processes = listAllWorktreeProcesses({ worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+    const roots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    const processes = listAllWorktreeProcesses({ worktreesDir: roots, protectedPaths: [this.config.hubHome] });
     const activeWorktrees = new Set<string>();
     for (const run of this.running.values()) {
       const task = this.taskRepo.get(run.taskId);
@@ -1012,7 +1014,7 @@ export class Scheduler {
     for (const info of processes) {
       const dir = info.cwd.replace(/ \(deleted\)$/, '');
       if (info.cwd.endsWith(' (deleted)')) {
-        reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        reapSyncForWorktree(dir, { worktreesDir: roots, protectedPaths: [this.config.hubHome] });
         continue;
       }
 
@@ -1020,7 +1022,7 @@ export class Scheduler {
       const active = [...activeWorktrees].some((worktree) => processCwd === worktree || processCwd.startsWith(worktree + path.sep));
       if (active) continue;
       if (info.startedAt > oldProcessCutoff && !isOrphanProcess(info)) continue;
-      reapSyncForWorktree(dir, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      reapSyncForWorktree(dir, { worktreesDir: roots, protectedPaths: [this.config.hubHome] });
     }
   }
 
@@ -1289,7 +1291,8 @@ export class Scheduler {
     this.killProcessGroup(rt.pid);
     const stalledTask = this.taskRepo.get(taskId);
     if (stalledTask?.worktreePath) {
-      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      const project = this.projectRepo.get(stalledTask.projectId);
+      reapSyncForWorktree(stalledTask.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
     this.running.delete(taskId);
     if (rt.lockFile) this.locks.release(rt.profileName, rt.lockFile);
@@ -1446,7 +1449,8 @@ export class Scheduler {
       }
 
       if (task.worktreePath) {
-        await reap(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+        const project = this.projectRepo.get(task.projectId);
+        await reap(task.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
       }
 
     // Read log tail for quota detection
@@ -2039,6 +2043,14 @@ export class Scheduler {
     return [...this.reviewerRuns.values()].some((run) => run.profileName === profileName);
   }
 
+  private taskLogDir(task: TaskRow): string {
+    const project = this.projectRepo.get(task.projectId);
+    if (project && projectSettings(project).worktree.logsInRoot === true) {
+      return path.join(projectWorktreeRoot(project, this.config.hubHome), '.logs', task.id.replace('/', '_'));
+    }
+    return path.join(this.config.logsDir, task.id.replace('/', '_'));
+  }
+
   private startReview(task: TaskRow, profileName: string, engine: Engine, reviewerModel: string, reviewerActor = 'codex-reviewer'): void {
     const actor: ReviewerActor = engine.id === 'claude' ? 'claude-reviewer' : 'codex-reviewer';
     const profile = this.profileRepo.get(profileName);
@@ -2048,7 +2060,7 @@ export class Scheduler {
     const lockFile = this.locks.lockPath(profile, lockSlot);
     this.locks.reserve(profile.name, lockFile);
     const runId = crypto.randomUUID();
-    const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
+    const logDir = this.taskLogDir(task);
     const logPath = path.join(logDir, `${runId}.log`);
     const outputPath = path.join(logDir, `${runId}.final.json`);
     this.runRepo.insert({ id: runId, taskId: task.id, engine: engine.id, model: reviewerModel, profileName, logPath, kind: 'reviewer' });
@@ -2528,8 +2540,13 @@ export class Scheduler {
     }
 
     const projectAccessible = isProjectAccessible(project.path);
+    const worktreeRootAccessible = isProjectWorktreeRootAccessible({
+      id: project.id,
+      path: project.path,
+      settings: project.settings,
+    });
     const worktreeAccessible = !task.worktreePath || fs.existsSync(task.worktreePath);
-    if (!projectAccessible || !worktreeAccessible) {
+    if (!projectAccessible || !worktreeRootAccessible || !worktreeAccessible) {
       this.locks.release(profile.name, lockFile);
       this.markTaskWaitingForProject(task, project);
       return;
@@ -2562,6 +2579,10 @@ export class Scheduler {
           ensureIntegrationWorktree(project, this.config.hubHome);
         } catch (e) {
           this.locks.release(profile.name, lockFile);
+          if (!isProjectAccessible(project.path) || !isProjectWorktreeRootAccessible({ id: project.id, path: project.path, settings: project.settings })) {
+            this.markTaskWaitingForProject(task, project);
+            return;
+          }
           this.taskRepo.updateStatus(task.id, 'failed');
           this.eventBus.emit('task.failed', task.id, { error: String(e) });
           return;
@@ -2572,13 +2593,14 @@ export class Scheduler {
         worktreePath = this.worktreeService.create({
           projectPath: project.path,
           projectId: project.id,
+          projectSettings: project.settings,
           slug: task.slug,
           branch,
           baseRef,
         });
       } catch (e) {
         this.locks.release(profile.name, lockFile);
-        if (!isProjectAccessible(project.path)) {
+        if (!isProjectAccessible(project.path) || !isProjectWorktreeRootAccessible({ id: project.id, path: project.path, settings: project.settings })) {
           this.markTaskWaitingForProject(task, project);
           return;
         }
@@ -2665,7 +2687,7 @@ export class Scheduler {
 
     // Create run record
     const runId = crypto.randomUUID();
-    const logDir = path.join(this.config.logsDir, task.id.replace('/', '_'));
+    const logDir = this.taskLogDir(task);
     const logPath = path.join(logDir, `${runId}.log`);
 
     let usageBefore: number | null = null;
@@ -2914,7 +2936,8 @@ export class Scheduler {
     this.killProcessGroup(rt.pid);
     const task = this.taskRepo.get(taskId);
     if (task?.worktreePath) {
-      reapSyncForWorktree(task.worktreePath, { worktreesDir: this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
+      const project = this.projectRepo.get(task.projectId);
+      reapSyncForWorktree(task.worktreePath, { worktreesDir: project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir, protectedPaths: [this.config.hubHome] });
     }
 
     this.running.delete(taskId);
@@ -2999,7 +3022,8 @@ export class Scheduler {
   }
 
   private getMonitoredDisks(): MonitoredDisk[] {
-    return getMonitoredDisks(this.config.worktreesDir, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
+    const roots = [this.config.worktreesDir, ...this.projectRepo.getAll().flatMap((project) => projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir))];
+    return getMonitoredDisks(roots, this.config.disk.minFreeGB, this.config.disk.extraPaths, process.env.NODE_ENV !== 'test', this.diskReader);
   }
 
   private getBlockingDisk(): MonitoredDisk | undefined {
@@ -3104,7 +3128,7 @@ export class Scheduler {
             projectId: task.projectId,
             taskId: task.id,
             hooks,
-          });
+          }, project ? projectWorktreeRoots(project, this.config.hubHome, this.config.worktreesDir) : this.config.worktreesDir);
         } catch {
           // ignore
         }
