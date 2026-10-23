@@ -30,7 +30,7 @@ export function resolveWebDir(moduleUrl: string, env: NodeJS.ProcessEnv = {}): s
 export async function createServer(
   service: AppService,
   config: AgentHubConfig,
-  options?: { webDir?: string },
+  options?: { webDir?: string; onShutdown?: (disable: boolean) => void },
 ): Promise<FastifyInstance> {
   const fastify = Fastify({ logger: false, forceCloseConnections: true });
 
@@ -125,6 +125,14 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.post('/api/hub/shutdown', async (req) => {
+    const body = (req.body || {}) as { disable?: unknown };
+    const disable = body.disable === true;
+    const result = service.shutdownForUser();
+    options?.onShutdown?.(disable);
+    return { ok: true, daemonPid: process.pid, ...result };
+  });
+
   fastify.get('/api/perf', async () => service.getPerf());
 
   fastify.get('/api/setup/status', async () => service.getSetupStatus());
@@ -192,12 +200,57 @@ export async function createServer(
     registerBrainRoutes(fastify, service.brainService, service);
   }
 
+  // --- Departments API ---
+  fastify.get('/api/departments', async () => service.listDepartments());
+  fastify.get('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getDepartment(id);
+  });
+  fastify.post('/api/departments', async (req: FastifyRequest, reply: FastifyReply) => {
+    return reply.status(201).send(service.createDepartment(req.body));
+  });
+  fastify.patch('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.updateDepartment(id, req.body);
+  });
+  fastify.delete('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.deleteDepartment(id);
+  });
+  fastify.put('/api/departments/:id/profiles', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.updateDepartmentProfiles(id, req.body);
+  });
+
   // --- Projects API ---
   fastify.get('/api/projects', async (req: FastifyRequest) => {
     const query = req.query as { archived?: string | boolean };
     const includeArchived = query?.archived === true || query?.archived === 'true' || query?.archived === '1';
     return service.listProjects(includeArchived);
   });
+
+  fastify.post('/api/projects/inspect', async (req: FastifyRequest) => service.inspectProject(req.body));
+
+  fastify.post('/api/projects/:id/guidance', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.writeProjectGuidance(id, req.body);
+  });
+
+  fastify.post('/api/projects/:id/summarize-context', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.summarizeProjectContext(id, req.body);
+  });
+
+  fastify.get('/api/projects/:id/summarize-context/:taskId', async (req: FastifyRequest) => {
+    const { id, taskId } = req.params as { id: string; taskId: string };
+    return service.getProjectContextSummary(id, taskId);
+  });
+
+  // Creating a repository is intentionally separate from registering an existing one.
+  // Keep both spellings for clients that adopted the early wizard contract.
+  for (const route of ['/api/projects/new', '/api/projects/create']) {
+    fastify.post(route, async (req: FastifyRequest, reply: FastifyReply) => reply.status(201).send(service.createNewProject(req.body)));
+  }
 
   fastify.get('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };

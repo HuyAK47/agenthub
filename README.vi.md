@@ -52,9 +52,15 @@ sh /tmp/agenthub-install.sh
 
 Script có thể cập nhật/gỡ cài đặt an toàn; dùng `--dry-run` để xem lệnh trước. Dữ liệu `~/.agenthub/` chỉ bị xoá khi chạy `--uninstall --purge` và xác nhận.
 
+### Cài đặt trên macOS
+
+Máy Mac mới không cần cài Node.js, nvm hay Xcode Command Line Tools khi cài từ release. Installer chỉ dùng `curl` và `tar`, tự tải Node.js 22 chính thức đúng kiến trúc (`darwin-arm64` hoặc `darwin-x64`), kiểm tra `SHASUMS256.txt` và lưu runtime riêng tại `~/.agenthub/runtime/node-v22.x`. Linux cũng dùng runtime riêng nếu PATH không có Node 22.
+
+Nếu muốn dùng nvm, chọn rõ bằng `--use-nvm`. Nếu cài từ source gặp lỗi thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại. Các lỗi checksum hoặc archive sai kiến trúc thường được khắc phục bằng cách tải lại release đúng máy.
+
 ### Cài đặt thủ công
 
-Yêu cầu môi trường: **Node.js >= 22** (khuyến nghị thông qua NVM) và **npm**.
+Yêu cầu môi trường: **Node.js >= 22** (hoặc dùng installer release để tự tải) và **npm**.
 
 ```bash
 # Kích hoạt môi trường Node 22
@@ -81,6 +87,9 @@ AgentHub cung cấp bộ lệnh CLI để khởi động daemon, tích hợp cô
 - `agenthub open`: Lấy token xác thực cục bộ và tự động mở Web Dashboard trên trình duyệt mặc định (`http://127.0.0.1:7700/#token=...`). Có thể dùng cờ `--no-browser` để chỉ in URL.
 - `agenthub doctor`: Kiểm tra, chẩn đoán sức khỏe hệ thống và môi trường thực thi (phiên bản Node.js, CLI `agy`, `codex`, git worktree, cổng mạng và tình trạng các tài khoản).
 - `agenthub install-service`: Tạo và kích hoạt systemd user service (`~/.config/systemd/user/agenthub.service`) để daemon tự động chạy nền khi đăng nhập hệ thống (hỗ trợ cờ `--print` để xem trước nội dung file service).
+- `agenthub stop`: Tắt êm AgentHub, đưa task đang chạy về hàng chờ để lần sau tiếp tục.
+- `agenthub stop --disable`: Tắt và không tự bật khi đăng nhập; `agenthub start` bật lại.
+- Đóng tab web chỉ đóng giao diện; `uninstall-service` là gỡ service chứ không phải tắt tạm.
 - `agenthub mcp-install`: Đăng ký AgentHub MCP server với Claude Code ở phạm vi người dùng (`claude mcp add --scope user agenthub ...`), cho phép Claude Code tương tác trực tiếp với AgentHub từ bất kỳ dự án nào (hỗ trợ cờ `--print`).
 - `agenthub link`: Tạo symlink tiện ích tại `~/.local/bin/agenthub` trỏ tới script wrapper, giúp chạy lệnh `agenthub` từ bất kỳ thư mục nào trong terminal.
 

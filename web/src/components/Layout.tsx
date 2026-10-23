@@ -12,6 +12,7 @@ import {
   CheckSquare,
   Users,
   FolderGit2,
+  Building2,
   Settings,
     Wrench,
   Sun,
@@ -115,6 +116,7 @@ export const Layout: React.FC = () => {
     { to: '/savings', label: t('extra.pageSavings'), icon: TrendingUp },
     { to: '/profiles', label: t('common.profiles'), icon: Users },
     { to: '/projects', label: t('common.projects'), icon: FolderGit2 },
+    { to: '/departments', label: t('common.departments'), icon: Building2 },
     { to: '/settings', label: t('common.settings'), icon: Settings },
     { to: '/setup', label: t('setup.navLabel'), icon: Wrench },
   ];
@@ -129,6 +131,7 @@ export const Layout: React.FC = () => {
     if (pathname.startsWith('/tasks')) return t('common.tasks');
     if (pathname.startsWith('/profiles')) return t('common.profiles');
     if (pathname.startsWith('/projects')) return t('common.projects');
+    if (pathname.startsWith('/departments')) return t('common.departments');
     if (pathname.startsWith('/savings')) return t('extra.pageSavings');
     if (pathname.startsWith('/settings')) return t('common.settings');
     if (pathname.startsWith('/setup')) return t('setup.navLabel');

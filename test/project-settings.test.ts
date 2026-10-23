@@ -12,13 +12,21 @@ import {
   parseProjectSettings,
   projectSettings,
 } from '../src/projects/settings.js';
+import { projectWorktreeRoot } from '../src/projects/paths.js';
+import { effectiveBrainEngine } from '../src/brain/engine.js';
 
 describe('project settings parsing', () => {
+  it('resolves project engine before global engine and inherits by default', () => {
+    expect(effectiveBrainEngine(null, { engine: 'codex' })).toBe('codex');
+    expect(effectiveBrainEngine({ settings: JSON.stringify({ brain: { engine: 'claude' } }) }, { engine: 'codex' })).toBe('claude');
+    expect(effectiveBrainEngine({ settings: JSON.stringify({}) }, { engine: 'codex' })).toBe('codex');
+  });
   it('defaults reproduce the behaviour from before settings existed', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
-      brain: { mode: 'inherit', permissions: 'inherit' },
+      brain: { engine: 'inherit', mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
       integration: { enabled: false, autoMerge: false },
+      review: { autoMerge: false },
       ci: {},
       references: [],
       reviewChecklist: [],
@@ -47,7 +55,7 @@ describe('project settings parsing', () => {
       brain: { dailyTokenBudget: 5000 },
       references: [{ name: 'glossary', path: '/data/glossary.md', inject: true }],
     });
-    expect(next.brain).toEqual({ mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
+    expect(next.brain).toEqual({ engine: 'inherit', mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
     expect(next.references).toEqual([{ name: 'glossary', path: '/data/glossary.md', inject: true }]);
     expect(next.worktree).toEqual(DEFAULT_PROJECT_SETTINGS.worktree);
   });
@@ -62,6 +70,20 @@ describe('project settings parsing', () => {
       ci: { branch: 'staging' },
     });
     expect(partial.ci).toEqual({ enabled: true, branch: 'staging' });
+  });
+
+  it('supports an explicit worktree root and keeps the legacy default', () => {
+    const root = path.join(os.tmpdir(), 'agenthub-worktree-root-test');
+    const project = { id: 'demo', path: path.join(root, 'repo'), settings: JSON.stringify({ worktree: { root } }) };
+    expect(projectWorktreeRoot(project, path.join(root, 'hub'))).toBe(root);
+    expect(projectWorktreeRoot({ id: 'demo', path: project.path }, path.join(root, 'hub')))
+      .toBe(path.join(root, 'hub', 'worktrees', 'demo'));
+  });
+
+  it('does not move an unconfigured project based on its mount path', () => {
+    const hub = path.join(os.tmpdir(), 'agenthub-hub');
+    const project = { id: 'mounted', path: '/media/veracrypt8/company/repo' };
+    expect(projectWorktreeRoot(project, hub)).toBe(path.join(hub, 'worktrees', 'mounted'));
   });
 });
 
@@ -138,5 +160,33 @@ describe('project settings through the service', () => {
       path: path.join(tmpDir, 'repo'),
       settings: { reviewChecklist: ['docs/../secret.md'] },
     })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad5',
+      path: path.join(tmpDir, 'repo'),
+      settings: { worktree: { root: path.join(tmpDir, 'missing-root') } },
+    })).toThrow(/không tồn tại/);
+  });
+
+  it('accepts an existing external worktree root', () => {
+    const root = path.join(tmpDir, 'custom-worktrees');
+    fs.mkdirSync(root);
+    const created = ctx.service.createProject({
+      name: 'custom-root',
+      path: path.join(tmpDir, 'repo'),
+      settings: { worktree: { root } },
+    }) as unknown as { settings: { worktree: { root?: string } } };
+    expect(created.settings.worktree.root).toBe(root);
+  });
+
+  it('creates the project-local worktree root used by sensitive projects', () => {
+    const root = path.join(tmpDir, '.agenthub-worktrees');
+    const created = ctx.service.createProject({
+      name: 'sensitive',
+      path: path.join(tmpDir, 'repo'),
+      settings: { worktree: { root, logsInRoot: true } },
+    }) as unknown as { settings: { worktree: { root?: string; logsInRoot?: boolean } } };
+
+    expect(fs.statSync(root).isDirectory()).toBe(true);
+    expect(created.settings.worktree).toMatchObject({ root, logsInRoot: true });
   });
 });

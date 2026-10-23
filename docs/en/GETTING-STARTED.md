@@ -27,7 +27,7 @@ AgentHub runs locally on your machine. It breaks down development tasks and sche
 | **Linux** | Verified on Ubuntu. Leverages `/proc`, `nice`/`ionice`, and systemd user services. |
 | **macOS** | Fully supported: process monitoring via `ps`/`lsof`, priority adjustments via `nice`, default browser launching via `open`, and daemon management via LaunchAgent (`ionice` and systemd are unavailable on macOS). |
 | **Windows** | Not natively supported. Recommended via WSL2 (run AgentHub inside the Linux subsystem). |
-| **Node.js 22** | Recommended via [nvm](https://github.com/nvm-sh/nvm). |
+| **Node.js 22** | Release installer downloads it on macOS/Linux when PATH has no Node; manual setup can use [nvm](https://github.com/nvm-sh/nvm). |
 | **git** | Projects managed by AgentHub must be git repositories. |
 | **At least one Worker CLI** | `agy` (Antigravity CLI with Google authentication) and/or `codex` (Codex CLI with OpenAI authentication). |
 | **Claude Code** | Required to use Claude as the orchestrator Brain (Claude Code extension for VS Code or the `claude` CLI). |
@@ -79,6 +79,8 @@ npm run build:web
 node dist/cli.js link     # Creates the `agenthub` symlink in ~/.local/bin (ensure it is in your PATH)
 agenthub doctor           # Validates Node.js, git, agy, codex, and port 7700 availability
 ```
+
+On macOS, release installation does not require Node, nvm, or Xcode Command Line Tools. The installer downloads the official Node.js 22 archive for `darwin-arm64` or `darwin-x64`, verifies `SHASUMS256.txt`, and stores it at `~/.agenthub/runtime/node-v22.x`. Use `--use-nvm` only when you explicitly want nvm. Common failures are a bad checksum, a wrong OS/architecture archive, or missing `curl`/`tar`; for source installs that report missing Command Line Tools, run `xcode-select --install` and retry.
 
 Data files (SQLite database, auth token, logs, and worktrees) are stored in `~/.agenthub/` by default. You can customize this storage location using the `AGENTHUB_HOME` environment variable.
 
@@ -170,7 +172,9 @@ In AgentHub, a **project** represents a local git repository on your machine. Wh
 
 1. **Prepare the repository**: Clone the repo onto your machine (if not already present). Ensure it is initialized as a git repository with a default branch (such as `main`).
 2. **Register the project in AgentHub**:
-   - **Via Web Dashboard**: Open the **Setup** page and click **"Add project"**, or visit the **Projects** page and click **"Register Project"** (or go directly to `/projects?new=1`). Enter a project name and the absolute path to the repository directory.
+   - **Bring an existing project into the hub**: Open **Projects**, launch the **registration wizard**, choose **Existing repository**, and enter an absolute path. AgentHub inspects branches, lockfiles, hooks, language, guidance files, and previous Claude Code sessions. Review the suggestions before creating; the **Advanced** form remains available for manual settings.
+   - **Create a new project**: In the same wizard, choose **New project**. AgentHub creates the directory, runs `git init`, makes an empty initial commit, and creates the default branch before registering the project.
+   - Always verify the path and base branch. An enabled integration branch is local-only: the hub merges locally and never pushes it automatically.
    - **Or via CLI**:
      ```bash
      agenthub project add <project_name> /absolute/path/to/git/repository

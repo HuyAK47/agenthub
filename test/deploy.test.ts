@@ -634,6 +634,31 @@ describe('DeployService', () => {
     expect(service2.getStatus('demo')?.pushStatus).toMatch(/^push lúc \d\d:\d\d$/);
     service2.stop();
   });
+
+  it('preserves a pending deploy debounce across service restarts', async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    const serviceConfig = { hubHome: f.root, logsDir: path.join(f.root, 'logs'), deploy: { demo: { steps: [['step']], timeoutSec: 2, restartHub: false } } } as never;
+    const projectRepo = { get: () => ({ id: 'demo', path: f.root, defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration } }) }) } as never;
+    const service1 = new DeployService(serviceConfig, projectRepo, deployEventBus(f.events), 10_000, undefined, async () => ({ code: 0, output: '' }));
+
+    service1.schedule('demo', 'pending-commit');
+    service1.stop();
+    expect(fs.existsSync(path.join(f.root, 'deploy-pending-state.json'))).toBe(true);
+
+    let stepRuns = 0;
+    const service2 = new DeployService(serviceConfig, projectRepo, deployEventBus(f.events), 10_000, undefined, async () => {
+      stepRuns++;
+      return { code: 0, output: '' };
+    });
+    service2.start();
+    expect(service2.getStatus('demo')).toMatchObject({ status: 'queued', commit: 'pending-commit' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await service2.waitForQueue();
+    expect(stepRuns).toBe(1);
+    expect(service2.getStatus('demo')).toMatchObject({ status: 'succeeded', commit: 'pending-commit' });
+    service2.stop();
+  });
 });
 
 describe('isRunningHubCheckout', () => {

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { HttpError } from '../errors.js';
 import { projectSettings } from './settings.js';
+import { isProjectWorktreeRootAccessible, projectWorktreeRoot } from './paths.js';
 
 export interface IntegrationStatus {
   path: string;
@@ -45,8 +46,14 @@ export function validateIntegrationBranch(branch: string, defaultBranch: string)
 /**
  * Path to the integration worktree for a project.
  */
-export function getIntegrationPath(hubHome: string, projectId: string): string {
-  return path.join(hubHome, 'integration', projectId);
+export function getIntegrationPath(project: ProjectLike, hubHome: string): string;
+export function getIntegrationPath(hubHome: string, projectId: string): string;
+export function getIntegrationPath(projectOrHubHome: ProjectLike | string, hubHomeOrProjectId: string): string {
+  if (typeof projectOrHubHome === 'string') return path.join(projectOrHubHome, 'integration', hubHomeOrProjectId);
+  if (!projectSettings(projectOrHubHome).worktree.root) {
+    return path.join(hubHomeOrProjectId, 'integration', projectOrHubHome.id);
+  }
+  return path.join(projectWorktreeRoot({ id: projectOrHubHome.id, path: projectOrHubHome.path || hubHomeOrProjectId, settings: projectOrHubHome.settings }, hubHomeOrProjectId), '.integration');
 }
 
 function addExcludeRules(worktreePath: string): void {
@@ -79,9 +86,11 @@ function integrationRoot(hubHome: string): string {
   return path.resolve(hubHome, 'integration');
 }
 
-function isSafeIntegrationPath(worktreePath: string, hubHome: string): boolean {
+function isSafeIntegrationPath(worktreePath: string, hubHome: string, project?: { id: string; path?: string | null; settings?: string | null }): boolean {
   try {
-    const root = fs.realpathSync(integrationRoot(hubHome));
+    const root = fs.realpathSync(project && projectSettings(project).worktree.root
+      ? projectWorktreeRoot({ id: project.id, path: project.path || hubHome, settings: project.settings }, hubHome)
+      : integrationRoot(hubHome));
     const resolved = fs.realpathSync(worktreePath);
     const relative = path.relative(root, resolved);
     return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -146,12 +155,19 @@ export function ensureIntegrationWorktree(project: ProjectLike, hubHome: string)
   }
 
   const settings = projectSettings(project);
+  if (settings.worktree.root && !isProjectWorktreeRootAccessible({
+    id: project.id,
+    path: project.path || hubHome,
+    settings: project.settings,
+  })) {
+    throw new HttpError(503, 'unavailable', `Worktree root không truy cập được: ${settings.worktree.root}`);
+  }
   const branch = settings.integration.branch || 'agenthub/integration';
   const baseRef = settings.integration.baseRef || project.defaultBranch;
 
   validateIntegrationBranch(branch, project.defaultBranch);
 
-  const integrationPath = getIntegrationPath(hubHome, project.id);
+  const integrationPath = getIntegrationPath(project, hubHome);
 
   if (fs.existsSync(integrationPath)) {
     let inside = '';
@@ -236,7 +252,7 @@ export function getIntegrationStatus(project: ProjectLike, hubHome: string): Int
   const settings = projectSettings(project);
   const branch = settings.integration.branch || 'agenthub/integration';
   const baseRef = settings.integration.baseRef || project.defaultBranch;
-  const integrationPath = getIntegrationPath(hubHome, project.id);
+  const integrationPath = getIntegrationPath(project, hubHome);
 
   let exists = false;
   let currentBranchName: string | null = null;
@@ -298,10 +314,10 @@ export function getIntegrationStatus(project: ProjectLike, hubHome: string): Int
 /**
  * Remove integration worktree (without deleting the branch).
  */
-export function removeIntegrationWorktree(project: { id: string; path?: string | null }, hubHome: string): string | null {
-  const integrationPath = getIntegrationPath(hubHome, project.id);
+export function removeIntegrationWorktree(project: { id: string; path?: string | null; settings?: string | null }, hubHome: string): string | null {
+  const integrationPath = getIntegrationPath({ ...project, defaultBranch: '' }, hubHome);
   if (!fs.existsSync(integrationPath)) return null;
-  if (!isSafeIntegrationPath(integrationPath, hubHome)) {
+  if (!isSafeIntegrationPath(integrationPath, hubHome, project)) {
     return `Không thể gỡ worktree tích hợp ${integrationPath}: đường dẫn không an toàn`;
   }
   if (!project.path || !fs.existsSync(project.path)) {
