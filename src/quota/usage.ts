@@ -88,6 +88,7 @@ export interface UsageEventSink {
 
 export class QuotaUsageService {
   private active = 0;
+  private announcedExhausted = new Set<string>();
   private pending = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private isLoggedIn: (profile: ProfileRow) => boolean;
@@ -310,6 +311,10 @@ export class QuotaUsageService {
       if (entry.remainingPct === 0) {
         for (const family of entry.families) {
           this.markForEmail(profile, family, entry.resetAt);
+          // Polls keep seeing 0% until reset; announce each exhausted window once.
+          const key = `${profile.name}|${family}|${entry.resetAt}`;
+          if (this.announcedExhausted.has(key)) continue;
+          this.announcedExhausted.add(key);
           this.eventBus?.emit('quota.exhausted', undefined, { profile: profile.name, family, reason: 'usage' });
         }
       }

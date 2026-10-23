@@ -340,6 +340,30 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(fs.existsSync(path.join(intPath, 'auto.txt'))).toBe(true);
   });
 
+  it('sends an escalated review back once on the strongest model when no auto brain is running', async () => {
+    const repo = path.join(tmpDir, 'esc-repo');
+    initGitRepo(repo, 'main');
+    ctx.service.createProject({ id: 'esc-proj', name: 'Escalation', path: repo, defaultBranch: 'main' });
+    ctx.service.createTask({ project: 'esc-proj', slug: 'feat', title: 'Feature', body: 'Do it', level: 'hard', start: false, modelChain: ['codex:gpt-5.6-luna'] });
+    const id = 'esc-proj/feat';
+    const escalate = () => {
+      ctx.taskRepo.update(id, { status: 'review', reviewerEscalated: 1, reviewerChangesRequested: 2 });
+      ctx.scheduler.getEventBus().emit('review.escalated', id, { actor: 'codex-reviewer', reason: 'reviewer_changes_limit', feedback: 'Còn thiếu test' });
+    };
+
+    escalate();
+    await vi.waitFor(() => expect(ctx.taskRepo.get(id)!.status).not.toBe('review'));
+    const retried = ctx.taskRepo.get(id)!;
+    expect(JSON.parse(retried.modelChain!)).toEqual(['claude-opus-4-6-thinking', 'codex:gpt-5.6-luna']);
+    expect(retried.reviewerEscalated).toBe(0);
+
+    // A second escalation is left for a person.
+    escalate();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ctx.taskRepo.get(id)!.status).toBe('review');
+    expect(ctx.taskRepo.get(id)!.reviewerEscalated).toBe(1);
+  });
+
   it('runs merge-time checks in integration worktree and rolls back on failure', async () => {
     const repo = path.join(tmpDir, 'checks-fail-repo');
     initGitRepo(repo, 'main');
@@ -385,6 +409,14 @@ describe('Integration branch and cross-project dependencies', () => {
     fs.writeFileSync(path.join(t.worktreePath!, '.agenthub', 'DONE'), 'done');
 
     ctx.taskRepo.update('checks-proj/failing-check-task', { status: 'review' });
+    ctx.taskRepo.insert({
+      id: 'checks-proj/failing-check-task-fix-test',
+      projectId: 'checks-proj',
+      slug: 'failing-check-task-fix-test',
+      title: 'Existing test fix',
+      status: 'queued',
+      sourceRef: JSON.stringify({ taskId: t.id, checkName: 'test', excerptHash: 'test' }),
+    });
 
     await expect(ctx.service.reviewTask('checks-proj/failing-check-task', {
       verdict: 'approved',
@@ -397,6 +429,8 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(afterHead).toBe(beforeHead);
     const status = execFileSync('git', ['-C', intPath, 'status', '--porcelain'], { encoding: 'utf8' }).trim();
     expect(status).toBe('');
+    expect(ctx.taskRepo.get('checks-proj/failing-check-task-fix-test')?.status).toBe('queued');
+    expect(ctx.taskRepo.getAll().filter((task) => task.slug.endsWith('-fix-merge'))).toHaveLength(1);
   });
 
   it('rejects invalid branch names and main/master collisions', () => {

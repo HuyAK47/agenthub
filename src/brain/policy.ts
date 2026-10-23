@@ -440,7 +440,7 @@ export function projectBrainPolicy(
 
 export function assistantPolicy(
   project: { id: string; path: string },
-  config: { worktreesDir: string; assistant: Pick<BrainConfig, 'policy'> },
+  config: { worktreesDir: string; assistant: Pick<BrainConfig, 'policy'> & { permissions?: 'guarded' | 'full' } },
 ): BrainPolicy {
   return new BrainPolicy({
     roots: [project.path, path.join(config.worktreesDir, project.id)],
@@ -448,19 +448,19 @@ export function assistantPolicy(
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
     mode: 'auto',
-    denyBashWrites: true,
-    denyToolWrites: true,
+    denyBashWrites: config.assistant.permissions !== 'full',
+    denyToolWrites: config.assistant.permissions !== 'full',
   });
 }
 
-export function globalAssistantPolicy(config: { worktreesDir: string; assistant: Pick<BrainConfig, 'policy'> }): BrainPolicy {
+export function globalAssistantPolicy(config: { worktreesDir: string; assistant: Pick<BrainConfig, 'policy'> & { permissions?: 'guarded' | 'full' } }): BrainPolicy {
   return new BrainPolicy({
     roots: [config.worktreesDir],
     extraPatterns: config.assistant.policy.flatMap((pattern) => {
       try { return [new RegExp(pattern)]; } catch { return []; }
     }),
     mode: 'auto',
-    denyBashWrites: true,
-    denyToolWrites: true,
+    denyBashWrites: config.assistant.permissions !== 'full',
+    denyToolWrites: config.assistant.permissions !== 'full',
   });
 }

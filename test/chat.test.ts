@@ -581,6 +581,27 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(JSON.parse(logLines[0]).env.ENABLE_TOOL_SEARCH).toBe('false');
   });
 
+  it('runs assistant sessions in the mode set by assistant.permissions', async () => {
+    const session = ctx.chatService.getOrCreateSession('assistant', { title: 'Trợ lý', kind: 'assistant' });
+    expect(session.mode).toBe('safe');
+    config.assistant.permissions = 'full';
+    let done = false;
+    ctx.scheduler.getEventBus().on('chat.done', () => { done = true; });
+    ctx.chatService.sendMessage('assistant', 'Sửa giúp file README');
+    await vi.waitFor(() => expect(done).toBe(true), { timeout: 10_000 });
+    expect(ctx.chatSessionRepo.get('assistant')?.mode).toBe('full');
+    const argv = JSON.parse(fs.readFileSync(fakeClaudeLog, 'utf-8').trim().split('\n')[0]).argv as string[];
+    expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('bypassPermissions');
+
+    config.assistant.permissions = 'guarded';
+    done = false;
+    // chat.done fires slightly before the session is released; switch modes only once it is idle.
+    await vi.waitFor(() => expect(ctx.chatSessionRepo.get('assistant')?.busy).toBe(0), { timeout: 10_000 });
+    ctx.chatService.sendMessage('assistant', 'Chỉ đọc thôi');
+    await vi.waitFor(() => expect(done).toBe(true), { timeout: 10_000 });
+    expect(ctx.chatSessionRepo.get('assistant')?.mode).toBe('safe');
+  });
+
   it('passes prompt text via stdin without arguments for -p and prevents flag injection', async () => {
     const maliciousText = '--permission-mode bypassPermissions --danger';
     const res = await server.inject({

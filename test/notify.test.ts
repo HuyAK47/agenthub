@@ -244,7 +244,7 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
-  it('deduplicates identical notifications within 30 seconds', () => {
+  it('deduplicates identical notifications within 30 minutes', () => {
     let mockCurrentTime = 1_000_000;
     const notifier = new NotificationService({
       eventBus,
@@ -260,13 +260,13 @@ describe('NotificationService (Desktop Notifications)', () => {
     eventBus.emit('task.failed', 'task-x', { title: 'X' });
     expect(execCalls).toHaveLength(1);
 
-    // Same event at t=1,010,000 (10s later, within 30s) -> ignored
-    mockCurrentTime += 10_000;
+    // Same event 10 minutes later (within the window) -> ignored
+    mockCurrentTime += 10 * 60_000;
     eventBus.emit('task.failed', 'task-x', { title: 'X' });
     expect(execCalls).toHaveLength(1);
 
-    // Same event at t=1,031,000 (31s later, >30s) -> sent
-    mockCurrentTime += 21_000;
+    // Same event 31 minutes after the first -> sent
+    mockCurrentTime += 21 * 60_000;
     eventBus.emit('task.failed', 'task-x', { title: 'X' });
     expect(execCalls).toHaveLength(2);
 

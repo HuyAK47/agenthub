@@ -46,11 +46,13 @@ import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
 import { SetupManager } from './tools/setup.js';
+import { ClaudeReviewEngine, CLAUDE_REVIEW_ENGINE_KEY } from './engines/claude-review.js';
 import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
 import { PerfCollector } from './perf.js';
+import { pruneNodeModulesCache } from './cache.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -101,6 +103,7 @@ export function createContext(
   engineOverrides?: Map<string, Engine> | CreateContextOptions,
   diskReader?: ((p: string) => DiskSpace) | CreateContextOptions,
 ): DaemonContext {
+  pruneNodeModulesCache(config.cacheDir, { maxEntries: config.cacheMaxEntries, maxBytes: config.cacheMaxGB * 1024 ** 3 });
   let enginesOverride: Map<string, Engine> | undefined;
   let diskFn: ((p: string) => DiskSpace) | undefined;
 
@@ -201,6 +204,7 @@ export function createContext(
     if (codexPath) {
       engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
+    engines.set(CLAUDE_REVIEW_ENGINE_KEY, new ClaudeReviewEngine(config.chat.claudeBin));
   }
 
   const scheduler = new Scheduler(
@@ -310,6 +314,9 @@ export function createContext(
   scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {
     const data = payload && typeof payload === 'object' ? payload as { reviewChainComplete?: unknown } : {};
     if (taskId && data.reviewChainComplete === true) void service.autoMergeReviewedTask(taskId);
+  });
+  scheduler.getEventBus().on('review.escalated', (taskId, payload) => {
+    if (taskId) void service.retryEscalatedReview(taskId, (payload && typeof payload === 'object' ? payload : {}) as { reason?: unknown; feedback?: unknown });
   });
   const perfCollector = new PerfCollector();
   service.setPerfCollector(perfCollector);

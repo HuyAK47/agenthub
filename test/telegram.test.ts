@@ -1072,6 +1072,20 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(calls).toHaveLength(1);
     });
 
+    it('sends an identical notification text at most once per 30 minutes', async () => {
+      const emit = () => ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, { profile: 'g9', family: 'gemini-pro', time: '18:30' });
+      emit();
+      await bot.flushQueue(CHAT_ID);
+      currentTime += 15 * 60_000;
+      emit();
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
+      currentTime += 16 * 60_000;
+      emit();
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(2);
+    });
+
     it('broadcasts quota.exhausted and disk alerts', async () => {
       ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, {
         profile: 'g1',

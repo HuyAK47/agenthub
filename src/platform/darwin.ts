@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import type { PlatformApi, PlatformProcessInfo, ServiceRestartResult, ServiceUninstallResult } from './types.js';
+import type { ServiceInstallResult } from './types.js';
+import { assertServiceWriteAllowed } from './service-safety.js';
 
 function command(args: string[]): string {
   try {
@@ -124,11 +126,11 @@ function openBrowser(url: string, openFn?: (file: string, args: string[], callba
 function shellQuote(value: string): string { return `'${value.replace(/'/g, "'\\''")}'`; }
 function shellWord(value: string): string { return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : shellQuote(value); }
 function launchctlCommand(...args: string[]): string { return [shellWord(process.env.AGENTHUB_LAUNCHCTL || 'launchctl'), ...args.map(shellWord)].join(' '); }
-function installService(opts: { nodePath: string; cliPath: string; currentPath: string; homeDir: string; print: boolean; exec?: (command: string, options: { stdio: 'inherit' }) => void }) {
+function installService(opts: { nodePath: string; cliPath: string; currentPath: string; homeDir: string; print: boolean; exec?: (command: string, options: { stdio: 'inherit' }) => void }): ServiceInstallResult {
   const file = path.join(opts.homeDir, 'Library', 'LaunchAgents', 'dev.agenthub.plist');
   const content = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>dev.agenthub</string><key>ProgramArguments</key><array><string>${opts.nodePath}</string><string>${opts.cliPath}</string><string>daemon</string></array><key>EnvironmentVariables</key><dict><key>PATH</key><string>${opts.currentPath}</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>\n`;
   const activate = launchctlCommand('bootstrap', `gui/${process.getuid?.() ?? ''}`, file);
-  if (!opts.print) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content, 'utf8'); (opts.exec || ((cmd, options) => execFileSync('sh', ['-c', cmd], options)))(activate, { stdio: 'inherit' }); }
+  if (!opts.print) { assertServiceWriteAllowed(file); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content, 'utf8'); (opts.exec || ((cmd, options) => execFileSync('sh', ['-c', cmd], options)))(activate, { stdio: 'inherit' }); }
   return { file, content, activate };
 }
 
@@ -146,6 +148,7 @@ function restartService(opts?: { exec?: (command: string, options?: { stdio?: 'i
 function uninstallService(opts?: { homeDir?: string; exec?: (command: string, options?: { stdio?: 'inherit' | 'pipe' | 'ignore' }) => void }): ServiceUninstallResult {
   const homeDir = opts?.homeDir || os.homedir();
   const file = path.join(homeDir, 'Library', 'LaunchAgents', 'dev.agenthub.plist');
+  assertServiceWriteAllowed(file);
   const uid = process.getuid?.() ?? '';
   const runner = opts?.exec || ((cmd, options) => execFileSync('sh', ['-c', cmd], options));
   try {
