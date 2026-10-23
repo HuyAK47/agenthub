@@ -872,6 +872,8 @@ export const vi = {
     integrationStatus: 'Trạng thái tích hợp',
     integrationAhead: '{count} commit phía trước',
     integrationBehind: '{count} commit phía sau',
+    activeTasks: 'Task đang hoạt động',
+    viewTasks: 'Xem task',
     integrationWorktreeCreated: 'Worktree tích hợp đã tạo',
     emptyTitle: 'Bắt đầu với Project đầu tiên',
     emptyDesc: 'Project là một repo git trên máy này; worker làm việc trong worktree riêng (nhánh agenthub/<slug>), không đụng thư mục bạn đang code.',

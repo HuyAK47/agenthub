@@ -873,6 +873,8 @@ export const en: typeof vi = {
     integrationStatus: 'Integration status',
     integrationAhead: '{count} commits ahead',
     integrationBehind: '{count} commits behind',
+    activeTasks: 'Active tasks',
+    viewTasks: 'View tasks',
     integrationWorktreeCreated: 'Integration worktree created',
     emptyTitle: 'Get started with your first project',
     emptyDesc: 'A project is a git repository on this machine; workers operate in isolated worktrees (branch agenthub/<slug>) without touching your working directory.',
