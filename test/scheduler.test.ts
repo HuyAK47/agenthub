@@ -781,6 +781,18 @@ describe('Codex reviewer failover lifecycle', () => {
     scheduler.stop();
   });
 
+  it('does not start a reviewer with a logged-out Codex profile', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    profileRepo.update('codex-1', { authState: 'not_logged_in' });
+    profileRepo.upsert({ name: 'codex-2', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1, authState: 'ok' });
+
+    scheduler.tick();
+
+    const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
+    expect(reviewer?.profileName).toBe('codex-2');
+    scheduler.stop();
+  });
+
   function withClaudeReviewer(scheduler: Scheduler) {
     profileRepo.upsert({ name: 'claude-1', engine: 'claude', kind: 'isolated', home: path.join(tmpDir, 'claude-1'), email: null, enabled: 1 });
     const claude = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
