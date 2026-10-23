@@ -41,6 +41,7 @@ import { Profile } from '../types/api';
 import { formatReset, formatTimeTitle } from '../lib/time';
 import { useTour } from '../components/tour/TourContext';
 import { AgentIcon } from '../components/AgentIcon';
+import { UI_Z_INDEX } from '../components/ui/layers';
 
 const LoginTerminal = lazy(() => import('../components/LoginTerminal').then((m) => ({ default: m.LoginTerminal })));
 
@@ -652,7 +653,8 @@ function ProfileCard({
           {menu === profile.name && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="absolute right-0 top-10 z-20 w-44 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-1 shadow-xl"
+              className="absolute right-0 top-10 w-44 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-1 shadow-xl"
+              style={{ zIndex: UI_Z_INDEX.popover }}
             >
               <button
                 type="button"
@@ -738,10 +740,11 @@ function ProfileCard({
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <StatusBadge profile={profile} />
         {profile.duplicateWarning && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[10px] font-semibold text-[var(--t-crit)]">
+          <span title={t('profiles.duplicateTip')} className="inline-flex items-center gap-1 rounded-full border border-[var(--t-crit)] px-2 py-0.5 text-[10px] font-semibold text-[var(--t-crit)]">
             <AlertTriangle className="h-3 w-3" />
-            {t('profiles.duplicateEmail')}
-            {profile.duplicateEmailWith?.length ? `: ${profile.duplicateEmailWith.join(', ')}` : ''}
+            {profile.duplicateEmailWith?.length
+              ? t('profiles.duplicateEmail', { emails: profile.duplicateEmailWith.join(', ') })
+              : t('profiles.duplicateEmailNoProfiles')}
           </span>
         )}
         <span className="text-[11px] text-[var(--t-text-3)]">{t('profiles.priority', { value: profile.priority ?? 0 })}</span>
@@ -921,7 +924,12 @@ function Modal({
 }) {
   const { t } = useLocale();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div
+      className="fixed inset-0 flex items-center justify-center bg-black/60 p-4"
+      style={{ zIndex: UI_Z_INDEX.modal }}
+      role="dialog"
+      aria-modal="true"
+    >
       <div className={`w-full ${maxWidth} rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
@@ -935,7 +943,7 @@ function Modal({
   );
 }
 
-function AddProfileModal({
+export function AddProfileModal({
   onClose,
   onCreated,
   onImported,
@@ -1040,6 +1048,7 @@ function AddProfileModal({
         <label className="block text-sm">
           {t('profiles.provider')}
           <select
+            data-tour="account-provider"
             value={engine}
             onChange={(e) => {
               const next = e.target.value as Provider;
@@ -1065,17 +1074,17 @@ function AddProfileModal({
             <span className="block text-xs font-medium text-[var(--t-text-3)] mb-1.5">
               {t('profiles.authMethod')}
             </span>
-            <div className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--t-border)] p-1 bg-[var(--t-surface-2)]">
+            <div data-tour="account-login-method" className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--t-border)] p-1 bg-[var(--t-surface-2)]">
               <button
                 type="button"
                 onClick={() => {
                   setMethod('terminal');
                   setCockpitError('');
                 }}
-                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                className={`rounded-md py-1.5 text-center text-xs font-semibold transition-all cursor-pointer ${
                   method === 'terminal'
-                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
-                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] border border-[var(--t-border)] shadow-xs'
+                    : 'text-[var(--t-text-2)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] border border-transparent'
                 }`}
               >
                 {t('profiles.tabTerminalLogin')}
@@ -1086,10 +1095,10 @@ function AddProfileModal({
                   setMethod('cockpit');
                   setError('');
                 }}
-                className={`rounded-md py-1.5 text-center text-xs font-medium transition-all ${
+                className={`rounded-md py-1.5 text-center text-xs font-semibold transition-all cursor-pointer ${
                   method === 'cockpit'
-                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-sm font-semibold'
-                    : 'text-[var(--t-text-3)] hover:text-[var(--t-text)]'
+                    ? 'bg-[var(--t-surface)] text-[var(--t-text)] border border-[var(--t-border)] shadow-xs'
+                    : 'text-[var(--t-text-2)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] border border-transparent'
                 }`}
               >
                 {t(engine === 'codex' ? 'profiles.tabImportCodex' : 'profiles.tabImportCockpit')}
@@ -1108,7 +1117,7 @@ function AddProfileModal({
                 {error}
               </p>
             )}
-            <label className="block text-sm">
+            <label data-tour="account-name" className="block text-sm">
               {t('profiles.accountName')}
               <input
                 autoFocus
@@ -1211,6 +1220,7 @@ function AddProfileModal({
                 <label className="block text-sm">
                   {t('profiles.cockpitJsonLabel')}
                   <textarea
+                    data-tour="account-token"
                     autoFocus
                     spellCheck={false}
                     autoComplete="off"
@@ -1536,7 +1546,7 @@ function LoginWizard({
       ? 'Claude'
       : 'Antigravity';
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3">
+    <div className="fixed inset-0 flex items-center justify-center bg-black/75 p-3" style={{ zIndex: UI_Z_INDEX.modal }}>
       <div className="flex h-[90vh] w-[96vw] max-w-[1400px] flex-col overflow-hidden rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-2xl">
         <div className="border-b border-[var(--t-border)] p-4">
           <h2 className="text-lg font-semibold">

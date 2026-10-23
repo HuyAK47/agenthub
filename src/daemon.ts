@@ -4,6 +4,7 @@ import { AgentHubConfig, DEFAULT_QUOTA_LOW_PCT } from './config.js';
 import {
   openDatabase,
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   TaskRepo,
@@ -45,12 +46,16 @@ import { PermissionBroker } from './chat/permissions.js';
 import { findClaudeBin } from './chat/claude.js';
 import { stopProcessGroups } from './priority.js';
 import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { SetupManager } from './tools/setup.js';
+import { ClaudeReviewEngine, CLAUDE_REVIEW_ENGINE_KEY } from './engines/claude-review.js';
 import { BrainPolicy, projectBrainPolicy, assistantPolicy, globalAssistantPolicy } from './brain/policy.js';
 import { BrainRunner } from './brain/runner.js';
 import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
 import { PerfCollector } from './perf.js';
+import { pruneNodeModulesCache } from './cache.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -101,6 +106,7 @@ export function createContext(
   engineOverrides?: Map<string, Engine> | CreateContextOptions,
   diskReader?: ((p: string) => DiskSpace) | CreateContextOptions,
 ): DaemonContext {
+  pruneNodeModulesCache(config.cacheDir, { maxEntries: config.cacheMaxEntries, maxBytes: config.cacheMaxGB * 1024 ** 3 });
   let enginesOverride: Map<string, Engine> | undefined;
   let diskFn: ((p: string) => DiskSpace) | undefined;
 
@@ -117,6 +123,7 @@ export function createContext(
   }
   const db = openDatabase(config.dbPath);
   const projectRepo = new ProjectRepo(db);
+  const departmentRepo = new DepartmentRepo(db);
   const profileRepo = new ProfileRepo(db);
   const quotaMarkRepo = new QuotaMarkRepo(db);
   const taskRepo = new TaskRepo(db);
@@ -201,6 +208,7 @@ export function createContext(
     if (codexPath) {
       engines.set('codex', new CodexEngine(codexPath, config.workers?.codexSandbox || 'off'));
     }
+    engines.set(CLAUDE_REVIEW_ENGINE_KEY, new ClaudeReviewEngine(config.chat.claudeBin));
   }
 
   const scheduler = new Scheduler(
@@ -218,6 +226,7 @@ export function createContext(
     runMetricsRepo,
     knowledgeRepo,
     diskFn ? { diskSpace: diskFn } : undefined,
+    departmentRepo,
   );
   usageService.setEventBus(scheduler.getEventBus());
   usageService.setQuotaLowThreshold(() => config.notifications?.quotaLowPct ?? DEFAULT_QUOTA_LOW_PCT);
@@ -305,8 +314,16 @@ export function createContext(
     setupManager,
     brainRunner,
     directiveRepo,
+    departmentRepo,
   );
   service.deployService = deployService;
+  scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {
+    const data = payload && typeof payload === 'object' ? payload as { reviewChainComplete?: unknown } : {};
+    if (taskId && data.reviewChainComplete === true) void service.autoMergeReviewedTask(taskId);
+  });
+  scheduler.getEventBus().on('review.escalated', (taskId, payload) => {
+    if (taskId) void service.retryEscalatedReview(taskId, (payload && typeof payload === 'object' ? payload : {}) as { reason?: unknown; feedback?: unknown });
+  });
   const perfCollector = new PerfCollector();
   service.setPerfCollector(perfCollector);
 
@@ -469,6 +486,7 @@ export async function startDaemon(
 
   // Start scheduler
   ctx.scheduler.start();
+  void ctx.service.retryParkedEscalations();
 
   // Start notification service and claude transcript scanner
   ctx.notifier.start();
@@ -484,7 +502,22 @@ export async function startDaemon(
   }
 
   // Start Fastify HTTP server with security and API endpoints
-  const fastify = await createServer(ctx.service, config);
+  const fastify = await createServer(ctx.service, config, {
+    onShutdown: (disable) => {
+      if (disable) {
+        try {
+          const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL_BIN || process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+          const args = process.platform === 'darwin'
+            ? ['unload', path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.agenthub.plist')]
+            : ['--user', 'disable', 'agenthub'];
+          execFileSync(command, args, { stdio: 'ignore' });
+        } catch {
+          // The CLI reports service-manager errors; the daemon must still exit cleanly.
+        }
+      }
+      setImmediate(() => { void shutdown(); });
+    },
+  });
 
   const port = config.port;
   try {

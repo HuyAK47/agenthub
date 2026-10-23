@@ -13,10 +13,11 @@ describe('worker service guard', () => {
     fs.mkdirSync(bin);
     const real = path.join(bin, 'systemctl');
     fs.writeFileSync(real, '#!/bin/sh\nprintf "real:%s\\n" "$*"\n', { mode: 0o700 });
-    const env = workerEnvironment(hub, { PATH: bin });
+    const env = workerEnvironment(hub, { PATH: bin, HOME: os.userInfo().homedir });
     const shim = path.join(hub, 'shims', 'service', 'systemctl');
     expect(() => execFileSync(shim, ['--user', 'stop', 'agenthub'], { env, encoding: 'utf8', stdio: 'pipe' })).toThrow(WORKER_SERVICE_MESSAGE);
     expect(execFileSync(shim, ['--user', 'status', 'foo'], { env, encoding: 'utf8' })).toContain('real:--user status foo');
+    expect(() => execFileSync(shim, ['--user', 'daemon-reload', path.join(os.userInfo().homedir, '.config/systemd/user/agenthub.service'), 'agenthub'], { env, encoding: 'utf8', stdio: 'pipe' })).toThrow(WORKER_SERVICE_MESSAGE);
     expect(() => execFileSync('systemctl', ['--user', 'stop', 'agenthub'], { env, encoding: 'utf8', stdio: 'pipe' })).toThrow(WORKER_SERVICE_MESSAGE);
     expect(execFileSync('systemctl', ['--user', 'status', 'foo'], { env, encoding: 'utf8' })).toContain('real:--user status foo');
     fs.rmSync(root, { recursive: true, force: true });

@@ -450,6 +450,17 @@ export class ChatService {
     this.claudeBinOverride = bin;
   }
 
+  getRunningPids(): number[] {
+    const pids: number[] = [];
+    for (const turn of this.runningTurns.values()) {
+      if (turn.child.pid) pids.push(turn.child.pid);
+    }
+    for (const proc of this.persistentProcesses.values()) {
+      if (proc.child.pid) pids.push(proc.child.pid);
+    }
+    return pids;
+  }
+
   stop(): void {
     for (const turn of this.runningTurns.values()) {
       clearTimeout(turn.timeoutTimer);
@@ -641,7 +652,8 @@ export class ChatService {
     kind?: 'chat' | 'brain' | 'assistant';
   }): { mode: 'safe' | 'full'; model: string } {
     const mode = body.mode || 'safe';
-    if (mode === 'full' && body.kind !== 'brain' && this.config.chat?.allowFullMode !== true) {
+    const fullAllowed = body.kind === 'brain' || (body.kind === 'assistant' && this.config.assistant?.permissions === 'full') || this.config.chat?.allowFullMode === true;
+    if (mode === 'full' && !fullAllowed) {
       throw new HttpError(403, 'forbidden', 'Chế độ full chưa được cho phép trong cấu hình');
     }
     const model = body.model ?? this.config.chat.model;
@@ -833,9 +845,14 @@ export class ChatService {
       throw new HttpError(400, 'bad_request', 'Nội dung tin nhắn tối đa 20.000 ký tự');
     }
 
-    const session = this.chatSessionRepo.get(sessionId);
+    let session = this.chatSessionRepo.get(sessionId);
     if (!session) {
       throw new HttpError(404, 'not_found', `Phiên trò chuyện "${sessionId}" không tồn tại`);
+    }
+    if (session.kind === 'assistant' && session.busy !== 1 && !this.runningTurns.has(sessionId)) {
+      // Follow assistant.permissions on every message, so a config change applies without new sessions.
+      const wanted = this.config.assistant?.permissions === 'full' ? 'full' : 'safe';
+      if (session.mode !== wanted) session = this.setSessionMode(sessionId, wanted);
     }
     if (opts.telegramChatId !== undefined) this.setTelegramChat(sessionId, opts.telegramChatId);
 

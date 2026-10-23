@@ -6,6 +6,7 @@ export const vi = {
     projects: 'Project',
     plans: 'Kế hoạch',
     settings: 'Cài đặt',
+    departments: 'Phòng ban',
     toggleTheme: 'Chuyển chế độ sáng/tối',
     language: 'Ngôn ngữ',
     switchLanguage: 'Đổi ngôn ngữ sang tiếng Anh',
@@ -255,6 +256,7 @@ export const vi = {
     btnRetry: 'Thử lại',
     btnReview: 'Duyệt',
     btnMerge: 'Duyệt & merge',
+    mergeSettingsLink: 'Mở cài đặt Integration',
     btnRequestChanges: 'Yêu cầu sửa',
     btnDeleteWorktree: 'Xóa worktree',
     noLog: 'Chưa có log từ worker...',
@@ -309,6 +311,9 @@ export const vi = {
     retryWithModel: 'Chạy lại bằng model khác',
     modelWarningTitle: 'Cảnh báo chuỗi model',
     modelWarningItem: 'Model "{model}" không thuộc engine đã cấu hình và sẽ bị bỏ qua.',
+    timeline: 'Dòng thời gian (Timeline)',
+    noEvents: 'Chưa có sự kiện nào.',
+    reviewFallbackLine: 'Codex hết quota, Claude đang duyệt ({profile})',
   },
   profiles: {
     antigravitySubtitle: 'Tài khoản Google và quota Gemini', codexSubtitle: 'Tài khoản ChatGPT và device auth', claudeSubtitle: 'Tài khoản Claude Code',
@@ -374,6 +379,7 @@ export const vi = {
     needsLogin: 'Cần đăng nhập lại',
     loginNow: 'Đăng nhập ngay',
     duplicateEmail: 'Trùng email với: {emails}',
+    duplicateEmailNoProfiles: 'Trùng email với hồ sơ khác',
     duplicateTip: 'Gợi ý: Bấm đăng nhập lại bằng tài khoản Google khác!',
     ready: 'Sẵn sàng',
     clearQuota: 'Xóa',
@@ -761,48 +767,80 @@ export const vi = {
     }
   },
   "modal-add-account": {
-    "modal": {
-      "title": "Thêm tài khoản",
-      "content": "Đây là hộp thoại thêm hồ sơ nhà cung cấp. Dùng để thêm quota hoặc dự phòng. Bấm chọn nhà cung cấp rồi chọn Terminal hoặc Refresh Token; token là bí mật và không nên dán vào nơi khác."
+    "provider": {
+      "title": "Nhà cung cấp và loại tài khoản",
+      "content": "Đây là nơi chọn Antigravity, Codex hoặc Claude và loại cá nhân, Team hay API. Dùng đúng nhà cung cấp để quota và quyền được tính đúng; bấm chọn để đổi luồng đăng nhập."
+    },
+    "login-method": {
+      "title": "Cách đăng nhập",
+      "content": "Terminal mở luồng đăng nhập tương tác và phù hợp khi có trình duyệt; Refresh Token dùng token đã lấy từ phiên nhà cung cấp. Bấm phương thức để đổi cách xác thực; không chia sẻ token."
+    },
+    "account-name": {
+      "title": "Tên tài khoản",
+      "content": "Đây là tên cục bộ của hồ sơ, không phải token bí mật. Dùng tên dễ nhận biết như work-gemini hoặc team-codex; bấm Tạo để chuẩn bị hồ sơ cho đăng nhập và theo dõi quota."
+    },
+    "token": {
+      "title": "Refresh Token",
+      "content": "Trường này nhận refresh token khi không dùng Terminal. Dùng token lấy từ trang/CLI xác thực chính thức của nhà cung cấp; bấm Tạo để lưu hồ sơ. Token là bí mật và nhiều hồ sơ cùng email vẫn dùng chung quota."
     }
   },
   "modal-register-project": {
-    "modal": {
-      "title": "Đăng ký dự án",
-      "content": "Đây là hộp thoại đăng ký project. Dùng để khai báo đường dẫn, nhánh mặc định và giới hạn song song. Bấm Nâng cao để mở chính sách; đường dẫn sai có thể làm worker sửa nhầm repo."
+    "path": {
+      "title": "Đường dẫn project",
+      "content": "Đây là thư mục repository mà worker được phép làm việc. Dùng đường dẫn tuyệt đối tới đúng repo; bấm Đăng ký để lưu. Đường dẫn sai có thể làm worker sửa nhầm mã nguồn."
+    },
+    "branch": {
+      "title": "Nhánh mặc định",
+      "content": "Đây là nhánh gốc để tạo worktree và so sánh thay đổi. Dùng main hoặc nhánh tích hợp thật của repo; đổi nhánh ảnh hưởng task tạo sau đó."
+    },
+    "advanced": {
+      "title": "Nâng cao và song song",
+      "content": "Phần Nâng cao chứa giới hạn chạy cùng lúc, worktree, checks và biến môi trường. Mở khi cần chính sách riêng; tăng song song có thể làm máy quá tải."
     }
   },
   "modal-create-task": {
-    "modal": {
-      "title": "Tạo task",
-      "content": "Đây là hộp thoại tạo task. Dùng để mô tả mục tiêu, độ khó, chuỗi model và phụ thuộc. Bấm Tạo để xếp hàng; chọn model khó trước sẽ tốn quota hơn."
+    "task": {
+      "title": "Mục tiêu task",
+      "content": "Đây là mô tả việc worker cần làm trong project đã chọn. Viết mục tiêu và tiêu chí rõ ràng để worker tạo diff kiểm chứng được; bấm Tạo để xếp task vào hàng đợi."
+    },
+    "difficulty": {
+      "title": "Độ khó và chuỗi model",
+      "content": "Độ khó chọn chuỗi model khó hoặc dễ; chuỗi được thử từ đầu đến cuối. Dùng hard cho thay đổi phức tạp, easy cho việc nhỏ; model đầu tiên dùng quota trước."
+    },
+    "dependencies": {
+      "title": "Phụ thuộc",
+      "content": "Phụ thuộc buộc task chờ các task được chọn hoàn tất. Dùng khi task sau cần đầu ra của task trước; bấm chọn để liên kết. Tránh tạo vòng phụ thuộc vì task sẽ không chạy."
     }
   },
   "modal-new-session": {
-    "modal": {
-      "title": "Phiên chat mới",
-      "content": "Đây là hộp thoại tạo phiên chat. Dùng để chọn project và chế độ safe/full. Bấm Tạo phiên để lưu ngữ cảnh; full cho phép tác động rộng hơn và cần thận trọng."
+    "project": {
+      "title": "Project của phiên",
+      "content": "Đây là project cung cấp thư mục và chính sách cho phiên chat. Chọn project khi muốn Trợ lý hiểu đúng repo; bấm Tạo phiên để lưu ngữ cảnh mới."
+    },
+    "mode": {
+      "title": "Chế độ safe/full",
+      "content": "Safe yêu cầu kiểm soát trước các thao tác nhạy cảm; Full cho phép tác động rộng hơn. Dùng Safe mặc định và chỉ chọn Full khi tin cậy repo, vì lệnh hoặc file có thể bị thay đổi trực tiếp."
     }
   },
   "modal-full-permission": {
-    "modal": {
+    "confirm": {
       "title": "Xác nhận toàn quyền",
-      "content": "Đây là hộp thoại cảnh báo quyền full. Dùng khi bạn hiểu lệnh và thư mục worker sẽ chạm tới. Bấm Xác nhận chỉ khi cần; quyền này có thể sửa file hoặc chạy lệnh nguy hiểm."
-    }
-  },
-  "modal-delete-project": {
-    "modal": {
-      "title": "Xoá dự án",
-      "content": "Đây là hộp thoại xác nhận xoá project. Dùng để bỏ cấu hình không còn cần. Bấm Xoá sẽ loại project khỏi hub; kiểm tra task và worktree trước vì thao tác có thể khó hoàn tác."
+      "content": "Đây là cảnh báo trước khi cho phép thao tác không cần hỏi lại. Chỉ xác nhận khi hiểu lệnh, thư mục và rủi ro; quyền full có thể sửa file hoặc chạy lệnh nguy hiểm.",
+      "note": "Hộp thoại xác nhận gốc của trình duyệt không có phần tử DOM ổn định; tour sẽ bỏ qua bước này nếu không thể đánh dấu."
     }
   }
 } },
   checklist: { title: 'Bắt đầu với AgentHub', subtitle: 'Hoàn thành vài bước để bắt đầu làm việc.', hide: 'Ẩn danh sách', cli: 'Cài CLI', account: 'Đăng nhập tài khoản worker', project: 'Thêm project', telegram: 'Kết nối Telegram', task: 'Giao task đầu tiên' },
+  usageModes: { title: 'Chọn cách dùng', subtitle: 'Chọn cách điều phối phù hợp với thói quen làm việc của bạn.', copy: 'Copy', copied: 'Đã copy', copyCommand: 'Copy lệnh mcp-install', docs: 'Đọc hướng dẫn đầy đủ', hub: { title: 'A — Hub độc lập', summary: 'Giao việc và theo dõi trên Web hoặc Telegram.', when: 'Chọn khi muốn AgentHub tự lập kế hoạch và điều phối worker, không cần mở IDE.', step1: 'Cài CLI claude, đăng nhập profile/tài khoản và bảo đảm còn quota; đồng thời đăng nhập ít nhất một tài khoản worker và đăng ký project.', step2: 'Để brain.mode là auto hoặc suggest, rồi giao task từ Chat/Web hoặc Telegram.', step3: 'Theo dõi task, review và merge/deploy trên Dashboard hoặc Telegram.', brainLink: 'Cài đặt bộ não', telegramLink: 'Cài đặt Telegram' }, mcp: { title: 'B — Dùng qua MCP', summary: 'Claude Code lập kế hoạch và review qua các tool hub_*.', when: 'Chọn khi Claude Code trong VS Code hoặc terminal là nơi bạn muốn lập kế hoạch và review.', step1: 'Cài CLI claude, đăng nhập và bảo đảm còn quota; AgentHub daemon cũng phải đang chạy.', step2: 'Chạy agenthub mcp-install, sau đó chọn project và đặt brain.mode = external.', step3: 'Dùng Claude Code để gọi hub_* giao việc, theo dõi, review và merge/deploy.' } },
   setup: {
     navLabel: 'Thiết lập', loading: 'Đang kiểm tra môi trường…', title: 'Bắt đầu với AgentHub', subtitle: 'Chuẩn bị các công cụ cần thiết để bạn có thể dùng ngay.',
     progress: 'Tiến độ sẵn sàng', progressSummary: '{ready}/{total} mục đã sẵn sàng',
     node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Service nền', mcp: 'Đăng ký MCP với Claude Code', accounts: 'Đăng nhập tài khoản', account: 'Tài khoản {name}', login: 'Đăng nhập trong Profiles', needsCheck: 'Cần kiểm tra', manualGuide: 'Hướng dẫn', install: 'Cài đặt', installAll: 'Cài tất cả công cụ còn thiếu', installing: 'Đang cài đặt…', log: 'Xem log', complete: 'Hoàn tất', skip: 'Bỏ qua, làm sau', done: 'Đã hoàn tất', notDone: 'Cần làm', running: 'Đang chạy', installFailed: 'Cài đặt thất bại',
     firstProject: 'Thêm dự án đầu tiên', addProject: 'Thêm dự án',
+  },
+  departments: {
+    title: 'Phòng ban', subtitle: 'Gom project, tài khoản và giới hạn chạy theo phòng ban.',
+    create: 'Tạo phòng ban', name: 'Tên phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.',
   },
   projects: {
     title: 'Quản lý Project',
@@ -827,6 +865,10 @@ export const vi = {
     loadError: 'Không thể tải danh sách project.',
     empty: 'Chưa có project nào được đăng ký.',
     confirmDelete: 'Bạn có chắc muốn xóa project "{name}"?',
+    archiveConfirm: 'Ẩn dự án "{name}"? Dữ liệu và lịch sử sẽ được giữ lại. Bấm Hủy để chọn xóa vĩnh viễn.',
+    purgeConfirm: 'Xóa vĩnh viễn? Hãy gõ đúng ID dự án: {id}',
+    archivedTitle: 'Dự án đã ẩn',
+    restore: 'Khôi phục',
     defaultBranchText: 'Nhánh mặc định: ',
     maxParallelText: 'Tối đa song song: ',
     invalidChecks: 'Checks không hợp lệ: {error}',
@@ -847,12 +889,13 @@ export const vi = {
     maxParallelHint: 'Số lượng task tối đa chạy song song trên project này',
     advanced: 'Nâng cao',
     envHint: 'Tuỳ chọn, ví dụ cổng/DB riêng cho mỗi worktree với {slot}',
-    checksHint: 'Các lệnh kiểm tra tự động trước khi review (JSON array)',
+    checksHint: 'Các lệnh kiểm tra tự động trước khi review (JSON array)', checksInfo: 'Dùng mảng [{"name":"test","cmd":["npm","test"],"timeoutSec":600}]. Để trống để hub tự phát hiện từ package.json.', envInfo: 'Biến JSON được cấp cho worktree, ví dụ PORT hoặc DATABASE_URL; chỉ inject bí mật khi thật sự cần.', integrationInfo: 'Nhánh tích hợp nhận các thay đổi đã merge để chạy kiểm tra end-to-end.', referencesInfo: 'Inject đưa tài liệu tham chiếu vào ngữ cảnh worker; không dùng file chứa bí mật.', permissionsInfo: 'Quyền quyết định worker được đọc, sửa file và chạy lệnh đến mức nào; full cần repository tin cậy.',
     hooksHint: 'Lệnh chạy sau khi xoá worktree (tuỳ chọn)',
     brainPermissions: 'Quyền của bộ não', brainPermissionInherit: 'Kế thừa toàn cục', brainPermissionStandard: 'Tiêu chuẩn', brainPermissionTrusted: 'Tin cậy', brainPermissionFull: 'Toàn quyền', brainPermissionDescinherit: 'Dùng mặc định toàn cục.', brainPermissionDescstandard: 'Đọc an toàn và lệnh đã duyệt.', brainPermissionDesctrusted: 'Được sửa và chạy lệnh trong dự án.', brainPermissionDescfull: 'Không hỏi quyền; dùng thận trọng.',
-    settings: 'Cài đặt', saveSettings: 'Lưu cài đặt', saveSettingsError: 'Không thể lưu cài đặt dự án', settingsPartialHint: 'Thay đổi được gửi theo từng phần settings của project.', brainMode: 'Bộ não', brainInherit: 'Kế thừa toàn cục', brainOff: 'Tắt', brainSuggest: 'Gợi ý', brainAuto: 'Tự động', brainExternal: 'Claude ngoài (VS Code) điều phối', brainDescinherit: 'Dùng cấu hình toàn cục.', brainDescoff: 'Không điều phối tự động.', brainDescsuggest: 'Chỉ gợi ý khi cần.', brainDescauto: 'Tự động lập kế hoạch và giao việc.', brainDescexternal: 'Claude ngoài (VS Code) điều phối.', dailyTokenBudget: 'Ngân sách token/ngày', maxTurnsPerHour: 'Lượt tối đa/giờ', worktreeInstall: 'Cài phụ thuộc', worktreeAuto: 'Tự động', worktreeSkip: 'Không cài', gitHooks: 'Git hooks', gitHooksRun: 'Chạy', gitHooksSkip: 'Bỏ qua', integrationEnabled: 'Bật nhánh tích hợp', integrationBaseRef: 'Nhánh gốc', references: 'Tham chiếu chỉ đọc', addReference: 'Thêm', referenceName: 'Tên', referencePath: 'Đường dẫn', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Đầy đủ', telegramMinimal: 'Tối giản',
+    settings: 'Cài đặt', saveSettings: 'Lưu cài đặt', saveSettingsError: 'Không thể lưu cài đặt dự án', settingsPartialHint: 'Thay đổi được gửi theo từng phần settings của project.', brainMode: 'Bộ não', brainInherit: 'Kế thừa toàn cục', brainOff: 'Tắt', brainSuggest: 'Gợi ý', brainAuto: 'Tự động', brainExternal: 'Claude ngoài (VS Code) điều phối', brainDescinherit: 'Dùng cấu hình toàn cục.', brainDescoff: 'Không điều phối tự động.', brainDescsuggest: 'Chỉ gợi ý khi cần.', brainDescauto: 'Tự động lập kế hoạch và giao việc.', brainDescexternal: 'Claude ngoài (VS Code) điều phối.', dailyTokenBudget: 'Ngân sách token/ngày', maxTurnsPerHour: 'Lượt tối đa/giờ', worktreeInstall: 'Cài phụ thuộc', worktreeAuto: 'Tự động', worktreeSkip: 'Không cài', gitHooks: 'Git hooks', gitHooksRun: 'Chạy', gitHooksSkip: 'Bỏ qua', integrationEnabled: 'Bật nhánh tích hợp', integrationAutoMerge: 'Tự merge và deploy khi Codex duyệt đạt', integrationBaseRef: 'Nhánh gốc', references: 'Tham chiếu chỉ đọc', addReference: 'Thêm', referenceName: 'Tên', referencePath: 'Đường dẫn', inject: 'Inject', telegramContent: 'Telegram', telegramFull: 'Đầy đủ', telegramMinimal: 'Tối giản',
     ciLabel: 'Theo dõi CI GitHub Actions', ciEnabled: 'Bật theo dõi CI', ciBranch: 'Nhánh theo dõi CI', ciStatusPassed: 'CI: Thành công', ciStatusFailed: 'CI: Thất bại', ciStatusRunning: 'CI: Đang chạy', ciViewRun: 'Xem run trên GitHub', ciNoRun: 'Chưa có run',
     knowledgeChecklistTitle: 'Kiến thức & checklist', knowledgeChecklistHint: 'Chọn tối đa 5 đường dẫn, mỗi file tối đa 64KB. Bộ não bắt buộc đối chiếu khi duyệt.', knowledgeChecklistPlaceholder: 'docs/review-checklist.md\\ntests/common-mistakes.md', reviewChecklistLabel: 'Checklist khi duyệt', checklistUnreadable: 'không đọc được', checklistTooLarge: 'Cảnh báo: file vượt 64KB, nội dung không được inject.', suggestAutomaticChecks: 'Gợi ý chuyển thành kiểm tra tự động', draftChecksCreated: 'Đã tạo task nháp gợi ý kiểm tra tự động.',
+    worktreeRoot: 'Thư mục worktree', worktreeRootPlaceholder: '/đường/dẫn/tuyệt/đối', worktreeRootDesc: 'Root cấu hình phải là thư mục riêng cho dự án này, không dùng chung với dự án khác. Mỗi task sẽ tạo tại <root>/<slug>, worktree tích hợp tại <root>/.integration. Thư mục phải tồn tại và ghi được.', worktreeLogsInRoot: 'Lưu log task trong thư mục này/.logs',
     sectionBrainTitle: 'Bộ não',
     sectionBrainDesc: 'Cấu hình quyền tự động và giới hạn quota của Claude đối với dự án.',
     sectionWorktreeTitle: 'Worktree',
@@ -935,6 +978,7 @@ export const vi = {
   },
   settings: {
     title: 'Cài đặt hệ thống',
+    shutdownTitle: 'Tắt AgentHub', shutdownDescription: '{count} task đang chạy sẽ được đưa về hàng chờ.', shutdownButton: 'Tắt AgentHub', shutdownConfirmTitle: 'Xác nhận tắt AgentHub', shutdownConfirm: '{count} task đang chạy sẽ được đưa về hàng chờ để tiếp tục sau. AgentHub sẽ dừng daemon, worker, reviewer và chat nền.', shutdownDisable: 'Không tự bật khi đăng nhập', shutdownDone: 'AgentHub đã tắt. Bật lại từ máy bằng lệnh',
     brandingTitle: 'Tên ứng dụng', brandingDescription: 'Chỉ đổi tên hiển thị; lệnh CLI, service, thư mục và biến môi trường kỹ thuật không thay đổi.', brandingName: 'Tên hiển thị', brandingShortName: 'Tên ngắn', brandingTagline: 'Slogan (tuỳ chọn)', brandingAccent: 'Màu nhấn (#RRGGBB)', brandingLogo: 'Logo', brandingLogoHint: 'PNG/SVG, tối đa 256KB', brandingLogoError: 'Không thể tải logo',
     subtitle: 'Cấu hình chuỗi model ưu tiên và thời gian timeout tối đa cho các lượt chạy (DEC-001).',
     saveSuccess: 'Cài đặt hệ thống đã được cập nhật thành công!',
@@ -943,7 +987,7 @@ export const vi = {
     languageSectionTitle: 'Ngôn ngữ hiển thị (Display Language)',
     languageSectionDesc: 'Lựa chọn ngôn ngữ cho toàn bộ giao diện dashboard.',
     infoChain: 'Hệ thống sẽ thử lần lượt các model theo thứ tự từ trên xuống dưới. Khi gặp lỗi Quota (429/RESOURCE_EXHAUSTED), Scheduler sẽ tự động chuyển sang model tiếp theo trong chuỗi.',
-    hardChainLabel: 'Chuỗi model mặc định cho task "Hard" (mỗi dòng một model) *',
+    hardChainLabel: 'Chuỗi model mặc định cho task "Hard" (mỗi dòng một model) *', hardChainInfo: 'Thử model khó trước rồi fallback xuống model dễ; ví dụ opus → sonnet → haiku. Model đầu tiên dùng quota trước.',
     hardChainHint: 'Mặc định: codex:gpt-5.6-luna, gemini-3.8-flash-high',
     hardChainRequired: 'Chuỗi model Hard phải có ít nhất 1 model',
     easyChainLabel: 'Chuỗi model mặc định cho task "Easy" (mỗi dòng một model) *',
@@ -961,6 +1005,8 @@ export const vi = {
     notificationsTitle: 'Thông báo & Tóm tắt',
     notificationsDescription: 'Cấu hình thông báo máy tính, chế độ bộ não, giờ yên tĩnh và tóm tắt định kỳ.',
     desktopNotifyLabel: 'Thông báo trên máy tính (Desktop Notifications)',
+    desktopNotifyLevelLabel: 'Mức thông báo trên máy tính',
+    desktopNotifyLevelAll: 'Tất cả', desktopNotifyLevelImportant: 'Quan trọng', desktopNotifyLevelCritical: 'Chỉ khẩn cấp', desktopNotifyLevelOff: 'Tắt',
     desktopNotifyHint: 'Gửi thông báo desktop qua notify-send / osascript khi có sự kiện quan trọng.',
     brainModeLabel: 'Chế độ hoạt động của Bộ não',
     brainModeHint: 'Trong chế độ Tự động, các thông báo thô từng task được chặn, chỉ gửi thông báo quan trọng và sự cố.', brainMaxConcurrent: 'Số lượt bộ não chạy đồng thời tối đa',
@@ -981,6 +1027,12 @@ export const vi = {
     digestTitle: 'Tóm tắt định kỳ (Daily Digest)',
     digestHint: 'Tự động tổng hợp số lượng task, các thay đổi đã merge và tình trạng quota mỗi ngày.',
     digestTime: 'Giờ gửi tóm tắt',
+    claudeFallback: 'Fallback sang Claude khi Codex hết quota',
+    claudeFallbackHint: 'Khi mọi tài khoản Codex đều hết quota hoặc lỗi đăng nhập, tự động dùng Claude reviewer để tiếp tục duyệt.',
+    claudeModel: 'Model Claude cho review',
+    claudeProfiles: 'Hồ sơ Claude review (theo thứ tự ưu tiên)',
+    claudeProfilesHint: 'Chọn các hồ sơ Claude dùng cho review fallback (để trống để dùng bất kỳ hồ sơ nào).',
+    claudeProfilesOrder: 'Thứ tự ưu tiên',
   },
   savings: { title: 'Hiệu quả ủy quyền', subtitle: 'Đo phần việc Claude (bộ não) không phải tự làm nhờ giao cho worker (Gemini, Codex).', clearFilters: 'Xóa bộ lọc', loadError: 'Không thể tải dữ liệu hiệu quả ủy quyền.', claudeSaved: 'Claude không phải làm', savingRate: 'tỷ lệ tiết kiệm', codeWritten: 'Code do worker viết', lines: 'dòng', linesDeleted: 'dòng đã xóa', approvedTasks: 'Task đã duyệt', totalTasks: 'Tổng {count} task trong hệ thống', avgReviewRounds: 'Trung bình vòng review', rounds: 'vòng', changesRound: 'Mỗi lần changes_requested tính 1 vòng', tokensByDay: 'Token worker theo từng ngày', tokensByDayDesc: 'Phân bố khối lượng token tiêu thụ theo ngày giữa Gemini (agy) và Codex.', noDailyData: 'Chưa có dữ liệu lượt chạy theo ngày.', byTask: 'Bảng theo task', byTaskDesc: 'Dòng code viết, token worker tiêu thụ và số vòng review của từng task.', linesChange: 'Dòng (+/-)', reviewRounds: 'Vòng review', noMatchingTasks: 'Không có task nào phù hợp.', estimatedTitle: 'Số liệu ước tính từ mức giảm quota 5h', methodTitle: 'Về phương pháp đo lường và hệ số quy đổi', methodDesc: 'Số liệu agy là ước tính dựa trên mức giảm quota của cửa sổ 5 giờ và dung lượng bucketTokens ước tính. Số liệu Codex được phân tích chính xác từ log lượt chạy.', },
   dailyUsage: {

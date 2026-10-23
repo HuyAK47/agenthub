@@ -32,7 +32,7 @@ export function resolveWebDir(moduleUrl: string, env: NodeJS.ProcessEnv = {}): s
 export async function createServer(
   service: AppService,
   config: AgentHubConfig,
-  options?: { webDir?: string },
+  options?: { webDir?: string; onShutdown?: (disable: boolean) => void },
 ): Promise<FastifyInstance> {
   const fastify = Fastify({ logger: false, forceCloseConnections: true });
 
@@ -127,6 +127,14 @@ export async function createServer(
     return service.getStatus();
   });
 
+  fastify.post('/api/hub/shutdown', async (req) => {
+    const body = (req.body || {}) as { disable?: unknown };
+    const disable = body.disable === true;
+    const result = service.shutdownForUser();
+    options?.onShutdown?.(disable);
+    return { ok: true, daemonPid: process.pid, ...result };
+  });
+
   fastify.get('/api/perf', async () => service.getPerf());
 
   fastify.get('/api/setup/status', async () => service.getSetupStatus());
@@ -194,9 +202,33 @@ export async function createServer(
     registerBrainRoutes(fastify, service.brainService, service);
   }
 
+  // --- Departments API ---
+  fastify.get('/api/departments', async () => service.listDepartments());
+  fastify.get('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.getDepartment(id);
+  });
+  fastify.post('/api/departments', async (req: FastifyRequest, reply: FastifyReply) => {
+    return reply.status(201).send(service.createDepartment(req.body));
+  });
+  fastify.patch('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.updateDepartment(id, req.body);
+  });
+  fastify.delete('/api/departments/:id', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.deleteDepartment(id);
+  });
+  fastify.put('/api/departments/:id/profiles', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.updateDepartmentProfiles(id, req.body);
+  });
+
   // --- Projects API ---
-  fastify.get('/api/projects', async () => {
-    return service.listProjects();
+  fastify.get('/api/projects', async (req: FastifyRequest) => {
+    const query = req.query as { archived?: string | boolean };
+    const includeArchived = query?.archived === true || query?.archived === 'true' || query?.archived === '1';
+    return service.listProjects(includeArchived);
   });
 
   fastify.get('/api/projects/:id', async (req: FastifyRequest) => {
@@ -219,6 +251,10 @@ export async function createServer(
     return reply.status(202).send(service.rerunDeploy(id));
   });
 
+  fastify.post('/api/git/inspect', async (req: FastifyRequest) => {
+    return service.inspectGitRepo(req.body);
+  });
+
   fastify.post('/api/projects', async (req: FastifyRequest, reply: FastifyReply) => {
     const project = service.createProject(req.body);
     return reply.status(201).send(project);
@@ -239,7 +275,14 @@ export async function createServer(
 
   fastify.delete('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return service.deleteProject(id);
+    const query = req.query as { purge?: string | boolean; confirm?: string };
+    const purge = query?.purge === true || query?.purge === 'true' || query?.purge === '1';
+    return service.deleteProject(id, { purge, confirm: query?.confirm });
+  });
+
+  fastify.post('/api/projects/:id/restore', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.restoreProject(id);
   });
 
   fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {

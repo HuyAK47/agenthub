@@ -1,5 +1,7 @@
 # AgentHub
 
+**Landing page:** [Giới thiệu AgentHub](https://ducanh19020217.github.io/agenthub/)
+
 [English](README.md) | **Tiếng Việt**
 
 AgentHub là "hệ điều hành" cục bộ quản lý các worker AI coding (Antigravity CLI và Codex CLI), được điều phối và giám sát bởi **Claude Code** qua giao thức MCP (Model Context Protocol) cùng giao diện Web Dashboard trực quan.
@@ -8,10 +10,12 @@ Hệ thống tự động hóa việc phân chia task độc lập trên từng 
 
 **Người mới bắt đầu:** xem [Hướng dẫn cài đặt & sử dụng (docs/GETTING-STARTED.md)](docs/GETTING-STARTED.md).
 
+Để chọn mô hình làm việc, xem [Hai cách dùng AgentHub (docs/USAGE-MODES.md)](docs/USAGE-MODES.md): hub độc lập qua Web/Telegram hoặc Claude Code qua MCP.
+
 > **Điều khiển linh hoạt:** Bạn có thể điều khiển AgentHub (giao việc, review, quản lý task) thông qua **Chat với Claude trực tiếp trên Web Dashboard**, **Bot Telegram từ xa** trên điện thoại, hoặc **Claude Code trong VS Code** qua giao thức MCP (`agenthub mcp-install`). Dashboard cung cấp đầy đủ công cụ theo dõi tiến độ, log thời gian thực, quota tài khoản, tải máy và quản lý task.
 
 Chi tiết tính năng và mẹo sử dụng: xem [Danh sách tính năng (docs/FEATURES.md)](docs/FEATURES.md).  
-Hướng dẫn quy trình sử dụng và xử lý sự cố: xem [Hướng dẫn sử dụng (docs/USAGE.md)](docs/USAGE.md).  
+Hướng dẫn quy trình sử dụng và xử lý sự cố: xem [Hướng dẫn sử dụng (docs/USAGE.md)](docs/USAGE.md) và [Hai cách dùng](docs/USAGE-MODES.md).
 Kế hoạch kiến trúc và thiết kế hệ thống: xem [Kế hoạch chi tiết (docs/PLAN.md)](docs/PLAN.md).
 
 ---
@@ -48,9 +52,15 @@ sh /tmp/agenthub-install.sh
 
 Script có thể cập nhật/gỡ cài đặt an toàn; dùng `--dry-run` để xem lệnh trước. Dữ liệu `~/.agenthub/` chỉ bị xoá khi chạy `--uninstall --purge` và xác nhận.
 
+### Cài đặt trên macOS
+
+Máy Mac mới không cần cài Node.js, nvm hay Xcode Command Line Tools khi cài từ release. Installer chỉ dùng `curl` và `tar`, tự tải Node.js 22 chính thức đúng kiến trúc (`darwin-arm64` hoặc `darwin-x64`), kiểm tra `SHASUMS256.txt` và lưu runtime riêng tại `~/.agenthub/runtime/node-v22.x`. Linux cũng dùng runtime riêng nếu PATH không có Node 22.
+
+Nếu muốn dùng nvm, chọn rõ bằng `--use-nvm`. Nếu cài từ source gặp lỗi thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại. Các lỗi checksum hoặc archive sai kiến trúc thường được khắc phục bằng cách tải lại release đúng máy.
+
 ### Cài đặt thủ công
 
-Yêu cầu môi trường: **Node.js >= 22** (khuyến nghị thông qua NVM) và **npm**.
+Yêu cầu môi trường: **Node.js >= 22** (hoặc dùng installer release để tự tải) và **npm**.
 
 ```bash
 # Kích hoạt môi trường Node 22
@@ -77,6 +87,9 @@ AgentHub cung cấp bộ lệnh CLI để khởi động daemon, tích hợp cô
 - `agenthub open`: Lấy token xác thực cục bộ và tự động mở Web Dashboard trên trình duyệt mặc định (`http://127.0.0.1:7700/#token=...`). Có thể dùng cờ `--no-browser` để chỉ in URL.
 - `agenthub doctor`: Kiểm tra, chẩn đoán sức khỏe hệ thống và môi trường thực thi (phiên bản Node.js, CLI `agy`, `codex`, git worktree, cổng mạng và tình trạng các tài khoản).
 - `agenthub install-service`: Tạo và kích hoạt systemd user service (`~/.config/systemd/user/agenthub.service`) để daemon tự động chạy nền khi đăng nhập hệ thống (hỗ trợ cờ `--print` để xem trước nội dung file service).
+- `agenthub stop`: Tắt êm AgentHub, đưa task đang chạy về hàng chờ để lần sau tiếp tục.
+- `agenthub stop --disable`: Tắt và không tự bật khi đăng nhập; `agenthub start` bật lại.
+- Đóng tab web chỉ đóng giao diện; `uninstall-service` là gỡ service chứ không phải tắt tạm.
 - `agenthub mcp-install`: Đăng ký AgentHub MCP server với Claude Code ở phạm vi người dùng (`claude mcp add --scope user agenthub ...`), cho phép Claude Code tương tác trực tiếp với AgentHub từ bất kỳ dự án nào (hỗ trợ cờ `--print`).
 - `agenthub link`: Tạo symlink tiện ích tại `~/.local/bin/agenthub` trỏ tới script wrapper, giúp chạy lệnh `agenthub` từ bất kỳ thư mục nào trong terminal.
 

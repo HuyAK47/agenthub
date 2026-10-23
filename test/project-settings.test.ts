@@ -12,13 +12,14 @@ import {
   parseProjectSettings,
   projectSettings,
 } from '../src/projects/settings.js';
+import { projectWorktreeRoot } from '../src/projects/paths.js';
 
 describe('project settings parsing', () => {
   it('defaults reproduce the behaviour from before settings existed', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
       brain: { mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
-      integration: { enabled: false },
+      integration: { enabled: false, autoMerge: false },
       ci: {},
       references: [],
       reviewChecklist: [],
@@ -62,6 +63,20 @@ describe('project settings parsing', () => {
       ci: { branch: 'staging' },
     });
     expect(partial.ci).toEqual({ enabled: true, branch: 'staging' });
+  });
+
+  it('supports an explicit worktree root and keeps the legacy default', () => {
+    const root = path.join(os.tmpdir(), 'agenthub-worktree-root-test');
+    const project = { id: 'demo', path: path.join(root, 'repo'), settings: JSON.stringify({ worktree: { root } }) };
+    expect(projectWorktreeRoot(project, path.join(root, 'hub'))).toBe(root);
+    expect(projectWorktreeRoot({ id: 'demo', path: project.path }, path.join(root, 'hub')))
+      .toBe(path.join(root, 'hub', 'worktrees', 'demo'));
+  });
+
+  it('does not move an unconfigured project based on its mount path', () => {
+    const hub = path.join(os.tmpdir(), 'agenthub-hub');
+    const project = { id: 'mounted', path: '/media/veracrypt8/company/repo' };
+    expect(projectWorktreeRoot(project, hub)).toBe(path.join(hub, 'worktrees', 'mounted'));
   });
 });
 
@@ -138,5 +153,21 @@ describe('project settings through the service', () => {
       path: path.join(tmpDir, 'repo'),
       settings: { reviewChecklist: ['docs/../secret.md'] },
     })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad5',
+      path: path.join(tmpDir, 'repo'),
+      settings: { worktree: { root: path.join(tmpDir, 'missing-root') } },
+    })).toThrow(/không tồn tại/);
+  });
+
+  it('accepts an existing external worktree root', () => {
+    const root = path.join(tmpDir, 'custom-worktrees');
+    fs.mkdirSync(root);
+    const created = ctx.service.createProject({
+      name: 'custom-root',
+      path: path.join(tmpDir, 'repo'),
+      settings: { worktree: { root } },
+    }) as unknown as { settings: { worktree: { root?: string } } };
+    expect(created.settings.worktree.root).toBe(root);
   });
 });

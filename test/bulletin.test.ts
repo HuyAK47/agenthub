@@ -402,12 +402,11 @@ describe('Context Bulletin & Overlap Coordination', () => {
       expect(overlapEvents[0].taskId).toBe('proj/task-1');
       expect((overlapEvents[0].payload as { file?: string }).file).toBe('shared.ts');
 
-      // Verify desktop notification was sent by NotificationService
-      expect(notifierExecCalls.length).toBeGreaterThan(0);
+      // Overlap stays in the bulletin/dashboard and is not a desktop notification.
       const overlapNotification = notifierExecCalls.find((c) =>
         c.args.some((a) => a.includes('shared.ts') && a.includes('Trùng file')),
       );
-      expect(overlapNotification).toBeDefined();
+      expect(overlapNotification).toBeUndefined();
 
       // Verify notes in database
       const notes = ctx.taskNoteRepo.getByProject('proj');

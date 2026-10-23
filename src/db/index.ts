@@ -648,6 +648,90 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE check_results ADD COLUMN head TEXT;
   `,
+  // Migration 50: soft-deleted projects remain restorable with their history.
+  `ALTER TABLE projects ADD COLUMN archivedAt TEXT;`,
+  // Migration 51: paused tasks are retained while their project is hidden.
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE tasks_new (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    level TEXT NOT NULL DEFAULT 'easy' CHECK(level IN ('easy','hard')),
+    modelChain TEXT,
+    baseRef TEXT,
+    branch TEXT,
+    worktreePath TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','queued','running','checking','review','done','blocked','failed','cancelled','waiting_quota','paused')),
+    dependsOn TEXT NOT NULL DEFAULT '[]',
+    attempt INTEGER NOT NULL DEFAULT 0,
+    resume INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    notBefore INTEGER,
+    transientRetries INTEGER NOT NULL DEFAULT 0,
+    slot INTEGER,
+    checkFixAttempts INTEGER NOT NULL DEFAULT 0,
+    reviewerChangesRequested INTEGER NOT NULL DEFAULT 0,
+    reviewerEscalated INTEGER NOT NULL DEFAULT 0,
+    reviewerEscalatedAt TEXT,
+    reviewerEscalationReason TEXT,
+    waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk','quota','parallel','profile_busy','project_unavailable')),
+    doneReport TEXT,
+    diffStat TEXT,
+    sourceRef TEXT,
+    reviewStep INTEGER NOT NULL DEFAULT 0,
+    batchId TEXT,
+    creationSessionId TEXT,
+    creationGoal TEXT,
+    FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  INSERT INTO tasks_new (
+    id, projectId, slug, title, body, level, modelChain, baseRef, branch, worktreePath,
+    status, dependsOn, attempt, resume, createdAt, updatedAt, notBefore, transientRetries,
+    slot, checkFixAttempts, reviewerChangesRequested, reviewerEscalated, reviewerEscalatedAt,
+    reviewerEscalationReason, waitReason, doneReport, diffStat, sourceRef, reviewStep, batchId,
+    creationSessionId, creationGoal
+  )
+  SELECT
+    id, projectId, slug, title, body, level, modelChain, baseRef, branch, worktreePath,
+    status, dependsOn, attempt, resume, createdAt, updatedAt, notBefore, transientRetries,
+    slot, checkFixAttempts, reviewerChangesRequested, reviewerEscalated, reviewerEscalatedAt,
+    reviewerEscalationReason, waitReason, doneReport, diffStat, sourceRef, reviewStep, batchId,
+    creationSessionId, creationGoal
+  FROM tasks;
+  DROP TABLE tasks;
+  ALTER TABLE tasks_new RENAME TO tasks;
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(projectId, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
+  PRAGMA foreign_keys = ON;
+  `,
+  // Migration 52: departments group projects and optionally assign worker profiles.
+  `
+  CREATE TABLE IF NOT EXISTS departments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    priority INTEGER NOT NULL DEFAULT 0,
+    maxParallel INTEGER NOT NULL DEFAULT 3,
+    claudeDailyTokenBudget INTEGER NOT NULL DEFAULT 0,
+    telegramTopicId INTEGER,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  INSERT OR IGNORE INTO departments (id, name) VALUES ('chung', 'Chung');
+  ALTER TABLE projects ADD COLUMN departmentId TEXT NOT NULL DEFAULT 'chung';
+  CREATE INDEX IF NOT EXISTS idx_projects_department ON projects(departmentId);
+  CREATE TABLE IF NOT EXISTS department_profiles (
+    departmentId TEXT NOT NULL,
+    profileName TEXT NOT NULL,
+    share REAL,
+    PRIMARY KEY (departmentId, profileName),
+    FOREIGN KEY (departmentId) REFERENCES departments(id) ON DELETE CASCADE,
+    FOREIGN KEY (profileName) REFERENCES profiles(name) ON DELETE CASCADE
+  );
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -716,6 +800,7 @@ export interface ProjectRow {
   defaultBranch: string;
   envTemplate: string | null;
   maxParallel: number;
+  departmentId: string;
   checks: string | null;
   hooks: string | null;
   merge?: string | null;
@@ -733,6 +818,42 @@ export interface ProjectRow {
     behind: number;
   } | null;
   createdAt: string;
+  archivedAt?: string | null;
+}
+
+export interface DepartmentRow {
+  id: string;
+  name: string;
+  priority: number;
+  maxParallel: number;
+  claudeDailyTokenBudget: number;
+  telegramTopicId: number | null;
+  createdAt: string;
+  profiles?: DepartmentProfileRow[];
+  projectCount?: number;
+}
+
+export interface DepartmentProfileRow {
+  departmentId: string;
+  profileName: string;
+  share: number | null;
+}
+
+export interface DepartmentProjectRow {
+  id: string;
+  name: string;
+}
+
+export interface ProjectDeleteTask {
+  id: string;
+  projectId: string;
+  slug: string;
+  worktreePath: string | null;
+}
+
+export interface ProjectDeleteData {
+  tasks: ProjectDeleteTask[];
+  counts: Record<string, number>;
 }
 
 export type ProfileAuthState = 'ok' | 'not_logged_in' | 'needs_verification' | 'error';
@@ -852,26 +973,35 @@ export class ProjectRepo {
   constructor(private db: Database.Database) {}
 
   getAll(): ProjectRow[] {
+    return this.db.prepare('SELECT * FROM projects WHERE archivedAt IS NULL ORDER BY id').all() as ProjectRow[];
+  }
+
+  getAllIncludingArchived(): ProjectRow[] {
     return this.db.prepare('SELECT * FROM projects ORDER BY id').all() as ProjectRow[];
   }
 
   get(id: string): ProjectRow | undefined {
+    return this.db.prepare('SELECT * FROM projects WHERE id = ? AND archivedAt IS NULL').get(id) as ProjectRow | undefined;
+  }
+
+  getIncludingArchived(id: string): ProjectRow | undefined {
     return this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined;
   }
 
   insert(
-    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'> & {
+    row: Omit<ProjectRow, 'createdAt' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings' | 'departmentId'> & {
       checks?: string | null;
       hooks?: string | null;
       merge?: string | null;
       reviewChain?: string | null;
       review?: string | null;
       settings?: string | null;
+      departmentId?: string;
     },
   ): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO projects (id, name, path, defaultBranch, envTemplate, maxParallel, checks, hooks, merge, reviewChain, review, settings, departmentId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         row.id,
@@ -886,12 +1016,13 @@ export class ProjectRepo {
         row.reviewChain || null,
         row.review || null,
         row.settings || null,
+        row.departmentId || 'chung',
       );
   }
 
   update(
     id: string,
-    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings'>>,
+    fields: Partial<Pick<ProjectRow, 'name' | 'defaultBranch' | 'envTemplate' | 'maxParallel' | 'checks' | 'hooks' | 'merge' | 'reviewChain' | 'review' | 'settings' | 'archivedAt' | 'departmentId'>>,
   ): void {
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -908,6 +1039,148 @@ export class ProjectRepo {
 
   delete(id: string): void {
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  }
+
+  archive(id: string): void {
+    this.db.prepare("UPDATE projects SET archivedAt = datetime('now') WHERE id = ?").run(id);
+  }
+
+  restore(id: string): void {
+    this.db.prepare('UPDATE projects SET archivedAt = NULL WHERE id = ?').run(id);
+  }
+
+  getDeleteData(id: string): ProjectDeleteData {
+    const tasks = this.db.prepare('SELECT id, projectId, slug, worktreePath FROM tasks WHERE projectId = ?').all(id) as ProjectDeleteTask[];
+    const count = (table: string, where: string, value: string | null = id): number => {
+      const row = this.db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get(value) as { count: number };
+      return row.count;
+    };
+    const taskIds = tasks.map((task) => task.id);
+    const taskCount = (table: string, column: string): number => {
+      if (taskIds.length === 0) return 0;
+      const placeholders = taskIds.map(() => '?').join(',');
+      const row = this.db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} IN (${placeholders})`).get(...taskIds) as { count: number };
+      return row.count;
+    };
+    return {
+      tasks,
+      counts: {
+        tasks: tasks.length,
+        runs: taskCount('runs', 'taskId'),
+        reviews: taskCount('reviews', 'taskId'),
+        runMetrics: taskCount('run_metrics', 'taskId'),
+        claudeTaskUsage: taskCount('claude_task_usage', 'taskId'),
+        taskNotes: count('task_notes', 'projectId = ?'),
+        knowledgeEntries: count('knowledge_entries', 'projectId = ?'),
+        taskBatches: count('task_batches', 'projectId = ?'),
+        chatSessions: count('chat_sessions', 'projectId = ?'),
+        brainTurns: count('brain_turns', 'projectId = ?'),
+        permissionRules: (this.db.prepare('SELECT COUNT(*) AS count FROM permission_rules WHERE projectId = ? OR sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').get(id, id) as { count: number }).count,
+        ciRuns: count('ci_runs', 'projectId = ?'),
+        brainDirectives: count('brain_directives', 'projectId = ?'),
+      },
+    };
+  }
+
+  purge(id: string): void {
+    const transaction = this.db.transaction(() => {
+      const tasks = this.db.prepare('SELECT id FROM tasks WHERE projectId = ?').all(id) as Array<{ id: string }>;
+      const taskIds = tasks.map((task) => task.id);
+      const deleteByTasks = (table: string, column: string) => {
+        if (taskIds.length === 0) return;
+        const placeholders = taskIds.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM ${table} WHERE ${column} IN (${placeholders})`).run(...taskIds);
+      };
+      deleteByTasks('check_results', 'taskId');
+      deleteByTasks('run_metrics', 'taskId');
+      deleteByTasks('claude_task_usage', 'taskId');
+      deleteByTasks('reviews', 'taskId');
+      deleteByTasks('task_notes', 'taskId');
+      deleteByTasks('runs', 'taskId');
+      deleteByTasks('events', 'taskId');
+      this.db.prepare('DELETE FROM task_notes WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM knowledge_entries WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM task_deps WHERE taskId IN (SELECT id FROM tasks WHERE projectId = ?) OR dependsOnId IN (SELECT id FROM tasks WHERE projectId = ?)').run(id, id);
+      this.db.prepare('DELETE FROM tasks WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM task_batches WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM permission_rules WHERE projectId = ? OR sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id, id);
+      this.db.prepare('DELETE FROM chat_permissions WHERE sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id);
+      this.db.prepare('DELETE FROM chat_retries WHERE sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id);
+      this.db.prepare('DELETE FROM chat_messages WHERE sessionId IN (SELECT id FROM chat_sessions WHERE projectId = ?)').run(id);
+      this.db.prepare('DELETE FROM chat_sessions WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM brain_turns WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM ci_runs WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM brain_directives WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    });
+    transaction();
+  }
+}
+
+export class DepartmentRepo {
+  constructor(private db: Database.Database) {}
+
+  getAll(): DepartmentRow[] {
+    return this.db.prepare(`
+      SELECT d.*, COUNT(DISTINCT p.id) AS projectCount
+      FROM departments d LEFT JOIN projects p ON p.departmentId = d.id AND p.archivedAt IS NULL
+      GROUP BY d.id ORDER BY d.priority DESC, d.name
+    `).all() as DepartmentRow[];
+  }
+
+  get(id: string): DepartmentRow | undefined {
+    return this.db.prepare('SELECT * FROM departments WHERE id = ?').get(id) as DepartmentRow | undefined;
+  }
+
+  insert(row: Omit<DepartmentRow, 'createdAt' | 'profiles' | 'projectCount'>): void {
+    this.db.prepare(
+      'INSERT INTO departments (id, name, priority, maxParallel, claudeDailyTokenBudget, telegramTopicId) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(row.id, row.name, row.priority, row.maxParallel, row.claudeDailyTokenBudget, row.telegramTopicId);
+  }
+
+  update(id: string, fields: Partial<Pick<DepartmentRow, 'name' | 'priority' | 'maxParallel' | 'claudeDailyTokenBudget' | 'telegramTopicId'>>): void {
+    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+    if (!entries.length) return;
+    this.db.prepare(`UPDATE departments SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`)
+      .run(...entries.map(([, value]) => value), id);
+  }
+
+  delete(id: string): void {
+    if (id === 'chung') throw new Error('Không thể xóa phòng ban Chung');
+    this.db.prepare("UPDATE projects SET departmentId = 'chung' WHERE departmentId = ?").run(id);
+    this.db.prepare('DELETE FROM departments WHERE id = ?').run(id);
+  }
+
+  profiles(departmentId: string): DepartmentProfileRow[] {
+    return this.db.prepare('SELECT * FROM department_profiles WHERE departmentId = ? ORDER BY profileName').all(departmentId) as DepartmentProfileRow[];
+  }
+
+  projects(departmentId: string): DepartmentProjectRow[] {
+    return this.db.prepare('SELECT id, name FROM projects WHERE departmentId = ? AND archivedAt IS NULL ORDER BY name').all(departmentId) as DepartmentProjectRow[];
+  }
+
+  claudeUsageToday(departmentId: string): number {
+    const row = this.db.prepare(`
+      SELECT COALESCE(SUM(ctu.effectiveTokens), 0) AS tokens
+      FROM claude_task_usage ctu
+      JOIN tasks t ON t.id = ctu.taskId
+      JOIN projects p ON p.id = t.projectId
+      WHERE p.departmentId = ? AND EXISTS (
+        SELECT 1 FROM claude_usage cu
+        WHERE cu.sessionId = ctu.sessionId AND cu.turnId = ctu.turnId
+          AND date(cu.ts, 'localtime') = date('now', 'localtime')
+      )
+    `).get(departmentId) as { tokens: number };
+    return Number(row?.tokens || 0);
+  }
+
+  setProfiles(departmentId: string, profiles: Array<{ profileName: string; share?: number | null }>): void {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM department_profiles WHERE departmentId = ?').run(departmentId);
+      const insert = this.db.prepare('INSERT INTO department_profiles (departmentId, profileName, share) VALUES (?, ?, ?)');
+      for (const profile of profiles) insert.run(departmentId, profile.profileName, profile.share ?? null);
+    });
+    transaction();
   }
 }
 
@@ -1402,7 +1675,10 @@ export class RunRepo {
 
   getByTask(taskId: string): RunRow[] {
     return this.db
-      .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt')
+      // startedAt used to be second-precision for older rows. Keep rowid as a
+      // deterministic tiebreaker so a newer worker inserted in the same
+      // second cannot be mistaken for the previous completion.
+      .prepare('SELECT * FROM runs WHERE taskId = ? ORDER BY startedAt, rowid')
       .all(taskId) as RunRow[];
   }
 
@@ -1431,13 +1707,14 @@ export class RunRepo {
     pid?: number;
     logPath?: string;
     pidStart?: number;
+    startedAt?: string;
     kind?: 'worker' | 'reviewer';
   }): void {
     this.db
       .prepare(
-        'INSERT INTO runs (id, taskId, engine, model, profileName, pid, logPath, pidStart, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO runs (id, taskId, engine, model, profileName, pid, startedAt, logPath, pidStart, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(row.id, row.taskId, row.engine, row.model, row.profileName, row.pid || null, row.logPath || null, row.pidStart || null, row.kind || 'worker');
+      .run(row.id, row.taskId, row.engine, row.model, row.profileName, row.pid || null, row.startedAt || new Date().toISOString(), row.logPath || null, row.pidStart || null, row.kind || 'worker');
   }
 
   finish(id: string, outcome: string, resetAt?: number, reason?: string): void {

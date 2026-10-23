@@ -17,6 +17,7 @@ export interface EnsureNodeModulesOptions {
     args: string[],
     opts?: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number },
   ) => Promise<{ stdout: string; stderr: string }>;
+  cachePolicy?: NodeModulesCachePolicy;
 }
 
 export interface EnsureNodeModulesResult {
@@ -26,6 +27,77 @@ export interface EnsureNodeModulesResult {
 }
 
 const INSTALL_TIMEOUT_MS = 300_000;
+export const DEFAULT_NODE_MODULES_CACHE_ENTRIES = 3;
+
+export interface NodeModulesCachePolicy {
+  maxEntries?: number;
+  maxBytes?: number;
+}
+
+function cacheEntrySize(dir: string): number {
+  let total = 0;
+  const visit = (current: string) => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      try {
+        if (entry.isDirectory()) visit(full);
+        else if (entry.isFile()) total += fs.statSync(full).size;
+      } catch { /* cache may be removed by another worker */ }
+    }
+  };
+  visit(dir);
+  return total;
+}
+
+export function pruneNodeModulesCache(
+  cacheBaseDir: string,
+  policy: NodeModulesCachePolicy = {},
+): { removed: string[]; entries: number; bytes: number } {
+  const maxEntries = Math.max(1, Math.floor(policy.maxEntries ?? DEFAULT_NODE_MODULES_CACHE_ENTRIES));
+  const maxBytes = policy.maxBytes !== undefined && policy.maxBytes > 0 ? policy.maxBytes : Infinity;
+  let entries: Array<{ name: string; path: string; mtime: number; bytes: number }> = [];
+  try {
+    entries = fs.readdirSync(cacheBaseDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.tmp-'))
+      .map((entry) => {
+        const entryPath = path.join(cacheBaseDir, entry.name);
+        const stat = fs.statSync(entryPath);
+        return { name: entry.name, path: entryPath, mtime: stat.mtimeMs, bytes: cacheEntrySize(entryPath) };
+      });
+  } catch { return { removed: [], entries: 0, bytes: 0 }; }
+
+  entries.sort((a, b) => a.mtime - b.mtime);
+  let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+  const removed: string[] = [];
+  while (entries.length > maxEntries || total > maxBytes) {
+    const victim = entries.shift();
+    if (!victim) break;
+    try { fs.rmSync(victim.path, { recursive: true, force: true }); } catch { continue; }
+    total -= victim.bytes;
+    removed.push(victim.name);
+  }
+  return { removed, entries: entries.length, bytes: Math.max(0, total) };
+}
+
+export function nodeModulesCacheSummary(cacheBaseDir: string): { path: string; entries: number; bytes: number; largest?: string; largestBytes?: number } {
+  try {
+    const dirs = fs.readdirSync(cacheBaseDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.tmp-'));
+    let bytes = 0;
+    let largest: { name: string; bytes: number } | undefined;
+    for (const entry of dirs) {
+      const size = cacheEntrySize(path.join(cacheBaseDir, entry.name));
+      bytes += size;
+      if (!largest || size > largest.bytes) largest = { name: entry.name, bytes: size };
+    }
+    return { path: cacheBaseDir, entries: dirs.length, bytes, largest: largest?.name, largestBytes: largest?.bytes };
+  } catch { return { path: cacheBaseDir, entries: 0, bytes: 0 }; }
+}
+
+function touchCacheEntry(entryDir: string): void {
+  try { fs.utimesSync(entryDir, new Date(), new Date()); } catch { /* best effort */ }
+}
 
 function readPackageJson(dir: string): Record<string, unknown> | null {
   try {
@@ -250,6 +322,7 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
     );
   const cacheEntryDir = path.join(cacheBase, lockHash);
   const targetNodeModules = path.join(worktreeDir, 'node_modules');
+  touchCacheEntry(cacheEntryDir);
 
   const isWeb = path.basename(worktreeDir) === 'web';
   const worktreeRoot = isWeb ? path.dirname(worktreeDir) : worktreeDir;
@@ -330,9 +403,11 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
       }
       try {
         await fs.promises.rename(tempDir, cacheEntryDir);
+        pruneNodeModulesCache(cacheBase, opts.cachePolicy);
         return path.join(cacheEntryDir, 'node_modules');
       } catch {
         // Another worker won the race. Its complete cache is authoritative.
+        pruneNodeModulesCache(cacheBase, opts.cachePolicy);
         return getCacheNodeModulesDir(cacheEntryDir);
       }
     } finally {
@@ -355,6 +430,7 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
 
     if (recordedHash) {
       if (recordedHash === lockHash) {
+        touchCacheEntry(cacheEntryDir);
         return verifyOrInstall({ cached: true, createdCache: false, usedNpmCi: false });
       }
       return installInWorktree();
@@ -370,6 +446,7 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
     }
 
     if (matchesProject || getCacheNodeModulesDir(cacheEntryDir)) {
+      touchCacheEntry(cacheEntryDir);
       writeHash();
       return verifyOrInstall({ cached: true, createdCache: false, usedNpmCi: false });
     }
@@ -410,6 +487,7 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
   }
 
   if (cacheNm && fs.existsSync(cacheNm)) {
+    touchCacheEntry(cacheEntryDir);
     await runner('cp', ['-al', cacheNm, targetNodeModules], { timeout: INSTALL_TIMEOUT_MS });
     writeHash();
     return verifyOrInstall({ cached: true, createdCache, usedNpmCi: false });
@@ -423,6 +501,7 @@ export async function ensureWorktreeNodeModules(
   projectPath?: string,
   cacheBaseDir?: string,
   execFn?: EnsureNodeModulesOptions['execFn'],
+  cachePolicy?: NodeModulesCachePolicy,
 ): Promise<void> {
   const rootIsWorkspace = hasWorkspaceConfig(worktreePath);
   const workspaceInstall = async () => {
@@ -453,6 +532,7 @@ export async function ensureWorktreeNodeModules(
     projectDir: projectPath,
     cacheBaseDir,
     execFn,
+    cachePolicy,
   });
   await workspaceInstall();
 
@@ -468,6 +548,7 @@ export async function ensureWorktreeNodeModules(
       projectDir: webProjectDir,
       cacheBaseDir,
       execFn,
+      cachePolicy,
     });
   }
 }

@@ -81,6 +81,7 @@ interface PtySession {
   sockets: Set<WebSocket>;
   timer: NodeJS.Timeout;
   recentBuffer: string;
+  exited?: boolean;
   loginMenuAnswered?: boolean;
   /** agy đã đăng nhập thì vào thẳng chat; hub phải tự gửi /login để lấy link mới. */
   agyRelogin?: 'waiting_prompt' | 'login_sent';
@@ -357,6 +358,7 @@ export class PtyManager {
     if (session) {
       session.exitDisposable?.dispose();
       clearTimeout(session.timer);
+      session.exited = true;
       for (const socket of session.sockets) {
         try {
           socket.close(1000, 'Process exited');
@@ -364,8 +366,15 @@ export class PtyManager {
           // ignore
         }
       }
-      this.sessions.delete(sessionId);
       this.profileToSession.delete(profileName);
+      // Keep the last output briefly so a WebSocket that connects just after
+      // the process exits can still receive the login result. This is common
+      // for short-lived test/fallback CLIs and avoids a session-id race after
+      // the POST /login response has already been sent.
+      const cleanupTimer = setTimeout(() => {
+        if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId);
+      }, 10_000);
+      cleanupTimer.unref?.();
     }
 
     if (!this.isDatabaseOpen()) return;
@@ -428,6 +437,14 @@ export class PtyManager {
       session.sockets.delete(socket);
       this.scheduleEmailRefresh(session.profileName);
     });
+
+    if (session.exited) {
+      // Give the queued recentBuffer message above a chance to flush before
+      // closing a socket attached after the PTY process has already exited.
+      setTimeout(() => {
+        try { socket.close(1000, 'Process exited'); } catch { /* already closed */ }
+      }, 0);
+    }
   }
 }
 

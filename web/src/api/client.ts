@@ -29,6 +29,7 @@ import {
   TaskBatch,
   CreateBatchInput,
   PerfReport,
+  Department,
 } from '../types/api';
 
 export const getPerf = () => apiFetch<PerfReport>('/api/perf');
@@ -252,9 +253,37 @@ export async function getProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects');
 }
 
+export const getDepartments = () => apiFetch<Department[]>('/api/departments');
+export const createDepartment = (data: Partial<Department> & { name: string }) => apiFetch<Department>('/api/departments', { method: 'POST', body: JSON.stringify(data) });
+export const updateDepartment = (id: string, data: Partial<Department>) => apiFetch<Department>(`/api/departments/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+export const deleteDepartment = (id: string) => apiFetch<{ ok: boolean }>(`/api/departments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const updateDepartmentProfiles = (id: string, profiles: Department['profiles']) => apiFetch<Department>(`/api/departments/${encodeURIComponent(id)}/profiles`, { method: 'PUT', body: JSON.stringify({ profiles }) });
+
+export async function getArchivedProjects(): Promise<Project[]> {
+  return apiFetch<Project[]>('/api/projects?archived=true');
+}
+
 export const rerunProjectDeploy = (id: string) => apiFetch(`/api/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
 export const getProjectDeployStatus = (id: string) =>
   apiFetch<DeployStatus | null>(`/api/projects/${encodeURIComponent(id)}/deploy`);
+
+export interface GitInspectResult {
+  valid: boolean;
+  error?: string;
+  message?: string;
+  suggestedName?: string;
+  defaultBranch?: string;
+  currentBranch?: string;
+  branches: string[];
+  remoteUrl?: string | null;
+}
+
+export async function inspectGitRepo(path: string): Promise<GitInspectResult> {
+  return apiFetch<GitInspectResult>('/api/git/inspect', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
 
 export async function createProject(data: CreateProjectInput): Promise<Project> {
   return apiFetch<Project>('/api/projects', {
@@ -270,10 +299,15 @@ export async function updateProject(id: string, data: UpdateProjectInput): Promi
   });
 }
 
-export async function deleteProject(id: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, {
+export async function deleteProject(id: string, options?: { purge?: boolean; confirm?: string }): Promise<{ ok: boolean; archived?: boolean; counts?: Record<string, number>; warnings?: string[] }> {
+  const query = options?.purge ? `?purge=true&confirm=${encodeURIComponent(options.confirm || '')}` : '';
+  return apiFetch<{ ok: boolean; archived?: boolean; counts?: Record<string, number>; warnings?: string[] }>(`/api/projects/${encodeURIComponent(id)}${query}`, {
     method: 'DELETE',
   });
+}
+
+export async function restoreProject(id: string): Promise<Project> {
+  return apiFetch<Project>(`/api/projects/${encodeURIComponent(id)}/restore`, { method: 'POST' });
 }
 
 export async function getProjectKnowledge(projectId: string): Promise<KnowledgeEntry[]> {
@@ -632,6 +666,10 @@ export async function updateConfig(data: Partial<SystemConfig>): Promise<SystemC
     method: 'PUT',
     body: JSON.stringify(data),
   });
+}
+
+export async function shutdownHub(disable = false): Promise<{ ok: boolean; queued: number; reviewers: number }> {
+  return apiFetch('/api/hub/shutdown', { method: 'POST', body: JSON.stringify({ disable }) });
 }
 
 export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; logo: string }> {

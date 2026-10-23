@@ -1,19 +1,24 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addProjectKnowledge,
   createProject,
   deleteProject,
+  restoreProject,
   deleteProjectKnowledge,
   getProjectKnowledge,
+  getArchivedProjects,
   getProjects,
   updateProjectKnowledge,
+  inspectGitRepo,
+  GitInspectResult,
 } from '../api/client';
 import {
   FolderGit2,
   Plus,
   Trash2,
+  Check,
   CheckCircle2,
   AlertCircle,
   BookOpen,
@@ -23,9 +28,12 @@ import {
   Clock,
   ExternalLink,
   GitBranch,
+  RefreshCw,
+  Search,
 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
 import { Project } from '../types/api';
 import {
@@ -52,6 +60,7 @@ function ProjectSettingsForm({
 }) {
   const { t } = useLocale();
   const { suggestModalTour } = useTour();
+  const [confirmFullPermission, setConfirmFullPermission] = useState(false);
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) =>
     onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () =>
@@ -87,10 +96,9 @@ function ProjectSettingsForm({
             value={value.brain.permissions ?? 'inherit'}
             onChange={(e) => {
               const permissions = e.target.value;
-              if (
-                permissions === 'full' &&
-                (suggestModalTour('modal-full-permission'), !window.confirm(t('extra.fullModeConfirm')))
-              ) {
+              if (permissions === 'full') {
+                setConfirmFullPermission(true);
+                suggestModalTour('modal-full-permission');
                 return;
               }
               update('brain', { permissions });
@@ -314,6 +322,18 @@ function ProjectSettingsForm({
           {t('projects.settingsPartialHint')}
         </p>
       )}
+      {confirmFullPermission && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4" style={{ zIndex: UI_Z_INDEX.modal }} role="dialog" aria-modal="true" data-tour="modal-full-permission">
+          <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-2xl">
+            <h2 className="text-base font-semibold">{t('common.confirm')}</h2>
+            <p className="mt-2 text-sm text-[var(--t-text-2)]">{t('extra.fullModeConfirm')}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="button-secondary" onClick={() => setConfirmFullPermission(false)}>{t('common.cancel')}</button>
+              <button type="button" className="button-primary" onClick={() => { update('brain', { permissions: 'full' }); setConfirmFullPermission(false); }}>{t('common.confirm')}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -327,6 +347,7 @@ export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [drawerProject, setDrawerProject] = useState<Project | null>(null);
 
   useEffect(() => {
@@ -347,6 +368,91 @@ export const ProjectsPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [knowledgeProject, setKnowledgeProject] = useState<string | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState('');
+  const [gitBranches, setGitBranches] = useState<string[]>([]);
+  const [gitInspectResult, setGitInspectResult] = useState<GitInspectResult | null>(null);
+  const [isInspectingGit, setIsInspectingGit] = useState(false);
+  const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
+  const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false);
+  const [branchSearchFilter, setBranchSearchFilter] = useState('');
+  const branchDropdownRef = useRef<HTMLDivElement>(null);
+
+  const handleRefreshBranches = async () => {
+    const trimmedPath = path.trim();
+    if (!trimmedPath) return;
+    setIsInspectingGit(true);
+    try {
+      const res = await inspectGitRepo(trimmedPath);
+      setGitInspectResult(res);
+      if (res.valid) {
+        setGitBranches(res.branches || []);
+        if (res.defaultBranch && (!defaultBranch.trim() || defaultBranch === 'main')) {
+          setDefaultBranch(res.defaultBranch);
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsInspectingGit(false);
+    }
+  };
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        branchDropdownRef.current &&
+        !branchDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsBranchDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  useEffect(() => {
+    const trimmedPath = path.trim();
+    if (!trimmedPath || trimmedPath.length < 2) {
+      setGitInspectResult(null);
+      setGitBranches([]);
+      setIsInspectingGit(false);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      setIsInspectingGit(true);
+      try {
+        const res = await inspectGitRepo(trimmedPath);
+        if (!active) return;
+        setGitInspectResult(res);
+        if (res.valid) {
+          setGitBranches(res.branches || []);
+          if (!nameManuallyEdited && res.suggestedName) {
+            setName(res.suggestedName);
+          }
+          if (res.defaultBranch && (defaultBranch === 'main' || !defaultBranch.trim())) {
+            setDefaultBranch(res.defaultBranch);
+          }
+        } else {
+          setGitBranches([]);
+        }
+      } catch {
+        if (!active) return;
+        setGitInspectResult({ valid: false, message: 'Không thể kiểm tra đường dẫn', branches: [] });
+        setGitBranches([]);
+      } finally {
+        if (active) setIsInspectingGit(false);
+      }
+    }, 400);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [path, nameManuallyEdited, defaultBranch]);
+
   useEffect(() => {
     if (showAddForm) suggestModalTour('modal-register-project');
   }, [showAddForm, suggestModalTour]);
@@ -354,6 +460,11 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: archivedProjects = [] } = useQuery({
+    queryKey: ['projects', 'archived'],
+    queryFn: getArchivedProjects,
+    enabled: showArchived,
   });
 
   // Keep drawer project in sync with latest query data or URL param
@@ -388,10 +499,15 @@ export const ProjectsPage: React.FC = () => {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: deleteProject,
-    onSuccess: () => {
+    mutationFn: ({ id, purge, confirm }: { id: string; purge?: boolean; confirm?: string }) => deleteProject(id, { purge, confirm }),
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      if (result.warnings?.length) window.alert(result.warnings.join('\n'));
     },
+  });
+  const restoreMutation = useMutation({
+    mutationFn: restoreProject,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
   });
 
   const knowledgeQuery = useQuery({
@@ -449,6 +565,12 @@ export const ProjectsPage: React.FC = () => {
     setNewSettings(defaultProjectSettings());
     setJsonError(null);
     setFormError(null);
+    setGitBranches([]);
+    setGitInspectResult(null);
+    setIsInspectingGit(false);
+    setNameManuallyEdited(false);
+    setIsBranchDropdownOpen(false);
+    setBranchSearchFilter('');
   };
 
   const handleEnvTemplateChange = (val: string) => {
@@ -517,6 +639,10 @@ export const ProjectsPage: React.FC = () => {
     });
   };
 
+  const displayBranches = branchSearchFilter.trim()
+    ? gitBranches.filter((b) => b.toLowerCase().includes(branchSearchFilter.trim().toLowerCase()))
+    : gitBranches;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -546,6 +672,44 @@ export const ProjectsPage: React.FC = () => {
           </span>
         </Button>
       </div>
+
+      <div>
+        <Button type="button" variant="ghost" size="sm" onClick={() => setShowArchived((value) => !value)}>
+          {t('projects.archivedTitle')}
+        </Button>
+      </div>
+
+      {archivedProjects.length > 0 && (
+        <Card className="p-4 space-y-2">
+          <h2 className="font-semibold">{t('projects.archivedTitle')}</h2>
+          {archivedProjects.map((project) => (
+            <div key={project.id} className="flex items-center justify-between text-sm py-1 border-b border-[var(--t-border)] last:border-b-0">
+              <span className="truncate pr-2">
+                {project.name} <span className="font-mono text-xs text-[var(--t-text-3)]">({project.id})</span>
+              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button size="sm" variant="secondary" onClick={() => restoreMutation.mutate(project.id)}>
+                  {t('projects.restore')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    if (window.confirm(`Xoá vĩnh viễn dự án "${project.name}" (${project.id})? Toàn bộ dữ liệu tác vụ và liên kết sẽ bị xóa hoàn toàn khỏi hệ thống.`)) {
+                      deleteMutation.mutate({ id: project.id, purge: true, confirm: project.id });
+                    }
+                  }}
+                  className="text-[var(--t-crit)] hover:bg-[color-mix(in_srgb,var(--t-crit)_10%,transparent)] gap-1 px-2.5"
+                  title="Xoá vĩnh viễn dự án"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Xoá vĩnh viễn</span>
+                </Button>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
 
       {/* Registration Form */}
       {showAddForm && (
@@ -577,7 +741,10 @@ export const ProjectsPage: React.FC = () => {
                   type="text"
                   placeholder={t('projects.namePlaceholder')}
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setNameManuallyEdited(Boolean(e.target.value.trim()));
+                  }}
                 />
               </div>
 
@@ -594,21 +761,194 @@ export const ProjectsPage: React.FC = () => {
                   value={path}
                   onChange={(e) => setPath(e.target.value)}
                 />
+                {isInspectingGit && (
+                  <p className="mt-1.5 text-xs text-[var(--t-text-3)] flex items-center gap-1.5 animate-pulse">
+                    <RefreshCw className="h-3 w-3 animate-spin text-[var(--t-accent)]" />
+                    <span>Đang kiểm tra Git repository...</span>
+                  </p>
+                )}
+                {!isInspectingGit && gitInspectResult?.valid && (
+                  <p className="mt-1.5 text-xs text-[var(--t-ok)] flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      Đã nhận diện Git repository ({gitBranches.length} nhánh)
+                      {gitInspectResult.currentBranch && ` • Nhánh hiện tại: ${gitInspectResult.currentBranch}`}
+                    </span>
+                  </p>
+                )}
+                {!isInspectingGit && gitInspectResult && !gitInspectResult.valid && (
+                  <p className="mt-1.5 text-xs text-[var(--t-warn)] flex items-center gap-1">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    <span>{gitInspectResult.message || 'Thư mục không phải Git repository'}</span>
+                  </p>
+                )}
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
-                  {t('projects.branchLabel')}
-                </label>
+              <div className="relative" ref={branchDropdownRef}>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)]">
+                    {t('projects.branchLabel')}
+                  </label>
+                  {path.trim() && (
+                    <button
+                      type="button"
+                      title="Làm mới danh sách nhánh từ Git repo"
+                      disabled={isInspectingGit}
+                      onClick={handleRefreshBranches}
+                      className="inline-flex items-center gap-1 text-[11px] text-[var(--t-accent)] hover:underline cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${isInspectingGit ? 'animate-spin' : ''}`} />
+                      <span>Làm mới nhánh</span>
+                    </button>
+                  )}
+                </div>
                 <p className="text-xs text-[var(--t-text-3)] mb-1.5">
                   {t('projects.branchHint')}
                 </p>
-                <Input
-                  type="text"
-                  placeholder="main"
-                  value={defaultBranch}
-                  onChange={(e) => setDefaultBranch(e.target.value)}
-                />
+                <div className="relative">
+                  <Input
+                    data-tour="project-default-branch"
+                    type="text"
+                    placeholder="main"
+                    value={defaultBranch}
+                    onChange={(e) => setDefaultBranch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setIsBranchDropdownOpen(false);
+                      if (e.key === 'ArrowDown') setIsBranchDropdownOpen(true);
+                    }}
+                    className="pr-9 font-mono"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Xem danh sách nhánh"
+                    title="Xem danh sách nhánh"
+                    onClick={() => {
+                      setIsBranchDropdownOpen((prev) => !prev);
+                      setBranchSearchFilter('');
+                    }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] rounded-md transition-colors cursor-pointer"
+                  >
+                    <ChevronDown
+                      className={`h-4 w-4 transition-transform duration-200 ${
+                        isBranchDropdownOpen ? 'rotate-180 text-[var(--t-accent)]' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {isBranchDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg shadow-xl overflow-hidden py-1">
+                    {gitBranches.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-[var(--t-text-3)] text-center">
+                        {isInspectingGit
+                          ? 'Đang tải danh sách nhánh...'
+                          : 'Chưa có danh sách nhánh. Hãy nhập đường dẫn Git repo hợp lệ ở trên.'}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="px-3 py-1.5 text-[11px] font-medium text-[var(--t-text-3)] border-b border-[var(--t-border)] flex items-center justify-between bg-[var(--t-surface-2)]">
+                          <span>
+                            Danh sách nhánh ({gitBranches.length})
+                          </span>
+                          {branchSearchFilter.trim() && (
+                            <span className="text-[10px] text-[var(--t-accent)]">
+                              Khớp {displayBranches.length}/{gitBranches.length}
+                            </span>
+                          )}
+                        </div>
+                        {gitBranches.length > 5 && (
+                          <div className="p-1.5 border-b border-[var(--t-border)] bg-[var(--t-surface-2)]">
+                            <div className="relative">
+                              <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[var(--t-text-3)]" />
+                              <input
+                                type="text"
+                                placeholder="Lọc nhánh..."
+                                value={branchSearchFilter}
+                                onChange={(e) => setBranchSearchFilter(e.target.value)}
+                                className="w-full h-7 pl-7 pr-2 text-xs bg-[var(--t-surface)] text-[var(--t-text)] border border-[var(--t-border)] rounded focus:outline-hidden focus:border-[var(--t-accent)]"
+                              />
+                            </div>
+                          </div>
+                        )}
+                        <ul className="max-h-56 overflow-y-auto py-1">
+                          {displayBranches.length === 0 ? (
+                            <li className="px-3 py-2 text-xs text-[var(--t-text-3)] text-center">
+                              Không tìm thấy nhánh phù hợp
+                            </li>
+                          ) : (
+                            displayBranches.map((b) => {
+                              const isSelected = defaultBranch === b;
+                              const isDefault = gitInspectResult?.defaultBranch === b;
+                              const isCurrent = gitInspectResult?.currentBranch === b;
+                              return (
+                                <li key={b}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDefaultBranch(b);
+                                      setIsBranchDropdownOpen(false);
+                                      setBranchSearchFilter('');
+                                    }}
+                                    className={`w-full text-left px-3 py-1.5 text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-[var(--t-accent)]/15 text-[var(--t-accent)] font-semibold'
+                                        : 'hover:bg-[var(--t-hover)] text-[var(--t-text)]'
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-2 truncate">
+                                      <GitBranch className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                                      <span className="truncate">{b}</span>
+                                    </span>
+                                    <span className="flex items-center gap-1.5 shrink-0 ml-2">
+                                      {isDefault && (
+                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-accent)]/10 text-[var(--t-accent)]">
+                                          mặc định
+                                        </span>
+                                      )}
+                                      {isCurrent && !isDefault && (
+                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-surface-2)] text-[var(--t-text-3)]">
+                                          hiện tại
+                                        </span>
+                                      )}
+                                      {isSelected && <Check className="h-3.5 w-3.5 text-[var(--t-accent)]" />}
+                                    </span>
+                                  </button>
+                                </li>
+                              );
+                            })
+                          )}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {gitBranches.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-[var(--t-text-3)] flex items-center gap-1">
+                      <GitBranch className="h-3 w-3" />
+                      Gợi ý:
+                    </span>
+                    {gitBranches.map((b) => (
+                      <button
+                        key={b}
+                        type="button"
+                        onClick={() => {
+                          setDefaultBranch(b);
+                          setIsBranchDropdownOpen(false);
+                          setBranchSearchFilter('');
+                        }}
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors cursor-pointer ${
+                          defaultBranch === b
+                            ? 'bg-[var(--t-accent)] text-white font-semibold'
+                            : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]'
+                        }`}
+                      >
+                        {b}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -632,6 +972,7 @@ export const ProjectsPage: React.FC = () => {
 
             {/* Advanced Section (collapsible, collapsed by default) */}
             <details
+              data-tour="project-register-advanced"
               data-testid="advanced-section"
               className="border border-[var(--t-border)] rounded-lg p-3 group"
             >
@@ -867,12 +1208,13 @@ export const ProjectsPage: React.FC = () => {
                       size="sm"
                       title={t('extra.deleteProject')}
                       onClick={() => {
-                        if (
-                          confirm(
-                            t('projects.confirmDelete', { name: proj.name }),
-                          )
-                        ) {
-                          deleteMutation.mutate(proj.id);
+                        if (window.confirm(t('projects.archiveConfirm', { name: proj.name }))) {
+                          deleteMutation.mutate({ id: proj.id });
+                          return;
+                        }
+                        const typed = window.prompt(t('projects.purgeConfirm', { id: proj.id }));
+                        if (typed === proj.id) {
+                          deleteMutation.mutate({ id: proj.id, purge: true, confirm: typed });
                         }
                       }}
                       className="p-1.5 text-[var(--t-text-3)] hover:text-[var(--t-crit)]"

@@ -208,6 +208,7 @@ export class BulletinService {
             const filesB = filesByTask.get(taskB.id);
             if (!filesA || !filesB) continue;
 
+            const pairFiles: string[] = [];
             for (const file of filesA) {
               if (filesB.has(file)) {
                 const hasA = this.taskNoteRepo.hasOverlap(taskA.id, taskB.id, file);
@@ -237,14 +238,18 @@ export class BulletinService {
                     otherTaskId: taskB.id,
                     file,
                   });
-
-                  this.eventBus.emit('task.overlap', taskA.id, {
-                    otherTaskId: taskB.id,
-                    file,
-                    projectId,
-                  });
+                  pairFiles.push(file);
                 }
               }
+            }
+            // One notification per task pair, not one per shared file.
+            if (pairFiles.length > 0) {
+              this.eventBus.emit('task.overlap', taskA.id, {
+                otherTaskId: taskB.id,
+                file: pairFiles.length === 1 ? pairFiles[0] : `${pairFiles[0]} (+${pairFiles.length - 1} file)`,
+                files: pairFiles,
+                projectId,
+              });
             }
           }
         }

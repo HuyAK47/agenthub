@@ -34,6 +34,7 @@ export interface QuietHoursConfig {
 
 export interface NotificationsConfig {
   desktop: boolean;
+  desktopLevel: 'all' | 'important' | 'critical' | 'off';
   quietHours?: QuietHoursConfig;
   /** Báo `quota.low` khi quota một cửa sổ tụt xuống dưới ngưỡng (%); 0 = tắt. */
   quotaLowPct?: number;
@@ -71,6 +72,8 @@ export interface AssistantConfig {
   enabled: boolean;
   model: string;
   policy: string[];
+  /** guarded: read-only helper (default); full: may edit files and run any command, like a full brain. */
+  permissions: 'guarded' | 'full';
 }
 
 export interface ClaudeSessionsConfig {
@@ -282,6 +285,13 @@ export interface AgentHubConfig {
     timeoutSec: number;
     failoverSec: number;
     maxChangesRequested: number;
+    /** Review with Claude when every Codex account is out of quota or logged out. */
+    claudeFallback: boolean;
+    /** Claude profiles to use for that fallback, in order; empty = any logged-in Claude profile. */
+    claudeProfiles: string[];
+    claudeModel: string;
+    /** Minutes a review may wait for a busy Codex account before Claude reviews instead. */
+    claudeFallbackAfterMin: number;
   };
   notifications: NotificationsConfig;
   /** Đánh thức quota theo giờ hẹn (src/quota/wakeup.ts). */
@@ -295,6 +305,8 @@ export interface AgentHubConfig {
     worktreeOnDoneAfterHours: number;
   };
   cacheDir: string;
+  cacheMaxEntries: number;
+  cacheMaxGB: number;
   savings: SavingsConfig;
   load: LoadConfig;
   stall: StallConfig;
@@ -333,6 +345,7 @@ export function saveConfig(
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
+      desktopLevel: NotificationsConfig['desktopLevel'];
       quietHours?: Partial<QuietHoursConfig>;
       quotaLowPct: number;
     }>;
@@ -340,6 +353,8 @@ export function saveConfig(
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
@@ -502,6 +517,7 @@ export function updateConfigInMemory(
     reviewer: Partial<AgentHubConfig['reviewer']>;
     notifications?: Partial<{
       desktop: boolean;
+      desktopLevel: NotificationsConfig['desktopLevel'];
       quietHours?: Partial<QuietHoursConfig>;
       quotaLowPct: number;
     }>;
@@ -509,6 +525,8 @@ export function updateConfigInMemory(
     disk?: { minFreeGB?: number; extraPaths?: ExtraDiskPath[] };
     cleanup?: { nodeModulesOnDone?: boolean; worktreeOnDoneAfterHours?: number };
     cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
     savings: DeepPartialSavingsConfig;
     load?: Partial<LoadConfig>;
     stall?: Partial<StallConfig>;
@@ -600,6 +618,9 @@ export function updateConfigInMemory(
     if (patch.notifications.quotaLowPct !== undefined) {
       config.notifications.quotaLowPct = patch.notifications.quotaLowPct;
     }
+    if (patch.notifications.desktopLevel !== undefined) {
+      config.notifications.desktopLevel = patch.notifications.desktopLevel;
+    }
     if (patch.notifications.quietHours) {
       config.notifications.quietHours = {
         enabled: patch.notifications.quietHours.enabled ?? config.notifications.quietHours?.enabled ?? DEFAULT_QUIET_HOURS_CONFIG.enabled,
@@ -626,6 +647,8 @@ export function updateConfigInMemory(
   if (patch.cacheDir !== undefined) {
     config.cacheDir = patch.cacheDir;
   }
+  if (patch.cacheMaxEntries !== undefined) config.cacheMaxEntries = patch.cacheMaxEntries;
+  if (patch.cacheMaxGB !== undefined) config.cacheMaxGB = patch.cacheMaxGB;
   if (patch.savings) {
     if (patch.savings.bucketTokens) {
       config.savings.bucketTokens = {
@@ -732,9 +755,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
   if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
   if (!fs.existsSync(worktreesDir)) fs.mkdirSync(worktreesDir, { recursive: true });
 
+  const testAgyHomesDir = process.env.AGENTHUB_TEST_MODE === '1'
+    ? path.join(path.dirname(hubHome), 'agy-homes')
+    : undefined;
   const agyHomesDir =
     (userConfig.agyHomesDir as string) ||
     process.env.AGENTHUB_AGY_HOMES ||
+    testAgyHomesDir ||
     path.join(os.homedir(), '.agy-homes');
 
   const defaultLogDir =
@@ -798,6 +825,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     process.env.AGENTHUB_CACHE_DIR ||
     path.join(hubHome, 'cache', 'node_modules');
   if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+  const cacheMaxEntries = typeof userConfig.cacheMaxEntries === 'number' && userConfig.cacheMaxEntries > 0
+    ? Math.floor(userConfig.cacheMaxEntries) : 3;
+  const cacheMaxGB = typeof userConfig.cacheMaxGB === 'number' && userConfig.cacheMaxGB > 0
+    ? userConfig.cacheMaxGB : 3;
 
   const rawSavings = (userConfig.savings as Record<string, unknown>) || {};
   const rawLoad = (userConfig.load as Record<string, unknown>) || {};
@@ -1002,6 +1033,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       policy: Array.isArray(assistantRaw.policy)
         ? assistantRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
         : [],
+      permissions: assistantRaw.permissions === 'full' ? 'full' : 'guarded',
     },
     claudeSessions: {
       dir: typeof rawClaudeSessions.dir === 'string' ? rawClaudeSessions.dir : path.join(os.homedir(), '.claude', 'projects'),
@@ -1026,6 +1058,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       timeoutSec: typeof reviewerRaw.timeoutSec === 'number' ? reviewerRaw.timeoutSec : 900,
       failoverSec: typeof reviewerRaw.failoverSec === 'number' ? reviewerRaw.failoverSec : 5 * 60 * 60,
       maxChangesRequested: typeof reviewerRaw.maxChangesRequested === 'number' ? reviewerRaw.maxChangesRequested : 2,
+      claudeFallback: reviewerRaw.claudeFallback !== false,
+      claudeProfiles: Array.isArray(reviewerRaw.claudeProfiles)
+        ? reviewerRaw.claudeProfiles.filter((name): name is string => typeof name === 'string' && name.length > 0)
+        : [],
+      claudeModel: typeof reviewerRaw.claudeModel === 'string' && reviewerRaw.claudeModel ? reviewerRaw.claudeModel : 'sonnet',
+      claudeFallbackAfterMin: typeof reviewerRaw.claudeFallbackAfterMin === 'number' ? reviewerRaw.claudeFallbackAfterMin : 10,
     },
     wakeup: parseWakeupConfig(userConfig.wakeup),
     notifications: {
@@ -1035,6 +1073,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       quotaLowPct: (() => {
         const raw = (userConfig.notifications as { quotaLowPct?: unknown } | undefined)?.quotaLowPct;
         return typeof raw === 'number' && raw >= 0 && raw <= 95 ? Math.round(raw) : DEFAULT_QUOTA_LOW_PCT;
+      })(),
+      desktopLevel: (() => {
+        const level = (userConfig.notifications as { desktopLevel?: unknown } | undefined)?.desktopLevel;
+        return level === 'all' || level === 'critical' || level === 'off' || level === 'important' ? level : 'important';
       })(),
       ...(userConfig.notifications && typeof userConfig.notifications === 'object' && 'quietHours' in userConfig.notifications
         ? {
@@ -1061,12 +1103,15 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     disk,
     cleanup,
     cacheDir,
+    cacheMaxEntries,
+    cacheMaxGB,
     savings,
     load: {
       enabled: typeof rawLoad.enabled === 'boolean' ? rawLoad.enabled : DEFAULT_LOAD_CONFIG.enabled,
       high: typeof rawLoad.high === 'number' ? rawLoad.high : DEFAULT_LOAD_CONFIG.high,
       ok: typeof rawLoad.ok === 'number' ? rawLoad.ok : DEFAULT_LOAD_CONFIG.ok,
       pressureHigh: typeof rawLoad.pressureHigh === 'number' ? rawLoad.pressureHigh : DEFAULT_LOAD_CONFIG.pressureHigh,
+      pressureIoHigh: typeof rawLoad.pressureIoHigh === 'number' ? rawLoad.pressureIoHigh : DEFAULT_LOAD_CONFIG.pressureIoHigh,
       pressureOk: typeof rawLoad.pressureOk === 'number' ? rawLoad.pressureOk : DEFAULT_LOAD_CONFIG.pressureOk,
       minFreeMemGB: typeof rawLoad.minFreeMemGB === 'number' ? rawLoad.minFreeMemGB : DEFAULT_LOAD_CONFIG.minFreeMemGB,
       recoverAfterSec: typeof rawLoad.recoverAfterSec === 'number' ? rawLoad.recoverAfterSec : DEFAULT_LOAD_CONFIG.recoverAfterSec,

@@ -26,6 +26,7 @@ import { Composer } from '../components/chat/Composer';
 import { ContextMeter } from '../components/chat/ContextMeter';
 import { NewSessionModal } from '../components/chat/NewSessionModal';
 import { useLocale } from '../context/LocaleContext';
+import { UI_Z_INDEX } from '../components/ui/layers';
 import {
   Menu,
   X,
@@ -477,6 +478,17 @@ export const ChatPage: React.FC = () => {
   return (
     <div className="relative h-[calc(100vh-8.5rem)] flex rounded-2xl border border-[var(--border-default)] bg-[var(--bg-app)] overflow-hidden shadow-xs">
       <ToastViewport toasts={toasts} onDismiss={dismissToast} closeLabel={t('common.close')} />
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div
+          role="alert"
+          className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-xl bg-[var(--t-warn)] text-white font-medium text-xs shadow-xl flex items-center gap-2 animate-fade-in"
+          style={{ zIndex: UI_Z_INDEX.toast }}
+        >
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
 
       {/* Desktop Left Column (Session List) >= 900px */}
       <aside className="hidden min-[900px]:block w-72 lg:w-80 shrink-0 h-full">
@@ -495,7 +507,7 @@ export const ChatPage: React.FC = () => {
 
       {/* Mobile Drawer Backdrop & Drawer < 900px */}
       {mobileDrawerOpen && (
-        <div className="min-[900px]:hidden fixed inset-0 z-50 flex">
+        <div className="min-[900px]:hidden fixed inset-0 flex" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div
             className="fixed inset-0 bg-black/60 backdrop-blur-xs"
             onClick={() => setMobileDrawerOpen(false)}

@@ -3,10 +3,11 @@ import { AgentHubConfig } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
-import { isQuietHours, areAllProfilesQuotaExhausted, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
+import { isQuietHours, isQuotaEventEngineWide, isSystemIncident, getMinutesSinceTime } from './brain/digest.js';
 import { effectiveBrainMode } from './brain/mode.js';
 import { formatReset } from './time-format.js';
 import { quotaLowText } from './quota/alerts.js';
+import { NotificationDeduper } from './notification-dedupe.js';
 
 export type NotifyExecFn = (
   file: string,
@@ -37,6 +38,10 @@ export class NotificationService {
   private now: () => number;
   private lastSent = new Map<string, number>();
   private lastSentCi = new Map<string, number>();
+  private lastSentSummary = new Map<string, number>();
+  private lastSentDisk = new Map<'low' | 'ok', number>();
+  private diskState: 'low' | 'ok' | undefined;
+  private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
   private get appName(): string { return this.config.branding?.name || 'AgentHub'; }
@@ -51,6 +56,7 @@ export class NotificationService {
     this.projectRepo = opts.projectRepo;
     this.execFn = opts.exec;
     this.now = opts.now || (() => Date.now());
+    this.eventDeduper = new NotificationDeduper({ now: this.now });
   }
 
   getQuietHoursQueue(): Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> {
@@ -112,8 +118,23 @@ export class NotificationService {
     if (!this.config.notifications || this.config.notifications.desktop === false) {
       return;
     }
+    // Hand-built integrations from older callers omit desktopLevel; retain their
+    // previous behavior while loaded config always supplies the important default.
+    const level = this.config.notifications.desktopLevel || 'all';
+    if (level === 'off') return;
+    if (level === 'important' && !new Set([
+      'brain.notify', 'task.review_ready', 'task.failed', 'task.blocked', 'review.escalated',
+      'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed',
+    ]).has(type)) return;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (type === 'quota.exhausted') {
+      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
+      // Individual quota exhaustion remains visible in the dashboard. Desktop
+      // should only interrupt the user when an entire engine is unavailable.
+      if (!allExhausted) return;
+    }
+    if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // 1. In brain auto mode: suppress raw task notifications
     const taskProjectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
@@ -121,7 +142,7 @@ export class NotificationService {
     if (effectiveMode === 'auto') {
       const allExhausted =
         type === 'quota.exhausted' &&
-        (p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now()));
+        isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
 
       const isSystemEvent =
         type === 'brain.notify' ||
@@ -200,11 +221,7 @@ export class NotificationService {
 
       case 'task.paused':
       case 'load.task_paused': {
-        const title = this.resolveTaskTitle(taskId, p);
-        const msg = p.reason === 'load'
-          ? `Tạm dừng task ${title} do quá tải hệ thống`
-          : `Tạm dừng task ${title}`;
-        this.notify(msg, 'normal');
+        this.notifyLoadSummary(now, p.reason === 'load' ? 'quá tải hệ thống' : 'yêu cầu tạm dừng');
         break;
       }
 
@@ -222,14 +239,24 @@ export class NotificationService {
       }
 
       case 'disk.low': {
+        if (!this.shouldSendDisk('low', now)) break;
+        this.diskState = 'low';
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
         const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 0;
-        this.notify(`Ổ đĩa còn ${freeGB} GB (< ${minFreeGB} GB): tạm dừng khởi chạy task`, 'normal');
+        const cacheDir = typeof p.cacheDir === 'string' ? ` Cache node_modules: ${p.cacheDir}.` : '';
+        const largest = typeof p.largestCacheEntry === 'string'
+          ? ` Bản lớn nhất: ${p.largestCacheEntry}${typeof p.largestCacheEntryBytes === 'number' ? ` (${(p.largestCacheEntryBytes / 1024 ** 3).toFixed(2)} GB)` : ''}.`
+          : '';
+        this.notify(`Ổ đĩa còn ${freeGB} GB (< ${minFreeGB} GB): tạm dừng khởi chạy task${cacheDir}${largest}`, 'normal');
         break;
       }
 
       case 'disk.ok': {
         const freeGB = typeof p.freeGB === 'number' ? p.freeGB : 0;
+        const minFreeGB = typeof p.minFreeGB === 'number' ? p.minFreeGB : 0;
+        if (freeGB < minFreeGB + 1 || this.diskState !== 'low') break;
+        if (!this.shouldSendDisk('ok', now)) break;
+        this.diskState = 'ok';
         this.notify(`Ổ đĩa đã đủ chỗ (${freeGB} GB): tiếp tục chạy task`, 'normal');
         break;
       }
@@ -242,13 +269,14 @@ export class NotificationService {
       }
 
       case 'quota.exhausted': {
-        const isAllExhausted = p.allExhausted === true || areAllProfilesQuotaExhausted(this.profileRepo, this.quotaMarkRepo, this.now());
+        const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
         if (effectiveMode === 'auto') {
           if (isAllExhausted) {
             this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
           }
           break;
         }
+        if (level === 'important' && !isAllExhausted) break;
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
         const family = (p.family || p.model || '') as string;
         const resetTimeStr = this.resolveResetTime(p, name, family);
@@ -293,16 +321,13 @@ export class NotificationService {
       }
 
       case 'task.overlap': {
-        const file = (p.file || p.filename || '') as string;
-        const otherTaskId = (p.otherTaskId || '') as string;
-        const taskTitle = this.resolveTaskTitle(taskId, p);
-        const otherTitle = this.resolveTaskTitle(otherTaskId);
-        const msg = file
-          ? `AgentHub: Trùng file ${file} giữa ${taskTitle} và ${otherTitle}`
-          : `AgentHub: Trùng sửa file giữa ${taskTitle} và ${otherTitle}`;
-        this.notify(msg, 'normal');
+        // Overlap details remain in the bulletin/dashboard; they are too noisy for desktop.
         break;
       }
+
+      case 'load.high':
+        this.notifyLoadSummary(now, 'tải hệ thống cao');
+        break;
 
       case 'ci.failed': {
         const projId = (typeof p.projectId === 'string' ? p.projectId : taskId) || 'dự án';
@@ -377,10 +402,13 @@ export class NotificationService {
   }
 
   private notify(message: string, urgency: 'normal' | 'warning' | 'critical' = 'normal'): void {
+    const level = this.config.notifications?.desktopLevel || 'all';
+    if (level === 'off') return;
+    if (level === 'critical' && urgency !== 'critical') return;
     const key = `${urgency}:${message}`;
     const now = this.now();
     const last = this.lastSent.get(key);
-    if (last !== undefined && now - last < 30_000) {
+    if (last !== undefined && now - last < 30 * 60 * 1000) {
       return;
     }
     this.lastSent.set(key, now);
@@ -405,5 +433,19 @@ export class NotificationService {
     } catch {
       // Ignore if notify-send is missing or fails
     }
+  }
+
+  private notifyLoadSummary(now: number, reason: string): void {
+    const last = this.lastSentSummary.get('load') || 0;
+    if (now - last < 15 * 60_000) return;
+    this.lastSentSummary.set('load', now);
+    this.notify(`AgentHub: Đã tạm dừng/gặp ${reason}; xem dashboard để biết chi tiết`, 'normal');
+  }
+
+  private shouldSendDisk(state: 'low' | 'ok', now: number): boolean {
+    const last = this.lastSentDisk.get(state);
+    if (last !== undefined && now - last < 60 * 60_000) return false;
+    this.lastSentDisk.set(state, now);
+    return true;
   }
 }
