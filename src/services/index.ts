@@ -12,6 +12,7 @@ import { z, ZodError } from 'zod';
 import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
 import {
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   TaskRepo,
@@ -250,6 +251,15 @@ export const ProjectReviewSchema = z.object({
   maxRounds: z.number().int().positive().default(2),
 });
 
+export const DepartmentInputSchema = z.object({
+  id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  name: z.string().min(1).max(120),
+  priority: z.number().int().default(0),
+  maxParallel: z.number().int().positive().default(3),
+  claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
+  telegramTopicId: z.number().int().positive().nullable().default(null),
+});
+
 export const CreateProjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1),
@@ -257,6 +267,7 @@ export const CreateProjectSchema = z.object({
   defaultBranch: z.string().default('main'),
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().default(3),
+  departmentId: z.string().min(1).default('chung'),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
@@ -270,6 +281,7 @@ export const UpdateProjectSchema = z.object({
   defaultBranch: z.string().min(1).optional(),
   envTemplate: z.string().nullable().optional(),
   maxParallel: z.number().int().positive().optional(),
+  departmentId: z.string().min(1).optional(),
   checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(),
   hooks: ProjectHooksInputSchema.nullable().optional(),
   merge: ProjectMergeSchema.nullable().optional(),
@@ -812,7 +824,53 @@ export class AppService {
     public setupManager?: SetupManager,
     public brainRunner?: BrainRunner,
     public directiveRepo?: BrainDirectiveRepo,
+    public departmentRepo?: DepartmentRepo,
   ) {}
+
+  // --- Departments ---
+  listDepartments() {
+    if (!this.departmentRepo) throw new HttpError(503, 'unavailable', 'Department service chưa sẵn sàng');
+    return this.departmentRepo.getAll().map((department) => ({ ...department, profiles: this.departmentRepo!.profiles(department.id), projects: this.departmentRepo!.projects(department.id) }));
+  }
+
+  getDepartment(id: string) {
+    const department = this.departmentRepo?.get(id);
+    if (!department) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    return { ...department, profiles: this.departmentRepo!.profiles(id), projects: this.departmentRepo!.projects(id) };
+  }
+
+  createDepartment(raw: unknown) {
+    if (!this.departmentRepo) throw new HttpError(503, 'unavailable', 'Department service chưa sẵn sàng');
+    const parsed = DepartmentInputSchema.parse(raw);
+    const id = parsed.id || parsed.name.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id) throw new HttpError(400, 'bad_request', 'Tên phòng ban không hợp lệ');
+    if (this.departmentRepo.get(id)) throw new HttpError(409, 'conflict', `Department ID "${id}" đã tồn tại`);
+    this.departmentRepo.insert({ id, ...parsed });
+    return this.getDepartment(id);
+  }
+
+  updateDepartment(id: string, raw: unknown) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    const parsed = DepartmentInputSchema.partial().parse(raw);
+    this.departmentRepo!.update(id, parsed);
+    return this.getDepartment(id);
+  }
+
+  deleteDepartment(id: string) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    try { this.departmentRepo.delete(id); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : 'Không thể xóa phòng ban'); }
+    return { ok: true };
+  }
+
+  updateDepartmentProfiles(id: string, raw: unknown) {
+    if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
+    const parsed = z.object({ profiles: z.array(z.object({ profileName: z.string().min(1), share: z.number().min(0).max(1).nullable().optional() })) }).parse(raw);
+    for (const profile of parsed.profiles) {
+      if (!this.profileRepo.get(profile.profileName)) throw new HttpError(404, 'not_found', `Profile "${profile.profileName}" không tồn tại`);
+    }
+    this.departmentRepo.setProfiles(id, parsed.profiles);
+    return this.getDepartment(id);
+  }
 
   setPerfCollector(collector: PerfCollector): void { this.perfCollector = collector; }
   getPerf() { return { samples: this.perfCollector?.getSamples() || [], latest: this.perfCollector?.latest() || null }; }
@@ -1233,6 +1291,9 @@ export class AppService {
 
   createProject(raw: unknown): ProjectRow {
     const parsed = CreateProjectSchema.parse(raw);
+    if (this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
+      throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
+    }
     const id = parsed.id || parsed.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     const existing = this.projectRepo.getIncludingArchived(id);
     if (existing && !existing.archivedAt) {
@@ -1309,6 +1370,7 @@ export class AppService {
         defaultBranch: parsed.defaultBranch,
         envTemplate: parsed.envTemplate || null,
         maxParallel: parsed.maxParallel,
+        departmentId: parsed.departmentId,
       });
       this.invalidateOutOfScopeClaudeScanStates();
       return this.getProject(archived.id);
@@ -1327,6 +1389,7 @@ export class AppService {
       reviewChain: parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
       review: parsed.review ? JSON.stringify(parsed.review) : null,
       settings: parsed.settings ? JSON.stringify(effectiveSettings) : null,
+      departmentId: parsed.departmentId,
     });
 
     if (effectiveSettings.integration.enabled) {
@@ -1344,6 +1407,9 @@ export class AppService {
     this.getProject(id);
     const parsed = UpdateProjectSchema.parse(raw);
     const current = this.projectRepo.get(id)!;
+    if (parsed.departmentId && this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
+      throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
+    }
     const effectiveDefaultBranch = parsed.defaultBranch ?? current.defaultBranch;
     const mergedSettings = parsed.settings === undefined
       ? projectSettings(current)

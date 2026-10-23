@@ -10,6 +10,7 @@ import {
   RunRepo,
   EventRepo,
   ProjectRepo,
+  DepartmentRepo,
   ProfileRepo,
   QuotaMarkRepo,
   ReviewRepo,
@@ -231,6 +232,7 @@ export class Scheduler {
     runMetricsRepo?: RunMetricsRepo,
     knowledgeRepo?: KnowledgeRepo,
     diskReader?: ((p: string) => DiskSpace) | SchedulerOptions,
+    private departmentRepo?: DepartmentRepo,
   ) {
     this.eventBus = new EventBus(eventRepo);
     this.quotaService = new QuotaService(quotaMarkRepo, profileRepo);
@@ -319,8 +321,9 @@ export class Scheduler {
     return this.running;
   }
 
-  effectiveParallel(project: { maxParallel: number }): number {
-    return this.loadGuard.effectiveParallel(project.maxParallel);
+  effectiveParallel(project: { maxParallel: number; departmentId?: string }): number {
+    const department = project.departmentId ? this.departmentRepo?.get(project.departmentId) : undefined;
+    return this.loadGuard.effectiveParallel(Math.min(project.maxParallel, department?.maxParallel || project.maxParallel));
   }
 
   getLoadStatus(): LoadSnapshot {
@@ -2324,7 +2327,10 @@ export class Scheduler {
       const engineId = getModelEngine(model);
 
       // Find suitable profiles
-      const profiles = this.profileRepo.getEnabled().filter((p) => !p.authState || p.authState === 'ok');
+      const project = this.projectRepo.get(task.projectId);
+      const assigned = project?.departmentId ? this.departmentRepo?.profiles(project.departmentId) : [];
+      const assignedNames = assigned && assigned.length > 0 ? new Set(assigned.map((item) => item.profileName)) : null;
+      const profiles = this.profileRepo.getEnabled().filter((p) => (!p.authState || p.authState === 'ok') && (!assignedNames || assignedNames.has(p.name)));
       const eligibleProfiles = profiles.filter((profile) => {
         if (profile.engine !== engineId) return false;
         if (this.quotaService.isExhausted(profile.name, family)) return false;
