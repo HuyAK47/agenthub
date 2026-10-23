@@ -59,7 +59,7 @@ import { mergeTaskIntoBase, MergeError } from '../merge.js';
 import { computeTaskGraph, filterTasksForGraph, detectCycle, parseDependsOn } from './dag.js';
 import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt } from '../task-capture.js';
 import type { TelegramBotService } from '../telegram.js';
-import { ReviewChainSchema, parseReviewChain } from '../review-chain.js';
+import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
 import { SetupManager } from '../tools/setup.js';
 import type { DeployService } from '../deploy.js';
@@ -779,6 +779,13 @@ export function formatEventSummary(
     case 'task.note': {
       const content = typeof p.content === 'string' ? p.content : '';
       return `${taskLabel} ghi chú: ${content.length > 50 ? content.slice(0, 50) + '...' : content}`;
+    }
+
+    case 'review.fallback': {
+      const to = p.to || 'claude';
+      const from = p.from || 'codex';
+      const profile = p.profile ? ` (${p.profile})` : '';
+      return `${taskLabel} fallback review từ ${from} sang ${to}${profile}`;
     }
 
     default:
@@ -2353,9 +2360,17 @@ export class AppService {
       if (project?.review) {
         try { reviewChain = parseReviewChain(JSON.stringify((JSON.parse(project.review) as { chain?: unknown }).chain || [])); } catch { /* invalid settings are ignored */ }
       }
+      // Keep this lookup scoped to the task. A global recent-event window can
+      // forget an older fallback after unrelated events push it out of that window.
+      const isFallback = this.eventRepo?.getByTask(task.id).some((event) => event.type === 'review.fallback') ?? false;
+      const reviewerRun = this.scheduler?.getReviewerRun?.(task.id);
+      const reviewer = reviewerRun
+        ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
+        : (isFallback ? 'claude' : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex'));
       return {
         ...apiTask(task),
         reviewChain,
+        reviewer,
         checks: this.scheduler.getCheckResults(task.id),
         paused: Boolean(run?.paused),
         pauseReason: run?.pauseReason ?? null,
@@ -2438,8 +2453,36 @@ export class AppService {
     } catch {
       modelWarnings = ['modelChain không phải JSON hợp lệ'];
     }
+
+    const events = (this.eventRepo ? this.eventRepo.getByTask(taskId) : []).map((e) => {
+      let parsedPayload: unknown = null;
+      if (e.payload) {
+        try {
+          parsedPayload = JSON.parse(e.payload);
+        } catch {
+          parsedPayload = e.payload;
+        }
+      }
+      return {
+        id: e.id,
+        ts: toApiTime(e.ts)!,
+        type: e.type,
+        taskId: e.taskId,
+        payload: parsedPayload,
+      };
+    });
+
+    const isFallback = events.some((e) => e.type === 'review.fallback');
+    const reviewerRun = this.scheduler?.getReviewerRun?.(taskId);
+    const activeReviewChain: ReviewChainStep[] = (Array.isArray(reviewSettings?.chain) ? reviewSettings.chain as ReviewChainStep[] : undefined) || parseReviewChain(project?.reviewChain);
+    const reviewer = reviewerRun
+      ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
+      : (isFallback ? 'claude' : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex')));
+
     return {
       ...apiTask(task),
+      reviewer,
+      events,
       paused: Boolean(activeRun?.paused),
       pauseReason: activeRun?.pauseReason ?? null,
       currentRun: activeRun ? {
