@@ -2794,38 +2794,11 @@ export class TelegramBotService {
       return { text: trimmed };
     }
 
-    // 1. Clear marker prefix (e.g. #123, #OP-45) or structured token with internal delimiter
-    // between letters/numbers (e.g. PROJ-45, OP#123, ABC-foo, ĐỀ-123, 営業-1).
-    const hasMarker = /^#[\p{L}\p{N}_-]+$/u.test(token);
+    // 1. Clear marker prefix (e.g. #123, #abc, [PROJ-45]) or structured token with internal delimiter
+    // between letters/numbers (e.g. PROJ-45, OP#123, ABC-foo, ĐỀ-123, 営業-1, ref:đề).
+    const hasMarker = /^#[\p{L}\p{N}_-]+$/u.test(token) || /^\[[\p{L}\p{N}_#/:.-]+\]$/u.test(token);
     const hasDelimitedRef = /^(?=.*\p{L})[\p{L}\p{N}]+[-_#/:][\p{L}\p{N}_#/:.-]*[\p{L}\p{N}]$/u.test(token);
     if (hasMarker || hasDelimitedRef) {
-      return { externalRef: token, text: rest };
-    }
-
-    // 2. CJK / ideographic tokens (e.g. 営業).
-    const isCjk = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(token);
-    if (isCjk) {
-      return { externalRef: token, text: rest };
-    }
-
-    // 3. All uppercase letters (e.g. ĐỀ, PROJ, ABC).
-    const isAllUpper = /^\p{Lu}+$/u.test(token);
-    if (isAllUpper) {
-      return { externalRef: token, text: rest };
-    }
-
-    // 4. Mixed case with internal capital (e.g. ABCfoo, ticketId).
-    const hasInternalCapital = /^\p{L}+$/u.test(token) && /.\p{Lu}/u.test(token);
-    if (hasInternalCapital) {
-      return { externalRef: token, text: rest };
-    }
-
-    // 5. Non-ASCII all-lowercase letters followed by a capitalized or CJK description (e.g. "đề Sửa lỗi").
-    // Normal English/Vietnamese descriptions starting with a capitalized word (e.g. "Fix Login bug",
-    // "Add Dashboard page", "Sửa lỗi đăng nhập") must not be treated as refs.
-    const isUnicodeLower = /[^\p{ASCII}]/u.test(token) && /^\p{Ll}+$/u.test(token);
-    const restStartsWithCapitalOrCjk = /^[\p{Lu}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(rest);
-    if (isUnicodeLower && restStartsWithCapitalOrCjk) {
       return { externalRef: token, text: rest };
     }
 

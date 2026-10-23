@@ -1519,16 +1519,16 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
           message_id: 23,
           date: 123456,
           chat: { id: CHAT_ID, type: 'private' },
-          text: '/newtask ABCfoo Sửa lỗi đăng nhập',
+          text: '/newtask ABC-foo Sửa lỗi đăng nhập',
         },
       });
 
       const task = ctx.taskRepo.get('proj-shop/sua-loi-dang-nhap');
-      expect(task?.externalRef).toBe('ABCfoo');
+      expect(task?.externalRef).toBe('ABC-foo');
       expect(task?.title).toBe('Sửa lỗi đăng nhập');
     });
 
-    it('accepts Unicode leading external references', async () => {
+    it('accepts structured and Unicode leading external references', async () => {
       await bot.handleUpdate({
         update_id: 24,
         message: {
@@ -1556,19 +1556,20 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       const japaneseTask = ctx.taskRepo.get('proj-shop/sua-noi-dung-ban-hang');
       expect(japaneseTask?.externalRef).toBe('営業-1');
       expect(japaneseTask?.title).toBe('Sửa nội dung bán hàng');
-    });
 
-    it('accepts Unicode letters-only leading external references', async () => {
       await bot.handleUpdate({
         update_id: 26,
         message: {
           message_id: 26,
           date: 123456,
           chat: { id: CHAT_ID, type: 'private' },
-          text: '/newtask ĐỀ Sửa lỗi thanh toán',
+          text: '/newtask PROJ-45 Sửa giao diện thanh toán',
         },
       });
-      expect(ctx.taskRepo.get('proj-shop/sua-loi-thanh-toan')?.externalRef).toBe('ĐỀ');
+
+      const projTask = ctx.taskRepo.get('proj-shop/sua-giao-dien-thanh-toan');
+      expect(projTask?.externalRef).toBe('PROJ-45');
+      expect(projTask?.title).toBe('Sửa giao diện thanh toán');
 
       await bot.handleUpdate({
         update_id: 27,
@@ -1576,22 +1577,13 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
           message_id: 27,
           date: 123456,
           chat: { id: CHAT_ID, type: 'private' },
-          text: '/newtask 営業 Cập nhật nội dung',
+          text: '/newtask #abc Tối ưu hóa truy vấn',
         },
       });
-      expect(ctx.taskRepo.get('proj-shop/cap-nhat-noi-dung')?.externalRef).toBe('営業');
 
-      await bot.handleUpdate({
-        update_id: 28,
-        message: {
-          message_id: 28,
-          date: 123456,
-          chat: { id: CHAT_ID, type: 'private' },
-          text: '/newtask đề Sửa lỗi',
-        },
-      });
-      expect(ctx.taskRepo.get('proj-shop/sua-loi')?.externalRef).toBe('đề');
-      expect(ctx.taskRepo.get('proj-shop/sua-loi')?.title).toBe('Sửa lỗi');
+      const markerTask = ctx.taskRepo.get('proj-shop/toi-uu-hoa-truy-van');
+      expect(markerTask?.externalRef).toBe('#abc');
+      expect(markerTask?.title).toBe('Tối ưu hóa truy vấn');
     });
 
     it('does not treat normal descriptions or trailing punctuation as external references', async () => {
@@ -1601,6 +1593,11 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(bot['parseLeadingExternalRef']('1. Sửa login')).toEqual({ text: '1. Sửa login' });
       expect(bot['parseLeadingExternalRef']('Fix Login bug')).toEqual({ text: 'Fix Login bug' });
       expect(bot['parseLeadingExternalRef']('Add Dashboard page')).toEqual({ text: 'Add Dashboard page' });
+      expect(bot['parseLeadingExternalRef']('sửa Login bug')).toEqual({ text: 'sửa Login bug' });
+      expect(bot['parseLeadingExternalRef']('API timeout khi gọi')).toEqual({ text: 'API timeout khi gọi' });
+      expect(bot['parseLeadingExternalRef']('GitHub Actions bị lỗi')).toEqual({ text: 'GitHub Actions bị lỗi' });
+      expect(bot['parseLeadingExternalRef']('iPhone crash')).toEqual({ text: 'iPhone crash' });
+      expect(bot['parseLeadingExternalRef']('README cần cập nhật')).toEqual({ text: 'README cần cập nhật' });
 
       // End-to-end task creation via bot
       await bot.handleUpdate({
@@ -1667,6 +1664,45 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       const taskAdd = ctx.taskRepo.get('proj-shop/add-dashboard-page');
       expect(taskAdd?.externalRef).toBeNull();
       expect(taskAdd?.title).toBe('Add Dashboard page');
+
+      await bot.handleUpdate({
+        update_id: 286,
+        message: {
+          message_id: 286,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask sửa Login bug',
+        },
+      });
+      const taskSua = ctx.taskRepo.get('proj-shop/sua-login-bug');
+      expect(taskSua?.externalRef).toBeNull();
+      expect(taskSua?.title).toBe('sửa Login bug');
+
+      await bot.handleUpdate({
+        update_id: 287,
+        message: {
+          message_id: 287,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask API timeout khi gọi',
+        },
+      });
+      const taskApi = ctx.taskRepo.get('proj-shop/api-timeout-khi-goi');
+      expect(taskApi?.externalRef).toBeNull();
+      expect(taskApi?.title).toBe('API timeout khi gọi');
+
+      await bot.handleUpdate({
+        update_id: 288,
+        message: {
+          message_id: 288,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask GitHub Actions bị lỗi',
+        },
+      });
+      const taskGithub = ctx.taskRepo.get('proj-shop/github-actions-bi-loi');
+      expect(taskGithub?.externalRef).toBeNull();
+      expect(taskGithub?.title).toBe('GitHub Actions bị lỗi');
     });
 
     it('allows cancelling wizard via /cancel', async () => {
