@@ -39,6 +39,7 @@ export class NotificationService {
   private lastSentCi = new Map<string, number>();
   private allQuotaNotified = new Set<string>();
   private waitingQuotaNotified = false;
+  private waitingQuotaCheckTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
@@ -110,6 +111,10 @@ export class NotificationService {
       clearInterval(this.checkTimer);
       this.checkTimer = undefined;
     }
+    if (this.waitingQuotaCheckTimer) {
+      clearTimeout(this.waitingQuotaCheckTimer);
+      this.waitingQuotaCheckTimer = undefined;
+    }
   }
 
   handleEvent(type: string, taskId?: string, payload?: unknown): void {
@@ -121,25 +126,14 @@ export class NotificationService {
     const notifyConfig = this.config.telegram?.notify;
     const notifyPerModel = notifyConfig
       ? typeof notifyConfig.quotaPerModel === 'boolean' ? notifyConfig.quotaPerModel : (notifyConfig as unknown as { quota?: boolean }).quota === true
-      : true;
+      : false;
     const notifyAllExhausted = notifyConfig?.quotaAllExhausted !== false;
-    if (type === 'quota.cleared') {
-      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
-      this.waitingQuotaNotified = false;
-    }
+    if (type === 'quota.cleared' && typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
     if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
-      const waiting = this.taskRepo.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota');
-      if (waiting.length === 0) {
-        this.waitingQuotaNotified = false;
-      } else if (notifyAllExhausted && !this.waitingQuotaNotified) {
-        this.waitingQuotaNotified = true;
-        const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
-        const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
-        const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
-        this.notify(`${waiting.length} task đang chờ quota, sớm nhất mở lại lúc ${time}`, 'warning');
-      }
+      this.queueWaitingQuotaCheck(notifyAllExhausted);
       return;
     }
+    if ((type === 'quota.cleared' || type === 'task.queued') && this.taskRepo) this.queueWaitingQuotaCheck(notifyAllExhausted);
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // 1. In brain auto mode: suppress raw task notifications
@@ -304,7 +298,7 @@ export class NotificationService {
 
       case 'claude.fallback_changed': {
         const step = p.step && typeof p.step === 'object' ? p.step as Record<string, unknown> : null;
-        if (step && step.type !== 'wait') break;
+        if (p.fallbackAvailable === true || (step && step.type !== 'wait')) break;
         const label = step?.type === 'model' ? `model ${String(step.model)}`
           : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
           : step?.type === 'apiKey' ? 'API key'
@@ -372,6 +366,24 @@ export class NotificationService {
         break;
       }
     }
+  }
+
+  private queueWaitingQuotaCheck(notifyAllExhausted: boolean): void {
+    if (this.waitingQuotaCheckTimer || !this.taskRepo) return;
+    this.waitingQuotaCheckTimer = setTimeout(() => {
+      this.waitingQuotaCheckTimer = undefined;
+      const waiting = this.taskRepo?.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota') || [];
+      if (waiting.length === 0) {
+        this.waitingQuotaNotified = false;
+        return;
+      }
+      if (!notifyAllExhausted || this.waitingQuotaNotified) return;
+      this.waitingQuotaNotified = true;
+      const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
+      const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
+      const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
+      this.notify(`${waiting.length} task đang chờ quota, sớm nhất mở lại lúc ${time}`, 'warning');
+    }, 0);
   }
 
   private resolveTaskTitle(taskId?: string, payload?: Record<string, unknown>): string {

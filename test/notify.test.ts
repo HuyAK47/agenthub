@@ -214,6 +214,39 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
+  it('groups waiting quota tasks and notifies again after the blockage clears', async () => {
+    for (let i = 1; i <= 3; i += 1) {
+      taskRepo.insert({
+        id: `proj/quota-${i}`,
+        projectId: 'proj',
+        slug: `quota-${i}`,
+        title: `Quota ${i}`,
+        status: 'waiting_quota',
+        waitReason: 'quota',
+      });
+    }
+
+    const notifier = new NotificationService({ eventBus, config, taskRepo, quotaMarkRepo, exec: fakeExec });
+    notifier.start();
+    eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
+    eventBus.emit('task.waiting_quota', 'proj/quota-2', { reason: 'quota' });
+    eventBus.emit('task.waiting_quota', 'proj/quota-3', { reason: 'quota' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toContain('3 task đang chờ quota');
+
+    eventBus.emit('quota.cleared', undefined, { family: 'gemini' });
+    for (let i = 1; i <= 3; i += 1) taskRepo.updateStatus(`proj/quota-${i}`, 'queued');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    taskRepo.updateStatus('proj/quota-1', 'waiting_quota', 'quota');
+    eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(execCalls).toHaveLength(2);
+
+    notifier.stop();
+  });
+
   it('notifies when a profile authentication expires', () => {
     const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
     notifier.start();
