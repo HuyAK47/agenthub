@@ -3152,7 +3152,7 @@ export class TelegramBotService {
 
     // 1. Brain auto mode: suppress raw task notifications
     const projectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
-    const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
+    const isSystemEvent = type === 'quota.exhausted' || type === 'claude.quota_exhausted' || type.startsWith('disk.') || type.startsWith('system.') || type.startsWith('hub.') || type.startsWith('deploy.') || type === 'profile.auth_expired' || type === 'chat.limit_waiting';
     this.notificationProjectId = isSystemEvent ? null : projectId;
     try {
       const prefix = this.projectPrefix(projectId);
@@ -3169,6 +3169,7 @@ export class TelegramBotService {
         type === 'disk.docker_low' ||
         type === 'claude.quota_exhausted' ||
         type === 'hub.restart_failed' ||
+        type.startsWith('deploy.') ||
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
@@ -3458,6 +3459,21 @@ export class TelegramBotService {
         if (!notify.quota || !this.chatService || typeof p.sessionId !== 'string') return;
         const resetAt = typeof p.resetAt === 'number' ? formatReset(p.resetAt * 1000 + 60_000, this.now(), 'vi') : 'sau khi reset';
         this.broadcastMessage(`⏳ <b>Claude đạt giới hạn 5 giờ</b>\nTự gửi lại lúc <b>${resetAt}</b>.`, { inline_keyboard: [[{ text: '⏹ Huỷ', callback_data: `chatlimit:cancel:${p.sessionId}` }, { text: '▶️ Gửi lại ngay', callback_data: `chatlimit:now:${p.sessionId}` }]] });
+        break;
+      }
+
+      case 'deploy.started':
+      case 'deploy.restarting':
+      case 'deploy.restart_waiting':
+      case 'deploy.succeeded':
+      case 'deploy.failed': {
+        if (!notify.fallback) return;
+        const isFailure = type === 'deploy.failed';
+        const isSuccess = type === 'deploy.succeeded';
+        const title = isFailure ? 'Triển khai thất bại' : isSuccess ? 'Triển khai thành công' : type === 'deploy.started' ? 'Bắt đầu triển khai' : 'Đang chờ triển khai';
+        const icon = isFailure ? '🚨' : isSuccess ? '✅' : '🚀';
+        const details = typeof p.error === 'string' ? `\n${this.escapeHtml(p.error)}` : typeof p.message === 'string' ? `\n${this.escapeHtml(p.message)}` : '';
+        this.broadcastMessage(`${icon} <b>${title}</b>${details}`);
         break;
       }
 

@@ -2727,6 +2727,19 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(quotaCall?.body?.message_thread_id).toBeUndefined();
   });
 
+  it('deploy event co projectId van duoc gui vao General', async () => {
+    createProject('p-deploy', 'Deploy App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-deploy': { chatId: CHAT_ID, threadId: 88 } };
+    const bot = createProjectBot('suggest');
+
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy', error: 'build failed' });
+    await bot.flushQueue(CHAT_ID);
+
+    const deployCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(deployCall?.body?.text).toContain('Triển khai thất bại');
+    expect(deployCall?.body?.message_thread_id).toBeUndefined();
+  });
+
   it('3. /newtask dung du an dang chon lam mac dinh', async () => {
     createProject('p-alpha', 'Project Alpha', 'suggest', 'full');
     createProject('p-beta', 'Project Beta', 'suggest', 'full');
