@@ -2,6 +2,8 @@
 
 **Public landing page:** [agenthub landing page](https://ducanh19020217.github.io/agenthub/)
 
+The landing page also shows installer download counts, sourced from the public GitHub Releases API (`download_count` for AgentHub installer archives). Counts include reinstalls and are not a user count.
+
 **English** | [Tiếng Việt](README.vi.md)
 
 > A local operating system for AI coding workers that coordinates Antigravity (Gemini) and OpenAI Codex CLI across isolated git worktrees, orchestrated by Claude Code via MCP, Web Chat, and Telegram.
