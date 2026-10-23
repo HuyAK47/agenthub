@@ -455,6 +455,7 @@ export const UpdateConfigSchema = z.object({
     claudeFallback: z.boolean().optional(),
     claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
     claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+    claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
   }).optional(),
   brain: z.object({
     fallback: z.array(z.discriminatedUnion('type', [

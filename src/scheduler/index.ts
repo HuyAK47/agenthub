@@ -981,10 +981,12 @@ export class Scheduler {
     void this.checkRunningTasks().catch(() => {});
 
     // 3. Start new tasks if possible
-    this.scheduleNewTasks();
-
-    // 3b. Claude failover reviews tasks that are waiting for review.
+    // 3. Reviews first: a slot freed by a worker should finish reviewed work before starting new work,
+    // otherwise busy Codex accounts starve the review queue.
     this.scheduleReviews();
+
+    // 3b. Start new tasks if possible
+    this.scheduleNewTasks();
 
     // 4. Prune expired worktrees for completed tasks
     this.cleanExpiredWorktrees();
@@ -1894,8 +1896,8 @@ export class Scheduler {
         !this.reviewerRunsForProfile(p.name) && this.locks.findFreeSlotSync(p) !== null);
       if (!task.worktreePath) continue;
       if (codexProfiles.length === 0) {
-        // Every Codex account out of quota or logged out (not merely busy): review with Claude instead.
-        if (this.codexReviewUnavailable()) this.startClaudeFallbackReview(task);
+        // Every Codex account out of quota or logged out, or busy for too long: review with Claude instead.
+        if (this.codexReviewUnavailable() || this.reviewWaitedTooLong(task)) this.startClaudeFallbackReview(task);
         continue;
       }
       codexProfiles.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -1987,6 +1989,11 @@ export class Scheduler {
     try { chain = task.modelChain ? JSON.parse(task.modelChain) as string[] : []; } catch { chain = []; }
     this.taskRepo.update(task.id, { modelChain: JSON.stringify([ARBITER_RETRY_MODEL, ...chain.filter((model) => model !== ARBITER_RETRY_MODEL)]) });
     this.reviewTask(task.id, 'changes_requested', `${last.feedback || 'Claude reviewer yêu cầu sửa.'}\n\n(Codex đã từ chối nhiều vòng và Claude reviewer cũng yêu cầu sửa; giao lại lần ${rejections}/${ARBITER_ROUNDS} với ${ARBITER_RETRY_MODEL}.)`, 'auto-arbiter');
+  }
+
+  private reviewWaitedTooLong(task: TaskRow): boolean {
+    const waitedMs = Date.now() - parseDbTime(task.updatedAt);
+    return Number.isFinite(waitedMs) && waitedMs >= (this.config.reviewer?.claudeFallbackAfterMin ?? 10) * 60_000;
   }
 
   private codexReviewUnavailable(): boolean {

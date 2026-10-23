@@ -726,7 +726,8 @@ describe('Codex reviewer failover lifecycle', () => {
       scheduler.tick();
       const task = taskRepo.get('test-project/review')!;
       if (round <= 2) {
-        expect(task.status).toBe('queued');
+        // Back in the queue; the same tick may already mark it waiting for a free account.
+        expect(['queued', 'waiting_quota']).toContain(task.status);
         expect(JSON.parse(task.modelChain!)[0]).toBe('claude-opus-4-6-thinking');
       } else {
         expect(task.status).toBe('blocked');
@@ -742,6 +743,16 @@ describe('Codex reviewer failover lifecycle', () => {
     taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
     scheduler.tick();
     expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('lets Claude review once a busy Codex has kept the task waiting too long', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    (scheduler as unknown as { reviewerRunsForProfile: (name: string) => boolean }).reviewerRunsForProfile = (name) => name === 'codex-1';
+    db.prepare("UPDATE tasks SET updatedAt = datetime('now', '-30 minutes') WHERE id = 'test-project/review'").run();
+    scheduler.tick();
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.profileName).toBe('claude-1');
     scheduler.stop();
   });
 
