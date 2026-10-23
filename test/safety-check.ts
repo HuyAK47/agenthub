@@ -87,21 +87,6 @@ function getAgentHubTempDirNames(): Set<string> {
   }
 }
 
-function cleanupNewAgentHubTempDirs(): string[] {
-  const removed: string[] = [];
-  for (const name of getAgentHubTempDirNames()) {
-    if (initialTempDirNames.has(name)) continue;
-    const dir = path.join(os.tmpdir(), name);
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-      removed.push(name);
-    } catch {
-      // Best effort: a child process may still be finishing its cleanup.
-    }
-  }
-  return removed;
-}
-
 export function setup({ provide }: { provide: (key: string, value: string) => void }) {
   initialTempDirNames = getAgentHubTempDirNames();
   testTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-test-run-'));
@@ -137,7 +122,6 @@ export function setup({ provide }: { provide: (key: string, value: string) => vo
     if (testTempRoot) {
       try { fs.rmSync(testTempRoot, { recursive: true, force: true }); } catch { /* best effort */ }
     }
-    cleanupNewAgentHubTempDirs();
     const remainingNewTempDirs = [...getAgentHubTempDirNames()]
       .filter((name) => !initialTempDirNames.has(name));
     const leakedTempDirs = remainingNewTempDirs.length;
