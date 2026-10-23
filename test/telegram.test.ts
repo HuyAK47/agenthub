@@ -2690,7 +2690,23 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(sysBrainSession?.kind).toBe('brain');
   });
 
-  it('2. /newtask dung du an dang chon lam mac dinh', async () => {
+  it('2. thong bao project vao topic, thong bao he thong vao General', async () => {
+    createProject('p-topic', 'Topic App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-topic': { chatId: CHAT_ID, threadId: 42 } };
+    const bot = createProjectBot('suggest');
+
+    bot.broadcastMessage('project notification', undefined, 'p-topic');
+    await bot.flushQueue(CHAT_ID);
+    const projectCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(projectCall?.body?.message_thread_id).toBe(42);
+
+    bot.broadcastMessage('system notification');
+    await bot.flushQueue(CHAT_ID);
+    const systemCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(systemCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('3. /newtask dung du an dang chon lam mac dinh', async () => {
     createProject('p-alpha', 'Project Alpha', 'suggest', 'full');
     createProject('p-beta', 'Project Beta', 'suggest', 'full');
 
