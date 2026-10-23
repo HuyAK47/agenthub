@@ -78,10 +78,14 @@ export class BrainRunner {
     const day = new Date(this.now());
     day.setHours(0, 0, 0, 0);
     const departmentId = this.department(projectId)?.id;
-    const latest = departmentId ? this.opts.turnRepo.latestDepartment(departmentId) : this.opts.turnRepo.latest(projectId);
-    const tokensToday = departmentId
-      ? this.opts.turnRepo.tokensSinceDepartment(day.toISOString(), departmentId)
-      : this.opts.turnRepo.tokensSince(day.toISOString(), projectId);
+    const departmentLatest = departmentId ? this.opts.turnRepo.latestDepartment(departmentId) : undefined;
+    const projectLatest = this.opts.turnRepo.latest(projectId);
+    const latest = [departmentLatest, projectLatest]
+      .filter((turn): turn is NonNullable<typeof turn> => Boolean(turn))
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
+    const departmentTokens = departmentId ? this.opts.turnRepo.tokensSinceDepartment(day.toISOString(), departmentId) : 0;
+    const projectTokens = this.opts.turnRepo.tokensSince(day.toISOString(), projectId);
+    const tokensToday = departmentId ? departmentTokens + projectTokens : projectTokens;
     return { queued: this.isQueued(projectId), lastTurnAt: latest?.finishedAt || latest?.startedAt || null, tokensToday };
   }
 
