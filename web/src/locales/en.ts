@@ -312,6 +312,9 @@ export const en: typeof vi = {
     retryWithModel: 'Retry with another model',
     modelWarningTitle: 'Model chain warning',
     modelWarningItem: 'Model "{model}" is not available in a configured engine and will be skipped.',
+    timeline: 'Timeline',
+    noEvents: 'No events recorded yet.',
+    reviewFallbackLine: 'Codex out of quota, Claude is reviewing ({profile})',
   },
   profiles: {
     antigravitySubtitle: 'Google account and Gemini quota', codexSubtitle: 'ChatGPT account and device auth', claudeSubtitle: 'Claude Code account',
@@ -992,6 +995,12 @@ export const en: typeof vi = {
     digestTitle: 'Daily Digest',
     digestHint: 'Automatically summarize task counts, merged changes, and quota status every day.',
     digestTime: 'Digest delivery time',
+    claudeFallback: 'Fall back to Claude when Codex is out of quota',
+    claudeFallbackHint: 'When every Codex account is out of quota or logged out, automatically use Claude reviewer to continue reviewing.',
+    claudeModel: 'Claude review model',
+    claudeProfiles: 'Claude review profiles (in priority order)',
+    claudeProfilesHint: 'Select Claude profiles for review fallback (leave empty to use any profile).',
+    claudeProfilesOrder: 'Priority order',
   },
   savings: { title: 'Delegation Savings', subtitle: 'Measure the work Claude (the brain) avoids by delegating to workers (Gemini, Codex).', clearFilters: 'Clear filters', loadError: 'Failed to load delegation savings.', claudeSaved: 'Claude work avoided', savingRate: 'saving rate', codeWritten: 'Code written by workers', lines: 'lines', linesDeleted: 'lines deleted', approvedTasks: 'Approved tasks', totalTasks: '{count} tasks in the system', avgReviewRounds: 'Average review rounds', rounds: 'rounds', changesRound: 'Each changes_requested counts as one round', tokensByDay: 'Worker tokens by day', tokensByDayDesc: 'Daily token consumption split between Gemini (agy) and Codex.', noDailyData: 'No daily run data.', byTask: 'By-task table', byTaskDesc: 'Code lines, worker tokens, and review rounds for each task.', linesChange: 'Lines (+/-)', reviewRounds: 'Review rounds', noMatchingTasks: 'No matching tasks.', estimatedTitle: 'Estimated from 5-hour quota reduction', methodTitle: 'Measurement method and conversion factors', methodDesc: 'agy values are estimated from 5-hour quota reduction and bucketTokens capacity. Codex values are analyzed precisely from run logs.', },
   dailyUsage: {
