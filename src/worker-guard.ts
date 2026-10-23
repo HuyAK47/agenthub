@@ -364,21 +364,30 @@ exec ${shellQuote(realBinary)} "$@"
 export function brainReadShimScript(name: string, realBinary: string, interpreter = '/bin/sh'): string {
   return `#!${interpreter}
 root="${'${AGENTHUB_BRAIN_ROOT:-$PWD}'}"
+root="$(readlink -f -- "$root" 2>/dev/null)"
+if [ -z "$root" ]; then
+  echo 'AgentHub: brain policy không xác định được project root' >&2
+  exit 1
+fi
 for arg in "$@"; do
   case "$arg" in
     -*|[0-9]*) continue ;;
-    */.git|*/.git/*|*/auth.json|*/.credentials.json|*oauth*token*|*/.agenthub/token|*/secrets/*|*/.ssh/*|*/.codex/*|*/.agy-homes/*)
-      echo 'AgentHub: brain policy chặn đọc secret hoặc .git' >&2
+  esac
+  resolved="$(readlink -f -- "$arg" 2>/dev/null)"
+  if [ -z "$resolved" ]; then
+    echo 'AgentHub: brain policy không xác định được đường dẫn đọc' >&2
+    exit 1
+  fi
+  case "$resolved" in
+    "$root"|"$root"/*) ;;
+    *)
+      echo 'AgentHub: brain policy chặn đọc ngoài project/worktree' >&2
       exit 1
       ;;
-    /*)
-      case "$arg" in
-        "$root"|"$root"/*) ;;
-        *) echo 'AgentHub: brain policy chặn đọc ngoài project/worktree' >&2; exit 1 ;;
-      esac
-      ;;
-    ../*|*/../*|*'~'*)
-      echo 'AgentHub: brain policy chặn đường dẫn đọc không an toàn' >&2
+  esac
+  case "$resolved" in
+    */.git|*/.git/*|*/auth.json|*/.credentials.json|*oauth*token*|*/.agenthub/token|*/secrets|*/secrets/*|*/.ssh|*/.ssh/*|*/.codex|*/.codex/*|*/.agy-homes|*/.agy-homes/*)
+      echo 'AgentHub: brain policy chặn đọc secret hoặc .git' >&2
       exit 1
       ;;
   esac
