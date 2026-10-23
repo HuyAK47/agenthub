@@ -516,13 +516,16 @@ export class TelegramBotService {
     return undefined;
   }
 
-  async createDepartmentTopic(departmentId: string): Promise<TelegramProjectTopic> {
+  async createDepartmentTopic(departmentId: string, targetChatId?: number): Promise<TelegramProjectTopic> {
     const dept = this.departmentRepo?.get(departmentId);
     if (!dept) throw new Error(`Không tìm thấy phòng ban "${departmentId}"`);
     const existing = this.config.telegram.departmentTopics?.[departmentId];
     if (existing) return existing;
-    const chatId = this.config.telegram.allowedChatIds.find((id) => {
-      const chat = this.config.telegram.chats.find((item) => item.id === id);
+    const chatId = targetChatId ?? this.config.telegram.allowedChatIds.find((id) => {
+      const chat = this.config.telegram.chats?.find((item) => item.id === id);
+      return !chat?.projectId && (chat?.kind === 'supergroup' || chat?.kind === 'group' || id < 0);
+    }) ?? this.config.telegram.allowedChatIds.find((id) => id < 0) ?? this.config.telegram.allowedChatIds.find((id) => {
+      const chat = this.config.telegram.chats?.find((item) => item.id === id);
       return !chat?.projectId;
     }) ?? this.config.telegram.allowedChatIds[0];
     if (chatId === undefined) throw new Error('Chưa có chat Telegram được cho phép');
@@ -557,6 +560,11 @@ export class TelegramBotService {
 
   async setupTopics(mode?: 'project' | 'department'): Promise<Record<string, TelegramProjectTopic>> {
     const targetMode = mode || this.config.telegram.topicMode || 'project';
+    if (mode && this.config.telegram.topicMode !== mode) {
+      this.config.telegram.topicMode = mode;
+      updateConfigInMemory(this.config, { telegram: this.config.telegram });
+      saveConfig(this.config.hubHome, { telegram: this.config.telegram });
+    }
     if (targetMode === 'department') {
       return this.setupDepartmentTopics();
     }
@@ -1021,7 +1029,7 @@ export class TelegramBotService {
             id: chatId,
             name: msg.chat.title || (msg.chat.first_name ? `${msg.chat.first_name}${msg.chat.username ? ` (@${msg.chat.username})` : ''}` : `Chat ${chatId}`),
             ...(msg.chat.username ? { username: msg.chat.username } : {}),
-            kind: 'chat',
+            kind: isGroup ? (msg.chat.type === 'group' ? 'group' : 'supergroup') : 'chat',
           });
           this.pairingCode = null;
           this.pairingExpiresAt = 0;

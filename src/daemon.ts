@@ -61,6 +61,7 @@ export interface DaemonContext {
   config: AgentHubConfig;
   db: ReturnType<typeof openDatabase>;
   projectRepo: ProjectRepo;
+  departmentRepo: DepartmentRepo;
   profileRepo: ProfileRepo;
   quotaMarkRepo: QuotaMarkRepo;
   taskRepo: TaskRepo;
@@ -374,6 +375,7 @@ export function createContext(
     config,
     db,
     projectRepo,
+    departmentRepo,
     profileRepo,
     quotaMarkRepo,
     taskRepo,
