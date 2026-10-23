@@ -2106,8 +2106,11 @@ export class Scheduler {
       .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
     const lastEscalationId = escalations.at(-1)?.id;
     if (lastEscalationId == null || !this.hasAutomatedVerdictAfter(task.id, lastEscalationId, 'changes_requested')) return;
+    // Count all arbiter rejections in this escalation chain. A new worker retry
+    // emits another escalation, but it must not reset the arbiter round limit.
+    const firstEscalationId = escalations[0].id;
     const rejections = this.eventRepo.getByTask(task.id)
-      .filter((event) => event.id > lastEscalationId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
+      .filter((event) => event.id > firstEscalationId && event.type === 'review.completed' && event.payload?.includes('"verdict":"changes_requested"')).length;
     if (rejections > ARBITER_ROUNDS) {
       this.taskRepo.updateStatus(task.id, 'blocked');
       this.eventBus.emit('task.blocked', task.id, {

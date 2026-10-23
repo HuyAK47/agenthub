@@ -858,8 +858,9 @@ describe('Codex reviewer failover lifecycle', () => {
     };
     escalate(); escalate();
     for (let round = 1; round <= 3; round++) {
-      reviewRepo.insert({ id: `arb-no-${round}`, taskId: 'test-project/review', verdict: 'changes_requested', feedback: `thiếu test ${round}`, actor: 'claude-reviewer' });
       if (round > 1) escalate();
+      reviewRepo.insert({ id: `arb-no-${round}`, taskId: 'test-project/review', verdict: 'changes_requested', feedback: `thiếu test ${round}`, actor: 'claude-reviewer' });
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.completed', 'test-project/review', ?)").run(JSON.stringify({ actor: 'claude-reviewer', verdict: 'changes_requested' }));
       scheduler.tick();
       const task = taskRepo.get('test-project/review')!;
       if (round <= 2) {
