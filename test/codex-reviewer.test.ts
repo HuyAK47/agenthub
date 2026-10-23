@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { detectClaudeQuota } from '../src/chat/parse.js';
 import { ClaudeFailoverState } from '../src/chat/failover.js';
