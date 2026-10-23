@@ -121,7 +121,7 @@ interface RunningTask {
   lastTicks?: number;
   lastTicksAt?: number;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
   pausedAt?: number | null;
   referenceSnapshots?: ReferenceSnapshot[];
 }
@@ -319,7 +319,10 @@ export class Scheduler {
     return this.running;
   }
 
-  effectiveParallel(project: { maxParallel: number }): number {
+  effectiveParallel(project: { maxParallel: number; id?: string }): number {
+    const focus = this.getFocus();
+    const load = this.loadGuard.getStatus();
+    if (focus.projectId && project.id === focus.projectId && load.highSince === null) return project.maxParallel;
     return this.loadGuard.effectiveParallel(project.maxParallel);
   }
 
@@ -344,7 +347,7 @@ export class Scheduler {
     return this.paused;
   }
 
-  pauseTask(taskId: string, reason: 'manual' | 'load' = 'manual'): boolean {
+  pauseTask(taskId: string, reason: 'manual' | 'load' | 'focus' = 'manual'): boolean {
     const rt = this.running.get(taskId);
     if (!rt) return false;
     if (rt.paused) return true;
@@ -400,6 +403,36 @@ export class Scheduler {
     return true;
   }
 
+  getFocus(): AgentHubConfig['focus'] {
+    return this.config.focus || { projectId: null, since: null, pauseRunning: true };
+  }
+
+  applyFocus(): { paused: number; resumed: number; waiting: number } {
+    const focus = this.getFocus();
+    let paused = 0;
+    let resumed = 0;
+    let waiting = 0;
+    for (const rt of this.running.values()) {
+      if (!focus.projectId || rt.projectId === focus.projectId) {
+        if (rt.paused && rt.pauseReason === 'focus' && this.resumeTask(rt.taskId)) resumed++;
+      } else if (focus.pauseRunning && !rt.paused && this.pauseTask(rt.taskId, 'focus')) paused++;
+    }
+    for (const task of this.taskRepo.getByStatus('queued')) {
+      if (focus.projectId && task.projectId !== focus.projectId) {
+        if (task.waitReason !== 'focus') {
+          this.taskRepo.update(task.id, { status: 'queued', waitReason: 'focus' });
+          this.eventBus.emit('task.queued', task.id, { reason: 'focus', projectId: focus.projectId });
+        }
+        waiting++;
+      } else if (task.waitReason === 'focus') {
+        this.taskRepo.update(task.id, { status: 'queued', waitReason: null });
+        this.eventBus.emit('task.queued', task.id, { reason: 'focus_cleared' });
+      }
+    }
+    this.pumpChecks();
+    return { paused, resumed, waiting };
+  }
+
   measureTaskResources(rt: RunningTask): void {
     const task = this.taskRepo.get(rt.taskId);
     const prev = rt.lastTicks !== undefined && rt.lastTicksAt !== undefined
@@ -426,6 +459,7 @@ export class Scheduler {
     this.lastOrphanScan = Date.now();
     // Recover crashed runs on startup
     this.recoverOnStartup();
+    this.applyFocus();
     this.skipSchedulingOnce = true;
 
     // Start the scheduler loop (every 2 seconds)
@@ -690,6 +724,8 @@ export class Scheduler {
     while (!this.stopped && this.checkingActive.size < limit) {
       const index = this.checkingQueue.findIndex((entry) => {
         const task = this.taskRepo.get(entry.taskId);
+        const focus = this.getFocus();
+        if (focus.projectId && task && task.projectId !== focus.projectId) return false;
         const worktree = task?.worktreePath || `project:${task?.projectId || entry.taskId}`;
         return !this.checkingWorktrees.has(worktree);
       });
@@ -1669,6 +1705,15 @@ export class Scheduler {
     const queuedTasks = this.taskRepo.getByStatus('queued');
 
     for (const task of queuedTasks) {
+      const focus = this.getFocus();
+      if (focus.projectId && task.projectId !== focus.projectId) {
+        if (task.waitReason !== 'focus') {
+          this.taskRepo.update(task.id, { status: 'queued', waitReason: 'focus' });
+          this.eventBus.emit('task.queued', task.id, { reason: 'focus', projectId: focus.projectId });
+        }
+        continue;
+      }
+      if (task.waitReason === 'focus') this.taskRepo.update(task.id, { status: 'queued', waitReason: null });
       if (task.notBefore != null && task.notBefore > Math.floor(Date.now() / 1000)) continue;
       // Check dependencies
       if (!this.areDependenciesMet(task)) continue;
@@ -1746,6 +1791,8 @@ export class Scheduler {
     const codex = this.engines.get('codex');
     if (!codex) return;
     for (const task of this.taskRepo.getByStatus('review')) {
+      const focus = this.getFocus();
+      if (focus.projectId && task.projectId !== focus.projectId) continue;
       if (this.reviewerRuns.has(task.id)) continue;
       if (task.reviewerEscalated) {
         const last = this.reviewRepo.getByTask(task.id).at(-1);

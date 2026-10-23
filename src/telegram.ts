@@ -212,6 +212,7 @@ export const TELEGRAM_BOT_COMMANDS: Array<{ command: string; description: string
   { command: 'digest', description: 'Tóm tắt tình hình hệ thống và quota' },
   { command: 'plans', description: '5 kế hoạch gần nhất và tiến độ' },
   { command: 'status', description: 'Tình hình hub: task, worker, quota' },
+  { command: 'focus', description: 'Tập trung tài nguyên cho một dự án: /focus <dự án>|off' },
   { command: 'tasks', description: 'Danh sách task (lọc: /tasks running)' },
   { command: 'task', description: 'Chi tiết một task: /task <id>' },
   { command: 'newtask', description: 'Tạo task từ một đoạn mô tả chung' },
@@ -1038,6 +1039,10 @@ export class TelegramBotService {
         await this.handleStatusCommand(chatId);
         break;
 
+      case '/focus':
+        await this.handleFocusCommand(chatId, argStr);
+        break;
+
       case '/digest':
         await this.handleDigestCommand(chatId);
         break;
@@ -1123,6 +1128,27 @@ export class TelegramBotService {
       default:
         await this.sendMessage(chatId, `Lệnh không hợp lệ: ${cmd}. Gõ /help để xem hướng dẫn.`);
         break;
+    }
+  }
+
+  private async handleFocusCommand(chatId: number, argStr: string): Promise<void> {
+    const target = argStr.trim();
+    const current = this.service.getFocus();
+    if (!target) {
+      await this.sendMessage(chatId, current.projectId
+        ? `🎯 Đang tập trung cho <b>${this.escapeHtml(current.projectId)}</b>\nTask khác đang chờ: ${this.taskRepo.getByStatus('queued').filter((task) => task.waitReason === 'focus').length}`
+        : '🎯 Chưa bật chế độ tập trung.');
+      return;
+    }
+    try {
+      const result = this.service.setFocus({ projectId: target.toLowerCase() === 'off' ? null : target });
+      if (!result.focus.projectId) {
+        await this.sendMessage(chatId, `▶️ Đã tắt tập trung. ${result.resumed} task được chạy lại.`);
+      } else {
+        await this.sendMessage(chatId, `🎯 Đã tập trung cho <b>${this.escapeHtml(result.focus.projectId)}</b>. ${result.paused} task bị tạm dừng, ${result.waiting} task khác đang chờ.`);
+      }
+    } catch (error) {
+      await this.sendMessage(chatId, `❌ ${this.escapeHtml(error instanceof Error ? error.message : String(error))}`);
     }
   }
 
@@ -3738,6 +3764,7 @@ export class TelegramBotService {
 
 /use &lt;dự án&gt; - Chọn dự án hiện tại cho chat (/use để xem, /use none để bỏ chọn)
 /status - Xem tổng quan hệ thống (task, hồ sơ, quota, ổ đĩa)
+/focus &lt;dự án&gt; - Tập trung tài nguyên cho dự án; /focus off để tắt
 /digest - Xem tóm tắt hệ thống (task hoàn thành, đã merge, quota, việc cần quyết định)
 /plans - Xem 5 kế hoạch gần nhất và tiến độ
 /ci [dự án] - Xem trạng thái CI GitHub Actions gần nhất và job lỗi

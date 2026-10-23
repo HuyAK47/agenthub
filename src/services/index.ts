@@ -456,6 +456,11 @@ export const UpdateConfigSchema = z.object({
     claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
     claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
   }).optional(),
+  focus: z.object({
+    projectId: z.string().min(1).nullable().optional(),
+    since: z.string().nullable().optional(),
+    pauseRunning: z.boolean().optional(),
+  }).optional(),
   brain: z.object({
     fallback: z.array(z.discriminatedUnion('type', [
       z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
@@ -663,6 +668,9 @@ export function formatEventSummary(
       }
       if (reason === 'profile_busy') {
         return `${taskLabel} chờ tài khoản rảnh`;
+      }
+      if (reason === 'focus') {
+        return `${taskLabel} chờ vì đang tập trung cho project khác`;
       }
       return `${taskLabel} chờ quota khả dụng`;
     }
@@ -1150,6 +1158,7 @@ export class AppService {
       recentEvents,
       brain: this.brainService?.getStatus(),
       schedulerPaused: this.scheduler.isPaused(),
+      focus: this.config.focus,
       disk: {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
@@ -3533,6 +3542,7 @@ export class AppService {
       },
       assistant: this.config.assistant,
       reviewer: this.config.reviewer,
+      focus: this.config.focus,
       notifications: this.config.notifications,
       savings: this.config.savings,
       load: this.config.load,
@@ -3548,6 +3558,28 @@ export class AppService {
       },
       ui: this.config.ui,
     };
+  }
+
+  getFocus() {
+    return this.config.focus;
+  }
+
+  setFocus(raw: unknown) {
+    const parsed = z.object({ projectId: z.string().min(1).nullable(), pauseRunning: z.boolean().optional() }).parse(raw);
+    if (parsed.projectId && !this.projectRepo.get(parsed.projectId)) {
+      throw new HttpError(404, 'not_found', `Project "${parsed.projectId}" không tồn tại`);
+    }
+    const focus = {
+      projectId: parsed.projectId,
+      since: parsed.projectId ? new Date().toISOString() : null,
+      pauseRunning: parsed.pauseRunning ?? this.config.focus.pauseRunning,
+    };
+    updateConfigInMemory(this.config, { focus });
+    saveConfig(this.config.hubHome, { focus });
+    const changes = this.scheduler.applyFocus();
+    this.scheduler.triggerTick();
+    this.scheduler.getEventBus().emit('focus.changed', undefined, { focus, ...changes });
+    return { focus, ...changes };
   }
 
   getModelOptions() {
@@ -3575,6 +3607,10 @@ export class AppService {
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
+    if (parsed.focus) {
+      this.scheduler.applyFocus();
+      this.scheduler.triggerTick();
+    }
 
     if (parsed.telegram?.enabled !== undefined && this.telegramBotService) {
       if (parsed.telegram.enabled) {
