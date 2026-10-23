@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { BrainConfig } from '../config.js';
-import { BrainDirectiveRepo, BrainTurnRepo, ChatSessionRepo, KnowledgeRepo, ProfileRepo, TaskRepo } from '../db/index.js';
+import { BrainDirectiveRepo, BrainTurnRepo, ChatSessionRepo, DepartmentRepo, KnowledgeRepo, ProfileRepo, TaskRepo } from '../db/index.js';
 import { resolveClaudeProfile, resolveCodexProfile } from '../profiles/index.js';
 import type { ChatService } from '../chat/service.js';
 import { EventBus } from '../scheduler/index.js';
@@ -21,7 +21,8 @@ export interface BrainRunnerOptions {
   profileRepo?: Pick<ProfileRepo, 'getAll'>;
   taskRepo?: Pick<TaskRepo, 'get'>;
   turnRepo: BrainTurnRepo;
-  projectRepo?: { get(id: string): { id: string; name: string; path: string; settings?: string | null } | undefined; getAll?: () => Array<{ id: string }> };
+  projectRepo?: { get(id: string): { id: string; name: string; path: string; departmentId?: string; settings?: string | null } | undefined; getAll?: () => Array<{ id: string }> };
+  departmentRepo?: DepartmentRepo;
   directiveRepo?: BrainDirectiveRepo;
   knowledgeRepo?: KnowledgeRepo;
   debounceMs?: number;
@@ -29,7 +30,7 @@ export interface BrainRunnerOptions {
 }
 
 export interface BrainQueuedEvent { id?: string; type: string; taskId?: string; projectId?: string | null; payload?: unknown; priority?: boolean; }
-interface ActiveTurn { id: string; events: BrainQueuedEvent[]; retries: number; knowledgeHash?: string; timer?: NodeJS.Timeout; }
+interface ActiveTurn { id: string; events: BrainQueuedEvent[]; retries: number; knowledgeHash?: string; departmentId?: string; timer?: NodeJS.Timeout; }
 
 /** Routes resident-brain turns by project while retaining the system brain for incidents. */
 export class BrainRunner {
@@ -54,7 +55,7 @@ export class BrainRunner {
   start(): void {
     if (this.started) return;
     this.started = true;
-    this.ensureSession(null);
+    if (this.opts.config.mode !== 'off' || this.opts.config.director?.enabled) this.ensureSession(null);
     this.opts.eventBus.on('*', this.bound);
   }
 
@@ -112,7 +113,7 @@ export class BrainRunner {
     const result: Array<string | null> = [];
     for (const event of this.pending) {
       const projectId = event.projectId ?? null;
-      const key = projectId ?? '__system__';
+      const key = this.sessionIdFor(projectId);
       if (seen.has(key)) continue;
       seen.add(key);
       result.push(projectId);
@@ -122,17 +123,21 @@ export class BrainRunner {
 
   private canStart(projectId: string | null): 'ready' | 'busy' | 'limited' | 'global_limited' {
     const sessionId = this.sessionIdFor(projectId);
-    const session = this.ensureSession(projectId);
     const mode = this.mode(projectId);
     if (mode === 'off' || mode === 'external') { this.dropProjectEvents(projectId); return 'busy'; }
+    const session = this.ensureSession(projectId);
     if (session.busy === 1 || session.state === 'running' || session.state === 'waiting_limit' || this.active.has(sessionId) || this.userBusy.has(sessionId)) return 'busy';
     const now = this.now();
     const day = new Date(now);
     day.setHours(0, 0, 0, 0);
     const settings = this.projectSettings(projectId);
-    const maxTurns = settings.brain.maxTurnsPerHour ?? this.opts.config.maxTurnsPerHour;
-    const budget = settings.brain.dailyTokenBudget ?? this.opts.config.dailyTokenBudget;
-    if (this.opts.turnRepo.countSince(now - 3600000, projectId) >= maxTurns || (budget > 0 && this.opts.turnRepo.tokensSince(day.toISOString(), projectId) >= budget)) {
+    const department = this.department(projectId);
+    const departmentId = department?.id;
+    const maxTurns = departmentId ? (department.brainMaxTurnsPerHour || this.opts.config.maxTurnsPerHour) : (settings.brain.maxTurnsPerHour ?? this.opts.config.maxTurnsPerHour);
+    const budget = departmentId ? (department.brainDailyTokenBudget || this.opts.config.dailyTokenBudget) : (settings.brain.dailyTokenBudget ?? this.opts.config.dailyTokenBudget);
+    const count = departmentId ? this.opts.turnRepo.countSinceDepartment(now - 3600000, departmentId) : this.opts.turnRepo.countSince(now - 3600000, projectId);
+    const tokens = departmentId ? this.opts.turnRepo.tokensSinceDepartment(day.toISOString(), departmentId) : this.opts.turnRepo.tokensSince(day.toISOString(), projectId);
+    if (count >= maxTurns || (budget > 0 && tokens >= budget)) {
       this.opts.eventBus.emit('brain.limited', projectId || undefined, { reason: 'budget' });
       return 'limited';
     }
@@ -145,16 +150,17 @@ export class BrainRunner {
 
   private startProjectTurn(projectId: string | null): void {
     const sessionId = this.sessionIdFor(projectId);
-    const projectEvents = this.pending.filter((event) => (event.projectId ?? null) === projectId);
+    const projectEvents = this.pending.filter((event) => this.sessionIdFor(event.projectId ?? null) === sessionId);
     const priority = projectEvents.find((event) => event.priority);
     const events = priority ? [priority] : projectEvents;
-    this.pending = this.pending.filter((event) => !(event.priority ? event === priority : !priority && (event.projectId ?? null) === projectId));
+    this.pending = this.pending.filter((event) => this.sessionIdFor(event.projectId ?? null) !== sessionId || (priority ? event !== priority : false));
     const formatted = priority
       ? { text: this.formatDirectiveAcknowledgement(priority, projectId) }
       : this.formatEvents(events, this.mode(projectId), projectId);
     const input = formatted.text;
-    const turn = this.opts.turnRepo.insert({ id: crypto.randomUUID(), trigger: 'event', input, projectId });
-    const active: ActiveTurn = { id: turn.id, events, retries: Math.max(0, ...events.map((event) => this.retryCounts.get(event.id || '') || 0)), knowledgeHash: formatted.knowledgeHash };
+    const departmentId = this.department(projectId)?.id;
+    const turn = this.opts.turnRepo.insert({ id: crypto.randomUUID(), trigger: 'event', input, projectId: departmentId ? null : projectId, departmentId });
+    const active: ActiveTurn = { id: turn.id, events, retries: Math.max(0, ...events.map((event) => this.retryCounts.get(event.id || '') || 0)), knowledgeHash: formatted.knowledgeHash, departmentId };
     this.active.set(sessionId, active);
     try {
       this.opts.chatService.sendMessage(sessionId, input);
@@ -166,16 +172,38 @@ export class BrainRunner {
     }
   }
 
-  private dropProjectEvents(projectId: string | null): void { this.pending = this.pending.filter((event) => (event.projectId ?? null) !== projectId); }
+  private dropProjectEvents(projectId: string | null): void {
+    const sessionId = this.sessionIdFor(projectId);
+    this.pending = this.pending.filter((event) => this.sessionIdFor(event.projectId ?? null) !== sessionId);
+  }
   private projectSettings(projectId: string | null) { return projectSettings(projectId ? this.opts.projectRepo?.get(projectId) : null); }
-  private mode(projectId: string | null): EffectiveBrainMode { return effectiveBrainMode(projectId, projectId ? this.opts.projectRepo?.get(projectId) : null, this.opts.config); }
-  private sessionIdFor(projectId: string | null): string { return projectId ? `brain:${projectId}` : 'brain'; }
+  private department(projectId: string | null) {
+    const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
+    return project?.departmentId ? this.opts.departmentRepo?.get(project.departmentId) : undefined;
+  }
+  private mode(projectId: string | null): EffectiveBrainMode {
+    if (this.opts.config.mode === 'off') return 'off';
+    const project = projectId ? this.opts.projectRepo?.get(projectId) : null;
+    const projectMode = effectiveBrainMode(projectId, project, this.opts.config);
+    const departmentMode = this.department(projectId)?.brainMode;
+    return departmentMode && departmentMode !== 'inherit' && projectSettings(project).brain.mode === 'inherit' ? departmentMode : projectMode;
+  }
+  private sessionIdFor(projectId: string | null): string {
+    const department = this.department(projectId);
+    if (department && this.opts.departmentRepo) return `brain:department:${department.id}`;
+    if (projectId) return `brain:${projectId}`;
+    return this.opts.config.director?.enabled ? 'brain:director' : 'brain';
+  }
 
   ensureSession(projectId: string | null) {
     const id = this.sessionIdFor(projectId);
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
-    const permission = effectiveBrainPermission(project, this.opts.config);
-    const mode = permission === 'full' ? 'full' : 'safe';
+    const department = this.department(projectId);
+    const permission = department?.brainPermissions && department.brainPermissions !== 'inherit'
+      ? department.brainPermissions : effectiveBrainPermission(project, this.opts.config);
+    const director = !projectId ? this.opts.config.director : undefined;
+    const effectivePermission = director?.permissions || permission;
+    const mode = effectivePermission === 'full' ? 'full' : 'safe';
     const existing = this.opts.chatSessionRepo.get(id) || this.opts.chatSessionRepo.getByKind('brain', projectId);
     if (existing) {
       if (existing.mode !== mode && existing.busy !== 1) {
@@ -194,10 +222,12 @@ export class BrainRunner {
       return this.opts.chatSessionRepo.get(existing.id) || existing;
     }
     const engine = effectiveBrainEngine(project, this.opts.config);
+    const resolvedEngine = director?.engine || department?.brainEngine || engine;
+    const resolvedModel = director?.model || department?.brainModel || (resolvedEngine === 'codex' ? (this.opts.config.codexModel || 'gpt-5.6-luna') : this.opts.config.model);
     this.opts.chatService.getOrCreateSession(id, {
-      title: project ? `Bộ não · ${project.name}` : 'Bộ não', mode,
-      model: engine === 'codex' ? (this.opts.config.codexModel || 'gpt-5.6-luna') : this.opts.config.model,
-      profileName: engine === 'codex' ? this.codexProfile(project) : this.profileName(), kind: 'brain', projectId,
+      title: department ? `Bộ não · ${department.name}` : project ? `Bộ não · ${project.name}` : director ? 'Bộ não Giám đốc' : 'Bộ não', mode,
+      model: resolvedModel,
+      profileName: resolvedEngine === 'codex' ? this.codexProfile(project, director?.codexProfile || department?.brainCodexProfile || undefined) : this.profileName(), kind: 'brain', projectId: department ? null : projectId,
     } as never);
     this.opts.chatSessionRepo.updatePinned(id, 1);
     return this.opts.chatSessionRepo.get(id)!;
@@ -205,12 +235,12 @@ export class BrainRunner {
 
   private profileName(): string { return resolveClaudeProfile(this.opts.profileRepo || { getAll: () => [] }, this.opts.config.claudeProfile, this.opts.config.claudeProfileExplicit); }
 
-  private codexProfile(project?: { settings?: string | null }): string | null {
+  private codexProfile(project?: { settings?: string | null }, override?: string): string | null {
     return resolveCodexProfile(
       this.opts.profileRepo || { getAll: () => [] },
       effectiveBrainCodexProfile(
         project,
-        this.opts.config,
+        { ...this.opts.config, codexProfile: override || this.opts.config.codexProfile },
       ),
     );
   }
@@ -289,7 +319,10 @@ export class BrainRunner {
 
   private formatEvents(events: BrainQueuedEvent[], mode: EffectiveBrainMode, projectId: string | null): { text: string; knowledgeHash?: string } {
     const project = projectId ? this.opts.projectRepo?.get(projectId) : undefined;
-    const context = project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
+    const department = this.department(projectId);
+    const context = department
+      ? `Bạn là bộ não của phòng ban ${department.name}. Điều phối các project thuộc phòng này; đọc AGENTS.md/CLAUDE.md của từng repo khi cần.`
+      : project ? `Bạn là bộ não của dự án ${project.name} (${project.path}). Chỉ xử lý dự án này. Đọc AGENTS.md/CLAUDE.md của repo.` : 'Bạn là bộ não hệ thống; chỉ xử lý sự cố hệ thống.';
     const seenQuota = new Set<string>();
     const lines = events.filter((event) => {
       if (event.type !== 'quota.exhausted' && event.type !== 'claude.quota_exhausted') return true;
@@ -301,8 +334,16 @@ export class BrainRunner {
     }).slice(0, 30).map((event) => `- ${event.type}${event.taskId ? ` (${event.taskId})` : ''}${event.payload ? ` ${JSON.stringify(event.payload).slice(0, 500)}` : ''}`);
     const directives = this.opts.directiveRepo?.list(projectId).map((directive) => `- ${directive.text}`).join('\n') || '- Không có';
     const settings = projectId ? this.projectSettings(projectId) : null;
-    const knowledge = projectId && this.opts.knowledgeRepo
-      ? buildProjectKnowledgeContext(this.opts.knowledgeRepo.getByProject(projectId), settings?.references || [], undefined, project?.path)
+    const knowledgeProjects = [...new Set(events.map((event) => event.projectId).filter((id): id is string => typeof id === 'string'))];
+    const knowledgeContexts = this.opts.knowledgeRepo
+      ? (knowledgeProjects.length ? knowledgeProjects : projectId ? [projectId] : []).map((id) => {
+          const item = this.opts.projectRepo?.get(id);
+          const itemSettings = this.projectSettings(id);
+          return buildProjectKnowledgeContext(this.opts.knowledgeRepo!.getByProject(id), itemSettings.references || [], undefined, item?.path);
+        })
+      : [];
+    const knowledge = knowledgeContexts.length
+      ? { text: knowledgeContexts.map((item) => item.text).join('\n\n'), hash: crypto.createHash('sha256').update(knowledgeContexts.map((item) => item.hash).join(':')).digest('hex') }
       : null;
     const key = this.sessionIdFor(projectId);
     let knowledgePrompt = 'KIẾN THỨC DỰ ÁN không đổi; hãy tiếp tục áp dụng kiến thức đã nhận.';

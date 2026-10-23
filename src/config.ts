@@ -64,6 +64,14 @@ export interface BrainConfig {
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
   digest: BrainDigestConfig;
+  /** Optional cross-department coordinator. Disabled unless explicitly enabled. */
+  director?: {
+    enabled: boolean;
+    engine: 'claude' | 'codex';
+    model: string;
+    codexProfile?: string;
+    permissions: 'standard' | 'trusted' | 'full';
+  };
 }
 
 export interface AssistantConfig {
@@ -582,6 +590,7 @@ export function updateConfigInMemory(
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
     if (patch.brain.maxConcurrent !== undefined) config.brain.maxConcurrent = patch.brain.maxConcurrent;
+    if (patch.brain.director) config.brain.director = { ...config.brain.director, ...patch.brain.director };
     if (patch.brain.digest) {
       config.brain.digest = {
         ...config.brain.digest,
@@ -1005,6 +1014,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
               : DEFAULT_BRAIN_DIGEST_CONFIG.time,
           }
         : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
+      director: {
+        enabled: (brainRaw.director as Record<string, unknown> | undefined)?.enabled === true,
+        engine: (brainRaw.director as Record<string, unknown> | undefined)?.engine === 'codex' ? 'codex' : 'claude',
+        model: typeof (brainRaw.director as Record<string, unknown> | undefined)?.model === 'string'
+          ? (brainRaw.director as Record<string, unknown>).model as string : 'opus',
+        codexProfile: typeof (brainRaw.director as Record<string, unknown> | undefined)?.codexProfile === 'string'
+          ? (brainRaw.director as Record<string, unknown>).codexProfile as string : undefined,
+        permissions: (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'full'
+          ? 'full' : (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'trusted' ? 'trusted' : 'standard',
+      },
     },
     assistant: {
       enabled: assistantRaw.enabled !== false,
