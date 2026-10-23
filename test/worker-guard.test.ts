@@ -193,12 +193,18 @@ describe('worker service guard', () => {
     fs.writeFileSync(path.join(secret, 'auth.json'), '{"token":"do-not-read"}\n');
     fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, 'outside-link'));
     fs.symlinkSync(path.join(secret, 'auth.json'), path.join(repo, 'secret-link'));
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, '-secret-link'));
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, '1secret-link'));
 
     const env = workerEnvironment(hub, { ...process.env }, { cwd: repo, brainPolicy: 'standard' });
     expect(() => execFileSync('cat', ['outside-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
       .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
     expect(() => execFileSync('cat', ['secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
       .toThrow('AgentHub: brain policy chặn đọc secret hoặc .git');
+    expect(() => execFileSync('cat', ['--', '-secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
+    expect(() => execFileSync('cat', ['1secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
 
     fs.rmSync(root, { recursive: true, force: true });
   });

@@ -362,6 +362,17 @@ exec ${shellQuote(realBinary)} "$@"
  * this shim prevents reads of credentials and unrelated host files.
  */
 export function brainReadShimScript(name: string, realBinary: string, interpreter = '/bin/sh'): string {
+  const optionSpec = {
+    cat: { flags: ['-A', '-b', '-e', '-E', '-n', '-s', '-t', '-T', '-v', '--show-all', '--number-nonblank', '--number', '--squeeze-blank', '--show-tabs', '--show-nonprinting'], values: [] },
+    grep: { flags: ['-E', '-F', '-G', '-P', '-i', '-v', '-w', '-x', '-m', '-n', '-b', '-H', '-h', '-s', '-o', '-q', '-r', '-R', '-a', '--extended-regexp', '--fixed-strings', '--basic-regexp', '--perl-regexp', '--ignore-case', '--invert-match', '--word-regexp', '--line-regexp', '--line-number', '--byte-offset', '--with-filename', '--no-filename', '--silent', '--only-matching', '--quiet', '--recursive', '--dereference-recursive', '--binary-files'], values: ['-e', '-f', '--regexp', '--file', '--max-count', '--binary-files'] },
+    head: { flags: ['-q', '-v', '--quiet', '--verbose'], values: ['-n', '-c', '--lines', '--bytes'] },
+    tail: { flags: ['-q', '-v', '--quiet', '--verbose', '--follow', '--retry', '--pid'], values: ['-n', '-c', '-s', '--lines', '--bytes', '--sleep-interval', '--pid'] },
+    wc: { flags: ['-c', '-m', '-l', '-L', '-w', '--bytes', '--chars', '--lines', '--max-line-length', '--words'], values: [] },
+    ls: { flags: ['-a', '-A', '-b', '-B', '-c', '-C', '-d', '-f', '-F', '-g', '-G', '-h', '-H', '-i', '-l', '-m', '-n', '-N', '-o', '-p', '-q', '-Q', '-r', '-R', '-s', '-S', '-t', '-u', '-U', '-v', '-w', '-x', '-X', '-Z', '--all', '--almost-all', '--author', '--color', '--directory', '--classify', '--human-readable', '--inode', '--long', '--reverse', '--recursive', '--size', '--sort', '--time', '--version-sort'], values: [] },
+  }[name as 'cat' | 'grep' | 'head' | 'tail' | 'wc' | 'ls'] ?? { flags: [], values: [] };
+  const flags = optionSpec.flags.map(shellQuote).join('|');
+  const values = optionSpec.values.map(shellQuote).join('|');
+  const valueCase = values ? `      ${values}) option_value=1; continue ;;\n` : '';
   return `#!${interpreter}
 root="${'${AGENTHUB_BRAIN_ROOT:-$PWD}'}"
 root="$(readlink -f -- "$root" 2>/dev/null)"
@@ -369,10 +380,24 @@ if [ -z "$root" ]; then
   echo 'AgentHub: brain policy không xác định được project root' >&2
   exit 1
 fi
+end_options=0
+option_value=0
 for arg in "$@"; do
-  case "$arg" in
-    -*|[0-9]*) continue ;;
-  esac
+  if [ "$option_value" -eq 1 ]; then
+    option_value=0
+    continue
+  fi
+  if [ "$end_options" -eq 1 ]; then
+    :
+  else
+    case "$arg" in
+      --) end_options=1; continue ;;
+      ${flags}) continue ;;
+${valueCase}      *) ;;
+    esac
+  fi
+  # Numeric names and unknown dash-prefixed values are operands.  Only the
+  # command's known options above are skipped.
   resolved="$(readlink -f -- "$arg" 2>/dev/null)"
   if [ -z "$resolved" ]; then
     echo 'AgentHub: brain policy không xác định được đường dẫn đọc' >&2
