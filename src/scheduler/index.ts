@@ -38,6 +38,7 @@ import { ClaudeFailoverState } from '../chat/failover.js';
 import { ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { CLAUDE_REVIEW_ENGINE_KEY } from '../engines/claude-review.js';
+import { effectiveBrainMode } from '../brain/mode.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
 import { isOrphanProcess, listAllWorktreeProcesses, reap, reapSyncForWorktree } from '../reaper.js';
 import { LoadGuard, LoadSnapshot } from '../load.js';
@@ -1742,7 +1743,10 @@ export class Scheduler {
     if (!codex) return;
     for (const task of this.taskRepo.getByStatus('review')) {
       if (this.reviewerRuns.has(task.id)) continue;
-      if (task.reviewerEscalated) continue;
+      if (task.reviewerEscalated) {
+        if (this.needsClaudeArbiter(task)) this.startClaudeFallbackReview(task);
+        continue;
+      }
       const chain = this.reviewChainForTask(task);
       const step = chain[task.reviewStep ?? 0];
       if (chain.length > 0 && (task.reviewStep ?? 0) >= chain.length && this.skippedCodexGate(task, chain)) {
@@ -1823,6 +1827,22 @@ export class Scheduler {
     } else {
       this.eventBus.emit('review.gate_completed', task.id, { reviewStep: nextStep, reason });
     }
+  }
+
+  /**
+   * Without an auto brain, a task escalated a second time for reviewer change requests gets one
+   * final verdict from the Claude reviewer instead of waiting for a person. Its approval merges as
+   * usual; a further change request leaves the task parked (it is already escalated).
+   */
+  private needsClaudeArbiter(task: TaskRow): boolean {
+    if (this.config.reviewer?.claudeFallback === false || task.reviewerEscalationReason !== 'reviewer_changes_limit') return false;
+    const project = this.projectRepo.get(task.projectId);
+    if (effectiveBrainMode(task.projectId, project, this.config.brain) === 'auto') return false;
+    const escalations = this.eventRepo.getByTask(task.id)
+      .filter((event) => event.type === 'review.escalated' && event.payload?.includes('reviewer_changes_limit'));
+    if (escalations.length < 2) return false;
+    const lastEscalation = escalations[escalations.length - 1].ts;
+    return !this.reviewRepo?.getByTask(task.id).some((review) => review.actor === 'claude-reviewer' && review.createdAt >= lastEscalation);
   }
 
   private codexReviewUnavailable(): boolean {
@@ -2323,6 +2343,15 @@ export class Scheduler {
     return running + starting >= this.locks.slotsTotal(profile) || this.locks.getSlotsSync(profile).busy;
   }
 
+  private startSkipLogged = new Map<string, string>();
+
+  /** startTask bails out without changing the task in a few cases; say why once, or a queue looks frozen. */
+  private logStartSkipped(task: TaskRow, reason: string): void {
+    if (this.startSkipLogged.get(task.id) === reason) return;
+    this.startSkipLogged.set(task.id, reason);
+    console.warn(`[scheduler] ${task.id} not started: ${reason}`);
+  }
+
   async startTask(task: TaskRow, model: string, profileName: string, retryCount = 0): Promise<void> {
     const stopGeneration = this.stopGeneration;
     const disk = this.getBlockingDisk();
@@ -2335,9 +2364,9 @@ export class Scheduler {
     }
 
     const profile = this.profileRepo.get(profileName);
-    if (!profile) return;
+    if (!profile) return this.logStartSkipped(task, `profile ${profileName} missing`);
     const lockSlot = this.locks.findFreeSlotSync(profile);
-    if (lockSlot == null) return;
+    if (lockSlot == null) return this.logStartSkipped(task, `no free lock slot on ${profileName}`);
     const lockFile = this.locks.lockPath(profile, lockSlot);
     this.locks.reserve(profile.name, lockFile);
 
@@ -2359,7 +2388,7 @@ export class Scheduler {
     const engine = this.engines.get(engineId);
     if (!engine) {
       this.locks.release(profile.name, lockFile);
-      return;
+      return this.logStartSkipped(task, `engine ${engineId} not available`);
     }
 
     this.starting.set(task.id, { projectId: task.projectId, profileName });
@@ -2370,10 +2399,10 @@ export class Scheduler {
       let slot: number;
       try {
         slot = this.worktreeService.allocateSlot(task.projectId, this.taskRepo.getUsedSlots(task.projectId));
-      } catch {
+      } catch (error) {
         // All slots are occupied; leave the task queued for a later tick.
         this.locks.release(profile.name, lockFile);
-        return;
+        return this.logStartSkipped(task, error instanceof Error ? error.message : String(error));
       }
       const branch = task.branch || `agenthub/${task.slug}`;
       const settings = projectSettings(project);
