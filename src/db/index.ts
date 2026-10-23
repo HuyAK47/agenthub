@@ -1979,6 +1979,7 @@ export class ChatSessionRepo {
       ? null
       : session.id.slice('assistant:'.length);
     if (session.kind === 'assistant' && session.projectId === projectId) return session;
+    if (!this.db.open) return session;
     try {
       this.db.prepare("UPDATE chat_sessions SET kind = 'assistant', projectId = ?, updatedAt = datetime('now') WHERE id = ?")
         .run(projectId, session.id);
@@ -2070,6 +2071,7 @@ export class ChatSessionRepo {
   }
 
   get(id: string): ChatSessionRow | undefined {
+    if (!this.db.open) return undefined;
     const session = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined;
     return session ? this.normalizeAssistantSession(session) : undefined;
   }
