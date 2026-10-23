@@ -580,7 +580,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       {toastMessage && (
         <div
           role="status"
-          className="fixed top-5 right-5 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-white font-medium text-xs shadow-xl flex items-center gap-2"
+          className="fixed top-5 right-5 px-4 py-2.5 rounded-xl bg-[var(--t-ok)] text-[var(--t-on-accent)] font-medium text-xs shadow-xl flex items-center gap-2"
           style={{ zIndex: UI_Z_INDEX.toast }}
         >
           <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -590,7 +590,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/40 backdrop-blur-xs transition-opacity"
+        className="fixed inset-0 bg-[var(--t-overlay)] backdrop-blur-xs transition-opacity"
         onClick={onClose}
       />
 
@@ -918,7 +918,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.install === 'auto'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -934,7 +934,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.install === 'skip'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -964,7 +964,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.gitHooks === 'run'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -980,7 +980,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       }
                       className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                         draftSettings.worktree.gitHooks === 'skip'
-                          ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                          ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                           : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                       }`}
                     >
@@ -1349,7 +1349,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                     }}
                     className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                       draftSettings.notifications.telegramContent === 'full'
-                        ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                        ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                         : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                     }`}
                   >
@@ -1369,7 +1369,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                     }}
                     className={`px-3 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors ${
                       draftSettings.notifications.telegramContent === 'minimal'
-                        ? 'bg-[var(--t-accent)] text-white shadow-xs'
+                        ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs'
                         : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
                     }`}
                   >

@@ -504,12 +504,12 @@ export const ChatPage: React.FC = () => {
   const sessionState = activeSession?.state || (isBusy ? 'running' : 'idle');
 
   return (
-    <div className="relative h-[calc(100vh-8.5rem)] flex rounded-2xl border border-[var(--border-default)] bg-[var(--bg-app)] overflow-hidden shadow-xs">
+    <div className="relative h-[calc(100vh-8.5rem)] flex rounded-2xl border border-[var(--t-border)] bg-[var(--t-bg)] overflow-hidden shadow-xs">
       {/* Toast Notification */}
       {toastMessage && (
         <div
           role="alert"
-          className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-xl bg-[var(--t-warn)] text-white font-medium text-xs shadow-xl flex items-center gap-2 animate-fade-in"
+          className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-xl bg-[var(--t-warn)] text-[var(--t-on-accent)] font-medium text-xs shadow-xl flex items-center gap-2 animate-fade-in"
           style={{ zIndex: UI_Z_INDEX.toast }}
         >
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -539,18 +539,18 @@ export const ChatPage: React.FC = () => {
       {mobileDrawerOpen && (
         <div className="min-[900px]:hidden fixed inset-0 flex" style={{ zIndex: UI_Z_INDEX.modal }}>
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-xs"
+            className="fixed inset-0 bg-[var(--t-overlay)] backdrop-blur-xs"
             onClick={() => setMobileDrawerOpen(false)}
           />
-          <div className="relative w-72 max-w-[80vw] h-full bg-[var(--bg-surface)] shadow-2xl z-10 flex flex-col">
-            <div className="flex items-center justify-between p-3 border-b border-[var(--border-default)]">
-              <span className="font-semibold text-xs text-[var(--text-primary)]">
+          <div className="relative w-72 max-w-[80vw] h-full bg-[var(--t-surface)] shadow-2xl z-10 flex flex-col">
+            <div className="flex items-center justify-between p-3 border-b border-[var(--t-border)]">
+              <span className="font-semibold text-xs text-[var(--t-text)]">
                 {t('extra.chatList')}
               </span>
               <button
                 type="button"
                 onClick={() => setMobileDrawerOpen(false)}
-                className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)]"
+                className="p-1.5 rounded-lg text-[var(--t-text-2)] hover:bg-[var(--t-hover)]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -582,15 +582,15 @@ export const ChatPage: React.FC = () => {
       )}
 
       {/* Right Column (Chat Area) */}
-      <section className="flex-1 flex flex-col h-full min-w-0 bg-[var(--bg-surface)]">
+      <section className="flex-1 flex flex-col h-full min-w-0 bg-[var(--t-surface)]">
         {/* Top Chat Header */}
-        <div className="min-h-14 px-4 py-2 border-b border-[var(--border-default)] flex items-center justify-between gap-3 bg-[var(--bg-surface)]">
+        <div className="min-h-14 px-4 py-2 border-b border-[var(--t-border)] flex items-center justify-between gap-3 bg-[var(--t-surface)]">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             {/* Mobile drawer button */}
             <button
               type="button"
               onClick={() => setMobileDrawerOpen(true)}
-              className="min-[900px]:hidden p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] cursor-pointer shrink-0"
+              className="min-[900px]:hidden p-1.5 rounded-lg text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)] cursor-pointer shrink-0"
               title={t('extra.openSessions')}
               aria-label={t('extra.openSessions')}
             >
@@ -599,12 +599,12 @@ export const ChatPage: React.FC = () => {
 
             {activeSession ? (
               <div className="min-w-0 flex items-center gap-2.5 flex-1" data-tour="assistant-chat">
-                <div className="w-7 h-7 rounded-full bg-[var(--t-claude)] text-white font-bold text-xs flex items-center justify-center shrink-0">
+                <div className="w-7 h-7 rounded-full bg-[var(--t-claude)] text-[var(--t-on-accent)] font-bold text-xs flex items-center justify-center shrink-0">
                   C
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <h2 className="text-xs sm:text-sm font-semibold text-[var(--text-primary)] truncate">
+                    <h2 className="text-xs sm:text-sm font-semibold text-[var(--t-text)] truncate">
                       {activeSession.title}
                     </h2>
 
@@ -639,14 +639,14 @@ export const ChatPage: React.FC = () => {
                     {sessionState === 'idle' && (
                       <span
                         data-testid="session-state-idle"
-                        className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)] font-medium shrink-0"
+                        className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-[var(--t-surface-2)] text-[var(--t-text-2)] border border-[var(--t-border)] font-medium shrink-0"
                       >
                         <span>{t('extra.stateIdle')}</span>
                       </span>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)] mt-0.5">
+                  <div className="flex items-center gap-2 text-[10px] text-[var(--t-text-2)] mt-0.5">
                     <span>
                       {t('extra.mode')}:{' '}
                       {activeSession.mode === 'full' ? t('extra.fullMode') : t('extra.safeMode')}
@@ -659,7 +659,7 @@ export const ChatPage: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)] font-medium">
+              <div className="flex items-center gap-2 text-sm text-[var(--t-text-2)] font-medium">
                 <Bot className="w-5 h-5 text-[var(--t-accent)]" />
                 <span>{t('extra.chatWithClaude')}</span>
               </div>
@@ -676,7 +676,7 @@ export const ChatPage: React.FC = () => {
                   value={activeSession.model || systemConfig?.chat?.model || 'sonnet'}
                   disabled={isBusy || updateSessionMutation.isPending}
                   onChange={(event) => updateSessionMutation.mutate({ id: activeSession.id, data: { model: event.target.value } })}
-                  className="hidden sm:block max-w-28 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-subtle)] px-2 py-1.5 text-[var(--text-primary)]"
+                  className="hidden sm:block max-w-28 text-xs rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-1.5 text-[var(--t-text)]"
                 >
                   {(systemConfig?.chat?.models || ['opus', 'sonnet', 'haiku']).map((model) => <option key={model} value={model}>{model}</option>)}
                 </select>
@@ -709,7 +709,7 @@ export const ChatPage: React.FC = () => {
                     onClick={handleRetryLastTurn}
                     data-testid="header-retry-button"
                     title={t('extra.retryLastTurn')}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white transition-colors cursor-pointer shadow-xs"
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] transition-colors cursor-pointer shadow-xs"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>{t('common.retry')}</span>
@@ -725,7 +725,7 @@ export const ChatPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-primary)] transition-colors cursor-pointer shrink-0"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--t-surface-2)] hover:bg-[var(--t-hover)] border border-[var(--t-border)] text-[var(--t-text)] transition-colors cursor-pointer shrink-0"
             >
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t('common.create')}</span>
@@ -735,7 +735,7 @@ export const ChatPage: React.FC = () => {
 
         {/* Mobile Context Meter Bar */}
         {activeSession && (
-          <div className="md:hidden px-4 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-surface-subtle)]">
+          <div className="md:hidden px-4 py-1.5 border-b border-[var(--t-border)] bg-[var(--t-surface-2)]">
             <ContextMeter
               session={activeSession}
               hasCompactApi={hasCompactApi}
@@ -782,29 +782,29 @@ export const ChatPage: React.FC = () => {
                   if (event.key === 'Escape') { event.preventDefault(); resolvePermission('deny'); }
                 }}
               >
-                <div className="font-semibold text-[var(--text-primary)]">
+                <div className="font-semibold text-[var(--t-text)]">
                   {t('extra.permissionTitle', { tool: permission.toolName })}
                 </div>
-                <div className="text-xs text-[var(--text-muted)]">
+                <div className="text-xs text-[var(--t-text-3)]">
                   {`${t(permission.projectName ? 'extra.permissionProject' : 'extra.permissionNoProject', { project: permission.projectName ? `${permission.projectName} (${activeSession.projectId || ''})` : undefined })} · ${t('extra.permissionSession', { session: `${permission.sessionTitle || activeSession.title} (${permission.sessionId})` })}`}
                 </div>
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--text-muted)] font-mono">
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--t-text-3)] font-mono">
                   {typeof permission.input.command === 'string' ? permission.input.command.slice(0, 500) : JSON.stringify(permission.input, null, 2)}
                 </pre>
-                {typeof permission.input.cwd === 'string' && <div className="text-xs text-[var(--text-muted)]">{t('extra.permissionCwd')}: <code>{permission.input.cwd}</code></div>}
-                {typeof permission.input.file_path === 'string' && <div className="text-xs text-[var(--text-muted)]">{t('extra.permissionFile')}: <code>{permission.input.file_path}</code></div>}
+                {typeof permission.input.cwd === 'string' && <div className="text-xs text-[var(--t-text-3)]">{t('extra.permissionCwd')}: <code>{permission.input.cwd}</code></div>}
+                {typeof permission.input.file_path === 'string' && <div className="text-xs text-[var(--t-text-3)]">{t('extra.permissionFile')}: <code>{permission.input.file_path}</code></div>}
                 <div className="mt-2 flex gap-2">
                   <button
                     type="button"
                     onClick={() => resolvePermission('allow')}
-                    className="rounded-lg bg-[var(--t-ok)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
+                    className="rounded-lg bg-[var(--t-ok)] px-3 py-1.5 text-xs font-semibold text-[var(--t-on-accent)] cursor-pointer"
                   >
                     {t('extra.allow')}
                   </button>
                   {permission.canAlwaysAllow !== false && <button
                     type="button"
                     onClick={() => resolvePermission('allow_always')}
-                    className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-white cursor-pointer"
+                    className="rounded-lg bg-[var(--t-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--t-on-accent)] cursor-pointer"
                   >
                     {`${t('extra.allowAlways')} ${permission.permissionLabel || permission.toolName}`}
                   </button>}
@@ -821,7 +821,7 @@ export const ChatPage: React.FC = () => {
 
             {/* Status & Progress indicator */}
             {(isBusy || (activeSession.state && activeSession.state !== 'idle')) && (
-              <div className="px-5 pb-2 text-xs text-[var(--text-muted)]" role="status">
+              <div className="px-5 pb-2 text-xs text-[var(--t-text-3)]" role="status">
                 {activeSession.state === 'waiting_permission'
                   ? t('extra.waitingPermissionStatus')
                   : activeSession.state === 'error'
