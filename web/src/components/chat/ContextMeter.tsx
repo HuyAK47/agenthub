@@ -40,7 +40,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
     ? 'text-[var(--t-crit)]'
     : isMedium
     ? 'text-[var(--t-warn)]'
-    : 'text-[var(--text-secondary)]';
+    : 'text-[var(--t-text-2)]';
 
   return (
     <div
@@ -49,18 +49,18 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
       title={`${t('extra.contextLabel')}: ${contextTokens.toLocaleString()} / 200.000 (${pct}%) · ${t('extra.totalTokens')}: ${totalTokens.toLocaleString()}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1 font-medium text-[var(--text-secondary)]">
+        <span className="flex items-center gap-1 font-medium text-[var(--t-text-2)]">
           <span>{t('extra.contextLabel')}:</span>
           <span className={`font-semibold ${textColor}`}>
             {pct}% ({contextTokens.toLocaleString()} / 200k)
           </span>
         </span>
-        <span className="text-[var(--text-muted)] text-[10px]">
-          {t('extra.totalTokens')}: <strong className="font-mono text-[var(--text-secondary)]">{totalTokens.toLocaleString()}</strong>
+        <span className="text-[var(--t-text-3)] text-[10px]">
+          {t('extra.totalTokens')}: <strong className="font-mono text-[var(--t-text-2)]">{totalTokens.toLocaleString()}</strong>
         </span>
       </div>
 
-      <div className="w-full h-1.5 rounded-full bg-[var(--bg-surface-subtle)] border border-[var(--border-subtle)] overflow-hidden">
+      <div className="w-full h-1.5 rounded-full bg-[var(--t-surface-2)] border border-[var(--t-border)] overflow-hidden">
         <div
           role="progressbar"
           aria-valuenow={pct}
@@ -84,7 +84,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
                 type="button"
                 onClick={onCompact}
                 data-testid="compact-button"
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-[10px] font-semibold transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-[10px] font-semibold transition-colors cursor-pointer"
               >
                 <Sparkles className="w-2.5 h-2.5" />
                 <span>{t('extra.compactContext')}</span>
@@ -95,7 +95,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
                 type="button"
                 onClick={onForkSummary}
                 data-testid="fork-summary-button"
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--bg-surface-subtle)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-[10px] font-semibold transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--t-surface-2)] hover:bg-[var(--t-hover)] border border-[var(--t-border)] text-[var(--t-text-2)] hover:text-[var(--t-text)] text-[10px] font-semibold transition-colors cursor-pointer"
               >
                 <GitFork className="w-2.5 h-2.5" />
                 <span>{t('extra.forkSummary')}</span>

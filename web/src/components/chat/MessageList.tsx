@@ -243,7 +243,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         {isLoadingMore && (
           <div
             data-testid="loading-older-messages"
-            className="flex items-center justify-center gap-2 py-3 text-xs text-[var(--text-muted)] animate-pulse"
+            className="flex items-center justify-center gap-2 py-3 text-xs text-[var(--t-text-3)] animate-pulse"
           >
             <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--t-accent)]" />
             <span>{t('extra.loadingOlderMessages')}</span>
@@ -254,16 +254,16 @@ export const MessageList: React.FC<MessageListProps> = ({
         {!activeSession ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
             <div
-              className="w-14 h-14 rounded-full flex items-center justify-center text-white font-bold text-2xl shadow-lg"
+              className="w-14 h-14 rounded-full flex items-center justify-center text-[var(--t-on-accent)] font-bold text-2xl shadow-lg"
               style={{ backgroundColor: 'var(--t-claude)' }}
             >
               C
             </div>
             <div className="max-w-md space-y-1">
-              <h3 className="text-base font-bold text-[var(--text-primary)]">
+              <h3 className="text-base font-bold text-[var(--t-text)]">
                 {t('extra.chatWelcome')}
               </h3>
-              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+              <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
                 {t('extra.chatWelcomeDesc')}
               </p>
             </div>
@@ -271,7 +271,7 @@ export const MessageList: React.FC<MessageListProps> = ({
               <button
                 type="button"
                 onClick={onNewSession}
-                className="px-4 py-2 rounded-xl bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white font-semibold text-xs shadow-xs transition-colors cursor-pointer inline-flex items-center gap-2"
+                className="px-4 py-2 rounded-xl bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] font-semibold text-xs shadow-xs transition-colors cursor-pointer inline-flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
                 <span>{t('extra.startChat')}</span>
@@ -280,17 +280,17 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         ) : messages.length === 0 ? (
           /* Empty Chat State */
-          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3 text-[var(--text-secondary)]">
+          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3 text-[var(--t-text-2)]">
             <div
-              className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-xl shadow-md"
+              className="w-12 h-12 rounded-full flex items-center justify-center text-[var(--t-on-accent)] font-bold text-xl shadow-md"
               style={{ backgroundColor: 'var(--t-claude)' }}
             >
               C
             </div>
-            <p className="text-sm font-medium text-[var(--text-primary)]">
+            <p className="text-sm font-medium text-[var(--t-text)]">
               {t('extra.emptyChat')}
             </p>
-            <p className="text-xs text-[var(--text-muted)] max-w-sm">
+            <p className="text-xs text-[var(--t-text-3)] max-w-sm">
               {t('extra.emptyChatDesc')}
             </p>
           </div>

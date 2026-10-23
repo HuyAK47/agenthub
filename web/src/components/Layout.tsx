@@ -145,7 +145,7 @@ export const Layout: React.FC = () => {
             aria-label={branding.name}
             className="flex items-center gap-3 overflow-hidden rounded-lg focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--t-surface)]"
           >
-            <div className="w-8 h-8 rounded-lg bg-[var(--t-accent)] flex items-center justify-center text-white shrink-0 shadow-xs">
+            <div className="w-8 h-8 rounded-lg bg-[var(--t-accent)] flex items-center justify-center text-[var(--t-on-accent)] shrink-0 shadow-xs">
               {branding.logo ? <img src={`/api/branding/logo?v=${branding.logoVersion ?? encodeURIComponent(branding.logo)}`} alt="" className="w-full h-full rounded-lg object-contain" /> : <Bot size={18} />}
             </div>
             <span className="font-bold text-base tracking-tight text-[var(--t-text)] max-[1100px]:hidden truncate">

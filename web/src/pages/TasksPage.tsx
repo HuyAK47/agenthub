@@ -1,16 +1,17 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProjects, getStatus, getTaskGraph, getTasksPage } from '../api/client';
+import { getProjects, getStatus, getTaskGraph, getTasks, getTasksPage } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 import { KANBAN_STATUSES } from '../utils/tasks';
 import { Task } from '../types/api';
-import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, List } from 'lucide-react';
+import { Plus, Filter, ArrowUpRight, Zap, Flame, LayoutGrid, Network, List, FolderKanban } from 'lucide-react';
 import { SilentRunIndicator } from '../components/SilentRunIndicator';
 import { useLocale } from '../context/LocaleContext';
 import { TaskDag } from '../components/dag';
 import { filterTasksForDag } from '../components/dag/dagUtils';
 import { DataTable } from '../components/ui';
+import { useShowMore } from '../components/CollapsibleList';
 
 export interface KanbanColumnProps {
   statusKey: (typeof KANBAN_STATUSES)[number];
@@ -78,7 +79,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
         <div className="flex items-center gap-2">
           <StatusBadge status={statusKey} size="sm" />
         </div>
-        <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[var(--bg-surface)] border border-[var(--border-default)] text-[var(--text-primary)]">
+        <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[var(--t-surface)] border border-[var(--t-border)] text-[var(--t-text)]">
           {data?.total || 0}
         </span>
       </div>
@@ -86,9 +87,9 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
       {/* Cards List */}
       <div className="space-y-2.5 flex-1 overflow-y-auto">
         {isLoading ? (
-          <div className="h-24 flex items-center justify-center text-xs text-[var(--text-muted)]">{t('pagination.loading')}</div>
+          <div className="h-24 flex items-center justify-center text-xs text-[var(--t-text-3)]">{t('pagination.loading')}</div>
         ) : visibleItems.length === 0 ? (
-          <div className="h-24 border border-dashed border-[var(--border-default)] rounded-lg flex items-center justify-center text-xs text-[var(--text-muted)] italic">
+          <div className="h-24 border border-dashed border-[var(--t-border)] rounded-lg flex items-center justify-center text-xs text-[var(--t-text-3)] italic">
             {t('common.empty')}
           </div>
         ) : (
@@ -96,10 +97,10 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
             <Link
               key={task.id}
               to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`}
-              className="block bg-[var(--bg-surface)] p-3.5 rounded-lg border border-[var(--border-default)] shadow-xs hover:border-[var(--t-accent)] hover:shadow-sm transition-all group"
+              className="block bg-[var(--t-surface)] p-3.5 rounded-lg border border-[var(--t-border)] shadow-xs hover:border-[var(--t-accent)] hover:shadow-sm transition-all group"
             >
               <div className="flex items-start justify-between gap-2 mb-1.5">
-                <span className="text-xs font-mono text-[var(--text-secondary)] font-medium">
+                <span className="text-xs font-mono text-[var(--t-text-2)] font-medium">
                   {task.slug}
                 </span>
                 {task.checks && task.checks.length > 0 && (
@@ -118,10 +119,10 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
                     {task.checks.every((check) => check.ok) ? '✓' : '✗'}
                   </span>
                 )}
-                <ArrowUpRight className="w-3.5 h-3.5 text-[var(--text-muted)] group-hover:text-[var(--t-accent)] transition-colors" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-[var(--t-text-3)] group-hover:text-[var(--t-accent)] transition-colors" />
               </div>
 
-              <h3 className="text-sm font-semibold text-[var(--text-primary)] line-clamp-2 mb-2.5">
+              <h3 className="text-sm font-semibold text-[var(--t-text)] line-clamp-2 mb-2.5">
                 {task.title}
               </h3>
 
@@ -159,8 +160,8 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border-subtle)] text-[11px]">
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--bg-surface-subtle)] font-medium text-[var(--text-secondary)] border border-[var(--border-subtle)]">
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--t-border)] text-[11px]">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] font-medium text-[var(--t-text-2)] border border-[var(--t-border)]">
                   {task.projectId}
                 </span>
 
@@ -176,7 +177,7 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
                   )}
 
                   {task.attempt > 0 && (
-                    <span className="font-mono text-[var(--text-muted)]">#{task.attempt}</span>
+                    <span className="font-mono text-[var(--t-text-3)]">#{task.attempt}</span>
                   )}
                 </div>
               </div>
@@ -198,11 +199,34 @@ const KanbanColumnComponent: React.FC<KanbanColumnProps> = ({ statusKey, project
 
 export const KanbanColumn = memo(KanbanColumnComponent);
 
+const ProjectTaskGroup: React.FC<{ project: { id: string; name: string }; tasks: Task[] }> = ({ project, tasks }) => {
+  const { t } = useLocale();
+  const visible = useShowMore(tasks, 20, 20, `agenthub:tasks:project:${project.id}`);
+  return (
+    <section className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface-2)] overflow-hidden">
+      <div className="flex items-center gap-2 p-3 sm:p-4">
+        <FolderKanban className="h-4 w-4 text-[var(--t-accent)]" />
+        <span className="font-semibold text-[var(--t-text)]">{project.name}</span>
+      </div>
+      <div className="border-t border-[var(--t-border)] p-3 sm:p-4">
+        {visible.visibleItems.length > 0 ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{visible.visibleItems.map((task) => (
+          <Link key={task.id} to={`/tasks/${encodeURIComponent(task.id.replace('/', '~'))}`} className="block rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-3 hover:border-[var(--t-accent)] transition-colors">
+            <div className="text-xs font-mono text-[var(--t-text-2)] truncate">{task.slug}</div>
+            <div className="mt-1 text-sm font-semibold text-[var(--t-text)] line-clamp-2">{task.title}</div>
+            <StatusBadge status={task.status} size="sm" />
+          </Link>
+        ))}</div> : <div className="rounded-lg border border-dashed border-[var(--t-border)] p-5 text-center text-xs italic text-[var(--t-text-3)]">{t('common.empty')}</div>}
+        {visible.hasMore && <button type="button" onClick={visible.showMore} className="mt-3 text-xs font-medium text-[var(--t-accent)] hover:underline">{t('tasks.showMore')}</button>}
+      </div>
+    </section>
+  );
+};
+
 export const TasksPage: React.FC = () => {
   const { t } = useLocale();
   const navigate = useNavigate();
   const [urlParams, setUrlParams] = useSearchParams();
-  const [viewMode, setViewMode] = useState<'kanban' | 'dag' | 'list'>((urlParams.get('view') as 'kanban' | 'dag' | 'list') || 'kanban');
+  const [viewMode, setViewMode] = useState<'kanban' | 'dag' | 'list' | 'project'>((urlParams.get('view') as 'kanban' | 'dag' | 'list' | 'project') || 'kanban');
   const [selectedProject, setSelectedProject] = useState<string>(urlParams.get('project') || 'all');
   const [selectedStatus, setSelectedStatus] = useState<string>(urlParams.get('status') || 'all');
   const [doneFilter, setDoneFilter] = useState<'active_chains' | '1d' | '3d' | '7d' | '30d' | 'all'>('active_chains');
@@ -217,6 +241,11 @@ export const TasksPage: React.FC = () => {
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: projectTasks = [] } = useQuery({
+    queryKey: ['tasks-project-view'],
+    queryFn: getTasks,
+    enabled: viewMode === 'project',
   });
 
   const { data, isLoading: isPageLoading } = useQuery({
@@ -283,15 +312,15 @@ export const TasksPage: React.FC = () => {
       {/* Top Bar: Filter & New Task Button */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4" data-tour="task-filters">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--t-text)]">
             {t('tasks.title')}
           </h1>
-          <p className="text-sm text-[var(--text-secondary)]">{t('tasks.subtitle')}</p>
+          <p className="text-sm text-[var(--t-text-2)]">{t('tasks.subtitle')}</p>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
           {/* View Mode Toggle: Kanban <-> Sơ đồ (DAG) */}
-          <div className="flex items-center bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-0.5 shadow-xs" data-tour="task-views">
+          <div className="flex items-center bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg p-0.5 shadow-xs" data-tour="task-views">
             <button
               type="button"
               onClick={() => setViewMode('kanban')}
@@ -300,12 +329,16 @@ export const TasksPage: React.FC = () => {
               title={t('dag.toggleKanban')}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
                 viewMode === 'kanban'
-                  ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold'
+                  : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t('dag.toggleKanban')}</span>
+            </button>
+            <button type="button" onClick={() => setViewMode('project')} data-testid="view-toggle-project" aria-label={t('tasks.projectView')} title={t('tasks.projectView')} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${viewMode === 'project' ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold' : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'}`}>
+              <FolderKanban className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t('tasks.projectView')}</span>
             </button>
             <button
               type="button"
@@ -313,7 +346,7 @@ export const TasksPage: React.FC = () => {
               data-testid="view-toggle-list"
               aria-label={t('tasks.listView')}
               title={t('tasks.listView')}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${viewMode === 'list' ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${viewMode === 'list' ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold' : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'}`}
             >
               <List className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t('tasks.listView')}</span>
@@ -326,8 +359,8 @@ export const TasksPage: React.FC = () => {
               title={t('dag.toggleDag')}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
                 viewMode === 'dag'
-                  ? 'bg-[var(--t-accent)] text-white shadow-xs font-semibold'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs font-semibold'
+                  : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
               }`}
             >
               <Network className="w-3.5 h-3.5" />
@@ -336,34 +369,34 @@ export const TasksPage: React.FC = () => {
           </div>
 
           {/* Quick Filter (Slug / Title) */}
-          <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
+          <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t('tasks.filterQuick')}
               aria-label={t('tasks.filterQuick')}
-              className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none w-36 sm:w-48"
+              className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] placeholder-[var(--t-text-3)] focus:outline-none w-36 sm:w-48"
             />
           </div>
 
           {/* Project Filter */}
-          <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
-            <Filter className="w-4 h-4 text-[var(--text-secondary)]" />
+          <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
+            <Filter className="w-4 h-4 text-[var(--t-text-2)]" />
             <select
               value={selectedProject}
               onChange={(e) => setSelectedProject(e.target.value)}
               aria-label={t('tasks.filterProject')}
-              className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] focus:outline-none cursor-pointer"
+              className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] focus:outline-none cursor-pointer"
             >
-              <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+              <option value="all" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                 {t('tasks.allProjects')}
               </option>
               {projects.map((p) => (
                 <option
                   key={p.id}
                   value={p.id}
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                  className="bg-[var(--t-surface)] text-[var(--t-text)]"
                 >
                   {p.name}
                 </option>
@@ -372,24 +405,24 @@ export const TasksPage: React.FC = () => {
           </div>
 
           {/* DAG-specific filters (Status & Done cutoff) */}
-          {viewMode !== 'kanban' && (
+          {viewMode !== 'kanban' && viewMode !== 'project' && (
             <>
               {/* Status Filter */}
-              <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
+              <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
                 <select
                   value={selectedStatus}
                   onChange={(e) => setSelectedStatus(e.target.value)}
                   aria-label={t('dag.filterStatus')}
-                  className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                  className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] focus:outline-none cursor-pointer"
                 >
-                  <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="all" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.allStatuses')}
                   </option>
                   {KANBAN_STATUSES.map((st) => (
                     <option
                       key={st}
                       value={st}
-                      className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                      className="bg-[var(--t-surface)] text-[var(--t-text)]"
                     >
                       {t(`status.${st}`)}
                     </option>
@@ -398,29 +431,29 @@ export const TasksPage: React.FC = () => {
               </div>
 
               {/* Done tasks filter */}
-              <div className="flex items-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-1.5 shadow-xs">
+              <div className="flex items-center gap-2 bg-[var(--t-surface)] border border-[var(--t-border)] rounded-lg px-3 py-1.5 shadow-xs">
                 <select
                   value={doneFilter}
                   onChange={(e) => setDoneFilter(e.target.value as any)}
                   aria-label={t('dag.hideDone')}
-                  className="text-xs font-medium bg-transparent border-none text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                  className="text-xs font-medium bg-transparent border-none text-[var(--t-text)] focus:outline-none cursor-pointer"
                 >
-                  <option value="active_chains" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="active_chains" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.activeChains')}
                   </option>
-                  <option value="1d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="1d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done1d')}
                   </option>
-                  <option value="3d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="3d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done3d')}
                   </option>
-                  <option value="7d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="7d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done7d')}
                   </option>
-                  <option value="30d" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="30d" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.done30d')}
                   </option>
-                  <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  <option value="all" className="bg-[var(--t-surface)] text-[var(--t-text)]">
                     {t('dag.doneAll')}
                   </option>
                 </select>
@@ -433,7 +466,7 @@ export const TasksPage: React.FC = () => {
             type="button"
             onClick={() => navigate('/tasks/new')}
             data-tour="task-actions"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold shadow-xs cursor-pointer transition-colors shrink-0"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold shadow-xs cursor-pointer transition-colors shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>{t('tasks.createTask')}</span>
@@ -441,7 +474,11 @@ export const TasksPage: React.FC = () => {
         </div>
       </div>
 
-      {viewMode === 'list' ? (
+      {viewMode === 'project' ? (
+        <div className="space-y-4 pb-8" data-testid="project-view-wrapper">
+          {projects.map((project) => <ProjectTaskGroup key={project.id} project={project} tasks={projectTasks.filter((task) => task.projectId === project.id)} />)}
+        </div>
+      ) : viewMode === 'list' ? (
         <DataTable
           rows={data?.items || []}
           loading={isPageLoading}
