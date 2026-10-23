@@ -3077,10 +3077,20 @@ export class AppService {
         feedback: 'Tự merge sau khi Codex reviewer chấp thuận.',
       });
     } catch (error) {
-      this.scheduler.getEventBus().emit('merge.failed', taskId, {
-        actor: 'auto-merge',
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      this.scheduler.getEventBus().emit('merge.failed', taskId, { actor: 'auto-merge', message });
+      // A conflict means the branch fell behind the merge target: hand it back to the worker.
+      if (error instanceof HttpError && error.statusCode === 409 && /xung đột|conflict/i.test(message)) {
+        try {
+          await this.reviewTask(toRouteId(taskId), {
+            verdict: 'changes_requested',
+            by: 'auto-merge',
+            feedback: `Reviewer đã duyệt nhưng merge tự động bị xung đột: ${message}\n\nCập nhật nhánh lên nhánh đích mới nhất (rebase hoặc merge), giải xung đột, giữ nguyên phần đã được duyệt, chạy lại lint/typecheck/test rồi commit.`,
+          });
+        } catch (retryError) {
+          console.error(`[review] could not hand merge conflict back for ${taskId}: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+        }
+      }
     }
   }
 
