@@ -250,77 +250,81 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  const resetDraftState = (targetProject: Project) => {
+    setDraftSettings(normalizeProjectSettings(targetProject.settings));
+    setChecklistDraft((targetProject.settings?.reviewChecklist || []).join('\n'));
+    setDraftChecks(
+      typeof targetProject.checks === 'string'
+        ? targetProject.checks
+        : targetProject.checks
+        ? JSON.stringify(targetProject.checks, null, 2)
+        : '',
+    );
+    setDraftHooks(getProjectHooksString(targetProject));
+
+    if (targetProject.settings?.review?.order && targetProject.settings.review.order.length > 0) {
+      setReviewerOrder(targetProject.settings.review.order);
+      setHasReviewerOrderOverride(true);
+      setDraftReviewerOrder(JSON.stringify(targetProject.settings.review.order, null, 2));
+    } else {
+      setReviewerOrder([]);
+      setHasReviewerOrderOverride(false);
+      setDraftReviewerOrder('');
+    }
+
+    if (targetProject.settings?.review?.fallback) {
+      setReviewerFallback({
+        onUnavailable: targetProject.settings.review.fallback.onUnavailable ?? true,
+        onError: targetProject.settings.review.fallback.onError ?? true,
+        onBusyAfterMin: targetProject.settings.review.fallback.onBusyAfterMin ?? 10,
+      });
+      setHasReviewerFallbackOverride(true);
+      setDraftReviewerFallback(JSON.stringify(targetProject.settings.review.fallback, null, 2));
+    } else {
+      setReviewerFallback({ onUnavailable: true, onError: true, onBusyAfterMin: 10 });
+      setHasReviewerFallbackOverride(false);
+      setDraftReviewerFallback('');
+    }
+
+    let parsedReview: any = null;
+    if (typeof targetProject.review === 'object' && targetProject.review !== null) {
+      parsedReview = targetProject.review;
+    } else if (typeof targetProject.review === 'string' && targetProject.review.trim()) {
+      try {
+        parsedReview = JSON.parse(targetProject.review);
+      } catch {
+        parsedReview = null;
+      }
+    }
+
+    if (parsedReview) {
+      setReviewChain({
+        chain: Array.isArray(parsedReview.chain) ? parsedReview.chain : [],
+        maxRounds: typeof parsedReview.maxRounds === 'number' ? parsedReview.maxRounds : 2,
+      });
+      setHasReviewChainOverride(true);
+      setDraftReview(JSON.stringify(parsedReview, null, 2));
+    } else {
+      setReviewChain({ chain: [], maxRounds: 2 });
+      setHasReviewChainOverride(false);
+      setDraftReview('');
+    }
+
+    setDraftEnvTemplate(targetProject.envTemplate ?? '');
+    setChecksError(null);
+    setReviewError(null);
+    setReviewerOrderError(null);
+    setReviewerFallbackError(null);
+    setEnvError(null);
+    setRefErrors({});
+    setApiError(null);
+    setSectionErrors({});
+  };
+
   // Initialize draft when project changes
   useEffect(() => {
     if (project) {
-      setDraftSettings(normalizeProjectSettings(project.settings));
-      setChecklistDraft((project.settings?.reviewChecklist || []).join('\n'));
-      setDraftChecks(
-        typeof project.checks === 'string'
-          ? project.checks
-          : project.checks
-          ? JSON.stringify(project.checks, null, 2)
-          : '',
-      );
-      setDraftHooks(getProjectHooksString(project));
-
-      if (project.settings?.review?.order && project.settings.review.order.length > 0) {
-        setReviewerOrder(project.settings.review.order);
-        setHasReviewerOrderOverride(true);
-        setDraftReviewerOrder(JSON.stringify(project.settings.review.order, null, 2));
-      } else {
-        setReviewerOrder([]);
-        setHasReviewerOrderOverride(false);
-        setDraftReviewerOrder('');
-      }
-
-      if (project.settings?.review?.fallback) {
-        setReviewerFallback({
-          onUnavailable: project.settings.review.fallback.onUnavailable ?? true,
-          onError: project.settings.review.fallback.onError ?? true,
-          onBusyAfterMin: project.settings.review.fallback.onBusyAfterMin ?? 10,
-        });
-        setHasReviewerFallbackOverride(true);
-        setDraftReviewerFallback(JSON.stringify(project.settings.review.fallback, null, 2));
-      } else {
-        setReviewerFallback({ onUnavailable: true, onError: true, onBusyAfterMin: 10 });
-        setHasReviewerFallbackOverride(false);
-        setDraftReviewerFallback('');
-      }
-
-      let parsedReview: any = null;
-      if (typeof project.review === 'object' && project.review !== null) {
-        parsedReview = project.review;
-      } else if (typeof project.review === 'string' && project.review.trim()) {
-        try {
-          parsedReview = JSON.parse(project.review);
-        } catch {
-          parsedReview = null;
-        }
-      }
-
-      if (parsedReview && Array.isArray(parsedReview.chain) && parsedReview.chain.length > 0) {
-        setReviewChain({
-          chain: parsedReview.chain,
-          maxRounds: typeof parsedReview.maxRounds === 'number' ? parsedReview.maxRounds : 2,
-        });
-        setHasReviewChainOverride(true);
-        setDraftReview(JSON.stringify(parsedReview, null, 2));
-      } else {
-        setReviewChain({ chain: [], maxRounds: 2 });
-        setHasReviewChainOverride(false);
-        setDraftReview('');
-      }
-
-      setDraftEnvTemplate(project.envTemplate ?? '');
-      setChecksError(null);
-      setReviewError(null);
-      setReviewerOrderError(null);
-      setReviewerFallbackError(null);
-      setEnvError(null);
-      setRefErrors({});
-      setApiError(null);
-      setSectionErrors({});
+      resetDraftState(project);
     }
   }, [project, isOpen]);
 
@@ -330,7 +334,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   ) => {
     setReviewerOrder(newOrder);
     setHasReviewerOrderOverride(isOverride);
-    const jsonStr = isOverride && newOrder.length > 0 ? JSON.stringify(newOrder, null, 2) : '';
+    const jsonStr = isOverride ? JSON.stringify(newOrder, null, 2) : '';
     setDraftReviewerOrder(jsonStr);
     setReviewerOrderError(null);
     setApiError(null);
@@ -357,7 +361,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   ) => {
     setReviewChain(newChainConfig);
     setHasReviewChainOverride(isOverride);
-    const jsonStr = isOverride && newChainConfig.chain.length > 0 ? JSON.stringify(newChainConfig, null, 2) : '';
+    const jsonStr = isOverride ? JSON.stringify(newChainConfig, null, 2) : '';
     setDraftReview(jsonStr);
     setReviewError(null);
     setApiError(null);
@@ -478,9 +482,17 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   );
   const origReview = useMemo(() => {
     if (!project?.review) return '';
-    return typeof project.review === 'string'
-      ? project.review
-      : JSON.stringify(project.review, null, 2);
+    if (typeof project.review === 'object') {
+      return JSON.stringify(project.review, null, 2);
+    }
+    if (typeof project.review === 'string' && project.review.trim()) {
+      try {
+        return JSON.stringify(JSON.parse(project.review), null, 2);
+      } catch {
+        return project.review;
+      }
+    }
+    return '';
   }, [project]);
   const origEnv = useMemo(() => project?.envTemplate ?? '', [project]);
 
@@ -538,10 +550,22 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     () => draftEnvTemplate.trim() !== origEnv.trim(),
     [draftEnvTemplate, origEnv],
   );
+  const origReviewerOrderStr = useMemo(() => {
+    return origSettings.review?.order && origSettings.review.order.length > 0
+      ? JSON.stringify(origSettings.review.order, null, 2)
+      : '';
+  }, [origSettings.review?.order]);
+
+  const origReviewerFallbackStr = useMemo(() => {
+    return origSettings.review?.fallback
+      ? JSON.stringify(origSettings.review.fallback, null, 2)
+      : '';
+  }, [origSettings.review?.fallback]);
+
   const reviewerOverrideChanged = useMemo(
-    () => draftReviewerOrder.trim() !== (origSettings.review?.order ? JSON.stringify(origSettings.review.order, null, 2) : '').trim()
-      || draftReviewerFallback.trim() !== (origSettings.review?.fallback ? JSON.stringify(origSettings.review.fallback, null, 2) : '').trim(),
-    [draftReviewerOrder, draftReviewerFallback, origSettings.review],
+    () => draftReviewerOrder.trim() !== origReviewerOrderStr.trim()
+      || draftReviewerFallback.trim() !== origReviewerFallbackStr.trim(),
+    [draftReviewerOrder, draftReviewerFallback, origReviewerOrderStr, origReviewerFallbackStr],
   );
 
   const changeCount = useMemo(() => {
@@ -647,20 +671,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   const handleDiscard = () => {
     if (!project) return;
-    setDraftSettings(
-      normalizeProjectSettings(project.settings),
-    );
-    setChecklistDraft((origSettings.reviewChecklist || []).join('\n'));
-    setDraftChecks(origChecks);
-    setDraftHooks(origHooks);
-    setDraftReview(origReview);
-    setDraftEnvTemplate(origEnv);
-    setChecksError(null);
-    setReviewError(null);
-    setEnvError(null);
-    setRefErrors({});
-    setApiError(null);
-    setSectionErrors({});
+    resetDraftState(project);
   };
 
   const handleSave = () => {
@@ -1724,12 +1735,17 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                   </div>
                 </div>
 
-                {!hasReviewerOrderOverride || reviewerOrder.length === 0 ? (
+                {!hasReviewerOrderOverride ? (
                   <p className="text-xs text-[var(--t-text-3)] italic py-1">
                     {t('settings.useSystemDefault')}
                   </p>
                 ) : (
                   <div className="space-y-2">
+                    {reviewerOrder.length === 0 && (
+                      <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                        {t('settings.noReviewers')}
+                      </p>
+                    )}
                     {reviewerOrder.map((item, index) => {
                       const engineProfiles = allProfiles.filter((p) => p.engine === item.engine);
                       const activeProfileNames = new Set(engineProfiles.map((p) => p.name));
@@ -1984,7 +2000,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                     >
                       {t('projects.insertExample')}
                     </Button>
-                    {hasReviewChainOverride && (
+                    {hasReviewChainOverride ? (
                       <Button
                         type="button"
                         variant="ghost"
@@ -1994,16 +2010,42 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       >
                         {t('settings.useSystemDefault')}
                       </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          updateReviewChainState(
+                            {
+                              chain: [
+                                { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
+                                { reviewer: 'claude', mode: 'final' },
+                              ],
+                              maxRounds: 2,
+                            },
+                            true,
+                          )
+                        }
+                        className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                      >
+                        + {t('settings.overrideConfig')}
+                      </Button>
                     )}
                   </div>
                 </div>
 
-                {!hasReviewChainOverride || reviewChain.chain.length === 0 ? (
+                {!hasReviewChainOverride ? (
                   <p className="text-xs text-[var(--t-text-3)] italic py-1">
                     {t('settings.useSystemDefault')}
                   </p>
                 ) : (
                   <div className="space-y-2">
+                    {reviewChain.chain.length === 0 && (
+                      <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                        {t('settings.noReviewSteps')}
+                      </p>
+                    )}
                     {reviewChain.chain.map((step, index) => (
                       <div
                         key={`review-step-${index}`}

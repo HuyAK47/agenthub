@@ -1073,6 +1073,8 @@ export const vi = {
     reviewChainHint: 'Cấu hình các bước duyệt: ai duyệt (reviewer) và chế độ (gate hoặc final).',
     reviewerPlaceholder: 'Chọn hoặc nhập reviewer...',
     stepMode: 'Chế độ bước',
+    noReviewSteps: 'Chưa có bước review nào.',
+    noReviewers: 'Chưa cấu hình reviewer nào.',
   },
   savings: { title: 'Hiệu quả ủy quyền', subtitle: 'Đo phần việc Claude (bộ não) không phải tự làm nhờ giao cho worker (Gemini, Codex).', clearFilters: 'Xóa bộ lọc', loadError: 'Không thể tải dữ liệu hiệu quả ủy quyền.', claudeSaved: 'Claude không phải làm', savingRate: 'tỷ lệ tiết kiệm', codeWritten: 'Code do worker viết', lines: 'dòng', linesDeleted: 'dòng đã xóa', approvedTasks: 'Task đã duyệt', totalTasks: 'Tổng {count} task trong hệ thống', avgReviewRounds: 'Trung bình vòng review', rounds: 'vòng', changesRound: 'Mỗi lần changes_requested tính 1 vòng', tokensByDay: 'Token worker theo từng ngày', tokensByDayDesc: 'Phân bố khối lượng token tiêu thụ theo ngày giữa Gemini (agy) và Codex.', noDailyData: 'Chưa có dữ liệu lượt chạy theo ngày.', byTask: 'Bảng theo task', byTaskDesc: 'Dòng code viết, token worker tiêu thụ và số vòng review của từng task.', linesChange: 'Dòng (+/-)', reviewRounds: 'Vòng review', noMatchingTasks: 'Không có task nào phù hợp.', estimatedTitle: 'Số liệu ước tính từ mức giảm quota 5h', methodTitle: 'Về phương pháp đo lường và hệ số quy đổi', methodDesc: 'Số liệu agy là ước tính dựa trên mức giảm quota của cửa sổ 5 giờ và dung lượng bucketTokens ước tính. Số liệu Codex được phân tích chính xác từ log lượt chạy.', },
   dailyUsage: {
