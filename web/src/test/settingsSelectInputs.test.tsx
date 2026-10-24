@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LocaleProvider } from '../context/LocaleContext';
@@ -256,7 +256,7 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       });
       const payload = updateSpy.mock.calls[0][0];
       expect(payload.modelChainHard).toEqual(['gemini-3.8-flash-high', 'codex:gpt-5.6-luna']);
-      expect(payload.reviewer?.order[0].model).toBe('codex:gpt-5.6-luna');
+      expect(payload.reviewer?.order?.[0]?.model).toBe('codex:gpt-5.6-luna');
     });
   });
 });

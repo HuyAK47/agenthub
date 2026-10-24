@@ -60,8 +60,8 @@ export function validateBranchSyntax(
 }
 
 export function validateReviewerModelSyntax(
-  engine: 'codex' | 'claude',
   model: string,
+  engine?: 'codex' | 'claude' | string,
   t?: (key: string) => string,
 ): string | null {
   const trimmed = model.trim();
@@ -70,6 +70,9 @@ export function validateReviewerModelSyntax(
   }
   if (/\s/.test(trimmed)) {
     return t ? t('settings.invalidModelSyntax') : 'Model không được chứa khoảng trắng';
+  }
+  if (engine && engine.length === 0) {
+    return null;
   }
   return null;
 }
