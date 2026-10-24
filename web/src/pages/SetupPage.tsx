@@ -85,6 +85,12 @@ export const SetupCheckRow: React.FC<SetupCheckRowProps> = ({
               </a>
             </div>
           )}
+          {item.key === 'agy' && !item.ok && (
+            <div className="mt-2 rounded-lg border border-[var(--t-warn)]/30 bg-[var(--t-warn)]/10 p-2.5 text-xs text-[var(--t-text)]">
+              <div>{t('setup.agyManualHint')}</div>
+              <code className="mt-1 block select-text break-all font-mono">curl -fsSL https://antigravity.google/cli/install.sh | bash</code>
+            </div>
+          )}
         </div>
       </div>
 
@@ -270,6 +276,7 @@ export const SetupPage: React.FC = () => {
   }, [data]);
 
   const installOne = async (tool: string) => {
+    if (tool === 'agy' && typeof window !== 'undefined' && !window.confirm(t('setup.agyInstallConfirm'))) return;
     setInstallingTool(tool);
     setLogs((old) => ({ ...old, [tool]: '' }));
     setInstallErrors((old) => ({ ...old, [tool]: '' }));
