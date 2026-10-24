@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,12 +64,11 @@ describe('first-run setup', () => {
       delete process.env.AGENTHUB_WORKER;
       process.env.FAKE_INSTALL_EXIT = '0';
       await manager.install('codex');
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(refreshed).toEqual(['codex']);
+      await vi.waitFor(() => expect(refreshed).toEqual(['codex']), { timeout: 10_000, interval: 25 });
 
       process.env.FAKE_INSTALL_EXIT = '1';
       await manager.install('codex');
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 300));
       expect(refreshed).toEqual(['codex']);
     } finally {
       if (previous.exit === undefined) delete process.env.FAKE_INSTALL_EXIT;
