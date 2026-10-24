@@ -799,12 +799,77 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(stepSelect.tagName.toLowerCase()).toBe('select');
       expect(stepSelect.value).toBe('codex:custom-model-dynamic');
       expect(within(stepSelect).getByRole('option', { name: 'codex:custom-model-dynamic' })).toBeInTheDocument();
+      // Ensure hardcoded models like gpt-5.6-turbo/luna are NOT included when not in API or config
+      expect(within(stepSelect).queryByRole('option', { name: 'codex:gpt-5.6-turbo' })).not.toBeInTheDocument();
+      expect(within(stepSelect).queryByRole('option', { name: 'codex:gpt-5.6-luna' })).not.toBeInTheDocument();
 
       // Reviewer order select should also have codex:custom-model-dynamic as option
       const orderBlock = screen.getByTestId('project-reviewer-order');
       const reviewerSelect = within(orderBlock).getByRole('combobox', { name: /^Model reviewer 1$/i }) as HTMLSelectElement;
       expect(reviewerSelect.tagName.toLowerCase()).toBe('select');
       expect(reviewerSelect.value).toBe('codex:custom-model-dynamic');
+      expect(within(reviewerSelect).queryByRole('option', { name: 'codex:gpt-5.6-turbo' })).not.toBeInTheDocument();
+      expect(within(reviewerSelect).queryByRole('option', { name: 'gpt-5.6-turbo' })).not.toBeInTheDocument();
+    });
+
+    it('sends review order: null and fallback: null when user resets overrides to system default', async () => {
+      const updateProjectSpy = vi.spyOn(client, 'updateProject').mockResolvedValue(mockProject);
+      const projectWithOverrides = {
+        ...mockProject,
+        settings: {
+          ...mockProject.settings,
+          review: {
+            order: [{ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }],
+            fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
+          },
+        },
+      };
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={projectWithOverrides}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-reviewer-order')).toBeInTheDocument();
+        expect(screen.getByTestId('project-reviewer-fallback')).toBeInTheDocument();
+      });
+
+      // Click "Dùng mặc định" in reviewer order block
+      const orderBlock = screen.getByTestId('project-reviewer-order');
+      const fallbackBlock = screen.getByTestId('project-reviewer-fallback');
+      const defaultOrderBtn = within(orderBlock).getAllByRole('button', { name: /Dùng mặc định/i })[0];
+      fireEvent.click(defaultOrderBtn);
+
+      // Click "Dùng mặc định" in reviewer fallback block
+      const defaultFallbackBtn = within(fallbackBlock).getByRole('button', { name: /Dùng mặc định/i });
+      fireEvent.click(defaultFallbackBtn);
+
+      // Save
+      const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(updateProjectSpy).toHaveBeenCalled();
+      });
+
+      const callArgs = updateProjectSpy.mock.calls[0][1];
+      expect(callArgs.settings?.review?.order).toBeNull();
+      expect(callArgs.settings?.review?.fallback).toBeNull();
     });
   });
 });
