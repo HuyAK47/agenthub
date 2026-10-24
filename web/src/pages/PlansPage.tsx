@@ -859,7 +859,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-add-slug"
               value={newSlug}
               onChange={(e) => setNewSlug(e.target.value)}
-              placeholder="e.g. auth-flow"
+              placeholder={t('plans.slugPlaceholder')}
               required
             />
           </div>
@@ -872,7 +872,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-add-title"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
-              placeholder="e.g. Implement authentication flow"
+              placeholder={t('plans.taskTitlePlaceholder')}
               required
             />
           </div>
@@ -900,7 +900,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-add-modelchain"
               value={newModelChain}
               onChange={(e) => setNewModelChain(e.target.value)}
-              placeholder="e.g. agy:claude-sonnet-4-6-thinking, gemini-3.8-flash-high"
+              placeholder={t('plans.modelChainPlaceholder')}
             />
           </div>
 
@@ -1032,7 +1032,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-edit-modelchain"
               value={editModelChain}
               onChange={(e) => setEditModelChain(e.target.value)}
-              placeholder="e.g. agy:claude-sonnet-4-6-thinking"
+              placeholder={t('plans.modelChainEditPlaceholder')}
             />
           </div>
 

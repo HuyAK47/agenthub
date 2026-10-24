@@ -717,7 +717,7 @@ export const SettingsPage: React.FC = () => {
                           {idx > 0 && (
                             <button
                               type="button"
-                              title="Move up"
+                              title={t('common.moveUp')}
                               onClick={() => {
                                 const next = [...claudeProfiles];
                                 const tmp = next[idx - 1];
@@ -733,7 +733,7 @@ export const SettingsPage: React.FC = () => {
                           {idx < claudeProfiles.length - 1 && (
                             <button
                               type="button"
-                              title="Move down"
+                              title={t('common.moveDown')}
                               onClick={() => {
                                 const next = [...claudeProfiles];
                                 const tmp = next[idx + 1];
@@ -748,7 +748,7 @@ export const SettingsPage: React.FC = () => {
                           )}
                           <button
                             type="button"
-                            title="Remove"
+                            title={t('common.remove')}
                             onClick={() => {
                               setClaudeProfiles(claudeProfiles.filter((name) => name !== pName));
                             }}
@@ -780,8 +780,8 @@ export const SettingsPage: React.FC = () => {
                   <option value="engine">{t('extra.fallbackEngine')}</option>
                   <option value="wait">{t('extra.fallbackWait')}</option>
                 </select>
-                {step.type === 'profile' && <input value={step.profile || ''} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, profile: event.target.value }; setFallback(next); }} placeholder="profile name" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                {step.type === 'model' && <input value={step.model} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, model: event.target.value }; setFallback(next); }} placeholder="sonnet" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
+                {step.type === 'profile' && <input value={step.profile || ''} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, profile: event.target.value }; setFallback(next); }} placeholder={t('extra.fallbackProfilePlaceholder')} className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
+                {step.type === 'model' && <input value={step.model} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, model: event.target.value }; setFallback(next); }} placeholder={t('extra.fallbackModelPlaceholder')} className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
                 {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
                 <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">{t('extra.remove')}</button>
               </div>
