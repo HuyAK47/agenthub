@@ -33,6 +33,16 @@ AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các wo
 | **Claude Code** | Bắt buộc nếu muốn để Claude điều phối (cài extension Claude Code cho VS Code, hoặc CLI `claude`). |
 | **Tài nguyên máy** | Mỗi worker có thể build/test nặng. Tham khảo: máy 12 nhân / 15 GB RAM chạy ổn ~4 worker song song. |
 
+### Cài Antigravity CLI (`agy`)
+
+Trong trang **Thiết lập**, bấm **Cài đặt** ở dòng Antigravity CLI để chạy bộ cài chính thức. AgentHub hiển thị log và kiểm tra lại binary sau khi chạy:
+
+```sh
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+Nếu cài xong nhưng AgentHub vẫn báo thiếu `agy`, daemon có thể có PATH khác shell tương tác. Đặt đường dẫn tuyệt đối bằng `AGENTHUB_AGY_BIN=/đường/dẫn/agy` rồi khởi động lại daemon. AgentHub tự dò PATH, `~/.local/bin/agy` và `~/.gemini/bin/agy`; log ở `~/.agenthub/logs/setup-agy.log`.
+
 ## 2. Cài đặt
 
 Cách cài đặt một lệnh (hãy đọc script trước khi chạy):

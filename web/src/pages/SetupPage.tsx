@@ -233,6 +233,7 @@ export const SetupPage: React.FC = () => {
   });
 
   const [logs, setLogs] = useState<Record<string, string>>({});
+  const [installErrors, setInstallErrors] = useState<Record<string, string>>({});
   const [installingTool, setInstallingTool] = useState<string | null>(null);
   const [installResult, setInstallResult] = useState<Record<string, boolean>>({});
 
@@ -258,6 +259,7 @@ export const SetupPage: React.FC = () => {
       }
       if (event.type === 'setup.install_done') {
         setInstallResult((old) => ({ ...old, [tool]: Boolean(event.payload.ok) }));
+        if (event.payload.error) setInstallErrors((old) => ({ ...old, [tool]: String(event.payload.error) }));
         queryClient.invalidateQueries({ queryKey: ['setup-status'] });
       }
     });
@@ -270,6 +272,7 @@ export const SetupPage: React.FC = () => {
   const installOne = async (tool: string) => {
     setInstallingTool(tool);
     setLogs((old) => ({ ...old, [tool]: '' }));
+    setInstallErrors((old) => ({ ...old, [tool]: '' }));
     let stop: (() => void) | undefined;
     const completed = new Promise<void>((resolve) => {
       const unsubscribe = subscribeToEvents((event) => {
@@ -458,7 +461,7 @@ export const SetupPage: React.FC = () => {
               key={item.key}
               item={item}
               result={installResult[item.key]}
-              log={logs[item.key]}
+              log={installErrors[item.key] ? `${installErrors[item.key]}\n\n${logs[item.key] || ''}` : logs[item.key]}
             />
           ))}
         </div>

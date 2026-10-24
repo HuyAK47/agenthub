@@ -417,6 +417,7 @@ export const en: typeof vi = {
     connectedTerminal: 'Connected. Please follow instructions in the terminal.',
     sessionEnded: 'Login session ended.',
     wsError: 'WebSocket terminal connection error.',
+    reconnecting: 'Reconnecting…',
     doneAndClose: 'Done & Close',
     authMethod: 'Authentication Method',
     tabTerminalLogin: 'Terminal Login',
