@@ -1034,6 +1034,7 @@ export const vi = {
     suggestChecksTaskBody: 'Đọc các file checklist dưới đây và chuyển các mục lặp lại thành checks tự động (semgrep/grep script):\n\n{items}',
     wizardSelectContextItem: 'Chọn nội dung {item}',
     wizardSummaryFailed: 'Task tóm tắt kết thúc với trạng thái {status}',
+    wizardSummaryErrorUnknown: 'Đã xảy ra lỗi không xác định',
     deployingBtn: 'Đang deploy…',
     cardBranch: 'Nhánh:',
     cardIntegration: 'Tích hợp:',

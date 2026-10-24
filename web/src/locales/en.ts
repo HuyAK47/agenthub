@@ -1035,6 +1035,7 @@ export const en: typeof vi = {
     suggestChecksTaskBody: 'Read the checklist files below and convert repeated items into automated checks (semgrep/grep script):\n\n{items}',
     wizardSelectContextItem: 'Select content {item}',
     wizardSummaryFailed: 'Summary task finished with status {status}',
+    wizardSummaryErrorUnknown: 'An unknown error occurred',
     deployingBtn: 'Deploying…',
     cardBranch: 'Branch:',
     cardIntegration: 'Integration:',
