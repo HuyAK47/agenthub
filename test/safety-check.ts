@@ -17,6 +17,7 @@ export interface HubHomeSnapshot {
 const IGNORED_HUB_EXACT_NAMES = new Set([
   'claude-failover.json',
   'deploy-push-state.json',
+  'deploy-pending-state.json',
   'daemon.log',
   'logs',
   'worktrees',
