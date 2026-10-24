@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from 'node:child_process';
+import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -205,13 +205,42 @@ export class AgyEngine implements Engine {
   }
 }
 
-function findBubblewrap(): string | null {
+export function findBubblewrap(): string | null {
   const configured = process.env.AGENTHUB_BWRAP_BIN;
-  if (configured && fs.existsSync(configured)) return configured;
+  if (configured !== undefined) {
+    const trimmed = configured.trim();
+    if (!trimmed || trimmed === '0' || trimmed === 'false') return null;
+    return fs.existsSync(trimmed) ? trimmed : null;
+  }
+  const searchPath = process.env.PATH;
+  if (searchPath !== undefined) {
+    for (const dir of searchPath.split(path.delimiter).filter(Boolean)) {
+      const candidate = path.join(dir, 'bwrap');
+      try {
+        const stat = fs.statSync(candidate);
+        if (stat.isFile() && (process.platform === 'win32' || (stat.mode & 0o111) !== 0)) return candidate;
+      } catch { /* try the next PATH entry */ }
+    }
+    return null;
+  }
   for (const candidate of ['/usr/bin/bwrap', '/bin/bwrap']) {
-    if (fs.existsSync(candidate)) return candidate;
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (stat.mode & 0o111) !== 0) return candidate;
+    } catch { /* target is missing */ }
   }
   return null;
+}
+
+export function canRunBubblewrap(): boolean {
+  const bwrap = findBubblewrap();
+  if (!bwrap) return false;
+  try {
+    const res = spawnSync(bwrap, ['--ro-bind', '/', '/', '--', 'true'], { stdio: 'ignore' });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
 }
 
 function brainSandboxCommand(
