@@ -221,12 +221,11 @@ export function findBubblewrap(): string | null {
         if (stat.isFile() && (process.platform === 'win32' || (stat.mode & 0o111) !== 0)) return candidate;
       } catch { /* try the next PATH entry */ }
     }
-    return null;
   }
   for (const candidate of ['/usr/bin/bwrap', '/bin/bwrap']) {
     try {
       const stat = fs.statSync(candidate);
-      if (stat.isFile() && (stat.mode & 0o111) !== 0) return candidate;
+      if (stat.isFile() && (process.platform === 'win32' || (stat.mode & 0o111) !== 0)) return candidate;
     } catch { /* target is missing */ }
   }
   return null;
