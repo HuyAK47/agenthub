@@ -416,6 +416,7 @@ export const vi = {
     connectedTerminal: 'Đã kết nối. Vui lòng làm theo hướng dẫn trong terminal.',
     sessionEnded: 'Phiên đăng nhập đã kết thúc.',
     wsError: 'Lỗi kết nối WebSocket terminal.',
+    reconnecting: 'Đang kết nối lại…',
     doneAndClose: 'Hoàn tất & Đóng',
     authMethod: 'Phương thức xác thực',
     tabTerminalLogin: 'Đăng nhập Terminal',
@@ -840,7 +841,7 @@ export const vi = {
   setup: {
     navLabel: 'Thiết lập', loading: 'Đang kiểm tra môi trường…', title: 'Bắt đầu với AgentHub', subtitle: 'Chuẩn bị các công cụ cần thiết để bạn có thể dùng ngay.',
     progress: 'Tiến độ sẵn sàng', progressSummary: '{ready}/{total} mục đã sẵn sàng',
-    node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Service nền', mcp: 'Đăng ký MCP với Claude Code', accounts: 'Đăng nhập tài khoản', account: 'Tài khoản {name}', login: 'Đăng nhập trong Profiles', needsCheck: 'Cần kiểm tra', manualGuide: 'Hướng dẫn', install: 'Cài đặt', installAll: 'Cài tất cả công cụ còn thiếu', installing: 'Đang cài đặt…', log: 'Xem log', complete: 'Hoàn tất', skip: 'Bỏ qua, làm sau', done: 'Đã hoàn tất', notDone: 'Cần làm', running: 'Đang chạy', installFailed: 'Cài đặt thất bại',
+    node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Service nền', mcp: 'Đăng ký MCP với Claude Code', accounts: 'Đăng nhập tài khoản', account: 'Tài khoản {name}', login: 'Đăng nhập trong Profiles', needsCheck: 'Cần kiểm tra', manualGuide: 'Hướng dẫn', install: 'Cài đặt', installAll: 'Cài tất cả công cụ còn thiếu', installing: 'Đang cài đặt…', log: 'Xem log', complete: 'Hoàn tất', skip: 'Bỏ qua, làm sau', done: 'Đã hoàn tất', notDone: 'Cần làm', running: 'Đang chạy', installFailed: 'Cài đặt thất bại', agyInstallConfirm: 'AgentHub sẽ chạy lệnh cài đặt chính thức của Antigravity (curl | bash). Bạn có đồng ý không?', agyManualHint: 'Nếu cài tự động thất bại, chạy lệnh sau trong terminal rồi bấm kiểm tra lại:',
     firstProject: 'Thêm dự án đầu tiên', addProject: 'Thêm dự án',
   },
   departments: {

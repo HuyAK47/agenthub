@@ -1213,7 +1213,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       installers: {
         claude: installer('claude', { package: '@anthropic-ai/claude-code', versionArgs: ['--version'] }),
         codex: installer('codex', { package: '@openai/codex', versionArgs: ['--version'] }),
-        agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
+        agy: installer('agy', {
+          command: ['sh', '-c', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'],
+          docsUrl: 'https://antigravity.google/',
+        }),
       },
     },
     workers,

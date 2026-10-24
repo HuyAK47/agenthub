@@ -8,6 +8,7 @@ import { CodexEngine } from './engines/index.js';
 import { findClaudeBin } from './chat/claude.js';
 import { getPlatform } from './platform/index.js';
 import { lockTool } from './profiles/locks.js';
+import { findAgyBin } from './agy.js';
 
 export type CheckStatus = 'ok' | 'error' | 'skip' | 'warn';
 
@@ -79,21 +80,7 @@ export function findRealUserHome(): string {
 }
 
 export function findAgyPath(customHome?: string, existsFn: (filePath: string) => boolean = (p) => fs.existsSync(p)): string | null {
-  const candidates: string[] = [];
-  if (process.env.AGENTHUB_TOOLS_DIR) candidates.push(path.join(process.env.AGENTHUB_TOOLS_DIR, 'node_modules', '.bin', 'agy'));
-  if (process.env.AGENTHUB_AGY_BIN) {
-    return existsFn(process.env.AGENTHUB_AGY_BIN) ? process.env.AGENTHUB_AGY_BIN : null;
-  }
-  const homes = [customHome, os.homedir(), findRealUserHome()].filter(Boolean) as string[];
-  for (const h of homes) {
-    candidates.push(path.join(h, '.gemini', 'bin', 'agy'));
-  }
-  for (const candidate of candidates) {
-    if (existsFn(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
+  return findAgyBin(customHome, existsFn);
 }
 
 export function findCodexPath(customHome?: string, existsFn: (filePath: string) => boolean = (p) => fs.existsSync(p)): string | null {

@@ -14,9 +14,13 @@ export interface HubHomeSnapshot {
   entries: string[];
 }
 
-const IGNORED_HUB_EXACT_NAMES = new Set([
+// Runtime entries that the daemon or worker setup may create in the real hub
+// home while tests are running. User/configuration data must not be added here.
+const ALLOWED_HUB_RUNTIME_ENTRIES = new Set([
   'claude-failover.json',
   'deploy-push-state.json',
+  'deploy-pending-state.json',
+  'deploy-restart.json',
   'daemon.log',
   'logs',
   'worktrees',
@@ -26,13 +30,15 @@ const IGNORED_HUB_EXACT_NAMES = new Set([
   'codex-homes',
   'claude-usage-cwd',
   'shims',
+  'sessions',
+  'empty-hooks',
 ]);
 
 export function isIgnoredHubEntry(name: string): boolean {
   if (name.startsWith('hub.db')) return true;
   if (/^chat-mcp.*\.json$/.test(name)) return true;
   if (name.endsWith('.tmp') || name.includes('.tmp-')) return true;
-  if (IGNORED_HUB_EXACT_NAMES.has(name)) return true;
+  if (ALLOWED_HUB_RUNTIME_ENTRIES.has(name)) return true;
   return false;
 }
 

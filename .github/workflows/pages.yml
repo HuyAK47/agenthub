@@ -1,4 +1,5 @@
 name: Deploy landing page
+# Triển khai lại sau khi bật GitHub Pages (Source: GitHub Actions)
 on:
   push:
     branches: [main]

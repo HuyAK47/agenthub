@@ -206,6 +206,17 @@ describe('SetupPage', () => {
     expect(result).toHaveTextContent('Cài đặt thất bại');
   });
 
+  it('hiển thị lỗi hậu cài và lệnh cài agy thủ công', async () => {
+    renderPage();
+    await screen.findByText('Antigravity CLI');
+    emitSSE({
+      type: 'setup.install_done',
+      payload: { tool: 'agy', ok: false, error: 'Chưa tìm thấy agy sau khi cài' },
+    });
+    expect(await screen.findByText('Chưa tìm thấy agy sau khi cài')).toBeInTheDocument();
+    expect(screen.getByText('curl -fsSL https://antigravity.google/cli/install.sh | bash')).toBeInTheDocument();
+  });
+
   it('5. Bấm "Cài tất cả công cụ còn thiếu" gọi installSetupTool cho các công cụ còn thiếu', async () => {
     const installSpy = vi.spyOn(client, 'installSetupTool');
     renderPage();
