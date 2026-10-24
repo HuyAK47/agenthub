@@ -3,7 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
-import { reviewerSettingsFromLegacy } from '../src/reviewer-config.js';
+import {
+  ReviewerArbiterSchema,
+  ReviewerOrderItemSchema,
+  reviewerSettingsFromLegacy,
+} from '../src/reviewer-config.js';
 
 describe('reviewer order configuration', () => {
   it('migrates legacy Codex/Claude settings to the ordered form', () => {
@@ -35,5 +39,42 @@ describe('reviewer order configuration', () => {
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('validates reviewer order items according to engine syntax', () => {
+    // Valid Claude models
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'sonnet', profiles: [] }).success).toBe(true);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'opus', profiles: [] }).success).toBe(true);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'haiku', profiles: [] }).success).toBe(true);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'claude-sonnet-4-6', profiles: [] }).success).toBe(true);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'claude:sonnet', profiles: [] }).success).toBe(true);
+
+    // Invalid Claude models
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'gpt-5.6-luna', profiles: [] }).success).toBe(false);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'gemini-3.8-flash-high', profiles: [] }).success).toBe(false);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'claude', model: 'claude:', profiles: [] }).success).toBe(false);
+
+    // Valid Codex models
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'gpt-5.6-luna', profiles: [] }).success).toBe(true);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'gpt-5.6-turbo', profiles: [] }).success).toBe(true);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }).success).toBe(true);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'gpt-4o', profiles: [] }).success).toBe(true);
+
+    // Invalid Codex models
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'sonnet', profiles: [] }).success).toBe(false);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'codex:', profiles: [] }).success).toBe(false);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'codex: ', profiles: [] }).success).toBe(false);
+
+    // Common invalid: empty or whitespace
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: '', profiles: [] }).success).toBe(false);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'gpt 5.6', profiles: [] }).success).toBe(false);
+  });
+
+  it('validates reviewer arbiter according to engine syntax', () => {
+    expect(ReviewerArbiterSchema.safeParse({ engine: 'claude', model: 'opus' }).success).toBe(true);
+    expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'gpt-5.6-luna' }).success).toBe(true);
+    expect(ReviewerArbiterSchema.safeParse({ engine: 'claude', model: 'gpt-5.6-luna' }).success).toBe(false);
+    expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'sonnet' }).success).toBe(false);
+    expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'codex:' }).success).toBe(false);
   });
 });

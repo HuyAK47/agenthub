@@ -180,6 +180,16 @@ describe('project settings through the service', () => {
       path: path.join(tmpDir, 'repo'),
       settings: { review: { order: [{ engine: 'claude', model: '   ' }] } },
     })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad8',
+      path: path.join(tmpDir, 'repo'),
+      settings: { review: { order: [{ engine: 'claude', model: 'gpt-5.6-luna' }] } },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad9',
+      path: path.join(tmpDir, 'repo'),
+      reviewChain: [{ reviewer: 'codex:', mode: 'gate' }],
+    })).toThrow();
   });
 
   it('accepts an existing external worktree root', () => {
