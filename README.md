@@ -126,6 +126,10 @@ sh /tmp/agenthub-install.sh --from-release
 
 Supports safe updates and uninstallation; use `--dry-run` to preview commands. Data in `~/.agenthub/` is only wiped when explicitly requested via `--uninstall --purge` with confirmation.
 
+On macOS, releases include both Apple Silicon (`macos-arm64`) and Intel (`macos-x64`) archives. The installer selects the matching archive, downloads a self-contained Node.js 22 runtime and production native modules, and registers `~/Library/LaunchAgents/dev.agenthub.plist`; no git, nvm, or Xcode Command Line Tools are required for a release install. If Gatekeeper reports that `spawn-helper` cannot be opened, download the release again or run `xattr -dr com.apple.quarantine ~/.agenthub-app/<version>` and retry `agenthub start`.
+
+To update, rerun the same `--from-release` command. Failed updates roll back the `current` symlink, CLI link, and LaunchAgent; `--uninstall` keeps `~/.agenthub/`, while `--uninstall --purge` removes it only after confirmation.
+
 Gỡ cài đặt:
 
 ```bash

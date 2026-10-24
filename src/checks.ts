@@ -73,9 +73,26 @@ function changedFiles(repo: string, task: TaskRow, project: ProjectRow): string[
   } catch { /* ignore */ }
   return [...names];
 }
+
+function committedAgentHubFiles(repo: string, task: TaskRow, project: ProjectRow): string[] {
+  try {
+    return execFileSync('git', ['diff', '--name-only', `${task.baseRef || project.defaultBranch}...${task.branch || 'HEAD'}`], { cwd: repo, encoding: 'utf8' })
+      .split('\n')
+      .map((name) => name.trim())
+      .filter((name) => name === '.agenthub' || name.startsWith('.agenthub/'));
+  } catch {
+    return [];
+  }
+}
+
 export function mandatoryChecks(repo: string, task: TaskRow, project: ProjectRow): CheckDefinition[] {
   const files = changedFiles(repo, task, project);
-  const checks = ['zero-byte', 'uncommitted', 'conflict-markers'].map((name) => ({ name, cmd: [], timeoutSec: 30, _files: files } as CheckDefinition & { _files: string[] }));
+  const checks = [
+    { name: 'zero-byte', files },
+    { name: 'uncommitted', files },
+    { name: 'conflict-markers', files },
+    { name: 'agenthub-files', files: committedAgentHubFiles(repo, task, project) },
+  ].map(({ name, files: checkFiles }) => ({ name, cmd: [], timeoutSec: 30, _files: checkFiles } as CheckDefinition & { _files: string[] }));
   if (project.settings && (projectSettings(project).commitConvention.commitRegex || projectSettings(project).commitConvention.commitTemplate.includes('{ref}'))) {
     checks.push({ name: 'commit-message', cmd: [], timeoutSec: 30, _files: [] } as CheckDefinition & { _files: string[] });
   }
@@ -96,7 +113,7 @@ function envFromFiles(repo: string, hubHome: string, project?: ProjectRow): Node
 }
 async function runOne(check: CheckDefinition, repo: string, hubHome: string, project?: ProjectRow, task?: TaskRow): Promise<CheckResult> {
   const started = Date.now();
-  if (['zero-byte', 'uncommitted', 'conflict-markers'].includes(check.name)) {
+  if (['zero-byte', 'uncommitted', 'conflict-markers', 'agenthub-files'].includes(check.name)) {
     const files = (check as CheckDefinition & { _files?: string[] })._files || []; let output = '';
     if (check.name === 'uncommitted') {
       try {
@@ -129,6 +146,9 @@ async function runOne(check: CheckDefinition, repo: string, hubHome: string, pro
       }
     }
     else if (check.name === 'zero-byte') output = files.filter((f) => !f.endsWith('.gitkeep') && !f.endsWith('__init__.py') && fs.existsSync(path.join(repo, f)) && fs.statSync(path.join(repo, f)).size === 0).join('\n');
+    else if (check.name === 'agenthub-files') output = files.length > 0
+      ? `Không được commit file trong .agenthub/:\n${files.join('\n')}`
+      : '';
     else output = files.filter((f) => { try { return CONFLICT_MARKER_REGEX.test(fs.readFileSync(path.join(repo, f), 'utf8')); } catch { return false; } }).join('\n');
     return { name: check.name, ok: !output, exitCode: output ? 1 : 0, durationMs: Date.now() - started, outputTail: tail(output || 'OK') };
   }

@@ -73,7 +73,7 @@ describe('safe installer and updater commands', () => {
     },
   );
 
-  it.runIf(process.platform === 'darwin')(
+  it(
     'uninstalls only temporary paths and calls the injected launchctl on macOS',
     () => {
       const home = makeTemp('agenthub-installer-darwin-');
@@ -90,6 +90,8 @@ describe('safe installer and updater commands', () => {
       fs.mkdirSync(data, { recursive: true });
       fs.mkdirSync(linkDir, { recursive: true });
       fs.mkdirSync(plistDir, { recursive: true });
+      fs.writeFileSync(path.join(bin, 'uname'), '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n');
+      fs.chmodSync(path.join(bin, 'uname'), 0o755);
       fs.writeFileSync(plistFile, '<plist></plist>');
       fs.writeFileSync(path.join(app, 'sentinel'), 'app');
       fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
@@ -122,6 +124,55 @@ describe('safe installer and updater commands', () => {
       expect(fs.readFileSync(log, 'utf8')).toContain('bootout');
     },
   );
+
+  it('supports Darwin dry-run without invoking launchctl or changing files', () => {
+    const home = makeTemp('agenthub-installer-darwin-dry-');
+    const bin = path.join(home, 'bin');
+    const app = path.join(home, 'app');
+    const stale = path.join(app, '.0.9.0.tmp.123');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.mkdirSync(stale, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'uname'), '#!/bin/sh\necho Darwin\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(app, '.agenthub-app'), 'mode=release\n');
+    fs.writeFileSync(path.join(stale, 'sentinel'), 'keep');
+    const result = spawnSync('/bin/sh', [installer, '--uninstall', '--dry-run'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${bin}:/usr/bin:/bin`,
+        AGENTHUB_DIR: app,
+        AGENTHUB_HOME: path.join(home, 'data'),
+        AGENTHUB_LAUNCHCTL: path.join(home, 'must-not-run'),
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('bootout gui/');
+    expect(fs.existsSync(path.join(app, '.agenthub-app'))).toBe(true);
+    expect(fs.existsSync(path.join(stale, 'sentinel'))).toBe(true);
+  });
+
+  it('does not purge marked Darwin data without an interactive confirmation', () => {
+    const home = makeTemp('agenthub-installer-darwin-purge-');
+    const bin = path.join(home, 'bin');
+    const app = path.join(home, 'app');
+    const data = path.join(home, 'data');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.mkdirSync(app, { recursive: true });
+    fs.mkdirSync(data, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'uname'), '#!/bin/sh\necho Darwin\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(app, '.agenthub-app'), 'version=0.1.0\n');
+    fs.writeFileSync(path.join(data, 'hub.db'), 'data');
+    const result = spawnSync('/bin/sh', [installer, '--uninstall', '--purge'], {
+      env: { ...process.env, HOME: home, PATH: `${bin}:/usr/bin:/bin`, AGENTHUB_DIR: app, AGENTHUB_HOME: data },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.existsSync(data)).toBe(true);
+    expect(result.stdout).toContain('Đã huỷ xoá dữ liệu');
+  });
 
   it('does not delete an ordinary git directory without the installer marker', () => {
     const home = makeTemp('agenthub-installer-unmarked-');

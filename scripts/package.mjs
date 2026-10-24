@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { prepareMacosNativeBinaries } from './package-native.mjs';
 
 const root = path.resolve(new URL('..', import.meta.url).pathname);
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -41,6 +42,7 @@ try {
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--omit=dev', '--prefix', staging], { stdio: 'inherit' });
   // Native modules (node-pty, better-sqlite3) only load on the Node major they were built for:
   // record it so install.sh can pick a matching Node and bin/agenthub always runs with it.
+  prepareMacosNativeBinaries(staging);
   fs.writeFileSync(path.join(staging, 'node-runtime'), `${process.versions.node.split('.')[0]}\n`);
   fs.mkdirSync(outputDir, { recursive: true });
   const archivePath = path.join(outputDir, archiveName);
