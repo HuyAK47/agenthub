@@ -343,6 +343,115 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(profileSelect).toBeInTheDocument();
       expect(screen.getByText(/claude-deleted-old \(cũ \/ không khả dụng\)/i)).toBeInTheDocument();
     });
+
+    it('preserves inactive/deleted codexProfile with inactive label and retains it on save', async () => {
+      const updateSpy = vi.spyOn(client, 'updateConfig').mockResolvedValue({} as any);
+      vi.spyOn(client, 'getProfiles').mockResolvedValue([
+        { name: 'codex-active', engine: 'codex', kind: 'isolated', home: '/home/codex', email: null, enabled: 1 } as any,
+      ]);
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        modelChainHard: ['gemini-3.8-flash-high'],
+        modelChainEasy: ['gemini-3.8-flash-medium'],
+        brain: {
+          engine: 'codex',
+          codexProfile: 'codex-archived-legacy',
+          mode: 'suggest',
+          digest: { enabled: true, time: '18:00' },
+          fallback: [],
+        },
+        chat: { model: 'sonnet', models: ['sonnet', 'opus'] },
+        reviewer: {
+          model: 'gemini-3.8-flash-high',
+          order: [{ engine: 'claude', model: 'sonnet', profiles: [] }],
+          fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
+          arbiter: { engine: 'claude', model: 'sonnet' },
+        },
+      } as any);
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <SettingsPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/Hồ sơ Codex cho Brain/i)).toBeInTheDocument();
+      });
+
+      // The inactive profile option should be present with the inactive label
+      expect(screen.getByText(/codex-archived-legacy \(cũ \/ không khả dụng\)/i)).toBeInTheDocument();
+
+      // Click save and verify codex-archived-legacy was preserved
+      const saveBtn = screen.getByRole('button', { name: /Lưu cấu hình/i });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(updateSpy).toHaveBeenCalled();
+      });
+      const payload = updateSpy.mock.calls[0][0];
+      expect(payload.brain?.codexProfile).toBe('codex-archived-legacy');
+    });
+
+    it('preserves fallback step pointing to an old profile absent from claudeProfiles and profiles list', async () => {
+      const updateSpy = vi.spyOn(client, 'updateConfig').mockResolvedValue({} as any);
+      vi.spyOn(client, 'getProfiles').mockResolvedValue([
+        { name: 'claude-current', engine: 'claude', kind: 'isolated', home: '/home/claude', email: null, enabled: 1 } as any,
+      ]);
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        modelChainHard: ['gemini-3.8-flash-high'],
+        modelChainEasy: ['gemini-3.8-flash-medium'],
+        brain: {
+          mode: 'suggest',
+          digest: { enabled: true, time: '18:00' },
+          fallback: [
+            { type: 'profile', profile: 'legacy-fallback-claude' },
+          ],
+        },
+        chat: { model: 'sonnet', models: ['sonnet', 'opus'] },
+        reviewer: {
+          model: 'gemini-3.8-flash-high',
+          claudeProfiles: ['claude-current'],
+          order: [{ engine: 'claude', model: 'sonnet', profiles: ['claude-current'] }],
+          fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
+          arbiter: { engine: 'claude', model: 'sonnet' },
+        },
+      } as any);
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <SettingsPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/Claude fallback chain/i)).toBeInTheDocument();
+      });
+
+      // The fallback profile input should recognize legacy-fallback-claude as a preset option with inactive label
+      expect(screen.getByText(/legacy-fallback-claude \(cũ \/ không khả dụng\)/i)).toBeInTheDocument();
+
+      // Click save and verify fallback profile is retained
+      const saveBtn = screen.getByRole('button', { name: /Lưu cấu hình/i });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(updateSpy).toHaveBeenCalled();
+      });
+      const payload = updateSpy.mock.calls[0][0];
+      expect(payload.brain?.fallback?.[0]).toEqual({ type: 'profile', profile: 'legacy-fallback-claude' });
+    });
   });
 
   describe('4. ProjectSettingsDrawer Reviewer Order, Fallback & Review Chain Integration', () => {
@@ -637,6 +746,65 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       const callArgs = updateProjectSpy.mock.calls[0][1];
       // review must explicitly be null to clear override on backend
       expect(callArgs.review).toBeNull();
+    });
+
+    it('populates review chain and reviewer order options dynamically from getModelOptions without defaulting to custom', async () => {
+      vi.spyOn(client, 'getModelOptions').mockResolvedValue({
+        suggestions: ['codex:custom-model-dynamic', 'gemini-3.8-flash-high'],
+        configured: ['codex:custom-model-dynamic', 'sonnet'],
+      });
+
+      const projectWithDynamicModel = {
+        ...mockProject,
+        settings: {
+          ...mockProject.settings,
+          review: {
+            order: [{ engine: 'codex', model: 'codex:custom-model-dynamic', profiles: [] }],
+            fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
+          },
+        },
+        review: {
+          chain: [{ reviewer: 'codex:custom-model-dynamic', mode: 'gate' }],
+          maxRounds: 2,
+        },
+      };
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={projectWithDynamicModel}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-review-chain')).toBeInTheDocument();
+        expect(screen.getByTestId('project-reviewer-order')).toBeInTheDocument();
+      });
+
+      // Review step select should display codex:custom-model-dynamic as a known select option, NOT custom input
+      const chainBlock = screen.getByTestId('project-review-chain');
+      const stepSelect = within(chainBlock).getByRole('combobox', { name: /^Bước review 1$/i }) as HTMLSelectElement;
+      expect(stepSelect.tagName.toLowerCase()).toBe('select');
+      expect(stepSelect.value).toBe('codex:custom-model-dynamic');
+      expect(within(stepSelect).getByRole('option', { name: 'codex:custom-model-dynamic' })).toBeInTheDocument();
+
+      // Reviewer order select should also have codex:custom-model-dynamic as option
+      const orderBlock = screen.getByTestId('project-reviewer-order');
+      const reviewerSelect = within(orderBlock).getByRole('combobox', { name: /^Model reviewer 1$/i }) as HTMLSelectElement;
+      expect(reviewerSelect.tagName.toLowerCase()).toBe('select');
+      expect(reviewerSelect.value).toBe('codex:custom-model-dynamic');
     });
   });
 });
