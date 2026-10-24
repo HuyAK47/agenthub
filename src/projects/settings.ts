@@ -75,8 +75,8 @@ export const ProjectSettingsSchema = z.object({
   review: z.object({
     /** Merge automatically after the final reviewer approves and hub checks pass. */
     autoMerge: z.boolean().default(false),
-    order: ReviewerOrderSchema.optional(),
-    fallback: ReviewerFallbackSchema.partial().optional(),
+    order: ReviewerOrderSchema.nullable().optional(),
+    fallback: ReviewerFallbackSchema.partial().nullable().optional(),
   }).default({}),
   ci: z.object({
     /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */
@@ -131,17 +131,29 @@ export function projectSettings(project: { settings?: string | null } | null | u
 
 /** Merge a partial update over current settings, section by section; arrays are replaced. */
 export function mergeProjectSettings(current: ProjectSettings, input: ProjectSettingsInput): ProjectSettings {
+  let nextReviewOrder = current.review?.order;
+  if (input.review && 'order' in input.review) {
+    nextReviewOrder = input.review.order === null ? undefined : input.review.order;
+  }
+
+  let nextReviewFallback = current.review?.fallback;
+  if (input.review && 'fallback' in input.review) {
+    nextReviewFallback = input.review.fallback === null ? undefined : (
+      input.review.fallback
+        ? { ...current.review?.fallback, ...input.review.fallback }
+        : undefined
+    );
+  }
+
   return ProjectSettingsSchema.parse({
     brain: { ...current.brain, ...input.brain },
     commitConvention: { ...current.commitConvention, ...input.commitConvention },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },
     review: {
-      ...current.review,
-      ...input.review,
-      ...(current.review?.fallback || input.review?.fallback ? {
-        fallback: { ...current.review?.fallback, ...input.review?.fallback },
-      } : {}),
+      autoMerge: input.review?.autoMerge ?? current.review?.autoMerge ?? false,
+      ...(nextReviewOrder ? { order: nextReviewOrder } : {}),
+      ...(nextReviewFallback ? { fallback: nextReviewFallback } : {}),
     },
     ci: { ...current.ci, ...input.ci },
     references: input.references ?? current.references,
