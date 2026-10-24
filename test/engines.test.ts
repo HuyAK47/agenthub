@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseResetTime, lastNLines, AgyEngine, CodexEngine } from '../src/engines/index.js';
+import { parseResetTime, lastNLines, AgyEngine, CodexEngine, canRunBubblewrap } from '../src/engines/index.js';
 import { getModelFamily, getModelEngine } from '../src/quota/index.js';
 import { loadConfig } from '../src/config.js';
 
@@ -224,7 +224,7 @@ process.exit(0);
     }
   });
 
-  it('enforces brain policy for absolute commands and shell indirection', async () => {
+  it.skipIf(!canRunBubblewrap())('enforces brain policy for absolute commands and shell indirection', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-policy-'));
     try {
       const marker = path.join(tmp, 'must-survive');
@@ -262,7 +262,7 @@ if (fs.existsSync('${hubToken}')) process.exit(1);
     }
   });
 
-  it('blocks mutation and interpreter bypasses in a brain sandbox', async () => {
+  it.skipIf(!canRunBubblewrap())('blocks mutation and interpreter bypasses in a brain sandbox', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-bypasses-'));
     try {
       const work = path.join(tmp, 'work');
@@ -318,7 +318,7 @@ if (!fs.existsSync('${marker}') || fs.existsSync('${moved}') || fs.existsSync('$
     }
   });
 
-  it('does not let shell shims bypass the npm, npx, and curl allowlists', async () => {
+  it.skipIf(!canRunBubblewrap())('does not let shell shims bypass the npm, npx, and curl allowlists', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-shell-policy-'));
     try {
       const work = path.join(tmp, 'work');
@@ -361,6 +361,51 @@ if (fs.existsSync('${marker}')) process.exit(1);
       expect(fs.existsSync(marker)).toBe(false);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when brain policy is requested but bubblewrap is unavailable via AGENTHUB_BWRAP_BIN', () => {
+    const prevBwrap = process.env.AGENTHUB_BWRAP_BIN;
+    try {
+      process.env.AGENTHUB_BWRAP_BIN = '';
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      expect(() => {
+        new CodexEngine('dummy').spawn({
+          profile,
+          model: 'gpt-5.6-luna',
+          cwd: '/tmp',
+          prompt: 'test',
+          logPath: '/tmp/test.log',
+          brainPolicy: 'standard',
+        });
+      }).toThrow('Codex brain policy requires bubblewrap (bwrap)');
+    } finally {
+      if (prevBwrap === undefined) delete process.env.AGENTHUB_BWRAP_BIN;
+      else process.env.AGENTHUB_BWRAP_BIN = prevBwrap;
+    }
+  });
+
+  it('throws when brain policy is requested but bwrap is missing from PATH', () => {
+    const prevBwrap = process.env.AGENTHUB_BWRAP_BIN;
+    const prevPath = process.env.PATH;
+    try {
+      delete process.env.AGENTHUB_BWRAP_BIN;
+      process.env.PATH = '/nonexistent-bin-dir';
+      const profile = { name: 'test-codex', engine: 'codex', kind: 'default', home: null, email: null, enabled: 1 };
+      expect(() => {
+        new CodexEngine('dummy').spawn({
+          profile,
+          model: 'gpt-5.6-luna',
+          cwd: '/tmp',
+          prompt: 'test',
+          logPath: '/tmp/test.log',
+          brainPolicy: 'standard',
+        });
+      }).toThrow('Codex brain policy requires bubblewrap (bwrap)');
+    } finally {
+      if (prevBwrap === undefined) delete process.env.AGENTHUB_BWRAP_BIN;
+      else process.env.AGENTHUB_BWRAP_BIN = prevBwrap;
+      process.env.PATH = prevPath;
     }
   });
 });
