@@ -97,3 +97,9 @@
   2. Chỉ nhận diện token có marker rõ ràng (bắt đầu bằng `#` như `#abc`, `#123` hoặc bao bởi ngoặc vuông `[...]`), hoặc token có ký tự phân tách (`-`, `_`, `#`, `/`, `:`) giữa các thành phần chữ/số (như `PROJ-45`, `OP#123`, `ĐỀ-123`, `営業-1`, `ABC-foo`, `ref:đề`).
   3. Từ chỉ gồm chữ cái không có dấu nối (kể cả chữ hoa, Unicode hay Han/kana như `ĐỀ`, `営業`, `đề`) sẽ không được tự động đoán là `externalRef` nhằm bảo vệ mô tả task thông thường; người dùng muốn đặt ref dạng này cần dùng cú pháp tường minh (`#đề`, `#営業`, `ref:đề` hoặc `ĐỀ-123`, `営業-1`).
 - **Hệ quả**: Đảm bảo 100% không nhận nhầm tiêu đề mô tả thường thành ref, đồng thời hỗ trợ đầy đủ mọi ref tự do có marker hoặc dấu nối quy chuẩn.
+
+## DEC-010: Dùng `macos-15-intel` và chặn publish khi macOS smoke fail
+
+- **Bối cảnh**: `macos-13` đã bị GitHub bắt đầu loại bỏ và không còn là runner hợp lệ; release cần tạo archive native cho cả Intel và Apple Silicon. Các lỗi cũ trên macOS (PTY, process stats, launchctl) cũng có thể làm archive được phát hành nhưng không cài/chạy được.
+- **Quyết định**: Dùng `macos-15-intel` cho archive/smoke Intel và `macos-latest` cho Apple Silicon. Giữ các job macOS là bắt buộc và để `publish` phụ thuộc vào `package`, `smoke`, `smoke-macos`.
+- **Rủi ro/giới hạn**: Worker chỉ kiểm chứng được Linux bằng shim; chưa có bằng chứng từ runner macOS thật trong phiên này. Claude phải chạy lại workflow sau khi push để xác nhận PTY, native `better-sqlite3`, `spawn-helper`, process stats và `launchctl`; nếu runner macOS thật vẫn lỗi thì cần điều chỉnh workflow/đánh dấu tạm thời thay vì phát hành archive chưa được kiểm thử.

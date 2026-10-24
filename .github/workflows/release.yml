@@ -21,7 +21,7 @@ jobs:
           - os: ubuntu-22.04-arm
           # Build on both supported macOS architectures so native node-pty and
           # better-sqlite3 binaries match the user's machine.
-          - os: macos-13
+          - os: macos-15-intel
           - os: macos-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -78,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-latest]
+        os: [macos-15-intel, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
