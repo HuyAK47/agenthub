@@ -139,4 +139,100 @@ describe('project inspection and creation at service level', () => {
   it('rejects summarizeProjectContext for non-existent project', () => {
     expect(() => ctx.service.summarizeProjectContext('not-found', { sessions: ['s.jsonl'] })).toThrow(/không tồn tại/);
   });
+
+  it('rejects summarizeProjectContext for invalid or missing session file', () => {
+    const target = path.join(tmpDir, 'repo-invalid-session');
+    const created = ctx.service.createNewProject({ name: 'Invalid Session Project', path: target, defaultBranch: 'main' });
+    expect(() => ctx.service.summarizeProjectContext(created.id, { sessions: ['non-existent.jsonl'] })).toThrow(/không hợp lệ hoặc không còn tồn tại/);
+    expect(() => ctx.service.summarizeProjectContext(created.id, { sessions: ['bad-format.txt'] })).toThrow(/không hợp lệ hoặc không còn tồn tại/);
+  });
+
+  it('supports retry on summarizeProjectContext without 409 conflict and resets failed task', async () => {
+    const target = path.join(tmpDir, 'repo-retry');
+    const created = ctx.service.createNewProject({ name: 'Retry Project', path: target, defaultBranch: 'main' });
+    const sessionDir = path.join(process.env.HOME as string, '.claude', 'projects', target.replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'sess-1.jsonl'), JSON.stringify({ message: { role: 'assistant', content: 'Some knowledge' } }) + '\n');
+
+    const first = ctx.service.summarizeProjectContext(created.id, { sessions: ['sess-1.jsonl'] });
+    expect(first.taskId).toBeTruthy();
+
+    // Mark task as failed with blockedContent containing a stack trace
+    ctx.taskRepo.update(first.taskId, {
+      status: 'failed',
+    });
+    ctx.taskRepo.updateStatus(first.taskId, 'failed');
+
+    // Calling summarizeProjectContext again (retry) should NOT throw 409 conflict
+    const second = ctx.service.summarizeProjectContext(created.id, { sessions: ['sess-1.jsonl'], notes: 'Retried note' });
+    expect(second.taskId).toBe(first.taskId);
+    expect(['queued', 'waiting_quota']).toContain(second.status);
+
+    const taskAfter = ctx.taskRepo.get(first.taskId);
+    expect(taskAfter?.body).toContain('Retried note');
+  });
+
+  it('getProjectContextSummary reports waiting_quota when engine has no quota', async () => {
+    const target = path.join(tmpDir, 'repo-quota');
+    const created = ctx.service.createNewProject({ name: 'Quota Project', path: target, defaultBranch: 'main' });
+    const sessionDir = path.join(process.env.HOME as string, '.claude', 'projects', target.replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'sess-q.jsonl'), JSON.stringify({ message: { role: 'assistant', content: 'Quota knowledge' } }) + '\n');
+
+    const result = ctx.service.summarizeProjectContext(created.id, { sessions: ['sess-q.jsonl'] });
+    ctx.taskRepo.updateStatus(result.taskId, 'waiting_quota', 'quota');
+
+    const summaryStatus = await ctx.service.getProjectContextSummary(created.id, result.taskId);
+    expect(summaryStatus.status).toBe('waiting_quota');
+    expect(summaryStatus.waitReason).toBe('quota');
+    expect(summaryStatus.error).toContain('Chưa có engine khả dụng hoặc đang hết quota');
+  });
+
+  it('getProjectContextSummary sanitizes error stack traces on failed task', async () => {
+    const target = path.join(tmpDir, 'repo-failed');
+    const created = ctx.service.createNewProject({ name: 'Failed Project', path: target, defaultBranch: 'main' });
+    const sessionDir = path.join(process.env.HOME as string, '.claude', 'projects', target.replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'sess-f.jsonl'), JSON.stringify({ message: { role: 'assistant', content: 'Fail knowledge' } }) + '\n');
+
+    const result = ctx.service.summarizeProjectContext(created.id, { sessions: ['sess-f.jsonl'] });
+    const taskWorktree = path.join(tmpDir, 'worktree-failed');
+    fs.mkdirSync(path.join(taskWorktree, '.agenthub'), { recursive: true });
+    fs.writeFileSync(
+      path.join(taskWorktree, '.agenthub', 'BLOCKED'),
+      'Error: Claude engine timed out\n    at WorkerProcess.exec (/src/worker.ts:42:15)\n    at processTicksAndRejections',
+    );
+    ctx.taskRepo.update(result.taskId, {
+      status: 'failed',
+      worktreePath: taskWorktree,
+    });
+
+    const summaryStatus = await ctx.service.getProjectContextSummary(created.id, result.taskId);
+    expect(summaryStatus.status).toBe('failed');
+    expect(summaryStatus.error).toBe('Claude engine timed out');
+    expect(summaryStatus.error).not.toContain('at WorkerProcess');
+  });
+
+  it('getProjectContextSummary returns summary when task is done', async () => {
+    const target = path.join(tmpDir, 'repo-done');
+    const created = ctx.service.createNewProject({ name: 'Done Project', path: target, defaultBranch: 'main' });
+    const sessionDir = path.join(process.env.HOME as string, '.claude', 'projects', target.replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'sess-d.jsonl'), JSON.stringify({ message: { role: 'assistant', content: 'Done knowledge' } }) + '\n');
+
+    const result = ctx.service.summarizeProjectContext(created.id, { sessions: ['sess-d.jsonl'] });
+    ctx.taskRepo.update(result.taskId, {
+      status: 'done',
+      doneReport: '# Durable Knowledge\n- Rule 1: Always test\n- Rule 2: Keep API clean',
+    });
+
+    const summaryStatus = await ctx.service.getProjectContextSummary(created.id, result.taskId);
+    expect(summaryStatus.status).toBe('done');
+    expect(summaryStatus.summary).toContain('# Durable Knowledge');
+
+    // Also calling summarizeProjectContext again returns the existing summary immediately
+    const recheck = ctx.service.summarizeProjectContext(created.id, { sessions: ['sess-d.jsonl'] });
+    expect(recheck.status).toBe('done');
+    expect(recheck.summary).toContain('# Durable Knowledge');
+  });
 });
