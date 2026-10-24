@@ -19,12 +19,11 @@ jobs:
         include:
           - os: ubuntu-22.04
           - os: ubuntu-22.04-arm
-          # macOS still fails on real macOS runners (PTY, process stats, launchctl); keep building it
-          # but don't let it block Linux releases until it is green.
+          # Build on both supported macOS architectures so native node-pty and
+          # better-sqlite3 binaries match the user's machine.
+          - os: macos-13
           - os: macos-latest
-            experimental: true
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -76,8 +75,11 @@ jobs:
   smoke-macos:
     # Install the macOS archive natively on a clean runner and check /health.
     needs: package
-    runs-on: macos-latest
-    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -92,10 +94,16 @@ jobs:
       - name: Smoke install without Node or usable git on PATH
         env:
           PATH: /usr/bin:/bin:/usr/sbin:/sbin
-        run: sh scripts/smoke-install-native.sh "$(find release -name 'agenthub-*-macos-*.tar.gz' -print -quit)"
+        run: |
+          case "$(uname -m)" in
+            arm64) ARCH=arm64 ;;
+            x86_64) ARCH=x64 ;;
+            *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          sh scripts/smoke-install-native.sh "$(find release -name "agenthub-*-macos-${ARCH}.tar.gz" -print -quit)"
 
   publish:
-    needs: [package, smoke]
+    needs: [package, smoke, smoke-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
