@@ -27,14 +27,14 @@ export const Modal: React.FC<ModalProps> = ({
   ariaLabel,
   'aria-label': propAriaLabel,
 }) => {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   const autoTitleId = useId();
   const titleId = customTitleId || autoTitleId;
   const containerRef = useFocusTrap<HTMLDivElement>({ isOpen, onClose });
 
   if (!isOpen) return null;
 
-  const fallbackLabel = ariaLabel || propAriaLabel || (locale === 'en' ? 'Dialog' : 'Hộp thoại');
+  const fallbackLabel = ariaLabel || propAriaLabel || t('common.dialog');
 
   return (
     <div

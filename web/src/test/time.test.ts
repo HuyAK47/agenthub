@@ -11,6 +11,18 @@ describe('API time helpers', () => {
     expect(formatTimeAgo('2026-10-15 08:20:00', now)).toBe('1 phút trước');
   });
 
+  it('handles invalid timestamps in formatTimeAgo with localized fallback', () => {
+    const now = Date.parse('2026-10-15T08:21:00Z');
+    expect(formatTimeAgo(NaN, now, 'vi')).toBe('chưa rõ thời gian');
+    expect(formatTimeAgo(NaN, now, 'en')).toBe('time unknown');
+    expect(formatTimeAgo('invalid date', now, 'vi')).toBe('chưa rõ thời gian');
+    expect(formatTimeAgo('invalid date', now, 'en')).toBe('time unknown');
+    expect(formatTimeAgo('', now, 'vi')).toBe('chưa rõ thời gian');
+    expect(formatTimeAgo('', now, 'en')).toBe('time unknown');
+    expect(formatTimeAgo(null as any, now, 'vi')).toBe('chưa rõ thời gian');
+    expect(formatTimeAgo(null as any, now, 'en')).toBe('time unknown');
+  });
+
   it('formats reset with an absolute Vietnam time for seconds and milliseconds', () => {
     const now = Date.parse('2026-10-15T01:00:00Z');
     const reset = Date.parse('2026-10-15T03:15:00Z');

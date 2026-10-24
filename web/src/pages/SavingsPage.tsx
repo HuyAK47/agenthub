@@ -359,7 +359,7 @@ export const SavingsPage: React.FC = () => {
                 </p>
               </div>
               <span className="text-xs text-[var(--t-text-2)]">
-                {savings?.tasksTotal || 0} task
+                {t('savings.taskCount', { count: savings?.tasksTotal || 0 })}
               </span>
             </div>
 
@@ -367,10 +367,10 @@ export const SavingsPage: React.FC = () => {
               <table className="w-full min-w-[760px] text-left text-xs">
                 <thead className="bg-[var(--t-hover)] border-b border-[var(--t-border)] text-[var(--t-text-2)] font-semibold uppercase tracking-wider">
                   <tr>
-                    <th className="px-6 py-3 whitespace-nowrap">Task</th>
-                    <th className="px-6 py-3 whitespace-nowrap">Model</th>
+                    <th className="px-6 py-3 whitespace-nowrap">{t('extra.task')}</th>
+                    <th className="px-6 py-3 whitespace-nowrap">{t('extra.model')}</th>
                     <th className="px-6 py-3 text-right whitespace-nowrap">{t('savings.linesChange')}</th>
-                    <th className="px-6 py-3 text-right whitespace-nowrap">Worker Tokens</th>
+                    <th className="px-6 py-3 text-right whitespace-nowrap">{t('savings.workerTokens')}</th>
                     <th className="px-6 py-3 text-center whitespace-nowrap">Claude</th>
                     <th className="px-6 py-3 text-center whitespace-nowrap">{t('savings.reviewRounds')}</th>
                     <th className="px-6 py-3 text-right whitespace-nowrap">{t('taskDetail.thDuration')}</th>
