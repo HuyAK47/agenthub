@@ -11,7 +11,7 @@ import { loadConfig } from '../src/config.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { effectiveBrainEngine } from '../src/brain/engine.js';
 import { resolveCodexProfile } from '../src/profiles/index.js';
-import { CodexEngine } from '../src/engines/index.js';
+import { CodexEngine, canRunBubblewrap } from '../src/engines/index.js';
 
 function initGitRepo(repoPath: string, branch = 'main'): void {
   fs.mkdirSync(repoPath, { recursive: true });
@@ -40,10 +40,16 @@ describe('Brain Codex Engine Integration and Failover', () => {
     return homeDir;
   }
 
+  let prevBwrap: string | undefined;
+
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-brain-'));
     process.env.AGENTHUB_HOME = tmpDir;
     process.env.AGENTHUB_CODEX_BIN = fakeCodexBin;
+    prevBwrap = process.env.AGENTHUB_BWRAP_BIN;
+    if (!canRunBubblewrap()) {
+      process.env.AGENTHUB_BWRAP_BIN = path.resolve(__dirname, 'fixtures', 'mock-bwrap.sh');
+    }
 
     const tokenPath = path.join(tmpDir, 'token');
     getOrCreateToken(tokenPath);
@@ -65,6 +71,8 @@ describe('Brain Codex Engine Integration and Failover', () => {
 
   afterEach(async () => {
     delete process.env.AGENTHUB_CODEX_BIN;
+    if (prevBwrap === undefined) delete process.env.AGENTHUB_BWRAP_BIN;
+    else process.env.AGENTHUB_BWRAP_BIN = prevBwrap;
     await server.close();
     ctx.scheduler.stop();
     ctx.chatService.stop();
