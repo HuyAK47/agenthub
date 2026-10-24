@@ -10,7 +10,6 @@ import { useTour } from '../components/tour/TourContext';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
 import { DataTable, SelectOrCustomInput, SortableModelList } from '../components/ui';
 import {
-  DEFAULT_VALID_MODELS,
   DEFAULT_CLAUDE_MODELS,
   validateModelSyntax,
   validateChatModelSyntax,
@@ -34,8 +33,8 @@ export const SettingsPage: React.FC = () => {
   const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
   const codexProfiles = profiles.filter((p) => p.engine === 'codex' && Boolean(p.enabled));
 
-  const [hardChainModels, setHardChainModels] = useState<string[]>(['gemini-3.8-flash-high', 'codex:gpt-5.6-luna']);
-  const [easyChainModels, setEasyChainModels] = useState<string[]>(['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna']);
+  const [hardChainModels, setHardChainModels] = useState<string[]>([]);
+  const [easyChainModels, setEasyChainModels] = useState<string[]>([]);
   const [timeoutHours, setTimeoutHours] = useState<number>(3);
   const [multiplePerProvider, setMultiplePerProvider] = useState<boolean>(true);
   const [claudeBin, setClaudeBin] = useState<string>('claude');
@@ -43,14 +42,11 @@ export const SettingsPage: React.FC = () => {
   const [chatModel, setChatModel] = useState<string>('sonnet');
   const [chatModels, setChatModels] = useState<string[]>(['opus', 'sonnet', 'haiku']);
   const [newChatModel, setNewChatModel] = useState<string>('sonnet');
-  const [reviewerModel, setReviewerModel] = useState<string>('codex:gpt-5.6-luna');
+  const [reviewerModel, setReviewerModel] = useState<string>('');
   const [claudeFallback, setClaudeFallback] = useState<boolean>(true);
   const [claudeProfiles, setClaudeProfiles] = useState<string[]>([]);
   const [claudeModel, setClaudeModel] = useState<string>('sonnet');
-  const [reviewOrder, setReviewOrder] = useState<ReviewerOrderItem[]>([
-    { engine: 'codex', model: 'gpt-5.6-luna', profiles: [] },
-    { engine: 'claude', model: 'sonnet', profiles: [] },
-  ]);
+  const [reviewOrder, setReviewOrder] = useState<ReviewerOrderItem[]>([]);
   const [reviewFallback, setReviewFallback] = useState<ReviewerFallback>({ onUnavailable: true, onBusyAfterMin: 10, onError: true });
   const [arbiter, setArbiter] = useState<{ engine: 'codex' | 'claude'; model: string }>({ engine: 'claude', model: 'opus' });
   const [draggedReviewer, setDraggedReviewer] = useState<number | null>(null);
@@ -109,7 +105,7 @@ export const SettingsPage: React.FC = () => {
   const availableWorkerModels = useMemo(() => {
     const fromApi = modelOptions?.suggestions || [];
     const fromConfig = modelOptions?.configured || [];
-    const set = new Set([...fromApi, ...fromConfig, ...DEFAULT_VALID_MODELS, ...hardChainModels, ...easyChainModels]);
+    const set = new Set([...fromApi, ...fromConfig, ...hardChainModels, ...easyChainModels]);
     return Array.from(set).filter(Boolean);
   }, [modelOptions, hardChainModels, easyChainModels]);
 
@@ -187,22 +183,34 @@ export const SettingsPage: React.FC = () => {
           : config.runTimeoutHours
           ? config.runTimeoutHours * 3600
           : 10800;
-      setHardChainModels(hardList.length ? hardList : ['gemini-3.8-flash-high', 'codex:gpt-5.6-luna']);
-      setEasyChainModels(easyList.length ? easyList : ['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna']);
+      setHardChainModels(hardList);
+      setEasyChainModels(easyList);
       setTimeoutHours(Math.max(1, Math.round(timeoutSec / 3600)));
       setMultiplePerProvider(config.multiplePerProvider !== false);
       setClaudeBin(config.chat?.claudeBin || 'claude');
       setAllowFullMode(Boolean(config.chat?.allowFullMode));
       setChatModel(config.chat?.model || 'sonnet');
       setChatModels(config.chat?.models?.length ? config.chat.models : ['opus', 'sonnet', 'haiku']);
-      setReviewerModel(config.reviewer?.model || 'codex:gpt-5.6-luna');
+      setReviewerModel(config.reviewer?.model || '');
       setClaudeFallback(config.reviewer?.claudeFallback !== false);
       setClaudeProfiles(config.reviewer?.claudeProfiles || []);
       setClaudeModel(config.reviewer?.claudeModel || 'sonnet');
-      setReviewOrder(config.reviewer?.order || [
-        { engine: 'codex', model: (config.reviewer?.model || 'codex:gpt-5.6-luna').replace(/^codex:/, ''), profiles: [] },
-        ...(config.reviewer?.claudeFallback === false ? [] : [{ engine: 'claude' as const, model: config.reviewer?.claudeModel || 'sonnet', profiles: config.reviewer?.claudeProfiles || [] }]),
-      ]);
+      const defaultReviewOrder: ReviewerOrderItem[] = [];
+      if (config.reviewer?.model) {
+        defaultReviewOrder.push({
+          engine: (config.reviewer.model.startsWith('claude') ? 'claude' : 'codex') as ReviewerOrderItem['engine'],
+          model: config.reviewer.model.replace(/^codex:/, ''),
+          profiles: [],
+        });
+      }
+      if (config.reviewer?.claudeFallback !== false && config.reviewer?.claudeModel) {
+        defaultReviewOrder.push({
+          engine: 'claude',
+          model: config.reviewer.claudeModel,
+          profiles: config.reviewer?.claudeProfiles || [],
+        });
+      }
+      setReviewOrder(config.reviewer?.order || defaultReviewOrder);
       setReviewFallback({
         onUnavailable: config.reviewer?.fallback?.onUnavailable ?? true,
         onBusyAfterMin: config.reviewer?.fallback?.onBusyAfterMin ?? config.reviewer?.claudeFallbackAfterMin ?? 10,

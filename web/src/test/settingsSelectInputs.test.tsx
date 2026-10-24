@@ -552,6 +552,53 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
         expect(updatedReviewerSelect.value).toBe('');
       });
     });
+
+    it('handles empty dynamic models and empty chains without inserting hardcoded codex:gpt-5.6-luna in SettingsPage', async () => {
+      vi.spyOn(client, 'getModelOptions').mockResolvedValue({
+        suggestions: ['sonnet'],
+        configured: [],
+      });
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        modelChainHard: [],
+        modelChainEasy: [],
+        defaultTimeout: 10800,
+        chat: { claudeBin: 'claude', allowFullMode: false, maxConcurrent: 2, model: 'sonnet', models: ['sonnet'] },
+        reviewer: {
+          model: '',
+          claudeFallback: false,
+        },
+      } as any);
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <SettingsPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('hard-chain-list')).toBeInTheDocument();
+        expect(screen.getByTestId('easy-chain-list')).toBeInTheDocument();
+        expect(screen.getByTestId('reviewer-order')).toBeInTheDocument();
+      });
+
+      // Hard and easy chains show empty warnings
+      const emptyWarnings = screen.getAllByText(/Chuỗi model không được để trống/i);
+      expect(emptyWarnings.length).toBeGreaterThanOrEqual(2);
+
+      // Reviewer model input is empty and not hardcoded to codex:gpt-5.6-luna
+      const reviewerModelInput = screen.getByTestId('reviewer-model-input') as HTMLSelectElement | HTMLInputElement;
+      expect(reviewerModelInput.value).toBe('');
+
+      // Reviewer order has no items
+      const orderBlock = screen.getByTestId('reviewer-order');
+      expect(within(orderBlock).queryByRole('combobox', { name: /^Model reviewer/i })).not.toBeInTheDocument();
+    });
   });
 
   describe('4. ProjectSettingsDrawer Reviewer Order, Fallback & Review Chain Integration', () => {

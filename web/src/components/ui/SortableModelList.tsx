@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowUp, ArrowDown, Trash2, Plus, GripVertical, AlertCircle } from 'lucide-react';
 import { useLocale } from '../../context/LocaleContext';
 import { SelectOrCustomInput } from './SelectOrCustomInput';
@@ -31,7 +31,13 @@ export const SortableModelList: React.FC<SortableModelListProps> = ({
 }) => {
   const { t } = useLocale();
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [modelToAdd, setModelToAdd] = useState<string>(availableOptions[0] || 'gemini-3.8-flash-high');
+  const [modelToAdd, setModelToAdd] = useState<string>(availableOptions[0] || '');
+
+  useEffect(() => {
+    if (!modelToAdd && availableOptions[0]) {
+      setModelToAdd(availableOptions[0]);
+    }
+  }, [availableOptions, modelToAdd]);
 
   const moveModel = (index: number, direction: -1 | 1) => {
     const target = index + direction;
