@@ -56,14 +56,17 @@ export const SelectOrCustomInput: React.FC<SelectOrCustomInputProps> = ({
     typeof opt === 'string' ? { value: opt, label: opt } : opt,
   );
 
-  const isKnownOption = normalizedOptions.some((opt) => opt.value === value);
+  const isKnownOption =
+    normalizedOptions.some((opt) => opt.value === value) || (allowEmpty && value === '');
 
   // If value is unknown and non-empty, default to custom mode so user sees and can edit it
   const [isCustomMode, setIsCustomMode] = useState<boolean>(!isKnownOption && Boolean(value));
   const [touched, setTouched] = useState<boolean>(false);
 
   useEffect(() => {
-    if (!isKnownOption && Boolean(value)) {
+    if (isKnownOption) {
+      setIsCustomMode(false);
+    } else if (Boolean(value)) {
       setIsCustomMode(true);
     }
   }, [value, isKnownOption]);
@@ -111,6 +114,11 @@ export const SelectOrCustomInput: React.FC<SelectOrCustomInputProps> = ({
         className={`w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] focus:outline-hidden focus:ring-2 focus:ring-[var(--t-accent)] disabled:opacity-50 disabled:cursor-not-allowed ${selectClassName}`}
       >
         {allowEmpty && <option value="">{emptyLabel}</option>}
+        {!allowEmpty && !value && !isCustomMode && (
+          <option value="" disabled>
+            {placeholder || '—'}
+          </option>
+        )}
         {normalizedOptions.map((opt) => (
           <option key={opt.value} value={opt.value}>
             {opt.label || opt.value}
