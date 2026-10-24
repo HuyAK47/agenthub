@@ -14,6 +14,7 @@ interface LoginTerminalProps {
   profileName: string;
   sessionId: string;
   onClose: () => void;
+  onReconnect?: () => Promise<string>;
 }
 
 type ConnState = 'connecting' | 'open' | 'closed' | 'error';
@@ -46,7 +47,7 @@ export function extractLoginUrl(raw: string): string | null {
   return urls.sort((a, b) => b.length - a.length)[0];
 }
 
-export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessionId, onClose }) => {
+export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessionId, onClose, onReconnect }) => {
   const { t } = useLocale();
   const themeContext = useOptionalTheme();
   const effectiveTheme = themeContext?.effectiveTheme ?? (document.documentElement.classList.contains('dark') ? 'dark' : 'light');
@@ -61,6 +62,8 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
   const [code, setCode] = useState('');
   const [copied, setCopied] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const sendInput = useCallback((data: string) => {
     const ws = wsRef.current;
@@ -115,6 +118,7 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
 
     ws.onopen = () => {
       setConn('open');
+      setStatusError(null);
       fit();
       term.focus();
     };
@@ -125,11 +129,15 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
       const url = extractLoginUrl(outputRef.current);
       if (url) setLoginUrl(url);
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setConn((c) => (c === 'error' ? c : 'closed'));
+      if (event.reason) setStatusError(event.reason);
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
     };
-    ws.onerror = () => setConn('error');
+    ws.onerror = () => {
+      setConn('error');
+      setStatusError(t('profiles.wsError'));
+    };
 
     term.onData((data) => sendInput(data));
 
@@ -161,7 +169,7 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
       termObj.current = null;
       wsRef.current = null;
     };
-  }, [sessionId, queryClient, sendInput, attempt]);
+  }, [sessionId, queryClient, sendInput, attempt, t]);
 
   useEffect(() => {
     themeRef.current = effectiveTheme;
@@ -259,6 +267,7 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
               <span className={`inline-block h-2 w-2 rounded-full ${connColor[conn]}`} />
               {connLabel[conn]}
             </span>
+            {statusError && <span className="max-w-[28rem] truncate text-xs text-[var(--t-crit)]" title={statusError}>{statusError}</span>}
           </div>
           <button
             type="button"
@@ -343,10 +352,25 @@ export const LoginTerminal: React.FC<LoginTerminalProps> = ({ profileName, sessi
           {conn === 'error' || conn === 'closed' ? (
             <button
               type="button"
-              onClick={() => setAttempt((a) => a + 1)}
+              disabled={reconnecting}
+              onClick={async () => {
+                setReconnecting(true);
+                setStatusError(null);
+                try {
+                  if (onReconnect) {
+                    await onReconnect();
+                  }
+                  setAttempt((a) => a + 1);
+                } catch (error) {
+                  setStatusError(error instanceof Error ? error.message : String(error));
+                  setConn('error');
+                } finally {
+                  setReconnecting(false);
+                }
+              }}
               className="rounded-lg border border-[var(--t-border)] px-3 py-2 text-sm hover:bg-[var(--t-hover)] cursor-pointer transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
             >
-              {t('extra.reconnect')}
+              {reconnecting ? t('profiles.reconnecting') : t('extra.reconnect')}
             </button>
           ) : null}
           <button

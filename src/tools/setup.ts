@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import type { AgentHubConfig, ToolInstaller } from '../config.js';
 import { findAgyPath, findCodexPath } from '../doctor.js';
 import { findClaudeBin } from '../chat/claude.js';
+import { agyInstallHint } from '../agy.js';
 
 const execFileAsync = promisify(execFile);
 export type SetupTool = 'claude' | 'codex' | 'agy';
@@ -81,7 +82,7 @@ export class SetupManager {
     if (process.env.AGENTHUB_WORKER === '1') throw new Error('Không được cài công cụ trong worker');
     if (this.installing.has(id)) throw new Error(`Đang cài ${id}`);
     const installer = this.installer(id);
-    if (!installer.package && !installer.command) throw new Error(`${id} chưa có bộ cài tự động; hãy cài thủ công`);
+    if (!installer.package && !installer.command) throw new Error(`${id} chưa có bộ cài tự động; hãy cài thủ công${id === 'agy' ? ` bằng: ${agyInstallHint()}` : ''}`);
     const jobId = `setup-${id}-${Date.now()}`;
     this.installing.add(id);
     const logDir = path.join(this.config.hubHome, 'logs');
@@ -98,7 +99,9 @@ export class SetupManager {
     const timer = setTimeout(() => child.kill('SIGTERM'), 10 * 60 * 1000);
     child.on('close', (code, signal) => {
       clearTimeout(timer); log.end(); this.installing.delete(id);
-      if (code === 0) {
+      const installedBin = this.binary(id);
+      const ok = code === 0 && Boolean(installedBin);
+      if (ok) {
         try {
           this.versionCache.delete(id);
           this.onInstallSuccess?.(id);
@@ -106,7 +109,16 @@ export class SetupManager {
           emit('setup.install_refresh_error', { error: error instanceof Error ? error.message : String(error) });
         }
       }
-      emit('setup.install_done', { ok: code === 0, code, signal, logPath });
+      emit('setup.install_done', {
+        ok,
+        code,
+        signal,
+        path: installedBin,
+        logPath,
+        error: code === 0 && !installedBin
+          ? `Đã chạy xong nhưng chưa tìm thấy ${id}. Kiểm tra PATH của service hoặc cấu hình AGENTHUB_AGY_BIN.`
+          : undefined,
+      });
     });
     return { jobId };
   }

@@ -85,6 +85,12 @@ export const SetupCheckRow: React.FC<SetupCheckRowProps> = ({
               </a>
             </div>
           )}
+          {item.key === 'agy' && !item.ok && (
+            <div className="mt-2 rounded-lg border border-[var(--t-warn)]/30 bg-[var(--t-warn)]/10 p-2.5 text-xs text-[var(--t-text)]">
+              <div>{t('setup.agyManualHint')}</div>
+              <code className="mt-1 block select-text break-all font-mono">curl -fsSL https://antigravity.google/cli/install.sh | bash</code>
+            </div>
+          )}
         </div>
       </div>
 
@@ -233,6 +239,7 @@ export const SetupPage: React.FC = () => {
   });
 
   const [logs, setLogs] = useState<Record<string, string>>({});
+  const [installErrors, setInstallErrors] = useState<Record<string, string>>({});
   const [installingTool, setInstallingTool] = useState<string | null>(null);
   const [installResult, setInstallResult] = useState<Record<string, boolean>>({});
 
@@ -258,6 +265,7 @@ export const SetupPage: React.FC = () => {
       }
       if (event.type === 'setup.install_done') {
         setInstallResult((old) => ({ ...old, [tool]: Boolean(event.payload.ok) }));
+        if (event.payload.error) setInstallErrors((old) => ({ ...old, [tool]: String(event.payload.error) }));
         queryClient.invalidateQueries({ queryKey: ['setup-status'] });
       }
     });
@@ -268,8 +276,10 @@ export const SetupPage: React.FC = () => {
   }, [data]);
 
   const installOne = async (tool: string) => {
+    if (tool === 'agy' && typeof window !== 'undefined' && !window.confirm(t('setup.agyInstallConfirm'))) return;
     setInstallingTool(tool);
     setLogs((old) => ({ ...old, [tool]: '' }));
+    setInstallErrors((old) => ({ ...old, [tool]: '' }));
     let stop: (() => void) | undefined;
     const completed = new Promise<void>((resolve) => {
       const unsubscribe = subscribeToEvents((event) => {
@@ -458,7 +468,7 @@ export const SetupPage: React.FC = () => {
               key={item.key}
               item={item}
               result={installResult[item.key]}
-              log={logs[item.key]}
+              log={installErrors[item.key] ? `${installErrors[item.key]}\n\n${logs[item.key] || ''}` : logs[item.key]}
             />
           ))}
         </div>

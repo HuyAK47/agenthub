@@ -33,6 +33,16 @@ AgentHub runs locally on your machine. It breaks down development tasks and sche
 | **Claude Code** | Required to use Claude as the orchestrator Brain (Claude Code extension for VS Code or the `claude` CLI). |
 | **Hardware Resources** | Workers execute builds and test suites concurrently. Recommended benchmark: 12 CPU cores / 16 GB RAM comfortably runs ~4 concurrent worker processes. |
 
+### Install the Antigravity CLI (`agy`)
+
+On the **Setup** page, click **Install** next to Antigravity CLI to run the official installer. AgentHub streams its output and verifies the binary after it completes:
+
+```sh
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+If installation succeeds but AgentHub still cannot find `agy`, the daemon may have a different PATH from your interactive shell. Set an absolute path with `AGENTHUB_AGY_BIN=/path/to/agy` and restart the daemon. AgentHub searches PATH, `~/.local/bin/agy`, and `~/.gemini/bin/agy`; the log is at `~/.agenthub/logs/setup-agy.log`.
+
 ---
 
 ## 2. Installation
