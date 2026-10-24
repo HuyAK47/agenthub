@@ -761,6 +761,11 @@ describe('i18n Audit & Parity', () => {
 
       expect(formatTimeAgo(now - 86400000 * 3, now, 'vi')).toBe('3 ngày trước');
       expect(formatTimeAgo(now - 86400000 * 3, now, 'en')).toBe('3d ago');
+
+      expect(formatTimeAgo(NaN, now, 'vi')).toBe('chưa rõ thời gian');
+      expect(formatTimeAgo(NaN, now, 'en')).toBe('time unknown');
+      expect(formatTimeAgo('invalid-date', now, 'vi')).toBe('chưa rõ thời gian');
+      expect(formatTimeAgo('invalid-date', now, 'en')).toBe('time unknown');
     });
   });
 

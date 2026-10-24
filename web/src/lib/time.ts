@@ -10,7 +10,11 @@ export function parseApiTime(value: string | number): number {
 }
 
 export function formatTimeAgo(value: string | number, now = Date.now(), locale: TimeLocale = 'vi'): string {
-  const seconds = Math.max(0, Math.floor((now - parseApiTime(value)) / 1000));
+  const parsed = parseApiTime(value);
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed)) {
+    return locale === 'en' ? 'time unknown' : 'chưa rõ thời gian';
+  }
+  const seconds = Math.max(0, Math.floor((now - parsed) / 1000));
   if (locale === 'en') {
     if (seconds < 60) return `${seconds}s ago`;
     const minutes = Math.floor(seconds / 60);
