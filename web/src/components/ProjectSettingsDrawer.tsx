@@ -24,7 +24,9 @@ import {
   TableHead,
   TableCell,
   StatTile,
+  SelectOrCustomInput,
 } from './ui';
+import { DEFAULT_COMMON_BRANCHES, validateBranchSyntax } from '../utils/models';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
@@ -213,6 +215,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   const [checksError, setChecksError] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewerOrderError, setReviewerOrderError] = useState<string | null>(null);
+  const [reviewerFallbackError, setReviewerFallbackError] = useState<string | null>(null);
   const [envError, setEnvError] = useState<string | null>(null);
   const [refErrors, setRefErrors] = useState<Record<number, string | null>>({});
 
@@ -245,6 +249,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       setDraftEnvTemplate(project.envTemplate ?? '');
       setChecksError(null);
       setReviewError(null);
+      setReviewerOrderError(null);
+      setReviewerFallbackError(null);
       setEnvError(null);
       setRefErrors({});
       setApiError(null);
@@ -269,6 +275,44 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       }
     } catch (err: any) {
       setChecksError(err.message);
+    }
+  };
+
+  const handleReviewerOrderChange = (val: string) => {
+    setDraftReviewerOrder(val);
+    setApiError(null);
+    if (!val.trim()) {
+      setReviewerOrderError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(val);
+      if (!Array.isArray(parsed)) {
+        setReviewerOrderError('Reviewer order must be a JSON array');
+      } else {
+        setReviewerOrderError(null);
+      }
+    } catch (err: any) {
+      setReviewerOrderError(err.message);
+    }
+  };
+
+  const handleReviewerFallbackChange = (val: string) => {
+    setDraftReviewerFallback(val);
+    setApiError(null);
+    if (!val.trim()) {
+      setReviewerFallbackError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(val);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        setReviewerFallbackError('Reviewer fallback must be a JSON object');
+      } else {
+        setReviewerFallbackError(null);
+      }
+    } catch (err: any) {
+      setReviewerFallbackError(err.message);
     }
   };
 
@@ -486,6 +530,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const hasValidationError = Boolean(
     checksError ||
       reviewError ||
+      reviewerOrderError ||
+      reviewerFallbackError ||
       envError ||
       Object.values(refErrors).some((err) => Boolean(err)),
   );
@@ -570,6 +616,23 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   const handleSave = () => {
     if (!project || hasValidationError || saveMutation.isPending) return;
+
+    if (draftSettings.integration.enabled) {
+      if (draftSettings.integration.branch) {
+        const err = validateBranchSyntax(draftSettings.integration.branch, t);
+        if (err) {
+          setSectionErrors((prev) => ({ ...prev, integration: `${t('projects.integrationBranch')}: ${err}` }));
+          return;
+        }
+      }
+      if (draftSettings.integration.baseRef) {
+        const err = validateBranchSyntax(draftSettings.integration.baseRef, t);
+        if (err) {
+          setSectionErrors((prev) => ({ ...prev, integration: `${t('projects.integrationBaseRef')}: ${err}` }));
+          return;
+        }
+      }
+    }
 
     const payload: UpdateProjectInput = {};
 
@@ -1175,40 +1238,48 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                   <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
                     {t('projects.integrationBranch')} <InfoTooltip text={t('projects.integrationInfo')} label={t('projects.integrationBranch')} />
                   </label>
-                  <Input
+                  <SelectOrCustomInput
                     placeholder="integration"
                     value={draftSettings.integration.branch ?? ''}
-                    onChange={(e) => {
+                    onChange={(val) => {
                       setSectionErrors((prev) => ({ ...prev, integration: null }));
                       setApiError(null);
                       setDraftSettings((prev) => ({
                         ...prev,
                         integration: {
                           ...prev.integration,
-                          branch: e.target.value || undefined,
+                          branch: val || undefined,
                         },
                       }));
                     }}
+                    options={DEFAULT_COMMON_BRANCHES}
+                    validate={(val) => validateBranchSyntax(val, t)}
+                    ariaLabel={t('projects.integrationBranch')}
+                    allowEmpty={true}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
                     {t('projects.integrationBaseRef')}
                   </label>
-                  <Input
+                  <SelectOrCustomInput
                     placeholder="main"
                     value={draftSettings.integration.baseRef ?? ''}
-                    onChange={(e) => {
+                    onChange={(val) => {
                       setSectionErrors((prev) => ({ ...prev, integration: null }));
                       setApiError(null);
                       setDraftSettings((prev) => ({
                         ...prev,
                         integration: {
                           ...prev.integration,
-                          baseRef: e.target.value || undefined,
+                          baseRef: val || undefined,
                         },
                       }));
                     }}
+                    options={DEFAULT_COMMON_BRANCHES}
+                    validate={(val) => validateBranchSyntax(val, t)}
+                    ariaLabel={t('projects.integrationBaseRef')}
+                    allowEmpty={true}
                   />
                 </div>
               </div>
@@ -1567,12 +1638,66 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                 />
               </div>
 
-              {/* review chain JSON */}
+              {/* reviewer override */}
               <div className="space-y-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3">
-                <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerOverride')}</label>
-                <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.reviewerOverrideHint')}</p>
-                <textarea aria-label={t('projects.reviewerOrderOverride')} rows={3} value={draftReviewerOrder} onChange={(event) => setDraftReviewerOrder(event.target.value)} placeholder={'[{"engine":"claude","model":"sonnet","profiles":[]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
-                <textarea aria-label={t('projects.reviewerFallbackOverride')} rows={2} value={draftReviewerFallback} onChange={(event) => setDraftReviewerFallback(event.target.value)} placeholder={'{"onUnavailable":true,"onBusyAfterMin":10,"onError":true}'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerOverride')}</label>
+                    <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.reviewerOverrideHint')}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleReviewerOrderChange('[{"engine":"claude","model":"sonnet","profiles":[]}]')}
+                      className="h-6 px-2 text-[10px]"
+                    >
+                      Claude
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleReviewerOrderChange('[{"engine":"codex","model":"codex:gpt-5.6-luna","profiles":[]}]')}
+                      className="h-6 px-2 text-[10px]"
+                    >
+                      Codex
+                    </Button>
+                  </div>
+                </div>
+                <textarea
+                  aria-label={t('projects.reviewerOrderOverride')}
+                  rows={3}
+                  value={draftReviewerOrder}
+                  onChange={(event) => handleReviewerOrderChange(event.target.value)}
+                  placeholder={'[{"engine":"claude","model":"sonnet","profiles":[]}]'}
+                  className={`w-full text-xs font-mono rounded-lg border p-2 bg-[var(--t-surface)] text-[var(--t-text)] ${
+                    reviewerOrderError ? 'border-[var(--t-crit)]' : 'border-[var(--t-border)]'
+                  }`}
+                />
+                {reviewerOrderError && (
+                  <p className="text-xs text-[var(--t-crit)] flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{reviewerOrderError}</span>
+                  </p>
+                )}
+                <textarea
+                  aria-label={t('projects.reviewerFallbackOverride')}
+                  rows={2}
+                  value={draftReviewerFallback}
+                  onChange={(event) => handleReviewerFallbackChange(event.target.value)}
+                  placeholder={'{"onUnavailable":true,"onBusyAfterMin":10,"onError":true}'}
+                  className={`w-full text-xs font-mono rounded-lg border p-2 bg-[var(--t-surface)] text-[var(--t-text)] ${
+                    reviewerFallbackError ? 'border-[var(--t-crit)]' : 'border-[var(--t-border)]'
+                  }`}
+                />
+                {reviewerFallbackError && (
+                  <p className="text-xs text-[var(--t-crit)] flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{reviewerFallbackError}</span>
+                  </p>
+                )}
               </div>
 
               {/* review chain JSON */}

@@ -15,6 +15,7 @@ import {
   setFocus,
   getTasks,
   updateProjectKnowledge,
+  getProfiles,
 } from '../api/client';
 import {
   FolderGit2,
@@ -30,7 +31,8 @@ import {
   ExternalLink,
   GitBranch,
 } from 'lucide-react';
-import { Card, Button, Input, DataTable } from '../components/ui';
+import { Card, Button, Input, DataTable, SelectOrCustomInput } from '../components/ui';
+import { DEFAULT_COMMON_BRANCHES, validateBranchSyntax } from '../utils/models';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
@@ -61,6 +63,9 @@ function ProjectSettingsForm({
   const { t } = useLocale();
   const { suggestModalTour } = useTour();
   const [confirmFullPermission, setConfirmFullPermission] = useState(false);
+  const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
+  const codexProfileOptions = profiles.filter((p) => p.engine === 'codex').map((p) => p.name);
+
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) =>
     onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () =>
@@ -85,14 +90,16 @@ function ProjectSettingsForm({
           </select>
         </label>
 
-        <label className="text-xs space-y-1">
-          <span className="font-semibold">{t('projects.codexProfile')}</span>
-          <input
-            type="text"
+        <label className="text-xs space-y-1 block">
+          <span className="font-semibold block">{t('projects.codexProfile')}</span>
+          <SelectOrCustomInput
             value={value.brain.codexProfile ?? ''}
-            onChange={(e) => update('brain', { codexProfile: e.target.value.trim() || undefined })}
+            onChange={(val) => update('brain', { codexProfile: val.trim() || undefined })}
+            options={codexProfileOptions}
+            allowEmpty={true}
+            emptyLabel={t('projects.codexProfileAuto')}
             placeholder={t('projects.codexProfileAuto')}
-            className="w-full rounded border p-2 bg-[var(--t-surface-2)]"
+            ariaLabel={t('projects.codexProfile')}
           />
         </label>
 
@@ -217,23 +224,29 @@ function ProjectSettingsForm({
         </label>
         {value.integration.enabled && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <input
-              aria-label={t('projects.integrationBranch')}
+            <SelectOrCustomInput
+              ariaLabel={t('projects.integrationBranch')}
               placeholder={t('projects.integrationBranch')}
               value={value.integration.branch ?? ''}
-              onChange={(e) =>
-                update('integration', { branch: e.target.value || undefined })
+              onChange={(val) =>
+                update('integration', { branch: val || undefined })
               }
-              className="rounded border p-2 bg-[var(--t-surface-2)]"
+              options={DEFAULT_COMMON_BRANCHES}
+              validate={(val) => validateBranchSyntax(val, t)}
+              allowEmpty={true}
+              className="flex-1"
             />
-            <input
-              aria-label={t('projects.integrationBaseRef')}
+            <SelectOrCustomInput
+              ariaLabel={t('projects.integrationBaseRef')}
               placeholder={t('projects.integrationBaseRef')}
               value={value.integration.baseRef ?? ''}
-              onChange={(e) =>
-                update('integration', { baseRef: e.target.value || undefined })
+              onChange={(val) =>
+                update('integration', { baseRef: val || undefined })
               }
-              className="rounded border p-2 bg-[var(--t-surface-2)]"
+              options={DEFAULT_COMMON_BRANCHES}
+              validate={(val) => validateBranchSyntax(val, t)}
+              allowEmpty={true}
+              className="flex-1"
             />
           </div>
         )}
@@ -260,14 +273,17 @@ function ProjectSettingsForm({
           <span className="font-semibold">{t('projects.ciEnabled')}</span>
         </label>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <input
-            aria-label={t('projects.ciBranch')}
+          <SelectOrCustomInput
+            ariaLabel={t('projects.ciBranch')}
             placeholder={t('projects.ciBranch')}
             value={value.ci?.branch ?? ''}
-            onChange={(e) =>
-              update('ci', { branch: e.target.value || undefined })
+            onChange={(val) =>
+              update('ci', { branch: val || undefined })
             }
-            className="rounded border p-2 bg-[var(--t-surface-2)]"
+            options={DEFAULT_COMMON_BRANCHES}
+            validate={(val) => validateBranchSyntax(val, t)}
+            allowEmpty={true}
+            className="flex-1"
           />
         </div>
       </div>
@@ -716,13 +732,16 @@ export const ProjectsPage: React.FC = () => {
                 <p className="text-xs text-[var(--t-text-3)] mb-1.5">
                   {t('projects.branchHint')}
                 </p>
-                <Input
-                  data-tour="project-default-branch"
-                  type="text"
-                  placeholder="main"
-                  value={defaultBranch}
-                  onChange={(e) => setDefaultBranch(e.target.value)}
-                />
+                <div data-tour="project-default-branch">
+                  <SelectOrCustomInput
+                    placeholder="main"
+                    value={defaultBranch}
+                    onChange={setDefaultBranch}
+                    options={DEFAULT_COMMON_BRANCHES}
+                    validate={(val) => validateBranchSyntax(val, t)}
+                    ariaLabel={t('projects.branchLabel')}
+                  />
+                </div>
               </div>
 
               <div>
