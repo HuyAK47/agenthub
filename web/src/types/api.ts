@@ -684,7 +684,7 @@ export interface SystemConfig {
   runTimeoutHours?: number;
   chat?: ChatConfig;
   reviewer?: {
-    model: string;
+    model?: string;
     enabled?: boolean;
     timeoutSec?: number;
     failoverSec?: number;

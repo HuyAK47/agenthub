@@ -87,9 +87,9 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(screen.getByText('settings.invalidModelSyntax')).toBeInTheDocument();
 
       // Fix syntax to valid model
-      fireEvent.change(customInput, { target: { value: 'codex:my-custom-model-1' } });
+      fireEvent.change(customInput, { target: { value: 'codex:gpt-custom-model-1' } });
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-      expect(screen.getByTestId('current-value').textContent).toBe('codex:my-custom-model-1');
+      expect(screen.getByTestId('current-value').textContent).toBe('codex:gpt-custom-model-1');
     });
 
     it('preserves an existing out-of-list value when loaded without data loss', () => {
@@ -162,7 +162,9 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(validateModelSyntax('gemini-3.8-flash-high', (k) => k)).toBeNull();
       expect(validateModelSyntax('claude-sonnet-4-6', (k) => k)).toBeNull();
       expect(validateModelSyntax('codex:gpt-5.6-luna', (k) => k)).toBeNull();
-      expect(validateModelSyntax('codex:custom-model-id', (k) => k)).toBeNull();
+      expect(validateModelSyntax('codex:gpt-4o', (k) => k)).toBeNull();
+      expect(validateModelSyntax('codex:x', (k) => k)).toBe('settings.invalidModelSyntax');
+      expect(validateModelSyntax('codex:custom-model-id', (k) => k)).toBe('settings.invalidModelSyntax');
       expect(validateModelSyntax('   ', (k) => k)).toBe('settings.emptyChainWarning');
       // Arbitrary non-agy and non-codex models should be rejected
       expect(validateModelSyntax('gemini-custom', (k) => k)).toBe('settings.invalidModelSyntax');
@@ -354,7 +356,7 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
         modelChainEasy: ['gemini-3.8-flash-medium'],
         chat: { model: 'sonnet', models: ['sonnet', 'opus'] },
         reviewer: {
-          model: 'gemini-3.8-flash-high',
+          model: 'codex:gpt-5.6-luna',
           order: [
             { engine: 'claude', model: 'sonnet', profiles: ['claude-deleted-old', 'claude-active'] },
           ],
@@ -402,7 +404,7 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
         },
         chat: { model: 'sonnet', models: ['sonnet', 'opus'] },
         reviewer: {
-          model: 'gemini-3.8-flash-high',
+          model: 'codex:gpt-5.6-luna',
           order: [{ engine: 'claude', model: 'sonnet', profiles: [] }],
           fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
           arbiter: { engine: 'claude', model: 'sonnet' },
@@ -456,7 +458,7 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
         },
         chat: { model: 'sonnet', models: ['sonnet', 'opus'] },
         reviewer: {
-          model: 'gemini-3.8-flash-high',
+          model: 'codex:gpt-5.6-luna',
           claudeProfiles: ['claude-current'],
           order: [{ engine: 'claude', model: 'sonnet', profiles: ['claude-current'] }],
           fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },

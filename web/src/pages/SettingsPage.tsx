@@ -311,7 +311,9 @@ export const SettingsPage: React.FC = () => {
       return;
     }
 
-    const invalidReviewer = reviewerModel.trim() ? validateModelSyntax(reviewerModel, t) : null;
+    const invalidReviewer = reviewerModel.trim()
+      ? validateReviewerModelSyntax(reviewerModel, reviewerModel.startsWith('claude') ? 'claude' : 'codex', t)
+      : null;
     if (invalidReviewer) {
       setSaveError(`${t('extra.reviewerModel')}: ${invalidReviewer} ("${reviewerModel}")`);
       return;
@@ -353,7 +355,7 @@ export const SettingsPage: React.FC = () => {
         models: chatModels,
       },
       reviewer: {
-        model: reviewerModel,
+        model: reviewerModel.trim() || undefined,
         claudeFallback,
         claudeProfiles,
         claudeModel,
@@ -899,8 +901,8 @@ export const SettingsPage: React.FC = () => {
                 ariaLabel={t('extra.reviewerModel')}
                 value={reviewerModel}
                 onChange={setReviewerModel}
-                options={availableWorkerModels}
-                validate={(val) => validateModelSyntax(val, t)}
+                options={availableCodexReviewerModels}
+                validate={(val) => validateReviewerModelSyntax(val, val.startsWith('claude') ? 'claude' : 'codex', t)}
                 placeholder="codex:model"
                 className="w-full"
               />

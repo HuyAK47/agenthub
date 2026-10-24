@@ -32,12 +32,14 @@ export function validateModelSyntax(
     return t ? t('settings.emptyChainWarning') : 'Model không được để trống';
   }
   const isAgy = VALID_AGY_MODELS.includes(trimmed);
-  const isCodex = trimmed.startsWith('codex:') && trimmed.length > 6;
+  const isCodex =
+    trimmed.startsWith('codex:') &&
+    validateReviewerModelSyntax(trimmed, 'codex') === null;
 
   if (!isAgy && !isCodex) {
     return t
       ? t('settings.invalidModelSyntax')
-      : 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:';
+      : 'Mỗi model phải là id agy hợp lệ hoặc model codex hợp lệ (codex:gpt-...)';
   }
   return null;
 }
