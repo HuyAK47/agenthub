@@ -72,6 +72,13 @@ restore_release_state() {
     fi
   fi
   case "$(uname -s 2>/dev/null)" in
+    Darwin*)
+      _uid="$(id -u)"
+      "$LAUNCHCTL" bootout "gui/$_uid/dev.agenthub" 2>/dev/null || true
+      if [ -n "$_old_service_backup" ] && [ -f "$_old_service_backup" ] && [ -n "$_service_file" ]; then
+        "$LAUNCHCTL" bootstrap "gui/$_uid" "$_service_file" 2>/dev/null || true
+      fi
+      ;;
     Linux*)
       "$SYSTEMCTL" --user daemon-reload 2>/dev/null || true
       ;;
@@ -516,6 +523,9 @@ install_from_release() {
   mkdir -p "$_release_stage"
   _install_step="giải nén release"
   tar -xzf "$_tmp/$_archive" -C "$_release_stage"
+  if [ "$_os" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "$_release_stage" 2>/dev/null || true
+  fi
   # Pin the Node major the bundled native modules were built for (see scripts/package.mjs).
   _node_major="$(cat "$_release_stage/node-runtime" 2>/dev/null || echo 22)"
   _install_step="tìm Node phù hợp"
@@ -561,7 +571,10 @@ install_from_release() {
   _link_file="$AGENTHUB_LINK_DIR/agenthub"
   _old_link=""
   [ -L "$_link_file" ] && _old_link="$(readlink "$_link_file")"
-  _service_file="$HOME/.config/systemd/user/agenthub.service"
+  case "$_os" in
+    Darwin*) _service_file="$HOME/Library/LaunchAgents/dev.agenthub.plist" ;;
+    *) _service_file="$HOME/.config/systemd/user/agenthub.service" ;;
+  esac
   _old_service_backup="$_tmp/service.before"
   [ -f "$_service_file" ] && cp "$_service_file" "$_old_service_backup"
 
