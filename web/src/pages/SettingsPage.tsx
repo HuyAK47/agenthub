@@ -311,7 +311,7 @@ export const SettingsPage: React.FC = () => {
       return;
     }
 
-    const invalidReviewer = validateModelSyntax(reviewerModel, t);
+    const invalidReviewer = reviewerModel.trim() ? validateModelSyntax(reviewerModel, t) : null;
     if (invalidReviewer) {
       setSaveError(`${t('extra.reviewerModel')}: ${invalidReviewer} ("${reviewerModel}")`);
       return;
