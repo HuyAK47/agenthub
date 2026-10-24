@@ -1853,7 +1853,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                         size="sm"
                         onClick={() =>
                           updateReviewerOrderState(
-                            [{ engine: 'codex', model: availableCodexReviewerModels[0] || 'codex:gpt-5.6-luna', profiles: [] }],
+                            [{ engine: 'codex', model: availableCodexReviewerModels[0] || '', profiles: [] }],
                             true,
                           )
                         }
@@ -1900,8 +1900,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                                         ...row,
                                         engine: newEngine,
                                         model: newEngine === 'codex'
-                                          ? (availableCodexReviewerModels[0] || 'codex:gpt-5.6-luna')
-                                          : (availableClaudeReviewerModels[0] || 'sonnet'),
+                                          ? (availableCodexReviewerModels[0] || '')
+                                          : (availableClaudeReviewerModels[0] || ''),
                                         profiles: [],
                                       }
                                     : row,
@@ -1925,7 +1925,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                                 }}
                                 options={engineModelOptions}
                                 validate={(val) => validateReviewerModelSyntax(val, item.engine, t)}
-                                placeholder={item.engine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet'}
+                                placeholder={item.engine === 'codex' ? 'codex:model' : 'sonnet'}
                               />
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
@@ -2012,7 +2012,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                         updateReviewerOrderState(
                           [
                             ...reviewerOrder,
-                            { engine: 'codex', model: availableCodexReviewerModels[0] || 'codex:gpt-5.6-luna', profiles: [] },
+                            { engine: 'codex', model: availableCodexReviewerModels[0] || '', profiles: [] },
                           ],
                           true,
                         )
@@ -2123,7 +2123,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                               {
                                 reviewer:
                                   availableReviewChainReviewers.find((r) => r.startsWith('codex:')) ||
-                                  'codex:gpt-5.6-luna',
+                                  '',
                                 mode: 'gate',
                               },
                               { reviewer: 'claude', mode: 'final' },
@@ -2159,7 +2159,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                                 {
                                   reviewer:
                                     availableReviewChainReviewers.find((r) => r.startsWith('codex:')) ||
-                                    'codex:gpt-5.6-luna',
+                                    '',
                                   mode: 'gate',
                                 },
                                 { reviewer: 'claude', mode: 'final' },

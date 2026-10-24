@@ -731,7 +731,7 @@ export const SettingsPage: React.FC = () => {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setReviewOrder((current) => [...current, { engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }])}
+                  onClick={() => setReviewOrder((current) => [...current, { engine: 'codex', model: availableCodexReviewerModels[0] || '', profiles: [] }])}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-[var(--t-text)] hover:bg-[var(--t-surface)] cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -766,7 +766,23 @@ export const SettingsPage: React.FC = () => {
                       <select
                         aria-label={`${t('settings.reviewerOrder')} ${index + 1}`}
                         value={item.engine}
-                        onChange={(event) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, engine: event.target.value as ReviewerOrderItem['engine'], profiles: [] } : row))}
+                        onChange={(event) => {
+                          const newEngine = event.target.value as ReviewerOrderItem['engine'];
+                          setReviewOrder((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index
+                                ? {
+                                    ...row,
+                                    engine: newEngine,
+                                    model: newEngine === 'codex'
+                                      ? (availableCodexReviewerModels[0] || '')
+                                      : (availableClaudeReviewerModels[0] || ''),
+                                    profiles: [],
+                                  }
+                                : row,
+                            ),
+                          );
+                        }}
                         className="text-sm rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1.5 text-[var(--t-text)]"
                       >
                         <option value="codex">Codex</option>
@@ -779,7 +795,7 @@ export const SettingsPage: React.FC = () => {
                           onChange={(val) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, model: val } : row))}
                           options={engineModelOptions}
                           validate={(val) => validateReviewerModelSyntax(val, item.engine, t)}
-                          placeholder={item.engine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet'}
+                          placeholder={item.engine === 'codex' ? 'codex:model' : 'sonnet'}
                         />
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
@@ -862,7 +878,7 @@ export const SettingsPage: React.FC = () => {
                     onChange={(val) => setArbiter((value) => ({ ...value, model: val }))}
                     options={arbiter.engine === 'codex' ? availableCodexReviewerModels : availableClaudeReviewerModels}
                     validate={(val) => validateReviewerModelSyntax(val, arbiter.engine, t)}
-                    placeholder={arbiter.engine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet'}
+                    placeholder={arbiter.engine === 'codex' ? 'codex:model' : 'sonnet'}
                   />
                 </div>
               </div>
@@ -877,7 +893,7 @@ export const SettingsPage: React.FC = () => {
                 onChange={setReviewerModel}
                 options={availableWorkerModels}
                 validate={(val) => validateModelSyntax(val, t)}
-                placeholder="codex:gpt-5.6-luna"
+                placeholder="codex:model"
                 className="w-full"
               />
             </div>
