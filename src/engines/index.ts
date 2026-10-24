@@ -6,6 +6,7 @@ import { ProfileRow } from '../db/index.js';
 import { LIMITED_TEST_ENV, lowPriority } from '../priority.js';
 import { workerEnvironment } from '../worker-guard.js';
 import { lockCommand } from '../profiles/locks.js';
+import { findAgyBin } from '../agy.js';
 
 export interface SpawnOpts {
   profile: ProfileRow;
@@ -100,7 +101,7 @@ export class AgyEngine implements Engine {
   private agyPath: string;
 
   constructor(agyPath?: string) {
-    this.agyPath = agyPath || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+    this.agyPath = agyPath || findAgyBin() || 'agy';
   }
 
   family(model: string): string {
