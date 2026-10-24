@@ -18,6 +18,7 @@ import { PlansPage } from '../pages/PlansPage';
 import { DashboardPage } from '../pages/DashboardPage';
 import { SavingsPage } from '../pages/SavingsPage';
 import { SetupPage } from '../pages/SetupPage';
+import { TelegramCard } from '../components/TelegramCard';
 import { translateApiErrorMessage } from '../utils/apiError';
 import { formatTimeAgo } from '../lib/time';
 import { browserNotificationBody } from '../notifications';
@@ -199,6 +200,58 @@ describe('i18n Audit & Parity', () => {
     scanDir(srcDir);
 
     expect(violations, `Hardcoded Vietnamese strings found in source code: ${JSON.stringify(violations, null, 2)}`).toEqual([]);
+  });
+
+  it('Requirement 3d: web/src contains no hardcoded English display patterns in JSX or attributes', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+
+    const violations: Array<{ file: string; line: number; rule: string; text: string }> = [];
+    const forbiddenPatterns: Array<{ regex: RegExp; rule: string }> = [
+      { regex: /topic\s*#/, rule: 'Hardcoded topic # label' },
+      { regex: /\}\s*process(es)?\b/, rule: 'Hardcoded process suffix in JSX' },
+      { regex: /placeholder=["'](e\.g\.|123456:)/, rule: 'Hardcoded placeholder' },
+      { regex: /title=["'](Move up|Move down|Remove)["']/, rule: 'Hardcoded button title' },
+      { regex: /aria-label=["'](Model chain|Chat suggestions)["']/, rule: 'Hardcoded aria-label' },
+    ];
+
+    function scanDir(dir: string) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git') continue;
+          scanDir(full);
+        } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))) {
+          if (full.includes('locales/')) continue;
+          if (full.includes('mocks/')) continue;
+          if (full.includes('.test.') || full.includes('__tests__') || full.includes('/test/')) continue;
+
+          const content = fs.readFileSync(full, 'utf8');
+          const lines = content.split('\n');
+          lines.forEach((line, idx) => {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('{/*')) return;
+
+            for (const { regex, rule } of forbiddenPatterns) {
+              if (regex.test(trimmed)) {
+                violations.push({
+                  file: path.relative(process.cwd(), full),
+                  line: idx + 1,
+                  rule,
+                  text: trimmed,
+                });
+              }
+            }
+          });
+        }
+      }
+    }
+
+    const srcDir = fs.existsSync('web/src') ? 'web/src' : 'src';
+    scanDir(srcDir);
+
+    expect(violations, `Hardcoded English UI patterns found in source code: ${JSON.stringify(violations, null, 2)}`).toEqual([]);
   });
 
   describe('Requirement 2: Render all in-scope pages in English without Vietnamese diacritics', () => {
@@ -807,6 +860,123 @@ describe('i18n Audit & Parity', () => {
       };
       expect(browserNotificationBody(diskEvent as any, 'vi')).toContain('Ổ đĩa còn 2.5 GB');
       expect(browserNotificationBody(diskEvent as any, 'en')).toContain('Disk space low: 2.5 GB');
+    });
+  });
+
+  describe('Specific UI Component Localization', () => {
+    it('TelegramCard renders topic and placeholder localized in vi and en', async () => {
+      vi.spyOn(client, 'getTelegramStatus').mockResolvedValue({
+        enabled: true,
+        hasToken: false,
+        topicMode: 'department',
+        allowedChatIds: [100],
+        chats: [],
+        departmentTopics: { 'd-1': { chatId: 100, threadId: 42 } },
+        projectTopics: {},
+        notify: {} as any,
+      } as any);
+      vi.spyOn(client, 'getTelegramPairingCode').mockResolvedValue({ code: '123456', expiresInSec: 300 });
+      vi.spyOn(client, 'getDepartments').mockResolvedValue([{ id: 'd-1', name: 'DevOps', telegramTopicId: 42 } as any]);
+      vi.spyOn(client, 'getProjects').mockResolvedValue([]);
+
+      // EN render
+      const enView = render(
+        <LocaleProvider initialLocale="en">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <TelegramCard />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('topic #42')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('e.g. 123456:ABC...')).toBeInTheDocument();
+      });
+      enView.unmount();
+
+      // VI render
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <TelegramCard />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('chủ đề #42')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ví dụ: 123456:ABC...')).toBeInTheDocument();
+      });
+    });
+
+    it('DashboardPage perf card renders process count localized in vi and en', async () => {
+      vi.spyOn(client, 'getStatus').mockResolvedValue({
+        tasks: { running: 0, waiting_quota: 0, queued: 0 },
+        running: [],
+        disk: { freeGB: 20, totalGB: 100 },
+        orphanProcesses: [],
+        quota: { profiles: [], claudeProfiles: [], accounts: [] },
+        claudeFailover: { active: false, status: 'off', currentStep: 0, dailyCostUSD: 0 },
+      } as any);
+      vi.spyOn(client, 'getProjects').mockResolvedValue([]);
+      vi.spyOn(client, 'getProfiles').mockResolvedValue([]);
+      vi.spyOn(client, 'getClaudeQuota').mockResolvedValue({ profiles: [] } as any);
+      vi.spyOn(client, 'getClaudeFailover').mockResolvedValue({ active: false } as any);
+      vi.spyOn(client, 'getEventHistoryPage').mockResolvedValue({ events: [], hasMore: false } as any);
+      vi.spyOn(client, 'getBrain').mockResolvedValue({ mode: 'auto' } as any);
+      vi.spyOn(client, 'getPerf').mockResolvedValue({
+        latest: {
+          at: Date.now(),
+          cpuCount: 4,
+          groups: {
+            worker: { cpuPercent: 10, rssBytes: 1024 ** 3 * 2, processes: 2 },
+            hub: { cpuPercent: 5, rssBytes: 1024 ** 3 * 1, processes: 1 },
+          },
+        },
+        samples: [],
+      } as any);
+      vi.spyOn(client, 'getOrphans').mockResolvedValue([] as any);
+
+      // EN render
+      const enView = render(
+        <LocaleProvider initialLocale="en">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <DashboardPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/2 processes/)).toBeInTheDocument();
+        expect(screen.getByText(/1 process\b/)).toBeInTheDocument();
+      });
+      enView.unmount();
+
+      // VI render
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <DashboardPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/2 tiến trình/)).toBeInTheDocument();
+        expect(screen.getByText(/1 tiến trình/)).toBeInTheDocument();
+      });
     });
   });
 });
