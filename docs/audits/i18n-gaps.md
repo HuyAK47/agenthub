@@ -12,7 +12,7 @@
 ### 2.1. Dịch thông báo lỗi Backend/API theo Locale của người dùng
 - **Tiện ích dịch lỗi API (`web/src/utils/apiError.ts`)**:
   - Hỗ trợ tra cứu theo mã lỗi chuẩn (`cycle_detected`, `conflict`, `not_found`, `forbidden`, `unauthorized`, `unavailable`, `service_unavailable`, `rate_limited`, `confirmation_required`, `invalid_logo`, `provider_policy`, `unprocessable_entity`, `compact_failed`, `mcp_install_failed`, `summary_failed`, `gateway_timeout`, `ambiguous`, v.v.).
-  - Bổ sung cơ chế fallback theo `code`: Khi backend trả về payload lỗi có mã lỗi và thông báo tiếng Việt không khớp regex (`{ error: "conflict", message: "..." }`), hệ thống trong chế độ EN sẽ tự động fallback sang bản dịch tiếng Anh của mã lỗi (`Resource conflict`) thay vì hiển thị chuỗi tiếng Việt thô chưa dịch. Ngược lại trong chế độ VI, các payload chỉ chứa mã lỗi thô không có message cũng được chuyển ngữ sang tiếng Việt chuẩn (`Xung đột dữ liệu`, `Không tìm thấy tài nguyên`).
+  - Bổ sung cơ chế fallback theo `code`: Khi backend trả về payload lỗi có mã lỗi và thông báo không khớp regex hoặc không chứa dấu tiếng Việt (`{ error: "conflict", message: "Conflict occurred" }`), hệ thống trong chế độ EN sẽ tự động fallback sang bản dịch tiếng Anh của mã lỗi (`Resource conflict`) cho mọi message không được dịch cụ thể. Ngược lại trong chế độ VI, các payload chứa mã lỗi thô hoặc thông báo không phải tiếng Việt cũng được chuyển ngữ sang tiếng Việt chuẩn (`Xung đột dữ liệu`, `Không tìm thấy tài nguyên`), đồng thời giữ nguyên các thông báo tiếng Việt chi tiết từ server.
   - Xây dựng từ điển ánh xạ Regex cho hơn 70 mẫu lỗi tiếng Việt do backend sinh ra, bao gồm đầy đủ các lỗi merge/worktree (`Merge bị xung đột`, `Xung đột merge ở: ...`, `worktree tích hợp có thay đổi chưa commit`, `Project chưa cấu hình merge tự động`), lỗi chat/brain (`Không thể đổi quyền khi brain đang chạy`, `Phiên đang bận và hàng đợi đã đầy`), lỗi task/profile, sang tiếng Anh tương ứng với nội suy tham số động chính xác.
 - **Tích hợp phía Client (`web/src/api/client.ts`)**:
   - Bổ sung header `Accept-Language: activeLocale` vào mọi request qua `apiFetch`.
@@ -83,7 +83,7 @@
 
 ## 3. Kết quả Kiểm thử Tự động (Automated Test Verification)
 
-Mở rộng bộ test `web/src/test/i18nAudit.test.tsx` (tổng cộng 26 test cases, toàn bộ passed):
+Mở rộng bộ test `web/src/test/i18nAudit.test.tsx` (tổng cộng 27 test cases, toàn bộ passed):
 1. **Key Parity**: Xác thực tập khóa của `vi` và `en` giống nhau 100% (0 khóa thiếu).
 2. **Placeholder Parity**: Xác thực mọi token placeholder `{token}` giữa `vi` và `en` trùng khớp tuyệt đối.
 3. **Source Code Scanner (Diacritics & UI Patterns)**:
@@ -103,14 +103,14 @@ Mở rộng bộ test `web/src/test/i18nAudit.test.tsx` (tổng cộng 26 test c
    - SavingsPage
    - SetupPage
 5. **Component Render Tests**: Kiểm tra hiển thị đa ngôn ngữ cụ thể cho TelegramCard (nhãn `topic #42` vs `chủ đề #42`, placeholder token) và DashboardPage (hiển thị số tiến trình `2 processes` / `1 process` vs `2 tiến trình` / `1 tiến trình`).
-6. **Backend Error Translation Tests**: Kiểm tra dịch chính xác thông báo lỗi cố định, thông báo lỗi có tham số động, mã lỗi chuẩn, và cơ chế fallback theo error code khi payload chứa thông báo tiếng Việt chưa có regex riêng.
+6. **Backend Error Translation Tests**: Kiểm tra dịch chính xác thông báo lỗi cố định, thông báo lỗi có tham số động, mã lỗi chuẩn, và cơ chế fallback theo error code cho các payload chứa thông báo không có dấu/không phải mã lỗi ở cả EN và VI.
 7. **Time & Relative Format Tests**: Kiểm tra `formatTimeAgo` hoạt động đúng cho cả hai locale `vi` và `en`, bao gồm xử lý an toàn cho timestamp `NaN` / không hợp lệ.
 8. **Browser Notification Tests**: Kiểm tra `browserNotificationBody` tạo đúng nội dung thông báo cho cả hai locale.
 
 ### Kết quả chạy lệnh kiểm tra:
 - `npm run lint`: **PASS** (0 lỗi)
 - `npm run typecheck`: **PASS** (0 lỗi)
-- `npm run test:web`: **PASS** (52/52 test files, 371/371 tests passed)
+- `npm run test:web`: **PASS** (52/52 test files, 372/372 tests passed)
 - `npm run build:web`: **PASS** (Biên dịch TypeScript và Vite hoàn tất sạch sẽ)
 - Backend tests: Toàn bộ các test suite backend hoàn thành không có lỗi assertion.
 
