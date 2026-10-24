@@ -7,7 +7,14 @@ import { LocaleProvider } from '../context/LocaleContext';
 import { ThemeProvider } from '../context/ThemeContext';
 import { SelectOrCustomInput, SortableModelList } from '../components/ui';
 import { SettingsPage } from '../pages/SettingsPage';
-import { validateModelSyntax, validateBranchSyntax } from '../utils/models';
+import { ProjectSettingsDrawer } from '../components/ProjectSettingsDrawer';
+import {
+  validateModelSyntax,
+  validateChatModelSyntax,
+  validateReviewChainReviewerSyntax,
+  validateReviewerModelSyntax,
+  validateBranchSyntax,
+} from '../utils/models';
 import * as client from '../api/client';
 import * as sse from '../api/sse';
 
@@ -110,6 +117,38 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(validateBranchSyntax('/leading-slash', (k) => k)).toBe('settings.invalidBranchSyntax');
       expect(validateBranchSyntax('double..dot', (k) => k)).toBe('settings.invalidBranchSyntax');
       expect(validateBranchSyntax('has:colon', (k) => k)).toBe('settings.invalidBranchSyntax');
+    });
+
+    it('validates worker model syntax consistently with backend modelValidator', () => {
+      expect(validateModelSyntax('gemini-3.8-flash-high', (k) => k)).toBeNull();
+      expect(validateModelSyntax('claude-sonnet-4-6', (k) => k)).toBeNull();
+      expect(validateModelSyntax('codex:gpt-5.6-luna', (k) => k)).toBeNull();
+      expect(validateModelSyntax('codex:custom-model-id', (k) => k)).toBeNull();
+      expect(validateModelSyntax('   ', (k) => k)).toBe('settings.emptyChainWarning');
+      // Arbitrary non-agy and non-codex models should be rejected
+      expect(validateModelSyntax('gemini-custom', (k) => k)).toBe('settings.invalidModelSyntax');
+      expect(validateModelSyntax('gpt-custom', (k) => k)).toBe('settings.invalidModelSyntax');
+      expect(validateModelSyntax('claude:custom', (k) => k)).toBe('settings.invalidModelSyntax');
+    });
+
+    it('validates chat model syntax consistently with chat.model enum', () => {
+      expect(validateChatModelSyntax('', (k) => k)).toBeNull();
+      expect(validateChatModelSyntax('sonnet', (k) => k)).toBeNull();
+      expect(validateChatModelSyntax('opus', (k) => k)).toBeNull();
+      expect(validateChatModelSyntax('haiku', (k) => k)).toBeNull();
+      expect(validateChatModelSyntax('gemini-3.8-flash-high', (k) => k)).toBe('settings.invalidChatModelSyntax');
+      expect(validateChatModelSyntax('codex:gpt-5.6-luna', (k) => k)).toBe('settings.invalidChatModelSyntax');
+    });
+
+    it('validates review chain reviewer syntax and reviewer model syntax', () => {
+      expect(validateReviewChainReviewerSyntax('claude', (k) => k)).toBeNull();
+      expect(validateReviewChainReviewerSyntax('codex:gpt-5.6-luna', (k) => k)).toBeNull();
+      expect(validateReviewChainReviewerSyntax('unknown-reviewer', (k) => k)).toBe('settings.invalidReviewChainReviewer');
+
+      expect(validateReviewerModelSyntax('sonnet', 'claude', (k) => k)).toBeNull();
+      expect(validateReviewerModelSyntax('gpt-5.6-luna', 'codex', (k) => k)).toBeNull();
+      expect(validateReviewerModelSyntax('codex:gpt-5.6-luna', 'codex', (k) => k)).toBeNull();
+      expect(validateReviewerModelSyntax('invalid model with space', 'codex', (k) => k)).toBe('settings.invalidModelSyntax');
     });
   });
 
@@ -257,6 +296,171 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       const payload = updateSpy.mock.calls[0][0];
       expect(payload.modelChainHard).toEqual(['gemini-3.8-flash-high', 'codex:gpt-5.6-luna']);
       expect(payload.reviewer?.order?.[0]?.model).toBe('codex:gpt-5.6-luna');
+    });
+
+    it('preserves old/inactive profiles in reviewer order without dropping them', async () => {
+      vi.spyOn(client, 'getProfiles').mockResolvedValue([
+        { name: 'claude-active', engine: 'claude', kind: 'isolated', home: '/home/claude', email: null, enabled: 1 } as any,
+      ]);
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        modelChainHard: ['gemini-3.8-flash-high'],
+        modelChainEasy: ['gemini-3.8-flash-medium'],
+        chat: { model: 'sonnet', models: ['sonnet', 'opus'] },
+        reviewer: {
+          model: 'gemini-3.8-flash-high',
+          order: [
+            { engine: 'claude', model: 'sonnet', profiles: ['claude-deleted-old', 'claude-active'] },
+          ],
+          fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
+          arbiter: { engine: 'claude', model: 'sonnet' },
+        },
+      } as any);
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <SettingsPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('reviewer-order')).toBeInTheDocument();
+      });
+
+      // The old profile should still appear as an option with the inactive label
+      const profileSelect = screen.getByLabelText(/Hồ sơ Claude review \(theo thứ tự ưu tiên\) 1/i);
+      expect(profileSelect).toBeInTheDocument();
+      expect(screen.getByText(/claude-deleted-old \(cũ \/ không khả dụng\)/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('4. ProjectSettingsDrawer Reviewer Order, Fallback & Review Chain Integration', () => {
+    let queryClient: QueryClient;
+
+    const mockProject = {
+      id: 'p1',
+      name: 'XFarm',
+      path: '/home/repo',
+      defaultBranch: 'main',
+      maxParallel: 2,
+      settings: {
+        integration: { enabled: true, branch: 'integration', baseRef: 'main' },
+        commitConvention: { branchTemplate: 'agenthub/{slug}' },
+        brain: { engine: 'claude', model: 'sonnet', mode: 'suggest', permissions: 'standard' },
+        worktree: {},
+        ci: {},
+        references: [],
+        reviewChecklist: [],
+        notifications: { telegramContent: 'full' },
+        review: {
+          order: [{ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: ['codex-main'] }],
+          fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
+        },
+      },
+      review: {
+        chain: [
+          { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
+          { reviewer: 'claude', mode: 'final' },
+        ],
+        maxRounds: 2,
+      },
+    } as any;
+
+    beforeEach(() => {
+      queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      vi.spyOn(client, 'getProfiles').mockResolvedValue([
+        { name: 'codex-main', engine: 'codex', kind: 'isolated', home: '/home/codex', email: null, enabled: 1 } as any,
+        { name: 'claude-main', engine: 'claude', kind: 'isolated', home: '/home/claude', email: null, enabled: 1 } as any,
+      ]);
+      vi.spyOn(client, 'getConfig').mockResolvedValue({} as any);
+      vi.spyOn(client, 'getFocus').mockResolvedValue({ projectId: null, since: null, pauseRunning: false } as any);
+    });
+
+    it('renders structured reviewer order and review chain controls without JSON textareas', async () => {
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={mockProject}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      // Open advanced settings section
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-reviewer-order')).toBeInTheDocument();
+        expect(screen.getByTestId('project-review-chain')).toBeInTheDocument();
+      });
+
+      // Assert that old JSON textareas are NOT present
+      expect(screen.queryByTestId('review-chain-textarea')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Ghi đè thứ tự reviewer/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Ghi đè fallback reviewer/i)).not.toBeInTheDocument();
+
+      // Assert that interactive controls are present
+      expect(screen.getAllByText('codex:gpt-5.6-luna').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('claude').length).toBeGreaterThan(0);
+    });
+
+    it('saves updated reviewer order and review chain correctly', async () => {
+      const updateProjectSpy = vi.spyOn(client, 'updateProject').mockResolvedValue(mockProject);
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={mockProject}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-review-chain')).toBeInTheDocument();
+      });
+
+      // Add a review step
+      const addStepBtn = screen.getByRole('button', { name: /Thêm bước review/i });
+      fireEvent.click(addStepBtn);
+
+      // Unsaved changes bar should appear
+      expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+      const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(updateProjectSpy).toHaveBeenCalled();
+      });
+
+      const callArgs = updateProjectSpy.mock.calls[0][1];
+      expect(callArgs.review?.chain.length).toBe(3);
     });
   });
 });
