@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -467,6 +467,176 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
 
       const callArgs = updateProjectSpy.mock.calls[0][1];
       expect(callArgs.review?.chain.length).toBe(3);
+    });
+
+    it('handleDiscard resets reviewerOrder, reviewerFallback, reviewChain and override flags to original state', async () => {
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={mockProject}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-review-chain')).toBeInTheDocument();
+        expect(screen.getByTestId('project-reviewer-order')).toBeInTheDocument();
+      });
+
+      // Initially review chain has 2 steps and reviewer order has 1 item
+      expect(within(screen.getByTestId('project-review-chain')).getByText('1.')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-review-chain')).getByText('2.')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-review-chain')).queryByText('3.')).not.toBeInTheDocument();
+
+      // Add a review step (chain now has 3 steps)
+      const addStepBtn = screen.getByRole('button', { name: /Thêm bước review/i });
+      fireEvent.click(addStepBtn);
+      expect(within(screen.getByTestId('project-review-chain')).getByText('3.')).toBeInTheDocument();
+
+      // Add a reviewer (reviewerOrder now has 2 items)
+      const addReviewerBtn = screen.getByRole('button', { name: /Thêm reviewer/i });
+      fireEvent.click(addReviewerBtn);
+      expect(within(screen.getByTestId('project-reviewer-order')).getByText('2.')).toBeInTheDocument();
+
+      // Unsaved changes bar should appear
+      expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+      // Click "Huỷ" / Discard
+      const discardBtn = screen.getByRole('button', { name: 'Huỷ' });
+      fireEvent.click(discardBtn);
+
+      // Unsaved changes bar should disappear
+      expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
+
+      // Review steps and reviewer order should be restored to original counts
+      expect(within(screen.getByTestId('project-review-chain')).queryByText('3.')).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('project-review-chain')).getByText('2.')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-reviewer-order')).queryByText('2.')).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('project-reviewer-order')).getByText('1.')).toBeInTheDocument();
+    });
+
+    it('preserves existing project.review when chain is empty and does not send review: null on unrelated changes', async () => {
+      const updateProjectSpy = vi.spyOn(client, 'updateProject').mockResolvedValue(mockProject);
+      const projectWithEmptyChain = {
+        ...mockProject,
+        review: {
+          chain: [],
+          maxRounds: 2,
+        },
+      };
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={projectWithEmptyChain}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-review-chain')).toBeInTheDocument();
+      });
+
+      // Upon opening, unsaved changes bar MUST NOT be present
+      expect(screen.queryByTestId('unsaved-changes-bar')).not.toBeInTheDocument();
+
+      // The review chain override is preserved even with empty chain (displays empty notice, not system default)
+      expect(within(screen.getByTestId('project-review-chain')).getByText(/Chưa có bước review nào/i)).toBeInTheDocument();
+
+      // Modify an unrelated field: hooks
+      const hooksTextarea = screen.getByTestId('hooks-textarea');
+      fireEvent.change(hooksTextarea, { target: { value: 'echo "hello"' } });
+
+      // Unsaved changes bar appears
+      expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+      // Save
+      const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(updateProjectSpy).toHaveBeenCalled();
+      });
+
+      const callArgs = updateProjectSpy.mock.calls[0][1];
+      // review should NOT be in callArgs (or definitely not null!)
+      expect(callArgs.review).toBeUndefined();
+    });
+
+    it('sends review: null only when user explicitly clicks useSystemDefault to remove review chain override', async () => {
+      const updateProjectSpy = vi.spyOn(client, 'updateProject').mockResolvedValue(mockProject);
+      const projectWithChain = {
+        ...mockProject,
+        review: {
+          chain: [{ reviewer: 'claude', mode: 'final' }],
+          maxRounds: 2,
+        },
+      };
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={projectWithChain}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-review-chain')).toBeInTheDocument();
+      });
+
+      // Click "Dùng mặc định hệ thống" in the review chain block
+      const chainBlock = screen.getByTestId('project-review-chain');
+      const useSystemDefaultBtn = within(chainBlock).getByRole('button', { name: /Dùng mặc định hệ thống/i });
+      fireEvent.click(useSystemDefaultBtn);
+
+      // Unsaved changes bar should appear
+      expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+      // Save
+      const saveBtn = screen.getByRole('button', { name: 'Lưu' });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(updateProjectSpy).toHaveBeenCalled();
+      });
+
+      const callArgs = updateProjectSpy.mock.calls[0][1];
+      // review must explicitly be null to clear override on backend
+      expect(callArgs.review).toBeNull();
     });
   });
 });
