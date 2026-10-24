@@ -31,7 +31,6 @@ import {
 import {
   DEFAULT_COMMON_BRANCHES,
   DEFAULT_CLAUDE_MODELS,
-  DEFAULT_CODEX_MODELS,
   validateBranchSyntax,
   validateReviewerModelSyntax,
   validateReviewChainReviewerSyntax,
@@ -122,10 +121,8 @@ export function changedSettings(
   const sections = [
     'commitConvention',
     'brain',
-    'review',
     'worktree',
     'integration',
-    'review',
     'ci',
     'references',
     'reviewChecklist',
@@ -275,9 +272,6 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
     return Array.from(
       new Set([
-        ...DEFAULT_CODEX_MODELS,
-        'codex:gpt-5.6-luna',
-        'codex:gpt-5.6-turbo',
         ...fromApi,
         ...fromConfigured,
         ...fromConfigOrder,
@@ -352,8 +346,6 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     return Array.from(
       new Set([
         'claude',
-        'codex:gpt-5.6-luna',
-        'codex:gpt-5.6-turbo',
         ...codexModels,
         ...fromCurrentChain,
         ...fromProjectChain,
@@ -684,10 +676,19 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       : '';
   }, [origSettings.review?.fallback]);
 
+  const orderChanged = useMemo(
+    () => draftReviewerOrder.trim() !== origReviewerOrderStr.trim(),
+    [draftReviewerOrder, origReviewerOrderStr],
+  );
+
+  const fallbackChanged = useMemo(
+    () => draftReviewerFallback.trim() !== origReviewerFallbackStr.trim(),
+    [draftReviewerFallback, origReviewerFallbackStr],
+  );
+
   const reviewerOverrideChanged = useMemo(
-    () => draftReviewerOrder.trim() !== origReviewerOrderStr.trim()
-      || draftReviewerFallback.trim() !== origReviewerFallbackStr.trim(),
-    [draftReviewerOrder, draftReviewerFallback, origReviewerOrderStr, origReviewerFallbackStr],
+    () => orderChanged || fallbackChanged,
+    [orderChanged, fallbackChanged],
   );
 
   const changeCount = useMemo(() => {
@@ -840,11 +841,18 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     }
 
     if (reviewerOverrideChanged) {
+      const reviewUpdate: Record<string, any> = {};
+      if (orderChanged) {
+        reviewUpdate.order = draftReviewerOrder.trim() ? JSON.parse(draftReviewerOrder) : null;
+      }
+      if (fallbackChanged) {
+        reviewUpdate.fallback = draftReviewerFallback.trim() ? JSON.parse(draftReviewerFallback) : null;
+      }
       payload.settings = {
         ...(payload.settings || {}),
         review: {
-          order: draftReviewerOrder.trim() ? JSON.parse(draftReviewerOrder) : undefined,
-          fallback: draftReviewerFallback.trim() ? JSON.parse(draftReviewerFallback) : undefined,
+          ...(payload.settings?.review || {}),
+          ...reviewUpdate,
         },
       };
     }
@@ -1845,7 +1853,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                         size="sm"
                         onClick={() =>
                           updateReviewerOrderState(
-                            [{ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }],
+                            [{ engine: 'codex', model: availableCodexReviewerModels[0] || 'codex:gpt-5.6-luna', profiles: [] }],
                             true,
                           )
                         }
@@ -1891,7 +1899,9 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                                     ? {
                                         ...row,
                                         engine: newEngine,
-                                        model: newEngine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet',
+                                        model: newEngine === 'codex'
+                                          ? (availableCodexReviewerModels[0] || 'codex:gpt-5.6-luna')
+                                          : (availableClaudeReviewerModels[0] || 'sonnet'),
                                         profiles: [],
                                       }
                                     : row,
@@ -2002,7 +2012,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                         updateReviewerOrderState(
                           [
                             ...reviewerOrder,
-                            { engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] },
+                            { engine: 'codex', model: availableCodexReviewerModels[0] || 'codex:gpt-5.6-luna', profiles: [] },
                           ],
                           true,
                         )
@@ -2016,7 +2026,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                 )}
 
                 {/* Reviewer fallback */}
-                <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
+                <div className="pt-2 border-t border-[var(--t-border)] space-y-2" data-testid="project-reviewer-fallback">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerFallbackOverride')}</label>
                     {hasReviewerFallbackOverride ? (
@@ -2110,7 +2120,12 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                         updateReviewChainState(
                           {
                             chain: [
-                              { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
+                              {
+                                reviewer:
+                                  availableReviewChainReviewers.find((r) => r.startsWith('codex:')) ||
+                                  'codex:gpt-5.6-luna',
+                                mode: 'gate',
+                              },
                               { reviewer: 'claude', mode: 'final' },
                             ],
                             maxRounds: 2,
@@ -2141,7 +2156,12 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                           updateReviewChainState(
                             {
                               chain: [
-                                { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
+                                {
+                                  reviewer:
+                                    availableReviewChainReviewers.find((r) => r.startsWith('codex:')) ||
+                                    'codex:gpt-5.6-luna',
+                                  mode: 'gate',
+                                },
                                 { reviewer: 'claude', mode: 'final' },
                               ],
                               maxRounds: 2,

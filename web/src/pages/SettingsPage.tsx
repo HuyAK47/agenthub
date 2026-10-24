@@ -12,7 +12,6 @@ import { DataTable, SelectOrCustomInput, SortableModelList } from '../components
 import {
   DEFAULT_VALID_MODELS,
   DEFAULT_CLAUDE_MODELS,
-  DEFAULT_CODEX_MODELS,
   validateModelSyntax,
   validateChatModelSyntax,
   validateReviewerModelSyntax,
@@ -150,9 +149,6 @@ export const SettingsPage: React.FC = () => {
     const arbiterModel = arbiter.engine === 'codex' && arbiter.model ? [arbiter.model] : [];
     const chainCodex = [...hardChainModels, ...easyChainModels].filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
     return Array.from(new Set([
-      ...DEFAULT_CODEX_MODELS,
-      'codex:gpt-5.6-luna',
-      'codex:gpt-5.6-turbo',
       ...fromApi,
       ...fromConfigured,
       ...reviewerModels,
