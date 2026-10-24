@@ -4,17 +4,17 @@ export function isValidReviewerModel(engine: 'codex' | 'claude', model: string):
   const trimmed = model.trim();
   if (!trimmed || /\s/.test(trimmed)) return false;
   if (engine === 'claude') {
+    const raw = trimmed.startsWith('claude:') ? trimmed.slice('claude:'.length) : trimmed;
     return (
-      ['sonnet', 'opus', 'haiku'].includes(trimmed) ||
-      trimmed.startsWith('claude-') ||
-      (trimmed.startsWith('claude:') && trimmed.length > 7)
+      ['sonnet', 'opus', 'haiku'].includes(raw) ||
+      raw.startsWith('claude-')
     );
   }
   if (engine === 'codex') {
+    const raw = trimmed.startsWith('codex:') ? trimmed.slice('codex:'.length) : trimmed;
     return (
-      ['gpt-5.6-luna', 'gpt-5.6-turbo'].includes(trimmed) ||
-      trimmed.startsWith('gpt-') ||
-      (trimmed.startsWith('codex:') && trimmed.length > 6)
+      ['gpt-5.6-luna', 'gpt-5.6-turbo'].includes(raw) ||
+      (raw.startsWith('gpt-') && raw.length > 4)
     );
   }
   return false;
@@ -37,11 +37,7 @@ export const ReviewerOrderItemSchema = z
       return;
     }
     if (item.engine === 'claude') {
-      const isValidClaude =
-        ['sonnet', 'opus', 'haiku'].includes(trimmed) ||
-        trimmed.startsWith('claude-') ||
-        (trimmed.startsWith('claude:') && trimmed.length > 7);
-      if (!isValidClaude) {
+      if (!isValidReviewerModel('claude', item.model)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['model'],
@@ -49,11 +45,7 @@ export const ReviewerOrderItemSchema = z
         });
       }
     } else if (item.engine === 'codex') {
-      const isValidCodex =
-        ['gpt-5.6-luna', 'gpt-5.6-turbo'].includes(trimmed) ||
-        trimmed.startsWith('gpt-') ||
-        (trimmed.startsWith('codex:') && trimmed.length > 6);
-      if (!isValidCodex) {
+      if (!isValidReviewerModel('codex', item.model)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['model'],
@@ -87,11 +79,7 @@ export const ReviewerArbiterSchema = z
       return;
     }
     if (item.engine === 'claude') {
-      const isValidClaude =
-        ['sonnet', 'opus', 'haiku'].includes(trimmed) ||
-        trimmed.startsWith('claude-') ||
-        (trimmed.startsWith('claude:') && trimmed.length > 7);
-      if (!isValidClaude) {
+      if (!isValidReviewerModel('claude', item.model)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['model'],
@@ -99,11 +87,7 @@ export const ReviewerArbiterSchema = z
         });
       }
     } else if (item.engine === 'codex') {
-      const isValidCodex =
-        ['gpt-5.6-luna', 'gpt-5.6-turbo'].includes(trimmed) ||
-        trimmed.startsWith('gpt-') ||
-        (trimmed.startsWith('codex:') && trimmed.length > 6);
-      if (!isValidCodex) {
+      if (!isValidReviewerModel('codex', item.model)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['model'],

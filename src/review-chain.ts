@@ -1,9 +1,24 @@
 import { z } from 'zod';
+import { isValidReviewerModel } from './reviewer-config.js';
 
 export const ReviewChainStepSchema = z.object({
-  reviewer: z.string().trim().min(1, 'Reviewer không được để trống').refine((value) => value === 'claude' || (value.startsWith('codex:') && value.length > 6 && !/\s/.test(value)), {
-    message: 'reviewer phải là claude hoặc codex:<model>',
-  }),
+  reviewer: z
+    .string()
+    .trim()
+    .min(1, 'Reviewer không được để trống')
+    .refine(
+      (value) => {
+        if (value === 'claude') return true;
+        if (value.startsWith('codex:')) {
+          const model = value.slice('codex:'.length);
+          return Boolean(model) && !/\s/.test(value) && isValidReviewerModel('codex', model);
+        }
+        return false;
+      },
+      {
+        message: 'reviewer phải là claude hoặc codex:<model>',
+      },
+    ),
   mode: z.enum(['gate', 'final']),
 });
 

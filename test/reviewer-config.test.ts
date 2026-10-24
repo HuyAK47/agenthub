@@ -64,6 +64,8 @@ describe('reviewer order configuration', () => {
     expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'sonnet', profiles: [] }).success).toBe(false);
     expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'codex:', profiles: [] }).success).toBe(false);
     expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'codex: ', profiles: [] }).success).toBe(false);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'codex:x', profiles: [] }).success).toBe(false);
+    expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: 'x', profiles: [] }).success).toBe(false);
 
     // Common invalid: empty or whitespace
     expect(ReviewerOrderItemSchema.safeParse({ engine: 'codex', model: '', profiles: [] }).success).toBe(false);
@@ -76,5 +78,6 @@ describe('reviewer order configuration', () => {
     expect(ReviewerArbiterSchema.safeParse({ engine: 'claude', model: 'gpt-5.6-luna' }).success).toBe(false);
     expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'sonnet' }).success).toBe(false);
     expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'codex:' }).success).toBe(false);
+    expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'codex:x' }).success).toBe(false);
   });
 });
