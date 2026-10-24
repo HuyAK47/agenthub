@@ -1,20 +1,29 @@
-# Hoàn tất task p-ci-main-red
+# Hoàn tất task f-wizard-summary-error
 
 ## Tóm tắt
 
-- Dò tìm bubblewrap linh hoạt qua biến môi trường AGENTHUB_BWRAP_BIN, PATH và tiếp tục kiểm tra fallback về các đường dẫn chuẩn hệ thống (/usr/bin/bwrap, /bin/bwrap) khi không tìm thấy trong PATH.
-- Bổ sung hàm canRunBubblewrap để kiểm tra khả năng thực thi thực tế của bubblewrap trước khi chạy các test phụ thuộc sandbox bwrap.
-- Bổ sung mock bwrap fixture cho test brain codex khi máy host không có bwrap, tránh fail test brain-codex.
-- Bổ sung skipIf cho các test yêu cầu bwrap sandbox trong engines.test.ts khi host thiếu bwrap, đồng thời bổ sung các test cho nhánh thiếu bwrap và thứ tự ưu tiên PATH/đường dẫn chuẩn.
-- Độc lập các test với công cụ hệ thống host (flock, lockf, nice) trong locks.test.ts, priority.test.ts, quota-usage.test.ts.
+- Xác định và tái hiện luồng tạo dự án kèm tóm tắt ngữ cảnh (Claude Code sessions):
+  - Trước đây, nếu bước tóm tắt gặp lỗi (lỗi API, thiếu engine, hết quota, timeout) thì thông báo lỗi chặn wizard, dễ gây tạo trùng dự án hoặc lộ stack trace kỹ thuật cho người dùng.
+- Backend (`src/services/index.ts` & `test/project-inspect.test.ts`):
+  - Xử lý tóm tắt ngữ cảnh độc lập, hỗ trợ trạng thái chờ quota / engine khả dụng (`waiting_quota`), làm sạch thông báo lỗi (loại bỏ stack trace).
+  - Bổ sung test backend cho các nhánh: thành công, lỗi engine/quota, timeout, retry.
+- Frontend (`web/src/components/ProjectWizard.tsx` & `web/src/locales/`):
+  - Tách biệt hoàn toàn việc tạo dự án khỏi việc tóm tắt: dự án luôn được tạo thành công trên đĩa và cơ sở dữ liệu.
+  - Thêm các trạng thái giao diện rõ ràng cho tóm tắt: Đang chạy (`wizard-summarizing`), Lỗi (`wizard-summary-error`), Duyệt kết quả (`wizard-summary-review`).
+  - Lỗi tóm tắt được làm sạch (không lộ stack trace `node_modules`, file line, `at ...`), cung cấp nút "Thử lại" và nút "Chạy nền và đóng".
+  - Bổ sung xử lý timeout tóm tắt phía client.
+  - Xử lý phản hồi review: Nút đóng góc trên (header close) khi đang tóm tắt hoặc sau khi tạo dự án áp dụng cùng logic với "Chạy nền và đóng" (`handleFinishAndClose`), lập tức dọn sạch draft trong `localStorage` và invalidate query danh sách dự án, ngăn chặn việc tạo trùng hoặc retry ngoài ý muốn khi mở lại wizard.
+- Đầy đủ test bao phủ:
+  - 14 unit tests trong `web/src/test/project-wizard.test.tsx` bao phủ toàn bộ các nhánh: thành công, thiếu engine/quota, timeout, lỗi API, nút thử lại, nút chạy nền, nút đóng góc trên khi đang tóm tắt / khi lỗi, và bảo toàn draft trước khi tạo dự án.
 
 ## Kết quả kiểm tra
 
 - `npm run lint`: PASS (0 lỗi).
 - `npm run typecheck`: PASS (0 lỗi).
-- `npm run test:web -- --run`: PASS (52 test files, 353 tests passed).
-- `env -u AGENTHUB_CHAT_KIND -u AGENTHUB_CHAT_SESSION_ID npm test -- --run`: PASS (101 test files, 1108 tests passed, 1 skipped).
-- Kiểm tra giả lập thiếu bwrap với `AGENTHUB_BWRAP_BIN=0`: PASS (test/engines.test.ts: 21 passed, 3 skipped; test/brain-codex.test.ts: 6 passed).
+- `npm --prefix web run typecheck`: PASS (0 lỗi).
+- `npm run build:web`: PASS (Vite build thành công).
+- `npm run test:web`: PASS (52 test files passed, 357 tests passed).
+- `env -u AGENTHUB_CHAT_KIND -u AGENTHUB_CHAT_SESSION_ID npm test -- --run`: PASS (101 test files passed, 1113 tests passed, 1 skipped).
 
 ## Việc còn thiếu
 
@@ -22,8 +31,7 @@
 
 ## Danh sách commit
 
-- a5046fd fix(engines): discover bubblewrap via path and configuration
-- 122f3c6 test(brain-codex): use mock bwrap fixture when host lacks bubblewrap
-- 1e1e289 test(engines): skip bubblewrap tests when unavailable and test error branch
-- 7cab724 test: decouple tests from host tools flock, lockf and nice
-- a49b439 fix(engines): fallback to standard bubblewrap paths when not in PATH
+- d5b5fdb fix(web): clean up draft and sync background state on wizard close
+- 72e6c99 fix(web): decouple project creation from summary errors with retry and background options
+- c181b70 feat(web): add i18n keys for wizard context summary states and error recovery
+- 13f88e7 fix(api): handle context summarization retry, engine quota, and error sanitization
