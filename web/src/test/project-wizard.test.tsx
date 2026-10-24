@@ -431,4 +431,102 @@ describe('ProjectWizard', () => {
     expect(screen.getByText('Worker process terminated unexpectedly')).toBeInTheDocument();
     expect(screen.queryByText(/at ChildProcess/)).not.toBeInTheDocument();
   });
+
+  it('cleans up draft and closes when clicking top close button during summarization', async () => {
+    const onClose = vi.fn();
+    const inspectSpy = vi.spyOn(client, 'inspectProject').mockResolvedValue(inspection);
+    vi.spyOn(client, 'createProject').mockResolvedValue(project);
+    vi.spyOn(client, 'summarizeProjectContext').mockResolvedValue({
+      taskId: 'task-close-test',
+      status: 'running',
+      summary: null,
+    });
+    vi.spyOn(client, 'getProjectContextSummary').mockResolvedValue({
+      taskId: 'task-close-test',
+      status: 'running',
+      summary: null,
+    });
+
+    renderWizard({ onClose });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.change(screen.getByPlaceholderText(/vd: XFarm/), { target: { value: 'Close Test Project' } });
+    fireEvent.change(screen.getByPlaceholderText(/vd: \/home/), { target: { value: inspection.path } });
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    await waitFor(() => expect(inspectSpy).toHaveBeenCalledWith(inspection.path));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    await waitFor(() => expect(screen.getByText(/session-a\.jsonl/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('checkbox', { name: /session-a\.jsonl/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Tôi đã duyệt nội dung/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tạo dự án' }));
+
+    // Wait until summarizing
+    await waitFor(() => expect(screen.getByTestId('wizard-summarizing')).toBeInTheDocument());
+
+    // Click top close button
+    const closeBtn = screen.getByRole('button', { name: 'Đóng' });
+    fireEvent.click(closeBtn);
+
+    // Verify onClose is called and draft in localStorage is cleared
+    expect(onClose).toHaveBeenCalled();
+    expect(localStorage.getItem('agenthub.projectWizard')).toBeNull();
+  });
+
+  it('cleans up draft and closes when clicking top close button during summary error state', async () => {
+    const onClose = vi.fn();
+    const inspectSpy = vi.spyOn(client, 'inspectProject').mockResolvedValue(inspection);
+    vi.spyOn(client, 'createProject').mockResolvedValue(project);
+    vi.spyOn(client, 'summarizeProjectContext').mockRejectedValue(new Error('Network failure'));
+
+    renderWizard({ onClose });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.change(screen.getByPlaceholderText(/vd: XFarm/), { target: { value: 'Close On Error Project' } });
+    fireEvent.change(screen.getByPlaceholderText(/vd: \/home/), { target: { value: inspection.path } });
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    await waitFor(() => expect(inspectSpy).toHaveBeenCalledWith(inspection.path));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    await waitFor(() => expect(screen.getByText(/session-a\.jsonl/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('checkbox', { name: /session-a\.jsonl/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Tôi đã duyệt nội dung/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tạo dự án' }));
+
+    // Wait for error state
+    await waitFor(() => expect(screen.getByTestId('wizard-summary-error')).toBeInTheDocument());
+
+    // Click top close button
+    const closeBtn = screen.getByRole('button', { name: 'Đóng' });
+    fireEvent.click(closeBtn);
+
+    expect(onClose).toHaveBeenCalled();
+    expect(localStorage.getItem('agenthub.projectWizard')).toBeNull();
+  });
+
+  it('preserves draft in localStorage when closing wizard before project creation', () => {
+    const onClose = vi.fn();
+    renderWizard({ onClose });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
+    fireEvent.change(screen.getByPlaceholderText(/vd: XFarm/), { target: { value: 'Unsaved Project' } });
+    fireEvent.change(screen.getByPlaceholderText(/vd: \/home/), { target: { value: '/tmp/unsaved' } });
+
+    // Click top close button before creating project
+    const closeBtn = screen.getByRole('button', { name: 'Đóng' });
+    fireEvent.click(closeBtn);
+
+    expect(onClose).toHaveBeenCalled();
+    const saved = JSON.parse(localStorage.getItem('agenthub.projectWizard') || '{}');
+    expect(saved.name).toBe('Unsaved Project');
+    expect(saved.path).toBe('/tmp/unsaved');
+  });
 });

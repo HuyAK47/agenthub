@@ -216,12 +216,12 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
           // Non-blocking best-effort
         }
       }
+      localStorage.removeItem(DRAFT_KEY);
       if (draft.contextApproved && draft.selectedSessions.length > 0) {
         setSummaryPhase('summarizing');
         setSummaryError(null);
         summarizeMutation.mutate({ projectId: project.id, sessions: draft.selectedSessions, selections: draft.selectedContextItems });
       } else {
-        localStorage.removeItem(DRAFT_KEY);
         onClose();
       }
     },
@@ -229,8 +229,9 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
   });
 
   useEffect(() => {
+    if (createdProject || summaryPhase !== 'idle') return;
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-  }, [draft]);
+  }, [draft, createdProject, summaryPhase]);
 
   const canNext = useMemo(
     () => step !== 1 || Boolean(draft.name.trim() && draft.path.trim()),
@@ -253,6 +254,14 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
     onClose();
   };
 
+  const handleClose = () => {
+    if (summaryPhase !== 'idle' || createdProject) {
+      handleFinishAndClose();
+    } else {
+      onClose();
+    }
+  };
+
   return (
     <Card data-testid="project-wizard" data-tour="modal-project-wizard" className="space-y-5 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -260,7 +269,15 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
           <h2 className="text-base font-bold">{t('projects.wizardTitle')}</h2>
           <p className="text-sm text-[var(--t-text-3)]">{t(`projects.wizardWhy${step}`)}</p>
         </div>
-        <Button type="button" variant="secondary" size="sm" onClick={onClose}>{t('common.close')}</Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={handleClose}
+          disabled={createMutation.isPending}
+        >
+          {t('common.close')}
+        </Button>
       </div>
       <div className="flex gap-1" aria-label={t('projects.wizardProgress')}>
         {[0, 1, 2, 3, 4, 5, 6].map((item) => (
