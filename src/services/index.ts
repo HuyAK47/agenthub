@@ -1487,7 +1487,11 @@ export class AppService {
   }
 
   createProject(raw: unknown): ProjectRow {
-    const parsed = CreateProjectSchema.parse(raw);
+    const parseResult = CreateProjectSchema.safeParse(raw);
+    if (!parseResult.success) {
+      throw new HttpError(400, 'bad_request', parseResult.error.issues[0]?.message || 'Dữ liệu project không hợp lệ');
+    }
+    const parsed = parseResult.data;
     if (this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
       throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
     }
@@ -1617,7 +1621,11 @@ export class AppService {
 
   updateProject(id: string, raw: unknown): ProjectRow {
     this.getProject(id);
-    const parsed = UpdateProjectSchema.parse(raw);
+    const parseResult = UpdateProjectSchema.safeParse(raw);
+    if (!parseResult.success) {
+      throw new HttpError(400, 'bad_request', parseResult.error.issues[0]?.message || 'Dữ liệu cập nhật project không hợp lệ');
+    }
+    const parsed = parseResult.data;
     const current = this.projectRepo.get(id)!;
     if (parsed.departmentId && this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
       throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
