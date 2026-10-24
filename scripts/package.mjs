@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { prepareMacosNativeBinaries } from './package-native.mjs';
 
 const root = path.resolve(new URL('..', import.meta.url).pathname);
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -33,24 +34,6 @@ function copy(relative) {
   fs.cpSync(source, target, { recursive: true, dereference: false });
 }
 
-function prepareMacosNativeBinaries() {
-  if (process.platform !== 'darwin') return;
-  const nodePtyRoot = path.join(staging, 'node_modules', 'node-pty');
-  if (fs.existsSync(nodePtyRoot)) {
-    for (const helper of execFileSync('find', [nodePtyRoot, '-type', 'f', '-name', 'spawn-helper'], { encoding: 'utf8' }).split('\n').filter(Boolean)) {
-      fs.chmodSync(helper, 0o755);
-    }
-  }
-  // A downloaded release must not carry a Gatekeeper quarantine attribute into
-  // the extracted helper. xattr is available on macOS, but older/custom
-  // runners may not have it, so absence of the command is harmless.
-  try {
-    execFileSync('xattr', ['-dr', 'com.apple.quarantine', staging], { stdio: 'ignore' });
-  } catch {
-    // No quarantine attribute or no xattr command.
-  }
-}
-
 try {
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: root, stdio: 'inherit' });
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:web'], { cwd: root, stdio: 'inherit' });
@@ -59,7 +42,7 @@ try {
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--omit=dev', '--prefix', staging], { stdio: 'inherit' });
   // Native modules (node-pty, better-sqlite3) only load on the Node major they were built for:
   // record it so install.sh can pick a matching Node and bin/agenthub always runs with it.
-  prepareMacosNativeBinaries();
+  prepareMacosNativeBinaries(staging);
   fs.writeFileSync(path.join(staging, 'node-runtime'), `${process.versions.node.split('.')[0]}\n`);
   fs.mkdirSync(outputDir, { recursive: true });
   const archivePath = path.join(outputDir, archiveName);
