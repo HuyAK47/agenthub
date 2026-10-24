@@ -22,12 +22,16 @@ const inspection = {
   },
 };
 
-function renderWizard(props?: { onClose?: () => void; summaryTimeoutMs?: number }) {
+function renderWizard(props?: { onClose?: () => void; summaryTimeoutMs?: number; summaryPollIntervalMs?: number }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <LocaleProvider initialLocale="vi">
-        <ProjectWizard onClose={props?.onClose || vi.fn()} summaryTimeoutMs={props?.summaryTimeoutMs} />
+        <ProjectWizard
+          onClose={props?.onClose || vi.fn()}
+          summaryTimeoutMs={props?.summaryTimeoutMs}
+          summaryPollIntervalMs={props?.summaryPollIntervalMs}
+        />
       </LocaleProvider>
     </QueryClientProvider>,
   );
@@ -393,22 +397,22 @@ describe('ProjectWizard', () => {
     expect(screen.getByRole('button', { name: 'Chạy nền và đóng' })).toBeInTheDocument();
   });
 
-  it('handles backend failed task status, sanitizes error, and allows retry', async () => {
+  it('handles backend failed task status, sanitizes error, and allows retry with queued/running then done status', async () => {
     const inspectSpy = vi.spyOn(client, 'inspectProject').mockResolvedValue(inspection);
     vi.spyOn(client, 'createProject').mockResolvedValue(project);
-    vi.spyOn(client, 'summarizeProjectContext').mockResolvedValue({
+    const summarizeSpy = vi.spyOn(client, 'summarizeProjectContext').mockResolvedValue({
       taskId: 'task-failed',
       status: 'queued',
       summary: null,
     });
-    vi.spyOn(client, 'getProjectContextSummary').mockResolvedValue({
+    const pollSpy = vi.spyOn(client, 'getProjectContextSummary').mockResolvedValue({
       taskId: 'task-failed',
       status: 'failed',
       summary: null,
       error: 'Worker process terminated unexpectedly\n    at ChildProcess.onExit (worker.ts:99:1)',
     } as any);
 
-    renderWizard();
+    renderWizard({ summaryPollIntervalMs: 20 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Tiếp' }));
     fireEvent.change(screen.getByPlaceholderText(/vd: XFarm/), { target: { value: 'Failed Task Project' } });
@@ -430,6 +434,36 @@ describe('ProjectWizard', () => {
     await waitFor(() => expect(screen.getByTestId('wizard-summary-error')).toBeInTheDocument());
     expect(screen.getByText('Worker process terminated unexpectedly')).toBeInTheDocument();
     expect(screen.queryByText(/at ChildProcess/)).not.toBeInTheDocument();
+
+    // Prepare retry responses: summarize returns queued without summary, poll returns running then done
+    summarizeSpy.mockResolvedValueOnce({
+      taskId: 'task-failed',
+      status: 'queued',
+      summary: null,
+    });
+    pollSpy
+      .mockResolvedValueOnce({
+        taskId: 'task-failed',
+        status: 'running',
+        summary: null,
+      })
+      .mockResolvedValueOnce({
+        taskId: 'task-failed',
+        status: 'done',
+        summary: '# Retried Durable Knowledge',
+      });
+
+    // Click retry
+    const retryBtn = screen.getByRole('button', { name: 'Thử lại' });
+    fireEvent.click(retryBtn);
+
+    // Transitions back to summarizing without immediately crashing back to error
+    await waitFor(() => expect(screen.getByTestId('wizard-summarizing')).toBeInTheDocument());
+    expect(screen.getByText('Đang chạy')).toBeInTheDocument();
+
+    // Polling moves to done and transitions to review screen
+    await waitFor(() => expect(screen.getByTestId('wizard-summary-review')).toBeInTheDocument());
+    expect(screen.getByDisplayValue(/# Retried Durable Knowledge/)).toBeInTheDocument();
   });
 
   it('cleans up draft and closes when clicking top close button during summarization', async () => {

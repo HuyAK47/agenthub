@@ -80,7 +80,15 @@ export function sanitizeErrorMessage(raw: unknown): string {
   return str || 'Đã xảy ra lỗi không xác định';
 }
 
-export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: () => void; summaryTimeoutMs?: number }) {
+export function ProjectWizard({
+  onClose,
+  summaryTimeoutMs = 30000,
+  summaryPollIntervalMs = 1000,
+}: {
+  onClose: () => void;
+  summaryTimeoutMs?: number;
+  summaryPollIntervalMs?: number;
+}) {
   const { t } = useLocale();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(0);
@@ -139,12 +147,13 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
   const summaryQuery = useQuery({
     queryKey: ['project-context-summary', createdProject?.id, summaryTaskId],
     queryFn: () => getProjectContextSummary(createdProject!.id, summaryTaskId!),
-    enabled: summaryPhase === 'summarizing' && Boolean(createdProject?.id && summaryTaskId),
-    refetchInterval: 1000,
+    enabled: summaryPhase === 'summarizing' && !summarizeMutation.isPending && Boolean(createdProject?.id && summaryTaskId),
+    refetchInterval: summaryPollIntervalMs,
+    refetchIntervalInBackground: true,
   });
 
   useEffect(() => {
-    if (summaryPhase !== 'summarizing') return;
+    if (summaryPhase !== 'summarizing' || summarizeMutation.isPending) return;
 
     if (summaryQuery.isError) {
       setSummaryError(sanitizeErrorMessage(summaryQuery.error?.message));
@@ -153,16 +162,17 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
     }
 
     if (!summaryQuery.data) return;
+    if (summaryTaskId && summaryQuery.data.taskId && summaryQuery.data.taskId !== summaryTaskId) return;
 
-    if (summaryQuery.data.summary) {
-      setContextSummary(summaryQuery.data.summary);
+    if (summaryQuery.data.summary || summaryQuery.data.status === 'done') {
+      setContextSummary(summaryQuery.data.summary || '');
       setSummaryPhase('review');
     } else if (['failed', 'blocked', 'cancelled'].includes(summaryQuery.data.status)) {
       const msg = (summaryQuery.data as any).error || `Task tóm tắt kết thúc với trạng thái ${summaryQuery.data.status}`;
       setSummaryError(sanitizeErrorMessage(msg));
       setSummaryPhase('error');
     }
-  }, [summaryPhase, summaryQuery.data, summaryQuery.isError, summaryQuery.error]);
+  }, [summaryPhase, summarizeMutation.isPending, summaryTaskId, summaryQuery.data, summaryQuery.isError, summaryQuery.error]);
 
   useEffect(() => {
     if (summaryPhase !== 'summarizing') return;
@@ -262,6 +272,19 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
     }
   };
 
+  const handleRetry = () => {
+    if (!createdProject) return;
+    setSummaryError(null);
+    queryClient.removeQueries({ queryKey: ['project-context-summary', createdProject.id] });
+    setSummaryTaskId(null);
+    setSummaryPhase('summarizing');
+    summarizeMutation.mutate({
+      projectId: createdProject.id,
+      sessions: draft.selectedSessions,
+      selections: draft.selectedContextItems,
+    });
+  };
+
   return (
     <Card data-testid="project-wizard" data-tour="modal-project-wizard" className="space-y-5 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -350,18 +373,9 @@ export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: 
             <Button
               type="button"
               size="sm"
-              onClick={() => {
-                if (createdProject) {
-                  setSummaryError(null);
-                  setSummaryPhase('summarizing');
-                  summarizeMutation.mutate({
-                    projectId: createdProject.id,
-                    sessions: draft.selectedSessions,
-                    selections: draft.selectedContextItems,
-                  });
-                }
-              }}
+              onClick={handleRetry}
               loading={summarizeMutation.isPending}
+              disabled={summarizeMutation.isPending}
             >
               {t('projects.wizardSummaryRetry')}
             </Button>
