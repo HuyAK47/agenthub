@@ -20,6 +20,15 @@ const ReferenceSchema = z.object({
   inject: z.boolean().default(false),
 });
 
+export function isValidBranchName(val: string): boolean {
+  if (!val || val.length > 200) return false;
+  if (val.startsWith('/') || val.endsWith('/') || val.includes('//')) return false;
+  if (val.includes('..') || val.includes('@{')) return false;
+  if (/[~^:?*[\\ ]/.test(val)) return false;
+  if (val.endsWith('.lock')) return false;
+  return true;
+}
+
 export const ProjectSettingsSchema = z.object({
   commitConvention: z.object({
     branchTemplate: z.string().min(1).max(200).default('agenthub/{slug}'),
@@ -57,9 +66,9 @@ export const ProjectSettingsSchema = z.object({
     /** When enabled, approved tasks merge into a local integration branch the hub manages. */
     enabled: z.boolean().default(false),
     /** Local branch name, e.g. `agenthub/integration` or `anhdd/kb-portal-locale`. */
-    branch: z.string().min(1).max(200).optional(),
+    branch: z.string().trim().min(1, 'Tên nhánh không được để trống').max(200).refine(isValidBranchName, 'Tên nhánh chứa ký tự không hợp lệ hoặc sai cú pháp').optional(),
     /** Branch/ref the integration branch starts from; defaults to the project's defaultBranch. */
-    baseRef: z.string().min(1).max(200).optional(),
+    baseRef: z.string().trim().min(1, 'Tên nhánh gốc không được để trống').max(200).refine(isValidBranchName, 'Tên nhánh gốc chứa ký tự không hợp lệ hoặc sai cú pháp').optional(),
     /** Merge (and so self-deploy) on its own once a Codex reviewer approves the last review-chain step. */
     autoMerge: z.boolean().default(false),
   }).default({}),
@@ -73,7 +82,7 @@ export const ProjectSettingsSchema = z.object({
     /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */
     enabled: z.boolean().optional(),
     /** Branch to monitor; defaults to the project's defaultBranch or pushed branch. */
-    branch: z.string().min(1).max(200).optional(),
+    branch: z.string().trim().min(1, 'Tên nhánh CI không được để trống').max(200).refine(isValidBranchName, 'Tên nhánh CI chứa ký tự không hợp lệ hoặc sai cú pháp').optional(),
   }).default({}),
   /** Read-only material workers may consult (another repo, shared data, glossary). */
   references: z.array(ReferenceSchema).max(20).default([]),

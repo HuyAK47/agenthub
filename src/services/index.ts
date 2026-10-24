@@ -234,7 +234,7 @@ export const VALID_AGY_MODELS = new Set([
   'gpt-oss-120b-medium',
 ]);
 
-export const modelValidator = z.string().refine(
+export const modelValidator = z.string().trim().min(1, 'Model không được để trống').refine(
   (m) => (m.startsWith('codex:') && m.length > 6) || VALID_AGY_MODELS.has(m),
   { message: 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:' },
 );
@@ -482,7 +482,7 @@ export const UpdateConfigSchema = z.object({
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
-      model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
+      model: z.string().trim().max(100).optional(),
       models: z.array(z.string().trim().min(1)).min(1).optional(),
       autoCompactPercent: z.number().min(0).max(100).optional(),
     })
@@ -499,7 +499,7 @@ export const UpdateConfigSchema = z.object({
     claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
     order: ReviewerOrderSchema.optional(),
     fallback: ReviewerFallbackSchema.partial().optional(),
-    arbiter: z.object({ engine: z.enum(['codex', 'claude']), model: z.string().min(1) }).optional(),
+    arbiter: z.object({ engine: z.enum(['codex', 'claude']), model: z.string().trim().min(1, 'Model của arbiter không được để trống') }).optional(),
   }).optional(),
   focus: z.object({
     projectId: z.string().min(1).nullable().optional(),
@@ -509,9 +509,9 @@ export const UpdateConfigSchema = z.object({
   brain: z.object({
     engine: z.enum(['claude', 'codex']).optional(),
     fallback: z.array(z.discriminatedUnion('type', [
-      z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
-      z.object({ type: z.literal('model'), model: z.string().min(1) }),
-      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive() }),
+      z.object({ type: z.literal('profile'), profile: z.string().trim().min(1, 'Tên profile không được để trống').optional() }),
+      z.object({ type: z.literal('model'), model: z.string().trim().min(1, 'Tên model không được để trống') }),
+      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive('Hạn mức ngày phải là số dương') }),
       z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
       z.object({ type: z.literal('wait') }),
     ])).max(10).optional(),

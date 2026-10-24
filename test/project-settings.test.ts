@@ -170,6 +170,16 @@ describe('project settings through the service', () => {
       path: path.join(tmpDir, 'repo'),
       settings: { worktree: { root: path.join(tmpDir, 'missing-root') } },
     })).toThrow(/không tồn tại/);
+    expect(() => ctx.service.createProject({
+      name: 'bad6',
+      path: path.join(tmpDir, 'repo'),
+      settings: { integration: { branch: 'invalid branch with spaces' } },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad7',
+      path: path.join(tmpDir, 'repo'),
+      settings: { review: { order: [{ engine: 'claude', model: '   ' }] } },
+    })).toThrow();
   });
 
   it('accepts an existing external worktree root', () => {

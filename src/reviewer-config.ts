@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const ReviewerOrderItemSchema = z.object({
   engine: z.enum(['codex', 'claude']),
-  model: z.string().trim().min(1),
+  model: z.string().trim().min(1, 'Model của reviewer không được để trống'),
   profiles: z.array(z.string().min(1)).max(50).default([]),
 });
 
@@ -16,7 +16,7 @@ export const ReviewerOrderSchema = z.array(ReviewerOrderItemSchema).max(20);
 
 export const ReviewerArbiterSchema = z.object({
   engine: z.enum(['codex', 'claude']).default('claude'),
-  model: z.string().trim().min(1).default('opus'),
+  model: z.string().trim().min(1, 'Model của arbiter không được để trống').default('opus'),
 });
 
 export const ReviewerSettingsSchema = z.object({
