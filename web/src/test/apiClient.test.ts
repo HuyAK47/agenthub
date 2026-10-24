@@ -68,4 +68,61 @@ describe('API Client', () => {
       nextCursor: null,
     });
   });
+
+  it('translates API error payload { error: "conflict", message: "..." } with code fallback when unmapped in EN', async () => {
+    setToken('valid_token');
+
+    // 1. Unmapped Vietnamese message with conflict code in EN
+    localStorage.setItem('agenthub_locale', 'en');
+    window.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'conflict', message: 'Xung đột phiên bản dữ liệu chưa có regex' }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    let caughtErr: any;
+    try {
+      await apiFetch('/api/test-conflict');
+    } catch (err) {
+      caughtErr = err;
+    }
+
+    expect(caughtErr).toBeDefined();
+    expect(caughtErr.message).toBe('Resource conflict');
+    expect(caughtErr.code).toBe('conflict');
+    expect(caughtErr.rawMessage).toBe('Xung đột phiên bản dữ liệu chưa có regex');
+
+    // 2. Exact patterned merge message in EN
+    window.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'conflict', message: 'Merge bị xung đột' }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await expect(apiFetch('/api/test-conflict')).rejects.toThrow('Merge conflict');
+
+    // 3. Same payload in VI retains Vietnamese message
+    localStorage.setItem('agenthub_locale', 'vi');
+    window.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'conflict', message: 'Xung đột phiên bản dữ liệu chưa có regex' }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await expect(apiFetch('/api/test-conflict')).rejects.toThrow('Xung đột phiên bản dữ liệu chưa có regex');
+
+    // 4. Raw error code payload without message translates in both locales
+    localStorage.setItem('agenthub_locale', 'vi');
+    window.fetch = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ error: 'conflict' }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await expect(apiFetch('/api/test-conflict')).rejects.toThrow('Xung đột dữ liệu');
+
+    localStorage.setItem('agenthub_locale', 'en');
+    await expect(apiFetch('/api/test-conflict')).rejects.toThrow('Resource conflict');
+  });
 });

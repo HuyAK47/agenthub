@@ -169,13 +169,16 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     try {
       const errJson = await response.json();
       if (errJson) {
+        if (typeof errJson.error === 'string') {
+          errorCode = errJson.error;
+        } else if (typeof errJson.code === 'string') {
+          errorCode = errJson.code;
+        }
+
         if (errJson.message) {
           errorMsg = errJson.message;
         } else if (errJson.error) {
           errorMsg = errJson.error;
-        }
-        if (typeof errJson.error === 'string') {
-          errorCode = errJson.error;
         }
       }
     } catch {

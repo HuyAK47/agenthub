@@ -738,6 +738,28 @@ describe('i18n Audit & Parity', () => {
       expect(translateApiErrorMessage('conflict', 'conflict', 'en')).toBe('Resource conflict');
       expect(translateApiErrorMessage('cycle_detected', 'cycle_detected', 'en')).toBe('Dependency cycle detected');
       expect(translateApiErrorMessage('rate_limited', 'rate_limited', 'en')).toBe('Rate limit exceeded');
+      expect(translateApiErrorMessage('conflict', 'conflict', 'vi')).toBe('Xung đột dữ liệu');
+      expect(translateApiErrorMessage('not_found', 'not_found', 'vi')).toBe('Không tìm thấy tài nguyên');
+    });
+
+    it('falls back to localized error code translation when payload has code and unmapped Vietnamese message', () => {
+      expect(translateApiErrorMessage('Một lỗi xung đột chưa có regex riêng', 'conflict', 'en'))
+        .toBe('Resource conflict');
+      expect(translateApiErrorMessage('Lỗi yêu cầu không xác định được mẫu', 'bad_request', 'en'))
+        .toBe('Bad request');
+      expect(translateApiErrorMessage('Tài nguyên không tìm thấy theo id mới', 'not_found', 'en'))
+        .toBe('Resource not found');
+    });
+
+    it('translates merge and chat backend messages accurately', () => {
+      expect(translateApiErrorMessage('Merge bị xung đột', 'conflict', 'en')).toBe('Merge conflict');
+      expect(translateApiErrorMessage('Xung đột merge ở: src/index.ts, src/app.ts', 'conflict', 'en'))
+        .toBe('Merge conflict in: src/index.ts, src/app.ts');
+      expect(translateApiErrorMessage('worktree tích hợp có thay đổi chưa commit', 'conflict', 'en'))
+        .toBe('Integration worktree has uncommitted changes');
+      expect(translateApiErrorMessage('Không thể đổi quyền khi brain đang chạy', 'conflict', 'en'))
+        .toBe('Cannot change permissions while brain is running');
+      expect(translateApiErrorMessage('Phiên đang bận', 'conflict', 'en')).toBe('Session is busy');
     });
 
     it('preserves Vietnamese text when active locale is vi', () => {

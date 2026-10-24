@@ -14,6 +14,8 @@ export function getActiveLocale(): Locale {
   return 'vi';
 }
 
+export const VN_DIACRITICS_REGEX = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
+
 const ERROR_CODE_TRANSLATIONS: Record<string, { en: string; vi: string }> = {
   not_found: { en: 'Resource not found', vi: 'Không tìm thấy tài nguyên' },
   bad_request: { en: 'Bad request', vi: 'Yêu cầu không hợp lệ' },
@@ -21,6 +23,7 @@ const ERROR_CODE_TRANSLATIONS: Record<string, { en: string; vi: string }> = {
   forbidden: { en: 'Permission denied', vi: 'Không có quyền truy cập' },
   unauthorized: { en: 'Unauthorized', vi: 'Chưa xác thực' },
   unavailable: { en: 'Service temporarily unavailable', vi: 'Dịch vụ tạm thời không khả dụng' },
+  service_unavailable: { en: 'Service temporarily unavailable', vi: 'Dịch vụ tạm thời không khả dụng' },
   cycle_detected: { en: 'Dependency cycle detected', vi: 'Phát hiện vòng phụ thuộc' },
   rate_limited: { en: 'Rate limit exceeded', vi: 'Vượt quá giới hạn tần suất' },
   confirmation_required: { en: 'Confirmation required', vi: 'Cần xác nhận' },
@@ -28,8 +31,15 @@ const ERROR_CODE_TRANSLATIONS: Record<string, { en: string; vi: string }> = {
   pty_unavailable: { en: 'Terminal PTY unavailable', vi: 'Terminal PTY không khả dụng' },
   internal_error: { en: 'Internal server error', vi: 'Lỗi máy chủ nội bộ' },
   internal_server_error: { en: 'Internal server error', vi: 'Lỗi máy chủ nội bộ' },
+  server_error: { en: 'Internal server error', vi: 'Lỗi máy chủ nội bộ' },
   provider_policy: { en: 'Provider account limit reached', vi: 'Đã đạt giới hạn tài khoản của nhà cung cấp' },
   invalid_logo: { en: 'Invalid logo file', vi: 'File logo không hợp lệ' },
+  unprocessable_entity: { en: 'Unprocessable entity', vi: 'Thực thể không thể xử lý' },
+  compact_failed: { en: 'Context compaction failed', vi: 'Nén ngữ cảnh thất bại' },
+  mcp_install_failed: { en: 'MCP server installation failed', vi: 'Cài đặt MCP server thất bại' },
+  summary_failed: { en: 'Summary generation failed', vi: 'Tạo tóm tắt thất bại' },
+  gateway_timeout: { en: 'Gateway timeout', vi: 'Hết thời gian phản hồi máy chủ' },
+  ambiguous: { en: 'Ambiguous reference', vi: 'Tham chiếu không rõ ràng' },
 };
 
 const VN_TO_EN_PATTERNS: Array<{ pattern: RegExp; replace: (...args: string[]) => string }> = [
@@ -112,11 +122,55 @@ const VN_TO_EN_PATTERNS: Array<{ pattern: RegExp; replace: (...args: string[]) =
   { pattern: /^AppService chưa sẵn sàng$/i, replace: () => 'AppService is not ready' },
   { pattern: /^Setup service chưa sẵn sàng$/i, replace: () => 'Setup service is not ready' },
   { pattern: /^Database chưa sẵn sàng$/i, replace: () => 'Database is not ready' },
+  { pattern: /^Merge bị xung đột$/i, replace: () => 'Merge conflict' },
+  { pattern: /^Xung đột merge ở: (.+)$/i, replace: (_, details) => `Merge conflict in: ${details}` },
+  { pattern: /^Project chưa cấu hình merge tự động$/i, replace: () => 'Project has not configured auto-merge' },
+  { pattern: /^Cấu hình merge không hợp lệ$/i, replace: () => 'Invalid merge configuration' },
+  { pattern: /^Merge tự động chưa được bật hoặc chưa có worktree tích hợp$/i, replace: () => 'Auto-merge is not enabled or integration worktree is missing' },
+  { pattern: /^Project thiếu id hoặc path để quản lý worktree tích hợp$/i, replace: () => 'Project is missing id or path for integration worktree' },
+  { pattern: /^Không thể chuẩn bị worktree tích hợp: (.+)$/i, replace: (_, err) => `Cannot prepare integration worktree: ${err}` },
+  { pattern: /^Chưa khai báo worktree tích hợp cho baseRef "([^"]+)"$/i, replace: (_, ref) => `Integration worktree not declared for baseRef "${ref}"` },
+  { pattern: /^worktree tích hợp có thay đổi chưa commit$/i, replace: () => 'Integration worktree has uncommitted changes' },
+  { pattern: /^Worktree tích hợp (.+) có thay đổi chưa commit; không thể chuyển sang nhánh (.+)$/i, replace: (_, path, branch) => `Integration worktree ${path} has uncommitted changes; cannot switch to branch ${branch}` },
+  { pattern: /^Nhánh (.+) đang được checkout tại (.+); chọn tên nhánh tích hợp khác$/i, replace: (_, branch, at) => `Branch ${branch} is checked out at ${at}; select another integration branch name` },
+  { pattern: /^Không thể đổi quyền khi brain đang chạy$/i, replace: () => 'Cannot change permissions while brain is running' },
+  { pattern: /^Hãy đợi lượt chat hiện tại kết thúc trước khi đổi model$/i, replace: () => 'Please wait for the current chat turn to complete before changing model' },
+  { pattern: /^Phiên đang bận và hàng đợi đã đầy$/i, replace: () => 'Session is busy and queue is full' },
+  { pattern: /^Phiên đang bận$/i, replace: () => 'Session is busy' },
+  { pattern: /^AGENTS\.md đã tồn tại trong project$/i, replace: () => 'AGENTS.md already exists in project' },
+  { pattern: /^Thư mục "([^"]+)" đã tồn tại trên đĩa$/i, replace: (_, dir) => `Directory "${dir}" already exists on disk` },
+  { pattern: /^Không thể xóa dữ liệu dự án vì còn liên kết dữ liệu; không có dữ liệu nào bị xóa$/i, replace: () => 'Cannot delete project data due to existing references; no data was deleted' },
+  { pattern: /^Quy tắc không tồn tại$/i, replace: () => 'Rule does not exist' },
+  { pattern: /^Yêu cầu cấp quyền không tồn tại hoặc đã được xử lý$/i, replace: () => 'Permission request does not exist or has already been processed' },
+  { pattern: /^Chế độ full chưa được cho phép trong cấu hình$/i, replace: () => 'Full mode is not permitted in configuration' },
+  { pattern: /^Model chat phải là mặc định, sonnet hoặc haiku$/i, replace: () => 'Chat model must be default, sonnet, or haiku' },
+  { pattern: /^Task tóm tắt không tồn tại$/i, replace: () => 'Summary task does not exist' },
+  { pattern: /^Deploy service chưa sẵn sàng$/i, replace: () => 'Deploy service is not ready' },
+  { pattern: /^Claude session service chưa sẵn sàng$/i, replace: () => 'Claude session service is not ready' },
+  { pattern: /^SavingsService chưa được khởi tạo$/i, replace: () => 'SavingsService is not initialized' },
+  { pattern: /^TaskBatchRepo chưa được khởi tạo$/i, replace: () => 'TaskBatchRepo is not initialized' },
+  { pattern: /^TaskNoteRepo chưa được khởi tạo$/i, replace: () => 'TaskNoteRepo is not initialized' },
+  { pattern: /^chat id không hợp lệ$/i, replace: () => 'Invalid chat ID' },
+  { pattern: /^chatId không hợp lệ$/i, replace: () => 'Invalid chatId' },
+  { pattern: /^token phải là chuỗi$/i, replace: () => 'token must be a string' },
+  { pattern: /^enabled phải là boolean$/i, replace: () => 'enabled must be a boolean' },
+  { pattern: /^apiKey là bắt buộc$/i, replace: () => 'apiKey is required' },
+  { pattern: /^text là bắt buộc$/i, replace: () => 'text is required' },
+  { pattern: /^question là bắt buộc$/i, replace: () => 'question is required' },
+  { pattern: /^Logo không hợp lệ$/i, replace: () => 'Invalid logo' },
 ];
 
 export function translateApiErrorMessage(message: string, code?: string, locale?: Locale): string {
   const targetLocale = locale || getActiveLocale();
   if (targetLocale === 'vi') {
+    if (code && ERROR_CODE_TRANSLATIONS[code]) {
+      if (
+        message.toLowerCase() === code.toLowerCase() ||
+        message.toLowerCase() === ERROR_CODE_TRANSLATIONS[code].en.toLowerCase()
+      ) {
+        return ERROR_CODE_TRANSLATIONS[code].vi;
+      }
+    }
     return message;
   }
 
@@ -127,9 +181,14 @@ export function translateApiErrorMessage(message: string, code?: string, locale?
     }
   }
 
-  // If code is available and message matches code or generic fallback
+  // Fallback by error code if pattern didn't match:
+  // Translate when message matches code, contains Vietnamese characters, or matches Vietnamese translation
   if (code && ERROR_CODE_TRANSLATIONS[code]) {
-    if (message.toLowerCase() === code.toLowerCase()) {
+    if (
+      message.toLowerCase() === code.toLowerCase() ||
+      VN_DIACRITICS_REGEX.test(message) ||
+      message.toLowerCase() === ERROR_CODE_TRANSLATIONS[code].vi.toLowerCase()
+    ) {
       return ERROR_CODE_TRANSLATIONS[code].en;
     }
   }
