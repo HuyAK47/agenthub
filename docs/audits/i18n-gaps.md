@@ -110,9 +110,9 @@ Mở rộng bộ test `web/src/test/i18nAudit.test.tsx` (tổng cộng 27 test c
 ### Kết quả chạy lệnh kiểm tra:
 - `npm run lint`: **PASS** (0 lỗi)
 - `npm run typecheck`: **PASS** (0 lỗi)
-- `npm run test:web`: **PASS** (52/52 test files, 372/372 tests passed)
+- `npm run test:web`: **PASS** (52/52 test files, 381/381 tests passed)
 - `npm run build:web`: **PASS** (Biên dịch TypeScript và Vite hoàn tất sạch sẽ)
-- Backend tests: Toàn bộ các test suite backend hoàn thành không có lỗi assertion.
+- Backend tests (`npm test -- --run`): **PASS** (101/101 test files, 1123/1123 tests passed)
 
 ## 4. Khoảng trống còn lại & Lưu ý kiến trúc (Remaining Considerations)
 
