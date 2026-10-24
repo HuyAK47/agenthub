@@ -482,7 +482,7 @@ export const UpdateConfigSchema = z.object({
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
-      model: z.string().trim().max(100).optional(),
+      model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
       models: z.array(z.string().trim().min(1)).min(1).optional(),
       autoCompactPercent: z.number().min(0).max(100).optional(),
     })
