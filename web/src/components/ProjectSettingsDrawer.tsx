@@ -3,6 +3,8 @@ import {
   FolderGit2,
   GitBranch,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   CheckCircle2,
   AlertCircle,
   X,
@@ -26,7 +28,14 @@ import {
   StatTile,
   SelectOrCustomInput,
 } from './ui';
-import { DEFAULT_COMMON_BRANCHES, validateBranchSyntax } from '../utils/models';
+import {
+  DEFAULT_COMMON_BRANCHES,
+  DEFAULT_CLAUDE_MODELS,
+  DEFAULT_CODEX_MODELS,
+  validateBranchSyntax,
+  validateReviewerModelSyntax,
+  validateReviewChainReviewerSyntax,
+} from '../utils/models';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
@@ -41,6 +50,7 @@ import {
   setFocus,
   getReviewChecklistPreview,
   createTask,
+  getProfiles,
 } from '../api/client';
 
 export interface ProjectSettingsDrawerProps {
@@ -157,17 +167,7 @@ const SAMPLE_CHECKS = JSON.stringify(
   2,
 );
 
-const SAMPLE_REVIEW = JSON.stringify(
-  {
-    chain: [
-      { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
-      { reviewer: 'claude', mode: 'final' },
-    ],
-    maxRounds: 2,
-  },
-  null,
-  2,
-);
+
 
 const SAMPLE_ENV = JSON.stringify(
   {
@@ -201,6 +201,12 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     staleTime: 30_000,
   });
 
+  const { data: allProfiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: getProfiles,
+    staleTime: 30_000,
+  });
+
   const [draftSettings, setDraftSettings] = useState<ProjectSettings>(
     defaultProjectSettings(),
   );
@@ -212,6 +218,26 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [draftEnvTemplate, setDraftEnvTemplate] = useState<string>('');
   const [checklistDraft, setChecklistDraft] = useState('');
   const [showCommitExample, setShowCommitExample] = useState(false);
+
+  const [reviewerOrder, setReviewerOrder] = useState<
+    Array<{ engine: 'codex' | 'claude'; model: string; profiles: string[] }>
+  >([]);
+  const [hasReviewerOrderOverride, setHasReviewerOrderOverride] = useState<boolean>(false);
+  const [reviewerFallback, setReviewerFallback] = useState<{
+    onUnavailable: boolean;
+    onError: boolean;
+    onBusyAfterMin: number;
+  }>({
+    onUnavailable: true,
+    onError: true,
+    onBusyAfterMin: 10,
+  });
+  const [hasReviewerFallbackOverride, setHasReviewerFallbackOverride] = useState<boolean>(false);
+  const [reviewChain, setReviewChain] = useState<{
+    chain: Array<{ reviewer: string; mode: 'gate' | 'final' }>;
+    maxRounds: number;
+  }>({ chain: [], maxRounds: 2 });
+  const [hasReviewChainOverride, setHasReviewChainOverride] = useState<boolean>(false);
 
   const [checksError, setChecksError] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -237,15 +263,55 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           : '',
       );
       setDraftHooks(getProjectHooksString(project));
-      setDraftReview(
-        typeof project.review === 'string'
-          ? project.review
-          : project.review
-          ? JSON.stringify(project.review, null, 2)
-          : '',
-      );
-      setDraftReviewerOrder(project.settings?.review?.order ? JSON.stringify(project.settings.review.order, null, 2) : '');
-      setDraftReviewerFallback(project.settings?.review?.fallback ? JSON.stringify(project.settings.review.fallback, null, 2) : '');
+
+      if (project.settings?.review?.order && project.settings.review.order.length > 0) {
+        setReviewerOrder(project.settings.review.order);
+        setHasReviewerOrderOverride(true);
+        setDraftReviewerOrder(JSON.stringify(project.settings.review.order, null, 2));
+      } else {
+        setReviewerOrder([]);
+        setHasReviewerOrderOverride(false);
+        setDraftReviewerOrder('');
+      }
+
+      if (project.settings?.review?.fallback) {
+        setReviewerFallback({
+          onUnavailable: project.settings.review.fallback.onUnavailable ?? true,
+          onError: project.settings.review.fallback.onError ?? true,
+          onBusyAfterMin: project.settings.review.fallback.onBusyAfterMin ?? 10,
+        });
+        setHasReviewerFallbackOverride(true);
+        setDraftReviewerFallback(JSON.stringify(project.settings.review.fallback, null, 2));
+      } else {
+        setReviewerFallback({ onUnavailable: true, onError: true, onBusyAfterMin: 10 });
+        setHasReviewerFallbackOverride(false);
+        setDraftReviewerFallback('');
+      }
+
+      let parsedReview: any = null;
+      if (typeof project.review === 'object' && project.review !== null) {
+        parsedReview = project.review;
+      } else if (typeof project.review === 'string' && project.review.trim()) {
+        try {
+          parsedReview = JSON.parse(project.review);
+        } catch {
+          parsedReview = null;
+        }
+      }
+
+      if (parsedReview && Array.isArray(parsedReview.chain) && parsedReview.chain.length > 0) {
+        setReviewChain({
+          chain: parsedReview.chain,
+          maxRounds: typeof parsedReview.maxRounds === 'number' ? parsedReview.maxRounds : 2,
+        });
+        setHasReviewChainOverride(true);
+        setDraftReview(JSON.stringify(parsedReview, null, 2));
+      } else {
+        setReviewChain({ chain: [], maxRounds: 2 });
+        setHasReviewChainOverride(false);
+        setDraftReview('');
+      }
+
       setDraftEnvTemplate(project.envTemplate ?? '');
       setChecksError(null);
       setReviewError(null);
@@ -257,6 +323,45 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       setSectionErrors({});
     }
   }, [project, isOpen]);
+
+  const updateReviewerOrderState = (
+    newOrder: Array<{ engine: 'codex' | 'claude'; model: string; profiles: string[] }>,
+    isOverride: boolean,
+  ) => {
+    setReviewerOrder(newOrder);
+    setHasReviewerOrderOverride(isOverride);
+    const jsonStr = isOverride && newOrder.length > 0 ? JSON.stringify(newOrder, null, 2) : '';
+    setDraftReviewerOrder(jsonStr);
+    setReviewerOrderError(null);
+    setApiError(null);
+  };
+
+  const updateReviewerFallbackState = (
+    newFallback: { onUnavailable: boolean; onError: boolean; onBusyAfterMin: number },
+    isOverride: boolean,
+  ) => {
+    setReviewerFallback(newFallback);
+    setHasReviewerFallbackOverride(isOverride);
+    const jsonStr = isOverride ? JSON.stringify(newFallback, null, 2) : '';
+    setDraftReviewerFallback(jsonStr);
+    setReviewerFallbackError(null);
+    setApiError(null);
+  };
+
+  const updateReviewChainState = (
+    newChainConfig: {
+      chain: Array<{ reviewer: string; mode: 'gate' | 'final' }>;
+      maxRounds: number;
+    },
+    isOverride: boolean,
+  ) => {
+    setReviewChain(newChainConfig);
+    setHasReviewChainOverride(isOverride);
+    const jsonStr = isOverride && newChainConfig.chain.length > 0 ? JSON.stringify(newChainConfig, null, 2) : '';
+    setDraftReview(jsonStr);
+    setReviewError(null);
+    setApiError(null);
+  };
 
   // Validation functions
   const handleChecksChange = (val: string) => {
@@ -278,62 +383,6 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     }
   };
 
-  const handleReviewerOrderChange = (val: string) => {
-    setDraftReviewerOrder(val);
-    setApiError(null);
-    if (!val.trim()) {
-      setReviewerOrderError(null);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(val);
-      if (!Array.isArray(parsed)) {
-        setReviewerOrderError('Reviewer order must be a JSON array');
-      } else {
-        setReviewerOrderError(null);
-      }
-    } catch (err: any) {
-      setReviewerOrderError(err.message);
-    }
-  };
-
-  const handleReviewerFallbackChange = (val: string) => {
-    setDraftReviewerFallback(val);
-    setApiError(null);
-    if (!val.trim()) {
-      setReviewerFallbackError(null);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(val);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        setReviewerFallbackError('Reviewer fallback must be a JSON object');
-      } else {
-        setReviewerFallbackError(null);
-      }
-    } catch (err: any) {
-      setReviewerFallbackError(err.message);
-    }
-  };
-
-  const handleReviewChange = (val: string) => {
-    setDraftReview(val);
-    setApiError(null);
-    if (!val.trim()) {
-      setReviewError(null);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(val);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        setReviewError('Review chain must be a JSON object: { chain, maxRounds }');
-      } else {
-        setReviewError(null);
-      }
-    } catch (err: any) {
-      setReviewError(err.message);
-    }
-  };
 
   const handleEnvChange = (val: string) => {
     setDraftEnvTemplate(val);
@@ -1639,103 +1688,445 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               </div>
 
               {/* reviewer override */}
-              <div className="space-y-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3">
+              <div className="space-y-3 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3" data-testid="project-reviewer-order">
                 <div className="flex items-center justify-between">
                   <div>
                     <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerOverride')}</label>
                     <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.reviewerOverrideHint')}</p>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleReviewerOrderChange('[{"engine":"claude","model":"sonnet","profiles":[]}]')}
-                      className="h-6 px-2 text-[10px]"
-                    >
-                      Claude
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleReviewerOrderChange('[{"engine":"codex","model":"codex:gpt-5.6-luna","profiles":[]}]')}
-                      className="h-6 px-2 text-[10px]"
-                    >
-                      Codex
-                    </Button>
+                    {hasReviewerOrderOverride ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewerOrderState([], false)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-crit)]"
+                      >
+                        {t('settings.useSystemDefault')}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          updateReviewerOrderState(
+                            [{ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }],
+                            true,
+                          )
+                        }
+                        className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                      >
+                        + {t('settings.overrideConfig')}
+                      </Button>
+                    )}
                   </div>
                 </div>
-                <textarea
-                  aria-label={t('projects.reviewerOrderOverride')}
-                  rows={3}
-                  value={draftReviewerOrder}
-                  onChange={(event) => handleReviewerOrderChange(event.target.value)}
-                  placeholder={'[{"engine":"claude","model":"sonnet","profiles":[]}]'}
-                  className={`w-full text-xs font-mono rounded-lg border p-2 bg-[var(--t-surface)] text-[var(--t-text)] ${
-                    reviewerOrderError ? 'border-[var(--t-crit)]' : 'border-[var(--t-border)]'
-                  }`}
-                />
-                {reviewerOrderError && (
-                  <p className="text-xs text-[var(--t-crit)] flex items-center gap-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{reviewerOrderError}</span>
+
+                {!hasReviewerOrderOverride || reviewerOrder.length === 0 ? (
+                  <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                    {t('settings.useSystemDefault')}
                   </p>
+                ) : (
+                  <div className="space-y-2">
+                    {reviewerOrder.map((item, index) => {
+                      const engineProfiles = allProfiles.filter((p) => p.engine === item.engine);
+                      const activeProfileNames = new Set(engineProfiles.map((p) => p.name));
+                      const missingProfiles = (item.profiles || []).filter((name) => !activeProfileNames.has(name));
+                      const engineModelOptions = item.engine === 'codex' ? DEFAULT_CODEX_MODELS : DEFAULT_CLAUDE_MODELS;
+
+                      return (
+                        <div
+                          key={`proj-reviewer-${index}`}
+                          className="rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-2.5 space-y-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-[var(--t-text-3)]">{index + 1}.</span>
+                            <select
+                              aria-label={`${t('settings.reviewerOrder')} ${index + 1}`}
+                              value={item.engine}
+                              onChange={(e) => {
+                                const newEngine = e.target.value as 'codex' | 'claude';
+                                const next = reviewerOrder.map((row, i) =>
+                                  i === index
+                                    ? {
+                                        ...row,
+                                        engine: newEngine,
+                                        model: newEngine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet',
+                                        profiles: [],
+                                      }
+                                    : row,
+                                );
+                                updateReviewerOrderState(next, true);
+                              }}
+                              className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-1.5 text-[var(--t-text)]"
+                            >
+                              <option value="codex">Codex</option>
+                              <option value="claude">Claude</option>
+                            </select>
+                            <div className="min-w-0 flex-1">
+                              <SelectOrCustomInput
+                                ariaLabel={`${t('settings.reviewerModel')} ${index + 1}`}
+                                value={item.model}
+                                onChange={(val) => {
+                                  const next = reviewerOrder.map((row, i) =>
+                                    i === index ? { ...row, model: val } : row,
+                                  );
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                options={engineModelOptions}
+                                validate={(val) => validateReviewerModelSyntax(val, item.engine, t)}
+                                placeholder={item.engine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet'}
+                              />
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                disabled={index === 0}
+                                onClick={() => {
+                                  if (index === 0) return;
+                                  const next = [...reviewerOrder];
+                                  const [moved] = next.splice(index, 1);
+                                  next.splice(index - 1, 0, moved);
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                                className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={index === reviewerOrder.length - 1}
+                                onClick={() => {
+                                  if (index === reviewerOrder.length - 1) return;
+                                  const next = [...reviewerOrder];
+                                  const [moved] = next.splice(index, 1);
+                                  next.splice(index + 1, 0, moved);
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                                className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = reviewerOrder.filter((_, i) => i !== index);
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                aria-label={`${t('common.remove')} ${index + 1}`}
+                                className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          <select
+                            aria-label={`${t('settings.claudeProfiles')} ${index + 1}`}
+                            multiple
+                            value={item.profiles}
+                            onChange={(e) => {
+                              const next = reviewerOrder.map((row, i) =>
+                                i === index
+                                  ? {
+                                      ...row,
+                                      profiles: Array.from(e.target.selectedOptions).map((opt) => opt.value),
+                                    }
+                                  : row,
+                              );
+                              updateReviewerOrderState(next, true);
+                            }}
+                            className="w-full text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-1 text-[var(--t-text)] min-h-[48px]"
+                          >
+                            {engineProfiles.map((p) => (
+                              <option key={p.name} value={p.name}>
+                                {p.name}
+                              </option>
+                            ))}
+                            {missingProfiles.map((name) => (
+                              <option key={name} value={name}>
+                                {name} ({t('settings.inactiveOrOld')})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        updateReviewerOrderState(
+                          [
+                            ...reviewerOrder,
+                            { engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] },
+                          ],
+                          true,
+                        )
+                      }
+                      className="h-7 text-xs text-[var(--t-accent)]"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" />
+                      {t('settings.addReviewer')}
+                    </Button>
+                  </div>
                 )}
-                <textarea
-                  aria-label={t('projects.reviewerFallbackOverride')}
-                  rows={2}
-                  value={draftReviewerFallback}
-                  onChange={(event) => handleReviewerFallbackChange(event.target.value)}
-                  placeholder={'{"onUnavailable":true,"onBusyAfterMin":10,"onError":true}'}
-                  className={`w-full text-xs font-mono rounded-lg border p-2 bg-[var(--t-surface)] text-[var(--t-text)] ${
-                    reviewerFallbackError ? 'border-[var(--t-crit)]' : 'border-[var(--t-border)]'
-                  }`}
-                />
-                {reviewerFallbackError && (
-                  <p className="text-xs text-[var(--t-crit)] flex items-center gap-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{reviewerFallbackError}</span>
-                  </p>
-                )}
+
+                {/* Reviewer fallback */}
+                <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerFallbackOverride')}</label>
+                    {hasReviewerFallbackOverride ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewerFallbackState(reviewerFallback, false)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-crit)]"
+                      >
+                        {t('settings.useSystemDefault')}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewerFallbackState(reviewerFallback, true)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                      >
+                        + {t('settings.overrideConfig')}
+                      </Button>
+                    )}
+                  </div>
+                  {hasReviewerFallbackOverride ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={reviewerFallback.onUnavailable}
+                          onChange={(e) =>
+                            updateReviewerFallbackState(
+                              { ...reviewerFallback, onUnavailable: e.target.checked },
+                              true,
+                            )
+                          }
+                        />
+                        {t('settings.fallbackUnavailable')}
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={reviewerFallback.onError}
+                          onChange={(e) =>
+                            updateReviewerFallbackState(
+                              { ...reviewerFallback, onError: e.target.checked },
+                              true,
+                            )
+                          }
+                        />
+                        {t('settings.fallbackError')}
+                      </label>
+                      <label className="flex items-center gap-2">
+                        {t('settings.fallbackBusy')}
+                        <input
+                          type="number"
+                          min={0}
+                          max={1440}
+                          value={reviewerFallback.onBusyAfterMin}
+                          onChange={(e) =>
+                            updateReviewerFallbackState(
+                              { ...reviewerFallback, onBusyAfterMin: Number(e.target.value) || 0 },
+                              true,
+                            )
+                          }
+                          className="w-16 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-1 py-1"
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[var(--t-text-3)] italic">
+                      {t('settings.useSystemDefault')}
+                    </p>
+                  )}
+                </div>
               </div>
 
-              {/* review chain JSON */}
-              <div className="space-y-1.5">
+              {/* review chain builder */}
+              <div className="space-y-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3" data-testid="project-review-chain">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-[var(--t-text)]">
-                    {t('extra.reviewChainLabel')}
-                  </label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleReviewChange(SAMPLE_REVIEW)}
-                    className="h-6 px-2 text-[11px] text-[var(--t-accent)]"
-                  >
-                    {t('projects.insertExample')}
-                  </Button>
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--t-text)]">{t('settings.reviewChainTitle')}</label>
+                    <p className="text-[11px] text-[var(--t-text-3)]">{t('settings.reviewChainHint')}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        updateReviewChainState(
+                          {
+                            chain: [
+                              { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
+                              { reviewer: 'claude', mode: 'final' },
+                            ],
+                            maxRounds: 2,
+                          },
+                          true,
+                        )
+                      }
+                      className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                    >
+                      {t('projects.insertExample')}
+                    </Button>
+                    {hasReviewChainOverride && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewChainState({ chain: [], maxRounds: 2 }, false)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-crit)]"
+                      >
+                        {t('settings.useSystemDefault')}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <textarea
-                  data-testid="review-chain-textarea"
-                  rows={4}
-                  value={draftReview}
-                  onChange={(e) => handleReviewChange(e.target.value)}
-                  placeholder={'{"chain":[{"reviewer":"codex:gpt-5.6-luna","mode":"gate"},{"reviewer":"claude","mode":"final"}],"maxRounds":2}'}
-                  className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] ${
-                    reviewError
-                      ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
-                      : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
-                  } focus:outline-hidden focus:ring-2`}
-                />
-                {reviewError && (
-                  <p
-                    data-testid="review-error-msg"
-                    className="text-xs text-[var(--t-crit)] flex items-center gap-1 mt-1"
-                  >
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{reviewError}</span>
+
+                {!hasReviewChainOverride || reviewChain.chain.length === 0 ? (
+                  <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                    {t('settings.useSystemDefault')}
                   </p>
+                ) : (
+                  <div className="space-y-2">
+                    {reviewChain.chain.map((step, index) => (
+                      <div
+                        key={`review-step-${index}`}
+                        className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-2"
+                      >
+                        <span className="text-xs font-bold text-[var(--t-text-3)] w-5 text-center">
+                          {index + 1}.
+                        </span>
+                        <div className="flex-1 min-w-[180px]">
+                          <SelectOrCustomInput
+                            value={step.reviewer}
+                            onChange={(val) => {
+                              const nextChain = reviewChain.chain.map((s, i) =>
+                                i === index ? { ...s, reviewer: val } : s,
+                              );
+                              updateReviewChainState({ ...reviewChain, chain: nextChain }, true);
+                            }}
+                            options={['claude', 'codex:gpt-5.6-luna', 'codex:gpt-5.6-turbo']}
+                            validate={(val) => validateReviewChainReviewerSyntax(val, t)}
+                            ariaLabel={`${t('settings.reviewStep')} ${index + 1}`}
+                            placeholder={t('settings.reviewerPlaceholder')}
+                          />
+                        </div>
+                        <select
+                          aria-label={`${t('settings.stepMode')} ${index + 1}`}
+                          value={step.mode}
+                          onChange={(e) => {
+                            const nextChain = reviewChain.chain.map((s, i) =>
+                              i === index ? { ...s, mode: e.target.value as 'gate' | 'final' } : s,
+                            );
+                            updateReviewChainState({ ...reviewChain, chain: nextChain }, true);
+                          }}
+                          className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-1.5 text-[var(--t-text)]"
+                        >
+                          <option value="gate">gate</option>
+                          <option value="final">final</option>
+                        </select>
+                        <div className="flex items-center gap-1 shrink-0 ml-auto">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            onClick={() => {
+                              if (index === 0) return;
+                              const next = [...reviewChain.chain];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index - 1, 0, moved);
+                              updateReviewChainState({ ...reviewChain, chain: next }, true);
+                            }}
+                            aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                            className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === reviewChain.chain.length - 1}
+                            onClick={() => {
+                              if (index === reviewChain.chain.length - 1) return;
+                              const next = [...reviewChain.chain];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index + 1, 0, moved);
+                              updateReviewChainState({ ...reviewChain, chain: next }, true);
+                            }}
+                            aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                            className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = reviewChain.chain.filter((_, i) => i !== index);
+                              updateReviewChainState({ ...reviewChain, chain: next }, true);
+                            }}
+                            aria-label={`${t('settings.removeReviewStep')} ${index + 1}`}
+                            className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          updateReviewChainState(
+                            {
+                              ...reviewChain,
+                              chain: [...reviewChain.chain, { reviewer: 'claude', mode: 'final' }],
+                            },
+                            true,
+                          )
+                        }
+                        className="h-7 text-xs text-[var(--t-accent)]"
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        {t('settings.addReviewStep')}
+                      </Button>
+                      <label className="text-xs flex items-center gap-1.5 text-[var(--t-text-2)]">
+                        <span>{t('settings.maxReviewRounds')}:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={reviewChain.maxRounds}
+                          onChange={(e) =>
+                            updateReviewChainState(
+                              {
+                                ...reviewChain,
+                                maxRounds: Math.min(10, Math.max(1, Number(e.target.value) || 2)),
+                              },
+                              true,
+                            )
+                          }
+                          className="w-14 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-1.5 py-1 text-center font-mono text-xs text-[var(--t-text)]"
+                        />
+                      </label>
+                    </div>
+                  </div>
                 )}
               </div>
 
