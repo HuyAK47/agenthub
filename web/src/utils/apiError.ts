@@ -162,35 +162,31 @@ const VN_TO_EN_PATTERNS: Array<{ pattern: RegExp; replace: (...args: string[]) =
 
 export function translateApiErrorMessage(message: string, code?: string, locale?: Locale): string {
   const targetLocale = locale || getActiveLocale();
+  const normalizedCode = code?.trim().toLowerCase();
+  const codeTranslation = normalizedCode ? ERROR_CODE_TRANSLATIONS[normalizedCode] : undefined;
+
   if (targetLocale === 'vi') {
-    if (code && ERROR_CODE_TRANSLATIONS[code]) {
-      if (
-        message.toLowerCase() === code.toLowerCase() ||
-        message.toLowerCase() === ERROR_CODE_TRANSLATIONS[code].en.toLowerCase()
-      ) {
-        return ERROR_CODE_TRANSLATIONS[code].vi;
+    if (codeTranslation) {
+      // If message is untranslated (e.g. English, raw code, or unaccented without Vietnamese characters),
+      // fallback to the error code's Vietnamese translation.
+      if (!VN_DIACRITICS_REGEX.test(message)) {
+        return codeTranslation.vi;
       }
     }
     return message;
   }
 
   // English translation mode
+  // 1. Check specific regex patterns first to preserve detailed contextual translations
   for (const item of VN_TO_EN_PATTERNS) {
     if (item.pattern.test(message)) {
       return message.replace(item.pattern, item.replace);
     }
   }
 
-  // Fallback by error code if pattern didn't match:
-  // Translate when message matches code, contains Vietnamese characters, or matches Vietnamese translation
-  if (code && ERROR_CODE_TRANSLATIONS[code]) {
-    if (
-      message.toLowerCase() === code.toLowerCase() ||
-      VN_DIACRITICS_REGEX.test(message) ||
-      message.toLowerCase() === ERROR_CODE_TRANSLATIONS[code].vi.toLowerCase()
-    ) {
-      return ERROR_CODE_TRANSLATIONS[code].en;
-    }
+  // 2. Fallback to error code translation for any untranslated message
+  if (codeTranslation) {
+    return codeTranslation.en;
   }
 
   return message;
