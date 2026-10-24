@@ -27,9 +27,12 @@ describe('priority helpers', () => {
   });
   it('wraps commands with nice on linux and macos', () => {
     const [exe, args] = lowPriority('/bin/echo', ['hi']);
-    const usesNice =
-      (process.platform === 'linux' && fs.existsSync('/usr/bin/nice')) ||
-      (process.platform === 'darwin' && process.env.AGENTHUB_NO_NICE !== '1');
+    const hasNice = process.platform === 'linux'
+      ? ['/usr/bin/nice', '/bin/nice', '/usr/local/bin/nice'].some((p) => {
+          try { return fs.statSync(p).isFile(); } catch { return false; }
+        })
+      : process.platform === 'darwin' && fs.existsSync('/usr/bin/nice');
+    const usesNice = process.env.AGENTHUB_NO_NICE !== '1' && hasNice;
     if (usesNice) {
       expect(exe).toMatch(/nice$/);
       expect(args).toContain('/bin/echo');

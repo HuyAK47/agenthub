@@ -147,6 +147,19 @@ describe('quota usage', () => {
   });
 });
 
+function hasCommand(name: string): boolean {
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, name);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (process.platform === 'win32' || (stat.mode & 0o111) !== 0)) return true;
+    } catch { /* next */ }
+  }
+  return false;
+}
+
+const canRunExternalLock = process.platform === 'darwin' ? fs.existsSync('/usr/bin/lockf') : hasCommand('flock');
+
 describe('profile locks', () => {
   it('gives Codex two compatible lock slots', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-lock-'));
@@ -158,7 +171,7 @@ describe('profile locks', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('detects an external flock-held slot', async () => {
+  it.skipIf(!canRunExternalLock)('detects an external flock-held slot', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-lock-'));
     const lock = path.join(dir, 'g1.lock');
     fs.writeFileSync(lock, '');
