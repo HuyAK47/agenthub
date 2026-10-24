@@ -20,7 +20,7 @@ describe('Project Focus Mode (agenthub/p-project-priority)', () => {
   function initProject(id: string, name: string, maxParallel = 3): string {
     const projectPath = path.join(tmpDir, id);
     fs.mkdirSync(projectPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: projectPath });
+    execFileSync('git', ['init', '--template='], { cwd: projectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
     fs.writeFileSync(path.join(projectPath, 'README.md'), `# ${name}`);
     execFileSync('git', ['add', '.'], { cwd: projectPath });

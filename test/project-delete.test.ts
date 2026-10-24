@@ -11,7 +11,7 @@ import { FakeEngine, type Engine } from '../src/engines/index.js';
 
 function initGitRepo(repoPath: string): void {
   fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: repoPath });
+  execFileSync('git', ['init', '--template='], { cwd: repoPath });
   execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# project\n');
   execFileSync('git', ['add', '.'], { cwd: repoPath });

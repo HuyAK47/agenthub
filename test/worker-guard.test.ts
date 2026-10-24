@@ -47,7 +47,7 @@ describe('worker service guard', () => {
     const repo = path.join(root, 'repo');
     fs.mkdirSync(repo);
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
     fs.writeFileSync(path.join(repo, 'file.txt'), 'hello');
 
@@ -114,7 +114,7 @@ describe('worker service guard', () => {
     const repo = path.join(root, 'repo');
     fs.mkdirSync(repo);
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
     fs.writeFileSync(path.join(repo, 'a.txt'), 'content');
 
@@ -172,7 +172,7 @@ describe('worker service guard', () => {
     const hub = path.join(root, 'hub');
     const repo = path.join(root, 'repo');
     fs.mkdirSync(repo);
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     const standard = workerEnvironment(hub, { ...process.env }, { cwd: repo, brainPolicy: 'standard' });
 
     for (const command of ['rm', 'systemctl', 'sudo']) {
@@ -239,7 +239,7 @@ describe('worker service guard', () => {
 
     const workRepo = path.join(root, 'work');
     fs.mkdirSync(workRepo, { recursive: true });
-    execFileSync('git', ['init'], { cwd: workRepo });
+    execFileSync('git', ['init', '--template='], { cwd: workRepo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: workRepo });
     fs.writeFileSync(path.join(workRepo, 'file.txt'), 'hello');
     execFileSync('git', ['add', '.'], { cwd: workRepo });
@@ -373,7 +373,7 @@ describe('worker service guard', () => {
     const home = path.join(root, 'home');
     fs.mkdirSync(repo);
     fs.mkdirSync(home);
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
 
     const cleanEnv = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' };
     delete cleanEnv.GIT_AUTHOR_NAME;

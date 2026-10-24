@@ -64,7 +64,7 @@ describe('checks and worktree excludes', () => {
     fs.mkdirSync(repo, { recursive: true });
 
     // Initialize git repo
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
@@ -160,7 +160,7 @@ describe('checks and worktree excludes', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-files-check-'));
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo, { recursive: true });
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
@@ -199,7 +199,7 @@ describe('checks and worktree excludes', () => {
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo, { recursive: true });
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
@@ -241,7 +241,7 @@ describe('checks and worktree excludes', () => {
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo, { recursive: true });
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
@@ -319,7 +319,7 @@ describe('checks and worktree excludes', () => {
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo, { recursive: true });
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });

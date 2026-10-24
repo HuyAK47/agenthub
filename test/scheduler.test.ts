@@ -57,7 +57,7 @@ function teardownTestEnv() {
 function createTestProject(projectPath: string) {
   // Create a git repo for the project
   fs.mkdirSync(projectPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: projectPath });
+  execFileSync('git', ['init', '--template='], { cwd: projectPath });
   execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
   fs.writeFileSync(path.join(projectPath, 'README.md'), '# Test');
   execFileSync('git', ['add', '.'], { cwd: projectPath });
@@ -320,7 +320,7 @@ describe('maxParallel limit', () => {
     createTestProject(firstProjectPath);
     const secondProjectPath = path.join(tmpDir, 'repo-second');
     fs.mkdirSync(secondProjectPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: secondProjectPath });
+    execFileSync('git', ['init', '--template='], { cwd: secondProjectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
     fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Test');
     execFileSync('git', ['add', '.'], { cwd: secondProjectPath });
@@ -357,7 +357,7 @@ describe('maxParallel limit', () => {
     createTestProject(path.join(tmpDir, 'repo'));
     const secondProjectPath = path.join(tmpDir, 'repo-fair-second');
     fs.mkdirSync(secondProjectPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: secondProjectPath });
+    execFileSync('git', ['init', '--template='], { cwd: secondProjectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
     fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Fair share');
     execFileSync('git', ['add', '.'], { cwd: secondProjectPath });

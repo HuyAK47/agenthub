@@ -15,7 +15,7 @@ import { CodexEngine, canRunBubblewrap } from '../src/engines/index.js';
 
 function initGitRepo(repoPath: string, branch = 'main'): void {
   fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: repoPath });
+  execFileSync('git', ['init', '--template='], { cwd: repoPath });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoPath });
   execFileSync('git', ['config', 'user.name', 'AgentHub Test'], { cwd: repoPath });
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# Initial Repo\n');
