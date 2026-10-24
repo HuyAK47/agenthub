@@ -98,10 +98,10 @@ const TRANSIENT_ERROR_RE =
 export class AgyEngine implements Engine {
   id = 'agy' as const;
 
-  private agyPath: string;
+  private agyPath: string | null;
 
-  constructor(agyPath?: string) {
-    this.agyPath = agyPath || findAgyBin() || 'agy';
+  constructor(agyPath?: string, customHome?: string) {
+    this.agyPath = agyPath || findAgyBin(customHome);
   }
 
   family(model: string): string {
@@ -156,6 +156,19 @@ export class AgyEngine implements Engine {
         { gitHooks: opts.gitHooks, project: opts.project, cwd: opts.cwd, workerCount: opts.workerCount },
       ),
     );
+    if (!this.agyPath) {
+      const message = 'Không tìm thấy Antigravity CLI (agy). Kiểm tra PATH của daemon hoặc AGENTHUB_AGY_BIN; cài bằng: curl -fsSL https://antigravity.google/cli/install.sh | bash';
+      fs.writeSync(logFd, `${message}\n`);
+      const missing = spawn(process.execPath, ['-e', `console.error(${JSON.stringify(message)}); process.exit(127)`], {
+        cwd: opts.cwd,
+        env,
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+      });
+      missing.on('spawn', () => fs.closeSync(logFd));
+      missing.on('error', () => { try { fs.closeSync(logFd); } catch { /* ignore */ } });
+      return missing;
+    }
     const [agyExe, agyArgs] = lowPriority(this.agyPath, args);
     const [executable, command] = opts.lockFile ? lockCommand(opts.lockFile, [agyExe, ...agyArgs]) : [agyExe, agyArgs];
     const child = spawn(executable, command, {

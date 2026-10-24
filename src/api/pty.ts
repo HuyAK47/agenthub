@@ -182,7 +182,9 @@ export class PtyManager {
       command = findAgyBin(this.service.config.hubHome);
     }
     if (!command) {
-      throw new HttpError(404, 'agy_not_found', `Không tìm thấy Antigravity CLI (agy). Daemon không thấy agy trong PATH, ~/.local/bin hoặc ~/.gemini/bin. Cài bằng: ${agyInstallHint()}`);
+      const configured = process.env.AGENTHUB_AGY_BIN?.trim();
+      const configuredNote = configured ? ` AGENTHUB_AGY_BIN đang trỏ tới “${configured}” nhưng file không tồn tại.` : '';
+      throw new HttpError(404, 'agy_not_found', `Không tìm thấy Antigravity CLI (agy). Daemon không thấy agy trong PATH, ~/.local/bin hoặc ~/.gemini/bin.${configuredNote} Cài bằng: ${agyInstallHint()}`);
     }
 
     if (process.platform === 'darwin' && !spawnHelperChecked) {

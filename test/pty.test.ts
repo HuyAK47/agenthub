@@ -120,6 +120,19 @@ describe('AgentHub PTY Login and WebSocket', () => {
     }, { timeout: 5000 });
   });
 
+  it('returns a clear agy_not_found error when the configured binary is missing', async () => {
+    process.env.AGENTHUB_AGY_BIN = path.join(tmpDir, 'missing-agy');
+    const response = await fetch(`http://127.0.0.1:${port}/api/profiles/missing-agy/login`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(404);
+    const body = await response.json() as { error?: string; message?: string };
+    expect(body.error).toBe('agy_not_found');
+    expect(body.message).not.toMatch(/execvp|ENOENT/i);
+    expect(body.message).toContain('AGENTHUB_AGY_BIN');
+  });
+
   it('re-reads email after WebSocket closes when fake agy logs are written with 1 second delay', async () => {
     ctx.scheduler.stop();
     process.env.FAKE_AGY_LOG_DELAY_MS = '1000';
