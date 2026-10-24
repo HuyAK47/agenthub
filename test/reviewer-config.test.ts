@@ -8,6 +8,7 @@ import {
   ReviewerOrderItemSchema,
   reviewerSettingsFromLegacy,
 } from '../src/reviewer-config.js';
+import { modelValidator, reviewerModelValidator } from '../src/services/index.js';
 
 describe('reviewer order configuration', () => {
   it('migrates legacy Codex/Claude settings to the ordered form', () => {
@@ -79,5 +80,30 @@ describe('reviewer order configuration', () => {
     expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'sonnet' }).success).toBe(false);
     expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'codex:' }).success).toBe(false);
     expect(ReviewerArbiterSchema.safeParse({ engine: 'codex', model: 'codex:x' }).success).toBe(false);
+  });
+
+  it('validates modelValidator and reviewerModelValidator with engine rules', () => {
+    // modelValidator
+    expect(modelValidator.safeParse('gemini-3.8-flash-high').success).toBe(true);
+    expect(modelValidator.safeParse('claude-sonnet-4-6').success).toBe(true);
+    expect(modelValidator.safeParse('codex:gpt-5.6-luna').success).toBe(true);
+    expect(modelValidator.safeParse('codex:gpt-4o').success).toBe(true);
+    expect(modelValidator.safeParse('codex:x').success).toBe(false);
+    expect(modelValidator.safeParse('codex:custom-model-id').success).toBe(false);
+    expect(modelValidator.safeParse('codex:').success).toBe(false);
+    expect(modelValidator.safeParse('').success).toBe(false);
+    expect(modelValidator.safeParse('gemini-custom').success).toBe(false);
+
+    // reviewerModelValidator
+    expect(reviewerModelValidator.safeParse('codex:gpt-5.6-luna').success).toBe(true);
+    expect(reviewerModelValidator.safeParse('gpt-5.6-luna').success).toBe(true);
+    expect(reviewerModelValidator.safeParse('codex:gpt-4o').success).toBe(true);
+    expect(reviewerModelValidator.safeParse('sonnet').success).toBe(true);
+    expect(reviewerModelValidator.safeParse('claude:sonnet').success).toBe(true);
+    expect(reviewerModelValidator.safeParse('claude-sonnet-4-6').success).toBe(true);
+    expect(reviewerModelValidator.safeParse('codex:x').success).toBe(false);
+    expect(reviewerModelValidator.safeParse('claude:x').success).toBe(false);
+    expect(reviewerModelValidator.safeParse('gemini-3.8-flash-high').success).toBe(false);
+    expect(reviewerModelValidator.safeParse('').success).toBe(false);
   });
 });

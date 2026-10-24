@@ -63,7 +63,7 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
-import { ReviewerArbiterSchema, ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
+import { isValidReviewerModel, ReviewerArbiterSchema, ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
 import { SetupManager } from '../tools/setup.js';
 import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
@@ -235,9 +235,18 @@ export const VALID_AGY_MODELS = new Set([
 ]);
 
 export const modelValidator = z.string().trim().min(1, 'Model không được để trống').refine(
-  (m) => (m.startsWith('codex:') && m.length > 6) || VALID_AGY_MODELS.has(m),
-  { message: 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:' },
+  (m) => (m.startsWith('codex:') && isValidReviewerModel('codex', m.slice('codex:'.length))) || VALID_AGY_MODELS.has(m),
+  { message: 'Mỗi model phải là id agy hợp lệ hoặc model codex hợp lệ (codex:gpt-...)' },
 );
+
+export const reviewerModelValidator = z
+  .string()
+  .trim()
+  .min(1, 'Model của reviewer không được để trống')
+  .refine(
+    (m) => isValidReviewerModel('codex', m) || isValidReviewerModel('claude', m),
+    { message: 'Model của reviewer phải theo cú pháp engine codex hoặc claude hợp lệ' },
+  );
 const taskModelValidator = z.string().trim().min(1, 'Model không được để trống');
 
 export const ProjectHooksSchema = z.object({
@@ -489,7 +498,7 @@ export const UpdateConfigSchema = z.object({
     .optional(),
   reviewer: z.object({
     enabled: z.boolean().optional(),
-    model: modelValidator.optional(),
+    model: reviewerModelValidator.or(z.literal('')).optional(),
     timeoutSec: z.number().int().positive().optional(),
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
