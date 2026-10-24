@@ -63,7 +63,7 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
-import { ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
+import { ReviewerArbiterSchema, ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
 import { SetupManager } from '../tools/setup.js';
 import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
@@ -483,7 +483,7 @@ export const UpdateConfigSchema = z.object({
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
       model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
-      models: z.array(z.string().trim().min(1)).min(1).optional(),
+      models: z.array(z.enum(['opus', 'sonnet', 'haiku'])).min(1).optional(),
       autoCompactPercent: z.number().min(0).max(100).optional(),
     })
     .optional(),
@@ -499,7 +499,7 @@ export const UpdateConfigSchema = z.object({
     claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
     order: ReviewerOrderSchema.optional(),
     fallback: ReviewerFallbackSchema.partial().optional(),
-    arbiter: z.object({ engine: z.enum(['codex', 'claude']), model: z.string().trim().min(1, 'Model của arbiter không được để trống') }).optional(),
+    arbiter: ReviewerArbiterSchema.optional(),
   }).optional(),
   focus: z.object({
     projectId: z.string().min(1).nullable().optional(),

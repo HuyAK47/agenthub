@@ -1,10 +1,67 @@
 import { z } from 'zod';
 
-export const ReviewerOrderItemSchema = z.object({
-  engine: z.enum(['codex', 'claude']),
-  model: z.string().trim().min(1, 'Model của reviewer không được để trống'),
-  profiles: z.array(z.string().min(1)).max(50).default([]),
-});
+export function isValidReviewerModel(engine: 'codex' | 'claude', model: string): boolean {
+  const trimmed = model.trim();
+  if (!trimmed || /\s/.test(trimmed)) return false;
+  if (engine === 'claude') {
+    return (
+      ['sonnet', 'opus', 'haiku'].includes(trimmed) ||
+      trimmed.startsWith('claude-') ||
+      (trimmed.startsWith('claude:') && trimmed.length > 7)
+    );
+  }
+  if (engine === 'codex') {
+    return (
+      ['gpt-5.6-luna', 'gpt-5.6-turbo'].includes(trimmed) ||
+      trimmed.startsWith('gpt-') ||
+      (trimmed.startsWith('codex:') && trimmed.length > 6)
+    );
+  }
+  return false;
+}
+
+export const ReviewerOrderItemSchema = z
+  .object({
+    engine: z.enum(['codex', 'claude']),
+    model: z.string().trim().min(1, 'Model của reviewer không được để trống'),
+    profiles: z.array(z.string().min(1)).max(50).default([]),
+  })
+  .superRefine((item, ctx) => {
+    const trimmed = item.model.trim();
+    if (/\s/.test(trimmed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'Model của reviewer không được chứa khoảng trắng',
+      });
+      return;
+    }
+    if (item.engine === 'claude') {
+      const isValidClaude =
+        ['sonnet', 'opus', 'haiku'].includes(trimmed) ||
+        trimmed.startsWith('claude-') ||
+        (trimmed.startsWith('claude:') && trimmed.length > 7);
+      if (!isValidClaude) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['model'],
+          message: 'Model Claude phải là sonnet, opus hoặc haiku',
+        });
+      }
+    } else if (item.engine === 'codex') {
+      const isValidCodex =
+        ['gpt-5.6-luna', 'gpt-5.6-turbo'].includes(trimmed) ||
+        trimmed.startsWith('gpt-') ||
+        (trimmed.startsWith('codex:') && trimmed.length > 6);
+      if (!isValidCodex) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['model'],
+          message: 'Model Codex phải có tiền tố codex: hoặc gpt-',
+        });
+      }
+    }
+  });
 
 export const ReviewerFallbackSchema = z.object({
   onUnavailable: z.boolean().default(true),
@@ -14,10 +71,47 @@ export const ReviewerFallbackSchema = z.object({
 
 export const ReviewerOrderSchema = z.array(ReviewerOrderItemSchema).max(20);
 
-export const ReviewerArbiterSchema = z.object({
-  engine: z.enum(['codex', 'claude']).default('claude'),
-  model: z.string().trim().min(1, 'Model của arbiter không được để trống').default('opus'),
-});
+export const ReviewerArbiterSchema = z
+  .object({
+    engine: z.enum(['codex', 'claude']).default('claude'),
+    model: z.string().trim().min(1, 'Model của arbiter không được để trống').default('opus'),
+  })
+  .superRefine((item, ctx) => {
+    const trimmed = item.model.trim();
+    if (/\s/.test(trimmed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'Model của arbiter không được chứa khoảng trắng',
+      });
+      return;
+    }
+    if (item.engine === 'claude') {
+      const isValidClaude =
+        ['sonnet', 'opus', 'haiku'].includes(trimmed) ||
+        trimmed.startsWith('claude-') ||
+        (trimmed.startsWith('claude:') && trimmed.length > 7);
+      if (!isValidClaude) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['model'],
+          message: 'Model Claude phải là sonnet, opus hoặc haiku',
+        });
+      }
+    } else if (item.engine === 'codex') {
+      const isValidCodex =
+        ['gpt-5.6-luna', 'gpt-5.6-turbo'].includes(trimmed) ||
+        trimmed.startsWith('gpt-') ||
+        (trimmed.startsWith('codex:') && trimmed.length > 6);
+      if (!isValidCodex) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['model'],
+          message: 'Model Codex phải có tiền tố codex: hoặc gpt-',
+        });
+      }
+    }
+  });
 
 export const ReviewerSettingsSchema = z.object({
   order: ReviewerOrderSchema,
