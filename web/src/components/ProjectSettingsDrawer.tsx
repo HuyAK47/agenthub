@@ -46,6 +46,7 @@ import {
   rerunProjectDeploy,
   getProjectDeployStatus,
   getConfig,
+  getModelOptions,
   getFocus,
   setFocus,
   getReviewChecklistPreview,
@@ -207,6 +208,12 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     staleTime: 30_000,
   });
 
+  const { data: modelOptions } = useQuery({
+    queryKey: ['model-options'],
+    queryFn: getModelOptions,
+    staleTime: 30_000,
+  });
+
   const [draftSettings, setDraftSettings] = useState<ProjectSettings>(
     defaultProjectSettings(),
   );
@@ -238,6 +245,121 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     maxRounds: number;
   }>({ chain: [], maxRounds: 2 });
   const [hasReviewChainOverride, setHasReviewChainOverride] = useState<boolean>(false);
+
+  const availableCodexReviewerModels = useMemo(() => {
+    const fromApi = (modelOptions?.suggestions || []).filter(
+      (m) => m.startsWith('codex:') || m.startsWith('gpt-'),
+    );
+    const fromConfigured = (modelOptions?.configured || []).filter(
+      (m) => m.startsWith('codex:') || m.startsWith('gpt-'),
+    );
+    const fromConfigOrder = (config?.reviewer?.order || [])
+      .filter((r) => r.engine === 'codex')
+      .map((r) => r.model);
+    const fromConfigReviewer = config?.reviewer?.model
+      ? (config.reviewer.model.startsWith('codex:') || config.reviewer.model.startsWith('gpt-') ? [config.reviewer.model] : [])
+      : [];
+    const fromConfigArbiter = config?.reviewer?.arbiter?.engine === 'codex' && config.reviewer.arbiter.model
+      ? [config.reviewer.arbiter.model]
+      : [];
+    const fromChains = [
+      ...(config?.modelChainHard || []),
+      ...(config?.modelChainEasy || []),
+    ].filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    const fromCurrentOrder = reviewerOrder
+      .filter((r) => r.engine === 'codex')
+      .map((r) => r.model);
+    const fromProjectOrder = (project?.settings?.review?.order || [])
+      .filter((r) => r.engine === 'codex')
+      .map((r) => r.model);
+
+    return Array.from(
+      new Set([
+        ...DEFAULT_CODEX_MODELS,
+        'codex:gpt-5.6-luna',
+        'codex:gpt-5.6-turbo',
+        ...fromApi,
+        ...fromConfigured,
+        ...fromConfigOrder,
+        ...fromConfigReviewer,
+        ...fromConfigArbiter,
+        ...fromChains,
+        ...fromCurrentOrder,
+        ...fromProjectOrder,
+      ]),
+    ).filter(Boolean);
+  }, [modelOptions, config, reviewerOrder, project]);
+
+  const availableClaudeReviewerModels = useMemo(() => {
+    const fromChat = config?.chat?.models || [];
+    const fromChatModel = config?.chat?.model ? [config.chat.model] : [];
+    const fromClaudeModel = config?.reviewer?.claudeModel ? [config.reviewer.claudeModel] : [];
+    const fromConfigOrder = (config?.reviewer?.order || [])
+      .filter((r) => r.engine === 'claude')
+      .map((r) => r.model);
+    const fromConfigArbiter = config?.reviewer?.arbiter?.engine === 'claude' && config.reviewer.arbiter.model
+      ? [config.reviewer.arbiter.model]
+      : [];
+    const fromApi = (modelOptions?.suggestions || []).filter(
+      (m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'),
+    );
+    const fromConfigured = (modelOptions?.configured || []).filter(
+      (m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'),
+    );
+    const fromCurrentOrder = reviewerOrder
+      .filter((r) => r.engine === 'claude')
+      .map((r) => r.model);
+    const fromProjectOrder = (project?.settings?.review?.order || [])
+      .filter((r) => r.engine === 'claude')
+      .map((r) => r.model);
+
+    return Array.from(
+      new Set([
+        ...DEFAULT_CLAUDE_MODELS,
+        ...fromChat,
+        ...fromChatModel,
+        ...fromClaudeModel,
+        ...fromConfigOrder,
+        ...fromConfigArbiter,
+        ...fromApi,
+        ...fromConfigured,
+        ...fromCurrentOrder,
+        ...fromProjectOrder,
+      ]),
+    ).filter(Boolean);
+  }, [modelOptions, config, reviewerOrder, project]);
+
+  const availableReviewChainReviewers = useMemo(() => {
+    const codexModels = availableCodexReviewerModels.map((m) =>
+      m.startsWith('codex:') ? m : `codex:${m}`,
+    );
+    const fromCurrentChain = reviewChain.chain.map((s) => s.reviewer);
+    let fromProjectChain: string[] = [];
+    if (project?.review) {
+      if (typeof project.review === 'object' && Array.isArray((project.review as any).chain)) {
+        fromProjectChain = (project.review as any).chain.map((s: any) => s.reviewer).filter(Boolean);
+      } else if (typeof project.review === 'string') {
+        try {
+          const parsed = JSON.parse(project.review);
+          if (Array.isArray(parsed?.chain)) {
+            fromProjectChain = parsed.chain.map((s: any) => s.reviewer).filter(Boolean);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return Array.from(
+      new Set([
+        'claude',
+        'codex:gpt-5.6-luna',
+        'codex:gpt-5.6-turbo',
+        ...codexModels,
+        ...fromCurrentChain,
+        ...fromProjectChain,
+      ]),
+    ).filter(Boolean);
+  }, [availableCodexReviewerModels, reviewChain.chain, project]);
 
   const [checksError, setChecksError] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -1750,7 +1872,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                       const engineProfiles = allProfiles.filter((p) => p.engine === item.engine);
                       const activeProfileNames = new Set(engineProfiles.map((p) => p.name));
                       const missingProfiles = (item.profiles || []).filter((name) => !activeProfileNames.has(name));
-                      const engineModelOptions = item.engine === 'codex' ? DEFAULT_CODEX_MODELS : DEFAULT_CLAUDE_MODELS;
+                      const engineModelOptions = item.engine === 'codex' ? availableCodexReviewerModels : availableClaudeReviewerModels;
 
                       return (
                         <div
@@ -2063,7 +2185,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                               );
                               updateReviewChainState({ ...reviewChain, chain: nextChain }, true);
                             }}
-                            options={['claude', 'codex:gpt-5.6-luna', 'codex:gpt-5.6-turbo']}
+                            options={availableReviewChainReviewers}
                             validate={(val) => validateReviewChainReviewerSyntax(val, t)}
                             ariaLabel={`${t('settings.reviewStep')} ${index + 1}`}
                             placeholder={t('settings.reviewerPlaceholder')}

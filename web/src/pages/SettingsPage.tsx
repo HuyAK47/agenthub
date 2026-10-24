@@ -124,6 +124,59 @@ export const SettingsPage: React.FC = () => {
     return Array.from(new Set([...fromProfiles, ...claudeProfiles]));
   }, [availableClaudeProfiles, claudeProfiles]);
 
+  const fallbackProfileOptions = useMemo(() => {
+    const fromProfiles = availableClaudeProfiles.map((p) => p.name);
+    const fromFallback = fallback
+      .filter((s): s is { type: 'profile'; profile?: string } => s.type === 'profile' && Boolean(s.profile))
+      .map((s) => s.profile!.trim())
+      .filter(Boolean);
+    const activeNames = new Set(availableClaudeProfiles.map((p) => p.name));
+    const allNames = Array.from(new Set([...fromProfiles, ...claudeProfiles, ...fromFallback]));
+    return allNames.map((name) => {
+      if (activeNames.has(name)) {
+        return name;
+      }
+      return {
+        value: name,
+        label: `${name} (${t('settings.inactiveOrOld')})`,
+      };
+    });
+  }, [availableClaudeProfiles, claudeProfiles, fallback, t]);
+
+  const availableCodexReviewerModels = useMemo(() => {
+    const fromApi = (modelOptions?.suggestions || []).filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    const fromConfigured = (modelOptions?.configured || []).filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    const reviewerModels = reviewOrder.filter((r) => r.engine === 'codex').map((r) => r.model);
+    const arbiterModel = arbiter.engine === 'codex' && arbiter.model ? [arbiter.model] : [];
+    const chainCodex = [...hardChainModels, ...easyChainModels].filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    return Array.from(new Set([
+      ...DEFAULT_CODEX_MODELS,
+      'codex:gpt-5.6-luna',
+      'codex:gpt-5.6-turbo',
+      ...fromApi,
+      ...fromConfigured,
+      ...reviewerModels,
+      ...arbiterModel,
+      ...chainCodex,
+    ])).filter(Boolean);
+  }, [modelOptions, reviewOrder, arbiter, hardChainModels, easyChainModels]);
+
+  const availableClaudeReviewerModels = useMemo(() => {
+    const fromChat = chatModels;
+    const fromApi = (modelOptions?.suggestions || []).filter((m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'));
+    const fromConfigured = (modelOptions?.configured || []).filter((m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'));
+    const reviewerModels = reviewOrder.filter((r) => r.engine === 'claude').map((r) => r.model);
+    const arbiterModel = arbiter.engine === 'claude' && arbiter.model ? [arbiter.model] : [];
+    return Array.from(new Set([
+      ...DEFAULT_CLAUDE_MODELS,
+      ...fromChat,
+      ...fromApi,
+      ...fromConfigured,
+      ...reviewerModels,
+      ...arbiterModel,
+    ])).filter(Boolean);
+  }, [modelOptions, reviewOrder, arbiter, chatModels]);
+
   useEffect(() => {
     if (config) {
       setBrandingName(config.branding?.name || 'AgentHub');
@@ -693,7 +746,7 @@ export const SettingsPage: React.FC = () => {
                 const profiles = allProfiles.filter((profile) => profile.engine === item.engine);
                 const activeProfileNames = new Set(profiles.map((p) => p.name));
                 const missingProfiles = (item.profiles || []).filter((name) => !activeProfileNames.has(name));
-                const engineModelOptions = item.engine === 'codex' ? DEFAULT_CODEX_MODELS : DEFAULT_CLAUDE_MODELS;
+                const engineModelOptions = item.engine === 'codex' ? availableCodexReviewerModels : availableClaudeReviewerModels;
                 return (
                   <div
                     key={`${item.engine}-${index}`}
@@ -811,7 +864,7 @@ export const SettingsPage: React.FC = () => {
                     ariaLabel={`${t('settings.arbiter')} ${t('settings.reviewerModel')}`}
                     value={arbiter.model}
                     onChange={(val) => setArbiter((value) => ({ ...value, model: val }))}
-                    options={arbiter.engine === 'codex' ? DEFAULT_CODEX_MODELS : DEFAULT_CLAUDE_MODELS}
+                    options={arbiter.engine === 'codex' ? availableCodexReviewerModels : availableClaudeReviewerModels}
                     validate={(val) => validateReviewerModelSyntax(val, arbiter.engine, t)}
                     placeholder={arbiter.engine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet'}
                   />
@@ -975,7 +1028,7 @@ export const SettingsPage: React.FC = () => {
                     <SelectOrCustomInput
                       value={step.profile || ''}
                       onChange={(val) => { const next = [...fallback]; next[index] = { ...step, profile: val }; setFallback(next); }}
-                      options={allClaudeOptions}
+                      options={fallbackProfileOptions}
                       placeholder="profile name"
                       ariaLabel={`Fallback profile ${index + 1}`}
                     />
@@ -986,7 +1039,7 @@ export const SettingsPage: React.FC = () => {
                     <SelectOrCustomInput
                       value={step.model}
                       onChange={(val) => { const next = [...fallback]; next[index] = { ...step, model: val }; setFallback(next); }}
-                      options={DEFAULT_CLAUDE_MODELS}
+                      options={Array.from(new Set([...DEFAULT_CLAUDE_MODELS, ...chatModels, step.model].filter(Boolean)))}
                       validate={(m) => validateChatModelSyntax(m, t)}
                       placeholder="sonnet"
                       ariaLabel={`Fallback model ${index + 1}`}
@@ -1217,6 +1270,15 @@ export const SettingsPage: React.FC = () => {
                     {codexProfiles.map((p) => (
                       <option key={p.name} value={p.name}>{p.name} {p.email ? `(${p.email})` : ''}</option>
                     ))}
+                    {!codexProfiles.some((p) => p.name === codexProfile) && Boolean(codexProfile.trim()) && (
+                      <option key={codexProfile} value={codexProfile}>
+                        {(() => {
+                          const matched = allProfiles.find((p) => p.name === codexProfile) || profiles.find((p) => p.name === codexProfile);
+                          const emailSuffix = matched?.email ? ` (${matched.email})` : '';
+                          return `${codexProfile}${emailSuffix} (${t('settings.inactiveOrOld')})`;
+                        })()}
+                      </option>
+                    )}
                   </select>
                   <p className="text-xs text-[var(--t-text-3)] mt-1">
                     {t('settings.codexProfileHint')}
