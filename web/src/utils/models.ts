@@ -66,7 +66,9 @@ export function validateReviewChainReviewerSyntax(
   if (!trimmed) {
     return t ? t('settings.emptyChainWarning') : 'Reviewer không được để trống';
   }
-  const isValid = trimmed === 'claude' || (trimmed.startsWith('codex:') && trimmed.length > 6);
+  const isValid =
+    trimmed === 'claude' ||
+    (trimmed.startsWith('codex:') && trimmed.length > 6 && !/\s/.test(trimmed));
   if (!isValid) {
     return t
       ? t('settings.invalidReviewChainReviewer')
@@ -112,16 +114,21 @@ export function validateReviewerModelSyntax(
     return t ? t('settings.invalidModelSyntax') : 'Model không được chứa khoảng trắng';
   }
   if (engine === 'claude') {
-    if (!DEFAULT_CLAUDE_MODELS.includes(trimmed) && !trimmed.startsWith('claude-')) {
+    const isValidClaude =
+      DEFAULT_CLAUDE_MODELS.includes(trimmed) ||
+      trimmed.startsWith('claude-') ||
+      (trimmed.startsWith('claude:') && trimmed.length > 7);
+    if (!isValidClaude) {
       return t
         ? t('settings.invalidChatModelSyntax')
         : 'Model Claude phải là sonnet, opus hoặc haiku';
     }
   }
   if (engine === 'codex') {
+    const isCodexWithModel = trimmed.startsWith('codex:') && trimmed.length > 6;
     if (
       !DEFAULT_CODEX_MODELS.includes(trimmed) &&
-      !trimmed.startsWith('codex:') &&
+      !isCodexWithModel &&
       !trimmed.startsWith('gpt-')
     ) {
       return t
