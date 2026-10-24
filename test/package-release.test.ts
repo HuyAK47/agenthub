@@ -55,8 +55,18 @@ case "${'${1:-}'}" in
     ln -sfn "${'${0}'}.target" "${'${AGENTHUB_LINK_DIR:-$HOME/.local/bin}'}/agenthub"
     ;;
   install-service)
-    mkdir -p "${'${HOME}'}/.config/systemd/user"
-    printf 'ExecStart=%s\n' "${'${0}'}" > "${'${HOME}'}/.config/systemd/user/agenthub.service"
+    case "$(uname -s)" in
+      Darwin*)
+        plist="${'${HOME}'}/Library/LaunchAgents/dev.agenthub.plist"
+        mkdir -p "$(dirname "$plist")"
+        printf '<plist><dict><key>Label</key><string>dev.agenthub</string></dict></plist>\n' > "$plist"
+        "${'${AGENTHUB_LAUNCHCTL:-launchctl}'}" bootstrap "gui/$(id -u)" "$plist"
+        ;;
+      *)
+        mkdir -p "${'${HOME}'}/.config/systemd/user"
+        printf 'ExecStart=%s\n' "${'${0}'}" > "${'${HOME}'}/.config/systemd/user/agenthub.service"
+        ;;
+    esac
     ${normalized.serviceFails ? 'exit 1' : ':'}
     ;;
   setup)
@@ -140,6 +150,42 @@ describe('release packaging and installation', () => {
     expect(fs.existsSync(path.join(app, '1.0.0'))).toBe(true);
     expect(fs.existsSync(path.join(app, '2.0.0'))).toBe(true);
     expect(fs.existsSync(path.join(app, '3.0.0'))).toBe(true);
+  });
+
+  it('installs a macOS release through launchctl shims without host Node or git', () => {
+    const home = makeTemp('agenthub-release-darwin-shim-');
+    const base = path.join(home, 'fake-release');
+    const app = path.join(home, 'app');
+    const linkDir = path.join(home, 'links');
+    const shimBin = path.join(home, 'shim-bin');
+    const launchctlLog = path.join(home, 'launchctl.log');
+    fs.mkdirSync(shimBin, { recursive: true });
+    fs.writeFileSync(path.join(shimBin, 'uname'), '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(shimBin, 'node'), '#!/bin/sh\ncase "$1" in -p) echo 22 ;; *) exit 0 ;; esac\n', { mode: 0o755 });
+    const fakeLaunchctl = path.join(shimBin, 'launchctl');
+    fs.writeFileSync(fakeLaunchctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${launchctlLog}'\n`, { mode: 0o755 });
+    makeRelease(base, '1.0.0');
+    const releaseDir = path.join(base, 'releases', 'download', 'v1.0.0');
+    const linuxArchive = path.join(releaseDir, 'agenthub-1.0.0-linux-x64.tar.gz');
+    const macArchive = path.join(releaseDir, 'agenthub-1.0.0-macos-arm64.tar.gz');
+    fs.renameSync(linuxArchive, macArchive);
+    fs.writeFileSync(releaseDir + '/SHA256SUMS', `${crypto.createHash('sha256').update(fs.readFileSync(macArchive)).digest('hex')}  ${path.basename(macArchive)}\n`);
+
+    const result = run('/bin/sh', [installer, '--from-release', '1.0.0'], {
+      HOME: home,
+      PATH: `${shimBin}:/usr/bin:/bin`,
+      AGENTHUB_DIR: app,
+      AGENTHUB_HOME: path.join(home, 'data'),
+      AGENTHUB_LINK_DIR: linkDir,
+      AGENTHUB_RELEASE_BASE: base,
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
+      AGENTHUB_NO_BROWSER: '1',
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.existsSync(path.join(home, 'Library', 'LaunchAgents', 'dev.agenthub.plist'))).toBe(true);
+    expect(fs.readFileSync(launchctlLog, 'utf8')).toContain('bootstrap gui/');
+    expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.0.0');
   });
 
   it('rolls back current, cli link, and service when install-service fails', () => {
