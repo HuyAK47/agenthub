@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles } from '../api/client';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles, getModelOptions } from '../api/client';
 import type { ReviewerFallback, ReviewerOrderItem } from '../types/api';
-import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
+import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell, ArrowUp, ArrowDown, Plus, Trash2 } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
 import { deletePermissionRule, getPermissionRules } from '../api/chat';
 import { useTour } from '../components/tour/TourContext';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
-import { DataTable } from '../components/ui';
+import { DataTable, SelectOrCustomInput, SortableModelList } from '../components/ui';
+import { DEFAULT_VALID_MODELS, DEFAULT_CLAUDE_MODELS, DEFAULT_CODEX_MODELS, validateModelSyntax, validateReviewerModelSyntax } from '../utils/models';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
@@ -27,14 +28,15 @@ export const SettingsPage: React.FC = () => {
   const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
   const codexProfiles = profiles.filter((p) => p.engine === 'codex' && Boolean(p.enabled));
 
-  const [hardChain, setHardChain] = useState<string>('');
-  const [easyChain, setEasyChain] = useState<string>('');
+  const [hardChainModels, setHardChainModels] = useState<string[]>(['gemini-3.8-flash-high', 'codex:gpt-5.6-luna']);
+  const [easyChainModels, setEasyChainModels] = useState<string[]>(['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna']);
   const [timeoutHours, setTimeoutHours] = useState<number>(3);
   const [multiplePerProvider, setMultiplePerProvider] = useState<boolean>(true);
   const [claudeBin, setClaudeBin] = useState<string>('claude');
   const [allowFullMode, setAllowFullMode] = useState<boolean>(false);
   const [chatModel, setChatModel] = useState<string>('sonnet');
   const [chatModels, setChatModels] = useState<string[]>(['opus', 'sonnet', 'haiku']);
+  const [newChatModel, setNewChatModel] = useState<string>('sonnet');
   const [reviewerModel, setReviewerModel] = useState<string>('codex:gpt-5.6-luna');
   const [claudeFallback, setClaudeFallback] = useState<boolean>(true);
   const [claudeProfiles, setClaudeProfiles] = useState<string[]>([]);
@@ -93,6 +95,18 @@ export const SettingsPage: React.FC = () => {
     queryFn: getProfiles,
   });
 
+  const { data: modelOptions } = useQuery({
+    queryKey: ['model-options'],
+    queryFn: getModelOptions,
+  });
+
+  const availableWorkerModels = useMemo(() => {
+    const fromApi = modelOptions?.suggestions || [];
+    const fromConfig = modelOptions?.configured || [];
+    const set = new Set([...fromApi, ...fromConfig, ...DEFAULT_VALID_MODELS, ...hardChainModels, ...easyChainModels]);
+    return Array.from(set).filter(Boolean);
+  }, [modelOptions, hardChainModels, easyChainModels]);
+
   const availableClaudeProfiles = useMemo(
     () => allProfiles.filter((p) => p.engine === 'claude'),
     [allProfiles],
@@ -117,8 +131,8 @@ export const SettingsPage: React.FC = () => {
           : config.runTimeoutHours
           ? config.runTimeoutHours * 3600
           : 10800;
-      setHardChain(hardList.join('\n'));
-      setEasyChain(easyList.join('\n'));
+      setHardChainModels(hardList.length ? hardList : ['gemini-3.8-flash-high', 'codex:gpt-5.6-luna']);
+      setEasyChainModels(easyList.length ? easyList : ['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna']);
       setTimeoutHours(Math.max(1, Math.round(timeoutSec / 3600)));
       setMultiplePerProvider(config.multiplePerProvider !== false);
       setClaudeBin(config.chat?.claudeBin || 'claude');
@@ -199,13 +213,11 @@ export const SettingsPage: React.FC = () => {
     setSaveSuccess(false);
     setSaveError(null);
 
-    const hardModels = hardChain
-      .split('\n')
+    const hardModels = hardChainModels
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const easyModels = easyChain
-      .split('\n')
+    const easyModels = easyChainModels
       .map((s) => s.trim())
       .filter(Boolean);
 
@@ -215,6 +227,43 @@ export const SettingsPage: React.FC = () => {
     }
     if (easyModels.length === 0) {
       setSaveError(t('settings.easyChainRequired'));
+      return;
+    }
+
+    const invalidHard = hardModels.find((m) => validateModelSyntax(m, t));
+    if (invalidHard) {
+      setSaveError(`${t('settings.hardChainLabel')}: ${validateModelSyntax(invalidHard, t)} ("${invalidHard}")`);
+      return;
+    }
+    const invalidEasy = easyModels.find((m) => validateModelSyntax(m, t));
+    if (invalidEasy) {
+      setSaveError(`${t('settings.easyChainLabel')}: ${validateModelSyntax(invalidEasy, t)} ("${invalidEasy}")`);
+      return;
+    }
+
+    const invalidChat = validateModelSyntax(chatModel, t);
+    if (invalidChat) {
+      setSaveError(`${t('extra.chatModel')}: ${invalidChat} ("${chatModel}")`);
+      return;
+    }
+
+    const invalidReviewer = validateModelSyntax(reviewerModel, t);
+    if (invalidReviewer) {
+      setSaveError(`${t('extra.reviewerModel')}: ${invalidReviewer} ("${reviewerModel}")`);
+      return;
+    }
+
+    for (let i = 0; i < reviewOrder.length; i++) {
+      const err = validateReviewerModelSyntax(reviewOrder[i].model, reviewOrder[i].engine, t);
+      if (err) {
+        setSaveError(`${t('settings.reviewerOrder')} ${i + 1}: ${err} ("${reviewOrder[i].model}")`);
+        return;
+      }
+    }
+
+    const invalidArbiter = validateReviewerModelSyntax(arbiter.model, arbiter.engine, t);
+    if (invalidArbiter) {
+      setSaveError(`${t('settings.arbiter')}: ${invalidArbiter} ("${arbiter.model}")`);
       return;
     }
 
@@ -398,39 +447,28 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             {/* Hard chain */}
-            <div data-tour="model-chain">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
-                {t('settings.hardChainLabel')}
-                <InfoTooltip text={t('settings.hardChainInfo')} label={t('settings.hardChainLabel')} />
-              </label>
-              <textarea
-                rows={4}
-                value={hardChain}
-                onChange={(e) => setHardChain(e.target.value)}
-                placeholder="codex:gpt-5.6-luna&#10;gemini-3.8-flash-high"
-                className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
-              />
-              <p className="text-[11px] text-[var(--t-text-3)] mt-1">
-                {t('settings.hardChainHint')}
-              </p>
-            </div>
+            <SortableModelList
+              dataTour="model-chain"
+              dataTestId="hard-chain-list"
+              title={t('settings.hardChainLabel')}
+              hint={t('settings.hardChainHint')}
+              infoTooltip={<InfoTooltip text={t('settings.hardChainInfo')} label={t('settings.hardChainLabel')} />}
+              models={hardChainModels}
+              onChange={setHardChainModels}
+              availableOptions={availableWorkerModels}
+              ariaLabel={t('settings.hardChainLabel')}
+            />
 
             {/* Easy chain */}
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
-                {t('settings.easyChainLabel')}
-              </label>
-              <textarea
-                rows={3}
-                value={easyChain}
-                onChange={(e) => setEasyChain(e.target.value)}
-                placeholder="gemini-3.8-flash-medium&#10;codex:gpt-5.6-luna"
-                className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
-              />
-              <p className="text-[11px] text-[var(--t-text-3)] mt-1">
-                {t('settings.easyChainHint')}
-              </p>
-            </div>
+            <SortableModelList
+              dataTestId="easy-chain-list"
+              title={t('settings.easyChainLabel')}
+              hint={t('settings.easyChainHint')}
+              models={easyChainModels}
+              onChange={setEasyChainModels}
+              availableOptions={availableWorkerModels}
+              ariaLabel={t('settings.easyChainLabel')}
+            />
 
             {/* Timeout */}
             <div>
@@ -529,12 +567,73 @@ export const SettingsPage: React.FC = () => {
                 </p>
               </div>
 
-              {/* allowFullMode selector */}
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">{t('extra.chatModel')}</label>
-                <input value={chatModel} onChange={(e) => setChatModel(e.target.value)} className="w-full max-w-sm text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-3 py-2 text-[var(--t-text)]" />
-                <p className="text-[11px] text-[var(--t-text-3)] mt-1">{t('extra.defaultChatModel')} {chatModels.join(', ')}</p>
-                <input value={chatModels.join(', ')} onChange={(e) => setChatModels(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))} className="mt-2 w-full max-w-sm text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" aria-label={t('extra.chatModelsLabel')} />
+              {/* Chat model and models list */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">
+                    {t('extra.chatModel')}
+                  </label>
+                  <SelectOrCustomInput
+                    ariaLabel={t('extra.chatModel')}
+                    value={chatModel}
+                    onChange={setChatModel}
+                    options={Array.from(new Set([...chatModels, ...DEFAULT_CLAUDE_MODELS]))}
+                    validate={(m) => validateModelSyntax(m, t)}
+                    placeholder="sonnet"
+                    className="w-full max-w-sm"
+                  />
+                  <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                    {t('extra.defaultChatModel')} {chatModels.join(', ')}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">
+                    {t('extra.chatModelsLabel')}
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 mb-2" aria-label={t('extra.chatModelsLabel')}>
+                    {chatModels.map((m) => (
+                      <span
+                        key={m}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-[var(--t-surface-2)] border border-[var(--t-border)] text-[var(--t-text)]"
+                      >
+                        <span>{m}</span>
+                        <button
+                          type="button"
+                          aria-label={`${t('common.remove')} ${m}`}
+                          onClick={() => setChatModels(chatModels.filter((item) => item !== m))}
+                          className="text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 max-w-sm">
+                    <SelectOrCustomInput
+                      value={newChatModel}
+                      onChange={setNewChatModel}
+                      options={DEFAULT_CLAUDE_MODELS.filter((m) => !chatModels.includes(m))}
+                      validate={(m) => validateModelSyntax(m, t)}
+                      placeholder="opus"
+                      ariaLabel={t('extra.chatModelsLabel')}
+                      className="flex-1"
+                    />
+                    <button
+                      type="button"
+                      disabled={!newChatModel.trim() || chatModels.includes(newChatModel.trim()) || Boolean(validateModelSyntax(newChatModel.trim(), t))}
+                      onClick={() => {
+                        const trimmed = newChatModel.trim();
+                        if (trimmed && !chatModels.includes(trimmed)) {
+                          setChatModels([...chatModels, trimmed]);
+                        }
+                      }}
+                      className="px-3 py-2 text-xs font-medium rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] text-[var(--t-text)] hover:bg-[var(--t-surface-2)] disabled:opacity-40 cursor-pointer shrink-0"
+                    >
+                      {t('settings.addModel')}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* allowFullMode toggle */}
@@ -569,12 +668,23 @@ export const SettingsPage: React.FC = () => {
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs" data-testid="reviewer-settings">
             <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
             <div className="space-y-3" data-testid="reviewer-order">
-              <div>
-                <h3 className="text-sm font-semibold text-[var(--t-text)]">{t('settings.reviewerOrder')}</h3>
-                <p className="text-xs text-[var(--t-text-3)]">{t('settings.reviewerOrderHint')}</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-[var(--t-text)]">{t('settings.reviewerOrder')}</h3>
+                  <p className="text-xs text-[var(--t-text-3)]">{t('settings.reviewerOrderHint')}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReviewOrder((current) => [...current, { engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }])}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-[var(--t-text)] hover:bg-[var(--t-surface)] cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{t('settings.addReviewer')}</span>
+                </button>
               </div>
               {reviewOrder.map((item, index) => {
                 const profiles = allProfiles.filter((profile) => profile.engine === item.engine);
+                const engineModelOptions = item.engine === 'codex' ? DEFAULT_CODEX_MODELS : DEFAULT_CLAUDE_MODELS;
                 return (
                   <div
                     key={`${item.engine}-${index}`}
@@ -599,17 +709,65 @@ export const SettingsPage: React.FC = () => {
                         aria-label={`${t('settings.reviewerOrder')} ${index + 1}`}
                         value={item.engine}
                         onChange={(event) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, engine: event.target.value as ReviewerOrderItem['engine'], profiles: [] } : row))}
-                        className="text-sm rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1 text-[var(--t-text)]"
+                        className="text-sm rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1.5 text-[var(--t-text)]"
                       >
                         <option value="codex">Codex</option>
                         <option value="claude">Claude</option>
                       </select>
-                      <input
-                        aria-label={`${t('settings.reviewerModel')} ${index + 1}`}
-                        value={item.model}
-                        onChange={(event) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, model: event.target.value } : row))}
-                        className="min-w-0 flex-1 text-sm font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1 text-[var(--t-text)]"
-                      />
+                      <div className="min-w-0 flex-1">
+                        <SelectOrCustomInput
+                          ariaLabel={`${t('settings.reviewerModel')} ${index + 1}`}
+                          value={item.model}
+                          onChange={(val) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, model: val } : row))}
+                          options={engineModelOptions}
+                          validate={(val) => validateReviewerModelSyntax(val, item.engine, t)}
+                          placeholder={item.engine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet'}
+                        />
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => {
+                            if (index === 0) return;
+                            setReviewOrder((current) => {
+                              const next = [...current];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index - 1, 0, moved);
+                              return next;
+                            });
+                          }}
+                          aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                          className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={index === reviewOrder.length - 1}
+                          onClick={() => {
+                            if (index === reviewOrder.length - 1) return;
+                            setReviewOrder((current) => {
+                              const next = [...current];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index + 1, 0, moved);
+                              return next;
+                            });
+                          }}
+                          aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                          className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReviewOrder((current) => current.filter((_, i) => i !== index))}
+                          aria-label={`${t('common.remove')} ${index + 1}`}
+                          className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                     <select
                       aria-label={`${t('settings.claudeProfiles')} ${index + 1}`}
@@ -628,15 +786,37 @@ export const SettingsPage: React.FC = () => {
                 <label className="flex items-center gap-2"><input type="checkbox" checked={reviewFallback.onError} onChange={(event) => setReviewFallback((value) => ({ ...value, onError: event.target.checked }))} />{t('settings.fallbackError')}</label>
                 <label className="flex items-center gap-2">{t('settings.fallbackBusy')}<input type="number" min={0} max={1440} value={reviewFallback.onBusyAfterMin} onChange={(event) => setReviewFallback((value) => ({ ...value, onBusyAfterMin: Number(event.target.value) || 0 }))} className="w-16 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-1 py-1" /></label>
               </div>
-              <div className="flex gap-2 items-center text-xs">
-                <label>{t('settings.arbiter')}</label>
-                <select value={arbiter.engine} onChange={(event) => setArbiter((value) => ({ ...value, engine: event.target.value as 'codex' | 'claude' }))} className="rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1"><option value="claude">Claude</option><option value="codex">Codex</option></select>
-                <input value={arbiter.model} onChange={(event) => setArbiter((value) => ({ ...value, model: event.target.value }))} className="w-32 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1" />
+              <div className="flex flex-wrap gap-2 items-center text-xs">
+                <label className="font-semibold text-[var(--t-text)]">{t('settings.arbiter')}</label>
+                <select value={arbiter.engine} onChange={(event) => setArbiter((value) => ({ ...value, engine: event.target.value as 'codex' | 'claude' }))} className="rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1.5 text-[var(--t-text)]">
+                  <option value="claude">Claude</option>
+                  <option value="codex">Codex</option>
+                </select>
+                <div className="w-48">
+                  <SelectOrCustomInput
+                    ariaLabel={`${t('settings.arbiter')} ${t('settings.reviewerModel')}`}
+                    value={arbiter.model}
+                    onChange={(val) => setArbiter((value) => ({ ...value, model: val }))}
+                    options={arbiter.engine === 'codex' ? DEFAULT_CODEX_MODELS : DEFAULT_CLAUDE_MODELS}
+                    validate={(val) => validateReviewerModelSyntax(val, arbiter.engine, t)}
+                    placeholder={arbiter.engine === 'codex' ? 'codex:gpt-5.6-luna' : 'sonnet'}
+                  />
+                </div>
               </div>
             </div>
             <div>
               <label htmlFor="reviewer-model-input" className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.reviewerModel')}</label>
-              <input id="reviewer-model-input" value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
+              <SelectOrCustomInput
+                id="reviewer-model-input"
+                testId="reviewer-model-input"
+                ariaLabel={t('extra.reviewerModel')}
+                value={reviewerModel}
+                onChange={setReviewerModel}
+                options={availableWorkerModels}
+                validate={(val) => validateModelSyntax(val, t)}
+                placeholder="codex:gpt-5.6-luna"
+                className="w-full"
+              />
             </div>
 
             <div className="pt-2 border-t border-[var(--t-border)] space-y-4">
@@ -771,18 +951,85 @@ export const SettingsPage: React.FC = () => {
               <p className="text-xs text-[var(--t-text-3)]">{t('extra.fallbackHint')}</p>
             </div>
             {fallback.map((step, index) => (
-              <div key={`${step.type}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const from = Number(event.dataTransfer.getData('text/plain')); if (!Number.isInteger(from) || from === index) return; const next = [...fallback]; const [moved] = next.splice(from, 1); next.splice(index, 0, moved); setFallback(next); }} className="flex items-center gap-2 p-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-grab">
-                <span className="text-xs text-[var(--t-text-3)]">⠿</span>
-                <select value={step.type} onChange={(event) => { const next = [...fallback]; const type = event.target.value; next[index] = type === 'model' ? { type: 'model', model: 'sonnet' } : type === 'apiKey' ? { type: 'apiKey', dailyCapUSD: 5 } : type === 'profile' ? { type: 'profile', profile: '' } : type === 'wait' ? { type: 'wait' } : { type: 'engine', engine: 'codex' }; setFallback(next); }} className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]">
+              <div key={`${step.type}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const from = Number(event.dataTransfer.getData('text/plain')); if (!Number.isInteger(from) || from === index) return; const next = [...fallback]; const [moved] = next.splice(from, 1); next.splice(index, 0, moved); setFallback(next); }} className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-grab">
+                <span className="text-xs text-[var(--t-text-3)] shrink-0">⠿ {index + 1}.</span>
+                <select value={step.type} onChange={(event) => { const next = [...fallback]; const type = event.target.value; next[index] = type === 'model' ? { type: 'model', model: 'sonnet' } : type === 'apiKey' ? { type: 'apiKey', dailyCapUSD: 5 } : type === 'profile' ? { type: 'profile', profile: '' } : type === 'wait' ? { type: 'wait' } : { type: 'engine', engine: 'codex' }; setFallback(next); }} className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1.5 text-[var(--t-text)] shrink-0">
                   <option value="profile">profile</option><option value="model">model</option><option value="apiKey">apiKey</option><option value="engine">engine: codex</option><option value="wait">wait</option>
                 </select>
-                {step.type === 'profile' && <input value={step.profile || ''} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, profile: event.target.value }; setFallback(next); }} placeholder="profile name" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                {step.type === 'model' && <input value={step.model} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, model: event.target.value }; setFallback(next); }} placeholder="sonnet" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">{t('extra.remove')}</button>
+                {step.type === 'profile' && (
+                  <div className="flex-1 min-w-[140px]">
+                    <SelectOrCustomInput
+                      value={step.profile || ''}
+                      onChange={(val) => { const next = [...fallback]; next[index] = { ...step, profile: val }; setFallback(next); }}
+                      options={allClaudeOptions}
+                      placeholder="profile name"
+                      ariaLabel={`Fallback profile ${index + 1}`}
+                    />
+                  </div>
+                )}
+                {step.type === 'model' && (
+                  <div className="flex-1 min-w-[140px]">
+                    <SelectOrCustomInput
+                      value={step.model}
+                      onChange={(val) => { const next = [...fallback]; next[index] = { ...step, model: val }; setFallback(next); }}
+                      options={DEFAULT_CLAUDE_MODELS}
+                      validate={(m) => validateModelSyntax(m, t)}
+                      placeholder="sonnet"
+                      ariaLabel={`Fallback model ${index + 1}`}
+                    />
+                  </div>
+                )}
+                {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1.5 text-[var(--t-text)]" />}
+                <div className="flex items-center gap-1 shrink-0 ml-auto">
+                  <button
+                    type="button"
+                    disabled={index === 0}
+                    onClick={() => {
+                      if (index === 0) return;
+                      const next = [...fallback];
+                      const [moved] = next.splice(index, 1);
+                      next.splice(index - 1, 0, moved);
+                      setFallback(next);
+                    }}
+                    aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                    className="p-1 text-xs rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={index === fallback.length - 1}
+                    onClick={() => {
+                      if (index === fallback.length - 1) return;
+                      const next = [...fallback];
+                      const [moved] = next.splice(index, 1);
+                      next.splice(index + 1, 0, moved);
+                      setFallback(next);
+                    }}
+                    aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                    className="p-1 text-xs rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowDown className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))}
+                    aria-label={`${t('extra.remove')} ${index + 1}`}
+                    className="text-xs text-[var(--t-crit)] hover:opacity-80 p-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             ))}
-            <button type="button" onClick={() => setFallback([...fallback, { type: 'wait' }])} className="text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)]">{t('extra.addStep')}</button>
+            <button
+              type="button"
+              onClick={() => setFallback([...fallback, { type: 'wait' }])}
+              className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)] hover:bg-[var(--t-surface-2)] cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t('extra.addStep')}</span>
+            </button>
             <div className="pt-3 border-t border-[var(--t-border)]">
               <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.apiKey')}</label>
               <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={apiKeyConfigured ? t('extra.configuredReplace') : 'sk-ant-…'} autoComplete="new-password" className="w-full text-xs font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-[var(--t-text)]" />
