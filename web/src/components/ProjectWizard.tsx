@@ -64,7 +64,23 @@ function projectSettings(draft: WizardDraft): ProjectSettings {
   };
 }
 
-export function ProjectWizard({ onClose }: { onClose: () => void }) {
+export function sanitizeErrorMessage(raw: unknown): string {
+  if (!raw) return 'Đã xảy ra lỗi không xác định';
+  let str = typeof raw === 'string' ? raw : (raw instanceof Error ? raw.message : String(raw));
+  const lines = str.split('\n');
+  const filtered = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('at ')) return false;
+    if (/\b(?:node_modules|\w+\.(?:ts|js|mjs|tsx|jsx)):\d+:\d+\b/.test(trimmed)) return false;
+    if (/^\s*\^+\s*$/.test(trimmed)) return false;
+    return true;
+  });
+  str = filtered.join('\n').trim();
+  str = str.replace(/^Error:\s*/, '');
+  return str || 'Đã xảy ra lỗi không xác định';
+}
+
+export function ProjectWizard({ onClose, summaryTimeoutMs = 30000 }: { onClose: () => void; summaryTimeoutMs?: number }) {
   const { t } = useLocale();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(0);
@@ -72,9 +88,10 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<WizardDraft>(restoredDraft);
   const [createdProject, setCreatedProject] = useState<Project | null>(null);
-  const [summaryPhase, setSummaryPhase] = useState<'idle' | 'summarizing' | 'review'>('idle');
+  const [summaryPhase, setSummaryPhase] = useState<'idle' | 'summarizing' | 'review' | 'error'>('idle');
   const [contextSummary, setContextSummary] = useState('');
   const [summaryTaskId, setSummaryTaskId] = useState<string | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
   const update = (patch: Partial<WizardDraft>) => {
     setError(null);
@@ -96,7 +113,7 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       }));
       setStep(2);
     },
-    onError: (cause: Error) => setError(cause.message),
+    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message)),
   });
 
   const summarizeMutation = useMutation({
@@ -114,8 +131,8 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       }
     },
     onError: (cause: Error) => {
-      setError(cause.message);
-      setSummaryPhase('idle');
+      setSummaryError(sanitizeErrorMessage(cause.message));
+      setSummaryPhase('error');
     },
   });
 
@@ -127,15 +144,34 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
   });
 
   useEffect(() => {
-    if (summaryPhase !== 'summarizing' || !summaryQuery.data) return;
+    if (summaryPhase !== 'summarizing') return;
+
+    if (summaryQuery.isError) {
+      setSummaryError(sanitizeErrorMessage(summaryQuery.error?.message));
+      setSummaryPhase('error');
+      return;
+    }
+
+    if (!summaryQuery.data) return;
+
     if (summaryQuery.data.summary) {
       setContextSummary(summaryQuery.data.summary);
       setSummaryPhase('review');
     } else if (['failed', 'blocked', 'cancelled'].includes(summaryQuery.data.status)) {
-      setError(`Task tóm tắt kết thúc với trạng thái ${summaryQuery.data.status}`);
-      setSummaryPhase('idle');
+      const msg = (summaryQuery.data as any).error || `Task tóm tắt kết thúc với trạng thái ${summaryQuery.data.status}`;
+      setSummaryError(sanitizeErrorMessage(msg));
+      setSummaryPhase('error');
     }
-  }, [summaryPhase, summaryQuery.data]);
+  }, [summaryPhase, summaryQuery.data, summaryQuery.isError, summaryQuery.error]);
+
+  useEffect(() => {
+    if (summaryPhase !== 'summarizing') return;
+    const timer = setTimeout(() => {
+      setSummaryError(t('projects.wizardSummaryTimeout'));
+      setSummaryPhase('error');
+    }, summaryTimeoutMs);
+    return () => clearTimeout(timer);
+  }, [summaryPhase, summaryTimeoutMs, t]);
 
   const pinSummaryMutation = useMutation({
     mutationFn: async (params: { projectId: string; content: string }) => {
@@ -146,7 +182,7 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       onClose();
     },
-    onError: (cause: Error) => setError(cause.message),
+    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message)),
   });
 
   const createMutation = useMutation({
@@ -162,24 +198,34 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
     },
     onSuccess: async (project) => {
       setCreatedProject(project);
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+
       if (draft.contextApproved) {
         if (draft.pinMemory && inspection?.memoryPreview) {
-          await addProjectKnowledge(project.id, { content: inspection.memoryPreview, pinned: true });
+          try {
+            await addProjectKnowledge(project.id, { content: inspection.memoryPreview, pinned: true });
+          } catch {
+            // Non-blocking best-effort
+          }
         }
       }
       if (draft.agentsDraft && draft.agentsApproved && draft.agentsContent.trim()) {
-        await writeProjectGuidance(project.id, draft.agentsContent.trim());
+        try {
+          await writeProjectGuidance(project.id, draft.agentsContent.trim());
+        } catch {
+          // Non-blocking best-effort
+        }
       }
       if (draft.contextApproved && draft.selectedSessions.length > 0) {
         setSummaryPhase('summarizing');
+        setSummaryError(null);
         summarizeMutation.mutate({ projectId: project.id, sessions: draft.selectedSessions, selections: draft.selectedContextItems });
       } else {
         localStorage.removeItem(DRAFT_KEY);
-        queryClient.invalidateQueries({ queryKey: ['projects'] });
         onClose();
       }
     },
-    onError: (cause: Error) => setError(cause.message),
+    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message)),
   });
 
   useEffect(() => {
@@ -201,6 +247,12 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
     setStep((current) => Math.min(6, current + 1));
   };
 
+  const handleFinishAndClose = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    queryClient.invalidateQueries({ queryKey: ['projects'] });
+    onClose();
+  };
+
   return (
     <Card data-testid="project-wizard" data-tour="modal-project-wizard" className="space-y-5 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -218,8 +270,20 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       {error && <div role="alert" className="rounded-lg p-3 text-sm text-[var(--t-crit)]">{error}</div>}
       {summaryPhase === 'summarizing' && (
         <div className="space-y-4 py-4" data-testid="wizard-summarizing">
-          <h3 className="text-sm font-bold">{t('projects.wizardSummarizingTitle')}</h3>
-          <p className="text-sm text-[var(--t-text-3)]">{t('projects.wizardSummarizingProgress')}</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold">{t('projects.wizardSummarizingTitle')}</h3>
+              <p className="text-sm text-[var(--t-text-3)]">{t('projects.wizardSummarizingProgress')}</p>
+            </div>
+            <span className="rounded bg-[var(--t-surface-2)] px-2 py-0.5 text-xs font-medium text-[var(--t-accent)]">
+              {t('projects.wizardSummaryStatusRunning')}
+            </span>
+          </div>
+          {summaryQuery.data?.status === 'waiting_quota' && (
+            <div role="status" className="rounded-lg bg-[var(--t-surface-2)] p-3 text-xs text-[var(--t-text-2)]">
+              {t('projects.wizardSummaryWaitingQuota')}
+            </div>
+          )}
           <div className="space-y-1 text-xs">
             {draft.selectedSessions.map((s) => (
               <div key={s} className="font-mono text-[var(--t-text-3)]">· {s}</div>
@@ -228,13 +292,75 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
           <div className="h-1.5 w-full overflow-hidden rounded bg-[var(--t-border)]">
             <div className="h-full w-2/3 animate-pulse rounded bg-[var(--t-accent)]" />
           </div>
+          <div className="flex justify-end pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleFinishAndClose}
+            >
+              {t('projects.wizardSummaryBackground')}
+            </Button>
+          </div>
+        </div>
+      )}
+      {summaryPhase === 'error' && (
+        <div className="space-y-4 py-4" data-testid="wizard-summary-error">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold">{t('projects.wizardSummaryErrorTitle')}</h3>
+              <p className="text-xs text-[var(--t-text-3)]">{t('projects.wizardProjectCreated')}</p>
+            </div>
+            <span className="rounded bg-[var(--t-surface-2)] px-2 py-0.5 text-xs font-medium text-[var(--t-crit)]">
+              {t('projects.wizardSummaryStatusError')}
+            </span>
+          </div>
+          <p className="text-sm text-[var(--t-text-2)]">{t('projects.wizardSummaryErrorDesc')}</p>
+          {summaryError && (
+            <div role="alert" className="rounded-lg border border-[var(--t-crit)]/30 bg-[var(--t-surface-2)] p-3 text-xs text-[var(--t-crit)]">
+              {summaryError}
+            </div>
+          )}
+          <div className="flex justify-between gap-2 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleFinishAndClose}
+            >
+              {t('projects.wizardSummaryBackground')}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                if (createdProject) {
+                  setSummaryError(null);
+                  setSummaryPhase('summarizing');
+                  summarizeMutation.mutate({
+                    projectId: createdProject.id,
+                    sessions: draft.selectedSessions,
+                    selections: draft.selectedContextItems,
+                  });
+                }
+              }}
+              loading={summarizeMutation.isPending}
+            >
+              {t('projects.wizardSummaryRetry')}
+            </Button>
+          </div>
         </div>
       )}
       {summaryPhase === 'review' && (
         <div className="space-y-4 py-2" data-testid="wizard-summary-review">
-          <div>
-            <h3 className="text-sm font-bold">{t('projects.wizardSummaryReviewTitle')}</h3>
-            <p className="text-xs text-[var(--t-text-3)]">{t('projects.wizardSummaryReviewDesc')}</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold">{t('projects.wizardSummaryReviewTitle')}</h3>
+              <p className="text-xs text-[var(--t-text-3)]">{t('projects.wizardSummaryReviewDesc')}</p>
+            </div>
+            <span className="rounded bg-[var(--t-surface-2)] px-2 py-0.5 text-xs font-medium text-[var(--t-accent)]">
+              {t('projects.wizardSummaryStatusSuccess')}
+            </span>
           </div>
           <textarea
             aria-label={t('projects.wizardSummaryReviewTitle')}
@@ -247,11 +373,7 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
               type="button"
               variant="secondary"
               size="sm"
-              onClick={() => {
-                localStorage.removeItem(DRAFT_KEY);
-                queryClient.invalidateQueries({ queryKey: ['projects'] });
-                onClose();
-              }}
+              onClick={handleFinishAndClose}
             >
               {t('projects.wizardSkipPin')}
             </Button>
