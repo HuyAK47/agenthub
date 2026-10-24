@@ -875,7 +875,13 @@ describe('i18n Audit & Parity', () => {
         projectTopics: {},
         notify: {} as any,
       } as any);
-      vi.spyOn(client, 'getTelegramPairingCode').mockResolvedValue({ code: '123456', expiresInSec: 300 });
+      vi.spyOn(client, 'getTelegramPairingCode').mockResolvedValue({
+        code: '123456',
+        expiresInSec: 300,
+        enabled: true,
+        allowedChatIds: [100],
+        chats: [],
+      });
       vi.spyOn(client, 'getDepartments').mockResolvedValue([{ id: 'd-1', name: 'DevOps', telegramTopicId: 42 } as any]);
       vi.spyOn(client, 'getProjects').mockResolvedValue([]);
 
