@@ -820,6 +820,24 @@ describe('i18n Audit & Parity', () => {
       expect(translateApiErrorMessage('Không thể xóa hồ sơ "worker-1" đang chạy task', undefined, 'vi'))
         .toBe('Không thể xóa hồ sơ "worker-1" đang chạy task');
     });
+
+    it('falls back to error code translation for untranslated payloads with unaccented/non-code messages in EN and VI', () => {
+      // EN locale: unaccented or arbitrary non-code messages fallback to error code translation
+      expect(translateApiErrorMessage('Conflict occurred', 'conflict', 'en')).toBe('Resource conflict');
+      expect(translateApiErrorMessage('Invalid payload structure received', 'bad_request', 'en')).toBe('Bad request');
+      expect(translateApiErrorMessage('Entity missing from database', 'not_found', 'en')).toBe('Resource not found');
+      expect(translateApiErrorMessage('Action not permitted', 'forbidden', 'en')).toBe('Permission denied');
+
+      // VI locale: unaccented or non-Vietnamese messages fallback to error code translation
+      expect(translateApiErrorMessage('Conflict occurred', 'conflict', 'vi')).toBe('Xung đột dữ liệu');
+      expect(translateApiErrorMessage('Invalid payload structure received', 'bad_request', 'vi')).toBe('Yêu cầu không hợp lệ');
+      expect(translateApiErrorMessage('Entity missing from database', 'not_found', 'vi')).toBe('Không tìm thấy tài nguyên');
+      expect(translateApiErrorMessage('Action not permitted', 'forbidden', 'vi')).toBe('Không có quyền truy cập');
+
+      // Specific regex pattern messages still preserved
+      expect(translateApiErrorMessage('Merge bị xung đột', 'conflict', 'en')).toBe('Merge conflict');
+      expect(translateApiErrorMessage('Merge bị xung đột', 'conflict', 'vi')).toBe('Merge bị xung đột');
+    });
   });
 
   describe('Date, time, and relative time formatting by locale', () => {
