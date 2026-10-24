@@ -38,7 +38,7 @@ describe('Task waitReason (lý do chờ)', () => {
 
     const projectPath = path.join(tmpDir, 'repo');
     fs.mkdirSync(projectPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: projectPath });
+    execFileSync('git', ['init', '--template='], { cwd: projectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
     fs.writeFileSync(path.join(projectPath, 'README.md'), '# Test Project');
     execFileSync('git', ['add', '.'], { cwd: projectPath });

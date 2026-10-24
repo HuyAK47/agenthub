@@ -486,9 +486,7 @@ export async function startDaemon(
   shutdown: () => Promise<void>;
 }> {
   const ctx = createContext(config, engineOverrides);
-  cleanupStaleAgentHubTempDirs();
-  const tempCleanupTimer = setInterval(() => cleanupStaleAgentHubTempDirs(), 6 * 60 * 60 * 1000);
-  tempCleanupTimer.unref?.();
+  let tempCleanupTimer: NodeJS.Timeout | undefined;
 
   // Register profiles on startup
   ctx.profileService.registerAll();
@@ -540,6 +538,9 @@ export async function startDaemon(
   try {
     await fastify.listen({ port, host: '127.0.0.1' });
     console.log(`AgentHub daemon running on http://127.0.0.1:${port}`);
+    void cleanupStaleAgentHubTempDirs();
+    tempCleanupTimer = setInterval(() => { void cleanupStaleAgentHubTempDirs(); }, 6 * 60 * 60 * 1000);
+    tempCleanupTimer.unref?.();
   } catch (err) {
     console.error('Failed to start daemon:', err);
     process.exit(1);
@@ -569,7 +570,7 @@ export async function startDaemon(
     } catch (err) {
       console.error('Error during shutdown:', err);
     } finally {
-      clearInterval(tempCleanupTimer);
+      if (tempCleanupTimer) clearInterval(tempCleanupTimer);
       clearTimeout(forceTimer);
       const elapsed = Date.now() - startTime;
       console.log(`Shutdown completed in ${elapsed}ms`);

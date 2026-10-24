@@ -27,7 +27,7 @@ describe('Reference snapshotting and modification detection unit tests', () => {
     try {
       const repoDir = path.join(root, 'shared-repo');
       fs.mkdirSync(repoDir);
-      execFileSync('git', ['init'], { cwd: repoDir });
+      execFileSync('git', ['init', '--template='], { cwd: repoDir });
       execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoDir });
 
       fs.writeFileSync(path.join(repoDir, 'initial.txt'), 'version 1');
@@ -198,7 +198,7 @@ describe('Scheduler reference guard integration', () => {
       // Project repo
       const projectRepoDir = path.join(root, 'project');
       fs.mkdirSync(projectRepoDir);
-      execFileSync('git', ['init'], { cwd: projectRepoDir });
+      execFileSync('git', ['init', '--template='], { cwd: projectRepoDir });
       execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectRepoDir });
       fs.writeFileSync(path.join(projectRepoDir, 'main.txt'), 'main');
       execFileSync('git', ['add', '.'], { cwd: projectRepoDir });
@@ -376,7 +376,7 @@ process.exit(0);
 
       const projectRepoDir = path.join(root, 'project-clean');
       fs.mkdirSync(projectRepoDir);
-      execFileSync('git', ['init'], { cwd: projectRepoDir });
+      execFileSync('git', ['init', '--template='], { cwd: projectRepoDir });
       execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectRepoDir });
       fs.writeFileSync(path.join(projectRepoDir, 'main.txt'), 'main');
       execFileSync('git', ['add', '.'], { cwd: projectRepoDir });
