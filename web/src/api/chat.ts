@@ -1,4 +1,5 @@
 import { apiFetch, getToken } from './client';
+import { getActiveLocale } from '../utils/apiError';
 import {
   ChatMessage,
   ChatSession,
@@ -122,7 +123,7 @@ export async function exportChatSession(sessionId: string): Promise<string> {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) {
-    throw new Error('Không thể xuất phiên trò chuyện');
+    throw new Error(getActiveLocale() === 'en' ? 'Failed to export chat session' : 'Không thể xuất phiên trò chuyện');
   }
   return res.text();
 }

@@ -216,7 +216,7 @@ export function StepContext({
                       <div className="mt-1 max-h-32 space-y-1 overflow-auto rounded bg-[var(--t-surface-2)] p-2">
                         {items.map((item) => (
                           <label key={item} className="flex gap-2 whitespace-pre-wrap">
-                            <input type="checkbox" aria-label={`Chọn nội dung ${item.slice(0, 40)}`} checked={draft.selectedContextItems.some((selected) => selected.session === session.name && selected.text === item)} onChange={() => toggleItem(session.name, item)} />
+                            <input type="checkbox" aria-label={t('projects.wizardSelectContextItem', { item: item.slice(0, 40) })} checked={draft.selectedContextItems.some((selected) => selected.session === session.name && selected.text === item)} onChange={() => toggleItem(session.name, item)} />
                             <span>{item}</span>
                           </label>
                         ))}

@@ -525,8 +525,10 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       setApiError(msg);
       if (
         msg.toLowerCase().includes('nhánh') ||
+        msg.toLowerCase().includes('branch') ||
         msg.toLowerCase().includes('integration') ||
-        msg.toLowerCase().includes('trùng')
+        msg.toLowerCase().includes('trùng') ||
+        msg.toLowerCase().includes('duplicate')
       ) {
         setSectionErrors((prev) => ({ ...prev, integration: msg }));
       } else if (
@@ -543,8 +545,10 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     mutationFn: () => createTask({
       project: project!.id,
       slug: `checklist-${Date.now()}`,
-      title: 'Chuyển checklist thành kiểm tra tự động',
-      body: `Đọc các file checklist dưới đây và chuyển các mục lặp lại thành checks tự động (semgrep/grep script):\n\n${(draftSettings.reviewChecklist || []).map((item) => `- ${item}`).join('\n')}`,
+      title: t('projects.suggestChecksTaskTitle'),
+      body: t('projects.suggestChecksTaskBody', {
+        items: (draftSettings.reviewChecklist || []).map((item) => `- ${item}`).join('\n'),
+      }),
       level: 'easy',
     }),
     onSuccess: () => setToastMessage(t('projects.draftChecksCreated')),
@@ -928,7 +932,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                 </div>
                 <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('projects.maxTurnsHint', {
-                    value: `${globalMaxTurns} lượt`,
+                    value: `${globalMaxTurns} ${t('projects.unitTurns')}`,
                   })}
                 </p>
               </div>

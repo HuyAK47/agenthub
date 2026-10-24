@@ -326,7 +326,7 @@ export const TaskDetailPage: React.FC = () => {
   const openCapture = (excerpt: string, checkName?: string) => {
     const first = excerpt.split(/\r?\n/).find((line) => line.trim())?.trim() || 'fix-error';
     setCapture({ excerpt, checkName });
-    setCaptureTitle(`${checkName || 'Lỗi'}: ${first.slice(0, 80)}`);
+    setCaptureTitle(`${checkName || t('common.error')}: ${first.slice(0, 80)}`);
     setCaptureSlug(`${task?.slug || 'task'}-fix-${Date.now().toString(36)}`.replace(/[^a-zA-Z0-9_-]/g, '-'));
   };
 
@@ -476,7 +476,7 @@ export const TaskDetailPage: React.FC = () => {
       ) : null}
       {task.reviewChain && task.reviewChain.length > 0 ? (
         <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] px-4 py-3 text-xs">
-          <div className="font-semibold mb-2">Review chain</div>
+          <div className="font-semibold mb-2">{t('taskDetail.reviewChain')}</div>
           <div className="flex flex-wrap items-center gap-2">
             {task.reviewChain.map((step, index) => (
               <React.Fragment key={`${step.reviewer}-${index}`}>
@@ -672,14 +672,14 @@ export const TaskDetailPage: React.FC = () => {
                 onClick={() => reviewMutation.mutate({ verdict: 'approved', merge: true })}
                 className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
                 disabled={reviewMutation.isPending || task.mergeAvailable === false}
-                title={task.mergeAvailable === false ? (task.mergeUnavailableReason || 'Project chưa cấu hình merge tự động') : undefined}
+                title={task.mergeAvailable === false ? (task.mergeUnavailableReason || t('taskDetail.mergeNotConfigured')) : undefined}
               >
                 <GitCommit className="w-4 h-4" />
                 <span>{t('taskDetail.btnMerge')}</span>
               </button>
               {task.mergeAvailable === false && (
                 <span className="text-xs text-[var(--t-text-3)] max-w-xs">
-                  {task.mergeUnavailableReason || 'Bật Integration trong Cài đặt dự án để dùng merge.'}
+                  {task.mergeUnavailableReason || t('taskDetail.mergeEnableHint')}
                   {' '}
                   <Link className="underline text-[var(--t-accent)]" to={`/projects/${encodeURIComponent(task.projectId)}/settings`}>
                     {t('taskDetail.mergeSettingsLink')}
@@ -1242,7 +1242,7 @@ export const TaskDetailPage: React.FC = () => {
             <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.captureDesc')}</p>
             <label className="block text-xs font-semibold">{t('extra.captureFieldTitle')}<input value={captureTitle} onChange={(e) => setCaptureTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
-            <label className="block text-xs font-semibold">Slug<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
+            <label className="block text-xs font-semibold">{t('createTask.slug')}<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
             <pre className="max-h-48 overflow-auto rounded-lg bg-[var(--t-log-bg)] text-[var(--t-log-text)] p-3 text-xs whitespace-pre-wrap">{capture.excerpt}</pre>
             {captureMutation.error && <p className="text-sm text-[var(--t-crit)]">{(captureMutation.error as Error).message}</p>}
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">{t('extra.cancel')}</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-[var(--t-on-accent)] cursor-pointer disabled:opacity-50">{t('extra.captureSubmit')}</button></div>

@@ -4,12 +4,25 @@ const TIME_ZONE = 'Asia/Ho_Chi_Minh';
 /** Parse API timestamps, including legacy SQLite UTC strings without a suffix. */
 export function parseApiTime(value: string | number): number {
   if (typeof value === 'number') return value;
+  if (!value || typeof value !== 'string') return NaN;
   const match = value.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/);
   return Date.parse(match ? `${match[1]}T${match[2]}Z` : value);
 }
 
-export function formatTimeAgo(value: string | number, now = Date.now()): string {
-  const seconds = Math.max(0, Math.floor((now - parseApiTime(value)) / 1000));
+export function formatTimeAgo(value: string | number, now = Date.now(), locale: TimeLocale = 'vi'): string {
+  const parsed = parseApiTime(value);
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed)) {
+    return locale === 'en' ? 'time unknown' : 'chưa rõ thời gian';
+  }
+  const seconds = Math.max(0, Math.floor((now - parsed) / 1000));
+  if (locale === 'en') {
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }
   if (seconds < 60) return `${seconds} giây trước`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes} phút trước`;

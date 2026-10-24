@@ -44,6 +44,7 @@ export interface SessionListProps {
 function formatRelativeTime(
   dateString: string,
   t: (key: string, params?: Record<string, string | number>) => string,
+  locale: 'vi' | 'en' = 'vi',
 ): string {
   try {
     const date = new Date(dateString);
@@ -53,7 +54,7 @@ function formatRelativeTime(
     if (diffSec < 60) return t('extra.justNow');
     if (diffSec < 3600) return t('extra.minutesAgo', { count: Math.floor(diffSec / 60) });
     if (diffSec < 86400) return t('extra.hoursAgo', { count: Math.floor(diffSec / 3600) });
-    return date.toLocaleDateString();
+    return date.toLocaleDateString(locale === 'vi' ? 'vi-VN' : 'en-US');
   } catch {
     return dateString;
   }
@@ -77,7 +78,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   onToggleCollapse,
   className = '',
 }) => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');
 
@@ -153,7 +154,7 @@ export const SessionList: React.FC<SessionListProps> = ({
       a.click();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(err.message || 'Không thể xuất Markdown');
+      alert(err.message || t('extra.exportMarkdownError'));
     }
   };
 
@@ -269,9 +270,9 @@ export const SessionList: React.FC<SessionListProps> = ({
         {filteredSessions.length === 0 ? (
           <div className="p-6 text-center text-xs text-[var(--t-text-2)]">
             {searchQuery
-              ? 'Không tìm thấy phiên chat phù hợp'
+              ? t('extra.noMatchingChats')
               : activeTab === 'archived'
-              ? 'Chưa có phiên chat nào được lưu trữ'
+              ? t('extra.noArchivedChats')
               : t('extra.noChats')}
           </div>
         ) : (
@@ -479,7 +480,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                   {!session.busy && (
                     <span className="inline-flex items-center gap-1 text-[var(--t-text-3)] ml-auto">
                       <Clock className="w-3 h-3" />
-                      <span>{formatRelativeTime(session.updatedAt, t)}</span>
+                      <span>{formatRelativeTime(session.updatedAt, t, locale)}</span>
                     </span>
                   )}
                 </div>

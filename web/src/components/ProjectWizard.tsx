@@ -64,8 +64,8 @@ function projectSettings(draft: WizardDraft): ProjectSettings {
   };
 }
 
-export function sanitizeErrorMessage(raw: unknown): string {
-  if (!raw) return 'Đã xảy ra lỗi không xác định';
+export function sanitizeErrorMessage(raw: unknown, fallback = ''): string {
+  if (!raw) return fallback;
   let str = typeof raw === 'string' ? raw : (raw instanceof Error ? raw.message : String(raw));
   const lines = str.split('\n');
   const filtered = lines.filter((line) => {
@@ -77,7 +77,7 @@ export function sanitizeErrorMessage(raw: unknown): string {
   });
   str = filtered.join('\n').trim();
   str = str.replace(/^Error:\s*/, '');
-  return str || 'Đã xảy ra lỗi không xác định';
+  return str || fallback;
 }
 
 export function ProjectWizard({
@@ -121,7 +121,7 @@ export function ProjectWizard({
       }));
       setStep(2);
     },
-    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message)),
+    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message, t('projects.wizardSummaryErrorUnknown'))),
   });
 
   const summarizeMutation = useMutation({
@@ -139,7 +139,7 @@ export function ProjectWizard({
       }
     },
     onError: (cause: Error) => {
-      setSummaryError(sanitizeErrorMessage(cause.message));
+      setSummaryError(sanitizeErrorMessage(cause.message, t('projects.wizardSummaryErrorUnknown')));
       setSummaryPhase('error');
     },
   });
@@ -156,7 +156,7 @@ export function ProjectWizard({
     if (summaryPhase !== 'summarizing' || summarizeMutation.isPending) return;
 
     if (summaryQuery.isError) {
-      setSummaryError(sanitizeErrorMessage(summaryQuery.error?.message));
+      setSummaryError(sanitizeErrorMessage(summaryQuery.error?.message, t('projects.wizardSummaryErrorUnknown')));
       setSummaryPhase('error');
       return;
     }
@@ -168,11 +168,11 @@ export function ProjectWizard({
       setContextSummary(summaryQuery.data.summary || '');
       setSummaryPhase('review');
     } else if (['failed', 'blocked', 'cancelled'].includes(summaryQuery.data.status)) {
-      const msg = (summaryQuery.data as any).error || `Task tóm tắt kết thúc với trạng thái ${summaryQuery.data.status}`;
-      setSummaryError(sanitizeErrorMessage(msg));
+      const msg = (summaryQuery.data as any).error || t('projects.wizardSummaryFailed', { status: summaryQuery.data.status });
+      setSummaryError(sanitizeErrorMessage(msg, t('projects.wizardSummaryErrorUnknown')));
       setSummaryPhase('error');
     }
-  }, [summaryPhase, summarizeMutation.isPending, summaryTaskId, summaryQuery.data, summaryQuery.isError, summaryQuery.error]);
+  }, [summaryPhase, summarizeMutation.isPending, summaryTaskId, summaryQuery.data, summaryQuery.isError, summaryQuery.error, t]);
 
   useEffect(() => {
     if (summaryPhase !== 'summarizing') return;
@@ -192,7 +192,7 @@ export function ProjectWizard({
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       onClose();
     },
-    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message)),
+    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message, t('projects.wizardSummaryErrorUnknown'))),
   });
 
   const createMutation = useMutation({
@@ -235,7 +235,7 @@ export function ProjectWizard({
         onClose();
       }
     },
-    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message)),
+    onError: (cause: Error) => setError(sanitizeErrorMessage(cause.message, t('projects.wizardSummaryErrorUnknown'))),
   });
 
   useEffect(() => {
