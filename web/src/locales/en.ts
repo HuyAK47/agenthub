@@ -417,6 +417,7 @@ export const en: typeof vi = {
     connectedTerminal: 'Connected. Please follow instructions in the terminal.',
     sessionEnded: 'Login session ended.',
     wsError: 'WebSocket terminal connection error.',
+    reconnecting: 'Reconnecting…',
     doneAndClose: 'Done & Close',
     authMethod: 'Authentication Method',
     tabTerminalLogin: 'Terminal Login',
@@ -841,7 +842,7 @@ export const en: typeof vi = {
   setup: {
     navLabel: 'Setup', loading: 'Checking environment…', title: 'Get started with AgentHub', subtitle: 'Prepare the tools you need to start working.',
     progress: 'Readiness progress', progressSummary: '{ready}/{total} items ready',
-    node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Background service', mcp: 'Claude Code MCP registration', accounts: 'Sign in to accounts', account: 'Account {name}', login: 'Sign in in Profiles', needsCheck: 'Needs checking', manualGuide: 'Guide', install: 'Install', installAll: 'Install all missing tools', installing: 'Installing…', log: 'View log', complete: 'Complete', skip: 'Skip for now', done: 'Complete', notDone: 'Needs action', running: 'Running', installFailed: 'Installation failed',
+    node: 'Node.js {version}', git: 'Git{version}', claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI', service: 'Background service', mcp: 'Claude Code MCP registration', accounts: 'Sign in to accounts', account: 'Account {name}', login: 'Sign in in Profiles', needsCheck: 'Needs checking', manualGuide: 'Guide', install: 'Install', installAll: 'Install all missing tools', installing: 'Installing…', log: 'View log', complete: 'Complete', skip: 'Skip for now', done: 'Complete', notDone: 'Needs action', running: 'Running', installFailed: 'Installation failed', agyInstallConfirm: 'AgentHub will run Antigravity’s official installer (curl | bash). Do you want to continue?', agyManualHint: 'If automatic installation fails, run this command in a terminal and check again:',
     firstProject: 'Add first project', addProject: 'Add project',
   },
   departments: {
