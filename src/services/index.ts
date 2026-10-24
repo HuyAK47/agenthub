@@ -1393,6 +1393,21 @@ export class AppService {
     return { ok: true };
   }
 
+  sanitizeErrorText(raw: unknown): string {
+    if (!raw) return 'Đã xảy ra lỗi không xác định';
+    let str = typeof raw === 'string' ? raw : (raw instanceof Error ? raw.message : String(raw));
+    const lines = str.split('\n');
+    const filtered = lines.filter((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('at ')) return false;
+      if (/\b(?:node_modules|\w+\.(?:ts|js|mjs|tsx|jsx)):\d+:\d+\b/.test(trimmed)) return false;
+      return true;
+    });
+    str = filtered.join('\n').trim();
+    str = str.replace(/^Error:\s*/, '');
+    return str || 'Đã xảy ra lỗi không xác định';
+  }
+
   summarizeProjectContext(id: string, raw: unknown): { taskId: string; status: string; summary: string | null } {
     const input = z.object({
       sessions: z.array(z.string().min(1)).min(1),
@@ -1410,36 +1425,89 @@ export class AppService {
       return [`### ${session}`, excerpt || 'Phiên không có nội dung văn bản; chỉ dùng các mục người dùng đã chọn bên dưới.'].join('\n');
     });
 
+    const body = [
+      'Read the selected previous session files and summarize durable project knowledge.',
+      'The session excerpts below are the approved input. Do not access ~/.claude or any other session file directly.',
+      '',
+      'Selected session excerpts:',
+      ...sessionContext,
+      ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
+      ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
+    ].join('\n');
+
+    const taskId = `${project.id}/summarize-previous-context`;
+    const existing = this.taskRepo.get(taskId);
+    if (existing) {
+      if (existing.status === 'done') {
+        const summary = existing.doneReport?.trim() || null;
+        return { taskId: existing.id, status: existing.status, summary };
+      }
+      if (existing.status === 'running') {
+        return { taskId: existing.id, status: existing.status, summary: null };
+      }
+      // Re-queue existing task for retry
+      this.taskRepo.update(taskId, {
+        status: 'queued',
+        resume: 1,
+        attempt: existing.attempt + 1,
+        transientRetries: 0,
+        notBefore: null,
+        body,
+        reviewerChangesRequested: 0,
+        reviewerEscalated: 0,
+        reviewerEscalatedAt: null,
+        reviewerEscalationReason: null,
+      });
+      if (existing.worktreePath) {
+        for (const marker of ['DONE', 'BLOCKED']) {
+          try {
+            fs.unlinkSync(path.join(existing.worktreePath, '.agenthub', marker));
+          } catch {
+            // Marker is absent or already removed.
+          }
+        }
+      }
+      this.scheduler.getEventBus().emit('task.queued', taskId, { reason: 'retry' });
+      this.scheduler.triggerTick();
+      const updated = this.taskRepo.get(taskId)!;
+      return { taskId: updated.id, status: updated.status, summary: null };
+    }
+
     const task = this.createTask({
       project: project.id,
       slug: 'summarize-previous-context',
       title: 'Review and summarize previous Claude Code context',
-      body: [
-        'Read the selected previous session files and summarize durable project knowledge.',
-        'The session excerpts below are the approved input. Do not access ~/.claude or any other session file directly.',
-        '',
-        'Selected session excerpts:',
-        ...sessionContext,
-        ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
-        ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
-      ].join('\n'),
+      body,
       level: 'easy',
       start: true,
     });
     return { taskId: task.id, status: task.status, summary: null };
   }
 
-  async getProjectContextSummary(projectId: string, taskIdParam: string) {
+  async getProjectContextSummary(projectId: string, taskIdParam: string): Promise<{ taskId: string; status: string; summary: string | null; error?: string; waitReason?: string }> {
     const project = this.projectRepo.get(projectId);
     if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     const taskId = toTaskId(taskIdParam);
     const task = this.taskRepo.get(taskId);
-    if (!task || task.projectId !== projectId || task.slug !== 'summarize-previous-context') {
+    if (!task || task.projectId !== projectId || !task.slug.startsWith('summarize-previous-context')) {
       throw new HttpError(404, 'not_found', 'Task tóm tắt không tồn tại');
     }
     const detail = await this.getTask(taskId);
     const summary = detail.doneContent?.trim() || null;
-    return { taskId, status: task.status, summary };
+    let error: string | undefined = undefined;
+    if (task.status === 'failed' || task.status === 'blocked') {
+      const rawError = detail.blockedContent?.trim() || task.reviewerEscalationReason || 'Task tóm tắt thất bại trong quá trình thực thi.';
+      error = this.sanitizeErrorText(rawError);
+    } else if (task.status === 'waiting_quota') {
+      error = 'Chưa có engine khả dụng hoặc đang hết quota.';
+    }
+    return {
+      taskId,
+      status: task.status,
+      summary,
+      ...(error ? { error } : {}),
+      ...(task.waitReason ? { waitReason: task.waitReason } : {}),
+    };
   }
 
   createNewProject(raw: unknown): ProjectRow {

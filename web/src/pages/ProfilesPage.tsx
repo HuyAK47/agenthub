@@ -1407,6 +1407,7 @@ function LoginWizard({
   onClose: () => void;
 }) {
   const { t } = useLocale();
+  const [currentSessionId, setCurrentSessionId] = useState(sessionId);
   const provider = engine === 'codex'
     ? 'Codex'
     : engine === 'claude'
@@ -1436,7 +1437,16 @@ function LoginWizard({
           </div>
         </div>
         <div className="min-h-0 flex-1">
-          <LoginTerminal profileName={profileName} sessionId={sessionId} onClose={onClose} />
+          <LoginTerminal
+            profileName={profileName}
+            sessionId={currentSessionId}
+            onClose={onClose}
+            onReconnect={async () => {
+              const next = await loginProfile(profileName);
+              setCurrentSessionId(next.sessionId);
+              return next.sessionId;
+            }}
+          />
         </div>
       </div>
     </div>

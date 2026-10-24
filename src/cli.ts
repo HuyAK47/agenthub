@@ -2,6 +2,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { loadConfig, saveConfig, AgentHubConfig } from './config.js';
+import { agyInstallHint, findAgyBin } from './agy.js';
 import { createContext, closeContext, startDaemon } from './daemon.js';
 import { runMcpServer } from './mcp/index.js';
 import { getOrCreateToken, getTokenPath, readExistingToken } from './auth.js';
@@ -997,9 +998,11 @@ export async function cmdProfile(
 
       const executable = profile.engine === 'claude'
         ? findClaudeBin(config.chat.claudeBin)
-        : (process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
+        : findAgyBin(config.hubHome);
       if (!executable) {
-        console.error(`Không tìm thấy lệnh ${profile.engine}`);
+        console.error(profile.engine === 'agy'
+          ? `Không tìm thấy Antigravity CLI (agy). Cài bằng: ${agyInstallHint()}`
+          : `Không tìm thấy lệnh ${profile.engine}`);
         process.exitCode = 1;
         break;
       }
