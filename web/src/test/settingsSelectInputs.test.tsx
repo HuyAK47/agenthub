@@ -110,6 +110,45 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(screen.getByTestId('current-value').textContent).toBe('sonnet');
     });
 
+    it('switches back to preset mode when options are loaded asynchronously after first render', async () => {
+      const AsyncWrapper = () => {
+        const [val, setVal] = useState('codex:dyn-model-1');
+        const [opts, setOpts] = useState<string[]>([]);
+        return (
+          <div>
+            <SelectOrCustomInput
+              value={val}
+              onChange={setVal}
+              options={opts}
+              testId="async-select"
+            />
+            <button type="button" onClick={() => setOpts(['codex:dyn-model-1', 'codex:dyn-model-2'])}>
+              Load Options
+            </button>
+          </div>
+        );
+      };
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <AsyncWrapper />
+        </LocaleProvider>,
+      );
+
+      // Initially opts is empty, so val is unknown and custom input is rendered
+      expect(screen.getByTestId('async-select-custom-input')).toBeInTheDocument();
+
+      // Load options asynchronously
+      fireEvent.click(screen.getByRole('button', { name: 'Load Options' }));
+
+      // Custom input should disappear, and select should show the known option
+      await waitFor(() => {
+        expect(screen.queryByTestId('async-select-custom-input')).not.toBeInTheDocument();
+        const select = screen.getByTestId('async-select') as HTMLSelectElement;
+        expect(select.value).toBe('codex:dyn-model-1');
+      });
+    });
+
     it('validates branch names correctly', () => {
       expect(validateBranchSyntax('main', (k) => k)).toBeNull();
       expect(validateBranchSyntax('feat/feature-1', (k) => k)).toBeNull();
@@ -451,6 +490,65 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       });
       const payload = updateSpy.mock.calls[0][0];
       expect(payload.brain?.fallback?.[0]).toEqual({ type: 'profile', profile: 'legacy-fallback-claude' });
+    });
+
+    it('creates reviewer with empty model when dynamic codex models are empty', async () => {
+      vi.spyOn(client, 'getModelOptions').mockResolvedValue({
+        suggestions: ['sonnet'],
+        configured: ['sonnet'],
+      });
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        modelChainHard: ['sonnet'],
+        modelChainEasy: ['sonnet'],
+        defaultTimeout: 10800,
+        chat: { claudeBin: 'claude', allowFullMode: false, maxConcurrent: 2, model: 'sonnet', models: ['sonnet'] },
+        reviewer: {
+          model: 'sonnet',
+          order: [],
+          fallback: { onUnavailable: true, onError: true, onBusyAfterMin: 10 },
+          arbiter: { engine: 'claude', model: 'sonnet' },
+        },
+      } as any);
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <SettingsPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('reviewer-order')).toBeInTheDocument();
+      });
+
+      const orderBlock = screen.getByTestId('reviewer-order');
+      const addReviewerBtn = within(orderBlock).getByRole('button', { name: /Thêm reviewer/i });
+      fireEvent.click(addReviewerBtn);
+
+      const reviewerSelect = within(orderBlock).getByRole('combobox', { name: /^Model reviewer 1$/i }) as HTMLSelectElement;
+      expect(reviewerSelect.value).toBe('');
+      expect(within(reviewerSelect).queryByText(/gpt-5.6-luna/i)).not.toBeInTheDocument();
+
+      // Switch to Claude engine, should pick sonnet from claude models
+      const engineSelect = within(orderBlock).getByRole('combobox', { name: /^Thứ tự duyệt 1$/i }) as HTMLSelectElement;
+      fireEvent.change(engineSelect, { target: { value: 'claude' } });
+      await waitFor(() => {
+        const updatedReviewerSelect = within(orderBlock).getByRole('combobox', { name: /^Model reviewer 1$/i }) as HTMLSelectElement;
+        expect(updatedReviewerSelect.value).toBe('sonnet');
+      });
+
+      // Switch back to Codex engine, should reset to '' since codex models are empty
+      const reloadedEngineSelect = within(orderBlock).getByRole('combobox', { name: /^Thứ tự duyệt 1$/i }) as HTMLSelectElement;
+      fireEvent.change(reloadedEngineSelect, { target: { value: 'codex' } });
+      await waitFor(() => {
+        const updatedReviewerSelect = within(orderBlock).getByRole('combobox', { name: /^Model reviewer 1$/i }) as HTMLSelectElement;
+        expect(updatedReviewerSelect.value).toBe('');
+      });
     });
   });
 
@@ -870,6 +968,89 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       const callArgs = updateProjectSpy.mock.calls[0][1];
       expect(callArgs.settings?.review?.order).toBeNull();
       expect(callArgs.settings?.review?.fallback).toBeNull();
+    });
+
+    it('handles empty dynamic models gracefully without inserting hardcoded codex:gpt-5.6-luna in ProjectSettingsDrawer', async () => {
+      // Mock project with NO reviewer order or chain overrides, and clean config
+      const cleanProject = {
+        ...mockProject,
+        review: null,
+        settings: {
+          ...mockProject.settings,
+          review: undefined,
+        },
+      };
+
+      // Mock getModelOptions returning no codex suggestions
+      vi.spyOn(client, 'getModelOptions').mockResolvedValue({
+        configured: [],
+        suggestions: ['sonnet', 'opus'],
+      });
+      // Mock getConfig returning no codex models
+      vi.spyOn(client, 'getConfig').mockResolvedValue({
+        chat: { model: 'sonnet', models: ['sonnet', 'opus'] },
+        reviewer: { model: '', claudeModel: 'sonnet' },
+        modelChainHard: [],
+        modelChainEasy: [],
+      } as any);
+
+      render(
+        <LocaleProvider initialLocale="vi">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <ProjectSettingsDrawer
+                  project={cleanProject}
+                  isOpen={true}
+                  onClose={() => {}}
+                />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      const advancedSummary = screen.getByTestId('advanced-settings-section').querySelector('summary');
+      if (advancedSummary) fireEvent.click(advancedSummary);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-reviewer-order')).toBeInTheDocument();
+        expect(screen.getByTestId('project-review-chain')).toBeInTheDocument();
+      });
+
+      // 1. Override reviewer order: should create row with model "" instead of hardcoded luna
+      const orderBlock = screen.getByTestId('project-reviewer-order');
+      const overrideOrderBtn = within(orderBlock).getAllByRole('button', { name: /\+ Ghi đè cấu hình/i })[0];
+      fireEvent.click(overrideOrderBtn);
+
+      const reviewerSelect = within(orderBlock).getByRole('combobox', { name: /^Model reviewer 1$/i }) as HTMLSelectElement;
+      expect(reviewerSelect.value).toBe('');
+      expect(within(reviewerSelect).queryByText(/gpt-5.6-luna/i)).not.toBeInTheDocument();
+
+      // 2. Add another reviewer: should also have model ""
+      const addReviewerBtn = within(orderBlock).getByRole('button', { name: /Thêm reviewer/i });
+      fireEvent.click(addReviewerBtn);
+      const reviewerSelect2 = within(orderBlock).getByRole('combobox', { name: /^Model reviewer 2$/i }) as HTMLSelectElement;
+      expect(reviewerSelect2.value).toBe('');
+      expect(within(reviewerSelect2).queryByText(/gpt-5.6-luna/i)).not.toBeInTheDocument();
+
+      // 3. Switch reviewer 1 engine to claude: should pick sonnet
+      const engineSelect = within(orderBlock).getByRole('combobox', { name: /^Thứ tự duyệt 1$/i }) as HTMLSelectElement;
+      fireEvent.change(engineSelect, { target: { value: 'claude' } });
+      expect(reviewerSelect.value).toBe('sonnet');
+
+      // Switch back to codex: should reset to '' since codex models are empty
+      fireEvent.change(engineSelect, { target: { value: 'codex' } });
+      expect(reviewerSelect.value).toBe('');
+
+      // 4. Override review chain: codex step should have reviewer "" instead of hardcoded luna
+      const chainBlock = screen.getByTestId('project-review-chain');
+      const overrideChainBtn = within(chainBlock).getByRole('button', { name: /\+ Ghi đè cấu hình/i });
+      fireEvent.click(overrideChainBtn);
+
+      const step1Select = within(chainBlock).getByRole('combobox', { name: /^Bước review 1$/i }) as HTMLSelectElement;
+      expect(step1Select.value).toBe('');
+      expect(within(step1Select).queryByText(/gpt-5.6-luna/i)).not.toBeInTheDocument();
     });
   });
 });
