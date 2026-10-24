@@ -53,6 +53,10 @@ function RunningDuration({ startedAt }: { startedAt: string }) {
   useEffect(() => {
     const update = () => {
       const start = parseApiTime(startedAt);
+      if (!Number.isFinite(start)) {
+        setElapsed('');
+        return;
+      }
       const now = Date.now();
       const diffSec = Math.max(0, Math.floor((now - start) / 1000));
       const hours = Math.floor(diffSec / 3600);
@@ -300,9 +304,9 @@ export const DashboardPage: React.FC = () => {
       <GettingStartedChecklist />
 
       <section data-testid="perf-card" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-4">
-        <div className="flex items-center justify-between"><div><h2 className="text-base font-semibold">Hiệu năng</h2><p className="text-xs text-[var(--t-text-2)]">CPU/RSS theo nhóm tiến trình · vòng 1 giờ gần nhất</p></div><Cpu className="w-5 h-5 text-[var(--t-accent)]" /></div>
-        {perf?.latest ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{Object.entries(perf.latest.groups).filter(([, value]) => value.processes > 0).sort((a, b) => b[1].cpuPercent - a[1].cpuPercent).map(([name, value]) => <div key={name} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2"><div className="flex justify-between text-xs"><span className="font-medium">{name}</span><span>{value.cpuPercent.toFixed(1)}% CPU</span></div><div className="mt-1 text-xs text-[var(--t-text-2)]">{(value.rssBytes / 1024 ** 3).toFixed(2)} GB · {value.processes} process</div></div>)}</div> : <p className="text-xs text-[var(--t-text-2)]">Chưa có mẫu đo.</p>}
-        {perf?.samples?.length ? <div className="flex h-8 items-end gap-0.5" aria-label="Biểu đồ CPU 1 giờ">{perf.samples.map((sample, index) => <span key={`${sample.at}-${index}`} className="flex-1 rounded-t bg-[var(--t-accent)] opacity-70" style={{ height: `${Math.max(4, Math.min(100, Object.values(sample.groups).reduce((sum, group) => sum + group.cpuPercent, 0) / Math.max(1, sample.cpuCount)))}%` }} />)}</div> : null}
+        <div className="flex items-center justify-between"><div><h2 className="text-base font-semibold">{t('dashboard.perfTitle')}</h2><p className="text-xs text-[var(--t-text-2)]">{t('dashboard.perfSubtitle')}</p></div><Cpu className="w-5 h-5 text-[var(--t-accent)]" /></div>
+        {perf?.latest ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{Object.entries(perf.latest.groups).filter(([, value]) => value.processes > 0).sort((a, b) => b[1].cpuPercent - a[1].cpuPercent).map(([name, value]) => <div key={name} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2"><div className="flex justify-between text-xs"><span className="font-medium">{name}</span><span>{value.cpuPercent.toFixed(1)}% CPU</span></div><div className="mt-1 text-xs text-[var(--t-text-2)]">{(value.rssBytes / 1024 ** 3).toFixed(2)} GB · {value.processes} process</div></div>)}</div> : <p className="text-xs text-[var(--t-text-2)]">{t('dashboard.perfNoSamples')}</p>}
+        {perf?.samples?.length ? <div className="flex h-8 items-end gap-0.5" aria-label={t('dashboard.perfChartLabel')}>{perf.samples.map((sample, index) => <span key={`${sample.at}-${index}`} className="flex-1 rounded-t bg-[var(--t-accent)] opacity-70" style={{ height: `${Math.max(4, Math.min(100, Object.values(sample.groups).reduce((sum, group) => sum + group.cpuPercent, 0) / Math.max(1, sample.cpuCount)))}%` }} />)}</div> : null}
       </section>
 
       {status.disks && status.disks.length > 0 && (
@@ -314,7 +318,7 @@ export const DashboardPage: React.FC = () => {
                 <HardDrive className="w-4 h-4 text-[var(--t-text-2)]" />
               </div>
               <div className="mt-2 text-xs text-[var(--t-text-2)]">
-                {disk.freeGB} / {disk.totalGB} GB trống · ngưỡng {disk.minFreeGB} GB
+                {t('dashboard.diskSpaceSummary', { free: disk.freeGB, total: disk.totalGB, threshold: disk.minFreeGB })}
               </div>
             </div>
           ))}
@@ -324,7 +328,7 @@ export const DashboardPage: React.FC = () => {
       {status.worktrees && (
         <section data-testid="worktree-usage" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
           <div className="flex items-center justify-between">
-            <div><h2 className="text-base font-semibold">Worktree</h2><p className="text-xs text-[var(--t-text-2)]">{status.worktrees.count} đang có · {(status.worktrees.bytes / 1024 ** 3).toFixed(2)} GB</p></div>
+            <div><h2 className="text-base font-semibold">{t('dashboard.worktrees')}</h2><p className="text-xs text-[var(--t-text-2)]">{t('dashboard.worktreesCount', { count: status.worktrees.count, size: (status.worktrees.bytes / 1024 ** 3).toFixed(2) })}</p></div>
             <HardDrive className="w-5 h-5 text-[var(--t-accent)]" />
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -343,7 +347,7 @@ export const DashboardPage: React.FC = () => {
       {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
         <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
         {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
-          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--t-text-2)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('dashboard.brainEngine')}: {brain.engine || 'claude'} · {t('projects.brainPermissions')}: {brain.permissions} · Mode phiên: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--t-text-2)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
+          <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--t-text-2)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('dashboard.brainEngine')}: {brain.engine || 'claude'} · {t('projects.brainPermissions')}: {brain.permissions} · {t('dashboard.brainSessionMode')}: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--t-text-2)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
           <div className="flex items-center gap-3 text-xs"><span>{t('dashboard.brainTokens')}: {brain.tokensToday.toLocaleString()}</span><Link to={`/chat/${encodeURIComponent(brain.sessionId)}`} className="text-[var(--t-accent)] hover:underline">{t('dashboard.openBrainChat')}</Link></div>
         </div>)}
         {brainOverview.assistants?.map((assistant) => <div key={`assistant-${assistant.projectId || 'system'}`} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3" data-testid={`assistant-row-${assistant.projectId || 'system'}`}>
@@ -482,9 +486,9 @@ export const DashboardPage: React.FC = () => {
             <table className="w-full text-left text-sm">
               <thead className="bg-[var(--t-surface-2)] text-[var(--t-text-2)] text-xs uppercase font-medium">
                 <tr>
-                  <th className="px-6 py-3">Task</th>
-                  <th className="px-6 py-3">Project</th>
-                  <th className="px-6 py-3">Model</th>
+                  <th className="px-6 py-3">{t('dashboard.thTask')}</th>
+                  <th className="px-6 py-3">{t('dashboard.thProject')}</th>
+                  <th className="px-6 py-3">{t('dashboard.thModel')}</th>
                   <th className="px-6 py-3">{t('dashboard.thProfile')}</th>
                   <th className="px-6 py-3">{t('dashboard.thElapsed')}</th>
                   <th className="px-6 py-3">{t('dashboard.thResources')}</th>
@@ -653,13 +657,13 @@ export const DashboardPage: React.FC = () => {
           return (
             <div key={engine} className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 shadow-xs">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-[var(--t-text)]">Quota {label}</h2>
-                <span className="text-[11px] text-[var(--t-text-2)]">{engineProfiles.length} hồ sơ</span>
+                <h2 className="text-sm font-semibold text-[var(--t-text)]">{t('dashboard.quotaTitle', { engine: label })}</h2>
+                <span className="text-[11px] text-[var(--t-text-2)]">{t('dashboard.profilesCount', { count: engineProfiles.length })}</span>
               </div>
               <QuotaUsage usage={providerUsage(profiles, engine)} onRefresh={() => { void refetchProfiles(); }} />
               {engine === 'claude' && engineProfiles.some((profile) => profile.claudeTokens) && (
                 <div className="mt-2 text-xs text-[var(--t-text-2)]">
-                  Token hôm nay: {Math.round(engineProfiles.reduce((sum, profile) => sum + (profile.claudeTokens?.today || 0), 0)).toLocaleString()}
+                  {t('dashboard.tokensToday', { count: Math.round(engineProfiles.reduce((sum, profile) => sum + (profile.claudeTokens?.today || 0), 0)).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US') })}
                 </div>
               )}
             </div>
@@ -668,17 +672,17 @@ export const DashboardPage: React.FC = () => {
       </div>
       {claudeQuota && <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
-        <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p, index) => <React.Fragment key={p.profileName}><span title={formatTimeTitle(p.resetsAt, locale, p.source, p.observedAt)}>{p.profileName}: {p.status === 'allowed' ? t('extra.claudeQuotaAvailable') : p.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : p.limited ? t('extra.claudeQuotaRejected') : (p.status || t('extra.unknown'))}{p.resetsAt ? ` · ${formatReset(p.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {new Date(p.observedAt).toLocaleTimeString()}</span>{index < claudeQuota.profiles!.length - 1 ? ' · ' : ''}</React.Fragment>) : <span title={formatTimeTitle(claudeQuota.resetsAt, locale, '/usage', claudeQuota.observedAt || null)}>{claudeQuota.status === 'allowed' ? t('extra.claudeQuotaAvailable') : claudeQuota.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : claudeQuota.limited ? t('extra.claudeQuotaRejected') : (claudeQuota.status || t('extra.unknown'))}{claudeQuota.resetsAt ? ` · ${formatReset(claudeQuota.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {claudeQuota.observedAt ? new Date(claudeQuota.observedAt).toLocaleTimeString() : t('extra.unknown')}</span>}</span>
+        <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p, index) => <React.Fragment key={p.profileName}><span title={formatTimeTitle(p.resetsAt, locale, p.source, p.observedAt)}>{p.profileName}: {p.status === 'allowed' ? t('extra.claudeQuotaAvailable') : p.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : p.limited ? t('extra.claudeQuotaRejected') : (p.status || t('extra.unknown'))}{p.resetsAt ? ` · ${formatReset(p.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {new Date(p.observedAt).toLocaleTimeString(locale === 'vi' ? 'vi-VN' : 'en-US')}</span>{index < claudeQuota.profiles!.length - 1 ? ' · ' : ''}</React.Fragment>) : <span title={formatTimeTitle(claudeQuota.resetsAt, locale, '/usage', claudeQuota.observedAt || null)}>{claudeQuota.status === 'allowed' ? t('extra.claudeQuotaAvailable') : claudeQuota.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : claudeQuota.limited ? t('extra.claudeQuotaRejected') : (claudeQuota.status || t('extra.unknown'))}{claudeQuota.resetsAt ? ` · ${formatReset(claudeQuota.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {claudeQuota.observedAt ? new Date(claudeQuota.observedAt).toLocaleTimeString(locale === 'vi' ? 'vi-VN' : 'en-US') : t('extra.unknown')}</span>}</span>
       </div>}
       {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--t-border)] bg-[var(--t-surface)]'}`}>
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? 'ĐANG BẬT' : 'đang tắt'}</div>
-            {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">Đang dùng: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? `tài khoản ${claudeFailover.step.profile || 'khác'}` : claudeFailover.step.type === 'apiKey' ? `API key (đã dùng $${claudeFailover.dailyCostUSD.toFixed(2)}/$${claudeFailover.step.dailyCapUSD ?? 0})` : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : 'chờ reset'}</div>}
-            {claudeFailover.reason && <div className="text-xs mt-1">Lý do: {claudeFailover.reason}</div>}
-            {claudeFailover.evidence && <div className="text-xs text-[var(--t-text-2)] mt-1 truncate">Bằng chứng: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString()}</div>}
+            <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? t('dashboard.failoverOn') : t('dashboard.failoverOff')}</div>
+            {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">{t('dashboard.failoverUsing')}: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? t('dashboard.failoverUsingProfile', { name: claudeFailover.step.profile || t('common.unknown') }) : claudeFailover.step.type === 'apiKey' ? t('dashboard.failoverUsingApiKey', { used: claudeFailover.dailyCostUSD.toFixed(2), cap: claudeFailover.step.dailyCapUSD ?? 0 }) : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : t('dashboard.failoverWaitingReset')}</div>}
+            {claudeFailover.reason && <div className="text-xs mt-1">{t('dashboard.failoverReason')}: {claudeFailover.reason}</div>}
+            {claudeFailover.evidence && <div className="text-xs text-[var(--t-text-2)] mt-1 truncate">{t('dashboard.failoverEvidence')}: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US')}</div>}
           </div>
-          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-[var(--t-on-accent)] text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? 'Đang tắt…' : 'Tắt failover'}</button>}
+          {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-[var(--t-on-accent)] text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? t('dashboard.failoverTurningOff') : t('dashboard.failoverTurnOff')}</button>}
         </div>
       </div>}
 
@@ -728,7 +732,7 @@ export const DashboardPage: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-[var(--t-surface-2)] text-[var(--t-text-2)]">
-                <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">Task</th></tr>
+                <tr><th className="px-6 py-3">PID</th><th className="px-6 py-3">CWD</th><th className="px-6 py-3">CPU</th><th className="px-6 py-3">RSS</th><th className="px-6 py-3">{t('dashboard.thTask')}</th></tr>
               </thead>
               <tbody className="divide-y divide-[var(--t-border)]">
                 {orphans.map((orphan) => <tr key={orphan.pid}>
@@ -736,7 +740,7 @@ export const DashboardPage: React.FC = () => {
                   <td className="px-6 py-3 font-mono max-w-sm truncate" title={orphan.cwd}>{orphan.cwd}</td>
                   <td className="px-6 py-3">{orphan.cpu.toFixed(1)}%</td>
                   <td className="px-6 py-3">{(orphan.rss / 1024 / 1024).toFixed(1)} MB</td>
-                  <td className="px-6 py-3">{orphan.task?.title || orphan.task?.id || 'Không xác định'}</td>
+                  <td className="px-6 py-3">{orphan.task?.title || orphan.task?.id || t('common.unknown')}</td>
                 </tr>)}
               </tbody>
             </table>
@@ -804,7 +808,7 @@ export const DashboardPage: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <span className="text-xs text-[var(--t-text-3)] shrink-0" title={Number.isFinite(parseApiTime(event.ts)) ? new Date(parseApiTime(event.ts)).toISOString() : String(event.ts)}>{formatTimeAgo(event.ts)}</span>
+                  <span className="text-xs text-[var(--t-text-3)] shrink-0" title={Number.isFinite(parseApiTime(event.ts)) ? new Date(parseApiTime(event.ts)).toISOString() : String(event.ts)}>{formatTimeAgo(event.ts, undefined, locale)}</span>
                 </li>
               );
             }}

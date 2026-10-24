@@ -132,7 +132,7 @@ export function ProjectWizard({ onClose }: { onClose: () => void }) {
       setContextSummary(summaryQuery.data.summary);
       setSummaryPhase('review');
     } else if (['failed', 'blocked', 'cancelled'].includes(summaryQuery.data.status)) {
-      setError(`Task tóm tắt kết thúc với trạng thái ${summaryQuery.data.status}`);
+      setError(t('projects.wizardSummaryFailed', { status: summaryQuery.data.status }));
       setSummaryPhase('idle');
     }
   }, [summaryPhase, summaryQuery.data]);

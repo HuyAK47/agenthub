@@ -1142,7 +1142,7 @@ export const ProjectsPage: React.FC = () => {
                   className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] px-2 h-7"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
-                  <span>Kiến thức</span>
+                  <span>{t('projects.knowledge')}</span>
                 </Button>
 
                 {knowledgeProject === proj.id && (
