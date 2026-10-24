@@ -1,20 +1,21 @@
-# Hoàn tất task p-ci-main-red
+# Hoàn tất task f-agy-setup-install
 
 ## Tóm tắt
 
-- Dò tìm bubblewrap linh hoạt qua biến môi trường AGENTHUB_BWRAP_BIN, PATH và tiếp tục kiểm tra fallback về các đường dẫn chuẩn hệ thống (/usr/bin/bwrap, /bin/bwrap) khi không tìm thấy trong PATH.
-- Bổ sung hàm canRunBubblewrap để kiểm tra khả năng thực thi thực tế của bubblewrap trước khi chạy các test phụ thuộc sandbox bwrap.
-- Bổ sung mock bwrap fixture cho test brain codex khi máy host không có bwrap, tránh fail test brain-codex.
-- Bổ sung skipIf cho các test yêu cầu bwrap sandbox trong engines.test.ts khi host thiếu bwrap, đồng thời bổ sung các test cho nhánh thiếu bwrap và thứ tự ưu tiên PATH/đường dẫn chuẩn.
-- Độc lập các test với công cụ hệ thống host (flock, lockf, nice) trong locks.test.ts, priority.test.ts, quota-usage.test.ts.
+- Hoàn thiện dò binary agy qua PATH, các thư mục cài đặt chuẩn và `AGENTHUB_AGY_BIN`; khi cấu hình trỏ tới file không tồn tại, lỗi nêu rõ đường dẫn thay vì để lộ `execvp`/`ENOENT`.
+- Sửa `AgyEngine` để không fallback mù về chuỗi `agy`; worker ghi lỗi dễ hiểu vào log khi chưa tìm thấy binary.
+- Bổ sung test backend cho PTY thiếu agy và installer agy bằng shim tạm, gồm thành công, exit 0 nhưng không có binary và cấu hình binary không tồn tại.
+- Setup Web xác nhận trước khi chạy installer chính thức `curl -fsSL https://antigravity.google/cli/install.sh | bash`, hiển thị log/lỗi và lệnh cài thủ công khi agy thiếu hoặc hậu cài thất bại.
+- Bổ sung test Web cho lỗi reconnect và lỗi hậu cài SetupPage; tài liệu cài đặt vi/en đã có từ phần trước của task.
 
 ## Kết quả kiểm tra
 
-- `npm run lint`: PASS (0 lỗi).
-- `npm run typecheck`: PASS (0 lỗi).
-- `npm run test:web -- --run`: PASS (52 test files, 353 tests passed).
-- `env -u AGENTHUB_CHAT_KIND -u AGENTHUB_CHAT_SESSION_ID npm test -- --run`: PASS (101 test files, 1108 tests passed, 1 skipped).
-- Kiểm tra giả lập thiếu bwrap với `AGENTHUB_BWRAP_BIN=0`: PASS (test/engines.test.ts: 21 passed, 3 skipped; test/brain-codex.test.ts: 6 passed).
+- `npm run lint`: PASS, 0 lỗi (3 warning `no-explicit-any` đã có trong test fixture mới).
+- `npm run typecheck`: PASS.
+- `env -u AGENTHUB_CHAT_KIND -u AGENTHUB_CHAT_SESSION_ID npm test -- --run`: PASS, 101 test files, 1111 passed, 1 skipped.
+- `npm run test:web -- --run`: PASS, 52 test files, 355 passed.
+- `npm run build`: PASS.
+- Test mục tiêu backend mới: `test/setup.test.ts` và `test/pty.test.ts`, 12/12 passed.
 
 ## Việc còn thiếu
 
@@ -22,8 +23,7 @@
 
 ## Danh sách commit
 
-- a5046fd fix(engines): discover bubblewrap via path and configuration
-- 122f3c6 test(brain-codex): use mock bwrap fixture when host lacks bubblewrap
-- 1e1e289 test(engines): skip bubblewrap tests when unavailable and test error branch
-- 7cab724 test: decouple tests from host tools flock, lockf and nice
-- a49b439 fix(engines): fallback to standard bubblewrap paths when not in PATH
+- a4405a1 feat: support official agy installation and binary discovery
+- 7bc5795 fix: surface agy login and setup failures
+- 42557ae fix: report missing agy binaries clearly
+- a59a948 test: cover agy setup and reconnect feedback
