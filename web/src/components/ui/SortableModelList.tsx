@@ -14,6 +14,7 @@ export interface SortableModelListProps {
   dataTour?: string;
   dataTestId?: string;
   ariaLabel?: string;
+  validate?: (val: string) => string | null;
 }
 
 export const SortableModelList: React.FC<SortableModelListProps> = ({
@@ -26,6 +27,7 @@ export const SortableModelList: React.FC<SortableModelListProps> = ({
   dataTour,
   dataTestId,
   ariaLabel,
+  validate,
 }) => {
   const { t } = useLocale();
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -95,7 +97,7 @@ export const SortableModelList: React.FC<SortableModelListProps> = ({
 
       <div className="space-y-2" aria-label={ariaLabel || title}>
         {models.map((model, index) => {
-          const itemError = validateModelSyntax(model, t);
+          const itemError = validate ? validate(model) : validateModelSyntax(model, t);
           return (
             <div
               key={`${model}-${index}`}
@@ -120,7 +122,7 @@ export const SortableModelList: React.FC<SortableModelListProps> = ({
                     value={model}
                     onChange={(val) => updateModel(index, val)}
                     options={availableOptions}
-                    validate={(val) => validateModelSyntax(val, t)}
+                    validate={validate ? validate : (val) => validateModelSyntax(val, t)}
                     ariaLabel={`${ariaLabel || title || 'Model'} ${index + 1}`}
                   />
                 </div>
@@ -173,7 +175,7 @@ export const SortableModelList: React.FC<SortableModelListProps> = ({
             value={modelToAdd}
             onChange={setModelToAdd}
             options={availableOptions}
-            validate={(val) => validateModelSyntax(val, t)}
+            validate={validate ? validate : (val) => validateModelSyntax(val, t)}
             ariaLabel={t('settings.addModelToChain')}
             placeholder={t('settings.selectModelPlaceholder')}
           />

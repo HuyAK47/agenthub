@@ -1,3 +1,12 @@
+export const VALID_AGY_MODELS = [
+  'gemini-3.8-flash-high',
+  'gemini-3.8-flash-medium',
+  'gemini-3.8-flash-low',
+  'claude-sonnet-4-6',
+  'claude-opus-4-6-thinking',
+  'gpt-oss-120b-medium',
+];
+
 export const DEFAULT_VALID_MODELS = [
   'gemini-3.8-flash-high',
   'gemini-3.8-flash-medium',
@@ -22,15 +31,46 @@ export function validateModelSyntax(
   if (!trimmed) {
     return t ? t('settings.emptyChainWarning') : 'Model không được để trống';
   }
-  const isAgy = DEFAULT_VALID_MODELS.includes(trimmed);
+  const isAgy = VALID_AGY_MODELS.includes(trimmed);
   const isCodex = trimmed.startsWith('codex:') && trimmed.length > 6;
-  const isClaude = trimmed.startsWith('claude:') || DEFAULT_CLAUDE_MODELS.includes(trimmed);
-  const isGeminiOrGpt = trimmed.startsWith('gemini-') || trimmed.startsWith('gpt-');
 
-  if (!isAgy && !isCodex && !isClaude && !isGeminiOrGpt) {
+  if (!isAgy && !isCodex) {
     return t
       ? t('settings.invalidModelSyntax')
-      : 'Mỗi model phải là id hợp lệ hoặc có tiền tố codex:';
+      : 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:';
+  }
+  return null;
+}
+
+export function validateChatModelSyntax(
+  model: string,
+  t?: (key: string) => string,
+): string | null {
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!DEFAULT_CLAUDE_MODELS.includes(trimmed)) {
+    return t
+      ? t('settings.invalidChatModelSyntax')
+      : 'Model chat phải là sonnet, opus hoặc haiku';
+  }
+  return null;
+}
+
+export function validateReviewChainReviewerSyntax(
+  reviewer: string,
+  t?: (key: string) => string,
+): string | null {
+  const trimmed = reviewer.trim();
+  if (!trimmed) {
+    return t ? t('settings.emptyChainWarning') : 'Reviewer không được để trống';
+  }
+  const isValid = trimmed === 'claude' || (trimmed.startsWith('codex:') && trimmed.length > 6);
+  if (!isValid) {
+    return t
+      ? t('settings.invalidReviewChainReviewer')
+      : 'Reviewer phải là claude hoặc có tiền tố codex:';
   }
   return null;
 }
@@ -71,8 +111,23 @@ export function validateReviewerModelSyntax(
   if (/\s/.test(trimmed)) {
     return t ? t('settings.invalidModelSyntax') : 'Model không được chứa khoảng trắng';
   }
-  if (engine && engine.length === 0) {
-    return null;
+  if (engine === 'claude') {
+    if (!DEFAULT_CLAUDE_MODELS.includes(trimmed) && !trimmed.startsWith('claude-')) {
+      return t
+        ? t('settings.invalidChatModelSyntax')
+        : 'Model Claude phải là sonnet, opus hoặc haiku';
+    }
+  }
+  if (engine === 'codex') {
+    if (
+      !DEFAULT_CODEX_MODELS.includes(trimmed) &&
+      !trimmed.startsWith('codex:') &&
+      !trimmed.startsWith('gpt-')
+    ) {
+      return t
+        ? t('settings.invalidModelSyntax')
+        : 'Model Codex phải có tiền tố codex: hoặc gpt-';
+    }
   }
   return null;
 }
