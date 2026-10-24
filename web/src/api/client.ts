@@ -35,6 +35,7 @@ import {
   Department,
   EventItem,
 } from '../types/api';
+import { getActiveLocale, translateApiErrorMessage } from '../utils/apiError';
 
 export interface ClaudeSession {
   sessionId: string;
@@ -77,7 +78,7 @@ const TOKEN_STORAGE_KEY = 'agenthub_token';
 let unauthorizedListeners: Array<() => void> = [];
 
 export class AuthError extends Error {
-  constructor(message = 'Chưa xác thực hoặc token không hợp lệ') {
+  constructor(message = getActiveLocale() === 'en' ? 'Unauthenticated or invalid token' : 'Chưa xác thực hoặc token không hợp lệ') {
     super(message);
     this.name = 'AuthError';
   }
@@ -139,11 +140,14 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   const token = getToken();
   if (!token) {
     notifyUnauthorized();
-    throw new AuthError('Thiếu token xác thực');
+    throw new AuthError(getActiveLocale() === 'en' ? 'Missing authentication token' : 'Thiếu token xác thực');
   }
 
   const headers = new Headers(options.headers || {});
   headers.set('Authorization', `Bearer ${token}`);
+  if (!headers.has('Accept-Language')) {
+    headers.set('Accept-Language', getActiveLocale());
+  }
 
   if (options.body && typeof options.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
@@ -156,11 +160,12 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
 
   if (response.status === 401) {
     clearToken();
-    throw new AuthError('Token không hợp lệ hoặc đã hết hạn');
+    throw new AuthError(getActiveLocale() === 'en' ? 'Token is invalid or expired' : 'Token không hợp lệ hoặc đã hết hạn');
   }
 
   if (!response.ok) {
-    let errorMsg = `Lỗi ${response.status}: ${response.statusText}`;
+    let errorMsg = getActiveLocale() === 'en' ? `Error ${response.status}: ${response.statusText}` : `Lỗi ${response.status}: ${response.statusText}`;
+    let errorCode: string | undefined;
     try {
       const errJson = await response.json();
       if (errJson) {
@@ -168,6 +173,9 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
           errorMsg = errJson.message;
         } else if (errJson.error) {
           errorMsg = errJson.error;
+        }
+        if (typeof errJson.error === 'string') {
+          errorCode = errJson.error;
         }
       }
     } catch {
@@ -178,8 +186,12 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
         // fallback
       }
     }
+    const rawMsg = errorMsg;
+    errorMsg = translateApiErrorMessage(errorMsg, errorCode, getActiveLocale());
     const err: any = new Error(errorMsg);
     err.status = response.status;
+    err.code = errorCode;
+    err.rawMessage = rawMsg;
     throw err;
   }
 
@@ -798,7 +810,7 @@ export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; log
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.onerror = () => reject(reader.error || new Error('Không thể đọc logo'));
+    reader.onerror = () => reject(reader.error || new Error(getActiveLocale() === 'en' ? 'Failed to read logo file' : 'Không thể đọc logo'));
     reader.readAsDataURL(file);
   });
   return apiFetch('/api/branding/logo', { method: 'PUT', body: JSON.stringify({ mimeType: file.type, data }) });
