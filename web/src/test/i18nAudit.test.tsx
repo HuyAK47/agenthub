@@ -15,6 +15,12 @@ import { CreateTaskPage } from '../pages/CreateTaskPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { ChatPage } from '../pages/ChatPage';
 import { PlansPage } from '../pages/PlansPage';
+import { DashboardPage } from '../pages/DashboardPage';
+import { SavingsPage } from '../pages/SavingsPage';
+import { SetupPage } from '../pages/SetupPage';
+import { translateApiErrorMessage } from '../utils/apiError';
+import { formatTimeAgo } from '../lib/time';
+import { browserNotificationBody } from '../notifications';
 
 import * as client from '../api/client';
 import * as chatApi from '../api/chat';
@@ -101,6 +107,98 @@ describe('i18n Audit & Parity', () => {
     expect(missingInEn, 'Keys present in vi but missing in en').toEqual([]);
     expect(missingInVi, 'Keys present in en but missing in vi').toEqual([]);
     expect(enKeys).toEqual(viKeys);
+  });
+
+  it('Requirement 3b: Placeholder parameter parity between vi and en', () => {
+    function getNestedEntries(obj: any, prefix = ''): [string, string][] {
+      const entries: [string, string][] = [];
+      for (const k of Object.keys(obj)) {
+        const full = prefix ? `${prefix}.${k}` : k;
+        if (typeof obj[k] === 'object' && obj[k] !== null && !Array.isArray(obj[k])) {
+          entries.push(...getNestedEntries(obj[k], full));
+        } else if (typeof obj[k] === 'string') {
+          entries.push([full, obj[k]]);
+        }
+      }
+      return entries;
+    }
+
+    const viEntries = new Map(getNestedEntries(viLocale));
+    const enEntries = new Map(getNestedEntries(enLocale));
+
+    const PLACEHOLDER_RE = /\{([a-zA-Z0-9_]+)\}/g;
+    function extractPlaceholders(str: string): string[] {
+      const matches: string[] = [];
+      let m;
+      while ((m = PLACEHOLDER_RE.exec(str)) !== null) {
+        matches.push(m[1]);
+      }
+      return matches.sort();
+    }
+
+    const mismatches: Array<{ key: string; vi: string[]; en: string[] }> = [];
+
+    for (const [key, viVal] of viEntries) {
+      const enVal = enEntries.get(key);
+      if (enVal !== undefined) {
+        const viTokens = extractPlaceholders(viVal);
+        const enTokens = extractPlaceholders(enVal);
+        if (JSON.stringify(viTokens) !== JSON.stringify(enTokens)) {
+          mismatches.push({ key, vi: viTokens, en: enTokens });
+        }
+      }
+    }
+
+    expect(mismatches, `Placeholder mismatches found: ${JSON.stringify(mismatches, null, 2)}`).toEqual([]);
+  });
+
+  it('Requirement 3c: web/src contains no hardcoded Vietnamese diacritics in user-facing JSX or string literals', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+
+    const violations: Array<{ file: string; line: number; text: string }> = [];
+
+    function scanDir(dir: string) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git') continue;
+          scanDir(full);
+        } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))) {
+          if (full.includes('locales/')) continue;
+          if (full.includes('utils/apiError.ts')) continue;
+          if (full.includes('notifications.ts')) continue;
+          if (full.includes('lib/time.ts')) continue;
+          if (full.includes('api/client.ts')) continue;
+          if (full.includes('api/chat.ts')) continue;
+          if (full.includes('mocks/')) continue;
+          if (full.includes('.test.') || full.includes('__tests__') || full.includes('/test/')) continue;
+
+          const content = fs.readFileSync(full, 'utf8');
+          const lines = content.split('\n');
+          lines.forEach((line, idx) => {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('{/*')) return;
+            if (trimmed.includes("locale === 'en'") || trimmed.includes("locale === 'vi'") || trimmed.includes("getActiveLocale()")) return;
+            if (trimmed.includes(".includes('") || trimmed.includes('.includes("')) return;
+
+            if (VN_DIACRITICS_REGEX.test(trimmed)) {
+              violations.push({
+                file: path.relative(process.cwd(), full),
+                line: idx + 1,
+                text: trimmed,
+              });
+            }
+          });
+        }
+      }
+    }
+
+    const srcDir = fs.existsSync('web/src') ? 'web/src' : 'src';
+    scanDir(srcDir);
+
+    expect(violations, `Hardcoded Vietnamese strings found in source code: ${JSON.stringify(violations, null, 2)}`).toEqual([]);
   });
 
   describe('Requirement 2: Render all in-scope pages in English without Vietnamese diacritics', () => {
@@ -472,6 +570,216 @@ describe('i18n Audit & Parity', () => {
       });
 
       assertNoVietnameseText(container, 'PlansPage with active batch');
+    });
+
+    it('10. DashboardPage renders in en without Vietnamese characters', async () => {
+      vi.spyOn(client, 'getStatus').mockResolvedValue({
+        tasks: { running: 1, waiting_quota: 0, queued: 0 },
+        running: [
+          {
+            taskId: 'p1/t1',
+            projectId: 'p1',
+            slug: 't1',
+            title: 'Sample running task',
+            status: 'running',
+            engine: 'agy',
+            model: 'gemini-3.8-flash',
+            profile: 'g1',
+            workerRssMb: 120,
+            workerCpuPct: 15,
+            startedAt: new Date(Date.now() - 60000).toISOString(),
+          },
+        ],
+        disk: { freeGB: 20, totalGB: 100 },
+        orphanProcesses: [],
+        quota: { profiles: [], claudeProfiles: [], accounts: [] },
+        claudeFailover: { active: false, status: 'off', currentStep: 0, dailyCostUSD: 0 },
+      } as any);
+      vi.spyOn(client, 'getProjects').mockResolvedValue([
+        { id: 'p1', name: 'Project 1', path: '/path/to/p1', defaultBranch: 'main', maxParallel: 2 },
+      ]);
+      vi.spyOn(client, 'getProfiles').mockResolvedValue([]);
+      vi.spyOn(client, 'getClaudeQuota').mockResolvedValue({ profiles: [] } as any);
+      vi.spyOn(client, 'getClaudeFailover').mockResolvedValue({ active: false } as any);
+      vi.spyOn(client, 'getEventHistoryPage').mockResolvedValue({ events: [], hasMore: false } as any);
+      vi.spyOn(client, 'getBrain').mockResolvedValue({ mode: 'auto' } as any);
+      vi.spyOn(client, 'getPerf').mockResolvedValue([] as any);
+      vi.spyOn(client, 'getOrphans').mockResolvedValue([] as any);
+
+      const { container } = render(
+        <LocaleProvider initialLocale="en">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <DashboardPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('System Overview')).toBeInTheDocument();
+      });
+
+      assertNoVietnameseText(container, 'DashboardPage');
+    });
+
+    it('11. SavingsPage renders in en without Vietnamese characters', async () => {
+      vi.spyOn(client, 'getSavings').mockResolvedValue({
+        summary: {
+          totalWorkerTokens: 100000,
+          claudeSavedTokens: 90000,
+          claudeCostTokens: 30000,
+          savingsRatio: 0.7,
+          totalLinesAdded: 50,
+          totalLinesDeleted: 10,
+          totalLinesChanged: 60,
+          tasksApprovedCount: 2,
+          avgReviewRounds: 1,
+        },
+        byEngine: {},
+        byModel: {},
+        byDay: [],
+        tasks: [
+          {
+            taskId: 'p1/t1',
+            slug: 't1',
+            title: 'Task Alpha',
+            projectId: 'p1',
+            status: 'done',
+            model: 'gemini-3.8-flash-high',
+            engine: 'agy',
+            linesAdded: 50,
+            linesDeleted: 10,
+            filesChanged: 2,
+            tokens: 100000,
+            estimated: false,
+            reviewRounds: 1,
+            durationMs: 30000,
+            completedAt: '2026-10-20T10:00:00.000Z',
+          },
+        ],
+      } as any);
+
+      const { container } = render(
+        <LocaleProvider initialLocale="en">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <SavingsPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Delegation Savings')).toBeInTheDocument();
+      });
+
+      assertNoVietnameseText(container, 'SavingsPage');
+    });
+
+    it('12. SetupPage renders in en without Vietnamese characters', async () => {
+      vi.spyOn(client, 'getSetupStatus').mockResolvedValue({
+        node: { version: 'v22.21.1', ok: true },
+        git: { version: '2.25.1', installed: true },
+        tools: [
+          { id: 'claude', installed: true, version: '1.0.0', path: '/bin/claude', manual: false, installing: false },
+          { id: 'codex', installed: true, version: '1.0.0', path: '/bin/codex', manual: false, installing: false },
+          { id: 'agy', installed: true, version: '1.0.0', path: '/bin/agy', manual: false, installing: false },
+        ],
+        profiles: [
+          { name: 'default', engine: 'agy', kind: 'keyring', loggedIn: true, enabled: 1 },
+        ],
+        mcpRegistered: true,
+        serviceRunning: true,
+      } as any);
+
+      const { container } = render(
+        <LocaleProvider initialLocale="en">
+          <ThemeProvider>
+            <QueryClientProvider client={queryClient}>
+              <MemoryRouter>
+                <SetupPage />
+              </MemoryRouter>
+            </QueryClientProvider>
+          </ThemeProvider>
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Get started with AgentHub')).toBeInTheDocument();
+      });
+
+      assertNoVietnameseText(container, 'SetupPage');
+    });
+  });
+
+  describe('Backend API error message translation', () => {
+    it('translates exact Vietnamese backend messages into English when in en locale', () => {
+      expect(translateApiErrorMessage('Chỉ thị không tồn tại', undefined, 'en')).toBe('Directive does not exist');
+      expect(translateApiErrorMessage('Mục kiến thức không tồn tại', undefined, 'en')).toBe('Knowledge entry does not exist');
+      expect(translateApiErrorMessage('Database chưa sẵn sàng', undefined, 'en')).toBe('Database is not ready');
+      expect(translateApiErrorMessage('Không thể xóa hồ sơ hệ thống', undefined, 'en')).toBe('Cannot delete system profile');
+    });
+
+    it('translates dynamic patterned messages into English with preserved parameters', () => {
+      expect(translateApiErrorMessage('Không thể xóa hồ sơ "worker-1" đang chạy task', undefined, 'en'))
+        .toBe('Cannot delete profile "worker-1" while running a task');
+      expect(translateApiErrorMessage('Nhánh mặc định "dev" không tồn tại trong repository', undefined, 'en'))
+        .toBe('Default branch "dev" does not exist in repository');
+      expect(translateApiErrorMessage('Thư mục repo không tồn tại: /tmp/repo', undefined, 'en'))
+        .toBe('Repository directory does not exist: /tmp/repo');
+    });
+
+    it('translates standard error codes when message is code-based', () => {
+      expect(translateApiErrorMessage('conflict', 'conflict', 'en')).toBe('Resource conflict');
+      expect(translateApiErrorMessage('cycle_detected', 'cycle_detected', 'en')).toBe('Dependency cycle detected');
+      expect(translateApiErrorMessage('rate_limited', 'rate_limited', 'en')).toBe('Rate limit exceeded');
+    });
+
+    it('preserves Vietnamese text when active locale is vi', () => {
+      expect(translateApiErrorMessage('Chỉ thị không tồn tại', undefined, 'vi')).toBe('Chỉ thị không tồn tại');
+      expect(translateApiErrorMessage('Không thể xóa hồ sơ "worker-1" đang chạy task', undefined, 'vi'))
+        .toBe('Không thể xóa hồ sơ "worker-1" đang chạy task');
+    });
+  });
+
+  describe('Date, time, and relative time formatting by locale', () => {
+    it('formats relative time correctly in vi and en', () => {
+      const now = 1700000000000;
+      expect(formatTimeAgo(now - 15000, now, 'vi')).toBe('15 giây trước');
+      expect(formatTimeAgo(now - 15000, now, 'en')).toBe('15s ago');
+
+      expect(formatTimeAgo(now - 120000, now, 'vi')).toBe('2 phút trước');
+      expect(formatTimeAgo(now - 120000, now, 'en')).toBe('2m ago');
+
+      expect(formatTimeAgo(now - 7200000, now, 'vi')).toBe('2 giờ trước');
+      expect(formatTimeAgo(now - 7200000, now, 'en')).toBe('2h ago');
+
+      expect(formatTimeAgo(now - 86400000 * 3, now, 'vi')).toBe('3 ngày trước');
+      expect(formatTimeAgo(now - 86400000 * 3, now, 'en')).toBe('3d ago');
+    });
+  });
+
+  describe('Browser notifications localization', () => {
+    it('formats notification body in Vietnamese and English', () => {
+      const taskEvent = {
+        type: 'task.review_ready',
+        taskId: 'p1/t1',
+        payload: { title: 'Implement Auth' },
+      };
+      expect(browserNotificationBody(taskEvent as any, 'vi')).toContain('Implement Auth chờ review');
+      expect(browserNotificationBody(taskEvent as any, 'en')).toContain('Implement Auth waiting for review');
+
+      const diskEvent = {
+        type: 'disk.low',
+        payload: { freeGB: 2.5, minFreeGB: 5 },
+      };
+      expect(browserNotificationBody(diskEvent as any, 'vi')).toContain('Ổ đĩa còn 2.5 GB');
+      expect(browserNotificationBody(diskEvent as any, 'en')).toContain('Disk space low: 2.5 GB');
     });
   });
 });
