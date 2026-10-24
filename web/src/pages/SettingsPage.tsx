@@ -9,7 +9,14 @@ import { deletePermissionRule, getPermissionRules } from '../api/chat';
 import { useTour } from '../components/tour/TourContext';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
 import { DataTable, SelectOrCustomInput, SortableModelList } from '../components/ui';
-import { DEFAULT_VALID_MODELS, DEFAULT_CLAUDE_MODELS, DEFAULT_CODEX_MODELS, validateModelSyntax, validateReviewerModelSyntax } from '../utils/models';
+import {
+  DEFAULT_VALID_MODELS,
+  DEFAULT_CLAUDE_MODELS,
+  DEFAULT_CODEX_MODELS,
+  validateModelSyntax,
+  validateChatModelSyntax,
+  validateReviewerModelSyntax,
+} from '../utils/models';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
@@ -241,7 +248,7 @@ export const SettingsPage: React.FC = () => {
       return;
     }
 
-    const invalidChat = validateModelSyntax(chatModel, t);
+    const invalidChat = validateChatModelSyntax(chatModel, t);
     if (invalidChat) {
       setSaveError(`${t('extra.chatModel')}: ${invalidChat} ("${chatModel}")`);
       return;
@@ -578,7 +585,7 @@ export const SettingsPage: React.FC = () => {
                     value={chatModel}
                     onChange={setChatModel}
                     options={Array.from(new Set([...chatModels, ...DEFAULT_CLAUDE_MODELS]))}
-                    validate={(m) => validateModelSyntax(m, t)}
+                    validate={(m) => validateChatModelSyntax(m, t)}
                     placeholder="sonnet"
                     className="w-full max-w-sm"
                   />
@@ -614,14 +621,14 @@ export const SettingsPage: React.FC = () => {
                       value={newChatModel}
                       onChange={setNewChatModel}
                       options={DEFAULT_CLAUDE_MODELS.filter((m) => !chatModels.includes(m))}
-                      validate={(m) => validateModelSyntax(m, t)}
+                      validate={(m) => validateChatModelSyntax(m, t)}
                       placeholder="opus"
                       ariaLabel={t('extra.chatModelsLabel')}
                       className="flex-1"
                     />
                     <button
                       type="button"
-                      disabled={!newChatModel.trim() || chatModels.includes(newChatModel.trim()) || Boolean(validateModelSyntax(newChatModel.trim(), t))}
+                      disabled={!newChatModel.trim() || chatModels.includes(newChatModel.trim()) || Boolean(validateChatModelSyntax(newChatModel.trim(), t))}
                       onClick={() => {
                         const trimmed = newChatModel.trim();
                         if (trimmed && !chatModels.includes(trimmed)) {
@@ -684,6 +691,8 @@ export const SettingsPage: React.FC = () => {
               </div>
               {reviewOrder.map((item, index) => {
                 const profiles = allProfiles.filter((profile) => profile.engine === item.engine);
+                const activeProfileNames = new Set(profiles.map((p) => p.name));
+                const missingProfiles = (item.profiles || []).filter((name) => !activeProfileNames.has(name));
                 const engineModelOptions = item.engine === 'codex' ? DEFAULT_CODEX_MODELS : DEFAULT_CLAUDE_MODELS;
                 return (
                   <div
@@ -777,6 +786,11 @@ export const SettingsPage: React.FC = () => {
                       className="w-full text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1 text-[var(--t-text)] min-h-[56px]"
                     >
                       {profiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name}</option>)}
+                      {missingProfiles.map((name) => (
+                        <option key={name} value={name}>
+                          {name} ({t('settings.inactiveOrOld')})
+                        </option>
+                      ))}
                     </select>
                   </div>
                 );
@@ -973,7 +987,7 @@ export const SettingsPage: React.FC = () => {
                       value={step.model}
                       onChange={(val) => { const next = [...fallback]; next[index] = { ...step, model: val }; setFallback(next); }}
                       options={DEFAULT_CLAUDE_MODELS}
-                      validate={(m) => validateModelSyntax(m, t)}
+                      validate={(m) => validateChatModelSyntax(m, t)}
                       placeholder="sonnet"
                       ariaLabel={`Fallback model ${index + 1}`}
                     />
