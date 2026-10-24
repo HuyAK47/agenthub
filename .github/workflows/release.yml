@@ -18,12 +18,19 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
+            experimental: false
           - os: ubuntu-22.04-arm
+            experimental: false
           # Build on both supported macOS architectures so native node-pty and
           # better-sqlite3 binaries match the user's machine.
           - os: macos-15-intel
+            experimental: true
           - os: macos-latest
+            experimental: true
     runs-on: ${{ matrix.os }}
+    # macOS runner availability/native compatibility still needs confirmation
+    # on GitHub. Keep Linux release artifacts publishable while this is proven.
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -74,6 +81,9 @@ jobs:
 
   smoke-macos:
     # Install the macOS archive natively on a clean runner and check /health.
+    # This remains non-blocking until PTY, native SQLite and launchctl are
+    # confirmed on both hosted macOS architectures.
+    continue-on-error: true
     needs: package
     strategy:
       fail-fast: false

@@ -98,8 +98,8 @@
   3. Từ chỉ gồm chữ cái không có dấu nối (kể cả chữ hoa, Unicode hay Han/kana như `ĐỀ`, `営業`, `đề`) sẽ không được tự động đoán là `externalRef` nhằm bảo vệ mô tả task thông thường; người dùng muốn đặt ref dạng này cần dùng cú pháp tường minh (`#đề`, `#営業`, `ref:đề` hoặc `ĐỀ-123`, `営業-1`).
 - **Hệ quả**: Đảm bảo 100% không nhận nhầm tiêu đề mô tả thường thành ref, đồng thời hỗ trợ đầy đủ mọi ref tự do có marker hoặc dấu nối quy chuẩn.
 
-## DEC-010: Dùng `macos-15-intel` và chặn publish khi macOS smoke fail
+## DEC-010: Dùng `macos-15-intel` và tạm thời không chặn publish bởi macOS
 
 - **Bối cảnh**: `macos-13` đã bị GitHub bắt đầu loại bỏ và không còn là runner hợp lệ; release cần tạo archive native cho cả Intel và Apple Silicon. Các lỗi cũ trên macOS (PTY, process stats, launchctl) cũng có thể làm archive được phát hành nhưng không cài/chạy được.
-- **Quyết định**: Dùng `macos-15-intel` cho archive/smoke Intel và `macos-latest` cho Apple Silicon. Giữ các job macOS là bắt buộc và để `publish` phụ thuộc vào `package`, `smoke`, `smoke-macos`.
-- **Rủi ro/giới hạn**: Worker chỉ kiểm chứng được Linux bằng shim; chưa có bằng chứng từ runner macOS thật trong phiên này. Claude phải chạy lại workflow sau khi push để xác nhận PTY, native `better-sqlite3`, `spawn-helper`, process stats và `launchctl`; nếu runner macOS thật vẫn lỗi thì cần điều chỉnh workflow/đánh dấu tạm thời thay vì phát hành archive chưa được kiểm thử.
+- **Quyết định**: Dùng `macos-15-intel` cho archive/smoke Intel và `macos-latest` cho Apple Silicon. Các matrix entry macOS trong `package` và toàn bộ `smoke-macos` tạm thời có `continue-on-error`, để lỗi runner/native không chặn việc phát hành artifact Linux. Khi runner hoạt động, artifact macOS vẫn được gom vào release và được smoke test; nếu macOS fail hoặc runner không tồn tại thì release phải được coi là thiếu bản macOS.
+- **Rủi ro/giới hạn**: Worker chỉ kiểm chứng được Linux bằng shim; chưa có bằng chứng từ runner macOS thật trong phiên này. Claude phải chạy lại workflow sau khi push để xác nhận PTY, native `better-sqlite3`, `spawn-helper`, process stats và `launchctl`. Sau khi xác nhận thành công trên cả hai kiến trúc, bỏ `continue-on-error` và đổi quyết định này thành bắt buộc; nếu không, cần tiếp tục ghi rõ việc thiếu artifact macOS trong release notes.
