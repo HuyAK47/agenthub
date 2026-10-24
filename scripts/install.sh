@@ -167,9 +167,16 @@ prompt_yes_no() {
   if [ -t 0 ]; then
     printf "%s %s: " "$_question" "$_prompt"
     read -r _ans
-  elif [ -e /dev/tty ]; then
-    printf "%s %s: " "$_question" "$_prompt" >/dev/tty
-    read -r _ans </dev/tty
+  elif ([ -t 1 ] || [ -t 2 ]) && [ -c /dev/tty ]; then
+    if printf "%s %s: " "$_question" "$_prompt" >/dev/tty 2>/dev/null && read -r _ans </dev/tty 2>/dev/null; then
+      :
+    else
+      if [ "$_default" = "y" ]; then
+        return 0
+      else
+        return 1
+      fi
+    fi
   else
     if [ "$_default" = "y" ]; then
       return 0
