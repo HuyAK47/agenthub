@@ -66,15 +66,30 @@ export function validateReviewChainReviewerSyntax(
   if (!trimmed) {
     return t ? t('settings.emptyChainWarning') : 'Reviewer không được để trống';
   }
-  const isValid =
-    trimmed === 'claude' ||
-    (trimmed.startsWith('codex:') && trimmed.length > 6 && !/\s/.test(trimmed));
-  if (!isValid) {
-    return t
-      ? t('settings.invalidReviewChainReviewer')
-      : 'Reviewer phải là claude hoặc có tiền tố codex:';
+  if (/\s/.test(trimmed)) {
+    return t ? t('settings.invalidModelSyntax') : 'Reviewer không được chứa khoảng trắng';
   }
-  return null;
+  if (trimmed === 'claude') {
+    return null;
+  }
+  if (trimmed.startsWith('codex:')) {
+    const codexModel = trimmed.slice('codex:'.length);
+    if (!codexModel) {
+      return t
+        ? t('settings.invalidReviewChainReviewer')
+        : 'Reviewer phải là claude hoặc có tiền tố codex:';
+    }
+    const modelError = validateReviewerModelSyntax(codexModel, 'codex', t);
+    if (modelError) {
+      return t
+        ? t('settings.invalidReviewChainReviewer')
+        : 'Reviewer phải là claude hoặc có tiền tố codex:';
+    }
+    return null;
+  }
+  return t
+    ? t('settings.invalidReviewChainReviewer')
+    : 'Reviewer phải là claude hoặc có tiền tố codex:';
 }
 
 export function validateBranchSyntax(
@@ -114,10 +129,10 @@ export function validateReviewerModelSyntax(
     return t ? t('settings.invalidModelSyntax') : 'Model không được chứa khoảng trắng';
   }
   if (engine === 'claude') {
+    const raw = trimmed.startsWith('claude:') ? trimmed.slice('claude:'.length) : trimmed;
     const isValidClaude =
-      DEFAULT_CLAUDE_MODELS.includes(trimmed) ||
-      trimmed.startsWith('claude-') ||
-      (trimmed.startsWith('claude:') && trimmed.length > 7);
+      DEFAULT_CLAUDE_MODELS.includes(raw) ||
+      raw.startsWith('claude-');
     if (!isValidClaude) {
       return t
         ? t('settings.invalidChatModelSyntax')
@@ -125,12 +140,11 @@ export function validateReviewerModelSyntax(
     }
   }
   if (engine === 'codex') {
-    const isCodexWithModel = trimmed.startsWith('codex:') && trimmed.length > 6;
-    if (
-      !DEFAULT_CODEX_MODELS.includes(trimmed) &&
-      !isCodexWithModel &&
-      !trimmed.startsWith('gpt-')
-    ) {
+    const raw = trimmed.startsWith('codex:') ? trimmed.slice('codex:'.length) : trimmed;
+    const isValidCodex =
+      DEFAULT_CODEX_MODELS.includes(raw) ||
+      (raw.startsWith('gpt-') && raw.length > 4);
+    if (!isValidCodex) {
       return t
         ? t('settings.invalidModelSyntax')
         : 'Model Codex phải có tiền tố codex: hoặc gpt-';

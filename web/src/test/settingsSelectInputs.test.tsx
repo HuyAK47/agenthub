@@ -184,6 +184,7 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(validateReviewChainReviewerSyntax('codex:gpt-5.6-luna', (k) => k)).toBeNull();
       expect(validateReviewChainReviewerSyntax('unknown-reviewer', (k) => k)).toBe('settings.invalidReviewChainReviewer');
       expect(validateReviewChainReviewerSyntax('codex:', (k) => k)).toBe('settings.invalidReviewChainReviewer');
+      expect(validateReviewChainReviewerSyntax('codex:x', (k) => k)).toBe('settings.invalidReviewChainReviewer');
 
       expect(validateReviewerModelSyntax('sonnet', 'claude', (k) => k)).toBeNull();
       expect(validateReviewerModelSyntax('claude-sonnet-4-6', 'claude', (k) => k)).toBeNull();
@@ -192,6 +193,7 @@ describe('Settings Select Inputs and Sortable Lists (f-settings-select-inputs)',
       expect(validateReviewerModelSyntax('codex:gpt-5.6-luna', 'codex', (k) => k)).toBeNull();
       expect(validateReviewerModelSyntax('invalid model with space', 'codex', (k) => k)).toBe('settings.invalidModelSyntax');
       expect(validateReviewerModelSyntax('codex:', 'codex', (k) => k)).toBe('settings.invalidModelSyntax');
+      expect(validateReviewerModelSyntax('codex:x', 'codex', (k) => k)).toBe('settings.invalidModelSyntax');
       expect(validateReviewerModelSyntax('gpt-5.6-luna', 'claude', (k) => k)).toBe('settings.invalidChatModelSyntax');
       expect(validateReviewerModelSyntax('sonnet', 'codex', (k) => k)).toBe('settings.invalidModelSyntax');
     });
