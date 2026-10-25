@@ -78,7 +78,7 @@ export async function createServer(
     if (addr && typeof addr === 'object') return addr.port;
     return config.port;
   };
-  registerSecurityHooks(fastify, token, getPort);
+  registerSecurityHooks(fastify, token, getPort, config.allowedHosts);
 
   // Register WebSocket support
   await fastify.register(fastifyWebsocket);
