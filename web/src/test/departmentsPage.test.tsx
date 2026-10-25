@@ -12,7 +12,7 @@ describe('DepartmentsPage', () => {
     claudeDailyTokenBudget: 0, telegramTopicId: null, brainEngine: 'claude' as const,
     brainModel: 'sonnet', brainCodexProfile: 'old-profile', brainMode: 'auto' as const,
     brainPermissions: 'trusted' as const, brainDailyTokenBudget: 100, brainMaxTurnsPerHour: 2,
-    profiles: [], projects: [],
+    profiles: [], projects: [], createdAt: '2026-01-01T00:00:00Z',
   };
 
   beforeEach(() => {

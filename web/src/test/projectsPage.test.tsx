@@ -28,8 +28,8 @@ describe('ProjectsPage', () => {
     });
     vi.spyOn(client, 'getProjects').mockResolvedValue([mockProject]);
     vi.spyOn(client, 'getDepartments').mockResolvedValue([
-      { id: 'chung', name: 'Chung', priority: 0, maxParallel: 0, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [] },
-      { id: 'engineering', name: 'Engineering', priority: 1, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [] },
+      { id: 'chung', name: 'Chung', priority: 0, maxParallel: 0, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 'engineering', name: 'Engineering', priority: 1, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [], createdAt: '2026-01-01T00:00:00Z' },
     ]);
     vi.spyOn(client, 'getConfig').mockResolvedValue({
       modelChainHard: ['codex:gpt-5.6-luna'],
