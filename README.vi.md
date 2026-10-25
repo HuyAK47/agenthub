@@ -2,6 +2,8 @@
 
 **Landing page:** [Giới thiệu AgentHub](https://ducanh19020217.github.io/agenthub/)
 
+Landing page cũng hiển thị số lượt tải gói cài, lấy từ API GitHub Releases công khai (`download_count` của các gói cài AgentHub). Số liệu bao gồm cả cài lại và không phải số lượng người dùng.
+
 [English](README.md) | **Tiếng Việt**
 
 AgentHub là "hệ điều hành" cục bộ quản lý các worker AI coding (Antigravity CLI và Codex CLI), được điều phối và giám sát bởi **Claude Code** qua giao thức MCP (Model Context Protocol) cùng giao diện Web Dashboard trực quan.
@@ -56,7 +58,11 @@ Script có thể cập nhật/gỡ cài đặt an toàn; dùng `--dry-run` để
 
 Máy Mac mới không cần cài Node.js, nvm hay Xcode Command Line Tools khi cài từ release. Installer chỉ dùng `curl` và `tar`, tự tải Node.js 22 chính thức đúng kiến trúc (`darwin-arm64` hoặc `darwin-x64`), kiểm tra `SHASUMS256.txt` và lưu runtime riêng tại `~/.agenthub/runtime/node-v22.x`. Linux cũng dùng runtime riêng nếu PATH không có Node 22.
 
+Release luôn có đủ hai gói `macos-arm64` (Apple Silicon) và `macos-x64` (Intel); installer tự chọn theo `uname -m`, kèm `node_modules` production cho `node-pty` và `better-sqlite3`. Service macOS nằm tại `~/Library/LaunchAgents/dev.agenthub.plist` và được nạp bằng `launchctl bootstrap`. Nếu Gatekeeper báo không mở được `spawn-helper`, tải lại release hoặc chạy `xattr -dr com.apple.quarantine ~/.agenthub-app/<version>` rồi chạy lại `agenthub start`.
+
 Nếu muốn dùng nvm, chọn rõ bằng `--use-nvm`. Nếu cài từ source gặp lỗi thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại. Các lỗi checksum hoặc archive sai kiến trúc thường được khắc phục bằng cách tải lại release đúng máy.
+
+Cập nhật dùng lại lệnh `--from-release`; nếu lỗi, installer tự rollback `current`, symlink CLI và LaunchAgent. `--uninstall` giữ nguyên `~/.agenthub/`; chỉ dùng `--uninstall --purge` khi muốn xoá dữ liệu và đã xác nhận.
 
 ### Cài đặt thủ công
 

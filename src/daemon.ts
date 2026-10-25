@@ -57,6 +57,7 @@ import { DeployService } from './deploy.js';
 import { PerfCollector } from './perf.js';
 import { pruneNodeModulesCache } from './cache.js';
 import { cleanupStaleAgentHubTempDirs } from './temp-cleanup.js';
+import { getOrCreateToken } from './auth.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
@@ -488,9 +489,7 @@ export async function startDaemon(
   shutdown: () => Promise<void>;
 }> {
   const ctx = createContext(config, engineOverrides);
-  cleanupStaleAgentHubTempDirs();
-  const tempCleanupTimer = setInterval(() => cleanupStaleAgentHubTempDirs(), 6 * 60 * 60 * 1000);
-  tempCleanupTimer.unref?.();
+  let tempCleanupTimer: NodeJS.Timeout | undefined;
 
   // Register profiles on startup
   ctx.profileService.registerAll();
@@ -541,8 +540,19 @@ export async function startDaemon(
 
   const port = config.port;
   try {
-    await fastify.listen({ port, host: '127.0.0.1' });
+    await fastify.listen({ port, host: config.host });
     console.log(`AgentHub daemon running on http://127.0.0.1:${port}`);
+    if (config.host !== '127.0.0.1') {
+      const token = getOrCreateToken(config.tokenPath);
+      const lanUrls = Object.values(os.networkInterfaces())
+        .flatMap((addresses) => addresses || [])
+        .filter((address) => address.family === 'IPv4' && !address.internal)
+        .map((address) => `http://${address.address}:${port}/#token=${token}`);
+      for (const url of lanUrls) console.log(`AgentHub LAN UI URL:\n${url}`);
+    }
+    void cleanupStaleAgentHubTempDirs();
+    tempCleanupTimer = setInterval(() => { void cleanupStaleAgentHubTempDirs(); }, 6 * 60 * 60 * 1000);
+    tempCleanupTimer.unref?.();
   } catch (err) {
     console.error('Failed to start daemon:', err);
     process.exit(1);
@@ -572,7 +582,7 @@ export async function startDaemon(
     } catch (err) {
       console.error('Error during shutdown:', err);
     } finally {
-      clearInterval(tempCleanupTimer);
+      if (tempCleanupTimer) clearInterval(tempCleanupTimer);
       clearTimeout(forceTimer);
       const elapsed = Date.now() - startTime;
       console.log(`Shutdown completed in ${elapsed}ms`);

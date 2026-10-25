@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { isSafeProjectRelativePath } from './paths.js';
+import { ReviewerFallbackSchema, ReviewerOrderSchema } from '../reviewer-config.js';
 
 /**
  * Per-project behaviour switches, stored as JSON in `projects.settings`.
@@ -65,6 +66,8 @@ export const ProjectSettingsSchema = z.object({
   review: z.object({
     /** Merge automatically after the final reviewer approves and hub checks pass. */
     autoMerge: z.boolean().default(false),
+    order: ReviewerOrderSchema.optional(),
+    fallback: ReviewerFallbackSchema.partial().optional(),
   }).default({}),
   ci: z.object({
     /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */
@@ -124,7 +127,13 @@ export function mergeProjectSettings(current: ProjectSettings, input: ProjectSet
     commitConvention: { ...current.commitConvention, ...input.commitConvention },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },
-    review: { ...current.review, ...input.review },
+    review: {
+      ...current.review,
+      ...input.review,
+      ...(current.review?.fallback || input.review?.fallback ? {
+        fallback: { ...current.review?.fallback, ...input.review?.fallback },
+      } : {}),
+    },
     ci: { ...current.ci, ...input.ci },
     references: input.references ?? current.references,
     reviewChecklist: input.reviewChecklist ?? current.reviewChecklist,

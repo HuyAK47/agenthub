@@ -244,6 +244,8 @@ describe('GET /api/usage/daily integration & report generation', () => {
   let token: string;
 
   beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-daily-usage-test-'));
     const agyHomesDir = path.join(tmpDir, 'agy-homes');
     fs.mkdirSync(agyHomesDir, { recursive: true });
@@ -270,6 +272,7 @@ describe('GET /api/usage/daily integration & report generation', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     ctx.scheduler.stop();
     await server.close();
     ctx.db.close();

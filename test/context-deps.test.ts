@@ -199,7 +199,7 @@ describe('dependency context in worker files', () => {
     try {
       const projectPath = path.join(root, 'repo');
       fs.mkdirSync(projectPath, { recursive: true });
-      execFileSync('git', ['init'], { cwd: projectPath });
+      execFileSync('git', ['init', '--template='], { cwd: projectPath });
       execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
       execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: projectPath });
       execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: projectPath });

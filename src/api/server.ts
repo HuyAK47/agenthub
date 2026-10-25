@@ -80,7 +80,7 @@ export async function createServer(
     if (addr && typeof addr === 'object') return addr.port;
     return config.port;
   };
-  registerSecurityHooks(fastify, token, getPort);
+  registerSecurityHooks(fastify, token, getPort, config.allowedHosts);
 
   // Register WebSocket support
   await fastify.register(fastifyWebsocket);
@@ -167,6 +167,8 @@ export async function createServer(
 
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
   fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+  fastify.get('/api/focus', async () => service.getFocus());
+  fastify.put('/api/focus', async (req) => service.setFocus(req.body));
 
   // --- Telegram API ---
   fastify.get('/api/telegram/pairing-code', async (req) => {

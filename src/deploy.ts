@@ -56,6 +56,7 @@ export class DeployService {
   private pushStates = new Map<string, ProjectPushState>();
   private deferredPushes = new Map<string, { dueTime: number; timer?: NodeJS.Timeout }>();
   private lastRestartBlockers = new Map<string, string>();
+  private stagedWeb = new Map<string, string>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -424,12 +425,18 @@ export class DeployService {
         this.latest.set(projectId, { ...status });
         return status;
       }
+      const selfDeploy = definition.restartHub && this.isHubProject(project, worktree);
       for (const [index, argv] of definition.steps.entries()) {
         if (!argv.length) continue;
         write(`step ${index + 1}: ${JSON.stringify(argv)}`);
+        const isWebInstall = argv.some((arg) => arg.endsWith('scripts/install-web.mjs'));
+        const staging = selfDeploy && isWebInstall
+          ? fs.mkdtempSync(path.join(this.config.hubHome, 'web-staging-'))
+          : undefined;
+        if (staging) this.stagedWeb.set(projectId, staging);
         const result = await this.processRunner(argv[0], argv.slice(1), {
           cwd: worktree,
-          env: process.env,
+          env: staging ? { ...process.env, AGENTHUB_WEB_STAGING_DIR: staging } : process.env,
           timeoutMs: definition.timeoutSec * 1000,
         });
         if (result.output) write(result.output.replace(/\n$/, ''));
@@ -481,6 +488,11 @@ export class DeployService {
       write(`deploy failed: ${status.error}`);
       this.eventBus.emit('deploy.failed', undefined, { projectId, commit, logPath, error: status.error, level: 'incident' });
     } finally {
+      const staging = this.stagedWeb.get(projectId);
+      if (staging) {
+        this.stagedWeb.delete(projectId);
+        try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* best effort cleanup */ }
+      }
       this.latest.set(projectId, { ...status });
     }
     return status;
@@ -521,6 +533,7 @@ export class DeployService {
       await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, Math.max(1, maxWaitMs))));
     }
     this.lastRestartBlockers.delete(status.projectId);
+    this.promoteStagedWeb(status.projectId);
     const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
     const args = process.platform === 'darwin' ? ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] : ['--user', 'restart', 'agenthub', '--no-block'];
     const statePath = path.join(this.config.hubHome, 'deploy-restart.json');
@@ -533,6 +546,22 @@ export class DeployService {
       throw error;
     }
     child?.on?.('error', (error) => this.failRestart(status, error, statePath));
+  }
+
+  private promoteStagedWeb(projectId: string): void {
+    const staging = this.stagedWeb.get(projectId);
+    if (!staging || !fs.existsSync(staging)) return;
+    const target = path.join(this.config.hubHome, 'web');
+    const backup = path.join(this.config.hubHome, `web-previous-${process.pid}-${Date.now()}`);
+    try {
+      if (fs.existsSync(target)) fs.renameSync(target, backup);
+      fs.renameSync(staging, target);
+      this.stagedWeb.delete(projectId);
+      fs.rmSync(backup, { recursive: true, force: true });
+    } catch (error) {
+      try { if (!fs.existsSync(target) && fs.existsSync(backup)) fs.renameSync(backup, target); } catch { /* best effort rollback */ }
+      throw error;
+    }
   }
 
   private failRestart(status: DeployStatus, error: unknown, statePath: string): void {

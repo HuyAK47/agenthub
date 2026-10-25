@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrainRepo, BrainService } from '../src/brain.js';
 import { EventRepo, MIGRATIONS, openDatabase } from '../src/db/index.js';
 import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
@@ -42,6 +42,15 @@ function addProjectAndTask(db: ReturnType<typeof openDatabase>, projectDir: stri
 }
 
 describe('Claude session privacy and quota handling', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('only treats a real assistant response as successful quota evidence', () => {
     expect(isRealClaudeAssistant({ type: 'assistant', isApiErrorMessage: true, message: { model: 'claude-sonnet', usage: { output_tokens: 5 } } })).toBe(false);
     expect(isRealClaudeAssistant({ type: 'assistant', message: { model: '<synthetic>', usage: { output_tokens: 5 } } })).toBe(false);
@@ -335,6 +344,7 @@ describe('Claude session privacy and quota handling', () => {
     const file = transcript(transcriptDir, projectDir, new Date().toISOString(), 'rejected');
     await new ClaudeSessionScanner(db, { dir: path.join(root, 'projects'), failoverState: state }).scan();
     expect(state.snapshot().active).toBe(true);
+    vi.advanceTimersByTime(1000);
     const activity = assistantEvent('session', projectDir, 'message-2', new Date().toISOString());
     fs.appendFileSync(file, `${JSON.stringify(activity)}\n`);
     await new ClaudeSessionScanner(db, { dir: path.join(root, 'projects'), failoverState: state }).scan();

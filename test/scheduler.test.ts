@@ -57,7 +57,7 @@ function teardownTestEnv() {
 function createTestProject(projectPath: string) {
   // Create a git repo for the project
   fs.mkdirSync(projectPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: projectPath });
+  execFileSync('git', ['init', '--template='], { cwd: projectPath });
   execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
   fs.writeFileSync(path.join(projectPath, 'README.md'), '# Test');
   execFileSync('git', ['add', '.'], { cwd: projectPath });
@@ -320,7 +320,7 @@ describe('maxParallel limit', () => {
     createTestProject(firstProjectPath);
     const secondProjectPath = path.join(tmpDir, 'repo-second');
     fs.mkdirSync(secondProjectPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: secondProjectPath });
+    execFileSync('git', ['init', '--template='], { cwd: secondProjectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
     fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Test');
     execFileSync('git', ['add', '.'], { cwd: secondProjectPath });
@@ -348,8 +348,49 @@ describe('maxParallel limit', () => {
 
     expect(taskRepo.get('test-project/low')?.status).toBe('running');
     expect(taskRepo.get('second-project/high')?.status).toBe('queued');
-    expect(taskRepo.get('second-project/high')?.waitReason).toBe('parallel');
+    expect(taskRepo.get('second-project/high')?.waitReason).toBe('department_parallel');
     expect(scheduler.getRunning().size).toBe(1);
+    scheduler.stop();
+  });
+
+  it('shares a busy machine between departments by weighted fair share', () => {
+    createTestProject(path.join(tmpDir, 'repo'));
+    const secondProjectPath = path.join(tmpDir, 'repo-fair-second');
+    fs.mkdirSync(secondProjectPath, { recursive: true });
+    execFileSync('git', ['init', '--template='], { cwd: secondProjectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: secondProjectPath });
+    fs.writeFileSync(path.join(secondProjectPath, 'README.md'), '# Fair share');
+    execFileSync('git', ['add', '.'], { cwd: secondProjectPath });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: secondProjectPath,
+      env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' },
+    });
+    const departmentRepo = new DepartmentRepo(db);
+    departmentRepo.insert({ id: 'priority', name: 'Priority', priority: 4, maxParallel: 6, claudeDailyTokenBudget: 0, telegramTopicId: null });
+    departmentRepo.insert({ id: 'normal', name: 'Normal', priority: 1, maxParallel: 6, claudeDailyTokenBudget: 0, telegramTopicId: null });
+    projectRepo.update('test-project', { maxParallel: 6, departmentId: 'priority' });
+    projectRepo.insert({ id: 'fair-second', name: 'Fair Second', path: secondProjectPath, defaultBranch: 'main', envTemplate: null, maxParallel: 6, departmentId: 'normal' });
+    for (const name of ['p1', 'p2', 'p3']) {
+      profileRepo.upsert({ name, engine: 'agy', kind: 'isolated', home: `/tmp/${name}`, email: null, enabled: 1 });
+    }
+    for (let i = 1; i <= 8; i++) {
+      taskRepo.insert({ id: `test-project/priority-${i}`, projectId: 'test-project', slug: `priority-${i}`, title: 'Priority', status: 'queued' });
+      taskRepo.insert({ id: `fair-second/normal-${i}`, projectId: 'fair-second', slug: `normal-${i}`, title: 'Normal', status: 'queued' });
+    }
+
+    const fakeEngine = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    const scheduler = new Scheduler(
+      config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
+      new Map<string, Engine>([['agy', fakeEngine]]), undefined, undefined, undefined, undefined, undefined, undefined, departmentRepo,
+    );
+    scheduler.tick();
+
+    const running = taskRepo.getAll().filter((task) => task.status === 'running');
+    const priorityCount = running.filter((task) => task.projectId === 'test-project').length;
+    const normalCount = running.filter((task) => task.projectId === 'fair-second').length;
+    expect(priorityCount).toBeGreaterThan(normalCount);
+    expect(normalCount).toBeGreaterThan(0);
+    expect(running.length).toBe(6);
     scheduler.stop();
   });
 });
@@ -630,6 +671,7 @@ describe('Codex reviewer failover lifecycle', () => {
     process.env.FAKE_MODE = mode;
     config.reviewer.enabled = true;
     const fake = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
+    (fake as unknown as { id: string }).id = 'codex';
     const scheduler = new Scheduler(config, taskRepo, runRepo, eventRepo, projectRepo, profileRepo, quotaMarkRepo,
       new Map<string, Engine>([['codex', fake]]), undefined, undefined, db);
     if (withChecks) {
@@ -760,14 +802,51 @@ describe('Codex reviewer failover lifecycle', () => {
     const { scheduler } = makeReviewer('reviewer-approved');
     projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
     db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('w1', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
-    scheduler.tick();
-    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
-    expect(taskRepo.get('test-project/review')?.reviewStep ?? 0).toBe(0);
 
     profileRepo.upsert({ name: 'codex-2', engine: 'codex', kind: 'codex', home: null, email: null, enabled: 1 });
     scheduler.tick();
     const reviewer = runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer');
     expect(reviewer?.profileName).toBe('codex-2');
+    scheduler.stop();
+  });
+
+  it('uses Claude for a chain gate when the worker is the only Codex profile', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('chain-worker', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
+    withClaudeReviewer(scheduler);
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.engine).toBe('claude');
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.profileName).toBe('claude-1');
+    scheduler.stop();
+  });
+
+  it('reuses the worker Codex profile when chain Claude fallback is disabled', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    config.reviewer.claudeFallback = false;
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    db.prepare("INSERT INTO runs (id, taskId, engine, model, profileName, kind) VALUES ('chain-worker', 'test-project/review', 'codex', 'codex:gpt-5.6-luna', 'codex-1', 'worker')").run();
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.profileName).toBe('codex-1');
+    scheduler.stop();
+  });
+
+  it('reports a chain gate with no reviewer once per 30-minute window', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    projectRepo.update('test-project', { reviewChain: JSON.stringify([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]) });
+    profileRepo.update('codex-1', { authState: 'not_logged_in' });
+
+    scheduler.tick();
+    scheduler.tick();
+    scheduler.tick();
+
+    const waiting = eventRepo.getRecent(30).filter((event) => event.type === 'review.waiting' && event.taskId === 'test-project/review');
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].payload).toContain('no_reviewer_profile');
     scheduler.stop();
   });
 
@@ -798,6 +877,14 @@ describe('Codex reviewer failover lifecycle', () => {
     const claude = new FakeEngine(path.join(process.cwd(), 'test', 'fixtures', 'fake-agent.mjs'));
     (claude as unknown as { id: string }).id = 'claude';
     (scheduler as unknown as { engines: Map<string, Engine> }).engines.set('claude-review', claude);
+  }
+
+  function exhaustDepartmentClaudeBudget(scheduler: Scheduler) {
+    const departmentRepo = new DepartmentRepo(db);
+    departmentRepo.insert({ id: 'review-eng', name: 'Review Engineering', priority: 0, maxParallel: 3, claudeDailyTokenBudget: 100, telegramTopicId: null });
+    projectRepo.update('test-project', { departmentId: 'review-eng' });
+    vi.spyOn(departmentRepo, 'claudeUsageToday').mockReturnValue(100);
+    (scheduler as unknown as { departmentRepo: DepartmentRepo }).departmentRepo = departmentRepo;
   }
 
   it('falls back to a Claude reviewer when every Codex account is out of quota', async () => {
@@ -848,6 +935,37 @@ describe('Codex reviewer failover lifecycle', () => {
     expect(reviewer?.profileName).toBe('codex-2');
     expect(eventRepo.getRecent(30).some((event) => event.type === 'review.fallback' && event.payload?.includes('arbiter_unavailable'))).toBe(true);
     await vi.waitFor(() => expect(reviewRepo.getByTask('test-project/review').at(-1)?.actor).toBe('codex-reviewer'));
+    scheduler.stop();
+  });
+
+  it('waits when a Claude arbiter exceeds the department budget', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    withClaudeReviewer(scheduler);
+    exhaustDepartmentClaudeBudget(scheduler);
+    for (let i = 0; i < 2; i++) {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    }
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').filter((run) => run.kind === 'reviewer')).toHaveLength(0);
+    expect(eventRepo.getRecent(30).some((event) => event.type === 'review.waiting' && event.payload?.includes('department_claude_budget'))).toBe(true);
+    scheduler.stop();
+  });
+
+  it('still runs a Codex arbiter when the department Claude budget is exhausted', () => {
+    const { scheduler } = makeReviewer('reviewer-approved');
+    exhaustDepartmentClaudeBudget(scheduler);
+    config.reviewer.arbiter = { engine: 'codex', model: 'gpt-5.6-luna' };
+    for (let i = 0; i < 2; i++) {
+      db.prepare("INSERT INTO events (type, taskId, payload) VALUES ('review.escalated', 'test-project/review', ?)").run(JSON.stringify({ reason: 'reviewer_changes_limit' }));
+    }
+    taskRepo.update('test-project/review', { reviewerEscalated: 1, reviewerEscalationReason: 'reviewer_changes_limit' });
+
+    scheduler.tick();
+
+    expect(runRepo.getByTask('test-project/review').find((run) => run.kind === 'reviewer')?.engine).toBe('codex');
     scheduler.stop();
   });
 

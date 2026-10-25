@@ -65,6 +65,7 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
+import { ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
 import { SetupManager } from '../tools/setup.js';
 import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
@@ -278,7 +279,7 @@ export const DepartmentInputSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1).max(120),
   priority: z.number().int().default(0),
-  maxParallel: z.number().int().positive().default(3),
+  maxParallel: z.number().int().nonnegative().default(0),
   claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
   telegramTopicId: z.number().int().positive().nullable().default(null),
   brainEngine: z.enum(['claude', 'codex']).default('claude'),
@@ -499,6 +500,14 @@ export const UpdateConfigSchema = z.object({
     claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
     claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
     claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
+    order: ReviewerOrderSchema.optional(),
+    fallback: ReviewerFallbackSchema.partial().optional(),
+    arbiter: z.object({ engine: z.enum(['codex', 'claude']), model: z.string().min(1) }).optional(),
+  }).optional(),
+  focus: z.object({
+    projectId: z.string().min(1).nullable().optional(),
+    since: z.string().nullable().optional(),
+    pauseRunning: z.boolean().optional(),
   }).optional(),
   brain: z.object({
     engine: z.enum(['claude', 'codex']).optional(),
@@ -730,6 +739,9 @@ export function formatEventSummary(
       }
       if (reason === 'profile_busy') {
         return `${taskLabel} chờ tài khoản rảnh`;
+      }
+      if (reason === 'focus') {
+        return `${taskLabel} chờ vì đang tập trung cho project khác`;
       }
       return `${taskLabel} chờ quota khả dụng`;
     }
@@ -1191,6 +1203,7 @@ export class AppService {
       done: 0,
       blocked: 0,
       cancelled: 0,
+      focusWaiting: 0,
     };
 
     const tasksByProject: Record<string, Record<string, number>> = {};
@@ -1209,8 +1222,10 @@ export class AppService {
       };
     }
 
+    const focusWaitingTaskIds = new Set<string>();
     for (const t of tasks) {
       byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+      if (t.waitReason === 'focus') focusWaitingTaskIds.add(t.id);
       if (!tasksByProject[t.projectId]) {
         tasksByProject[t.projectId] = {
           draft: 0,
@@ -1227,6 +1242,11 @@ export class AppService {
       }
       tasksByProject[t.projectId][t.status] = (tasksByProject[t.projectId][t.status] || 0) + 1;
     }
+
+    for (const [taskId, runtime] of runningMap.entries()) {
+      if (runtime.paused && runtime.pauseReason === 'focus') focusWaitingTaskIds.add(taskId);
+    }
+    byStatus.focusWaiting = focusWaitingTaskIds.size;
 
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
@@ -1333,6 +1353,7 @@ export class AppService {
       recentEvents,
       brain: this.brainService?.getStatus(),
       schedulerPaused: this.scheduler.isPaused(),
+      focus: this.config.focus,
       disk: {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
@@ -1403,6 +1424,21 @@ export class AppService {
     return { ok: true };
   }
 
+  sanitizeErrorText(raw: unknown): string {
+    if (!raw) return 'Đã xảy ra lỗi không xác định';
+    let str = typeof raw === 'string' ? raw : (raw instanceof Error ? raw.message : String(raw));
+    const lines = str.split('\n');
+    const filtered = lines.filter((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('at ')) return false;
+      if (/\b(?:node_modules|\w+\.(?:ts|js|mjs|tsx|jsx)):\d+:\d+\b/.test(trimmed)) return false;
+      return true;
+    });
+    str = filtered.join('\n').trim();
+    str = str.replace(/^Error:\s*/, '');
+    return str || 'Đã xảy ra lỗi không xác định';
+  }
+
   summarizeProjectContext(id: string, raw: unknown): { taskId: string; status: string; summary: string | null } {
     const input = z.object({
       sessions: z.array(z.string().min(1)).min(1),
@@ -1420,36 +1456,89 @@ export class AppService {
       return [`### ${session}`, excerpt || 'Phiên không có nội dung văn bản; chỉ dùng các mục người dùng đã chọn bên dưới.'].join('\n');
     });
 
+    const body = [
+      'Read the selected previous session files and summarize durable project knowledge.',
+      'The session excerpts below are the approved input. Do not access ~/.claude or any other session file directly.',
+      '',
+      'Selected session excerpts:',
+      ...sessionContext,
+      ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
+      ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
+    ].join('\n');
+
+    const taskId = `${project.id}/summarize-previous-context`;
+    const existing = this.taskRepo.get(taskId);
+    if (existing) {
+      if (existing.status === 'done') {
+        const summary = existing.doneReport?.trim() || null;
+        return { taskId: existing.id, status: existing.status, summary };
+      }
+      if (existing.status === 'running') {
+        return { taskId: existing.id, status: existing.status, summary: null };
+      }
+      // Re-queue existing task for retry
+      this.taskRepo.update(taskId, {
+        status: 'queued',
+        resume: 1,
+        attempt: existing.attempt + 1,
+        transientRetries: 0,
+        notBefore: null,
+        body,
+        reviewerChangesRequested: 0,
+        reviewerEscalated: 0,
+        reviewerEscalatedAt: null,
+        reviewerEscalationReason: null,
+      });
+      if (existing.worktreePath) {
+        for (const marker of ['DONE', 'BLOCKED']) {
+          try {
+            fs.unlinkSync(path.join(existing.worktreePath, '.agenthub', marker));
+          } catch {
+            // Marker is absent or already removed.
+          }
+        }
+      }
+      this.scheduler.getEventBus().emit('task.queued', taskId, { reason: 'retry' });
+      this.scheduler.triggerTick();
+      const updated = this.taskRepo.get(taskId)!;
+      return { taskId: updated.id, status: updated.status, summary: null };
+    }
+
     const task = this.createTask({
       project: project.id,
       slug: 'summarize-previous-context',
       title: 'Review and summarize previous Claude Code context',
-      body: [
-        'Read the selected previous session files and summarize durable project knowledge.',
-        'The session excerpts below are the approved input. Do not access ~/.claude or any other session file directly.',
-        '',
-        'Selected session excerpts:',
-        ...sessionContext,
-        ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
-        ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
-      ].join('\n'),
+      body,
       level: 'easy',
       start: true,
     });
     return { taskId: task.id, status: task.status, summary: null };
   }
 
-  async getProjectContextSummary(projectId: string, taskIdParam: string) {
+  async getProjectContextSummary(projectId: string, taskIdParam: string): Promise<{ taskId: string; status: string; summary: string | null; error?: string; waitReason?: string }> {
     const project = this.projectRepo.get(projectId);
     if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     const taskId = toTaskId(taskIdParam);
     const task = this.taskRepo.get(taskId);
-    if (!task || task.projectId !== projectId || task.slug !== 'summarize-previous-context') {
+    if (!task || task.projectId !== projectId || !task.slug.startsWith('summarize-previous-context')) {
       throw new HttpError(404, 'not_found', 'Task tóm tắt không tồn tại');
     }
     const detail = await this.getTask(taskId);
     const summary = detail.doneContent?.trim() || null;
-    return { taskId, status: task.status, summary };
+    let error: string | undefined = undefined;
+    if (task.status === 'failed' || task.status === 'blocked') {
+      const rawError = detail.blockedContent?.trim() || task.reviewerEscalationReason || 'Task tóm tắt thất bại trong quá trình thực thi.';
+      error = this.sanitizeErrorText(rawError);
+    } else if (task.status === 'waiting_quota') {
+      error = 'Chưa có engine khả dụng hoặc đang hết quota.';
+    }
+    return {
+      taskId,
+      status: task.status,
+      summary,
+      ...(error ? { error } : {}),
+      ...(task.waitReason ? { waitReason: task.waitReason } : {}),
+    };
   }
 
   createNewProject(raw: unknown): ProjectRow {
@@ -2909,10 +2998,17 @@ export class AppService {
       // Keep this lookup scoped to the task. A global recent-event window can
       // forget an older fallback after unrelated events push it out of that window.
       const isFallback = this.eventRepo?.getByTask(task.id).some((event) => event.type === 'review.fallback') ?? false;
+      const fallbackEvent = this.eventRepo?.getByTask(task.id).filter((event) => event.type === 'review.fallback').at(-1);
+      let fallbackReviewer: 'codex' | 'claude' = 'claude';
+      if (fallbackEvent?.payload) {
+        try { fallbackReviewer = JSON.parse(fallbackEvent.payload).to === 'codex' ? 'codex' : 'claude'; } catch { /* legacy payload */ }
+      }
+      const configuredOrder = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>).order;
+      const projectOrder = project ? projectSettings(project).review?.order : undefined;
       const reviewerRun = this.scheduler?.getReviewerRun?.(task.id);
       const reviewer = reviewerRun
         ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
-        : (isFallback ? 'claude' : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex'));
+        : (isFallback ? fallbackReviewer : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : (projectOrder || configuredOrder)[task.reviewStep ?? 0]?.engine || 'codex'));
       return {
         ...apiTask(task),
         reviewChain,
@@ -3027,12 +3123,29 @@ export class AppService {
       };
     });
 
+    const completedReviewEvents = events.filter((event) => event.type === 'review.completed');
+    const reviewsWithModels = reviews.map((review) => {
+      const event = completedReviewEvents.find((candidate) => {
+        if (!candidate.payload || typeof candidate.payload !== 'object') return false;
+        const payload = candidate.payload as { actor?: string; verdict?: string; model?: string };
+        return payload.actor === review.actor && payload.verdict === review.verdict && typeof payload.model === 'string';
+      });
+      const model = event && typeof event.payload === 'object' && event.payload
+        ? (event.payload as { model?: string }).model
+        : undefined;
+      return model ? { ...review, model } : review;
+    });
+
     const isFallback = events.some((e) => e.type === 'review.fallback');
     const reviewerRun = this.scheduler?.getReviewerRun?.(taskId);
     const activeReviewChain: ReviewChainStep[] = (Array.isArray(reviewSettings?.chain) ? reviewSettings.chain as ReviewChainStep[] : undefined) || parseReviewChain(project?.reviewChain);
+    const fallbackEvent = events.filter((event) => event.type === 'review.fallback').at(-1);
+    const fallbackReviewer = fallbackEvent && typeof fallbackEvent.payload === 'object' && fallbackEvent.payload && (fallbackEvent.payload as { to?: string }).to === 'codex' ? 'codex' : 'claude';
+    const configuredOrder = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>).order;
+    const projectOrder = project ? projectSettings(project).review?.order : undefined;
     const reviewer = reviewerRun
       ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
-      : (isFallback ? 'claude' : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex')));
+      : (isFallback ? fallbackReviewer : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : (projectOrder || configuredOrder)[task.reviewStep ?? 0]?.engine || 'codex')));
 
     return {
       ...apiTask(task),
@@ -3054,7 +3167,7 @@ export class AppService {
         cpu: activeRun.cpu ?? 0,
       } : null,
       runs: runs.map(apiRun),
-      reviews: reviews.map(apiReview),
+      reviews: reviewsWithModels.map(apiReview),
       reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
       mergeAvailable: configuredMerge,
       mergeUnavailableReason: configuredMerge ? null : 'Project chưa cấu hình merge tự động. Mở Cài đặt dự án → Integration để bật.',
@@ -4326,6 +4439,7 @@ export class AppService {
       },
       assistant: this.config.assistant,
       reviewer: this.config.reviewer,
+      focus: this.config.focus,
       notifications: this.config.notifications,
       wakeup: this.config.wakeup,
       savings: this.config.savings,
@@ -4342,6 +4456,28 @@ export class AppService {
       },
       ui: this.config.ui,
     };
+  }
+
+  getFocus() {
+    return this.config.focus;
+  }
+
+  setFocus(raw: unknown) {
+    const parsed = z.object({ projectId: z.string().min(1).nullable(), pauseRunning: z.boolean().optional() }).parse(raw);
+    if (parsed.projectId && !this.projectRepo.get(parsed.projectId)) {
+      throw new HttpError(404, 'not_found', `Project "${parsed.projectId}" không tồn tại`);
+    }
+    const focus = {
+      projectId: parsed.projectId,
+      since: parsed.projectId ? new Date().toISOString() : null,
+      pauseRunning: parsed.pauseRunning ?? this.config.focus.pauseRunning,
+    };
+    updateConfigInMemory(this.config, { focus });
+    saveConfig(this.config.hubHome, { focus });
+    const changes = this.scheduler.applyFocus();
+    this.scheduler.triggerTick();
+    this.scheduler.getEventBus().emit('focus.changed', undefined, { focus, ...changes });
+    return { focus, ...changes };
   }
 
   getModelOptions() {
@@ -4369,6 +4505,10 @@ export class AppService {
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
+    if (parsed.focus) {
+      this.scheduler.applyFocus();
+      this.scheduler.triggerTick();
+    }
 
     if (parsed.telegram?.enabled !== undefined && this.telegramBotService) {
       if (parsed.telegram.enabled) {

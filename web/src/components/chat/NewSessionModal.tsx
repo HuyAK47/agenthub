@@ -133,7 +133,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1.5">Claude profile</label>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1.5">{t('extra.claudeProfile')}</label>
             <select value={profileName} onChange={(e) => setProfileName(e.target.value)} className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]">
               {claudeProfiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name}{profile.email ? ` · ${profile.email}` : ''}</option>)}
             </select>

@@ -9,6 +9,7 @@ import { ProfileRepo, ProfileRow, QuotaMarkRepo, QuotaUsageRepo, QuotaUsageRow }
 import { isProfileLoggedIn } from '../profiles/index.js';
 import { sameAccount } from '../profiles/account.js';
 import { parseAuthState } from '../profiles/auth.js';
+import { findAgyBin } from '../agy.js';
 
 const execFileAsync = promisify(execFile);
 const GROUP_FAMILIES: Record<string, string[]> = {
@@ -54,7 +55,7 @@ export function parseUsage(text: string): UsageEntry[] {
   return result;
 }
 
-export async function fetchUsage(profile: ProfileRow, agyPath = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy')): Promise<UsageEntry[]> {
+export async function fetchUsage(profile: ProfileRow, agyPath = findAgyBin() || 'agy'): Promise<UsageEntry[]> {
   const result = await runUsage(profile, agyPath);
   return result.entries;
 }
@@ -143,7 +144,7 @@ export class QuotaUsageService {
     if (profile.engine !== 'agy') {
       return { entries: [], output: '', error: `Cannot check quota usage for engine ${profile.engine}` };
     }
-    const result = await runUsage(profile, this.agyPath || process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
+    const result = await runUsage(profile, this.agyPath || findAgyBin() || 'agy');
     const auth = parseAuthState(result.output, result.entries.length > 0);
     this.profiles.updateAuthState(profile.name, auth.authState, auth.authMessage, auth.verifyUrl);
     if (result.entries.length > 0) this.saveEntries(profile, result.entries);
@@ -292,7 +293,7 @@ export class QuotaUsageService {
     if (this.active >= 2) { this.pending.add(profile.name); return []; }
     this.active++;
     try {
-      const result = await runUsage(profile, this.agyPath || process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
+      const result = await runUsage(profile, this.agyPath || findAgyBin() || 'agy');
       const auth = parseAuthState(result.output, result.entries.length > 0);
       this.profiles.updateAuthState(profile.name, auth.authState, auth.authMessage, auth.verifyUrl);
       const entries = result.entries;

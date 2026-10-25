@@ -1193,7 +1193,7 @@ export function AddProfileModal({
                       {t('profiles.importBack')}
                     </button>
                   )}
-                  {cockpitResult.results.some((item) => item.status === 'error' && item.message?.includes('Cho phép nhiều tài khoản')) && (
+                  {cockpitResult.results.some((item) => item.status === 'error' && (item.message?.includes('Cho phép nhiều tài khoản') || item.message?.includes('Allow multiple accounts'))) && (
                     <button type="button" disabled={cockpitLoading} onClick={enableAndRetryImport} className="button-secondary">
                       {cockpitLoading ? t('profiles.importingTokens') : t('profiles.enableMultipleAndRetry')}
                     </button>
@@ -1313,7 +1313,7 @@ function TokenLoginModal({
           <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">{error}</p>
         )}
         <label className="block text-sm">
-          Email
+          {t('profiles.email')}
           <input
             type="email"
             autoFocus={!email}
@@ -1324,7 +1324,7 @@ function TokenLoginModal({
           />
         </label>
         <label className="block text-sm">
-          Refresh token
+          {t('profiles.refreshToken')}
           <textarea
             autoFocus={Boolean(email)}
             spellCheck={false}
@@ -1497,8 +1497,7 @@ function DeleteModal({
         }}
       >
         <p className="text-sm text-[var(--t-text-3)]">
-          Nhập lại <code className="font-mono text-[var(--t-text)]">{profile.name}</code> để xác
-          nhận.
+          {t('profiles.confirmDeletePrompt', { name: profile.name })}
         </p>
         <input
           className="field"
@@ -1512,17 +1511,17 @@ function DeleteModal({
         ) : (
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-            Xoá cả thư mục dữ liệu đăng nhập
+            {t('profiles.deletePurgeData')}
           </label>
         )}
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('common.cancel')}
           </button>
           <button disabled={typed !== profile.name} className="button-danger">
             <Trash2 className="h-3 w-3" />
-            Xoá hồ sơ
+            {t('profiles.deleteProfile')}
           </button>
         </div>
       </form>
@@ -1540,6 +1539,8 @@ function LoginWizard({
   sessionId: string;
   onClose: () => void;
 }) {
+  const { t } = useLocale();
+  const [currentSessionId, setCurrentSessionId] = useState(sessionId);
   const provider = engine === 'codex'
     ? 'Codex'
     : engine === 'claude'
@@ -1550,26 +1551,35 @@ function LoginWizard({
       <div className="flex h-[90vh] w-[96vw] max-w-[1400px] flex-col overflow-hidden rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-2xl">
         <div className="border-b border-[var(--t-border)] p-4">
           <h2 className="text-lg font-semibold">
-            Hướng dẫn đăng nhập {provider} · {profileName}
+            {t('profiles.loginGuideTitle', { provider, profileName })}
           </h2>
           <div className="mt-3 grid gap-2 text-xs text-[var(--t-text-3)] sm:grid-cols-4">
             <Step
               n="1"
               text={
                 provider === 'Antigravity'
-                  ? 'Chọn Google OAuth'
+                  ? t('profiles.stepGoogleOAuth')
                   : provider === 'Codex'
-                    ? 'Chạy device-auth'
-                    : 'Gửi /login'
+                    ? t('profiles.stepDeviceAuth')
+                    : t('profiles.stepSendLogin')
               }
             />
-            <Step n="2" text="Mở link và đăng nhập" />
-            <Step n="3" text="Copy mã xác thực" />
-            <Step n="4" text="Dán mã và chờ xác nhận" />
+            <Step n="2" text={t('profiles.stepOpenLink')} />
+            <Step n="3" text={t('profiles.stepCopyCode')} />
+            <Step n="4" text={t('profiles.stepPasteCode')} />
           </div>
         </div>
         <div className="min-h-0 flex-1">
-          <LoginTerminal profileName={profileName} sessionId={sessionId} onClose={onClose} />
+          <LoginTerminal
+            profileName={profileName}
+            sessionId={currentSessionId}
+            onClose={onClose}
+            onReconnect={async () => {
+              const next = await loginProfile(profileName);
+              setCurrentSessionId(next.sessionId);
+              return next.sessionId;
+            }}
+          />
         </div>
       </div>
     </div>

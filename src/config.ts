@@ -6,6 +6,7 @@ import type { ExtraDiskPath } from './disk.js';
 import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
 import { DEFAULT_WAKEUP_CONFIG, type WakeupConfig } from './quota/wakeup.js';
 import { BrandingConfig, parseBranding } from './branding.js';
+import { DEFAULT_REVIEWER_ARBITER, reviewerSettingsFromLegacy, type ReviewerArbiter, type ReviewerFallback, type ReviewerOrderItem } from './reviewer-config.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -283,11 +284,18 @@ export interface AgentHubConfig {
   tokenPath: string;
   configFilePath: string;
   port: number;
+  host: string;
+  allowedHosts: string[];
   defaultModelChains: {
     hard: string[];
     easy: string[];
   };
   defaultTimeout: number;
+  focus: {
+    projectId: string | null;
+    since: string | null;
+    pauseRunning: boolean;
+  };
   multiplePerProvider: boolean;
   multiplePerProviderConfigured: boolean;
   slotsPerAgyProfile: number;
@@ -315,6 +323,9 @@ export interface AgentHubConfig {
     claudeModel: string;
     /** Minutes a review may wait for a busy Codex account before Claude reviews instead. */
     claudeFallbackAfterMin: number;
+    order: ReviewerOrderItem[];
+    fallback: ReviewerFallback;
+    arbiter: ReviewerArbiter;
   };
   notifications: NotificationsConfig;
   /** Đánh thức quota theo giờ hẹn (src/quota/wakeup.ts). */
@@ -345,6 +356,11 @@ export interface AgentHubConfig {
   deploy: Record<string, DeployProjectConfig>;
 }
 
+type ReviewerConfigPatch = Partial<Omit<AgentHubConfig['reviewer'], 'fallback' | 'arbiter'>> & {
+  fallback?: Partial<ReviewerFallback>;
+  arbiter?: Partial<ReviewerArbiter>;
+};
+
 const DEFAULT_MODEL_CHAINS = {
   hard: ['codex:gpt-5.6-luna', 'gemini-3.8-flash-high'],
   easy: ['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna'],
@@ -356,6 +372,7 @@ export function saveConfig(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    focus?: Partial<AgentHubConfig['focus']>;
     multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
@@ -365,7 +382,7 @@ export function saveConfig(
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
     assistant?: Partial<AssistantConfig>;
-    reviewer: Partial<AgentHubConfig['reviewer']>;
+    reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
       desktop: boolean;
       desktopLevel: NotificationsConfig['desktopLevel'];
@@ -462,6 +479,9 @@ export function saveConfig(
     ...(patch.reviewer && typeof patch.reviewer === 'object'
       ? { reviewer: { ...((current.reviewer as Record<string, unknown>) || {}), ...patch.reviewer } }
       : {}),
+    ...(patch.focus && typeof patch.focus === 'object'
+      ? { focus: { ...((current.focus as Record<string, unknown>) || {}), ...patch.focus } }
+      : {}),
     ...(patch.disk ? { disk: { ...((current.disk as Record<string, unknown>) || {}), ...patch.disk } } : {}),
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
     ...(patch.load ? { load: { ...((current.load as Record<string, unknown>) || {}), ...patch.load } } : {}),
@@ -532,6 +552,7 @@ export function updateConfigInMemory(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    focus?: Partial<AgentHubConfig['focus']>;
     multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
@@ -540,7 +561,7 @@ export function updateConfigInMemory(
     chat: Partial<ChatConfig>;
     brain?: Partial<BrainConfig>;
     assistant?: Partial<AssistantConfig>;
-    reviewer: Partial<AgentHubConfig['reviewer']>;
+    reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
       desktop: boolean;
       desktopLevel: NotificationsConfig['desktopLevel'];
@@ -584,6 +605,7 @@ export function updateConfigInMemory(
   if (patch.defaultTimeout !== undefined) {
     config.defaultTimeout = patch.defaultTimeout;
   }
+  if (patch.focus) config.focus = { ...config.focus, ...patch.focus };
   if (patch.multiplePerProvider !== undefined) {
     config.multiplePerProvider = patch.multiplePerProvider;
     config.multiplePerProviderConfigured = true;
@@ -643,7 +665,14 @@ export function updateConfigInMemory(
   if (patch.assistant) {
     config.assistant = { ...config.assistant, ...patch.assistant };
   }
-  if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
+  if (patch.reviewer) {
+    config.reviewer = {
+      ...config.reviewer,
+      ...patch.reviewer,
+      fallback: { ...config.reviewer.fallback, ...patch.reviewer.fallback },
+      arbiter: { ...config.reviewer.arbiter, ...patch.reviewer.arbiter },
+    };
+  }
   if (patch.notifications) {
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
@@ -807,6 +836,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
 
   const envPort = process.env.AGENTHUB_PORT ? parseInt(process.env.AGENTHUB_PORT, 10) : undefined;
   const port = (envPort && !isNaN(envPort)) ? envPort : ((userConfig.port as number) || 7700);
+  const host = process.env.AGENTHUB_HOST || (userConfig.host as string) || '127.0.0.1';
+  const allowedHosts = process.env.AGENTHUB_ALLOWED_HOSTS !== undefined
+    ? process.env.AGENTHUB_ALLOWED_HOSTS.split(',').map((value) => value.trim()).filter(Boolean)
+    : Array.isArray(userConfig.allowedHosts)
+      ? userConfig.allowedHosts.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
+      : [];
+  const rawFocus = (userConfig.focus && typeof userConfig.focus === 'object' ? userConfig.focus : {}) as Record<string, unknown>;
 
   const chatRaw = (userConfig.chat as Record<string, unknown>) || {};
   const chat: ChatConfig = {
@@ -1023,11 +1059,18 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     tokenPath: path.join(hubHome, 'token'),
     configFilePath,
     port,
+    host,
+    allowedHosts,
     defaultModelChains: {
       hard: (userConfig as Record<string, unknown>).modelChainHard as string[] || [...DEFAULT_MODEL_CHAINS.hard],
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
+    focus: {
+      projectId: typeof rawFocus.projectId === 'string' ? rawFocus.projectId : null,
+      since: typeof rawFocus.since === 'string' ? rawFocus.since : null,
+      pauseRunning: rawFocus.pauseRunning !== false,
+    },
     multiplePerProvider: userConfig.multiplePerProvider !== false,
     multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,
@@ -1128,6 +1171,22 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : [],
       claudeModel: typeof reviewerRaw.claudeModel === 'string' && reviewerRaw.claudeModel ? reviewerRaw.claudeModel : 'sonnet',
       claudeFallbackAfterMin: typeof reviewerRaw.claudeFallbackAfterMin === 'number' ? reviewerRaw.claudeFallbackAfterMin : 10,
+      ...(() => {
+        const migrated = reviewerSettingsFromLegacy(reviewerRaw);
+        return {
+          order: migrated.order,
+          fallback: migrated.fallback,
+          arbiter: (() => {
+            const raw = reviewerRaw.arbiter;
+            if (!raw || typeof raw !== 'object') return DEFAULT_REVIEWER_ARBITER;
+            const value = raw as Record<string, unknown>;
+            return {
+              engine: value.engine === 'codex' ? 'codex' : 'claude',
+              model: typeof value.model === 'string' && value.model ? value.model : DEFAULT_REVIEWER_ARBITER.model,
+            };
+          })(),
+        };
+      })(),
     },
     wakeup: parseWakeupConfig(userConfig.wakeup),
     notifications: {
@@ -1199,7 +1258,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       installers: {
         claude: installer('claude', { package: '@anthropic-ai/claude-code', versionArgs: ['--version'] }),
         codex: installer('codex', { package: '@openai/codex', versionArgs: ['--version'] }),
-        agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
+        agy: installer('agy', {
+          command: ['sh', '-c', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'],
+          docsUrl: 'https://antigravity.google/',
+        }),
       },
     },
     workers,

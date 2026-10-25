@@ -33,6 +33,16 @@ AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các wo
 | **Claude Code** | Bắt buộc nếu muốn để Claude điều phối (cài extension Claude Code cho VS Code, hoặc CLI `claude`). |
 | **Tài nguyên máy** | Mỗi worker có thể build/test nặng. Tham khảo: máy 12 nhân / 15 GB RAM chạy ổn ~4 worker song song. |
 
+### Cài Antigravity CLI (`agy`)
+
+Trong trang **Thiết lập**, bấm **Cài đặt** ở dòng Antigravity CLI để chạy bộ cài chính thức. AgentHub hiển thị log và kiểm tra lại binary sau khi chạy:
+
+```sh
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+Nếu cài xong nhưng AgentHub vẫn báo thiếu `agy`, daemon có thể có PATH khác shell tương tác. Đặt đường dẫn tuyệt đối bằng `AGENTHUB_AGY_BIN=/đường/dẫn/agy` rồi khởi động lại daemon. AgentHub tự dò PATH, `~/.local/bin/agy` và `~/.gemini/bin/agy`; log ở `~/.agenthub/logs/setup-agy.log`.
+
 ## 2. Cài đặt
 
 Cách cài đặt một lệnh (hãy đọc script trước khi chạy):
@@ -389,6 +399,17 @@ Khi tài khoản Claude chính gặp giới hạn tốc độ (rate limit / HTTP
   }
 }
 ```
+
+Để xem dashboard từ thiết bị trong LAN, có thể cấu hình bind address và các hostname/IP được phép:
+
+```json
+{
+  "host": "0.0.0.0",
+  "allowedHosts": ["192.168.111.15"]
+}
+```
+
+Hai biến môi trường tương ứng là `AGENTHUB_HOST` và `AGENTHUB_ALLOWED_HOSTS` (phân tách bằng dấu phẩy). Mặc định daemon chỉ bind `127.0.0.1`; chỉ bật LAN khi cần, khai báo địa chỉ cụ thể và không chia sẻ bearer token.
 
 Bạn cũng có thể xem trạng thái bước fallback hiện tại, chi phí tiêu thụ trong ngày và cấu hình trực quan trên trang **Settings** của Web Dashboard.
 

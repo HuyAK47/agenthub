@@ -64,7 +64,7 @@ describe('checks and worktree excludes', () => {
     fs.mkdirSync(repo, { recursive: true });
 
     // Initialize git repo
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
@@ -156,12 +156,50 @@ describe('checks and worktree excludes', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('fails the agenthub-files check when a branch diff contains a committed .agenthub file', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-files-check-'));
+    const repo = path.join(tmp, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'initial\n');
+    execFileSync('git', ['add', 'tracked.txt'], { cwd: repo });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo });
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo });
+    fs.mkdirSync(path.join(repo, '.agenthub'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.agenthub', 'x'), 'must not be committed\n');
+    execFileSync('git', ['add', '-f', '.agenthub/x'], { cwd: repo });
+    execFileSync('git', ['commit', '-m', 'bad marker commit'], { cwd: repo });
+
+    const db = openDatabase(path.join(tmp, 'hub.db'));
+    const project: ProjectRow = { id: 'p1', name: 'P1', path: repo, defaultBranch: 'main', maxParallel: 1 };
+    db.prepare('INSERT INTO projects (id, name, path, defaultBranch, maxParallel) VALUES (?, ?, ?, ?, ?)').run('p1', 'P1', repo, 'main', 1);
+    const task: TaskRow = {
+      id: 'p1/t1', projectId: 'p1', slug: 't1', title: 'T1', body: '', level: 'easy', modelChain: null,
+      baseRef: 'main', branch: 'feature', worktreePath: repo, status: 'running', dependsOn: '[]', attempt: 0,
+      resume: 0, createdAt: '', updatedAt: '', checkFixAttempts: 0,
+    };
+    db.prepare('INSERT INTO tasks (id, projectId, slug, title, status, baseRef, branch, worktreePath) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(task.id, task.projectId, task.slug, task.title, task.status, task.baseRef, task.branch, task.worktreePath);
+    db.prepare('INSERT INTO runs (id, taskId, engine, model, profileName) VALUES (?, ?, ?, ?, ?)').run('run-1', task.id, 'agy', 'model', 'profile');
+
+    const result = await new CheckRunner(db).run(task, project, 'run-1');
+    const check = result.results.find((item) => item.name === 'agenthub-files');
+    expect(check?.ok).toBe(false);
+    expect(check?.outputTail).toContain('.agenthub/x');
+    expect(check?.outputTail).toContain('Không được commit');
+    db.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('adds node_modules without slash to .git/info/exclude when creating worktree', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-exclude-test-'));
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo, { recursive: true });
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
@@ -203,7 +241,7 @@ describe('checks and worktree excludes', () => {
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo, { recursive: true });
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
@@ -281,7 +319,7 @@ describe('checks and worktree excludes', () => {
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo, { recursive: true });
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });

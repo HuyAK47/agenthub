@@ -3361,6 +3361,58 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(newBot.getSelectedProject(CHAT_ID)).toBe('p-keep');
   });
 
+  it('7. /focus bat tat va kiem tra trang thai tap trung project', async () => {
+    createProject('p-focus', 'Project Focus', 'suggest', 'full');
+    const bot = createProjectBot('suggest');
+
+    // 1. /focus khi chưa bật
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg1 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg1).toContain('Chưa bật chế độ tập trung');
+
+    // 2. /focus cho project không tồn tại
+    await bot.handleUpdate({
+      update_id: 2,
+      message: { message_id: 2, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus p-non-existent' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msgErr = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msgErr).toContain('không tồn tại');
+
+    // 3. /focus p-focus -> bật tập trung
+    await bot.handleUpdate({
+      update_id: 3,
+      message: { message_id: 3, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus p-focus' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg2 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg2).toContain('Đã tập trung cho <b>p-focus</b>');
+    expect(ctx.service.getFocus().projectId).toBe('p-focus');
+
+    // 4. /focus xem trạng thái khi đang bật
+    await bot.handleUpdate({
+      update_id: 4,
+      message: { message_id: 4, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg3 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg3).toContain('Đang tập trung cho <b>p-focus</b>');
+
+    // 5. /focus off -> tắt tập trung
+    await bot.handleUpdate({
+      update_id: 5,
+      message: { message_id: 5, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus off' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg4 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg4).toContain('Đã tắt tập trung');
+    expect(ctx.service.getFocus().projectId).toBeNull();
+  });
+
   describe('13. Telegram Topics per Department & Group Pairing (d-telegram-topics)', () => {
     const SUPERGROUP_ID = -100987654321;
     const AUTHORIZED_USER_ID = 777111;

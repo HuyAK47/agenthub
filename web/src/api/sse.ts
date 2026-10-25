@@ -286,7 +286,7 @@ export function connectSSE(queryClient: QueryClient): () => void {
           queryClient.invalidateQueries({ queryKey: ['batches'] });
         }
       } catch (err) {
-        console.error('Lỗi phân tích SSE event:', err);
+        console.error('Failed to parse SSE event:', err);
       }
     };
 

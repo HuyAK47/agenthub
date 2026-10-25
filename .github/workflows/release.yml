@@ -18,13 +18,19 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
+            experimental: false
           - os: ubuntu-22.04-arm
-          # macOS still fails on real macOS runners (PTY, process stats, launchctl); keep building it
-          # but don't let it block Linux releases until it is green.
+            experimental: false
+          # Build on both supported macOS architectures so native node-pty and
+          # better-sqlite3 binaries match the user's machine.
+          - os: macos-15-intel
+            experimental: true
           - os: macos-latest
             experimental: true
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental == true }}
+    # macOS runner availability/native compatibility still needs confirmation
+    # on GitHub. Keep Linux release artifacts publishable while this is proven.
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -75,9 +81,15 @@ jobs:
 
   smoke-macos:
     # Install the macOS archive natively on a clean runner and check /health.
-    needs: package
-    runs-on: macos-latest
+    # This remains non-blocking until PTY, native SQLite and launchctl are
+    # confirmed on both hosted macOS architectures.
     continue-on-error: true
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -92,10 +104,16 @@ jobs:
       - name: Smoke install without Node or usable git on PATH
         env:
           PATH: /usr/bin:/bin:/usr/sbin:/sbin
-        run: sh scripts/smoke-install-native.sh "$(find release -name 'agenthub-*-macos-*.tar.gz' -print -quit)"
+        run: |
+          case "$(uname -m)" in
+            arm64) ARCH=arm64 ;;
+            x86_64) ARCH=x64 ;;
+            *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          sh scripts/smoke-install-native.sh "$(find release -name "agenthub-*-macos-${ARCH}.tar.gz" -print -quit)"
 
   publish:
-    needs: [package, smoke]
+    needs: [package, smoke, smoke-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

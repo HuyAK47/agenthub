@@ -25,7 +25,7 @@ function authHeaders() {
 
 function initGitRepo(repoPath: string) {
   fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: repoPath });
+  execFileSync('git', ['init', '--template='], { cwd: repoPath });
   execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# Initial Repo\n');
   execFileSync('git', ['add', '.'], { cwd: repoPath });
@@ -735,7 +735,7 @@ describe('AgentHub HTTP API Endpoints', () => {
     // 5. Test detail endpoint with git commits and worktree DONE/BLOCKED
     const worktreeDir = path.join(tmpDir, 'worktrees', 'myproj', 'task-abc');
     fs.mkdirSync(path.join(worktreeDir, '.agenthub'), { recursive: true });
-    execFileSync('git', ['init'], { cwd: worktreeDir });
+    execFileSync('git', ['init', '--template='], { cwd: worktreeDir });
     execFileSync('git', ['config', 'user.name', 'test'], { cwd: worktreeDir });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
     fs.writeFileSync(path.join(worktreeDir, '.agenthub', 'DONE'), 'All completed successfully');

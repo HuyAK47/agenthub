@@ -33,10 +33,14 @@ describe('safety-check hub home comparison', () => {
     expect(isIgnoredHubEntry('chat-mcp-x.json')).toBe(true);
     expect(isIgnoredHubEntry('chat-mcp-123.json')).toBe(true);
 
-    // claude-failover.json, deploy-push-state.json, daemon.log
+    // Runtime state and directories written by the daemon/worker
     expect(isIgnoredHubEntry('claude-failover.json')).toBe(true);
     expect(isIgnoredHubEntry('deploy-push-state.json')).toBe(true);
+    expect(isIgnoredHubEntry('deploy-pending-state.json')).toBe(true);
+    expect(isIgnoredHubEntry('deploy-restart.json')).toBe(true);
     expect(isIgnoredHubEntry('daemon.log')).toBe(true);
+    expect(isIgnoredHubEntry('sessions')).toBe(true);
+    expect(isIgnoredHubEntry('empty-hooks')).toBe(true);
 
     // *.tmp / *.tmp-*
     expect(isIgnoredHubEntry('foo.tmp')).toBe(true);
@@ -82,7 +86,7 @@ describe('safety-check hub home comparison', () => {
     );
   });
 
-  it('does not report violation when ignored files (chat-mcp-x.json, hub.db-wal) are added or modified', () => {
+  it('does not report violation when allowlisted runtime entries are added or modified', () => {
     fs.writeFileSync(path.join(tempDir, 'chat-mcp-x.json'), '{"initial":true}');
     fs.writeFileSync(path.join(tempDir, 'hub.db'), 'initial');
     const snap = getHubSnapshot(tempDir);
@@ -95,8 +99,12 @@ describe('safety-check hub home comparison', () => {
     fs.writeFileSync(path.join(tempDir, 'chat-mcp-another.json'), '{}');
     fs.writeFileSync(path.join(tempDir, 'claude-failover.json'), '{}');
     fs.writeFileSync(path.join(tempDir, 'deploy-push-state.json'), '{}');
+    fs.writeFileSync(path.join(tempDir, 'deploy-pending-state.json'), '{}');
+    fs.writeFileSync(path.join(tempDir, 'deploy-restart.json'), '{}');
     fs.writeFileSync(path.join(tempDir, 'atomic.tmp-123'), 'temp');
     fs.mkdirSync(path.join(tempDir, 'logs'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'sessions'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'empty-hooks'), { recursive: true });
 
     expect(() => verifyHubHomeSafety(snap)).not.toThrow();
   });

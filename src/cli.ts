@@ -2,6 +2,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { loadConfig, saveConfig, AgentHubConfig } from './config.js';
+import { agyInstallHint, findAgyBin } from './agy.js';
 import { createContext, closeContext, startDaemon } from './daemon.js';
 import { runMcpServer } from './mcp/index.js';
 import { getOrCreateToken, getTokenPath, readExistingToken } from './auth.js';
@@ -28,6 +29,7 @@ import { projectWorktreeRoots } from './projects/paths.js';
 export { cmdVersion, cmdUpdate, cmdUninstallService, compareSemver };
 import { assertWorkerMayControlHub } from './worker-guard.js';
 import { SetupManager } from './tools/setup.js';
+import { cleanupStaleAgentHubTempDirs, inspectAgentHubTempDirs, AGENTHUB_TEMP_MAX_AGE_MS } from './temp-cleanup.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -439,6 +441,24 @@ export async function cmdSetup(config: AgentHubConfig, extraArgs: string[] = [])
   console.log('Tiếp theo: mở trang Profiles để đăng nhập worker, rồi chạy `agenthub mcp-install` để kết nối Claude Code.');
 }
 
+export async function cmdCleanTmp(extraArgs: string[] = []): Promise<void> {
+  const dryRun = extraArgs.includes('--dry-run');
+  const entries = await inspectAgentHubTempDirs();
+  const stale = entries.filter((entry) => entry.owned && entry.ageMs >= AGENTHUB_TEMP_MAX_AGE_MS);
+  const safe = stale.filter((entry) => !entry.containsGit);
+  const skipped = stale.filter((entry) => entry.containsGit);
+  const bytes = safe.reduce((sum, entry) => sum + entry.sizeBytes, 0);
+  console.log(`Tìm thấy ${entries.length} thư mục agenthub-*; đủ tuổi dọn: ${stale.length}; dung lượng an toàn: ${bytes} bytes.`);
+  for (const entry of skipped) console.log(`Bỏ qua repo git: ${entry.path}`);
+  if (dryRun) {
+    for (const entry of safe) console.log(`Có thể xoá: ${entry.path} (${entry.sizeBytes} bytes)`);
+    console.log(`Dry run: sẽ xoá ${safe.length} thư mục, giải phóng ${bytes} bytes.`);
+    return;
+  }
+  const removed = await cleanupStaleAgentHubTempDirs();
+  console.log(`Đã xoá ${removed.length} thư mục, giải phóng khoảng ${bytes} bytes.`);
+}
+
 async function main() {
   const config = loadConfig();
   if (command === 'install-service' || command === 'uninstall' || command === 'stop' || command === 'start' || command === 'update' || (command === 'daemon' && subcommand === 'stop')) {
@@ -520,6 +540,10 @@ async function main() {
       await cmdClean(config, args.slice(1));
       break;
 
+    case 'clean-tmp':
+      await cmdCleanTmp(args.slice(1));
+      break;
+
     case 'usage':
       await cmdUsage(config);
       break;
@@ -581,6 +605,7 @@ Cách dùng:
   agenthub perf [--seconds 60] [--json] Đo CPU/RSS theo nhóm tiến trình
   agenthub status                     Xem trạng thái
   agenthub clean [--dry-run] [--dedupe] Dọn hoặc dedupe node_modules của worktree
+  agenthub clean-tmp [--dry-run]   Liệt kê/xoá thư mục tạm agenthub an toàn
   agenthub usage                      Xem usage quota các hồ sơ
   agenthub profile list|check|login|add|import-tokens|rename|remove   Quản lý hồ sơ
   agenthub project add <name> <path>  Thêm project
@@ -1002,9 +1027,11 @@ export async function cmdProfile(
 
       const executable = profile.engine === 'claude'
         ? findClaudeBin(config.chat.claudeBin)
-        : (process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy'));
+        : findAgyBin(config.hubHome);
       if (!executable) {
-        console.error(`Không tìm thấy lệnh ${profile.engine}`);
+        console.error(profile.engine === 'agy'
+          ? `Không tìm thấy Antigravity CLI (agy). Cài bằng: ${agyInstallHint()}`
+          : `Không tìm thấy lệnh ${profile.engine}`);
         process.exitCode = 1;
         break;
       }

@@ -26,7 +26,7 @@ describe('Worktree Cleanup Hooks', () => {
     fs.mkdirSync(projectPath, { recursive: true });
 
     // Initialize git repo for project
-    execFileSync('git', ['init'], { cwd: projectPath });
+    execFileSync('git', ['init', '--template='], { cwd: projectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
     fs.writeFileSync(path.join(projectPath, 'README.md'), '# Project');
     execFileSync('git', ['add', '.'], { cwd: projectPath });
@@ -236,7 +236,7 @@ describe('Worktree Cleanup Hooks', () => {
     fs.mkdirSync(spaceRepoDir, { recursive: true });
     fs.mkdirSync(spaceWorktreesDir, { recursive: true });
 
-    execFileSync('git', ['init'], { cwd: spaceRepoDir });
+    execFileSync('git', ['init', '--template='], { cwd: spaceRepoDir });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: spaceRepoDir });
     fs.writeFileSync(path.join(spaceRepoDir, 'README.md'), '# Space Repo');
     execFileSync('git', ['add', '.'], { cwd: spaceRepoDir });
