@@ -29,7 +29,7 @@ export function validateModelSyntax(
 ): string | null {
   const trimmed = model.trim();
   if (!trimmed) {
-    return t ? t('settings.emptyChainWarning') : 'Model không được để trống';
+    return t ? t('settings.emptyChainWarning') : 'Model cannot be empty';
   }
   const isAgy = VALID_AGY_MODELS.includes(trimmed);
   const isCodex =
@@ -39,7 +39,7 @@ export function validateModelSyntax(
   if (!isAgy && !isCodex) {
     return t
       ? t('settings.invalidModelSyntax')
-      : 'Mỗi model phải là id agy hợp lệ hoặc model codex hợp lệ (codex:gpt-...)';
+      : 'Each model must be a valid agy id or codex model (codex:gpt-...)';
   }
   return null;
 }
@@ -55,7 +55,7 @@ export function validateChatModelSyntax(
   if (!DEFAULT_CLAUDE_MODELS.includes(trimmed)) {
     return t
       ? t('settings.invalidChatModelSyntax')
-      : 'Model chat phải là sonnet, opus hoặc haiku';
+      : 'Chat model must be sonnet, opus, or haiku';
   }
   return null;
 }
@@ -66,10 +66,10 @@ export function validateReviewChainReviewerSyntax(
 ): string | null {
   const trimmed = reviewer.trim();
   if (!trimmed) {
-    return t ? t('settings.emptyChainWarning') : 'Reviewer không được để trống';
+    return t ? t('settings.emptyChainWarning') : 'Reviewer cannot be empty';
   }
   if (/\s/.test(trimmed)) {
-    return t ? t('settings.invalidModelSyntax') : 'Reviewer không được chứa khoảng trắng';
+    return t ? t('settings.invalidModelSyntax') : 'Reviewer cannot contain whitespace';
   }
   if (trimmed === 'claude') {
     return null;
@@ -79,19 +79,19 @@ export function validateReviewChainReviewerSyntax(
     if (!codexModel) {
       return t
         ? t('settings.invalidReviewChainReviewer')
-        : 'Reviewer phải là claude hoặc có tiền tố codex:';
+      : 'Reviewer must be claude or have the codex: prefix';
     }
     const modelError = validateReviewerModelSyntax(codexModel, 'codex', t);
     if (modelError) {
       return t
         ? t('settings.invalidReviewChainReviewer')
-        : 'Reviewer phải là claude hoặc có tiền tố codex:';
+      : 'Reviewer must be claude or have the codex: prefix';
     }
     return null;
   }
   return t
     ? t('settings.invalidReviewChainReviewer')
-    : 'Reviewer phải là claude hoặc có tiền tố codex:';
+      : 'Reviewer must be claude or have the codex: prefix';
 }
 
 export function validateBranchSyntax(
@@ -100,7 +100,7 @@ export function validateBranchSyntax(
 ): string | null {
   const trimmed = branch.trim();
   if (!trimmed) {
-    return t ? t('projects.nameRequired') : 'Tên nhánh không được để trống';
+    return t ? t('projects.nameRequired') : 'Branch name cannot be empty';
   }
   if (
     trimmed.startsWith('/') ||
@@ -113,7 +113,7 @@ export function validateBranchSyntax(
   ) {
     return t
       ? t('settings.invalidBranchSyntax')
-      : 'Tên nhánh không hợp lệ hoặc chứa ký tự đặc biệt';
+      : 'Branch name is invalid or contains special characters';
   }
   return null;
 }
@@ -125,10 +125,10 @@ export function validateReviewerModelSyntax(
 ): string | null {
   const trimmed = model.trim();
   if (!trimmed) {
-    return t ? t('settings.emptyChainWarning') : 'Model reviewer không được để trống';
+    return t ? t('settings.emptyChainWarning') : 'Reviewer model cannot be empty';
   }
   if (/\s/.test(trimmed)) {
-    return t ? t('settings.invalidModelSyntax') : 'Model không được chứa khoảng trắng';
+    return t ? t('settings.invalidModelSyntax') : 'Model cannot contain whitespace';
   }
   if (engine === 'claude') {
     const raw = trimmed.startsWith('claude:') ? trimmed.slice('claude:'.length) : trimmed;
@@ -138,7 +138,7 @@ export function validateReviewerModelSyntax(
     if (!isValidClaude) {
       return t
         ? t('settings.invalidChatModelSyntax')
-        : 'Model Claude phải là sonnet, opus hoặc haiku';
+      : 'Claude model must be sonnet, opus, or haiku';
     }
   }
   if (engine === 'codex') {
@@ -149,7 +149,7 @@ export function validateReviewerModelSyntax(
     if (!isValidCodex) {
       return t
         ? t('settings.invalidModelSyntax')
-        : 'Model Codex phải có tiền tố codex: hoặc gpt-';
+      : 'Codex model must have the codex: or gpt- prefix';
     }
   }
   return null;
