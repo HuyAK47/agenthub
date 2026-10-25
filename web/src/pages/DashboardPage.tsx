@@ -251,9 +251,9 @@ export const DashboardPage: React.FC = () => {
   });
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       {/* Page Title */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="order-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 data-tour="overview" className="text-2xl font-bold tracking-tight text-[var(--t-text)]">{t('dashboard.title')}</h1>
           <p className="text-sm text-[var(--t-text-2)]">
@@ -301,16 +301,18 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      <GettingStartedChecklist />
+      <div className="order-5">
+        <GettingStartedChecklist />
+      </div>
 
-      <section data-testid="perf-card" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-4">
+      <section data-testid="perf-card" className="order-3 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-4">
         <div className="flex items-center justify-between"><div><h2 className="text-base font-semibold">{t('dashboard.perfTitle')}</h2><p className="text-xs text-[var(--t-text-2)]">{t('dashboard.perfSubtitle')}</p></div><Cpu className="w-5 h-5 text-[var(--t-accent)]" /></div>
         {perf?.latest ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{Object.entries(perf.latest.groups).filter(([, value]) => value.processes > 0).sort((a, b) => b[1].cpuPercent - a[1].cpuPercent).map(([name, value]) => <div key={name} className="rounded-lg bg-[var(--t-surface-2)] px-3 py-2"><div className="flex justify-between text-xs"><span className="font-medium">{name}</span><span>{value.cpuPercent.toFixed(1)}% CPU</span></div><div className="mt-1 text-xs text-[var(--t-text-2)]">{(value.rssBytes / 1024 ** 3).toFixed(2)} GB · {value.processes === 1 ? t('dashboard.perfProcess', { count: value.processes }) : t('dashboard.perfProcesses', { count: value.processes })}</div></div>)}</div> : <p className="text-xs text-[var(--t-text-2)]">{t('dashboard.perfNoSamples')}</p>}
         {perf?.samples?.length ? <div className="flex h-8 items-end gap-0.5" aria-label={t('dashboard.perfChartLabel')}>{perf.samples.map((sample, index) => <span key={`${sample.at}-${index}`} className="flex-1 rounded-t bg-[var(--t-accent)] opacity-70" style={{ height: `${Math.max(4, Math.min(100, Object.values(sample.groups).reduce((sum, group) => sum + group.cpuPercent, 0) / Math.max(1, sample.cpuCount)))}%` }} />)}</div> : null}
       </section>
 
       {status.disks && status.disks.length > 0 && (
-        <div data-testid="monitored-disks" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div data-testid="monitored-disks" className="order-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {status.disks.map((disk) => (
             <div key={`${disk.label}:${disk.path}`} className={`rounded-xl border p-4 ${disk.low ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--t-border)] bg-[var(--t-surface)]'}`}>
               <div className="flex items-center justify-between gap-2">
@@ -326,7 +328,7 @@ export const DashboardPage: React.FC = () => {
       )}
 
       {status.worktrees && (
-        <section data-testid="worktree-usage" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
+        <section data-testid="worktree-usage" className="order-3 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
           <div className="flex items-center justify-between">
             <div><h2 className="text-base font-semibold">{t('dashboard.worktrees')}</h2><p className="text-xs text-[var(--t-text-2)]">{t('dashboard.worktreesCount', { count: status.worktrees.count, size: (status.worktrees.bytes / 1024 ** 3).toFixed(2) })}</p></div>
             <HardDrive className="w-5 h-5 text-[var(--t-accent)]" />
@@ -343,8 +345,8 @@ export const DashboardPage: React.FC = () => {
       )}
 
       {/* Brain Card */}
-      {status.brain && <BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} />}
-      {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
+      {status.brain && <div className="order-4"><BrainCard brain={status.brain} quota={claudeQuota} onRetryLimit={() => retryChatLimitNow('brain')} /></div>}
+      {brainOverview?.brains && <div data-tour="brain" data-testid="project-brains" className="order-4 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
         <h2 className="text-base font-semibold">{t('dashboard.brains')}</h2>
         {brainOverview.brains.map((brain: ProjectBrain) => <div key={brain.projectId || 'system'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--t-border)] pt-3 first:border-0 first:pt-0" data-testid={`brain-row-${brain.projectId || 'system'}`}>
           <div><div className="font-medium text-sm">{brain.projectName}</div><div className="text-xs text-[var(--t-text-2)]">{t('dashboard.brainMode')}: {t(`dashboard.brainMode_${brain.mode}`)} · {t('dashboard.brainEngine')}: {brain.engine || 'claude'} · {t('projects.brainPermissions')}: {brain.permissions} · {t('dashboard.brainSessionMode')}: {brain.sessionMode || 'safe'} · {t(`dashboard.brainState${brain.state}`)}{brain.queued ? ` · ${t('dashboard.brainQueued')}` : ''}</div>{brain.directives?.length ? <div className="mt-1 text-xs text-[var(--t-text-2)]">📌 {brain.directives.map((directive) => directive.text).join(' · ')}</div> : null}</div>
@@ -357,7 +359,7 @@ export const DashboardPage: React.FC = () => {
       </div>}
 
       {/* CI Card */}
-      <div data-testid="dashboard-ci" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
+      <div data-testid="dashboard-ci" className="order-4 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Activity className="w-5 h-5 text-[var(--t-accent)]" />
@@ -423,7 +425,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div data-testid="dashboard-metrics" className="order-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {metrics.map((m) => {
           const Icon = m.icon;
           return (
@@ -450,7 +452,7 @@ export const DashboardPage: React.FC = () => {
         })}
       </div>
 
-      <div data-testid="dashboard-project-summary" className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
+      <div data-testid="dashboard-project-summary" className="order-2 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-base font-semibold">{t('dashboard.projectTaskSummary')}</h2>
           <Link to="/projects" className="text-xs text-[var(--t-accent)] hover:underline">{t('common.view')}</Link>
@@ -466,7 +468,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* Running workers */}
-      <div data-tour="workers" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors">
+      <div data-tour="workers" className="order-2 bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors">
         <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Cpu className="w-5 h-5 text-[var(--t-accent)]" />
@@ -613,19 +615,23 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* Review queue */}
-      <ReviewQueue activeTaskId={status.brain?.taskId} />
+      <div className="order-1">
+        <ReviewQueue activeTaskId={status.brain?.taskId} />
+      </div>
 
       {/* Waiting queue */}
-      <WaitingQueue
-        diskFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.freeGB ?? status.disk?.freeGB}
-        diskMinFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.minFreeGB ?? status.disk?.minFreeGB}
-        diskLabel={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.label}
-      />
+      <div className="order-1">
+        <WaitingQueue
+          diskFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.freeGB ?? status.disk?.freeGB}
+          diskMinFreeGB={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.minFreeGB ?? status.disk?.minFreeGB}
+          diskLabel={(status.disks?.find((disk) => disk.low) ?? status.disks?.[0])?.label}
+        />
+      </div>
 
       {status.overlaps && status.overlaps.length > 0 && (
         <div
           data-testid="overlap-warnings"
-          className="rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4 space-y-2"
+          className="order-1 rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4 space-y-2"
         >
           <div className="flex items-center gap-2 text-[var(--t-warn)] font-semibold text-sm">
             <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -647,7 +653,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
-      <div data-tour="provider-quotas" data-testid="dashboard-provider-quotas" className="grid gap-4 md:grid-cols-3">
+      <div data-tour="provider-quotas" data-testid="dashboard-provider-quotas" className="order-3 grid gap-4 md:grid-cols-3">
         {([
           ['agy', 'Antigravity'],
           ['codex', 'Codex'],
@@ -670,11 +676,11 @@ export const DashboardPage: React.FC = () => {
           );
         })}
       </div>
-      {claudeQuota && <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 flex items-center justify-between">
+      {claudeQuota && <div className="order-3 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-4 flex items-center justify-between">
         <span className="font-semibold text-sm">{t('extra.claudeQuota')}</span>
         <span className="text-sm">{claudeQuota.profiles?.length ? claudeQuota.profiles.map((p, index) => <React.Fragment key={p.profileName}><span title={formatTimeTitle(p.resetsAt, locale, p.source, p.observedAt)}>{p.profileName}: {p.status === 'allowed' ? t('extra.claudeQuotaAvailable') : p.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : p.limited ? t('extra.claudeQuotaRejected') : (p.status || t('extra.unknown'))}{p.resetsAt ? ` · ${formatReset(p.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {new Date(p.observedAt).toLocaleTimeString(locale === 'vi' ? 'vi-VN' : 'en-US')}</span>{index < claudeQuota.profiles!.length - 1 ? ' · ' : ''}</React.Fragment>) : <span title={formatTimeTitle(claudeQuota.resetsAt, locale, '/usage', claudeQuota.observedAt || null)}>{claudeQuota.status === 'allowed' ? t('extra.claudeQuotaAvailable') : claudeQuota.status === 'allowed_warning' ? t('extra.claudeQuotaWarning') : claudeQuota.limited ? t('extra.claudeQuotaRejected') : (claudeQuota.status || t('extra.unknown'))}{claudeQuota.resetsAt ? ` · ${formatReset(claudeQuota.resetsAt, Date.now(), locale)}` : ''} · {t('extra.updatedAt')} {claudeQuota.observedAt ? new Date(claudeQuota.observedAt).toLocaleTimeString(locale === 'vi' ? 'vi-VN' : 'en-US') : t('extra.unknown')}</span>}</span>
       </div>}
-      {claudeFailover && <div data-testid="claude-failover" className={`rounded-xl border p-4 ${claudeFailover.active ? 'border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)]' : 'border-[var(--t-border)] bg-[var(--t-surface)]'}`}>
+      {claudeFailover?.active && <div data-testid="claude-failover" className="order-1 rounded-xl border border-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_10%,transparent)] p-4">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? t('dashboard.failoverOn') : t('dashboard.failoverOff')}</div>
@@ -687,7 +693,7 @@ export const DashboardPage: React.FC = () => {
       </div>}
 
       {/* Compact quick chat */}
-      <div className="p-4 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-xs transition-colors">
+      <div className="order-5 p-4 rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-xs transition-colors">
         <form onSubmit={handleQuickChat} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-[var(--t-text)] shrink-0">
             <div className="w-6 h-6 rounded-full bg-[var(--t-claude)] text-[var(--t-on-accent)] font-bold text-xs flex items-center justify-center shadow-xs">
@@ -718,7 +724,7 @@ export const DashboardPage: React.FC = () => {
         </form>
       </div>
 
-      <div data-testid="orphan-processes" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs">
+      {orphans.length > 0 && <div data-testid="orphan-processes" className="order-1 bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs">
         <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.orphanProcesses')}</h2>
@@ -746,13 +752,15 @@ export const DashboardPage: React.FC = () => {
             </table>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Daily Usage Table */}
-      <DailyUsageTable />
+      <div className="order-5">
+        <DailyUsageTable />
+      </div>
 
       {/* Recent events */}
-      <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors">
+      <div className="order-5 bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] overflow-hidden shadow-xs transition-colors">
         <div className="px-6 py-4 border-b border-[var(--t-border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Activity className="w-5 h-5 text-[var(--t-purple)]" />
