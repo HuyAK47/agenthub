@@ -20,6 +20,15 @@ const ReferenceSchema = z.object({
   inject: z.boolean().default(false),
 });
 
+export function isValidBranchName(val: string): boolean {
+  if (!val || val.length > 200) return false;
+  if (val.startsWith('/') || val.endsWith('/') || val.includes('//')) return false;
+  if (val.includes('..') || val.includes('@{')) return false;
+  if (/[~^:?*[\\ ]/.test(val)) return false;
+  if (val.endsWith('.lock')) return false;
+  return true;
+}
+
 export const ProjectSettingsSchema = z.object({
   commitConvention: z.object({
     branchTemplate: z.string().min(1).max(200).default('agenthub/{slug}'),
@@ -57,23 +66,23 @@ export const ProjectSettingsSchema = z.object({
     /** When enabled, approved tasks merge into a local integration branch the hub manages. */
     enabled: z.boolean().default(false),
     /** Local branch name, e.g. `agenthub/integration` or `anhdd/kb-portal-locale`. */
-    branch: z.string().min(1).max(200).optional(),
+    branch: z.string().trim().min(1, 'Tên nhánh không được để trống').max(200).refine(isValidBranchName, 'Tên nhánh chứa ký tự không hợp lệ hoặc sai cú pháp').optional(),
     /** Branch/ref the integration branch starts from; defaults to the project's defaultBranch. */
-    baseRef: z.string().min(1).max(200).optional(),
+    baseRef: z.string().trim().min(1, 'Tên nhánh gốc không được để trống').max(200).refine(isValidBranchName, 'Tên nhánh gốc chứa ký tự không hợp lệ hoặc sai cú pháp').optional(),
     /** Merge (and so self-deploy) on its own once a Codex reviewer approves the last review-chain step. */
     autoMerge: z.boolean().default(false),
   }).default({}),
   review: z.object({
     /** Merge automatically after the final reviewer approves and hub checks pass. */
     autoMerge: z.boolean().default(false),
-    order: ReviewerOrderSchema.optional(),
-    fallback: ReviewerFallbackSchema.partial().optional(),
+    order: ReviewerOrderSchema.nullable().optional(),
+    fallback: ReviewerFallbackSchema.partial().nullable().optional(),
   }).default({}),
   ci: z.object({
     /** When enabled, hub monitors GitHub Actions CI runs for this project. Defaults to true for GitHub repos. */
     enabled: z.boolean().optional(),
     /** Branch to monitor; defaults to the project's defaultBranch or pushed branch. */
-    branch: z.string().min(1).max(200).optional(),
+    branch: z.string().trim().min(1, 'Tên nhánh CI không được để trống').max(200).refine(isValidBranchName, 'Tên nhánh CI chứa ký tự không hợp lệ hoặc sai cú pháp').optional(),
   }).default({}),
   /** Read-only material workers may consult (another repo, shared data, glossary). */
   references: z.array(ReferenceSchema).max(20).default([]),
@@ -122,17 +131,29 @@ export function projectSettings(project: { settings?: string | null } | null | u
 
 /** Merge a partial update over current settings, section by section; arrays are replaced. */
 export function mergeProjectSettings(current: ProjectSettings, input: ProjectSettingsInput): ProjectSettings {
+  let nextReviewOrder = current.review?.order;
+  if (input.review && 'order' in input.review) {
+    nextReviewOrder = input.review.order === null ? undefined : input.review.order;
+  }
+
+  let nextReviewFallback = current.review?.fallback;
+  if (input.review && 'fallback' in input.review) {
+    nextReviewFallback = input.review.fallback === null ? undefined : (
+      input.review.fallback
+        ? { ...current.review?.fallback, ...input.review.fallback }
+        : undefined
+    );
+  }
+
   return ProjectSettingsSchema.parse({
     brain: { ...current.brain, ...input.brain },
     commitConvention: { ...current.commitConvention, ...input.commitConvention },
     worktree: { ...current.worktree, ...input.worktree },
     integration: { ...current.integration, ...input.integration },
     review: {
-      ...current.review,
-      ...input.review,
-      ...(current.review?.fallback || input.review?.fallback ? {
-        fallback: { ...current.review?.fallback, ...input.review?.fallback },
-      } : {}),
+      autoMerge: input.review?.autoMerge ?? current.review?.autoMerge ?? false,
+      ...(nextReviewOrder ? { order: nextReviewOrder } : {}),
+      ...(nextReviewFallback ? { fallback: nextReviewFallback } : {}),
     },
     ci: { ...current.ci, ...input.ci },
     references: input.references ?? current.references,

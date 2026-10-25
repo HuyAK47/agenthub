@@ -63,7 +63,7 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
-import { ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
+import { isValidReviewerModel, ReviewerArbiterSchema, ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
 import { SetupManager } from '../tools/setup.js';
 import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
@@ -234,10 +234,19 @@ export const VALID_AGY_MODELS = new Set([
   'gpt-oss-120b-medium',
 ]);
 
-export const modelValidator = z.string().refine(
-  (m) => (m.startsWith('codex:') && m.length > 6) || VALID_AGY_MODELS.has(m),
-  { message: 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:' },
+export const modelValidator = z.string().trim().min(1, 'Model không được để trống').refine(
+  (m) => (m.startsWith('codex:') && isValidReviewerModel('codex', m.slice('codex:'.length))) || VALID_AGY_MODELS.has(m),
+  { message: 'Mỗi model phải là id agy hợp lệ hoặc model codex hợp lệ (codex:gpt-...)' },
 );
+
+export const reviewerModelValidator = z
+  .string()
+  .trim()
+  .min(1, 'Model của reviewer không được để trống')
+  .refine(
+    (m) => isValidReviewerModel('codex', m) || isValidReviewerModel('claude', m),
+    { message: 'Model của reviewer phải theo cú pháp engine codex hoặc claude hợp lệ' },
+  );
 const taskModelValidator = z.string().trim().min(1, 'Model không được để trống');
 
 export const ProjectHooksSchema = z.object({
@@ -483,13 +492,13 @@ export const UpdateConfigSchema = z.object({
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
       model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
-      models: z.array(z.string().trim().min(1)).min(1).optional(),
+      models: z.array(z.enum(['opus', 'sonnet', 'haiku'])).min(1).optional(),
       autoCompactPercent: z.number().min(0).max(100).optional(),
     })
     .optional(),
   reviewer: z.object({
     enabled: z.boolean().optional(),
-    model: modelValidator.optional(),
+    model: reviewerModelValidator.or(z.literal('')).optional(),
     timeoutSec: z.number().int().positive().optional(),
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
@@ -499,7 +508,7 @@ export const UpdateConfigSchema = z.object({
     claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
     order: ReviewerOrderSchema.optional(),
     fallback: ReviewerFallbackSchema.partial().optional(),
-    arbiter: z.object({ engine: z.enum(['codex', 'claude']), model: z.string().min(1) }).optional(),
+    arbiter: ReviewerArbiterSchema.optional(),
   }).optional(),
   focus: z.object({
     projectId: z.string().min(1).nullable().optional(),
@@ -509,9 +518,9 @@ export const UpdateConfigSchema = z.object({
   brain: z.object({
     engine: z.enum(['claude', 'codex']).optional(),
     fallback: z.array(z.discriminatedUnion('type', [
-      z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
-      z.object({ type: z.literal('model'), model: z.string().min(1) }),
-      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive() }),
+      z.object({ type: z.literal('profile'), profile: z.string().trim().min(1, 'Tên profile không được để trống').optional() }),
+      z.object({ type: z.literal('model'), model: z.string().trim().min(1, 'Tên model không được để trống') }),
+      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive('Hạn mức ngày phải là số dương') }),
       z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
       z.object({ type: z.literal('wait') }),
     ])).max(10).optional(),
@@ -1555,7 +1564,11 @@ export class AppService {
   }
 
   createProject(raw: unknown): ProjectRow {
-    const parsed = CreateProjectSchema.parse(raw);
+    const parseResult = CreateProjectSchema.safeParse(raw);
+    if (!parseResult.success) {
+      throw new HttpError(400, 'bad_request', parseResult.error.issues[0]?.message || 'Dữ liệu project không hợp lệ');
+    }
+    const parsed = parseResult.data;
     if (this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
       throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
     }
@@ -1685,7 +1698,11 @@ export class AppService {
 
   updateProject(id: string, raw: unknown): ProjectRow {
     this.getProject(id);
-    const parsed = UpdateProjectSchema.parse(raw);
+    const parseResult = UpdateProjectSchema.safeParse(raw);
+    if (!parseResult.success) {
+      throw new HttpError(400, 'bad_request', parseResult.error.issues[0]?.message || 'Dữ liệu cập nhật project không hợp lệ');
+    }
+    const parsed = parseResult.data;
     const current = this.projectRepo.get(id)!;
     if (parsed.departmentId && this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
       throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);

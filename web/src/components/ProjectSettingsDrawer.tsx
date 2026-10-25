@@ -3,6 +3,8 @@ import {
   FolderGit2,
   GitBranch,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   CheckCircle2,
   AlertCircle,
   X,
@@ -24,7 +26,15 @@ import {
   TableHead,
   TableCell,
   StatTile,
+  SelectOrCustomInput,
 } from './ui';
+import {
+  DEFAULT_COMMON_BRANCHES,
+  DEFAULT_CLAUDE_MODELS,
+  validateBranchSyntax,
+  validateReviewerModelSyntax,
+  validateReviewChainReviewerSyntax,
+} from '../utils/models';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
@@ -35,10 +45,12 @@ import {
   rerunProjectDeploy,
   getProjectDeployStatus,
   getConfig,
+  getModelOptions,
   getFocus,
   setFocus,
   getReviewChecklistPreview,
   createTask,
+  getProfiles,
 } from '../api/client';
 
 export interface ProjectSettingsDrawerProps {
@@ -110,10 +122,8 @@ export function changedSettings(
   const sections = [
     'commitConvention',
     'brain',
-    'review',
     'worktree',
     'integration',
-    'review',
     'ci',
     'references',
     'reviewChecklist',
@@ -156,17 +166,7 @@ const SAMPLE_CHECKS = JSON.stringify(
   2,
 );
 
-const SAMPLE_REVIEW = JSON.stringify(
-  {
-    chain: [
-      { reviewer: 'codex:gpt-5.6-luna', mode: 'gate' },
-      { reviewer: 'claude', mode: 'final' },
-    ],
-    maxRounds: 2,
-  },
-  null,
-  2,
-);
+
 
 const SAMPLE_ENV = JSON.stringify(
   {
@@ -201,6 +201,18 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     staleTime: 30_000,
   });
 
+  const { data: allProfiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: getProfiles,
+    staleTime: 30_000,
+  });
+
+  const { data: modelOptions } = useQuery({
+    queryKey: ['model-options'],
+    queryFn: getModelOptions,
+    staleTime: 30_000,
+  });
+
   const [draftSettings, setDraftSettings] = useState<ProjectSettings>(
     defaultProjectSettings(),
   );
@@ -214,8 +226,140 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [checklistDraft, setChecklistDraft] = useState('');
   const [showCommitExample, setShowCommitExample] = useState(false);
 
+  const [reviewerOrder, setReviewerOrder] = useState<
+    Array<{ engine: 'codex' | 'claude'; model: string; profiles: string[] }>
+  >([]);
+  const [hasReviewerOrderOverride, setHasReviewerOrderOverride] = useState<boolean>(false);
+  const [reviewerFallback, setReviewerFallback] = useState<{
+    onUnavailable: boolean;
+    onError: boolean;
+    onBusyAfterMin: number;
+  }>({
+    onUnavailable: true,
+    onError: true,
+    onBusyAfterMin: 10,
+  });
+  const [hasReviewerFallbackOverride, setHasReviewerFallbackOverride] = useState<boolean>(false);
+  const [reviewChain, setReviewChain] = useState<{
+    chain: Array<{ reviewer: string; mode: 'gate' | 'final' }>;
+    maxRounds: number;
+  }>({ chain: [], maxRounds: 2 });
+  const [hasReviewChainOverride, setHasReviewChainOverride] = useState<boolean>(false);
+
+  const availableCodexReviewerModels = useMemo(() => {
+    const fromApi = (modelOptions?.suggestions || []).filter(
+      (m) => m.startsWith('codex:') || m.startsWith('gpt-'),
+    );
+    const fromConfigured = (modelOptions?.configured || []).filter(
+      (m) => m.startsWith('codex:') || m.startsWith('gpt-'),
+    );
+    const fromConfigOrder = (config?.reviewer?.order || [])
+      .filter((r) => r.engine === 'codex')
+      .map((r) => r.model);
+    const fromConfigReviewer = config?.reviewer?.model
+      ? (config.reviewer.model.startsWith('codex:') || config.reviewer.model.startsWith('gpt-') ? [config.reviewer.model] : [])
+      : [];
+    const fromConfigArbiter = config?.reviewer?.arbiter?.engine === 'codex' && config.reviewer.arbiter.model
+      ? [config.reviewer.arbiter.model]
+      : [];
+    const fromChains = [
+      ...(config?.modelChainHard || []),
+      ...(config?.modelChainEasy || []),
+    ].filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    const fromCurrentOrder = reviewerOrder
+      .filter((r) => r.engine === 'codex')
+      .map((r) => r.model);
+    const fromProjectOrder = (project?.settings?.review?.order || [])
+      .filter((r) => r.engine === 'codex')
+      .map((r) => r.model);
+
+    return Array.from(
+      new Set([
+        ...fromApi,
+        ...fromConfigured,
+        ...fromConfigOrder,
+        ...fromConfigReviewer,
+        ...fromConfigArbiter,
+        ...fromChains,
+        ...fromCurrentOrder,
+        ...fromProjectOrder,
+      ]),
+    ).filter(Boolean);
+  }, [modelOptions, config, reviewerOrder, project]);
+
+  const availableClaudeReviewerModels = useMemo(() => {
+    const fromChat = config?.chat?.models || [];
+    const fromChatModel = config?.chat?.model ? [config.chat.model] : [];
+    const fromClaudeModel = config?.reviewer?.claudeModel ? [config.reviewer.claudeModel] : [];
+    const fromConfigOrder = (config?.reviewer?.order || [])
+      .filter((r) => r.engine === 'claude')
+      .map((r) => r.model);
+    const fromConfigArbiter = config?.reviewer?.arbiter?.engine === 'claude' && config.reviewer.arbiter.model
+      ? [config.reviewer.arbiter.model]
+      : [];
+    const fromApi = (modelOptions?.suggestions || []).filter(
+      (m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'),
+    );
+    const fromConfigured = (modelOptions?.configured || []).filter(
+      (m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'),
+    );
+    const fromCurrentOrder = reviewerOrder
+      .filter((r) => r.engine === 'claude')
+      .map((r) => r.model);
+    const fromProjectOrder = (project?.settings?.review?.order || [])
+      .filter((r) => r.engine === 'claude')
+      .map((r) => r.model);
+
+    return Array.from(
+      new Set([
+        ...DEFAULT_CLAUDE_MODELS,
+        ...fromChat,
+        ...fromChatModel,
+        ...fromClaudeModel,
+        ...fromConfigOrder,
+        ...fromConfigArbiter,
+        ...fromApi,
+        ...fromConfigured,
+        ...fromCurrentOrder,
+        ...fromProjectOrder,
+      ]),
+    ).filter(Boolean);
+  }, [modelOptions, config, reviewerOrder, project]);
+
+  const availableReviewChainReviewers = useMemo(() => {
+    const codexModels = availableCodexReviewerModels.map((m) =>
+      m.startsWith('codex:') ? m : `codex:${m}`,
+    );
+    const fromCurrentChain = reviewChain.chain.map((s) => s.reviewer);
+    let fromProjectChain: string[] = [];
+    if (project?.review) {
+      if (typeof project.review === 'object' && Array.isArray((project.review as any).chain)) {
+        fromProjectChain = (project.review as any).chain.map((s: any) => s.reviewer).filter(Boolean);
+      } else if (typeof project.review === 'string') {
+        try {
+          const parsed = JSON.parse(project.review);
+          if (Array.isArray(parsed?.chain)) {
+            fromProjectChain = parsed.chain.map((s: any) => s.reviewer).filter(Boolean);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return Array.from(
+      new Set([
+        'claude',
+        ...codexModels,
+        ...fromCurrentChain,
+        ...fromProjectChain,
+      ]),
+    ).filter(Boolean);
+  }, [availableCodexReviewerModels, reviewChain.chain, project]);
+
   const [checksError, setChecksError] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewerOrderError, setReviewerOrderError] = useState<string | null>(null);
+  const [reviewerFallbackError, setReviewerFallbackError] = useState<string | null>(null);
   const [envError, setEnvError] = useState<string | null>(null);
   const [refErrors, setRefErrors] = useState<Record<number, string | null>>({});
 
@@ -223,38 +367,122 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  const resetDraftState = (targetProject: Project) => {
+    setDraftSettings(normalizeProjectSettings(targetProject.settings));
+    setChecklistDraft((targetProject.settings?.reviewChecklist || []).join('\n'));
+    setDraftChecks(
+      typeof targetProject.checks === 'string'
+        ? targetProject.checks
+        : targetProject.checks
+        ? JSON.stringify(targetProject.checks, null, 2)
+        : '',
+    );
+    setDraftHooks(getProjectHooksString(targetProject));
+
+    if (targetProject.settings?.review?.order && targetProject.settings.review.order.length > 0) {
+      setReviewerOrder(targetProject.settings.review.order);
+      setHasReviewerOrderOverride(true);
+      setDraftReviewerOrder(JSON.stringify(targetProject.settings.review.order, null, 2));
+    } else {
+      setReviewerOrder([]);
+      setHasReviewerOrderOverride(false);
+      setDraftReviewerOrder('');
+    }
+
+    if (targetProject.settings?.review?.fallback) {
+      setReviewerFallback({
+        onUnavailable: targetProject.settings.review.fallback.onUnavailable ?? true,
+        onError: targetProject.settings.review.fallback.onError ?? true,
+        onBusyAfterMin: targetProject.settings.review.fallback.onBusyAfterMin ?? 10,
+      });
+      setHasReviewerFallbackOverride(true);
+      setDraftReviewerFallback(JSON.stringify(targetProject.settings.review.fallback, null, 2));
+    } else {
+      setReviewerFallback({ onUnavailable: true, onError: true, onBusyAfterMin: 10 });
+      setHasReviewerFallbackOverride(false);
+      setDraftReviewerFallback('');
+    }
+
+    let parsedReview: any = null;
+    if (typeof targetProject.review === 'object' && targetProject.review !== null) {
+      parsedReview = targetProject.review;
+    } else if (typeof targetProject.review === 'string' && targetProject.review.trim()) {
+      try {
+        parsedReview = JSON.parse(targetProject.review);
+      } catch {
+        parsedReview = null;
+      }
+    }
+
+    if (parsedReview) {
+      setReviewChain({
+        chain: Array.isArray(parsedReview.chain) ? parsedReview.chain : [],
+        maxRounds: typeof parsedReview.maxRounds === 'number' ? parsedReview.maxRounds : 2,
+      });
+      setHasReviewChainOverride(true);
+      setDraftReview(JSON.stringify(parsedReview, null, 2));
+    } else {
+      setReviewChain({ chain: [], maxRounds: 2 });
+      setHasReviewChainOverride(false);
+      setDraftReview('');
+    }
+
+    setDraftEnvTemplate(targetProject.envTemplate ?? '');
+    setChecksError(null);
+    setReviewError(null);
+    setReviewerOrderError(null);
+    setReviewerFallbackError(null);
+    setEnvError(null);
+    setRefErrors({});
+    setApiError(null);
+    setSectionErrors({});
+  };
+
   // Initialize draft when project changes
   useEffect(() => {
     if (project) {
-      setDraftSettings(normalizeProjectSettings(project.settings));
-      setChecklistDraft((project.settings?.reviewChecklist || []).join('\n'));
-      setDraftChecks(
-        typeof project.checks === 'string'
-          ? project.checks
-          : project.checks
-          ? JSON.stringify(project.checks, null, 2)
-          : '',
-      );
-      setDraftHooks(getProjectHooksString(project));
-      setDraftReview(
-        typeof project.review === 'string'
-          ? project.review
-          : project.review
-          ? JSON.stringify(project.review, null, 2)
-          : '',
-      );
-      setDraftReviewerOrder(project.settings?.review?.order ? JSON.stringify(project.settings.review.order, null, 2) : '');
-      setDraftReviewerFallback(project.settings?.review?.fallback ? JSON.stringify(project.settings.review.fallback, null, 2) : '');
-      setDraftEnvTemplate(project.envTemplate ?? '');
-      setDraftDepartmentId(project.departmentId ?? 'chung');
-      setChecksError(null);
-      setReviewError(null);
-      setEnvError(null);
-      setRefErrors({});
-      setApiError(null);
-      setSectionErrors({});
+      resetDraftState(project);
     }
   }, [project, isOpen]);
+
+  const updateReviewerOrderState = (
+    newOrder: Array<{ engine: 'codex' | 'claude'; model: string; profiles: string[] }>,
+    isOverride: boolean,
+  ) => {
+    setReviewerOrder(newOrder);
+    setHasReviewerOrderOverride(isOverride);
+    const jsonStr = isOverride ? JSON.stringify(newOrder, null, 2) : '';
+    setDraftReviewerOrder(jsonStr);
+    setReviewerOrderError(null);
+    setApiError(null);
+  };
+
+  const updateReviewerFallbackState = (
+    newFallback: { onUnavailable: boolean; onError: boolean; onBusyAfterMin: number },
+    isOverride: boolean,
+  ) => {
+    setReviewerFallback(newFallback);
+    setHasReviewerFallbackOverride(isOverride);
+    const jsonStr = isOverride ? JSON.stringify(newFallback, null, 2) : '';
+    setDraftReviewerFallback(jsonStr);
+    setReviewerFallbackError(null);
+    setApiError(null);
+  };
+
+  const updateReviewChainState = (
+    newChainConfig: {
+      chain: Array<{ reviewer: string; mode: 'gate' | 'final' }>;
+      maxRounds: number;
+    },
+    isOverride: boolean,
+  ) => {
+    setReviewChain(newChainConfig);
+    setHasReviewChainOverride(isOverride);
+    const jsonStr = isOverride ? JSON.stringify(newChainConfig, null, 2) : '';
+    setDraftReview(jsonStr);
+    setReviewError(null);
+    setApiError(null);
+  };
 
   // Validation functions
   const handleChecksChange = (val: string) => {
@@ -276,24 +504,6 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     }
   };
 
-  const handleReviewChange = (val: string) => {
-    setDraftReview(val);
-    setApiError(null);
-    if (!val.trim()) {
-      setReviewError(null);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(val);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        setReviewError('Review chain must be a JSON object: { chain, maxRounds }');
-      } else {
-        setReviewError(null);
-      }
-    } catch (err: any) {
-      setReviewError(err.message);
-    }
-  };
 
   const handleEnvChange = (val: string) => {
     setDraftEnvTemplate(val);
@@ -389,9 +599,17 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   );
   const origReview = useMemo(() => {
     if (!project?.review) return '';
-    return typeof project.review === 'string'
-      ? project.review
-      : JSON.stringify(project.review, null, 2);
+    if (typeof project.review === 'object') {
+      return JSON.stringify(project.review, null, 2);
+    }
+    if (typeof project.review === 'string' && project.review.trim()) {
+      try {
+        return JSON.stringify(JSON.parse(project.review), null, 2);
+      } catch {
+        return project.review;
+      }
+    }
+    return '';
   }, [project]);
   const origEnv = useMemo(() => project?.envTemplate ?? '', [project]);
 
@@ -449,10 +667,31 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     () => draftEnvTemplate.trim() !== origEnv.trim(),
     [draftEnvTemplate, origEnv],
   );
+  const origReviewerOrderStr = useMemo(() => {
+    return origSettings.review?.order && origSettings.review.order.length > 0
+      ? JSON.stringify(origSettings.review.order, null, 2)
+      : '';
+  }, [origSettings.review?.order]);
+
+  const origReviewerFallbackStr = useMemo(() => {
+    return origSettings.review?.fallback
+      ? JSON.stringify(origSettings.review.fallback, null, 2)
+      : '';
+  }, [origSettings.review?.fallback]);
+
+  const orderChanged = useMemo(
+    () => draftReviewerOrder.trim() !== origReviewerOrderStr.trim(),
+    [draftReviewerOrder, origReviewerOrderStr],
+  );
+
+  const fallbackChanged = useMemo(
+    () => draftReviewerFallback.trim() !== origReviewerFallbackStr.trim(),
+    [draftReviewerFallback, origReviewerFallbackStr],
+  );
+
   const reviewerOverrideChanged = useMemo(
-    () => draftReviewerOrder.trim() !== (origSettings.review?.order ? JSON.stringify(origSettings.review.order, null, 2) : '').trim()
-      || draftReviewerFallback.trim() !== (origSettings.review?.fallback ? JSON.stringify(origSettings.review.fallback, null, 2) : '').trim(),
-    [draftReviewerOrder, draftReviewerFallback, origSettings.review],
+    () => orderChanged || fallbackChanged,
+    [orderChanged, fallbackChanged],
   );
 
   const changeCount = useMemo(() => {
@@ -491,6 +730,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const hasValidationError = Boolean(
     checksError ||
       reviewError ||
+      reviewerOrderError ||
+      reviewerFallbackError ||
       envError ||
       Object.values(refErrors).some((err) => Boolean(err)),
   );
@@ -561,25 +802,28 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
 
   const handleDiscard = () => {
     if (!project) return;
-    setDraftSettings(
-      normalizeProjectSettings(project.settings),
-    );
-    setChecklistDraft((origSettings.reviewChecklist || []).join('\n'));
-    setDraftChecks(origChecks);
-    setDraftHooks(origHooks);
-    setDraftReview(origReview);
-    setDraftEnvTemplate(origEnv);
-    setDraftDepartmentId(project.departmentId ?? 'chung');
-    setChecksError(null);
-    setReviewError(null);
-    setEnvError(null);
-    setRefErrors({});
-    setApiError(null);
-    setSectionErrors({});
+    resetDraftState(project);
   };
 
   const handleSave = () => {
     if (!project || hasValidationError || saveMutation.isPending) return;
+
+    if (draftSettings.integration.enabled) {
+      if (draftSettings.integration.branch) {
+        const err = validateBranchSyntax(draftSettings.integration.branch, t);
+        if (err) {
+          setSectionErrors((prev) => ({ ...prev, integration: `${t('projects.integrationBranch')}: ${err}` }));
+          return;
+        }
+      }
+      if (draftSettings.integration.baseRef) {
+        const err = validateBranchSyntax(draftSettings.integration.baseRef, t);
+        if (err) {
+          setSectionErrors((prev) => ({ ...prev, integration: `${t('projects.integrationBaseRef')}: ${err}` }));
+          return;
+        }
+      }
+    }
 
     const payload: UpdateProjectInput = {};
 
@@ -605,11 +849,18 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     }
 
     if (reviewerOverrideChanged) {
+      const reviewUpdate: Record<string, any> = {};
+      if (orderChanged) {
+        reviewUpdate.order = draftReviewerOrder.trim() ? JSON.parse(draftReviewerOrder) : null;
+      }
+      if (fallbackChanged) {
+        reviewUpdate.fallback = draftReviewerFallback.trim() ? JSON.parse(draftReviewerFallback) : null;
+      }
       payload.settings = {
         ...(payload.settings || {}),
         review: {
-          order: draftReviewerOrder.trim() ? JSON.parse(draftReviewerOrder) : undefined,
-          fallback: draftReviewerFallback.trim() ? JSON.parse(draftReviewerFallback) : undefined,
+          ...(payload.settings?.review || {}),
+          ...reviewUpdate,
         },
       };
     }
@@ -1205,40 +1456,48 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                   <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
                     {t('projects.integrationBranch')} <InfoTooltip text={t('projects.integrationInfo')} label={t('projects.integrationBranch')} />
                   </label>
-                  <Input
+                  <SelectOrCustomInput
                     placeholder="integration"
                     value={draftSettings.integration.branch ?? ''}
-                    onChange={(e) => {
+                    onChange={(val) => {
                       setSectionErrors((prev) => ({ ...prev, integration: null }));
                       setApiError(null);
                       setDraftSettings((prev) => ({
                         ...prev,
                         integration: {
                           ...prev.integration,
-                          branch: e.target.value || undefined,
+                          branch: val || undefined,
                         },
                       }));
                     }}
+                    options={DEFAULT_COMMON_BRANCHES}
+                    validate={(val) => validateBranchSyntax(val, t)}
+                    ariaLabel={t('projects.integrationBranch')}
+                    allowEmpty={true}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
                     {t('projects.integrationBaseRef')}
                   </label>
-                  <Input
+                  <SelectOrCustomInput
                     placeholder="main"
                     value={draftSettings.integration.baseRef ?? ''}
-                    onChange={(e) => {
+                    onChange={(val) => {
                       setSectionErrors((prev) => ({ ...prev, integration: null }));
                       setApiError(null);
                       setDraftSettings((prev) => ({
                         ...prev,
                         integration: {
                           ...prev.integration,
-                          baseRef: e.target.value || undefined,
+                          baseRef: val || undefined,
                         },
                       }));
                     }}
+                    options={DEFAULT_COMMON_BRANCHES}
+                    validate={(val) => validateBranchSyntax(val, t)}
+                    ariaLabel={t('projects.integrationBaseRef')}
+                    allowEmpty={true}
                   />
                 </div>
               </div>
@@ -1597,50 +1856,489 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                 />
               </div>
 
-              {/* review chain JSON */}
-              <div className="space-y-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3">
-                <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerOverride')}</label>
-                <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.reviewerOverrideHint')}</p>
-                <textarea aria-label={t('projects.reviewerOrderOverride')} rows={3} value={draftReviewerOrder} onChange={(event) => setDraftReviewerOrder(event.target.value)} placeholder={'[{"engine":"claude","model":"sonnet","profiles":[]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
-                <textarea aria-label={t('projects.reviewerFallbackOverride')} rows={2} value={draftReviewerFallback} onChange={(event) => setDraftReviewerFallback(event.target.value)} placeholder={'{"onUnavailable":true,"onBusyAfterMin":10,"onError":true}'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
+              {/* reviewer override */}
+              <div className="space-y-3 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3" data-testid="project-reviewer-order">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerOverride')}</label>
+                    <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.reviewerOverrideHint')}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {hasReviewerOrderOverride ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewerOrderState([], false)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-crit)]"
+                      >
+                        {t('settings.useSystemDefault')}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          updateReviewerOrderState(
+                            [{ engine: 'codex', model: availableCodexReviewerModels[0] || '', profiles: [] }],
+                            true,
+                          )
+                        }
+                        className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                      >
+                        + {t('settings.overrideConfig')}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {!hasReviewerOrderOverride ? (
+                  <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                    {t('settings.useSystemDefault')}
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {reviewerOrder.length === 0 && (
+                      <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                        {t('settings.noReviewers')}
+                      </p>
+                    )}
+                    {reviewerOrder.map((item, index) => {
+                      const engineProfiles = allProfiles.filter((p) => p.engine === item.engine);
+                      const activeProfileNames = new Set(engineProfiles.map((p) => p.name));
+                      const missingProfiles = (item.profiles || []).filter((name) => !activeProfileNames.has(name));
+                      const engineModelOptions = item.engine === 'codex' ? availableCodexReviewerModels : availableClaudeReviewerModels;
+
+                      return (
+                        <div
+                          key={`proj-reviewer-${index}`}
+                          className="rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-2.5 space-y-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-[var(--t-text-3)]">{index + 1}.</span>
+                            <select
+                              aria-label={`${t('settings.reviewerOrder')} ${index + 1}`}
+                              value={item.engine}
+                              onChange={(e) => {
+                                const newEngine = e.target.value as 'codex' | 'claude';
+                                const next = reviewerOrder.map((row, i) =>
+                                  i === index
+                                    ? {
+                                        ...row,
+                                        engine: newEngine,
+                                        model: newEngine === 'codex'
+                                          ? (availableCodexReviewerModels[0] || '')
+                                          : (availableClaudeReviewerModels[0] || ''),
+                                        profiles: [],
+                                      }
+                                    : row,
+                                );
+                                updateReviewerOrderState(next, true);
+                              }}
+                              className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-1.5 text-[var(--t-text)]"
+                            >
+                              <option value="codex">Codex</option>
+                              <option value="claude">Claude</option>
+                            </select>
+                            <div className="min-w-0 flex-1">
+                              <SelectOrCustomInput
+                                ariaLabel={`${t('settings.reviewerModel')} ${index + 1}`}
+                                value={item.model}
+                                onChange={(val) => {
+                                  const next = reviewerOrder.map((row, i) =>
+                                    i === index ? { ...row, model: val } : row,
+                                  );
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                options={engineModelOptions}
+                                validate={(val) => validateReviewerModelSyntax(val, item.engine, t)}
+                                placeholder={item.engine === 'codex' ? 'codex:model' : 'sonnet'}
+                              />
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                disabled={index === 0}
+                                onClick={() => {
+                                  if (index === 0) return;
+                                  const next = [...reviewerOrder];
+                                  const [moved] = next.splice(index, 1);
+                                  next.splice(index - 1, 0, moved);
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                                className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={index === reviewerOrder.length - 1}
+                                onClick={() => {
+                                  if (index === reviewerOrder.length - 1) return;
+                                  const next = [...reviewerOrder];
+                                  const [moved] = next.splice(index, 1);
+                                  next.splice(index + 1, 0, moved);
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                                className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = reviewerOrder.filter((_, i) => i !== index);
+                                  updateReviewerOrderState(next, true);
+                                }}
+                                aria-label={`${t('common.remove')} ${index + 1}`}
+                                className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          <select
+                            aria-label={`${t('settings.claudeProfiles')} ${index + 1}`}
+                            multiple
+                            value={item.profiles}
+                            onChange={(e) => {
+                              const next = reviewerOrder.map((row, i) =>
+                                i === index
+                                  ? {
+                                      ...row,
+                                      profiles: Array.from(e.target.selectedOptions).map((opt) => opt.value),
+                                    }
+                                  : row,
+                              );
+                              updateReviewerOrderState(next, true);
+                            }}
+                            className="w-full text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-1 text-[var(--t-text)] min-h-[48px]"
+                          >
+                            {engineProfiles.map((p) => (
+                              <option key={p.name} value={p.name}>
+                                {p.name}
+                              </option>
+                            ))}
+                            {missingProfiles.map((name) => (
+                              <option key={name} value={name}>
+                                {name} ({t('settings.inactiveOrOld')})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        updateReviewerOrderState(
+                          [
+                            ...reviewerOrder,
+                            { engine: 'codex', model: availableCodexReviewerModels[0] || '', profiles: [] },
+                          ],
+                          true,
+                        )
+                      }
+                      className="h-7 text-xs text-[var(--t-accent)]"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" />
+                      {t('settings.addReviewer')}
+                    </Button>
+                  </div>
+                )}
+
+                {/* Reviewer fallback */}
+                <div className="pt-2 border-t border-[var(--t-border)] space-y-2" data-testid="project-reviewer-fallback">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerFallbackOverride')}</label>
+                    {hasReviewerFallbackOverride ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewerFallbackState(reviewerFallback, false)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-crit)]"
+                      >
+                        {t('settings.useSystemDefault')}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewerFallbackState(reviewerFallback, true)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                      >
+                        + {t('settings.overrideConfig')}
+                      </Button>
+                    )}
+                  </div>
+                  {hasReviewerFallbackOverride ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={reviewerFallback.onUnavailable}
+                          onChange={(e) =>
+                            updateReviewerFallbackState(
+                              { ...reviewerFallback, onUnavailable: e.target.checked },
+                              true,
+                            )
+                          }
+                        />
+                        {t('settings.fallbackUnavailable')}
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={reviewerFallback.onError}
+                          onChange={(e) =>
+                            updateReviewerFallbackState(
+                              { ...reviewerFallback, onError: e.target.checked },
+                              true,
+                            )
+                          }
+                        />
+                        {t('settings.fallbackError')}
+                      </label>
+                      <label className="flex items-center gap-2">
+                        {t('settings.fallbackBusy')}
+                        <input
+                          type="number"
+                          min={0}
+                          max={1440}
+                          value={reviewerFallback.onBusyAfterMin}
+                          onChange={(e) =>
+                            updateReviewerFallbackState(
+                              { ...reviewerFallback, onBusyAfterMin: Number(e.target.value) || 0 },
+                              true,
+                            )
+                          }
+                          className="w-16 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-1 py-1"
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[var(--t-text-3)] italic">
+                      {t('settings.useSystemDefault')}
+                    </p>
+                  )}
+                </div>
               </div>
 
-              {/* review chain JSON */}
-              <div className="space-y-1.5">
+              {/* review chain builder */}
+              <div className="space-y-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3" data-testid="project-review-chain">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-[var(--t-text)]">
-                    {t('extra.reviewChainLabel')}
-                  </label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleReviewChange(SAMPLE_REVIEW)}
-                    className="h-6 px-2 text-[11px] text-[var(--t-accent)]"
-                  >
-                    {t('projects.insertExample')}
-                  </Button>
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--t-text)]">{t('settings.reviewChainTitle')}</label>
+                    <p className="text-[11px] text-[var(--t-text-3)]">{t('settings.reviewChainHint')}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        updateReviewChainState(
+                          {
+                            chain: [
+                              {
+                                reviewer:
+                                  availableReviewChainReviewers.find((r) => r.startsWith('codex:')) ||
+                                  '',
+                                mode: 'gate',
+                              },
+                              { reviewer: 'claude', mode: 'final' },
+                            ],
+                            maxRounds: 2,
+                          },
+                          true,
+                        )
+                      }
+                      className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                    >
+                      {t('projects.insertExample')}
+                    </Button>
+                    {hasReviewChainOverride ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateReviewChainState({ chain: [], maxRounds: 2 }, false)}
+                        className="h-6 px-2 text-[10px] text-[var(--t-crit)]"
+                      >
+                        {t('settings.useSystemDefault')}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          updateReviewChainState(
+                            {
+                              chain: [
+                                {
+                                  reviewer:
+                                    availableReviewChainReviewers.find((r) => r.startsWith('codex:')) ||
+                                    '',
+                                  mode: 'gate',
+                                },
+                                { reviewer: 'claude', mode: 'final' },
+                              ],
+                              maxRounds: 2,
+                            },
+                            true,
+                          )
+                        }
+                        className="h-6 px-2 text-[10px] text-[var(--t-accent)]"
+                      >
+                        + {t('settings.overrideConfig')}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <textarea
-                  data-testid="review-chain-textarea"
-                  rows={4}
-                  value={draftReview}
-                  onChange={(e) => handleReviewChange(e.target.value)}
-                  placeholder={'{"chain":[{"reviewer":"codex:gpt-5.6-luna","mode":"gate"},{"reviewer":"claude","mode":"final"}],"maxRounds":2}'}
-                  className={`w-full text-xs font-mono rounded-lg border p-2.5 bg-[var(--t-surface-2)] text-[var(--t-text)] ${
-                    reviewError
-                      ? 'border-[var(--t-crit)] focus:ring-[var(--t-crit)]'
-                      : 'border-[var(--t-border)] focus:ring-[var(--t-accent)]'
-                  } focus:outline-hidden focus:ring-2`}
-                />
-                {reviewError && (
-                  <p
-                    data-testid="review-error-msg"
-                    className="text-xs text-[var(--t-crit)] flex items-center gap-1 mt-1"
-                  >
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{reviewError}</span>
+
+                {!hasReviewChainOverride ? (
+                  <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                    {t('settings.useSystemDefault')}
                   </p>
+                ) : (
+                  <div className="space-y-2">
+                    {reviewChain.chain.length === 0 && (
+                      <p className="text-xs text-[var(--t-text-3)] italic py-1">
+                        {t('settings.noReviewSteps')}
+                      </p>
+                    )}
+                    {reviewChain.chain.map((step, index) => (
+                      <div
+                        key={`review-step-${index}`}
+                        className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] p-2"
+                      >
+                        <span className="text-xs font-bold text-[var(--t-text-3)] w-5 text-center">
+                          {index + 1}.
+                        </span>
+                        <div className="flex-1 min-w-[180px]">
+                          <SelectOrCustomInput
+                            value={step.reviewer}
+                            onChange={(val) => {
+                              const nextChain = reviewChain.chain.map((s, i) =>
+                                i === index ? { ...s, reviewer: val } : s,
+                              );
+                              updateReviewChainState({ ...reviewChain, chain: nextChain }, true);
+                            }}
+                            options={availableReviewChainReviewers}
+                            validate={(val) => validateReviewChainReviewerSyntax(val, t)}
+                            ariaLabel={`${t('settings.reviewStep')} ${index + 1}`}
+                            placeholder={t('settings.reviewerPlaceholder')}
+                          />
+                        </div>
+                        <select
+                          aria-label={`${t('settings.stepMode')} ${index + 1}`}
+                          value={step.mode}
+                          onChange={(e) => {
+                            const nextChain = reviewChain.chain.map((s, i) =>
+                              i === index ? { ...s, mode: e.target.value as 'gate' | 'final' } : s,
+                            );
+                            updateReviewChainState({ ...reviewChain, chain: nextChain }, true);
+                          }}
+                          className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] px-2 py-1.5 text-[var(--t-text)]"
+                        >
+                          <option value="gate">gate</option>
+                          <option value="final">final</option>
+                        </select>
+                        <div className="flex items-center gap-1 shrink-0 ml-auto">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            onClick={() => {
+                              if (index === 0) return;
+                              const next = [...reviewChain.chain];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index - 1, 0, moved);
+                              updateReviewChainState({ ...reviewChain, chain: next }, true);
+                            }}
+                            aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                            className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === reviewChain.chain.length - 1}
+                            onClick={() => {
+                              if (index === reviewChain.chain.length - 1) return;
+                              const next = [...reviewChain.chain];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index + 1, 0, moved);
+                              updateReviewChainState({ ...reviewChain, chain: next }, true);
+                            }}
+                            aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                            className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = reviewChain.chain.filter((_, i) => i !== index);
+                              updateReviewChainState({ ...reviewChain, chain: next }, true);
+                            }}
+                            aria-label={`${t('settings.removeReviewStep')} ${index + 1}`}
+                            className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          updateReviewChainState(
+                            {
+                              ...reviewChain,
+                              chain: [...reviewChain.chain, { reviewer: 'claude', mode: 'final' }],
+                            },
+                            true,
+                          )
+                        }
+                        className="h-7 text-xs text-[var(--t-accent)]"
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        {t('settings.addReviewStep')}
+                      </Button>
+                      <label className="text-xs flex items-center gap-1.5 text-[var(--t-text-2)]">
+                        <span>{t('settings.maxReviewRounds')}:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={reviewChain.maxRounds}
+                          onChange={(e) =>
+                            updateReviewChainState(
+                              {
+                                ...reviewChain,
+                                maxRounds: Math.min(10, Math.max(1, Number(e.target.value) || 2)),
+                              },
+                              true,
+                            )
+                          }
+                          className="w-14 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-1.5 py-1 text-center font-mono text-xs text-[var(--t-text)]"
+                        />
+                      </label>
+                    </div>
+                  </div>
                 )}
               </div>
 
