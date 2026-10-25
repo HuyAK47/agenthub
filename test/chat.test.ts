@@ -7,7 +7,7 @@ import { createContext } from '../src/daemon.js';
 import { createServer } from '../src/api/server.js';
 import { getOrCreateToken } from '../src/auth.js';
 import { FakeEngine, Engine } from '../src/engines/index.js';
-import { buildBrainPrompt, buildClaudeArgs, buildHubSnapshot, clearPartialSupportCache, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
+import { buildBrainPrompt, buildClaudeArgs, buildHubSnapshot, checkClaudePartialSupport, checkClaudeStreamJsonSupport, clearPartialSupportCache, ensureChatMcpConfig, findClaudeBin, readHubSnapshotFiles } from '../src/chat/claude.js';
 import { parseStreamJsonLine, formatToolSummary, StreamChunkParser } from '../src/chat/parse.js';
 
 let tmpDir: string;
@@ -1951,5 +1951,32 @@ describe('AgentHub Chat Backend API (t-chat-api)', () => {
     expect(compacted).toBe(false);
     const messages = ctx.chatMessageRepo.getBySession(session.id);
     expect(messages.find((m) => m.role === 'system')).toBeUndefined();
+  });
+
+  it('checkClaudePartialSupport and checkClaudeStreamJsonSupport use execFileSync without shell interpolation', () => {
+    clearPartialSupportCache();
+    // fakeClaudeBin returns --include-partial-messages on --help
+    expect(checkClaudePartialSupport(fakeClaudeBin)).toBe(true);
+
+    // Without FAKE_CLAUDE_STREAM_JSON=1, stream-json is not supported
+    clearPartialSupportCache();
+    delete process.env.FAKE_CLAUDE_STREAM_JSON;
+    expect(checkClaudeStreamJsonSupport(fakeClaudeBin)).toBe(false);
+
+    // With FAKE_CLAUDE_STREAM_JSON=1, stream-json is supported
+    clearPartialSupportCache();
+    process.env.FAKE_CLAUDE_STREAM_JSON = '1';
+    expect(checkClaudeStreamJsonSupport(fakeClaudeBin)).toBe(true);
+
+    // Returns false for non-existent binary without throwing
+    expect(checkClaudePartialSupport('/nonexistent/path/to/claude')).toBe(false);
+    expect(checkClaudeStreamJsonSupport('/nonexistent/path/to/claude')).toBe(false);
+
+    // Shell metacharacters are safely treated as a binary path (execFileSync) and not executed by a shell
+    const canaryFile = path.join(tmpDir, 'injection-canary.txt');
+    const maliciousBin = `${fakeClaudeBin}; touch "${canaryFile}"`;
+    expect(checkClaudePartialSupport(maliciousBin)).toBe(false);
+    expect(checkClaudeStreamJsonSupport(maliciousBin)).toBe(false);
+    expect(fs.existsSync(canaryFile)).toBe(false);
   });
 });
