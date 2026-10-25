@@ -266,6 +266,8 @@ export interface AgentHubConfig {
   tokenPath: string;
   configFilePath: string;
   port: number;
+  host: string;
+  allowedHosts: string[];
   defaultModelChains: {
     hard: string[];
     easy: string[];
@@ -804,6 +806,12 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
 
   const envPort = process.env.AGENTHUB_PORT ? parseInt(process.env.AGENTHUB_PORT, 10) : undefined;
   const port = (envPort && !isNaN(envPort)) ? envPort : ((userConfig.port as number) || 7700);
+  const host = process.env.AGENTHUB_HOST || (userConfig.host as string) || '127.0.0.1';
+  const allowedHosts = process.env.AGENTHUB_ALLOWED_HOSTS !== undefined
+    ? process.env.AGENTHUB_ALLOWED_HOSTS.split(',').map((value) => value.trim()).filter(Boolean)
+    : Array.isArray(userConfig.allowedHosts)
+      ? userConfig.allowedHosts.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
+      : [];
   const rawFocus = (userConfig.focus && typeof userConfig.focus === 'object' ? userConfig.focus : {}) as Record<string, unknown>;
 
   const chatRaw = (userConfig.chat as Record<string, unknown>) || {};
@@ -1021,6 +1029,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     tokenPath: path.join(hubHome, 'token'),
     configFilePath,
     port,
+    host,
+    allowedHosts,
     defaultModelChains: {
       hard: (userConfig as Record<string, unknown>).modelChainHard as string[] || [...DEFAULT_MODEL_CHAINS.hard],
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],

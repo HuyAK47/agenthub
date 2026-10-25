@@ -400,6 +400,17 @@ Khi tài khoản Claude chính gặp giới hạn tốc độ (rate limit / HTTP
 }
 ```
 
+Để xem dashboard từ thiết bị trong LAN, có thể cấu hình bind address và các hostname/IP được phép:
+
+```json
+{
+  "host": "0.0.0.0",
+  "allowedHosts": ["192.168.111.15"]
+}
+```
+
+Hai biến môi trường tương ứng là `AGENTHUB_HOST` và `AGENTHUB_ALLOWED_HOSTS` (phân tách bằng dấu phẩy). Mặc định daemon chỉ bind `127.0.0.1`; chỉ bật LAN khi cần, khai báo địa chỉ cụ thể và không chia sẻ bearer token.
+
 Bạn cũng có thể xem trạng thái bước fallback hiện tại, chi phí tiêu thụ trong ngày và cấu hình trực quan trên trang **Settings** của Web Dashboard.
 
 ## 10. Vòng đời một task

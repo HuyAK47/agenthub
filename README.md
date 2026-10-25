@@ -218,9 +218,16 @@ Documentation screenshots and UI walkthroughs are cataloged in [`docs/assets/`](
 
 ## Security Architecture
 
-- **Localhost Binding**: The daemon strictly binds to `127.0.0.1:7700`. It does not expose listening ports to external networks.
+- **Localhost Binding**: By default the daemon strictly binds to `127.0.0.1:7700`. To view the dashboard from a LAN device, explicitly configure `host` and `allowedHosts` in `~/.agenthub/config.json`, for example:
+  ```json
+  {
+    "host": "0.0.0.0",
+    "allowedHosts": ["192.168.111.15"]
+  }
+  ```
+  You can also use `AGENTHUB_HOST` and comma-separated `AGENTHUB_ALLOWED_HOSTS`. Exposing the daemon beyond loopback makes the dashboard reachable over the network; use a specific trusted hostname/IP in `allowedHosts`, protect the network, and keep the bearer token private.
 - **Token Authentication**: All HTTP API routes require a bearer token generated randomly at startup and saved to `~/.agenthub/token` (file permission `0600`).
-- **DNS Rebinding Protection**: Enforces strict `Host` and `Origin` header validation against `127.0.0.1:7700` and `localhost:7700`.
+- **DNS Rebinding Protection**: Enforces strict `Host` and `Origin` header validation against localhost and the explicitly configured `allowedHosts`.
 - **Credential Hygiene**: Worker credentials, OAuth refresh tokens, and system keyring entries are never printed in logs or transmitted across API responses.
 - **Interactive Permission Broker**: Sensitive commands executed during chat require explicit user authorization via Web UI or Telegram confirmation buttons.
 - **Secure Telegram Remote Access**: The Telegram bot accepts commands exclusively from paired chats verified by temporary 6-digit codes; bot tokens are stored in `0600` files and redacted from APIs.

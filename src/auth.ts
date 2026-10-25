@@ -68,9 +68,9 @@ export function verifyToken(provided: string | undefined, expected: string): boo
 }
 
 /**
- * Validates Host header against allowlist: 127.0.0.1:<port> and localhost:<port>
+ * Validates Host header against the loopback allowlist and explicitly configured hosts.
  */
-export function isValidHost(host: string | undefined, port: number): boolean {
+export function isValidHost(host: string | undefined, port: number, allowedHosts: string[] = []): boolean {
   if (!host) return false;
   const normalized = host.toLowerCase().trim();
   const allowed = new Set([
@@ -79,19 +79,27 @@ export function isValidHost(host: string | undefined, port: number): boolean {
     '127.0.0.1',
     'localhost',
   ]);
+  for (const allowedHost of allowedHosts) {
+    const normalizedHost = allowedHost.toLowerCase().trim();
+    if (normalizedHost) {
+      allowed.add(`${normalizedHost}:${port}`);
+      allowed.add(normalizedHost);
+    }
+  }
   return allowed.has(normalized);
 }
 
 /**
  * Validates Origin header if present against allowlist.
  */
-export function isValidOrigin(origin: string | undefined, port: number): boolean {
+export function isValidOrigin(origin: string | undefined, port: number, allowedHosts: string[] = []): boolean {
   if (!origin) return true; // Origin is optional per PLAN 3.1
   try {
     const url = new URL(origin);
     const host = url.hostname.toLowerCase();
     const isLocal = host === '127.0.0.1' || host === 'localhost';
-    if (!isLocal) return false;
+    const isAllowed = isLocal || allowedHosts.some((allowedHost) => allowedHost.toLowerCase().trim() === host);
+    if (!isAllowed) return false;
 
     const originPort = url.port || (url.protocol === 'https:' ? '443' : '80');
     return originPort === String(port) || url.port === String(port);
@@ -107,18 +115,19 @@ export function registerSecurityHooks(
   fastify: FastifyInstance,
   token: string,
   portOrGetter: number | (() => number),
+  allowedHosts: string[] = [],
 ): void {
   fastify.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     const port = typeof portOrGetter === 'function' ? portOrGetter() : portOrGetter;
     // 1. Host header validation
     const host = req.headers.host;
-    if (!isValidHost(host, port)) {
+    if (!isValidHost(host, port, allowedHosts)) {
       return reply.status(403).send({ error: 'forbidden', message: 'Forbidden: invalid Host header' });
     }
 
     // 2. Origin header validation (if provided)
     const origin = req.headers.origin;
-    if (!isValidOrigin(origin, port)) {
+    if (!isValidOrigin(origin, port, allowedHosts)) {
       return reply.status(403).send({ error: 'forbidden', message: 'Forbidden: invalid Origin header' });
     }
 
