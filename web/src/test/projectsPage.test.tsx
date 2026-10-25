@@ -27,6 +27,10 @@ describe('ProjectsPage', () => {
       },
     });
     vi.spyOn(client, 'getProjects').mockResolvedValue([mockProject]);
+    vi.spyOn(client, 'getDepartments').mockResolvedValue([
+      { id: 'chung', name: 'Chung', priority: 0, maxParallel: 0, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 'engineering', name: 'Engineering', priority: 1, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [], createdAt: '2026-01-01T00:00:00Z' },
+    ]);
     vi.spyOn(client, 'getConfig').mockResolvedValue({
       modelChainHard: ['codex:gpt-5.6-luna'],
       modelChainEasy: ['gemini-3.8-flash-high'],
@@ -193,6 +197,20 @@ describe('ProjectsPage', () => {
       }),
       expect.anything(),
     );
+  });
+
+  it('3b. Gán department khi đăng ký project', async () => {
+    const createSpy = vi.spyOn(client, 'createProject').mockResolvedValue({ ...mockProject, id: 'proj-2', departmentId: 'engineering' });
+
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: /Đăng ký Project/i }));
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'engineering' } });
+    fireEvent.change(screen.getByPlaceholderText('vd: XFarm, AgentHub'), { target: { value: 'AgentHub' } });
+    fireEvent.change(screen.getByPlaceholderText('vd: /home/user/projects/xfarm'), { target: { value: '/tmp/agenthub' } });
+    fireEvent.click(screen.getByRole('button', { name: /Lưu Project/i }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ departmentId: 'engineering' }), expect.anything()));
   });
 
   it('4. Bấm nút xóa project có xác nhận window.confirm và gọi deleteProject', async () => {

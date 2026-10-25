@@ -894,7 +894,7 @@ export const vi = {
   },
   departments: {
     title: 'Phòng ban', subtitle: 'Gom project, tài khoản và giới hạn chạy theo phòng ban.',
-    create: 'Tạo phòng ban', name: 'Tên phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', maxParallelHint: 'Áp dụng cho mọi project trong phòng; 0 nghĩa là không giới hạn.', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.',
+    create: 'Tạo phòng ban', name: 'Tên phòng ban', department: 'Phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', maxParallelHint: 'Áp dụng cho mọi project trong phòng; 0 nghĩa là không giới hạn.', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.', brainSettings: 'Cấu hình Brain', brainEngine: 'Engine Brain', brainModel: 'Model Brain', brainCodexProfile: 'Profile Codex', brainMode: 'Chế độ Brain', brainPermissions: 'Quyền', brainDailyTokenBudget: 'Ngân sách token/ngày', brainMaxTurnsPerHour: 'Lượt tối đa/giờ', inherit: 'Kế thừa toàn cục', off: 'Tắt', suggest: 'Gợi ý', auto: 'Tự động',
   },
   projects: {
     title: 'Quản lý Project',

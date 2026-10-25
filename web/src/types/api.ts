@@ -159,6 +159,13 @@ export interface Department {
   maxParallel: number;
   claudeDailyTokenBudget: number;
   telegramTopicId: number | null;
+  brainEngine?: 'claude' | 'codex';
+  brainModel?: string;
+  brainCodexProfile?: string | null;
+  brainMode?: 'inherit' | 'off' | 'suggest' | 'auto';
+  brainPermissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+  brainDailyTokenBudget?: number;
+  brainMaxTurnsPerHour?: number;
   createdAt: string;
   projectCount?: number;
   profiles: DepartmentProfile[];
@@ -843,6 +850,7 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   envTemplate?: string | null;
   maxParallel?: number;
+  departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
@@ -864,6 +872,7 @@ export interface UpdateProjectInput {
   defaultBranch?: string;
   envTemplate?: string | null;
   maxParallel?: number;
+  departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
