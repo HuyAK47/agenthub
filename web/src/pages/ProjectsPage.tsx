@@ -11,6 +11,7 @@ import {
   getCiRunsPage,
   getArchivedProjects,
   getProjects,
+  getDepartments,
   getFocus,
   setFocus,
   getTasks,
@@ -396,6 +397,7 @@ export const ProjectsPage: React.FC = () => {
   const [path, setPath] = useState('');
   const [defaultBranch, setDefaultBranch] = useState('main');
   const [maxParallel, setMaxParallel] = useState(3);
+  const [departmentId, setDepartmentId] = useState('chung');
   const [envTemplate, setEnvTemplate] = useState('');
   const [checksJson, setChecksJson] = useState('');
   const [hooksText, setHooksText] = useState('');
@@ -416,6 +418,10 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: getDepartments,
   });
   const { data: focus } = useQuery({ queryKey: ['focus'], queryFn: getFocus });
   const focusMutation = useMutation({
@@ -533,6 +539,7 @@ export const ProjectsPage: React.FC = () => {
     setPath('');
     setDefaultBranch('main');
     setMaxParallel(3);
+    setDepartmentId('chung');
     setEnvTemplate('');
     setChecksJson('');
     setHooksText('');
@@ -596,6 +603,7 @@ export const ProjectsPage: React.FC = () => {
       path: path.trim(),
       defaultBranch: defaultBranch.trim() || 'main',
       maxParallel: Number(maxParallel) || 3,
+      ...(departmentId !== 'chung' ? { departmentId } : {}),
       envTemplate: envTemplate.trim() ? envTemplate.trim() : null,
       checks: checks as any,
       ...(JSON.stringify(newSettings) !== JSON.stringify(defaultProjectSettings())
@@ -692,6 +700,21 @@ export const ProjectsPage: React.FC = () => {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('departments.department')}
+                </label>
+                <select
+                  value={departmentId}
+                  onChange={(e) => setDepartmentId(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)] text-sm"
+                >
+                  {departments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1262,6 +1285,7 @@ export const ProjectsPage: React.FC = () => {
       {/* Project Settings Drawer */}
       <ProjectSettingsDrawer
         project={drawerProject}
+        departments={departments}
         isOpen={drawerProject !== null}
         onClose={() => {
           setDrawerProject(null);

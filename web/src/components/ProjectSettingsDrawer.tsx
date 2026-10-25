@@ -28,7 +28,7 @@ import {
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
-import { Project, ProjectSettings, UpdateProjectInput } from '../types/api';
+import { Department, Project, ProjectSettings, UpdateProjectInput } from '../types/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   updateProject,
@@ -43,6 +43,7 @@ import {
 
 export interface ProjectSettingsDrawerProps {
   project: Project | null;
+  departments?: Department[];
   isOpen: boolean;
   onClose: () => void;
   onSaved?: () => void;
@@ -178,6 +179,7 @@ const SAMPLE_ENV = JSON.stringify(
 
 export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   project,
+  departments = [],
   isOpen,
   onClose,
   onSaved,
@@ -208,6 +210,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [draftReviewerOrder, setDraftReviewerOrder] = useState<string>('');
   const [draftReviewerFallback, setDraftReviewerFallback] = useState<string>('');
   const [draftEnvTemplate, setDraftEnvTemplate] = useState<string>('');
+  const [draftDepartmentId, setDraftDepartmentId] = useState('chung');
   const [checklistDraft, setChecklistDraft] = useState('');
   const [showCommitExample, setShowCommitExample] = useState(false);
 
@@ -243,6 +246,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       setDraftReviewerOrder(project.settings?.review?.order ? JSON.stringify(project.settings.review.order, null, 2) : '');
       setDraftReviewerFallback(project.settings?.review?.fallback ? JSON.stringify(project.settings.review.fallback, null, 2) : '');
       setDraftEnvTemplate(project.envTemplate ?? '');
+      setDraftDepartmentId(project.departmentId ?? 'chung');
       setChecksError(null);
       setReviewError(null);
       setEnvError(null);
@@ -464,6 +468,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     if (hooksChanged) count++;
     if (reviewChanged) count++;
     if (envChanged) count++;
+    if (draftDepartmentId !== (project?.departmentId ?? 'chung')) count++;
     if (reviewerOverrideChanged) count++;
     return count;
   }, [
@@ -564,6 +569,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     setDraftHooks(origHooks);
     setDraftReview(origReview);
     setDraftEnvTemplate(origEnv);
+    setDraftDepartmentId(project.departmentId ?? 'chung');
     setChecksError(null);
     setReviewError(null);
     setEnvError(null);
@@ -612,6 +618,10 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       payload.envTemplate = draftEnvTemplate.trim()
         ? draftEnvTemplate.trim()
         : null;
+    }
+
+    if (draftDepartmentId !== (project.departmentId ?? 'chung')) {
+      payload.departmentId = draftDepartmentId;
     }
 
     if (draftSettings.brain.permissions === 'full') {
@@ -717,6 +727,22 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               <span>{apiError}</span>
             </div>
           )}
+
+          <Card className="p-5 space-y-2">
+            <label className="text-xs font-semibold text-[var(--t-text)]" htmlFor="project-department">
+              {t('departments.department')}
+            </label>
+            <select
+              id="project-department"
+              value={draftDepartmentId}
+              onChange={(event) => setDraftDepartmentId(event.target.value)}
+              className="w-full rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)] text-sm"
+            >
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
+          </Card>
 
           {/* Section 1: Bộ não (Brain) */}
           <Card className="p-5 space-y-5" data-tour="project-brain-settings">
