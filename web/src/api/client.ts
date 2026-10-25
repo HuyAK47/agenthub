@@ -72,6 +72,7 @@ export const getSetupStatus = () => apiFetch<SetupStatus>('/api/setup/status');
 export const installSetupTool = (tool: string) => apiFetch<{ jobId: string }>(`/api/setup/install/${encodeURIComponent(tool)}`, { method: 'POST' });
 export const completeSetup = (skip = false) => apiFetch(`/api/setup/${skip ? 'skip' : 'complete'}`, { method: 'POST' });
 export const installSetupMcp = () => apiFetch('/api/setup/mcp', { method: 'POST' });
+export const getSetupLog = (tool: string) => apiFetch<string>(`/api/setup/log/${encodeURIComponent(tool)}`);
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
 
