@@ -233,7 +233,7 @@ export function checkClaudePartialSupport(claudeBin: string): boolean {
   }
 
   try {
-    const stdout = execSync(`"${claudeBin}" --help`, {
+    const stdout = execFileSync(claudeBin, ['--help'], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 5000,
@@ -250,7 +250,7 @@ export function checkClaudePartialSupport(claudeBin: string): boolean {
 export function checkClaudeStreamJsonSupport(claudeBin: string): boolean {
   if (streamJsonSupportCache.has(claudeBin)) return streamJsonSupportCache.get(claudeBin)!;
   try {
-    const stdout = execSync(`"${claudeBin}" --help`, {
+    const stdout = execFileSync(claudeBin, ['--help'], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 5000,
