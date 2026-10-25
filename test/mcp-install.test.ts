@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,6 +33,7 @@ describe('POST /api/setup/mcp', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await server.close();
     closeContext(ctx);
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -45,6 +46,8 @@ describe('POST /api/setup/mcp', () => {
   });
 
   it('registers AgentHub using the absolute Claude path even when claude is not on PATH', async () => {
+    const existsSync = fs.existsSync;
+    vi.spyOn(fs, 'existsSync').mockImplementation((file) => /dist[/\\]cli\.js$/.test(String(file)) || existsSync(file));
     const res = await post();
 
     expect(res.statusCode).toBe(200);
@@ -54,6 +57,16 @@ describe('POST /api/setup/mcp', () => {
     expect(args[6]).toBe(process.execPath);
     expect(args[7]).toMatch(/dist[/\\]cli\.js$/);
     expect(args[8]).toBe('mcp');
+  });
+
+  it('refuses to register a CLI build that does not exist', async () => {
+    const existsSync = fs.existsSync;
+    vi.spyOn(fs, 'existsSync').mockImplementation((file) => !/dist[/\\]cli\.js$/.test(String(file)) && existsSync(file));
+    const res = await post();
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'mcp_cli_missing' });
+    expect(fs.existsSync(argsFile)).toBe(false);
   });
 
   it('explains when Claude Code cannot be found', async () => {
