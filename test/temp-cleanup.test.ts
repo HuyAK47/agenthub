@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 describe('temp cleanup', () => {
-  it('removes only old agenthub directories owned by the test user', () => {
+  it('removes only old agenthub directories owned by the test user', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temp-cleanup-fixture-'));
     roots.push(root);
     const old = path.join(root, 'agenthub-old');
@@ -22,7 +22,7 @@ describe('temp cleanup', () => {
     fs.utimesSync(old, new Date(now - 25 * 60 * 60 * 1000), new Date(now - 25 * 60 * 60 * 1000));
     fs.utimesSync(other, new Date(now - 25 * 60 * 60 * 1000), new Date(now - 25 * 60 * 60 * 1000));
 
-    expect(cleanupStaleAgentHubTempDirs({ tmpDir: root, now })).toEqual([old]);
+    expect(await cleanupStaleAgentHubTempDirs({ tmpDir: root, now })).toEqual([old]);
     expect(fs.existsSync(old)).toBe(false);
     expect(fs.existsSync(fresh)).toBe(true);
     expect(fs.existsSync(other)).toBe(true);
@@ -39,11 +39,22 @@ describe('temp cleanup', () => {
     expect(fs.existsSync(final)).toBe(false);
   });
 
-  it('counts only agenthub directories', () => {
+  it('counts only agenthub directories', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temp-cleanup-fixture-'));
     roots.push(root);
     fs.mkdirSync(path.join(root, 'agenthub-one'));
     fs.mkdirSync(path.join(root, 'not-agenthub'));
-    expect(countAgentHubTempDirectories(root)).toBe(1);
+    expect(await countAgentHubTempDirectories(root)).toBe(1);
+  });
+
+  it('skips old directories containing a git repository', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temp-cleanup-fixture-'));
+    roots.push(root);
+    const repo = path.join(root, 'agenthub-repo', 'nested');
+    fs.mkdirSync(path.join(repo, '.git', 'hooks'), { recursive: true });
+    const now = Date.now();
+    fs.utimesSync(path.join(root, 'agenthub-repo'), new Date(now - 25 * 60 * 60 * 1000), new Date(now - 25 * 60 * 60 * 1000));
+    expect(await cleanupStaleAgentHubTempDirs({ tmpDir: root, now })).toEqual([]);
+    expect(fs.existsSync(path.join(repo, '.git', 'hooks'))).toBe(true);
   });
 });

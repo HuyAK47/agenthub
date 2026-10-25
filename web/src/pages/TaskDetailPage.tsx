@@ -326,7 +326,7 @@ export const TaskDetailPage: React.FC = () => {
   const openCapture = (excerpt: string, checkName?: string) => {
     const first = excerpt.split(/\r?\n/).find((line) => line.trim())?.trim() || 'fix-error';
     setCapture({ excerpt, checkName });
-    setCaptureTitle(`${checkName || 'Lỗi'}: ${first.slice(0, 80)}`);
+    setCaptureTitle(`${checkName || t('common.error')}: ${first.slice(0, 80)}`);
     setCaptureSlug(`${task?.slug || 'task'}-fix-${Date.now().toString(36)}`.replace(/[^a-zA-Z0-9_-]/g, '-'));
   };
 
@@ -476,7 +476,7 @@ export const TaskDetailPage: React.FC = () => {
       ) : null}
       {task.reviewChain && task.reviewChain.length > 0 ? (
         <div className="rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] px-4 py-3 text-xs">
-          <div className="font-semibold mb-2">Review chain</div>
+          <div className="font-semibold mb-2">{t('taskDetail.reviewChain')}</div>
           <div className="flex flex-wrap items-center gap-2">
             {task.reviewChain.map((step, index) => (
               <React.Fragment key={`${step.reviewer}-${index}`}>
@@ -537,6 +537,8 @@ export const TaskDetailPage: React.FC = () => {
                 >
                   {(task.pauseReason === 'load' || task.currentRun?.pauseReason === 'load')
                     ? t('status.pausedOverload')
+                    : (task.pauseReason === 'focus' || task.currentRun?.pauseReason === 'focus')
+                      ? t('status.pausedFocus')
                     : t('status.paused')}
                 </span>
               )}
@@ -670,14 +672,14 @@ export const TaskDetailPage: React.FC = () => {
                 onClick={() => reviewMutation.mutate({ verdict: 'approved', merge: true })}
                 className="px-3.5 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
                 disabled={reviewMutation.isPending || task.mergeAvailable === false}
-                title={task.mergeAvailable === false ? (task.mergeUnavailableReason || 'Project chưa cấu hình merge tự động') : undefined}
+                title={task.mergeAvailable === false ? (task.mergeUnavailableReason || t('taskDetail.mergeNotConfigured')) : undefined}
               >
                 <GitCommit className="w-4 h-4" />
                 <span>{t('taskDetail.btnMerge')}</span>
               </button>
               {task.mergeAvailable === false && (
                 <span className="text-xs text-[var(--t-text-3)] max-w-xs">
-                  {task.mergeUnavailableReason || 'Bật Integration trong Cài đặt dự án để dùng merge.'}
+                  {task.mergeUnavailableReason || t('taskDetail.mergeEnableHint')}
                   {' '}
                   <Link className="underline text-[var(--t-accent)]" to={`/projects/${encodeURIComponent(task.projectId)}/settings`}>
                     {t('taskDetail.mergeSettingsLink')}
@@ -724,6 +726,25 @@ export const TaskDetailPage: React.FC = () => {
       ) : null}
 
       <CheckResults checks={task.checks} onRerun={() => rerunChecksMutation.mutate()} rerunning={rerunChecksMutation.isPending} onCreateTask={(check) => openCapture(check.outputTail, check.name)} />
+
+      {task.reviews.length > 0 && (
+        <section data-testid="task-reviews" className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 shadow-xs space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-[var(--t-text-3)]">{t('taskDetail.reviewHistory')}</h2>
+          <ul className="space-y-2">
+            {task.reviews.map((review) => (
+              <li key={review.id} className="flex items-center justify-between gap-3 flex-wrap text-sm">
+                <span className="font-medium text-[var(--t-text)]">
+                  {review.actor || t('taskDetail.unknownReviewer')}
+                  {review.model ? <span className="ml-2 text-xs font-mono text-[var(--t-text-3)]">({review.model})</span> : null}
+                </span>
+                <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${review.verdict === 'approved' ? 'text-[var(--t-ok)] bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)]' : 'text-[var(--t-warn)] bg-[color-mix(in_srgb,var(--t-warn)_15%,transparent)]'}`}>
+                  {review.verdict === 'approved' ? t('taskDetail.reviewApproved') : t('taskDetail.reviewChangesRequested')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {(task.sourceRef || (task.derivedTasks && task.derivedTasks.length > 0)) && <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-5 text-sm space-y-2"><h2 className="font-semibold">{t('extra.linkedTasks')}</h2>{task.sourceRef && <p>{t('extra.generatedFrom')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(task.sourceRef!.taskId.replace('/', '~'))}`)}>{task.sourceRef.taskId}</button></p>}{task.derivedTasks?.map((derived) => <p key={derived.id}>{t('extra.generatedTask')}: <button type="button" className="text-[var(--t-accent)] underline cursor-pointer" onClick={() => navigate(`/tasks/${encodeURIComponent(derived.id.replace('/', '~'))}`)}>{derived.id}</button></p>)}</section>}
 
@@ -1221,7 +1242,7 @@ export const TaskDetailPage: React.FC = () => {
             <h2 className="text-lg font-semibold">{t('extra.captureTitle')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.captureDesc')}</p>
             <label className="block text-xs font-semibold">{t('extra.captureFieldTitle')}<input value={captureTitle} onChange={(e) => setCaptureTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
-            <label className="block text-xs font-semibold">Slug<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
+            <label className="block text-xs font-semibold">{t('createTask.slug')}<input value={captureSlug} onChange={(e) => setCaptureSlug(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-sm" /></label>
             <pre className="max-h-48 overflow-auto rounded-lg bg-[var(--t-log-bg)] text-[var(--t-log-text)] p-3 text-xs whitespace-pre-wrap">{capture.excerpt}</pre>
             {captureMutation.error && <p className="text-sm text-[var(--t-crit)]">{(captureMutation.error as Error).message}</p>}
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setCapture(null)} className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] cursor-pointer">{t('extra.cancel')}</button><button type="submit" disabled={captureMutation.isPending} className="px-3 py-1.5 rounded-lg bg-[var(--t-accent)] text-[var(--t-on-accent)] cursor-pointer disabled:opacity-50">{t('extra.captureSubmit')}</button></div>

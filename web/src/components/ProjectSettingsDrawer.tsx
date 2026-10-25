@@ -31,13 +31,15 @@ import {
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from './ui/layers';
 import { InfoTooltip } from './tour/InfoTooltip';
-import { Project, ProjectSettings, UpdateProjectInput } from '../types/api';
+import { Department, Project, ProjectSettings, UpdateProjectInput } from '../types/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   updateProject,
   rerunProjectDeploy,
   getProjectDeployStatus,
   getConfig,
+  getFocus,
+  setFocus,
   getReviewChecklistPreview,
   createTask,
   inspectGitRepo,
@@ -45,6 +47,7 @@ import {
 
 export interface ProjectSettingsDrawerProps {
   project: Project | null;
+  departments?: Department[];
   isOpen: boolean;
   onClose: () => void;
   onSaved?: () => void;
@@ -111,6 +114,7 @@ export function changedSettings(
   const sections = [
     'commitConvention',
     'brain',
+    'review',
     'worktree',
     'integration',
     'review',
@@ -179,12 +183,21 @@ const SAMPLE_ENV = JSON.stringify(
 
 export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   project,
+  departments = [],
   isOpen,
   onClose,
   onSaved,
 }) => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
+  const { data: focus } = useQuery({ queryKey: ['focus'], queryFn: getFocus });
+  const focusMutation = useMutation({
+    mutationFn: (projectId: string | null) => setFocus(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['focus'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
 
   const { data: config } = useQuery({
     queryKey: ['config'],
@@ -198,7 +211,10 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
   const [draftChecks, setDraftChecks] = useState<string>('');
   const [draftHooks, setDraftHooks] = useState<string>('');
   const [draftReview, setDraftReview] = useState<string>('');
+  const [draftReviewerOrder, setDraftReviewerOrder] = useState<string>('');
+  const [draftReviewerFallback, setDraftReviewerFallback] = useState<string>('');
   const [draftEnvTemplate, setDraftEnvTemplate] = useState<string>('');
+  const [draftDepartmentId, setDraftDepartmentId] = useState('chung');
   const [checklistDraft, setChecklistDraft] = useState('');
   const [draftDefaultBranch, setDraftDefaultBranch] = useState<string>('main');
   const [drawerGitBranches, setDrawerGitBranches] = useState<string[]>([]);
@@ -268,6 +284,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           ? JSON.stringify(project.review, null, 2)
           : '',
       );
+      setDraftReviewerOrder(project.settings?.review?.order ? JSON.stringify(project.settings.review.order, null, 2) : '');
+      setDraftReviewerFallback(project.settings?.review?.fallback ? JSON.stringify(project.settings.review.fallback, null, 2) : '');
       setDraftEnvTemplate(project.envTemplate ?? '');
       setDraftDefaultBranch(project.defaultBranch || 'main');
       setIsDrawerBranchDropdownOpen(false);
@@ -277,6 +295,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
           if (res.valid) setDrawerGitBranches(res.branches || []);
         }).catch(() => {});
       }
+      setDraftDepartmentId(project.departmentId ?? 'chung');
       setChecksError(null);
       setReviewError(null);
       setEnvError(null);
@@ -479,6 +498,11 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     () => draftEnvTemplate.trim() !== origEnv.trim(),
     [draftEnvTemplate, origEnv],
   );
+  const reviewerOverrideChanged = useMemo(
+    () => draftReviewerOrder.trim() !== (origSettings.review?.order ? JSON.stringify(origSettings.review.order, null, 2) : '').trim()
+      || draftReviewerFallback.trim() !== (origSettings.review?.fallback ? JSON.stringify(origSettings.review.fallback, null, 2) : '').trim(),
+    [draftReviewerOrder, draftReviewerFallback, origSettings.review],
+  );
 
   const defaultBranchChanged = useMemo(
     () => draftDefaultBranch.trim() !== (project?.defaultBranch || 'main'),
@@ -499,6 +523,8 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     if (hooksChanged) count++;
     if (reviewChanged) count++;
     if (envChanged) count++;
+    if (draftDepartmentId !== (project?.departmentId ?? 'chung')) count++;
+    if (reviewerOverrideChanged) count++;
     return count;
   }, [
     defaultBranchChanged,
@@ -514,6 +540,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     hooksChanged,
     reviewChanged,
     envChanged,
+    reviewerOverrideChanged,
   ]);
 
   const hasChanges = changeCount > 0;
@@ -559,8 +586,10 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       setApiError(msg);
       if (
         msg.toLowerCase().includes('nhánh') ||
+        msg.toLowerCase().includes('branch') ||
         msg.toLowerCase().includes('integration') ||
-        msg.toLowerCase().includes('trùng')
+        msg.toLowerCase().includes('trùng') ||
+        msg.toLowerCase().includes('duplicate')
       ) {
         setSectionErrors((prev) => ({ ...prev, integration: msg }));
       } else if (
@@ -577,8 +606,10 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     mutationFn: () => createTask({
       project: project!.id,
       slug: `checklist-${Date.now()}`,
-      title: 'Chuyển checklist thành kiểm tra tự động',
-      body: `Đọc các file checklist dưới đây và chuyển các mục lặp lại thành checks tự động (semgrep/grep script):\n\n${(draftSettings.reviewChecklist || []).map((item) => `- ${item}`).join('\n')}`,
+      title: t('projects.suggestChecksTaskTitle'),
+      body: t('projects.suggestChecksTaskBody', {
+        items: (draftSettings.reviewChecklist || []).map((item) => `- ${item}`).join('\n'),
+      }),
       level: 'easy',
     }),
     onSuccess: () => setToastMessage(t('projects.draftChecksCreated')),
@@ -597,6 +628,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     setDraftDefaultBranch(project.defaultBranch || 'main');
     setIsDrawerBranchDropdownOpen(false);
     setDrawerBranchSearch('');
+    setDraftDepartmentId(project.departmentId ?? 'chung');
     setChecksError(null);
     setReviewError(null);
     setEnvError(null);
@@ -635,10 +667,24 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
       payload.review = draftReview.trim() ? JSON.parse(draftReview) : null;
     }
 
+    if (reviewerOverrideChanged) {
+      payload.settings = {
+        ...(payload.settings || {}),
+        review: {
+          order: draftReviewerOrder.trim() ? JSON.parse(draftReviewerOrder) : undefined,
+          fallback: draftReviewerFallback.trim() ? JSON.parse(draftReviewerFallback) : undefined,
+        },
+      };
+    }
+
     if (envChanged) {
       payload.envTemplate = draftEnvTemplate.trim()
         ? draftEnvTemplate.trim()
         : null;
+    }
+
+    if (draftDepartmentId !== (project.departmentId ?? 'chung')) {
+      payload.departmentId = draftDepartmentId;
     }
 
     if (draftSettings.brain.permissions === 'full') {
@@ -711,6 +757,16 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
               {project.path}
             </p>
           </div>
+
+          <Button
+            variant={focus?.projectId === project.id ? 'primary' : 'secondary'}
+            size="sm"
+            onClick={() => focusMutation.mutate(focus?.projectId === project.id ? null : project.id)}
+            disabled={focusMutation.isPending}
+            className="shrink-0"
+          >
+            🎯 {focus?.projectId === project.id ? t('projects.unfocusProject') : t('projects.focusProject')}
+          </Button>
 
           <Button
             variant="ghost"
@@ -894,6 +950,22 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                 </div>
               )}
             </div>
+          </Card>
+
+          <Card className="p-5 space-y-2">
+            <label className="text-xs font-semibold text-[var(--t-text)]" htmlFor="project-department">
+              {t('departments.department')}
+            </label>
+            <select
+              id="project-department"
+              value={draftDepartmentId}
+              onChange={(event) => setDraftDepartmentId(event.target.value)}
+              className="w-full rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)] text-sm"
+            >
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
           </Card>
 
           {/* Section 1: Bộ não (Brain) */}
@@ -1110,7 +1182,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                 </div>
                 <p className="text-[11px] text-[var(--t-text-3)] mt-1">
                   {t('projects.maxTurnsHint', {
-                    value: `${globalMaxTurns} lượt`,
+                    value: `${globalMaxTurns} ${t('projects.unitTurns')}`,
                   })}
                 </p>
               </div>
@@ -1747,6 +1819,14 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                     'bg-[var(--t-surface-2)] text-[var(--t-text)] focus:ring-2 focus:ring-[var(--t-accent)]'
                   }
                 />
+              </div>
+
+              {/* review chain JSON */}
+              <div className="space-y-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3">
+                <label className="text-xs font-semibold text-[var(--t-text)]">{t('projects.reviewerOverride')}</label>
+                <p className="text-[11px] text-[var(--t-text-3)]">{t('projects.reviewerOverrideHint')}</p>
+                <textarea aria-label={t('projects.reviewerOrderOverride')} rows={3} value={draftReviewerOrder} onChange={(event) => setDraftReviewerOrder(event.target.value)} placeholder={'[{"engine":"claude","model":"sonnet","profiles":[]}]'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
+                <textarea aria-label={t('projects.reviewerFallbackOverride')} rows={2} value={draftReviewerFallback} onChange={(event) => setDraftReviewerFallback(event.target.value)} placeholder={'{"onUnavailable":true,"onBusyAfterMin":10,"onError":true}'} className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] p-2 bg-[var(--t-surface)] text-[var(--t-text)]" />
               </div>
 
               {/* review chain JSON */}

@@ -223,7 +223,7 @@ export const CreateTaskPage: React.FC = () => {
           <div>
             <label className="block text-xs font-semibold text-[var(--t-text)] uppercase tracking-wider mb-2">{t('createTask.modelChainLabel')}</label>
             <input
-              aria-label="Model chain"
+              aria-label={t('createTask.modelChainLabel')}
               value={modelChain.join(', ')}
               onChange={(e) => setModelChain(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))}
               list="create-task-model-suggestions"

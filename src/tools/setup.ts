@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import type { AgentHubConfig, ToolInstaller } from '../config.js';
 import { findAgyPath, findCodexPath } from '../doctor.js';
 import { findClaudeBin } from '../chat/claude.js';
+import { agyInstallHint } from '../agy.js';
 
 const execFileAsync = promisify(execFile);
 export type SetupTool = 'claude' | 'codex' | 'agy';
@@ -19,6 +20,13 @@ export interface SetupToolStatus {
   manual: boolean;
   docsUrl?: string;
   installing: boolean;
+}
+
+/** PATH của service macOS (launchd) có thể thiếu npm/node: thêm thư mục của Node đang chạy daemon vào cuối. */
+function installPath(): string {
+  const nodeDir = path.dirname(process.execPath);
+  const current = process.env.PATH || '';
+  return current.split(path.delimiter).includes(nodeDir) ? current : [current, nodeDir].filter(Boolean).join(path.delimiter);
 }
 
 export class SetupManager {
@@ -81,7 +89,7 @@ export class SetupManager {
     if (process.env.AGENTHUB_WORKER === '1') throw new Error('Không được cài công cụ trong worker');
     if (this.installing.has(id)) throw new Error(`Đang cài ${id}`);
     const installer = this.installer(id);
-    if (!installer.package && !installer.command) throw new Error(`${id} chưa có bộ cài tự động; hãy cài thủ công`);
+    if (!installer.package && !installer.command) throw new Error(`${id} chưa có bộ cài tự động; hãy cài thủ công${id === 'agy' ? ` bằng: ${agyInstallHint()}` : ''}`);
     const jobId = `setup-${id}-${Date.now()}`;
     this.installing.add(id);
     const logDir = path.join(this.config.hubHome, 'logs');
@@ -90,15 +98,28 @@ export class SetupManager {
     const log = fs.createWriteStream(logPath, { flags: 'a' });
     const command = installer.command ? installer.command[0] : 'npm';
     const args = installer.command ? installer.command.slice(1) : ['install', '--prefix', path.join(this.config.hubHome, 'tools'), installer.package!];
-    const child = spawn(command, args, { cwd: this.config.hubHome, env: { ...process.env, AGENTHUB_TOOLS_DIR: path.join(this.config.hubHome, 'tools') }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd: this.config.hubHome, env: { ...process.env, PATH: installPath(), AGENTHUB_TOOLS_DIR: path.join(this.config.hubHome, 'tools') }, stdio: ['ignore', 'pipe', 'pipe'] });
     const emit = (type: string, payload: unknown) => this.events?.emit(type, undefined, { jobId, tool: id, ...((payload && typeof payload === 'object') ? payload : { line: String(payload) }) });
     emit('setup.install_progress', { line: `$ ${command} ${args.join(' ')}` });
     child.stdout.on('data', (chunk: Buffer) => { log.write(chunk); emit('setup.install_progress', { line: chunk.toString() }); });
     child.stderr.on('data', (chunk: Buffer) => { log.write(chunk); emit('setup.install_progress', { line: chunk.toString(), stderr: true }); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 10 * 60 * 1000);
+    let finished = false;
+    // spawn lỗi (vd. ENOENT khi service launchd không có npm trong PATH) phát 'error' thay vì 'close';
+    // không bắt sẽ làm sập daemon và UI chờ install_done mãi.
+    child.on('error', (error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer); log.write(`${error.message}\n`); log.end(); this.installing.delete(id);
+      emit('setup.install_done', { ok: false, code: null, signal: null, path: null, logPath, error: `Không chạy được ${command}: ${error.message}` });
+    });
     child.on('close', (code, signal) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer); log.end(); this.installing.delete(id);
-      if (code === 0) {
+      const installedBin = this.binary(id);
+      const ok = code === 0 && Boolean(installedBin);
+      if (ok) {
         try {
           this.versionCache.delete(id);
           this.onInstallSuccess?.(id);
@@ -106,7 +127,16 @@ export class SetupManager {
           emit('setup.install_refresh_error', { error: error instanceof Error ? error.message : String(error) });
         }
       }
-      emit('setup.install_done', { ok: code === 0, code, signal, logPath });
+      emit('setup.install_done', {
+        ok,
+        code,
+        signal,
+        path: installedBin,
+        logPath,
+        error: code === 0 && !installedBin
+          ? `Đã chạy xong nhưng chưa tìm thấy ${id}. Kiểm tra PATH của service hoặc cấu hình AGENTHUB_AGY_BIN.`
+          : undefined,
+      });
     });
     return { jobId };
   }

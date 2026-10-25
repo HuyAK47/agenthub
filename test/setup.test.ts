@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,6 +50,27 @@ describe('first-run setup', () => {
     }
   });
 
+  it('reports install_done instead of crashing when the installer cannot be spawned', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-setup-enoent-'));
+    const previousWorker = process.env.AGENTHUB_WORKER;
+    delete process.env.AGENTHUB_WORKER;
+    try {
+      const config = loadConfig(home);
+      config.tools.installers.codex = { command: [path.join(home, 'missing-installer')], versionArgs: ['--version'] };
+      const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+      const manager = new SetupManager(config, { emit: (type, _taskId, payload) => { events.push({ type, payload: payload as Record<string, unknown> }); return true; } });
+      await manager.install('codex');
+      await vi.waitFor(() => expect(events.some((event) => event.type === 'setup.install_done')).toBe(true), { timeout: 5000, interval: 10 });
+      const done = events.find((event) => event.type === 'setup.install_done')!;
+      expect(done.payload.ok).toBe(false);
+      expect(String(done.payload.error)).toContain('ENOENT');
+      expect((await manager.status()).find((tool) => tool.id === 'codex')?.installing).toBe(false);
+    } finally {
+      if (previousWorker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = previousWorker;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('runs the profile refresh callback only after a successful install', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-setup-refresh-'));
     const fakeBin = path.join(home, 'bin');
@@ -64,18 +85,65 @@ describe('first-run setup', () => {
       delete process.env.AGENTHUB_WORKER;
       process.env.FAKE_INSTALL_EXIT = '0';
       await manager.install('codex');
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(refreshed).toEqual(['codex']);
+      await vi.waitFor(() => expect(refreshed).toEqual(['codex']), { timeout: 10_000, interval: 25 });
 
       process.env.FAKE_INSTALL_EXIT = '1';
       await manager.install('codex');
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 300));
       expect(refreshed).toEqual(['codex']);
     } finally {
       if (previous.exit === undefined) delete process.env.FAKE_INSTALL_EXIT;
       else process.env.FAKE_INSTALL_EXIT = previous.exit;
       if (previous.worker === undefined) delete process.env.AGENTHUB_WORKER;
       else process.env.AGENTHUB_WORKER = previous.worker;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('installs agy with a shim, reports a missing result, and rejects a missing configured binary', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-setup-agy-'));
+    const bin = path.join(home, 'bin');
+    fs.mkdirSync(bin);
+    const installer = path.join(bin, 'agy-installer');
+    const noopInstaller = path.join(bin, 'agy-noop-installer');
+    const configured = path.join(home, 'agy');
+    fs.writeFileSync(installer, `#!/bin/sh\n${process.env.SHELL || '/bin/sh'} -c 'printf "#!/bin/sh\\nexit 0\\n" > "$AGY_TARGET"; chmod +x "$AGY_TARGET"'\n`, { mode: 0o755 });
+    fs.writeFileSync(noopInstaller, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const old = { target: process.env.AGY_TARGET, configured: process.env.AGENTHUB_AGY_BIN, worker: process.env.AGENTHUB_WORKER };
+    const waitDone = (events: Array<{ type: string; payload: any }>) => new Promise<any>((resolve, reject) => {
+      const deadline = Date.now() + 5000;
+      const poll = () => {
+        const done = events.find((event) => event.type === 'setup.install_done');
+        if (done) return resolve(done.payload);
+        if (Date.now() > deadline) return reject(new Error('agy install timed out'));
+        setTimeout(poll, 10);
+      };
+      poll();
+    });
+    try {
+      delete process.env.AGENTHUB_WORKER;
+      process.env.AGENTHUB_AGY_BIN = configured;
+      process.env.AGY_TARGET = configured;
+      const config = loadConfig(home);
+      config.tools.installers.agy = { command: [installer], versionArgs: ['--version'] };
+      let events: Array<{ type: string; payload: any }> = [];
+      let manager = new SetupManager(config, { emit: (type, _task, payload) => { events.push({ type, payload }); return true; } });
+      await manager.install('agy');
+      expect((await waitDone(events)).ok).toBe(true);
+
+      fs.rmSync(configured);
+      process.env.AGENTHUB_AGY_BIN = path.join(home, 'missing-agy');
+      events = [];
+      config.tools.installers.agy = { command: [noopInstaller], versionArgs: ['--version'] };
+      manager = new SetupManager(config, { emit: (type, _task, payload) => { events.push({ type, payload }); return true; } });
+      await manager.install('agy');
+      const missing = await waitDone(events);
+      expect(missing.ok).toBe(false);
+      expect(missing.error).toMatch(/chưa tìm thấy/);
+    } finally {
+      if (old.target === undefined) delete process.env.AGY_TARGET; else process.env.AGY_TARGET = old.target;
+      if (old.configured === undefined) delete process.env.AGENTHUB_AGY_BIN; else process.env.AGENTHUB_AGY_BIN = old.configured;
+      if (old.worker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = old.worker;
       fs.rmSync(home, { recursive: true, force: true });
     }
   });

@@ -10,6 +10,7 @@ import { AppService, HttpError } from '../services/index.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { CodexEngine } from '../engines/index.js';
 import { accountKey, isProfileLoggedIn } from '../profiles/index.js';
+import { agyInstallHint, findAgyBin } from '../agy.js';
 
 const require = createRequire(import.meta.url);
 
@@ -183,9 +184,13 @@ export class PtyManager {
       args = ['login', '--device-auth'];
       if (profile.kind === 'isolated' && profile.home) env.CODEX_HOME = profile.home;
     } else {
-      command = process.env.AGENTHUB_AGY_BIN || path.join(os.homedir(), '.gemini', 'bin', 'agy');
+      command = findAgyBin(this.service.config.hubHome);
     }
-    if (!command) throw new HttpError(404, 'not_found', `Không tìm thấy lệnh ${profile.engine}`);
+    if (!command) {
+      const configured = process.env.AGENTHUB_AGY_BIN?.trim();
+      const configuredNote = configured ? ` AGENTHUB_AGY_BIN đang trỏ tới “${configured}” nhưng file không tồn tại.` : '';
+      throw new HttpError(404, 'agy_not_found', `Không tìm thấy Antigravity CLI (agy). Daemon không thấy agy trong PATH, ~/.local/bin hoặc ~/.gemini/bin.${configuredNote} Cài bằng: ${agyInstallHint()}`);
+    }
 
     if (process.platform === 'darwin' && !spawnHelperChecked) {
       ensureSpawnHelperExecutable();
@@ -202,6 +207,9 @@ export class PtyManager {
       });
     } catch (err: unknown) {
       const detail = err instanceof Error ? err.message : String(err);
+      if (profile.engine === 'agy' && /ENOENT|execvp|no such file or directory/i.test(detail)) {
+        throw new HttpError(404, 'agy_not_found', `Không thể chạy Antigravity CLI (agy). Kiểm tra AGENTHUB_AGY_BIN hoặc PATH của daemon. Cài bằng: ${agyInstallHint()}`);
+      }
       throw new HttpError(503, 'pty_unavailable', `Không thể khởi tạo PTY trên ${process.platform}: ${detail}. Kiểm tra binary node-pty/spawn-helper và quyền thực thi.`);
     }
 

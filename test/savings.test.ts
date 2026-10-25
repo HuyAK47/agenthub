@@ -427,7 +427,7 @@ describe('SavingsService and GET /api/savings integration', () => {
     // 1. Create a temporary git repo
     const testRepoDir = path.join(tmpDir, 'test-repo');
     fs.mkdirSync(testRepoDir, { recursive: true });
-    execFileSync('git', ['init'], { cwd: testRepoDir });
+    execFileSync('git', ['init', '--template='], { cwd: testRepoDir });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: testRepoDir });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: testRepoDir });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: testRepoDir });
@@ -517,7 +517,7 @@ describe('SavingsService and GET /api/savings integration', () => {
 
     const testRepoDir = path.join(tmpDir, 'test-backfill-repo');
     fs.mkdirSync(testRepoDir, { recursive: true });
-    execFileSync('git', ['init'], { cwd: testRepoDir });
+    execFileSync('git', ['init', '--template='], { cwd: testRepoDir });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: testRepoDir });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: testRepoDir });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: testRepoDir });

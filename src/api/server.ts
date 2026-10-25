@@ -80,7 +80,7 @@ export async function createServer(
     if (addr && typeof addr === 'object') return addr.port;
     return config.port;
   };
-  registerSecurityHooks(fastify, token, getPort);
+  registerSecurityHooks(fastify, token, getPort, config.allowedHosts);
 
   // Register WebSocket support
   await fastify.register(fastifyWebsocket);
@@ -158,6 +158,10 @@ export async function createServer(
     if (!claudeBin) {
       throw new HttpError(404, 'claude_not_found', 'Không tìm thấy Claude Code. Hãy cài Claude Code trước, hoặc đặt đường dẫn trong Cài đặt → Chat (claudeBin).');
     }
+    if (!fs.existsSync(cliPath)) {
+      // Chạy dev bằng tsx chưa có dist: đăng ký lúc này sẽ để lại MCP server trỏ vào file không tồn tại.
+      throw new HttpError(409, 'mcp_cli_missing', `Không tìm thấy ${cliPath}. Hãy chạy \`npm run build\` rồi thử lại.`);
+    }
     try {
       return { ok: true, output: await runMcpInstall({ claudeBin, nodePath: process.execPath, cliPath }) };
     } catch (error) {
@@ -167,6 +171,8 @@ export async function createServer(
 
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
   fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+  fastify.get('/api/focus', async () => service.getFocus());
+  fastify.put('/api/focus', async (req) => service.setFocus(req.body));
 
   // --- Telegram API ---
   fastify.get('/api/telegram/pairing-code', async (req) => {

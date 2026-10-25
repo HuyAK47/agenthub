@@ -11,6 +11,9 @@ import {
   getCiRunsPage,
   getArchivedProjects,
   getProjects,
+  getDepartments,
+  getFocus,
+  setFocus,
   getTasks,
   updateProjectKnowledge,
   inspectGitRepo,
@@ -399,6 +402,7 @@ export const ProjectsPage: React.FC = () => {
   const [path, setPath] = useState('');
   const [defaultBranch, setDefaultBranch] = useState('main');
   const [maxParallel, setMaxParallel] = useState(3);
+  const [departmentId, setDepartmentId] = useState('chung');
   const [envTemplate, setEnvTemplate] = useState('');
   const [checksJson, setChecksJson] = useState('');
   const [hooksText, setHooksText] = useState('');
@@ -504,6 +508,18 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: getDepartments,
+  });
+  const { data: focus } = useQuery({ queryKey: ['focus'], queryFn: getFocus });
+  const focusMutation = useMutation({
+    mutationFn: (projectId: string | null) => setFocus(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['focus'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
   });
   const { data: projectTasks = [] } = useQuery({
     queryKey: ['tasks'],
@@ -613,6 +629,7 @@ export const ProjectsPage: React.FC = () => {
     setPath('');
     setDefaultBranch('main');
     setMaxParallel(3);
+    setDepartmentId('chung');
     setEnvTemplate('');
     setChecksJson('');
     setHooksText('');
@@ -682,6 +699,7 @@ export const ProjectsPage: React.FC = () => {
       path: path.trim(),
       defaultBranch: defaultBranch.trim() || 'main',
       maxParallel: Number(maxParallel) || 3,
+      ...(departmentId !== 'chung' ? { departmentId } : {}),
       envTemplate: envTemplate.trim() ? envTemplate.trim() : null,
       checks: checks as any,
       ...(JSON.stringify(newSettings) !== JSON.stringify(defaultProjectSettings())
@@ -805,6 +823,21 @@ export const ProjectsPage: React.FC = () => {
                     setNameManuallyEdited(Boolean(e.target.value.trim()));
                   }}
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('departments.department')}
+                </label>
+                <select
+                  value={departmentId}
+                  onChange={(e) => setDepartmentId(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)] text-sm"
+                >
+                  {departments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1261,6 +1294,16 @@ export const ProjectsPage: React.FC = () => {
                       <Settings2 className="w-3.5 h-3.5" />
                       <span>{t('projects.settings')}</span>
                     </Button>
+                    <Button
+                      variant={focus?.projectId === proj.id ? 'primary' : 'ghost'}
+                      size="sm"
+                      onClick={() => focusMutation.mutate(focus?.projectId === proj.id ? null : proj.id)}
+                      disabled={focusMutation.isPending}
+                      className="gap-1.5"
+                    >
+                      <span aria-hidden="true">🎯</span>
+                      <span>{focus?.projectId === proj.id ? t('projects.unfocusProject') : t('projects.focusProject')}</span>
+                    </Button>
 
                     <Button
                       variant="ghost"
@@ -1417,7 +1460,7 @@ export const ProjectsPage: React.FC = () => {
                   className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] px-2 h-7"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
-                  <span>Kiến thức</span>
+                  <span>{t('projects.knowledge')}</span>
                 </Button>
 
                 {knowledgeProject === proj.id && (
@@ -1537,6 +1580,7 @@ export const ProjectsPage: React.FC = () => {
       {/* Project Settings Drawer */}
       <ProjectSettingsDrawer
         project={drawerProject}
+        departments={departments}
         isOpen={drawerProject !== null}
         onClose={() => {
           setDrawerProject(null);

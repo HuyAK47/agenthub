@@ -71,15 +71,15 @@ function CodeBlock({ children, className }: { children: any; className?: string 
   );
 }
 
-function formatDuration(durationMs: number, secondLabel = 'seconds'): string {
+function formatDuration(durationMs: number, secondLabel = 'seconds', locale: 'vi' | 'en' = 'vi'): string {
   const sec = durationMs / 1000;
-  return sec.toLocaleString('vi-VN', { maximumFractionDigits: 1 }) + ` ${secondLabel}`;
+  return sec.toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US', { maximumFractionDigits: 1 }) + ` ${secondLabel}`;
 }
 
-function formatStats(meta: ChatMessage['meta'] | undefined, secondLabel: string, turnLabel: string): string | null {
+function formatStats(meta: ChatMessage['meta'] | undefined, secondLabel: string, turnLabel: string, locale: 'vi' | 'en' = 'vi'): string | null {
   if (!meta || meta.durationMs === undefined) return null;
   const parts: string[] = [];
-  parts.push(formatDuration(meta.durationMs, secondLabel));
+  parts.push(formatDuration(meta.durationMs, secondLabel, locale));
   if (meta.numTurns !== undefined) {
     parts.push(`${meta.numTurns} ${turnLabel}`);
   }
@@ -92,7 +92,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onRetry,
   onEdit,
 }) => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
 
   // User message
   if (message.role === 'user') {
@@ -133,7 +133,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <div className="whitespace-pre-wrap break-words">{message.content}</div>
             {onRetry && (
               <button type="button" onClick={onRetry} className="text-xs underline font-semibold cursor-pointer">
-                {t('extra.retry') === 'extra.retry' ? 'Thử lại' : t('extra.retry')}
+                {t('extra.retry')}
               </button>
             )}
           </div>
@@ -143,7 +143,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }
 
   // Assistant message
-  const statsText = formatStats(message.meta, t('extra.seconds'), t('extra.turns'));
+  const statsText = formatStats(message.meta, t('extra.seconds'), t('extra.turns'), locale);
 
   return (
     <div className="flex gap-3 my-3">

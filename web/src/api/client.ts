@@ -35,6 +35,7 @@ import {
   Department,
   EventItem,
 } from '../types/api';
+import { getActiveLocale, translateApiErrorMessage } from '../utils/apiError';
 
 export interface ClaudeSession {
   sessionId: string;
@@ -71,13 +72,14 @@ export const getSetupStatus = () => apiFetch<SetupStatus>('/api/setup/status');
 export const installSetupTool = (tool: string) => apiFetch<{ jobId: string }>(`/api/setup/install/${encodeURIComponent(tool)}`, { method: 'POST' });
 export const completeSetup = (skip = false) => apiFetch(`/api/setup/${skip ? 'skip' : 'complete'}`, { method: 'POST' });
 export const installSetupMcp = () => apiFetch('/api/setup/mcp', { method: 'POST' });
+export const getSetupLog = (tool: string) => apiFetch<string>(`/api/setup/log/${encodeURIComponent(tool)}`);
 
 const TOKEN_STORAGE_KEY = 'agenthub_token';
 
 let unauthorizedListeners: Array<() => void> = [];
 
 export class AuthError extends Error {
-  constructor(message = 'Chưa xác thực hoặc token không hợp lệ') {
+  constructor(message = getActiveLocale() === 'en' ? 'Unauthenticated or invalid token' : 'Chưa xác thực hoặc token không hợp lệ') {
     super(message);
     this.name = 'AuthError';
   }
@@ -139,11 +141,14 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   const token = getToken();
   if (!token) {
     notifyUnauthorized();
-    throw new AuthError('Thiếu token xác thực');
+    throw new AuthError(getActiveLocale() === 'en' ? 'Missing authentication token' : 'Thiếu token xác thực');
   }
 
   const headers = new Headers(options.headers || {});
   headers.set('Authorization', `Bearer ${token}`);
+  if (!headers.has('Accept-Language')) {
+    headers.set('Accept-Language', getActiveLocale());
+  }
 
   if (options.body && typeof options.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
@@ -156,14 +161,21 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
 
   if (response.status === 401) {
     clearToken();
-    throw new AuthError('Token không hợp lệ hoặc đã hết hạn');
+    throw new AuthError(getActiveLocale() === 'en' ? 'Token is invalid or expired' : 'Token không hợp lệ hoặc đã hết hạn');
   }
 
   if (!response.ok) {
-    let errorMsg = `Lỗi ${response.status}: ${response.statusText}`;
+    let errorMsg = getActiveLocale() === 'en' ? `Error ${response.status}: ${response.statusText}` : `Lỗi ${response.status}: ${response.statusText}`;
+    let errorCode: string | undefined;
     try {
       const errJson = await response.json();
       if (errJson) {
+        if (typeof errJson.error === 'string') {
+          errorCode = errJson.error;
+        } else if (typeof errJson.code === 'string') {
+          errorCode = errJson.code;
+        }
+
         if (errJson.message) {
           errorMsg = errJson.message;
         } else if (errJson.error) {
@@ -178,8 +190,12 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
         // fallback
       }
     }
+    const rawMsg = errorMsg;
+    errorMsg = translateApiErrorMessage(errorMsg, errorCode, getActiveLocale());
     const err: any = new Error(errorMsg);
     err.status = response.status;
+    err.code = errorCode;
+    err.rawMessage = rawMsg;
     throw err;
   }
 
@@ -205,6 +221,13 @@ export async function getVersion(): Promise<VersionResponse | null> {
 export async function getStatus(): Promise<HubStatus> {
   return apiFetch<HubStatus>('/api/status');
 }
+
+export type FocusState = { projectId: string | null; since: string | null; pauseRunning: boolean };
+export const getFocus = () => apiFetch<FocusState>('/api/focus');
+export const setFocus = (projectId: string | null, pauseRunning?: boolean) => apiFetch<{ focus: FocusState }>('/api/focus', {
+  method: 'PUT',
+  body: JSON.stringify({ projectId, ...(pauseRunning === undefined ? {} : { pauseRunning }) }),
+});
 
 export async function getOrphans(): Promise<OrphanProcess[]> {
   return apiFetch<OrphanProcess[]>('/api/system/orphans');
@@ -275,7 +298,7 @@ export const getDepartments = () => apiFetch<Department[]>('/api/departments');
 export const createDepartment = (data: Partial<Department> & { name: string }) => apiFetch<Department>('/api/departments', { method: 'POST', body: JSON.stringify(data) });
 export const updateDepartment = (id: string, data: Partial<Department>) => apiFetch<Department>(`/api/departments/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const deleteDepartment = (id: string) => apiFetch<{ ok: boolean }>(`/api/departments/${encodeURIComponent(id)}`, { method: 'DELETE' });
-export const updateDepartmentProfiles = (id: string, profiles: Department['profiles']) => apiFetch<Department>(`/api/departments/${encodeURIComponent(id)}/profiles`, { method: 'PUT', body: JSON.stringify({ profiles }) });
+export const updateDepartmentProfiles = (id: string, profiles: Array<Pick<Department['profiles'][number], 'profileName' | 'share'>>) => apiFetch<Department>(`/api/departments/${encodeURIComponent(id)}/profiles`, { method: 'PUT', body: JSON.stringify({ profiles }) });
 
 export async function getArchivedProjects(): Promise<Project[]> {
   return apiFetch<Project[]>('/api/projects?archived=true');
@@ -571,7 +594,10 @@ export async function getTasksPage(params?: TaskQuery): Promise<PageResponse<Tas
   if (params?.offset !== undefined) query.set('offset', String(params.offset));
   if (params?.sort) query.set('sort', params.sort);
   if (params?.order) query.set('order', params.order);
-  return apiFetch<PageResponse<Task>>(`/api/tasks?${query.toString()}`);
+  const response = await apiFetch<PageResponse<Task> | Task[]>(`/api/tasks?${query.toString()}`);
+  return Array.isArray(response)
+    ? { items: response, total: response.length, nextCursor: null }
+    : response;
 }
 
 export async function getAllTasksPaged(params?: Omit<TaskQuery, 'limit' | 'cursor' | 'offset'>): Promise<Task[]> {
@@ -820,7 +846,7 @@ export async function uploadBrandingLogo(file: File): Promise<{ ok: boolean; log
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.onerror = () => reject(reader.error || new Error('Không thể đọc logo'));
+    reader.onerror = () => reject(reader.error || new Error(getActiveLocale() === 'en' ? 'Failed to read logo file' : 'Không thể đọc logo'));
     reader.readAsDataURL(file);
   });
   return apiFetch('/api/branding/logo', { method: 'PUT', body: JSON.stringify({ mimeType: file.type, data }) });

@@ -19,6 +19,10 @@ export function assertServiceWriteAllowed(file: string): void {
 
   const realHome = path.resolve(os.userInfo().homedir);
   const target = path.resolve(file);
+  const testTmp = process.env.AGENTHUB_TEST_TMP_ROOT;
+  if (testTmp && isWithin(path.resolve(testTmp), target)) {
+    return;
+  }
   if (process.env.VITEST && isWithin(realHome, target)) {
     throw new Error(`AgentHub: Vitest bị từ chối ghi service file dưới HOME thật: ${target}; dùng HOME tạm hoặc AGENTHUB_ALLOW_SERVICE_WRITE=1`);
   }

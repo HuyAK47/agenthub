@@ -17,6 +17,7 @@ import {
 } from '../src/doctor.js';
 import { cmdDoctor } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
+import { findAgyBin } from '../src/agy.js';
 
 describe('Doctor checks', () => {
   let tmpHome: string;
@@ -102,6 +103,16 @@ describe('Doctor checks', () => {
   });
 
   describe('checkEngines', () => {
+    it('finds agy from a service PATH or official installer location', () => {
+      const seen = new Set(['/tmp/bin/agy', '/tmp/home/.local/bin/agy']);
+      expect(findAgyBin('/tmp/home', (candidate) => seen.has(candidate), {
+        PATH: '/tmp/bin',
+      })).toBe('/tmp/bin/agy');
+      expect(findAgyBin('/tmp/home', (candidate) => candidate === '/tmp/home/.local/bin/agy', {
+        PATH: '',
+      })).toBe('/tmp/home/.local/bin/agy');
+    });
+
     it('returns ok when both agy and codex are found', async () => {
       const res = await checkEngines({
         agyPath: '/home/user/.gemini/bin/agy',

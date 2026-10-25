@@ -6,12 +6,14 @@ import {
   AlertCircle,
   Download,
   ExternalLink,
+  FileText,
   Loader2,
   Wrench,
 } from 'lucide-react';
 import {
   completeSetup,
   getProjects,
+  getSetupLog,
   getSetupStatus,
   installSetupMcp,
   installSetupTool,
@@ -24,6 +26,8 @@ import { StatTile } from '../components/ui/StatTile';
 import { StatusBadge } from '../components/StatusBadge';
 import { Profile } from '../types/api';
 import { UsageModes } from '../components/UsageModes';
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export interface SetupCheckItem {
   key: string;
@@ -45,6 +49,23 @@ export const SetupCheckRow: React.FC<SetupCheckRowProps> = ({
 }) => {
   const { t } = useLocale();
   const showLog = item.key !== 'node' && item.key !== 'git' && item.key !== 'firstProject' && log !== undefined;
+  // Chỉ công cụ có file log trên server; MCP chỉ có lỗi trả về trực tiếp.
+  const hasLogFile = item.key === 'claude' || item.key === 'codex' || item.key === 'agy';
+  const [fullLog, setFullLog] = useState<string | null>(null);
+  const [loadingLog, setLoadingLog] = useState(false);
+  useEffect(() => setFullLog(null), [log]);
+
+  // Endpoint log cần Bearer token nên không mở bằng <a href> được (sẽ 401).
+  const loadFullLog = async () => {
+    setLoadingLog(true);
+    try {
+      setFullLog(await getSetupLog(item.key));
+    } catch (error) {
+      setFullLog(errorMessage(error));
+    } finally {
+      setLoadingLog(false);
+    }
+  };
 
   return (
     <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -72,17 +93,25 @@ export const SetupCheckRow: React.FC<SetupCheckRowProps> = ({
           {showLog && (
             <div className="mt-2 space-y-1">
               <pre className="max-h-36 overflow-auto rounded-lg bg-[var(--t-surface-2)] p-2.5 font-mono text-xs text-[var(--t-text)] border border-[var(--t-border)] whitespace-pre-wrap select-text leading-relaxed">
-                {log}
+                {fullLog ?? log}
               </pre>
-              <a
-                href={`/api/setup/log/${encodeURIComponent(item.key)}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] hover:underline"
-              >
-                <ExternalLink size={12} />
-                <span>{t('setup.log')}</span>
-              </a>
+              {hasLogFile && (
+                <button
+                  type="button"
+                  onClick={loadFullLog}
+                  disabled={loadingLog}
+                  className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] hover:underline disabled:opacity-60"
+                >
+                  {loadingLog ? <Loader2 className="animate-spin" size={12} /> : <FileText size={12} />}
+                  <span>{t('setup.log')}</span>
+                </button>
+              )}
+            </div>
+          )}
+          {item.key === 'agy' && !item.ok && (
+            <div className="mt-2 rounded-lg border border-[var(--t-warn)]/30 bg-[var(--t-warn)]/10 p-2.5 text-xs text-[var(--t-text)]">
+              <div>{t('setup.agyManualHint')}</div>
+              <code className="mt-1 block select-text break-all font-mono">curl -fsSL https://antigravity.google/cli/install.sh | bash</code>
             </div>
           )}
         </div>
@@ -233,6 +262,7 @@ export const SetupPage: React.FC = () => {
   });
 
   const [logs, setLogs] = useState<Record<string, string>>({});
+  const [installErrors, setInstallErrors] = useState<Record<string, string>>({});
   const [installingTool, setInstallingTool] = useState<string | null>(null);
   const [installResult, setInstallResult] = useState<Record<string, boolean>>({});
 
@@ -243,7 +273,15 @@ export const SetupPage: React.FC = () => {
   });
   const mcp = useMutation({
     mutationFn: () => installSetupMcp(),
+    onMutate: () => {
+      setInstallErrors((old) => ({ ...old, mcp: '' }));
+      setInstallResult(({ mcp: _previous, ...rest }) => rest);
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['setup-status'] }),
+    onError: (error) => {
+      setInstallResult((old) => ({ ...old, mcp: false }));
+      setInstallErrors((old) => ({ ...old, mcp: errorMessage(error) }));
+    },
   });
 
   useEffect(() => {
@@ -258,6 +296,7 @@ export const SetupPage: React.FC = () => {
       }
       if (event.type === 'setup.install_done') {
         setInstallResult((old) => ({ ...old, [tool]: Boolean(event.payload.ok) }));
+        if (event.payload.error) setInstallErrors((old) => ({ ...old, [tool]: String(event.payload.error) }));
         queryClient.invalidateQueries({ queryKey: ['setup-status'] });
       }
     });
@@ -268,8 +307,11 @@ export const SetupPage: React.FC = () => {
   }, [data]);
 
   const installOne = async (tool: string) => {
+    if (tool === 'agy' && typeof window !== 'undefined' && !window.confirm(t('setup.agyInstallConfirm'))) return;
     setInstallingTool(tool);
     setLogs((old) => ({ ...old, [tool]: '' }));
+    setInstallErrors((old) => ({ ...old, [tool]: '' }));
+    setInstallResult(({ [tool]: _previous, ...rest }) => rest);
     let stop: (() => void) | undefined;
     const completed = new Promise<void>((resolve) => {
       const unsubscribe = subscribeToEvents((event) => {
@@ -284,6 +326,10 @@ export const SetupPage: React.FC = () => {
     try {
       await install.mutateAsync(tool);
       await completed;
+    } catch (error) {
+      // POST bị từ chối thì không có install_done: phải tự hiện lỗi, nếu không ô log trống và nút quay về im lặng.
+      setInstallResult((old) => ({ ...old, [tool]: false }));
+      setInstallErrors((old) => ({ ...old, [tool]: errorMessage(error) }));
     } finally {
       stop?.();
       setInstallingTool(null);
@@ -458,7 +504,7 @@ export const SetupPage: React.FC = () => {
               key={item.key}
               item={item}
               result={installResult[item.key]}
-              log={logs[item.key]}
+              log={installErrors[item.key] ? `${installErrors[item.key]}\n\n${logs[item.key] || ''}` : logs[item.key]}
             />
           ))}
         </div>

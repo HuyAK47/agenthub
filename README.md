@@ -2,6 +2,8 @@
 
 **Public landing page:** [agenthub landing page](https://ducanh19020217.github.io/agenthub/)
 
+The landing page also shows installer download counts, sourced from the public GitHub Releases API (`download_count` for AgentHub installer archives). Counts include reinstalls and are not a user count.
+
 **English** | [Tiếng Việt](README.vi.md)
 
 > A local operating system for AI coding workers that coordinates Antigravity (Gemini) and OpenAI Codex CLI across isolated git worktrees, orchestrated by Claude Code via MCP, Web Chat, and Telegram.
@@ -124,6 +126,10 @@ sh /tmp/agenthub-install.sh --from-release
 
 Supports safe updates and uninstallation; use `--dry-run` to preview commands. Data in `~/.agenthub/` is only wiped when explicitly requested via `--uninstall --purge` with confirmation.
 
+On macOS, releases include both Apple Silicon (`macos-arm64`) and Intel (`macos-x64`) archives. The installer selects the matching archive, downloads a self-contained Node.js 22 runtime and production native modules, and registers `~/Library/LaunchAgents/dev.agenthub.plist`; no git, nvm, or Xcode Command Line Tools are required for a release install. If Gatekeeper reports that `spawn-helper` cannot be opened, download the release again or run `xattr -dr com.apple.quarantine ~/.agenthub-app/<version>` and retry `agenthub start`.
+
+To update, rerun the same `--from-release` command. Failed updates roll back the `current` symlink, CLI link, and LaunchAgent; `--uninstall` keeps `~/.agenthub/`, while `--uninstall --purge` removes it only after confirmation.
+
 Gỡ cài đặt:
 
 ```bash
@@ -212,9 +218,16 @@ Documentation screenshots and UI walkthroughs are cataloged in [`docs/assets/`](
 
 ## Security Architecture
 
-- **Localhost Binding**: The daemon strictly binds to `127.0.0.1:7700`. It does not expose listening ports to external networks.
+- **Localhost Binding**: By default the daemon strictly binds to `127.0.0.1:7700`. To view the dashboard from a LAN device, explicitly configure `host` and `allowedHosts` in `~/.agenthub/config.json`, for example:
+  ```json
+  {
+    "host": "0.0.0.0",
+    "allowedHosts": ["192.168.111.15"]
+  }
+  ```
+  You can also use `AGENTHUB_HOST` and comma-separated `AGENTHUB_ALLOWED_HOSTS`. Exposing the daemon beyond loopback makes the dashboard reachable over the network; use a specific trusted hostname/IP in `allowedHosts`, protect the network, and keep the bearer token private.
 - **Token Authentication**: All HTTP API routes require a bearer token generated randomly at startup and saved to `~/.agenthub/token` (file permission `0600`).
-- **DNS Rebinding Protection**: Enforces strict `Host` and `Origin` header validation against `127.0.0.1:7700` and `localhost:7700`.
+- **DNS Rebinding Protection**: Enforces strict `Host` and `Origin` header validation against localhost and the explicitly configured `allowedHosts`.
 - **Credential Hygiene**: Worker credentials, OAuth refresh tokens, and system keyring entries are never printed in logs or transmitted across API responses.
 - **Interactive Permission Broker**: Sensitive commands executed during chat require explicit user authorization via Web UI or Telegram confirmation buttons.
 - **Secure Telegram Remote Access**: The Telegram bot accepts commands exclusively from paired chats verified by temporary 6-digit codes; bot tokens are stored in `0600` files and redacted from APIs.

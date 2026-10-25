@@ -162,7 +162,7 @@ describe('GET /api/tasks/graph API endpoint', () => {
     // Seed test project
     const p1Path = path.join(tmpDir, 'p1');
     fs.mkdirSync(p1Path, { recursive: true });
-    execFileSync('git', ['init'], { cwd: p1Path });
+    execFileSync('git', ['init', '--template='], { cwd: p1Path });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: p1Path });
     fs.writeFileSync(path.join(p1Path, 'README.md'), '# p1\n');
     execFileSync('git', ['add', '.'], { cwd: p1Path });
