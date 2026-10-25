@@ -331,4 +331,21 @@ describe('SetupPage', () => {
     expect(await screen.findByText('5/8')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Thêm dự án/i })).not.toBeInTheDocument();
   });
+
+  it('11. Trạng thái lỗi hiển thị thông báo và nút thử lại gọi refetch', async () => {
+    const statusSpy = vi.spyOn(client, 'getSetupStatus').mockRejectedValueOnce(new Error('Network failure'));
+
+    renderPage();
+
+    expect(await screen.findByText('Không thể kiểm tra môi trường thiết lập.')).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: /Thử lại/i });
+    expect(retryBtn).toBeInTheDocument();
+
+    statusSpy.mockResolvedValueOnce(mockSetupStatus);
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+
+    expect(await screen.findByText('Bắt đầu với AgentHub')).toBeInTheDocument();
+  });
 });

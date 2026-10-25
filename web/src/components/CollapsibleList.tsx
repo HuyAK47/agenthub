@@ -82,18 +82,18 @@ export function CollapsibleList<T>({
         <button
           type="button"
           onClick={list.showMore}
-          className="text-xs font-medium text-[var(--t-accent)] hover:underline"
+          className="text-xs font-medium text-[var(--t-accent)] hover:underline cursor-pointer"
         >
-          {t('common.showMoreCount', { count: Math.min(step, remaining), remaining })}
+          {t('common.showMoreRemaining', { count: Math.min(step, remaining), remaining })}
         </button>
       )}
       {list.isExpanded && (
         <button
           type="button"
           onClick={list.collapse}
-          className="text-xs text-[var(--t-text-2)] hover:underline"
+          className="text-xs text-[var(--t-text-2)] hover:underline cursor-pointer"
         >
-          {t('common.collapse')}
+          {t('common.collapseBtn')}
         </button>
       )}
     </div>

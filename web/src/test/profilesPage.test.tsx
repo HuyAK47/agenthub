@@ -575,4 +575,20 @@ describe('ProfilesPage - Bật/Tắt, Nút Check và Quota Mark', () => {
     expect(screen.getByText('Phiên bị giới hạn')).toBeInTheDocument();
     expect(screen.getByText('Không có phiên nào bị giới hạn')).toBeInTheDocument();
   });
+
+  it('14. displays error message and retry button when profiles fail to load', async () => {
+    const getProfilesSpy = vi.spyOn(client, 'getProfiles').mockRejectedValueOnce(new Error('Network error'));
+    renderPage();
+
+    expect(await screen.findByText('Không thể tải danh sách tài khoản.')).toBeInTheDocument();
+    const retryButtons = screen.getAllByRole('button', { name: 'Thử lại' });
+    expect(retryButtons.length).toBeGreaterThanOrEqual(1);
+
+    getProfilesSpy.mockResolvedValueOnce(mockProfiles);
+    await act(async () => {
+      fireEvent.click(retryButtons[0]);
+    });
+
+    expect(await screen.findByText('g1')).toBeInTheDocument();
+  });
 });
