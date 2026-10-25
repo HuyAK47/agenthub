@@ -23,6 +23,20 @@ Bạn là một AI worker trong hệ thống AgentHub.
 12. Đọc `.agenthub/context/references.md` (nếu có): danh sách tài liệu tham chiếu CHỈ ĐỌC (không sửa, không commit).
 13. Đọc `.agenthub/context/review-checklist.md` (nếu có): checklist bắt buộc đối chiếu khi duyệt thay đổi.
 
+## Task phát hành (`r-*-publish`)
+
+Task phát hành được coi là hoàn tất khi đã chuẩn bị và kiểm tra đầy đủ, không phải khi
+worker tự tạo tag hoặc đẩy thay đổi lên remote. Worker phải dùng remote HTTPS cho các
+thao tác Git chỉ đọc nếu origin đang là SSH, và dùng GitHub REST API qua `curl` cho việc
+đọc release/workflow. Không được tìm cách nới worker-guard, chạy `ssh`, `git push`, tạo
+tag, hoặc gọi `gh` CLI.
+
+`DONE` của task phát hành phải ghi rõ: commit/main SHA đã kiểm tra, kết quả build và
+smoke, release notes/assets đã chuẩn bị, cùng các lệnh chính xác để người vận hành chạy
+thủ công ở biên giới phát hành (ví dụ `git tag ... && git push origin ...` và API tạo
+release tương ứng). Nếu chưa thể chuẩn bị artifact hoặc kiểm tra chỉ đọc thì mới tạo
+`BLOCKED`, kèm nguyên nhân cụ thể.
+
 ## Context dependency
 
 Khi task có task phụ thuộc, AgentHub tạo `.agenthub/context/deps.md` trong worktree.

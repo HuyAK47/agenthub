@@ -127,10 +127,45 @@ jobs:
         run: |
           # install.sh matches bare file names in SHA256SUMS, so hash from inside release/.
           (cd release && sha256sum *.tar.gz > SHA256SUMS)
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" release/* --clobber
-          else
+          # Keep the runner independent of the optional gh CLI. The worker-side
+          # release procedure is also REST-only, so both paths use the same API.
+          api="https://api.github.com/repos/${GH_REPO}"
+          auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json')
+          release_json="$(mktemp)"
+          trap 'rm -f "$release_json" release-request.json' EXIT
+          status="$(curl -sS "${auth[@]}" -o "$release_json" -w '%{http_code}' \
+            "$api/releases/tags/${GITHUB_REF_NAME}")"
+          if [ "$status" = 404 ]; then
             # Tags like v1.0.0-rc.1 are test builds: publish them as pre-releases.
-            case "${GITHUB_REF_NAME}" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
-            gh release create "${GITHUB_REF_NAME}" release/* --generate-notes $PRE
+            prerelease=false
+            case "${GITHUB_REF_NAME}" in *-*) prerelease=true ;; esac
+            PRE_RELEASE="$prerelease" node -e 'process.stdout.write(JSON.stringify({tag_name: process.env.GITHUB_REF_NAME, name: process.env.GITHUB_REF_NAME, generate_release_notes: true, prerelease: process.env.PRE_RELEASE === "true"}))' \
+              > release-request.json
+            curl --fail-with-body -sS -X POST "${auth[@]}" -H 'Content-Type: application/json' \
+              --data-binary @release-request.json "$api/releases" > "$release_json"
+          elif [ "$status" -ne 200 ]; then
+            cat "$release_json"
+            exit 1
           fi
+          upload_url="$(node -e 'const fs=require("fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).upload_url || "")' "$release_json")"
+          test -n "$upload_url"
+          upload_url="${upload_url%%\{*}"
+          # Match gh release upload --clobber when a tag is retried.
+          while IFS=$'\t' read -r asset_id asset_name; do
+            for local_asset in release/*; do
+              if [ "$(basename "$local_asset")" = "$asset_name" ]; then
+                curl --fail-with-body -sS -X DELETE "${auth[@]}" \
+                  "$api/releases/assets/${asset_id}" >/dev/null
+              fi
+            done
+          done < <(node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); for (const a of (r.assets || [])) console.log(`${a.id}\t${a.name}`)' "$release_json")
+          for asset in release/*; do
+            name="$(basename "$asset")"
+            case "$name" in
+              *.tar.gz) content_type='application/gzip' ;;
+              *) content_type='text/plain' ;;
+            esac
+            curl --fail-with-body -sS -X POST "${auth[@]}" \
+              -H "Content-Type: ${content_type}" --data-binary "@${asset}" \
+              "${upload_url}?name=${name}" >/dev/null
+          done
