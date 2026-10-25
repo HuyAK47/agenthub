@@ -1673,6 +1673,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
                           size="sm"
                           onClick={() => handleRemoveRef(idx)}
                           title={t('projects.deleteRef')}
+                          aria-label={t('projects.deleteRef')}
                           className="text-[var(--t-crit)] hover:bg-[color-mix(in_srgb,var(--t-crit)_15%,transparent)] h-8 w-8 p-0"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

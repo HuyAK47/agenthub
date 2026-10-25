@@ -653,5 +653,44 @@ describe('TaskDetailPage', () => {
       expect(resumeSpy).toHaveBeenCalledWith('proj-1~t1');
     });
   });
+
+  it('17. Nút Xóa worktree yêu cầu xác nhận window.confirm trước khi gọi deleteWorktree', async () => {
+    const deleteSpy = vi.spyOn(client, 'deleteWorktree').mockResolvedValue({ ok: true });
+    vi.spyOn(client, 'getTask').mockResolvedValue({
+      ...baseTask,
+      status: 'done',
+      worktreePath: '/tmp/worktree-1',
+    });
+
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    renderPage();
+    const deleteBtn = await screen.findByRole('button', { name: /Xóa worktree/i });
+    expect(deleteBtn).toBeInTheDocument();
+
+    // 1. User cancels confirm -> deleteWorktree is not called
+    confirmSpy.mockReturnValueOnce(false);
+    fireEvent.click(deleteBtn);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(deleteSpy).not.toHaveBeenCalled();
+
+    // 2. User confirms -> deleteWorktree is called
+    confirmSpy.mockReturnValueOnce(true);
+    fireEvent.click(deleteBtn);
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(deleteSpy).toHaveBeenCalledWith('proj-1~t1');
+    });
+  });
+
+  it('18. Nút quay lại danh sách task có accessible name', async () => {
+    vi.spyOn(client, 'getTask').mockResolvedValue(baseTask);
+
+    renderPage();
+    await screen.findByText('Task Alpha');
+
+    const backBtn = screen.getByRole('button', { name: /Quay lại/i });
+    expect(backBtn).toBeInTheDocument();
+  });
 });
 

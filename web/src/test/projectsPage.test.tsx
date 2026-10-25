@@ -695,4 +695,21 @@ describe('ProjectsPage', () => {
     expect(summaryLink).toHaveAttribute('href', '/tasks?project=proj-1');
     expect(summaryLink).toHaveTextContent('3 · Xem task');
   });
+
+  it('20. Lỗi tải danh sách project hiển thị thông báo và nút thử lại', async () => {
+    const getProjectsSpy = vi.spyOn(client, 'getProjects').mockRejectedValueOnce(new Error('Failed to load'));
+
+    renderPage();
+
+    expect(await screen.findByText('Không thể tải danh sách project.')).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: /Thử lại/i });
+    expect(retryBtn).toBeInTheDocument();
+
+    getProjectsSpy.mockResolvedValueOnce([mockProject]);
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+
+    expect(await screen.findByText('XFarm')).toBeInTheDocument();
+  });
 });
