@@ -3631,6 +3631,47 @@ export class AppService {
     }
   }
 
+  async cleanupOrphanedMergeFixTasks(sourceTaskId?: string): Promise<number> {
+    const sources = sourceTaskId
+      ? [this.taskRepo.get(sourceTaskId)].filter((task): task is TaskRow => Boolean(task))
+      : this.taskRepo.getByStatus('done');
+    let cancelled = 0;
+    const reason = 'Task gốc đã merge thành công qua đường khác, tự đóng task fix-merge liên quan';
+
+    for (const source of sources) {
+      if (source.status !== 'done') continue;
+      const project = this.projectRepo.getIncludingArchived(source.projectId);
+      if (!project) continue;
+
+      for (const derived of this.taskRepo.getDerivedFrom(source.id)) {
+        if (!/-fix-merge(?:-\d+)?$/.test(derived.slug)) continue;
+        if (!['draft', 'queued', 'waiting_quota'].includes(derived.status) || derived.attempt > 0) continue;
+        let sourceRef: { checkName?: unknown };
+        try {
+          sourceRef = JSON.parse(derived.sourceRef || '{}') as { checkName?: unknown };
+        } catch {
+          continue;
+        }
+        if (sourceRef.checkName !== 'merge') continue;
+
+        const commits = derived.branch
+          ? await getGitCommits(project.path, derived.baseRef || project.defaultBranch, derived.branch)
+          : [];
+        const current = this.taskRepo.get(derived.id);
+        if (!current || !['draft', 'queued', 'waiting_quota'].includes(current.status) || current.attempt > 0 || commits.length > 0) continue;
+
+        this.taskRepo.updateStatus(current.id, 'cancelled');
+        this.scheduler.getEventBus().emit('task.cancelled', current.id, {
+          reason: 'orphaned_merge_fix',
+          sourceTaskId: source.id,
+          message: reason,
+        });
+        cancelled += 1;
+      }
+    }
+    return cancelled;
+  }
+
   retryTask(idParam: string, raw: unknown): TaskRow {
     const taskId = toTaskId(idParam);
     const task = this.taskRepo.get(taskId);

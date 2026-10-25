@@ -337,6 +337,11 @@ export function createContext(
   const perfCollector = new PerfCollector();
   service.setPerfCollector(perfCollector);
 
+  scheduler.getEventBus().on('task.done', (taskId) => {
+    if (taskId) void service.cleanupOrphanedMergeFixTasks(taskId);
+  });
+  void service.cleanupOrphanedMergeFixTasks();
+
   const ciRepo = new CiRepo(db);
   const ciService = new CiWatchService({
     config,

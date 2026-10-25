@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -822,6 +822,43 @@ describe('AgentHub HTTP API Endpoints', () => {
     });
     expect(delWtRes.statusCode).toBe(200);
     expect(fs.existsSync(worktreeDir)).toBe(false);
+  });
+
+  it('cancels an unstarted merge-fix task when its source is done', async () => {
+    ctx.projectRepo.insert({ id: 'merge-cleanup', name: 'Merge cleanup', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    ctx.taskRepo.insert({ id: 'merge-cleanup/source', projectId: 'merge-cleanup', slug: 'source', title: 'Source', status: 'done' });
+    ctx.taskRepo.insert({
+      id: 'merge-cleanup/source-fix-merge',
+      projectId: 'merge-cleanup',
+      slug: 'source-fix-merge',
+      title: 'Fix merge',
+      status: 'draft',
+      sourceRef: JSON.stringify({ taskId: 'merge-cleanup/source', checkName: 'merge', excerptHash: 'hash' }),
+    });
+
+    ctx.scheduler.getEventBus().emit('task.done', 'merge-cleanup/source');
+    await vi.waitFor(() => expect(ctx.taskRepo.get('merge-cleanup/source-fix-merge')?.status).toBe('cancelled'));
+    const event = ctx.eventRepo.getByTask('merge-cleanup/source-fix-merge').find((item) => item.type === 'task.cancelled');
+    expect(event?.payload).toContain('orphaned_merge_fix');
+  });
+
+  it('keeps a merge-fix task that has already attempted work', async () => {
+    ctx.projectRepo.insert({ id: 'merge-keep', name: 'Merge keep', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    ctx.taskRepo.insert({ id: 'merge-keep/source', projectId: 'merge-keep', slug: 'source', title: 'Source', status: 'done' });
+    ctx.taskRepo.insert({
+      id: 'merge-keep/source-fix-merge',
+      projectId: 'merge-keep',
+      slug: 'source-fix-merge',
+      title: 'Fix merge',
+      status: 'queued',
+      sourceRef: JSON.stringify({ taskId: 'merge-keep/source', checkName: 'merge', excerptHash: 'hash' }),
+    });
+    ctx.taskRepo.update('merge-keep/source-fix-merge', { attempt: 1 });
+
+    ctx.scheduler.getEventBus().emit('task.done', 'merge-keep/source');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(ctx.taskRepo.get('merge-keep/source-fix-merge')?.status).toBe('queued');
+    expect(ctx.eventRepo.getByTask('merge-keep/source-fix-merge').some((item) => item.type === 'task.cancelled')).toBe(false);
   });
 
   it('rejects a concurrent merge review and does not create a merge-fix task', async () => {
