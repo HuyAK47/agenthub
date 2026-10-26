@@ -28,6 +28,7 @@ import { ReviewQueue } from '../components/ReviewQueue';
 import { WaitingQueue } from '../components/WaitingQueue';
 import { DailyUsageTable } from '../components/DailyUsageTable';
 import { ModelBadge } from '../components/ModelBadge';
+import { formatEventType, formatReason } from '../utils/events';
 import { useLocale } from '../context/LocaleContext';
 import { CollapsibleList } from '../components/CollapsibleList';
 import { Pagination } from '../components/ui/Pagination';
@@ -685,7 +686,7 @@ export const DashboardPage: React.FC = () => {
           <div className="min-w-0">
             <div className="font-semibold text-sm">Failover Claude: {claudeFailover.active ? t('dashboard.failoverOn') : t('dashboard.failoverOff')}</div>
             {claudeFailover.active && claudeFailover.step && <div className="text-sm mt-1">{t('dashboard.failoverUsing')}: {claudeFailover.step.type === 'model' ? claudeFailover.step.model : claudeFailover.step.type === 'profile' ? t('dashboard.failoverUsingProfile', { name: claudeFailover.step.profile || t('common.unknown') }) : claudeFailover.step.type === 'apiKey' ? t('dashboard.failoverUsingApiKey', { used: claudeFailover.dailyCostUSD.toFixed(2), cap: claudeFailover.step.dailyCapUSD ?? 0 }) : claudeFailover.step.type === 'engine' ? claudeFailover.step.engine : t('dashboard.failoverWaitingReset')}</div>}
-            {claudeFailover.reason && <div className="text-xs mt-1">{t('dashboard.failoverReason')}: {claudeFailover.reason}</div>}
+            {claudeFailover.reason && <div className="text-xs mt-1">{t('dashboard.failoverReason')}: {formatReason(claudeFailover.reason, locale)}</div>}
             {claudeFailover.evidence && <div className="text-xs text-[var(--t-text-2)] mt-1 truncate">{t('dashboard.failoverEvidence')}: {claudeFailover.evidence.file}:{claudeFailover.evidence.line} · {new Date(claudeFailover.evidence.observedAt).toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US')}</div>}
           </div>
           {claudeFailover.active && <button type="button" onClick={() => failoverMutation.mutate()} disabled={failoverMutation.isPending} className="shrink-0 px-3 py-2 rounded-lg bg-[var(--t-warn)] text-[var(--t-on-accent)] text-xs font-semibold disabled:opacity-50">{failoverMutation.isPending ? t('dashboard.failoverTurningOff') : t('dashboard.failoverTurnOff')}</button>}
@@ -799,8 +800,8 @@ export const DashboardPage: React.FC = () => {
                         C
                       </span>
                     )}
-                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] border border-[var(--t-border)] shrink-0">
-                      {event.type}
+                    <span title={event.type} className="font-mono text-xs px-2 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] border border-[var(--t-border)] shrink-0">
+                      {formatEventType(event.type, locale)}
                     </span>
                     {event.taskId && (
                       <Link

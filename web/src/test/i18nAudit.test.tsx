@@ -6,6 +6,14 @@ import { LocaleProvider } from '../context/LocaleContext';
 import { ThemeProvider } from '../context/ThemeContext';
 import { vi as viLocale } from '../locales/vi';
 import { en as enLocale } from '../locales/en';
+import { getNestedValue } from '../locales';
+import {
+  ALL_BACKEND_EVENT_TYPES,
+  formatEventType,
+  fallbackFormatEventType,
+  formatCheckName,
+  formatReason,
+} from '../utils/events';
 
 import { ProfilesPage } from '../pages/ProfilesPage';
 import { TaskDetailPage } from '../pages/TaskDetailPage';
@@ -252,6 +260,180 @@ describe('i18n Audit & Parity', () => {
     scanDir(srcDir);
 
     expect(violations, `Hardcoded English UI patterns found in source code: ${JSON.stringify(violations, null, 2)}`).toEqual([]);
+  });
+
+  it('Requirement 3e: web/src contains no missing translation keys called via t(), translate(), or i18n.t()', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+
+    function getFiles(dir: string): string[] {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const files: string[] = [];
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name === 'node_modules' || e.name === 'dist' || e.name === '.git') continue;
+          files.push(...getFiles(full));
+        } else if (e.isFile() && (e.name.endsWith('.ts') || e.name.endsWith('.tsx'))) {
+          if (full.includes('locales/') || full.includes('test/') || full.includes('.test.') || full.includes('mocks/')) continue;
+          files.push(full);
+        }
+      }
+      return files;
+    }
+
+    const srcDir = fs.existsSync('web/src') ? 'web/src' : 'src';
+    const files = getFiles(srcDir);
+    const keyCalls: { file: string; line: number; key: string }[] = [];
+    const regex = /(?:^|[^\w])(?:t|i18n\.t|translate)\(\s*(['"])([^'"]+)\1/g;
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf8');
+      const lines = content.split('\n');
+      lines.forEach((line, idx) => {
+        let m;
+        regex.lastIndex = 0;
+        while ((m = regex.exec(line)) !== null) {
+          const key = m[2];
+          // Skip locale argument in translate('vi', ...) / translate('en', ...)
+          if (key === 'vi' || key === 'en') continue;
+          keyCalls.push({ file: path.relative(process.cwd(), file), line: idx + 1, key });
+        }
+      });
+    }
+
+    const missingInVi: Array<{ file: string; line: number; key: string }> = [];
+    const missingInEn: Array<{ file: string; line: number; key: string }> = [];
+
+    for (const item of keyCalls) {
+      if (getNestedValue(viLocale, item.key) === undefined) {
+        missingInVi.push(item);
+      }
+      if (getNestedValue(enLocale, item.key) === undefined) {
+        missingInEn.push(item);
+      }
+    }
+
+    expect(missingInVi, `Keys called in web/src but missing in vi: ${JSON.stringify(missingInVi, null, 2)}`).toEqual([]);
+    expect(missingInEn, `Keys called in web/src but missing in en: ${JSON.stringify(missingInEn, null, 2)}`).toEqual([]);
+  });
+
+  it('Requirement 3f: Every backend event type has a localized translation in vi and en', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+
+    function getBackendFiles(dir: string): string[] {
+      if (!fs.existsSync(dir)) return [];
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const files: string[] = [];
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name === 'node_modules' || e.name === 'dist' || e.name === '.git' || e.name === 'web') continue;
+          files.push(...getBackendFiles(full));
+        } else if (e.isFile() && (e.name.endsWith('.ts') || e.name.endsWith('.js'))) {
+          if (full.includes('test/') || full.includes('.test.')) continue;
+          files.push(full);
+        }
+      }
+      return files;
+    }
+
+    const backendSrcDir = fs.existsSync('src') ? 'src' : '../src';
+    const backendFiles = getBackendFiles(backendSrcDir);
+    const emitRegex = /(?:eventBus|bus)\.emit\(\s*['"]([a-zA-Z0-9_.-]+)['"]/g;
+    const scannedBackendEvents = new Set<string>();
+
+    for (const f of backendFiles) {
+      const content = fs.readFileSync(f, 'utf8');
+      let m;
+      while ((m = emitRegex.exec(content)) !== null) {
+        scannedBackendEvents.add(m[1]);
+      }
+    }
+
+    // All scanned backend events must be tracked in ALL_BACKEND_EVENT_TYPES
+    const untrackedEvents = [...scannedBackendEvents].filter((e) => !ALL_BACKEND_EVENT_TYPES.includes(e));
+    expect(untrackedEvents, 'Backend events missing from ALL_BACKEND_EVENT_TYPES list').toEqual([]);
+
+    // Every event type in ALL_BACKEND_EVENT_TYPES must have translations in vi and en
+    const missingViEvents: string[] = [];
+    const missingEnEvents: string[] = [];
+
+    for (const evt of ALL_BACKEND_EVENT_TYPES) {
+      const viVal = getNestedValue(viLocale, `events.${evt}`);
+      const enVal = getNestedValue(enLocale, `events.${evt}`);
+      if (!viVal) missingViEvents.push(evt);
+      if (!enVal) missingEnEvents.push(evt);
+    }
+
+    expect(missingViEvents, 'Event types missing from vi.events').toEqual([]);
+    expect(missingEnEvents, 'Event types missing from en.events').toEqual([]);
+  });
+
+  it('Requirement 3g: formatEventType and fallbackFormatEventType work correctly for known and unknown events', () => {
+    // Known events return localized labels
+    expect(formatEventType('task.queued', 'vi')).toBe('Task vào hàng đợi');
+    expect(formatEventType('task.queued', 'en')).toBe('Task queued');
+    expect(formatEventType('deploy.restart_waiting', 'vi')).toBe('Chờ khởi động lại dịch vụ');
+    expect(formatEventType('deploy.restart_waiting', 'en')).toBe('Waiting for restart');
+
+    // Unknown events return readable title-cased fallback instead of raw key
+    expect(fallbackFormatEventType('task.queued')).toBe('Task · queued');
+    expect(fallbackFormatEventType('custom_category.some_action')).toBe('Custom_category · some_action');
+    expect(fallbackFormatEventType('singleword')).toBe('Singleword');
+    expect(formatEventType('unknown_category.custom_event', 'vi')).toBe('Unknown_category · custom_event');
+    expect(formatEventType('unknown_category.custom_event', 'en')).toBe('Unknown_category · custom_event');
+    expect(formatEventType('')).toBe('');
+    expect(formatEventType(null)).toBe('');
+    expect(formatEventType(undefined)).toBe('');
+  });
+
+  it('Requirement 3h: Autochecks, wait reasons, and review waiting reasons have localized translations', () => {
+    // Autochecks
+    const expectedChecks = [
+      'zero-byte',
+      'uncommitted',
+      'conflict-markers',
+      'agenthub-files',
+      'commit-message',
+      'lint',
+      'typecheck',
+      'test',
+      'build',
+      'python-check',
+      'dotnet-build',
+    ];
+
+    for (const check of expectedChecks) {
+      const viCheck = formatCheckName(check, 'vi');
+      const enCheck = formatCheckName(check, 'en');
+      expect(viCheck).not.toBe(check);
+      expect(enCheck).not.toBe(check);
+      expect(typeof viCheck).toBe('string');
+      expect(typeof enCheck).toBe('string');
+    }
+
+    // Wait reasons & review waiting reasons
+    const sampleReasons = [
+      'waiting_quota',
+      'profile_quota',
+      'lock_busy',
+      'department_claude_budget',
+      'claude_quota',
+      'switch_codex',
+    ];
+
+    for (const reason of sampleReasons) {
+      const viReason = formatReason(reason, 'vi');
+      const enReason = formatReason(reason, 'en');
+      expect(viReason).not.toBe(reason);
+      expect(enReason).not.toBe(reason);
+    }
+
+    // Fallback for unmapped checks and reasons
+    expect(formatCheckName('unknown-check', 'vi')).toBe('unknown-check');
+    expect(formatReason('custom_unknown_reason', 'vi')).toBe('custom_unknown_reason');
   });
 
   describe('Requirement 2: Render all in-scope pages in English without Vietnamese diacritics', () => {

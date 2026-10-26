@@ -2,6 +2,7 @@ import React from 'react';
 import { QueryClientContext } from '@tanstack/react-query';
 import { TaskStatus, WaitReason, HubStatus } from '../types/api';
 import { useLocale } from '../context/LocaleContext';
+import { formatReason } from '../utils/events';
 
 export type ExtendedTaskStatus = TaskStatus | 'checking';
 
@@ -24,7 +25,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   className = '',
   size = 'md',
 }) => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const queryClient = React.useContext(QueryClientContext);
   const cachedStatus = queryClient?.getQueryData<HubStatus>(['status']);
 
@@ -55,6 +56,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       label = t('waitReason.project_unavailable');
     } else if (waitReason === 'focus') {
       label = t('waitReason.focus');
+    } else {
+      label = formatReason(waitReason, locale);
     }
   }
 

@@ -81,15 +81,54 @@
 - Tất cả các khóa mới bổ sung đều được khai báo đồng thời ở cả `web/src/locales/vi.ts` và `web/src/locales/en.ts`.
 - 100% tham số nội suy `{param}` giữa `vi` và `en` hoàn toàn trùng khớp.
 
+### 2.5. Rà soát và Bổ sung Toàn diện Khóa Thiếu (Missing Translation Keys Audit)
+- **Quét tĩnh mã nguồn `web/src`**:
+  - Quét mọi lời gọi hàm dịch `t('...')`, `t("...")`, `translate(...)`, `i18n.t(...)` trên toàn bộ source tree.
+  - Tổng số lời gọi khóa dịch chuỗi tĩnh: 1.695 lời gọi, bao phủ 1.259 khóa duy nhất.
+  - Bổ sung 20 khóa còn thiếu trong `web/src/locales/vi.ts` và `web/src/locales/en.ts`:
+    - `tasks.projectView`: Chế độ xem theo dự án
+    - `status.review_ready`, `status.reviewing`, `status.ready`, `status.waiting`
+    - `common.remove`, `common.send`, `common.createdAt`, `common.moveUp`, `common.moveDown`, `common.error`
+    - `tasks.attention`, `createTask.slug`, `profiles.deleteProfile`, `projects.brainEngine`, `projects.reviewAutoMerge`
+    - `savings.fromDate`, `savings.factorsPrefix`, `savings.factorsSuffix`
+    - `extra.save`, `extra.rename`, `extra.knowledge`, `extra.actions`
+  - Đảm bảo 100% lời gọi khóa dịch tĩnh đều tồn tại ở cả hai locale (0 khóa thiếu).
+
+### 2.6. Bản dịch Sự kiện SSE Backend, Tên Autocheck và Lý do Chờ (Events, Checks & Waiting Reasons)
+- **Tên sự kiện Backend (`events.*`)**:
+  - Quét toàn bộ `src/` backend và bắt toàn bộ 104 loại sự kiện SSE phát ra qua `eventBus.emit(...)` / `bus.emit(...)` thuộc 24 nhóm danh mục (`batch`, `brain`, `chat`, `ci`, `claude`, `config`, `daemon`, `decision`, `deploy`, `disk`, `focus`, `load`, `merge`, `profile`, `project`, `quota`, `reference`, `review`, `run`, `scheduler`, `setup`, `task`, `telegram`, `worktree`).
+  - Xây dựng từ điển lồng nhau theo danh mục trong `vi.ts` và `en.ts` tương thích với `getNestedValue(dict, 'events.<category>.<action>')`.
+  - Tạo tiện ích `formatEventType(type, locale)` trong `web/src/utils/events.ts`:
+    - Trả về nhãn đã dịch cho mọi sự kiện backend ở cả VI và EN.
+    - Cơ chế fallback thông minh `fallbackFormatEventType`: Khi gặp sự kiện tùy biến hoặc sự kiện mới chưa có trong từ điển, tự động chuyển đổi sang chuỗi dễ đọc dạng `"Category · Action"` (ví dụ: `"task.queued"` -> `"Task · queued"`, `"custom.action"` -> `"Custom · action"`) thay vì để lộ khóa thô kỹ thuật.
+  - Áp dụng `formatEventType` xuyên suốt các thành phần hiển thị sự kiện:
+    - `DashboardPage.tsx`: Badge loại sự kiện ở luồng sự kiện (giữ `title` là mã gốc).
+    - `TaskDetailPage.tsx`: Badge loại sự kiện ở timeline lịch sử task.
+    - `notifications.ts`: Tiêu đề thông báo trình duyệt khi có sự kiện mới.
+- **Tên kiểm tra tự động (`checks.*`)**:
+  - Dịch 11 loại autocheck (`zero-byte`, `uncommitted`, `conflict-markers`, `agenthub-files`, `commit-message`, `lint`, `typecheck`, `test`, `build`, `python-check`, `dotnet-build`) sang cả VI và EN.
+  - Tạo hàm `formatCheckName(name, locale)` và áp dụng trong `CheckResults.tsx`.
+- **Lý do chờ, Chuyển giao Reviewer & Failover (`reasons.*`)**:
+  - Dịch hơn 60 chuỗi lý do chờ (`lock_busy`, `quota`, `department_claude_budget`, `timeout`, `crash`, `busy`, `unavailable`, `arbiter_unavailable`, `available`, `arbiter`, `spawn_failed`, `restart_recovery`, `malformed_output`, `uncommitted_changes`, `git_unreadable`, `review_approved`, `reviewer_retry`, `user_stop`, `orphaned_start`, `daemon_shutdown`, `resume_after_progress`, `checks_failed_autofix`, `stalled_retry`, `disk_ready`, `parallel_available`, `profile_available`, `project_available`, `quota_cleared`, `retry`, `changes_requested`, `focus_cleared`, `project_archived`, `recovered`, `auth_expired`, `codex_quota`, `codex_login`, `codex_unavailable`, `manual`, `cost_recorded`, `quota_exhausted`, `disk`, `parallel`, `profile_busy`, `department_parallel`, `project_unavailable`, `focus`, `waiting_quota`, `profile_quota`, `switch_codex`, `load`, `budget`, `restart_marker`, `stalled_limit`, `quota_retry`, `auth_retry`, `transient_retry`, `reference_modified`, `no_usable_model`, `no_reviewer_profile`, `only_worker_profile`, `claude_budget`, `review_rounds_exhausted`, `exit`, `claude_quota`).
+  - Tạo tiện ích `formatReason(reason, locale)` và `formatReviewWaitingReason(reason, locale)` và áp dụng trong `StatusBadge.tsx`, `DashboardPage.tsx` (Claude failover reason), `TaskDetailPage.tsx` (lý do chờ review / lý do chờ quota).
+
 ## 3. Kết quả Kiểm thử Tự động (Automated Test Verification)
 
-Mở rộng bộ test `web/src/test/i18nAudit.test.tsx` (tổng cộng 27 test cases, toàn bộ passed):
+Mở rộng bộ test `web/src/test/i18nAudit.test.tsx` (tổng cộng 31 test cases, toàn bộ passed):
 1. **Key Parity**: Xác thực tập khóa của `vi` và `en` giống nhau 100% (0 khóa thiếu).
 2. **Placeholder Parity**: Xác thực mọi token placeholder `{token}` giữa `vi` và `en` trùng khớp tuyệt đối.
 3. **Source Code Scanner (Diacritics & UI Patterns)**:
    - Quét toàn bộ mã nguồn `web/src` (ngoại trừ từ điển `locales/vi.ts`, từ điển lỗi `apiError.ts`, mocks và test files), đảm bảo không còn chuỗi tiếng Việt hard-code nào trong JSX hay mã giao diện.
    - Bổ sung quét tĩnh các chuỗi hiển thị hard-code tiếng Anh (`process`/`processes` nối chuỗi, nhãn `topic #`, `placeholder="e.g. "`, `title="Move up"`, `aria-label="Model chain"`), đảm bảo tất cả chuỗi nhãn và thuộc tính hiển thị đều qua hàm `t()`.
-4. **Multi-page Render Tests**: Render 12 trang và ngữ cảnh trong chế độ tiếng Anh (`locale="en"`), xác nhận hoàn toàn không chứa ký tự tiếng Việt có dấu:
+4. **Missing Key Scanner (Requirement 3e)**:
+   - Tự động quét toàn bộ cây thư mục `web/src`, trích xuất mọi lời gọi `t('...')`, `translate('...')`, `i18n.t('...')`, xác thực 100% khóa tĩnh đều có bản dịch trong cả `vi.ts` và `en.ts` (0 khóa thiếu).
+5. **Backend Events Coverage (Requirement 3f)**:
+   - Tự động quét động `src/` backend để tìm mọi sự kiện phát ra qua `eventBus.emit(...)` / `bus.emit(...)`, xác thực mọi sự kiện backend đều nằm trong danh sách sự kiện và có nhãn dịch song ngữ (0 sự kiện thiếu).
+6. **Event Formatter & Fallback (Requirement 3g)**:
+   - Kiểm tra `formatEventType` và `fallbackFormatEventType` trả về nhãn dịch chính xác cho sự kiện đã biết và chuỗi chuẩn hóa dễ đọc `"Category · Action"` cho sự kiện mới/lạ thay vì lộ khóa thô.
+7. **Checks & Reasons Formatter (Requirement 3h)**:
+   - Xác thực 100% tên autocheck, lý do chờ task, lý do chờ review và lý do failover đều có bản dịch song ngữ và fallback an toàn.
+8. **Multi-page Render Tests**: Render 12 trang và ngữ cảnh trong chế độ tiếng Anh (`locale="en"`), xác nhận hoàn toàn không chứa ký tự tiếng Việt có dấu:
    - ProfilesPage
    - TaskDetailPage
    - TasksPage
@@ -102,10 +141,10 @@ Mở rộng bộ test `web/src/test/i18nAudit.test.tsx` (tổng cộng 27 test c
    - DashboardPage
    - SavingsPage
    - SetupPage
-5. **Component Render Tests**: Kiểm tra hiển thị đa ngôn ngữ cụ thể cho TelegramCard (nhãn `topic #42` vs `chủ đề #42`, placeholder token) và DashboardPage (hiển thị số tiến trình `2 processes` / `1 process` vs `2 tiến trình` / `1 tiến trình`).
-6. **Backend Error Translation Tests**: Kiểm tra dịch chính xác thông báo lỗi cố định, thông báo lỗi có tham số động, mã lỗi chuẩn, và cơ chế fallback theo error code cho các payload chứa thông báo không có dấu/không phải mã lỗi ở cả EN và VI.
-7. **Time & Relative Format Tests**: Kiểm tra `formatTimeAgo` hoạt động đúng cho cả hai locale `vi` và `en`, bao gồm xử lý an toàn cho timestamp `NaN` / không hợp lệ.
-8. **Browser Notification Tests**: Kiểm tra `browserNotificationBody` tạo đúng nội dung thông báo cho cả hai locale.
+9. **Component Render Tests**: Kiểm tra hiển thị đa ngôn ngữ cụ thể cho TelegramCard (nhãn `topic #42` vs `chủ đề #42`, placeholder token) và DashboardPage (hiển thị số tiến trình `2 processes` / `1 process` vs `2 tiến trình` / `1 tiến trình`).
+10. **Backend Error Translation Tests**: Kiểm tra dịch chính xác thông báo lỗi cố định, thông báo lỗi có tham số động, mã lỗi chuẩn, và cơ chế fallback theo error code cho các payload chứa thông báo không có dấu/không phải mã lỗi ở cả EN và VI.
+11. **Time & Relative Format Tests**: Kiểm tra `formatTimeAgo` hoạt động đúng cho cả hai locale `vi` và `en`, bao gồm xử lý an toàn cho timestamp `NaN` / không hợp lệ.
+12. **Browser Notification Tests**: Kiểm tra `browserNotificationBody` tạo đúng nội dung thông báo cho cả hai locale.
 
 ### Kết quả chạy lệnh kiểm tra:
 - `npm run lint`: **PASS** (0 lỗi)

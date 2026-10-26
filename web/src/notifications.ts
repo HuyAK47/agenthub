@@ -1,5 +1,6 @@
 import { EventItem } from './types/api';
 import { getActiveLocale } from './utils/apiError';
+import { formatEventType } from './utils/events';
 
 const IMPORTANT = new Set(['brain.notify', 'task.review_ready', 'task.failed', 'task.blocked', 'review.escalated', 'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed']);
 const DESKTOP_EVENTS = new Set([
@@ -266,7 +267,7 @@ export function notifyBrowserEvent(
     const previous = Number(localStorage.getItem(key) || 0);
     if (previous && now - previous < throttleWindow) return;
     localStorage.setItem(key, String(now));
-    new Notification(event.type, { body: browserNotificationBody(event, getActiveLocale()) });
+    new Notification(formatEventType(event.type, getActiveLocale()), { body: browserNotificationBody(event, getActiveLocale()) });
   } catch {
     // Browser notification APIs may be unavailable or blocked by policy.
   }

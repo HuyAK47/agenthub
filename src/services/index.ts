@@ -449,6 +449,8 @@ export const MarkQuotaSchema = z.object({
   reason: z.string().optional(),
 });
 
+export const timeStringValidator = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Định dạng giờ phải là HH:MM (00:00 - 23:59)');
+
 export const UpdateConfigSchema = z.object({
   branding: z.object({
     name: z.string().trim().min(1).max(80).optional(),
@@ -491,6 +493,7 @@ export const UpdateConfigSchema = z.object({
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
+      claudeProfile: z.string().optional(),
       model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
       models: z.array(z.enum(['opus', 'sonnet', 'haiku'])).min(1).optional(),
       autoCompactPercent: z.number().min(0).max(100).optional(),
@@ -534,6 +537,18 @@ export const UpdateConfigSchema = z.object({
     maxConcurrent: z.number().int().positive().optional(),
     maxTurnsPerHour: z.number().int().positive().optional(),
     dailyTokenBudget: z.number().int().nonnegative().optional(),
+    turnTimeoutSec: z.number().int().positive().optional(),
+    digest: z.object({
+      enabled: z.boolean().optional(),
+      time: timeStringValidator,
+    }).partial().optional(),
+    director: z.object({
+      enabled: z.boolean().optional(),
+      engine: z.enum(['claude', 'codex']).optional(),
+      model: z.string().trim().min(1).optional(),
+      codexProfile: z.string().trim().min(1).optional(),
+      permissions: z.enum(['standard', 'trusted', 'full']).optional(),
+    }).partial().optional(),
   }).optional(),
   assistant: z.object({
     enabled: z.boolean().optional(),
@@ -542,7 +557,13 @@ export const UpdateConfigSchema = z.object({
     permissions: z.enum(['guarded', 'full']).optional(),
   }).optional(),
   notifications: z.object({
-    desktop: z.boolean(),
+    desktop: z.boolean().optional(),
+    desktopLevel: z.enum(['all', 'important', 'critical', 'off']).optional(),
+    quietHours: z.object({
+      enabled: z.boolean().optional(),
+      start: timeStringValidator,
+      end: timeStringValidator,
+    }).partial().optional(),
   }).optional(),
   savings: z
     .object({
@@ -564,6 +585,9 @@ export const UpdateConfigSchema = z.object({
     pressureOk: z.number().positive().optional(),
     minFreeMemGB: z.number().positive().optional(),
     recoverAfterSec: z.number().int().positive().optional(),
+    pausePolicy: z.enum(['recent', 'rss']).optional(),
+    maxAutoPaused: z.number().int().positive().optional(),
+    autoPauseThresholdSec: z.number().int().positive().optional(),
   }).optional(),
   stall: z.object({
     noCommitMin: z.number().positive().optional(),
@@ -573,10 +597,24 @@ export const UpdateConfigSchema = z.object({
     minFreeGB: z.number().positive().optional(),
     extraPaths: z.array(z.object({ path: z.string().min(1), minFreeGB: z.number().positive(), label: z.string().min(1) })).optional(),
   }).optional(),
+  cleanup: z.object({
+    nodeModulesOnDone: z.boolean().optional(),
+    worktreeOnDoneAfterHours: z.number().int().nonnegative().optional(),
+  }).optional(),
+  cacheDir: z.string().optional(),
+  cacheMaxEntries: z.number().int().positive().optional(),
+  cacheMaxGB: z.number().positive().optional(),
   telegram: z.object({
     enabled: z.boolean().optional(),
     botTokenFile: z.string().optional(),
     allowedChatIds: z.array(z.number()).optional(),
+    chats: z.array(z.object({
+      id: z.number(),
+      name: z.string(),
+      username: z.string().optional(),
+      kind: z.enum(['chat', 'group', 'supergroup', 'channel']).optional(),
+      projectId: z.string().optional(),
+    })).optional(),
     topicMode: z.enum(['project', 'department']).optional(),
     projectTopics: z.record(z.object({ chatId: z.number(), threadId: z.number() })).optional(),
     departmentTopics: z.record(z.object({ chatId: z.number(), threadId: z.number() })).optional(),
@@ -588,7 +626,15 @@ export const UpdateConfigSchema = z.object({
       quotaPerModel: z.boolean().optional(),
       quotaAllExhausted: z.boolean().optional(),
       fallback: z.boolean().optional(),
+      brainWaiting: z.boolean().optional(),
     }).optional(),
+  }).optional(),
+  updates: z.object({
+    check: z.boolean().optional(),
+    repo: z.string().optional(),
+  }).optional(),
+  workers: z.object({
+    codexSandbox: z.enum(['off', 'workspace-write']).optional(),
   }).optional(),
   ui: z.object({
     tours: z.record(z.boolean()).optional(),
@@ -4129,6 +4175,7 @@ export class AppService {
         model: this.config.chat.model,
         autoCompactPercent: this.config.chat.autoCompactPercent ?? 85,
         models: this.config.chat.models,
+        claudeProfile: this.config.chat.claudeProfile,
       },
       brain: {
         engine: this.config.brain.engine || 'claude',
@@ -4139,6 +4186,8 @@ export class AppService {
         policy: this.config.brain.policy,
         codexProfile: this.config.brain.codexProfile,
         codexModel: this.config.brain.codexModel,
+        turnTimeoutSec: this.config.brain.turnTimeoutSec,
+        director: this.config.brain.director,
       },
       assistant: this.config.assistant,
       reviewer: this.config.reviewer,
@@ -4148,6 +4197,10 @@ export class AppService {
       load: this.config.load,
       stall: this.config.stall,
       disk: this.config.disk,
+      cleanup: this.config.cleanup,
+      cacheDir: this.config.cacheDir,
+      cacheMaxEntries: this.config.cacheMaxEntries,
+      cacheMaxGB: this.config.cacheMaxGB,
       context: this.config.context,
       telegram: {
         enabled: this.config.telegram.enabled,
@@ -4156,6 +4209,8 @@ export class AppService {
         chats: this.config.telegram.chats,
         notify: this.config.telegram.notify,
       },
+      updates: this.config.updates,
+      workers: this.config.workers,
       ui: this.config.ui,
     };
   }

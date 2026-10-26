@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { AgentHubConfig } from './config.js';
+import { AgentHubConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
@@ -124,7 +124,18 @@ export class NotificationService {
     }
   }
 
+  updateConfig(config: AgentHubConfig): void {
+    this.config = config;
+  }
+
   handleEvent(type: string, taskId?: string, payload?: unknown): void {
+    if (type === 'config.updated') {
+      if (payload && typeof payload === 'object') {
+        updateConfigInMemory(this.config, payload as Parameters<typeof updateConfigInMemory>[1]);
+      }
+      return;
+    }
+
     if (!this.config.notifications || this.config.notifications.desktop === false) {
       return;
     }
