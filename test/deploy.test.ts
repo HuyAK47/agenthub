@@ -159,8 +159,13 @@ describe('DeployService', () => {
       },
       (command, args) => {
         atRestart = fs.readFileSync(path.join(target, 'version'), 'utf8');
-        expect(command).toBe(process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
-        expect(args).toContain('restart');
+        if (process.platform === 'darwin') {
+          expect(command).toBe(process.env.AGENTHUB_LAUNCHCTL || 'launchctl');
+          expect(args).toContain('kickstart');
+        } else {
+          expect(command).toBe(process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
+          expect(args).toContain('restart');
+        }
       },
       { snapshot: () => snapshots++ === 0 ? { checks: 1, editing: 0 } : { checks: 0, editing: 0 } },
     );
