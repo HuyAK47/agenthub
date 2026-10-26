@@ -280,6 +280,33 @@ describe('BrainRunner', () => {
     expect(ctx.turns.latest()?.departmentId).toBe('eng');
   });
 
+  it('creates and uses the department session when a legacy project session already exists', () => {
+    const ctx = setup('auto', { departments: true, projectSettings: { p1: '{}' } });
+    ctx.departments.insert({ id: 'eng', name: 'Engineering', priority: 0, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, brainEngine: 'claude', brainModel: 'sonnet', brainCodexProfile: null, brainMode: 'auto', brainPermissions: 'full', brainDailyTokenBudget: 0, brainMaxTurnsPerHour: 20 });
+    ctx.projects.update('p1', { departmentId: 'eng' });
+    ctx.sessions.insert({ id: 'brain:p1', projectId: 'p1', title: 'Legacy project brain', kind: 'brain' });
+
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p1/task');
+    ctx.runner.flush();
+
+    expect(ctx.sessions.get('brain:p1')).toBeDefined();
+    expect(ctx.sessions.get('brain:department:eng')).toMatchObject({ projectId: null, pinned: 1 });
+    expect(ctx.sent[0]).toMatch(/^brain:department:eng:/);
+  });
+
+  it('keeps using a legacy project session when the project has no department', () => {
+    const ctx = setup('auto', { projectSettings: { p1: '{}' } });
+    ctx.sessions.insert({ id: 'brain:p1', projectId: 'p1', title: 'Legacy project brain', kind: 'brain' });
+
+    ctx.runner.start();
+    ctx.events.emit('task.done', 'p1/task');
+    ctx.runner.flush();
+
+    expect(ctx.sessions.get('brain:department:eng')).toBeUndefined();
+    expect(ctx.sent[0]).toMatch(/^brain:p1:/);
+  });
+
   it('uses the optional director session for system events', () => {
     const ctx = setup('auto');
     (ctx.runner as unknown as { opts: { config: { director: unknown } } }).opts.config.director = { enabled: true, engine: 'claude', model: 'opus', permissions: 'standard' };
