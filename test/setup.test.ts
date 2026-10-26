@@ -54,27 +54,55 @@ describe('first-run setup', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-setup-refresh-'));
     const fakeBin = path.join(home, 'bin');
     fs.mkdirSync(fakeBin);
-    fs.writeFileSync(path.join(fakeBin, 'installer'), '#!/bin/sh\nexit "$FAKE_INSTALL_EXIT"\n', { mode: 0o755 });
-    const previous = { exit: process.env.FAKE_INSTALL_EXIT, worker: process.env.AGENTHUB_WORKER };
+    const configured = path.join(home, 'codex');
+    const installer = path.join(fakeBin, 'installer');
+    fs.writeFileSync(
+      installer,
+      '#!/bin/sh\n' +
+      'if [ "$FAKE_INSTALL_EXIT" = "0" ]; then\n' +
+      '  printf "#!/bin/sh\\nexit 0\\n" > "$CODEX_TARGET"\n' +
+      '  chmod +x "$CODEX_TARGET"\n' +
+      'fi\n' +
+      'exit "$FAKE_INSTALL_EXIT"\n',
+      { mode: 0o755 },
+    );
+    const nodeBinDir = path.dirname(process.execPath);
+    const previous = {
+      exit: process.env.FAKE_INSTALL_EXIT,
+      worker: process.env.AGENTHUB_WORKER,
+      codexBin: process.env.AGENTHUB_CODEX_BIN,
+      codexTarget: process.env.CODEX_TARGET,
+      tools: process.env.AGENTHUB_TOOLS_DIR,
+      path: process.env.PATH,
+    };
     const refreshed: string[] = [];
     try {
-      const config = loadConfig(home);
-      config.tools.installers.codex = { command: [path.join(fakeBin, 'installer')], versionArgs: ['--version'] };
-      const manager = new SetupManager(config, undefined, (tool) => refreshed.push(tool));
       delete process.env.AGENTHUB_WORKER;
+      delete process.env.AGENTHUB_TOOLS_DIR;
+      process.env.AGENTHUB_CODEX_BIN = configured;
+      process.env.CODEX_TARGET = configured;
+      process.env.PATH = [fakeBin, nodeBinDir, '/usr/bin', '/bin'].filter(Boolean).join(path.delimiter);
+
+      const config = loadConfig(home);
+      config.tools.installers.codex = { command: [installer], versionArgs: ['--version'] };
+      const manager = new SetupManager(config, undefined, (tool) => refreshed.push(tool));
+
       process.env.FAKE_INSTALL_EXIT = '0';
       await manager.install('codex');
       await vi.waitFor(() => expect(refreshed).toEqual(['codex']), { timeout: 10_000, interval: 25 });
 
       process.env.FAKE_INSTALL_EXIT = '1';
+      fs.rmSync(configured, { force: true });
       await manager.install('codex');
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(refreshed).toEqual(['codex']);
     } finally {
-      if (previous.exit === undefined) delete process.env.FAKE_INSTALL_EXIT;
-      else process.env.FAKE_INSTALL_EXIT = previous.exit;
-      if (previous.worker === undefined) delete process.env.AGENTHUB_WORKER;
-      else process.env.AGENTHUB_WORKER = previous.worker;
+      if (previous.exit === undefined) delete process.env.FAKE_INSTALL_EXIT; else process.env.FAKE_INSTALL_EXIT = previous.exit;
+      if (previous.worker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = previous.worker;
+      if (previous.codexBin === undefined) delete process.env.AGENTHUB_CODEX_BIN; else process.env.AGENTHUB_CODEX_BIN = previous.codexBin;
+      if (previous.codexTarget === undefined) delete process.env.CODEX_TARGET; else process.env.CODEX_TARGET = previous.codexTarget;
+      if (previous.tools === undefined) delete process.env.AGENTHUB_TOOLS_DIR; else process.env.AGENTHUB_TOOLS_DIR = previous.tools;
+      if (previous.path === undefined) delete process.env.PATH; else process.env.PATH = previous.path;
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
