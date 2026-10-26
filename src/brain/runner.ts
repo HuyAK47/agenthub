@@ -206,7 +206,8 @@ export class BrainRunner {
     const director = !projectId ? this.opts.config.director : undefined;
     const effectivePermission = director?.permissions || permission;
     const mode = effectivePermission === 'full' ? 'full' : 'safe';
-    const existing = this.opts.chatSessionRepo.get(id) || this.opts.chatSessionRepo.getByKind('brain', projectId);
+    const existing = this.opts.chatSessionRepo.get(id)
+      || (!department && projectId ? this.opts.chatSessionRepo.getByKind('brain', projectId) : undefined);
     if (existing) {
       if (existing.mode !== mode && existing.busy !== 1) {
         const chatService = this.opts.chatService as ChatService & { setSessionMode?: (id: string, mode: 'safe' | 'full') => unknown };
