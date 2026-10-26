@@ -179,9 +179,11 @@ describe('release packaging and installation', () => {
     fs.writeFileSync(fakeLaunchctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${launchctlLog}'\n`, { mode: 0o755 });
     makeRelease(base, '1.0.0');
     const releaseDir = path.join(base, 'releases', 'download', 'v1.0.0');
-    const linuxArchive = path.join(releaseDir, 'agenthub-1.0.0-linux-x64.tar.gz');
+    const archive = path.join(releaseDir, `agenthub-1.0.0-${PLATFORM_ARCH}.tar.gz`);
     const macArchive = path.join(releaseDir, 'agenthub-1.0.0-macos-arm64.tar.gz');
-    fs.renameSync(linuxArchive, macArchive);
+    if (archive !== macArchive) {
+      fs.renameSync(archive, macArchive);
+    }
     fs.writeFileSync(releaseDir + '/SHA256SUMS', `${crypto.createHash('sha256').update(fs.readFileSync(macArchive)).digest('hex')}  ${path.basename(macArchive)}\n`);
 
     const result = run('/bin/sh', [installer, '--from-release', '1.0.0'], {
@@ -218,9 +220,11 @@ printf '%s\n' "$*" >> '${launchctlLog}'
     for (const [version, options] of [['1.0.0', {}], ['2.0.0', { serviceFails: true }]] as const) {
       makeRelease(base, version, options);
       const releaseDir = path.join(base, 'releases', 'download', `v${version}`);
-      const archive = path.join(releaseDir, `agenthub-${version}-linux-x64.tar.gz`);
+      const archive = path.join(releaseDir, `agenthub-${version}-${PLATFORM_ARCH}.tar.gz`);
       const macArchive = path.join(releaseDir, `agenthub-${version}-macos-arm64.tar.gz`);
-      fs.renameSync(archive, macArchive);
+      if (archive !== macArchive) {
+        fs.renameSync(archive, macArchive);
+      }
       fs.writeFileSync(path.join(releaseDir, 'SHA256SUMS'), `${crypto.createHash('sha256').update(fs.readFileSync(macArchive)).digest('hex')}  ${path.basename(macArchive)}\n`);
     }
     const env = {
