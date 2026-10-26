@@ -570,8 +570,36 @@ case "$url" in
   */releases/latest)
     case "$CURL_REDIRECT_MODE" in
       ok)
-        printf '%s' "$CURL_REDIRECT_URL"
+        code="\${CURL_REDIRECT_CODE:-200}"
+        target="\${CURL_REDIRECT_URL:-$url}"
+        if [ "$has_w" = "1" ]; then
+          case "$w_format" in
+            *HTTP_CODE*|*%{http_code}*)
+              printf 'HTTP_CODE:%s\nURL:%s\n' "$code" "$target"
+              ;;
+            *)
+              printf '%s' "$target"
+              ;;
+          esac
+        else
+          printf '%s' "$target"
+        fi
         exit 0
+        ;;
+      fail)
+        code="\${CURL_REDIRECT_CODE:-404}"
+        target="\${CURL_REDIRECT_URL:-$url}"
+        if [ "$has_w" = "1" ]; then
+          case "$w_format" in
+            *HTTP_CODE*|*%{http_code}*)
+              printf 'HTTP_CODE:%s\nURL:%s\n' "$code" "$target"
+              ;;
+          esac
+        fi
+        exit 22
+        ;;
+      network_error)
+        exit 22
         ;;
       *)
         exit 22
@@ -600,6 +628,7 @@ exit 1
     const home = makeTemp('agenthub-latest-redirect-');
     const app = path.join(home, 'app');
     const fakeBin = path.join(home, 'bin');
+    const installLog = path.join(home, 'install.log');
     createReleaseFixture(home, '1.2.3');
     createCurlShim(fakeBin);
 
@@ -616,6 +645,7 @@ exit 1
         CURL_REDIRECT_MODE: 'ok',
         CURL_REDIRECT_URL: 'https://github.com/ducanh19020217/agenthub/releases/tag/v1.2.3',
         CURL_FIXTURE_DIR: home,
+        INSTALL_LOG: installLog,
       },
       encoding: 'utf8',
     });
@@ -623,12 +653,16 @@ exit 1
     expect(result.status).toBe(0);
     expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.2.3');
     expect(fs.existsSync(path.join(app, '1.2.3'))).toBe(true);
+    expect(fs.readFileSync(installLog, 'utf8')).toContain(
+      'release resolve: URL https://github.com/ducanh19020217/agenthub/releases/latest redirected to https://github.com/ducanh19020217/agenthub/releases/tag/v1.2.3 (HTTP 200, version 1.2.3)',
+    );
   });
 
   it('falls back to GitHub API when redirect fails and uses tag_name', () => {
     const home = makeTemp('agenthub-latest-api-');
     const app = path.join(home, 'app');
     const fakeBin = path.join(home, 'bin');
+    const installLog = path.join(home, 'install.log');
     createReleaseFixture(home, '1.2.3');
     createCurlShim(fakeBin);
 
@@ -643,9 +677,11 @@ exit 1
         AGENTHUB_LINK_DIR: path.join(home, 'links'),
         AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
         CURL_REDIRECT_MODE: 'fail',
+        CURL_REDIRECT_CODE: '404',
         CURL_API_LATEST_STATUS: '200',
         CURL_API_LATEST_BODY: JSON.stringify({ tag_name: 'v1.2.3' }),
         CURL_FIXTURE_DIR: home,
+        INSTALL_LOG: installLog,
       },
       encoding: 'utf8',
     });
@@ -653,6 +689,9 @@ exit 1
     expect(result.status).toBe(0);
     expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.2.3');
     expect(fs.existsSync(path.join(app, '1.2.3'))).toBe(true);
+    expect(fs.readFileSync(installLog, 'utf8')).toContain(
+      'release resolve: URL https://github.com/ducanh19020217/agenthub/releases/latest redirect failed (HTTP 404, effective URL: https://github.com/ducanh19020217/agenthub/releases/latest)',
+    );
   });
 
   it('falls back to pre-release with warning when API latest returns 404', () => {
@@ -751,4 +790,99 @@ exit 1
     expect(result.stderr).toContain('--from-release <version>');
     expect(fs.existsSync(app)).toBe(false);
   });
+
+  it('logs actual HTTP code and effective URL on redirect success', () => {
+    const home = makeTemp('agenthub-latest-redirect-log-');
+    const app = path.join(home, 'app');
+    const fakeBin = path.join(home, 'bin');
+    const installLog = path.join(home, 'install.log');
+    createReleaseFixture(home, '1.2.3');
+    createCurlShim(fakeBin);
+
+    const result = spawnSync('/bin/sh', [installer, '--from-release'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        AGENTHUB_DIR: app,
+        AGENTHUB_HOME: path.join(home, 'data'),
+        AGENTHUB_RELEASE_REPO: 'ducanh19020217/agenthub',
+        AGENTHUB_LINK_DIR: path.join(home, 'links'),
+        AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+        CURL_REDIRECT_MODE: 'ok',
+        CURL_REDIRECT_CODE: '200',
+        CURL_REDIRECT_URL: 'https://github.com/ducanh19020217/agenthub/releases/tag/v1.2.3',
+        CURL_FIXTURE_DIR: home,
+        INSTALL_LOG: installLog,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    const logContent = fs.readFileSync(installLog, 'utf8');
+    expect(logContent).toContain(
+      'release resolve: URL https://github.com/ducanh19020217/agenthub/releases/latest redirected to https://github.com/ducanh19020217/agenthub/releases/tag/v1.2.3 (HTTP 200, version 1.2.3)',
+    );
+  });
+
+  it('logs actual HTTP code and effective URL on redirect failure', () => {
+    const home = makeTemp('agenthub-latest-redirect-fail-log-');
+    const app = path.join(home, 'app');
+    const fakeBin = path.join(home, 'bin');
+    const installLog = path.join(home, 'install.log');
+    createCurlShim(fakeBin);
+
+    // Case 1: HTTP 404 on redirect request
+    const result404 = spawnSync('/bin/sh', [installer, '--from-release'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        AGENTHUB_DIR: app,
+        AGENTHUB_HOME: path.join(home, 'data'),
+        AGENTHUB_RELEASE_REPO: 'ducanh19020217/agenthub',
+        AGENTHUB_LINK_DIR: path.join(home, 'links'),
+        AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+        CURL_REDIRECT_MODE: 'fail',
+        CURL_REDIRECT_CODE: '404',
+        CURL_API_LATEST_STATUS: '404',
+        CURL_API_ALL_STATUS: 'empty',
+        INSTALL_LOG: installLog,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result404.status).not.toBe(0);
+    let logContent = fs.readFileSync(installLog, 'utf8');
+    expect(logContent).toContain(
+      'release resolve: URL https://github.com/ducanh19020217/agenthub/releases/latest redirect failed (HTTP 404, effective URL: https://github.com/ducanh19020217/agenthub/releases/latest)',
+    );
+
+    // Case 2: Complete network/curl failure without response
+    const installLogNet = path.join(home, 'install-net.log');
+    const resultNet = spawnSync('/bin/sh', [installer, '--from-release'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        AGENTHUB_DIR: app,
+        AGENTHUB_HOME: path.join(home, 'data'),
+        AGENTHUB_RELEASE_REPO: 'ducanh19020217/agenthub',
+        AGENTHUB_LINK_DIR: path.join(home, 'links'),
+        AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+        CURL_REDIRECT_MODE: 'network_error',
+        CURL_API_LATEST_STATUS: '404',
+        CURL_API_ALL_STATUS: 'empty',
+        INSTALL_LOG: installLogNet,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(resultNet.status).not.toBe(0);
+    logContent = fs.readFileSync(installLogNet, 'utf8');
+    expect(logContent).toContain(
+      'release resolve: URL https://github.com/ducanh19020217/agenthub/releases/latest redirect failed (HTTP unknown, effective URL: none)',
+    );
+  });
 });
+
