@@ -3,14 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Building2, Plus, Trash2 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { createDepartment, deleteDepartment, getDepartments, getProfiles, updateDepartment, updateDepartmentProfiles } from '../api/client';
-import { Department } from '../types/api';
+import { Department, Profile } from '../types/api';
 import { useLocale } from '../context/LocaleContext';
 
 export const DepartmentsPage: React.FC = () => {
   const { t } = useLocale();
   const client = useQueryClient();
-  const { data = [], isLoading } = useQuery({ queryKey: ['departments'], queryFn: getDepartments });
-  const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
+  const { data = [], isLoading: isLoadingDepartments } = useQuery({ queryKey: ['departments'], queryFn: getDepartments });
+  const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
+  const isLoading = isLoadingDepartments || isLoadingProfiles;
   const [name, setName] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [brainEngines, setBrainEngines] = useState<Record<string, 'claude' | 'codex'>>({});
@@ -20,15 +21,15 @@ export const DepartmentsPage: React.FC = () => {
   const updateProfiles = useMutation({ mutationFn: ({ id, profiles }: { id: string; profiles: { profileName: string; share: null }[] }) => updateDepartmentProfiles(id, profiles), onSuccess: refresh });
   const remove = useMutation({ mutationFn: deleteDepartment, onSuccess: refresh });
 
+  const isProfileEnabled = (p: Profile): boolean => p.enabled !== false && p.enabled !== 0 && (p as any).enabled !== null;
   const assignedProfileNames = new Set(data.flatMap((dept) => dept.profiles.map((p) => p.profileName)));
-  const hasGlobalProfiles = profiles.some((p) => (p.enabled !== false && p.enabled !== 0) && !assignedProfileNames.has(p.name));
+  const hasGlobalProfiles = profiles.some((p) => isProfileEnabled(p) && !assignedProfileNames.has(p.name));
   const hasUsableProfile = (department: Department): boolean => {
+    if (isLoadingProfiles) return true;
     if (hasGlobalProfiles) return true;
-    if (department.profiles.length === 0) return false;
-    if (profiles.length === 0) return true;
     return department.profiles.some((dp) => {
       const p = profiles.find((item) => item.name === dp.profileName);
-      return !p || (p.enabled !== false && p.enabled !== 0);
+      return Boolean(p && isProfileEnabled(p));
     });
   };
 
