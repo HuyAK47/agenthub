@@ -151,10 +151,10 @@
   --t-purple: hsl(277, 72%, 50%);
   --t-checking: #14b8a6;
   --t-claude: #d97757;
-  --brand-gemini-1: #1ba1e2;
-  --brand-gemini-2: #4a88ec;
-  --brand-gemini-3: #9b51e0;
-  --brand-codex: #10a37f;
+  --t-codex: #10a37f;
+  --t-gemini-from: #1ba1e2;
+  --t-gemini-via: #4a88ec;
+  --t-gemini-to: #9b51e0;
   --t-info: var(--t-accent);
   --t-on-accent: #ffffff;
   --t-info-bg: color-mix(in srgb, var(--t-info) 12%, transparent);
@@ -330,10 +330,6 @@
   --t-purple: hsl(277, 60%, 65%);
   --t-checking: #2dd4bf;
   --t-claude: #d97757;
-  --brand-gemini-1: #1ba1e2;
-  --brand-gemini-2: #4a88ec;
-  --brand-gemini-3: #9b51e0;
-  --brand-codex: #10a37f;
   --t-info: var(--t-accent);
   --t-on-accent: #ffffff;
   --t-info-bg: color-mix(in srgb, var(--t-info) 15%, transparent);

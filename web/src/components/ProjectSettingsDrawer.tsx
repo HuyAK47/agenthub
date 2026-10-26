@@ -468,6 +468,7 @@ export const ProjectSettingsDrawer: React.FC<ProjectSettingsDrawerProps> = ({
     }
 
     setDraftEnvTemplate(targetProject.envTemplate ?? '');
+    setDraftDepartmentId(targetProject.departmentId ?? 'chung');
     setChecksError(null);
     setReviewError(null);
     setReviewerOrderError(null);

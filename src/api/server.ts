@@ -158,6 +158,10 @@ export async function createServer(
     if (!claudeBin) {
       throw new HttpError(404, 'claude_not_found', 'Không tìm thấy Claude Code. Hãy cài Claude Code trước, hoặc đặt đường dẫn trong Cài đặt → Chat (claudeBin).');
     }
+    if (!fs.existsSync(cliPath)) {
+      // Chạy dev bằng tsx chưa có dist: đăng ký lúc này sẽ để lại MCP server trỏ vào file không tồn tại.
+      throw new HttpError(409, 'mcp_cli_missing', `Không tìm thấy ${cliPath}. Hãy chạy \`npm run build\` rồi thử lại.`);
+    }
     try {
       return { ok: true, output: await runMcpInstall({ claudeBin, nodePath: process.execPath, cliPath }) };
     } catch (error) {

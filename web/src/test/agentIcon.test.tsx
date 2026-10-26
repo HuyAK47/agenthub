@@ -15,7 +15,7 @@ describe('AgentIcon', () => {
   it('renders CodexIcon for codex and openai', () => {
     const { container: codexContainer } = render(<AgentIcon provider="codex" />);
     expect(codexContainer.querySelector('svg')).toBeInTheDocument();
-    expect(codexContainer.querySelector('.text-\\[var\\(--brand-codex\\)\\]')).toBeInTheDocument();
+    expect(codexContainer.querySelector('.text-\\[var\\(--t-codex\\)\\]')).toBeInTheDocument();
 
     const { container: openaiContainer } = render(<AgentIcon provider="openai" />);
     expect(openaiContainer.querySelector('svg')).toBeInTheDocument();
