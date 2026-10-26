@@ -446,6 +446,66 @@ describe('AgentHub API Extra Endpoints', () => {
       });
       expect(res3.statusCode).toBe(400);
     });
+
+    it('PUT /api/config validates and persists load.autoPauseThresholdSec', async () => {
+      // 1. Validation: non-positive or non-integer is rejected
+      const res1 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 0 },
+        },
+      });
+      expect(res1.statusCode).toBe(400);
+
+      const res2 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: -10 },
+        },
+      });
+      expect(res2.statusCode).toBe(400);
+
+      const res3 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 45.5 },
+        },
+      });
+      expect(res3.statusCode).toBe(400);
+
+      // 2. PUT with valid autoPauseThresholdSec
+      const putRes = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 90 },
+        },
+      });
+      expect(putRes.statusCode).toBe(200);
+      const putBody = JSON.parse(putRes.body);
+      expect(putBody.load.autoPauseThresholdSec).toBe(90);
+
+      // 3. GET /api/config reflects the saved value
+      const getRes = await server.inject({
+        method: 'GET',
+        url: '/api/config',
+        headers: authHeaders(),
+      });
+      expect(getRes.statusCode).toBe(200);
+      const getBody = JSON.parse(getRes.body);
+      expect(getBody.load.autoPauseThresholdSec).toBe(90);
+
+      // 4. Persisted on disk in config.json
+      const onDisk = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk.load.autoPauseThresholdSec).toBe(90);
+    });
   });
 
   describe('branding logo security headers', () => {
