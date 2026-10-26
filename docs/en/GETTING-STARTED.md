@@ -500,6 +500,17 @@ Deploy steps are trusted configuration in `~/.agenthub/config.json` only; they a
 
 Each step runs as argv in the integration worktree and is logged under `~/.agenthub/logs/deploy/<project>/<time>.log`. Push is disabled by default and is fast-forward-only when enabled.
 
+### Integration worktrees for merge and deploy
+
+AgentHub supports two types of integration worktrees:
+1. **Hub-managed integration worktree (`settings.integration.enabled = true`)** (recommended):
+   - Located at `<worktree.root>/.integration` (if `settings.worktree.root` is configured) or `~/.agenthub/integration/<projectId>`, checking out `settings.integration.branch` (defaults to `agenthub/integration`).
+   - Used for both automated merging (`mergeTaskIntoBase`), executing merge-checks, and post-merge self-deployment.
+   - AgentHub automatically manages lifecycle and dependency installation matching the task worktree policy (`worktree.install`: `auto` using cache/symlink or `npm ci`). If `package-lock.json` or lockfiles change in a merge commit, dependencies are automatically reinstalled before running merge-checks.
+2. **Manually declared worktrees (`project.merge.worktrees`)** (legacy):
+   - Explicit absolute paths configured per baseRef in project merge settings.
+   - Used only when `settings.integration.enabled = false`. When `settings.integration.enabled = true`, the hub-managed worktree takes precedence and the legacy configuration is ignored.
+
 To avoid overloading CI workflows during frequent merges, AgentHub supports **batched pushes** configured via `minIntervalMin` (defaults to 30 minutes):
 - After a successful deploy, the hub only pushes to the remote if the time elapsed since the previous push is ≥ `minIntervalMin`.
 - If the interval has not yet elapsed, the hub schedules a deferred push (executing git push without rebuilding) once the interval expires, batching all intermediate merges into a single push. The push schedule and last push timestamp persist across daemon restarts.

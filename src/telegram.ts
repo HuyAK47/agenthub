@@ -3862,7 +3862,8 @@ export class TelegramBotService {
       case 'merge.failed': {
         const message = typeof p.message === 'string' ? p.message : 'Lỗi khi merge tự động';
         const taskLabel = taskId || 'Task';
-        this.broadcastMessage(`${prefix}❌ <b>Lỗi tự động gộp: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
+        const title = p.environment ? 'Lỗi môi trường khi tự động gộp' : 'Lỗi tự động gộp';
+        this.broadcastMessage(`${prefix}❌ <b>${title}: ${this.escapeHtml(taskLabel)}</b>\n${this.escapeHtml(message)}`);
         break;
       }
 

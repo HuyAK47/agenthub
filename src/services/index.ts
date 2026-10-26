@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
 import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../projects/paths.js';
-import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
+import { ensureIntegrationNodeModules, ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -1730,10 +1730,17 @@ export class AppService {
     });
 
     if (effectiveSettings.integration.enabled) {
-      ensureIntegrationWorktree(
-        { id, path: resolvedPath, defaultBranch: parsed.defaultBranch, settings: JSON.stringify(effectiveSettings) },
-        this.config.hubHome,
-      );
+      const projLike = { id, path: resolvedPath, defaultBranch: parsed.defaultBranch, settings: JSON.stringify(effectiveSettings) };
+      ensureIntegrationWorktree(projLike, this.config.hubHome);
+      if (effectiveSettings.worktree.install !== 'skip') {
+        void ensureIntegrationNodeModules(projLike, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[projects] Failed to prepare integration node_modules: ${String(err)}`);
+        });
+      }
     }
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -1781,6 +1788,15 @@ export class AppService {
     if (mergedSettings.integration.enabled) {
       const updatedProject = this.projectRepo.get(id)!;
       ensureIntegrationWorktree(updatedProject, this.config.hubHome);
+      if (mergedSettings.worktree.install !== 'skip') {
+        void ensureIntegrationNodeModules(updatedProject, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[projects] Failed to prepare integration node_modules: ${String(err)}`);
+        });
+      }
     }
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -3523,10 +3539,38 @@ export class AppService {
       const project = this.projectRepo.get(task.projectId);
       if (!project) throw new HttpError(404, 'not_found', `Project "${task.projectId}" không tồn tại`);
       try {
-        mergeResult = await mergeTaskIntoBase(task, project, { hubHome: this.config.hubHome });
+        mergeResult = await mergeTaskIntoBase(task, project, {
+          hubHome: this.config.hubHome,
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+          cachePolicy: {
+            maxEntries: this.config.cacheMaxEntries,
+            maxBytes: this.config.cacheMaxGB * 1024 ** 3,
+          },
+        });
       } catch (error) {
         if (error instanceof MergeError) {
-          if (!error.configuration) this.createMergeFailureDraft(task, error.message);
+          if (!error.configuration && !error.environment) this.createMergeFailureDraft(task, error.message);
+          if (error.environment) {
+            this.scheduler.getEventBus().emit('merge.failed', taskId, {
+              actor: parsed.by || 'review',
+              message: error.message,
+              environment: true,
+            });
+            if (this.taskNoteRepo) {
+              try {
+                this.taskNoteRepo.insert({
+                  projectId: task.projectId,
+                  taskId: task.id,
+                  kind: 'note',
+                  content: `Lỗi môi trường khi merge (không phải lỗi worker): ${error.message}`,
+                });
+              } catch {
+                // ignore
+              }
+            }
+          }
           throw new HttpError(error.statusCode, error.error, error.message);
         }
         throw error;
@@ -3600,9 +3644,12 @@ export class AppService {
       const isConflict = (error instanceof HttpError && (error.error === 'conflict' || error.statusCode === 409)) ||
         (error instanceof MergeError && error.error === 'conflict') ||
         (error instanceof Error && /conflict/i.test(error.message));
+      const isEnvironment = (error instanceof HttpError && (error.error === 'environment_error' || error.statusCode === 503)) ||
+        (error instanceof MergeError && error.environment);
       this.scheduler.getEventBus().emit(isConflict ? 'merge.conflict' : 'merge.failed', taskId, {
         actor: 'auto-merge',
         message: error instanceof Error ? error.message : String(error),
+        environment: isEnvironment || undefined,
       });
     }
   }

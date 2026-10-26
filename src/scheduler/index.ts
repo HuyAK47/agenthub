@@ -38,7 +38,7 @@ import { parseCodexTokens, parseShortstat, recalculateTaskLines, measureTaskLine
 
 const execFileAsync = promisify(execFile);
 import { ClaudeFailoverState } from '../chat/failover.js';
-import { ensureIntegrationWorktree } from '../projects/integration.js';
+import { ensureIntegrationNodeModules, ensureIntegrationWorktree } from '../projects/integration.js';
 import { buildReviewerPrompt, parseReviewerOutput, ReviewerVerdict } from '../reviewer.js';
 import { CLAUDE_REVIEW_ENGINE_KEY } from '../engines/claude-review.js';
 import { parseReviewChain, reviewerModel, type ReviewChainStep } from '../review-chain.js';
@@ -3094,6 +3094,15 @@ export class Scheduler {
       if (settings.integration?.enabled) {
         try {
           ensureIntegrationWorktree(project, this.config.hubHome);
+          if (settings.worktree.install !== 'skip') {
+            void ensureIntegrationNodeModules(project, this.config.hubHome, {
+              cacheDir: this.config.cacheDir,
+              cacheMaxEntries: this.config.cacheMaxEntries,
+              cacheMaxGB: this.config.cacheMaxGB,
+            }).catch((err) => {
+              console.warn(`[scheduler] Failed to prepare integration worktree node_modules:`, err);
+            });
+          }
         } catch (e) {
           this.locks.release(profile.name, lockFile);
           if (!isProjectAccessible(project.path) || !isProjectWorktreeRootAccessible({ id: project.id, path: project.path, settings: project.settings })) {

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import { mergeTaskIntoBase, MergeError } from '../src/merge.js';
+import { mergeTaskIntoBase, MergeError, isEnvironmentFailure } from '../src/merge.js';
 
 const tempDirs: string[] = [];
 
@@ -70,5 +70,187 @@ describe('mergeTaskIntoBase', () => {
     )).rejects.toMatchObject<Partial<MergeError>>({ statusCode: 422 });
     expect(git(f.integration, 'rev-parse', 'HEAD')).toBe(f.before);
     expect(git(f.integration, 'status', '--porcelain')).toBe('');
+  });
+
+  it('installs missing node_modules before running merge checks', async () => {
+    const f = fixture();
+    const pkg = {
+      name: 'test-app',
+      version: '1.0.0',
+      scripts: { test: 'node -e "process.exit(0)"' },
+      dependencies: { foo: '^1.0.0' },
+    };
+    fs.writeFileSync(path.join(f.integration, 'package.json'), JSON.stringify(pkg, null, 2));
+    fs.writeFileSync(path.join(f.integration, 'package-lock.json'), JSON.stringify({ name: 'test-app', lockfileVersion: 3 }, null, 2));
+    git(f.integration, 'add', '.');
+    git(f.integration, 'commit', '-m', 'add package.json');
+    fs.rmSync(path.join(f.integration, 'node_modules'), { recursive: true, force: true });
+
+    let installCalled = false;
+    const fakeExecFn = async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+      if (cmd === 'npm' && args[0] === 'ci') {
+        installCalled = true;
+        const cwd = opts?.cwd || f.integration;
+        const binDir = path.join(cwd, 'node_modules', '.bin');
+        fs.mkdirSync(binDir, { recursive: true });
+        return { stdout: 'installed', stderr: '' };
+      }
+      const out = execFileSync(cmd, args, { cwd: opts?.cwd, encoding: 'utf8' });
+      return { stdout: String(out), stderr: '' };
+    };
+
+    const result = await mergeTaskIntoBase(
+      { slug: 'task', branch: f.branch, baseRef: 'main' },
+      { defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration }, checks: ['npm run test'], timeoutSec: 30 }) },
+      { execFn: fakeExecFn },
+    );
+    expect(installCalled).toBe(true);
+    expect(result.mergeCommit).toBeDefined();
+    expect(git(f.integration, 'status', '--porcelain')).toBe('');
+  });
+
+  it('fails with environment_error (503) and rolls back when node_modules is missing and installation is skipped', async () => {
+    const f = fixture();
+    const pkg = {
+      name: 'test-app',
+      version: '1.0.0',
+      scripts: { test: 'node -e "process.exit(0)"' },
+      dependencies: { foo: '^1.0.0' },
+    };
+    fs.writeFileSync(path.join(f.integration, 'package.json'), JSON.stringify(pkg, null, 2));
+    fs.writeFileSync(path.join(f.integration, 'package-lock.json'), JSON.stringify({ name: 'test-app', lockfileVersion: 3 }, null, 2));
+    git(f.integration, 'add', '.');
+    git(f.integration, 'commit', '-m', 'add package.json');
+    const before = git(f.integration, 'rev-parse', 'HEAD');
+    fs.rmSync(path.join(f.integration, 'node_modules'), { recursive: true, force: true });
+
+    await expect(mergeTaskIntoBase(
+      { slug: 'task', branch: f.branch, baseRef: 'main' },
+      {
+        defaultBranch: 'main',
+        settings: JSON.stringify({ worktree: { install: 'skip' } }),
+        merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration }, checks: ['npm run test'], timeoutSec: 30 }),
+      },
+    )).rejects.toMatchObject<Partial<MergeError>>({
+      statusCode: 503,
+      error: 'environment_error',
+      environment: true,
+    });
+    expect(git(f.integration, 'rev-parse', 'HEAD')).toBe(before);
+    expect(git(f.integration, 'status', '--porcelain')).toBe('');
+  });
+
+  it('fails with environment_error (503) and rolls back when check exits with code 127', async () => {
+    const f = fixture();
+    await expect(mergeTaskIntoBase(
+      { slug: 'task', branch: f.branch, baseRef: 'main' },
+      { defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration }, checks: ['sh -c "exit 127"'], timeoutSec: 30 }) },
+    )).rejects.toMatchObject<Partial<MergeError>>({
+      statusCode: 503,
+      error: 'environment_error',
+      environment: true,
+    });
+    expect(git(f.integration, 'rev-parse', 'HEAD')).toBe(f.before);
+    expect(git(f.integration, 'status', '--porcelain')).toBe('');
+  });
+
+  it('treats check terminated by signal as normal check failure (422) and rolls back', async () => {
+    const f = fixture();
+    await expect(mergeTaskIntoBase(
+      { slug: 'task', branch: f.branch, baseRef: 'main' },
+      { defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration }, checks: ['sh -c "kill -9 $$"'], timeoutSec: 30 }) },
+    )).rejects.toMatchObject<Partial<MergeError>>({
+      statusCode: 422,
+      error: 'unprocessable_entity',
+      environment: false,
+    });
+    expect(git(f.integration, 'rev-parse', 'HEAD')).toBe(f.before);
+    expect(git(f.integration, 'status', '--porcelain')).toBe('');
+  });
+
+  it('reinstalls dependencies when package-lock.json changes in merge commit', async () => {
+    const f = fixture();
+    const pkg = { name: 'test-app', version: '1.0.0', dependencies: { foo: '1.0.0' } };
+    fs.writeFileSync(path.join(f.integration, 'package.json'), JSON.stringify(pkg, null, 2));
+    fs.writeFileSync(path.join(f.integration, 'package-lock.json'), JSON.stringify({ name: 'test-app', version: '1.0.0' }, null, 2));
+    const nmBin = path.join(f.integration, 'node_modules', '.bin');
+    fs.mkdirSync(nmBin, { recursive: true });
+    git(f.integration, 'add', 'package.json', 'package-lock.json');
+    git(f.integration, 'commit', '-m', 'initial lock');
+    const beforeHead = git(f.integration, 'rev-parse', 'HEAD');
+
+    // Make task branch rebase/merge from main
+    git(f.root, 'merge', 'main');
+    // On task branch, modify package-lock.json
+    fs.writeFileSync(path.join(f.root, 'package-lock.json'), JSON.stringify({ name: 'test-app', version: '2.0.0' }, null, 2));
+    git(f.root, 'add', 'package-lock.json');
+    git(f.root, 'commit', '-m', 'update lock on task');
+
+    let ciCalled = false;
+    const fakeExecFn = async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+      if (cmd === 'npm' && args[0] === 'ci') {
+        ciCalled = true;
+        const cwd = opts?.cwd || f.integration;
+        fs.mkdirSync(path.join(cwd, 'node_modules', '.bin'), { recursive: true });
+        return { stdout: 'ok', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await mergeTaskIntoBase(
+      { slug: 'task', branch: f.branch, baseRef: 'main' },
+      { defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration }, checks: ['node -e "process.exit(0)"'], timeoutSec: 30 }) },
+      { execFn: fakeExecFn },
+    );
+    expect(ciCalled).toBe(true);
+    expect(result.mergeCommit).not.toBe(beforeHead);
+  });
+});
+
+describe('isEnvironmentFailure', () => {
+  it('returns true for exit code 127 regardless of output', () => {
+    expect(isEnvironmentFailure({ code: 127, output: '' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 127, output: 'anything' })).toBe(true);
+  });
+
+  it('returns false when timedOut is true', () => {
+    expect(isEnvironmentFailure({ code: 127, output: 'sh: 1: cmd: not found', timedOut: true })).toBe(false);
+    expect(isEnvironmentFailure({ code: null, output: 'spawn cmd ENOENT', timedOut: true })).toBe(false);
+  });
+
+  it('returns true when output confirms spawn/ENOENT error', () => {
+    expect(isEnvironmentFailure({ code: null, output: 'Error: spawn eslint ENOENT' })).toBe(true);
+    expect(isEnvironmentFailure({ code: null, output: 'Error: spawn /custom/bin/tsc ENOENT' })).toBe(true);
+    expect(isEnvironmentFailure({ code: null, output: 'spawn ENOENT' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'Error: spawn eslint ENOENT' })).toBe(true);
+  });
+
+  it('returns false when code is null due to signal termination without spawn error', () => {
+    // Process terminated by SIGKILL / OOM
+    expect(isEnvironmentFailure({ code: null, output: 'Killed' })).toBe(false);
+    expect(isEnvironmentFailure({ code: null, output: '' })).toBe(false);
+    // Process crashed with SIGSEGV
+    expect(isEnvironmentFailure({ code: null, output: 'Segmentation fault (core dumped)' })).toBe(false);
+    // Vitest failure interrupted or killed
+    expect(isEnvironmentFailure({ code: null, output: 'FAIL test/example.test.ts\nExpected 1 to be 2' })).toBe(false);
+  });
+
+  it('returns true when output matches shell command not found patterns', () => {
+    expect(isEnvironmentFailure({ code: 1, output: 'sh: 1: eslint: not found' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'bash: line 1: tsc: command not found' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'zsh: command not found: vitest' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'eslint: not found' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'tsc: not found' })).toBe(true);
+  });
+
+  it('returns true when output indicates missing module', () => {
+    expect(isEnvironmentFailure({ code: 1, output: 'npm ERR! code MODULE_NOT_FOUND' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: "Error: Cannot find module '@eslint/js'" })).toBe(true);
+  });
+
+  it('returns false for normal test or lint check failures', () => {
+    expect(isEnvironmentFailure({ code: 1, output: '1 error and 0 warnings found by eslint' })).toBe(false);
+    expect(isEnvironmentFailure({ code: 2, output: 'error TS2322: Type "string" is not assignable to type "number".' })).toBe(false);
+    expect(isEnvironmentFailure({ code: 1, output: 'FAIL test/merge.test.ts\nAssertionError: expected true to be false' })).toBe(false);
   });
 });
