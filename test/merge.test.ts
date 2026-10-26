@@ -95,7 +95,8 @@ describe('mergeTaskIntoBase', () => {
         fs.mkdirSync(binDir, { recursive: true });
         return { stdout: 'installed', stderr: '' };
       }
-      return execFileSync(cmd, args, { cwd: opts?.cwd, encoding: 'utf8' }) as any;
+      const out = execFileSync(cmd, args, { cwd: opts?.cwd, encoding: 'utf8' });
+      return { stdout: String(out), stderr: '' };
     };
 
     const result = await mergeTaskIntoBase(
