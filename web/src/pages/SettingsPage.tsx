@@ -1364,6 +1364,7 @@ export const SettingsPage: React.FC = () => {
                     </label>
                     <input
                       type="time"
+                      data-testid="quiet-hours-start"
                       value={quietHoursStart}
                       onChange={(e) => setQuietHoursStart(e.target.value)}
                       className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"
@@ -1375,6 +1376,7 @@ export const SettingsPage: React.FC = () => {
                     </label>
                     <input
                       type="time"
+                      data-testid="quiet-hours-end"
                       value={quietHoursEnd}
                       onChange={(e) => setQuietHoursEnd(e.target.value)}
                       className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"

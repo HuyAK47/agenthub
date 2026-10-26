@@ -150,4 +150,55 @@ describe('SettingsPage Notifications & Digest (b-brain-notify)', () => {
     expect(callPayload.notifications).toBeDefined();
     expect(callPayload.notifications?.desktop).toBe(true);
   });
+
+  it('updates desktop notification level and quiet hours in settings form and saves correctly', async () => {
+    const updateSpy = vi.spyOn(client, 'updateConfig').mockResolvedValue({} as any);
+
+    render(
+      <LocaleProvider initialLocale="vi">
+        <ThemeProvider>
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter>
+              <SettingsPage />
+            </MemoryRouter>
+          </QueryClientProvider>
+        </ThemeProvider>
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('notifications-settings')).toBeInTheDocument();
+    });
+
+    // Change desktop notification level to critical
+    const levelSelect = screen.getByTestId('desktop-notify-level');
+    fireEvent.change(levelSelect, { target: { value: 'critical' } });
+
+    // Enable quiet hours
+    const quietHoursToggle = screen.getByTestId('quiet-hours-toggle');
+    fireEvent.click(quietHoursToggle);
+
+    // Set custom quiet hours
+    const startInput = screen.getByTestId('quiet-hours-start');
+    fireEvent.change(startInput, { target: { value: '23:00' } });
+
+    const endInput = screen.getByTestId('quiet-hours-end');
+    fireEvent.change(endInput, { target: { value: '06:30' } });
+
+    // Save
+    const saveButton = screen.getByText('Lưu cấu hình');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalled();
+    });
+
+    const callPayload = updateSpy.mock.calls[0][0];
+    expect(callPayload.notifications?.desktopLevel).toBe('critical');
+    expect(callPayload.notifications?.quietHours).toEqual({
+      enabled: true,
+      start: '23:00',
+      end: '06:30',
+    });
+  });
 });
