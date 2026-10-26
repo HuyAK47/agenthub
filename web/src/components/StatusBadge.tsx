@@ -41,6 +41,10 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       }
     } else if (waitReason === 'quota') {
       label = t('waitReason.quota');
+    } else if (waitReason === 'no_department_profile') {
+      label = t('waitReason.no_department_profile');
+    } else if (waitReason === 'no_matching_profile') {
+      label = t('waitReason.no_matching_profile');
     } else if (waitReason === 'parallel') {
       label = t('waitReason.parallel');
     } else if (waitReason === 'department_parallel') {
