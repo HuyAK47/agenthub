@@ -66,7 +66,14 @@ describe('DepartmentsPage', () => {
     await waitFor(() => expect(updateProfilesSpy).toHaveBeenCalledWith('engineering', [{ profileName: 'worker-1', share: null }]));
   });
 
-  it('hiển thị cảnh báo khi phòng có dự án nhưng không có tài khoản được gán', async () => {
+  it('hiển thị cảnh báo khi phòng có dự án nhưng không có tài khoản nào dùng được', async () => {
+    const otherDept = {
+      ...department,
+      id: 'other-dept',
+      name: 'Phòng Khác',
+      projects: [],
+      profiles: [{ profileName: 'worker-1', departmentId: 'other-dept', share: null }],
+    };
     const deptWithProjectsNoProfiles = {
       ...department,
       id: 'no-profile-dept',
@@ -74,11 +81,26 @@ describe('DepartmentsPage', () => {
       projects: [{ id: 'p1', name: 'Project 1' }] as any,
       profiles: [],
     };
-    vi.spyOn(client, 'getDepartments').mockResolvedValue([deptWithProjectsNoProfiles]);
+    vi.spyOn(client, 'getDepartments').mockResolvedValue([otherDept, deptWithProjectsNoProfiles]);
     renderPage();
     await screen.findByText('Phòng Thiếu Profile');
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Phòng này có project nhưng chưa có tài khoản được gán.');
+  });
+
+  it('không hiển thị cảnh báo khi phòng có dự án và có profile toàn cục chưa gán phòng', async () => {
+    const deptWithProjectsNoProfiles = {
+      ...department,
+      id: 'global-profile-dept',
+      name: 'Phòng Dùng Profile Toàn Cục',
+      projects: [{ id: 'p1', name: 'Project 1' }] as any,
+      profiles: [],
+    };
+    // worker-1 is global (not assigned to any department)
+    vi.spyOn(client, 'getDepartments').mockResolvedValue([deptWithProjectsNoProfiles]);
+    renderPage();
+    await screen.findByText('Phòng Dùng Profile Toàn Cục');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('không hiển thị cảnh báo khi phòng có tài khoản được gán', async () => {
@@ -87,7 +109,7 @@ describe('DepartmentsPage', () => {
       id: 'healthy-dept',
       name: 'Phòng Đầy Đủ',
       projects: [{ id: 'p1', name: 'Project 1' }] as any,
-      profiles: [{ profileName: 'worker-1' }] as any,
+      profiles: [{ profileName: 'worker-1', departmentId: 'healthy-dept', share: null }],
     };
     vi.spyOn(client, 'getDepartments').mockResolvedValue([deptWithProjectsAndProfiles]);
     renderPage();

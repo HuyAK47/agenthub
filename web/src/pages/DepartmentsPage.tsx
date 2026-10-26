@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Building2, Plus, Trash2 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
 import { createDepartment, deleteDepartment, getDepartments, getProfiles, updateDepartment, updateDepartmentProfiles } from '../api/client';
+import { Department } from '../types/api';
 import { useLocale } from '../context/LocaleContext';
 
 export const DepartmentsPage: React.FC = () => {
@@ -19,6 +20,18 @@ export const DepartmentsPage: React.FC = () => {
   const updateProfiles = useMutation({ mutationFn: ({ id, profiles }: { id: string; profiles: { profileName: string; share: null }[] }) => updateDepartmentProfiles(id, profiles), onSuccess: refresh });
   const remove = useMutation({ mutationFn: deleteDepartment, onSuccess: refresh });
 
+  const assignedProfileNames = new Set(data.flatMap((dept) => dept.profiles.map((p) => p.profileName)));
+  const hasGlobalProfiles = profiles.some((p) => (p.enabled !== false && p.enabled !== 0) && !assignedProfileNames.has(p.name));
+  const hasUsableProfile = (department: Department): boolean => {
+    if (hasGlobalProfiles) return true;
+    if (department.profiles.length === 0) return false;
+    if (profiles.length === 0) return true;
+    return department.profiles.some((dp) => {
+      const p = profiles.find((item) => item.name === dp.profileName);
+      return !p || (p.enabled !== false && p.enabled !== 0);
+    });
+  };
+
   return <div className="p-6 max-w-6xl mx-auto space-y-6">
     <div><h2 className="text-xl font-semibold flex items-center gap-2"><Building2 size={22} />{t('departments.title')}</h2><p className="text-sm text-[var(--t-text-2)] mt-1">{t('departments.subtitle')}</p></div>
     <Card className="p-4 flex gap-2">
@@ -27,7 +40,7 @@ export const DepartmentsPage: React.FC = () => {
     </Card>
     {isLoading ? <p>{t('common.loading')}</p> : data.length === 0 ? <p>{t('departments.empty')}</p> : <div className="grid gap-4 md:grid-cols-2">
       {data.map((department) => <Card key={department.id} className="p-4 space-y-3">
-        {department.projects.length > 0 && department.profiles.length === 0 && <div role="alert" className="rounded border border-[var(--t-crit)] bg-[var(--t-crit)]/10 px-3 py-2 text-sm text-[var(--t-crit)]">{t('departments.noUsableProfiles')}</div>}
+        {department.projects.length > 0 && !hasUsableProfile(department) && <div role="alert" className="rounded border border-[var(--t-crit)] bg-[var(--t-crit)]/10 px-3 py-2 text-sm text-[var(--t-crit)]">{t('departments.noUsableProfiles')}</div>}
         {editing === department.id ? <Input autoFocus defaultValue={department.name} onBlur={(e) => { update.mutate({ id: department.id, data: { name: e.target.value } }); setEditing(null); }} aria-label={t('departments.name')} /> : <div className="flex items-center justify-between"><h3 className="font-semibold cursor-pointer" onClick={() => setEditing(department.id)}>{department.name}</h3>{department.id !== 'chung' && <Button variant="ghost" onClick={() => { if (window.confirm(t('departments.confirmDelete'))) remove.mutate(department.id); }} aria-label={t('departments.delete')}><Trash2 size={16} /></Button>}</div>}
         <div className="grid grid-cols-3 gap-2 text-sm"><label>{t('departments.priority')}<Input type="number" defaultValue={department.priority} onBlur={(e) => update.mutate({ id: department.id, data: { priority: Number(e.target.value) } })} /></label><label>{t('departments.maxParallel')}<Input type="number" min="0" defaultValue={department.maxParallel} onBlur={(e) => update.mutate({ id: department.id, data: { maxParallel: Number(e.target.value) } })} /><span className="text-xs text-[var(--t-text-3)]">{t('departments.maxParallelHint')}</span></label><label>{t('departments.budget')}<Input type="number" min="0" defaultValue={department.claudeDailyTokenBudget} onBlur={(e) => update.mutate({ id: department.id, data: { claudeDailyTokenBudget: Number(e.target.value) } })} /></label></div>
         <div className="space-y-2 text-sm text-[var(--t-text-2)]">
