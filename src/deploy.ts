@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { AgentHubConfig, DeployProjectConfig } from './config.js';
 import { ProjectRepo, ProjectRow } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
-import { ensureIntegrationWorktree } from './projects/integration.js';
+import { ensureIntegrationNodeModules, ensureIntegrationWorktree } from './projects/integration.js';
+import { ensureWorktreeNodeModules } from './cache.js';
 import { projectSettings } from './projects/settings.js';
 import { runInProcessGroup } from './priority.js';
 
@@ -56,6 +57,7 @@ export class DeployService {
   private pushStates = new Map<string, ProjectPushState>();
   private deferredPushes = new Map<string, { dueTime: number; timer?: NodeJS.Timeout }>();
   private lastRestartBlockers = new Map<string, string>();
+  private stagedWeb = new Map<string, string>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -267,7 +269,7 @@ export class DeployService {
     if (!definition?.push || !project) {
       return { projectId, status: 'skipped', error: 'Không có cấu hình deploy push' };
     }
-    const worktree = this.resolveWorktree(project);
+    const worktree = await this.resolveWorktree(project);
     if (!worktree) {
       return { projectId, status: 'skipped', error: 'Không có worktree đích tích hợp được cấu hình' };
     }
@@ -415,7 +417,7 @@ export class DeployService {
       this.latest.set(projectId, status);
       this.eventBus.emit('deploy.started', undefined, { projectId, commit, logPath });
       write(`deploy started project=${projectId} commit=${commit || 'unknown'}`);
-      const worktree = this.resolveWorktree(project);
+      const worktree = await this.resolveWorktree(project);
       if (!worktree) {
         status.status = 'skipped';
         status.finishedAt = new Date().toISOString();
@@ -424,12 +426,18 @@ export class DeployService {
         this.latest.set(projectId, { ...status });
         return status;
       }
+      const selfDeploy = definition.restartHub && this.isHubProject(project, worktree);
       for (const [index, argv] of definition.steps.entries()) {
         if (!argv.length) continue;
         write(`step ${index + 1}: ${JSON.stringify(argv)}`);
+        const isWebInstall = argv.some((arg) => arg.endsWith('scripts/install-web.mjs'));
+        const staging = selfDeploy && isWebInstall
+          ? fs.mkdtempSync(path.join(this.config.hubHome, 'web-staging-'))
+          : undefined;
+        if (staging) this.stagedWeb.set(projectId, staging);
         const result = await this.processRunner(argv[0], argv.slice(1), {
           cwd: worktree,
-          env: process.env,
+          env: staging ? { ...process.env, AGENTHUB_WEB_STAGING_DIR: staging } : process.env,
           timeoutMs: definition.timeoutSec * 1000,
         });
         if (result.output) write(result.output.replace(/\n$/, ''));
@@ -481,6 +489,11 @@ export class DeployService {
       write(`deploy failed: ${status.error}`);
       this.eventBus.emit('deploy.failed', undefined, { projectId, commit, logPath, error: status.error, level: 'incident' });
     } finally {
+      const staging = this.stagedWeb.get(projectId);
+      if (staging) {
+        this.stagedWeb.delete(projectId);
+        try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* best effort cleanup */ }
+      }
       this.latest.set(projectId, { ...status });
     }
     return status;
@@ -490,15 +503,34 @@ export class DeployService {
     return isRunningHubCheckout([worktree, project.path], hubPackageRoot);
   }
 
-  private resolveWorktree(project: ProjectRow): string | null {
+  private async resolveWorktree(project: ProjectRow): Promise<string | null> {
     const settings = projectSettings(project);
-    if (settings.integration.enabled) return ensureIntegrationWorktree(project, this.config.hubHome);
+    if (settings.integration.enabled) {
+      const worktree = ensureIntegrationWorktree(project, this.config.hubHome);
+      if (settings.worktree.install !== 'skip') {
+        await ensureIntegrationNodeModules(project, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[deploy] Failed to prepare integration worktree node_modules:`, err);
+        });
+      }
+      return worktree;
+    }
     if (!project.merge) return null;
     try {
       const merge = JSON.parse(project.merge) as { enabled?: boolean; worktrees?: Record<string, string> };
       if (merge.enabled !== true || !merge.worktrees) return null;
       const target = merge.worktrees[project.defaultBranch];
-      return target && path.isAbsolute(target) ? path.resolve(target) : null;
+      if (!target || !path.isAbsolute(target)) return null;
+      const worktree = path.resolve(target);
+      if (settings.worktree.install !== 'skip') {
+        await ensureWorktreeNodeModules(worktree, project.path || undefined, this.config.cacheDir).catch((err) => {
+          console.warn(`[deploy] Failed to prepare legacy worktree node_modules:`, err);
+        });
+      }
+      return worktree;
     } catch { return null; }
   }
 
@@ -521,6 +553,7 @@ export class DeployService {
       await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, Math.max(1, maxWaitMs))));
     }
     this.lastRestartBlockers.delete(status.projectId);
+    this.promoteStagedWeb(status.projectId);
     const command = process.platform === 'darwin' ? (process.env.AGENTHUB_LAUNCHCTL || 'launchctl') : (process.env.AGENTHUB_SYSTEMCTL || 'systemctl');
     const args = process.platform === 'darwin' ? ['kickstart', '-k', `gui/${process.getuid?.() ?? os.userInfo().uid}/dev.agenthub`] : ['--user', 'restart', 'agenthub', '--no-block'];
     const statePath = path.join(this.config.hubHome, 'deploy-restart.json');
@@ -533,6 +566,22 @@ export class DeployService {
       throw error;
     }
     child?.on?.('error', (error) => this.failRestart(status, error, statePath));
+  }
+
+  private promoteStagedWeb(projectId: string): void {
+    const staging = this.stagedWeb.get(projectId);
+    if (!staging || !fs.existsSync(staging)) return;
+    const target = path.join(this.config.hubHome, 'web');
+    const backup = path.join(this.config.hubHome, `web-previous-${process.pid}-${Date.now()}`);
+    try {
+      if (fs.existsSync(target)) fs.renameSync(target, backup);
+      fs.renameSync(staging, target);
+      this.stagedWeb.delete(projectId);
+      fs.rmSync(backup, { recursive: true, force: true });
+    } catch (error) {
+      try { if (!fs.existsSync(target) && fs.existsSync(backup)) fs.renameSync(backup, target); } catch { /* best effort rollback */ }
+      throw error;
+    }
   }
 
   private failRestart(status: DeployStatus, error: unknown, statePath: string): void {

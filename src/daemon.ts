@@ -56,11 +56,14 @@ import { type DiskSpace } from './disk.js';
 import { DeployService } from './deploy.js';
 import { PerfCollector } from './perf.js';
 import { pruneNodeModulesCache } from './cache.js';
+import { cleanupStaleAgentHubTempDirs } from './temp-cleanup.js';
+import { getOrCreateToken } from './auth.js';
 
 export interface DaemonContext {
   config: AgentHubConfig;
   db: ReturnType<typeof openDatabase>;
   projectRepo: ProjectRepo;
+  departmentRepo: DepartmentRepo;
   profileRepo: ProfileRepo;
   quotaMarkRepo: QuotaMarkRepo;
   taskRepo: TaskRepo;
@@ -270,6 +273,7 @@ export function createContext(
     taskRepo,
     turnRepo: brainTurnRepo,
     projectRepo,
+    departmentRepo,
     directiveRepo,
     knowledgeRepo,
   });
@@ -319,13 +323,25 @@ export function createContext(
   service.deployService = deployService;
   scheduler.getEventBus().on('task.review_ready', (taskId, payload) => {
     const data = payload && typeof payload === 'object' ? payload as { reviewChainComplete?: unknown } : {};
-    if (taskId && data.reviewChainComplete === true) void service.autoMergeReviewedTask(taskId);
+    if (taskId && data.reviewChainComplete === true) {
+      // ReviewTask emits this event before it releases its reviewingTasks guard.
+      // Defer the merge so the normal service path can finish first.
+      setImmediate(() => void service.autoMergeReviewedTask(taskId));
+    }
+  });
+  scheduler.getEventBus().on('task.queued', (taskId) => {
+    if (taskId) service.clearFailedAutoMerge(taskId);
   });
   scheduler.getEventBus().on('review.escalated', (taskId, payload) => {
     if (taskId) void service.retryEscalatedReview(taskId, (payload && typeof payload === 'object' ? payload : {}) as { reason?: unknown; feedback?: unknown });
   });
   const perfCollector = new PerfCollector();
   service.setPerfCollector(perfCollector);
+
+  scheduler.getEventBus().on('task.done', (taskId) => {
+    if (taskId) void service.cleanupOrphanedMergeFixTasks(taskId);
+  });
+  void service.cleanupOrphanedMergeFixTasks();
 
   const ciRepo = new CiRepo(db);
   const ciService = new CiWatchService({
@@ -353,6 +369,7 @@ export function createContext(
     eventBus: scheduler.getEventBus(),
     taskRepo,
     projectRepo,
+    departmentRepo,
     profileRepo,
     quotaMarkRepo,
     chatService,
@@ -366,6 +383,7 @@ export function createContext(
     config,
     db,
     projectRepo,
+    departmentRepo,
     profileRepo,
     quotaMarkRepo,
     taskRepo,
@@ -456,6 +474,11 @@ export function closeContext(ctx: DaemonContext): void {
     // ignore
   }
   try {
+    ctx.chatService?.stop();
+  } catch {
+    // ignore
+  }
+  try {
     ctx.db?.close();
   } catch {
     // ignore
@@ -471,6 +494,7 @@ export async function startDaemon(
   shutdown: () => Promise<void>;
 }> {
   const ctx = createContext(config, engineOverrides);
+  let tempCleanupTimer: NodeJS.Timeout | undefined;
 
   // Register profiles on startup
   ctx.profileService.registerAll();
@@ -521,8 +545,19 @@ export async function startDaemon(
 
   const port = config.port;
   try {
-    await fastify.listen({ port, host: '127.0.0.1' });
+    await fastify.listen({ port, host: config.host });
     console.log(`AgentHub daemon running on http://127.0.0.1:${port}`);
+    if (config.host !== '127.0.0.1') {
+      const token = getOrCreateToken(config.tokenPath);
+      const lanUrls = Object.values(os.networkInterfaces())
+        .flatMap((addresses) => addresses || [])
+        .filter((address) => address.family === 'IPv4' && !address.internal)
+        .map((address) => `http://${address.address}:${port}/#token=${token}`);
+      for (const url of lanUrls) console.log(`AgentHub LAN UI URL:\n${url}`);
+    }
+    void cleanupStaleAgentHubTempDirs();
+    tempCleanupTimer = setInterval(() => { void cleanupStaleAgentHubTempDirs(); }, 6 * 60 * 60 * 1000);
+    tempCleanupTimer.unref?.();
   } catch (err) {
     console.error('Failed to start daemon:', err);
     process.exit(1);
@@ -552,6 +587,7 @@ export async function startDaemon(
     } catch (err) {
       console.error('Error during shutdown:', err);
     } finally {
+      if (tempCleanupTimer) clearInterval(tempCleanupTimer);
       clearTimeout(forceTimer);
       const elapsed = Date.now() - startTime;
       console.log(`Shutdown completed in ${elapsed}ms`);

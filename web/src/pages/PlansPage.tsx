@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getBatches,
+  getBatchesPage,
   getBatch,
   getProjects,
   getConfig,
@@ -18,6 +18,7 @@ import { TaskDag } from '../components/dag';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
+import { Pagination } from '../components/ui/Pagination';
 import { Input } from '../components/ui/Input';
 import {
   Layers,
@@ -46,7 +47,7 @@ const BatchStatusBadge: React.FC<{ status: BatchStatus | 'working' | 'completed'
     discarded: 'bg-[color-mix(in_srgb,var(--t-text-3)_15%,transparent)] text-[var(--t-text-3)] border-[color-mix(in_srgb,var(--t-text-3)_30%,transparent)]',
     working: 'bg-[color-mix(in_srgb,var(--t-accent)_15%,transparent)] text-[var(--t-accent)] border-[color-mix(in_srgb,var(--t-accent)_30%,transparent)]',
     completed: 'bg-[color-mix(in_srgb,var(--t-ok)_15%,transparent)] text-[var(--t-ok)] border-[color-mix(in_srgb,var(--t-ok)_30%,transparent)]',
-    failed: 'bg-rose-500/15 text-rose-500 border-rose-500/30',
+    failed: 'bg-[var(--t-crit-bg)] text-[var(--t-crit)] border-[var(--t-crit)]/30',
   }[status];
 
   return (
@@ -63,11 +64,14 @@ export const PlansPage: React.FC = () => {
   const { t, locale } = useLocale();
   const navigate = useNavigate();
   const { batchId } = useParams<{ batchId?: string }>();
+  const [urlParams, setUrlParams] = useSearchParams();
   const queryClient = useQueryClient();
 
   // Filters
   const [filterProject, setFilterProject] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [batchPage, setBatchPage] = useState(Math.max(1, Number(urlParams.get('page') || 1)));
+  const batchPageSize = 20;
 
   // Modals & form state
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -134,14 +138,17 @@ export const PlansPage: React.FC = () => {
     queryFn: getProjects,
   });
 
-  const { data: batches = [], isLoading: isLoadingBatches } = useQuery({
-    queryKey: ['batches', filterProject, filterStatus],
+  const { data: batchesData, isLoading: isLoadingBatches } = useQuery({
+    queryKey: ['batches', filterProject, filterStatus, batchPage],
     queryFn: () =>
-      getBatches({
+      getBatchesPage({
         project: filterProject !== 'all' ? filterProject : undefined,
         status: filterStatus !== 'all' ? filterStatus : undefined,
+        limit: batchPageSize,
+        offset: (batchPage - 1) * batchPageSize,
       }),
   });
+  const batches = batchesData?.items || [];
 
   // Determine active batch ID
   const activeBatchId = useMemo(() => {
@@ -156,6 +163,15 @@ export const PlansPage: React.FC = () => {
       navigate(`/plans/${batches[0].id}`, { replace: true });
     }
   }, [batchId, batches, navigate]);
+  const initialFilters = useRef(true);
+  useEffect(() => {
+    if (initialFilters.current) {
+      initialFilters.current = false;
+      return;
+    }
+    setBatchPage(1);
+    setUrlParams((current) => { current.delete('page'); return current; }, { replace: true });
+  }, [filterProject, filterStatus, setUrlParams]);
 
   // Query active batch detail
   const { data: currentBatch, isLoading: isLoadingBatch } = useQuery({
@@ -490,6 +506,16 @@ export const PlansPage: React.FC = () => {
                 );
               })
             )}
+            {batchesData && <Pagination
+              page={batchPage}
+              pageSize={batchPageSize}
+              total={batchesData.total}
+              onPageChange={(nextPage) => {
+                setBatchPage(nextPage);
+                setUrlParams((current) => { if (nextPage === 1) current.delete('page'); else current.set('page', String(nextPage)); return current; }, { replace: true });
+              }}
+              onPageSizeChange={() => undefined}
+            />}
           </div>
         </div>
 
@@ -630,9 +656,9 @@ export const PlansPage: React.FC = () => {
                     <span>{progress.running} {t('plans.working').toLowerCase()} · {progress.failed} {t('plans.failed').toLowerCase()}</span>
                   </div>
                   <div className="h-2 rounded-full bg-[var(--t-surface-2)] overflow-hidden flex">
-                    {progress.done > 0 && <div className="bg-emerald-500" style={{ width: `${(progress.done / Math.max(progress.total, 1)) * 100}%` }} />}
-                    {progress.running > 0 && <div className="bg-blue-500" style={{ width: `${(progress.running / Math.max(progress.total, 1)) * 100}%` }} />}
-                    {progress.failed > 0 && <div className="bg-rose-500" style={{ width: `${(progress.failed / Math.max(progress.total, 1)) * 100}%` }} />}
+                    {progress.done > 0 && <div className="bg-[var(--t-ok)]" style={{ width: `${(progress.done / Math.max(progress.total, 1)) * 100}%` }} />}
+                    {progress.running > 0 && <div className="bg-[var(--t-info)]" style={{ width: `${(progress.running / Math.max(progress.total, 1)) * 100}%` }} />}
+                    {progress.failed > 0 && <div className="bg-[var(--t-crit)]" style={{ width: `${(progress.failed / Math.max(progress.total, 1)) * 100}%` }} />}
                   </div>
                 </div>
 
@@ -755,8 +781,8 @@ export const PlansPage: React.FC = () => {
                               <span
                                 className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
                                   task.level === 'hard'
-                                    ? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
-                                    : 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+                                    ? 'bg-[var(--t-crit-bg)] text-[var(--t-crit)] border-[var(--t-crit)]/20'
+                                    : 'bg-[var(--t-info-bg)] text-[var(--t-info)] border-[var(--t-info)]/20'
                                 }`}
                               >
                                 {t(`plans.${task.level || 'easy'}`)}
@@ -833,7 +859,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-add-slug"
               value={newSlug}
               onChange={(e) => setNewSlug(e.target.value)}
-              placeholder="e.g. auth-flow"
+              placeholder={t('plans.slugPlaceholder')}
               required
             />
           </div>
@@ -846,7 +872,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-add-title"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
-              placeholder="e.g. Implement authentication flow"
+              placeholder={t('plans.taskTitlePlaceholder')}
               required
             />
           </div>
@@ -874,7 +900,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-add-modelchain"
               value={newModelChain}
               onChange={(e) => setNewModelChain(e.target.value)}
-              placeholder="e.g. agy:claude-sonnet-4-6-thinking, gemini-3.8-flash-high"
+              placeholder={t('plans.modelChainPlaceholder')}
             />
           </div>
 
@@ -1006,7 +1032,7 @@ export const PlansPage: React.FC = () => {
               data-testid="input-edit-modelchain"
               value={editModelChain}
               onChange={(e) => setEditModelChain(e.target.value)}
-              placeholder="e.g. agy:claude-sonnet-4-6-thinking"
+              placeholder={t('plans.modelChainEditPlaceholder')}
             />
           </div>
 

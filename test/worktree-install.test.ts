@@ -33,6 +33,7 @@ describe('settings.worktree.install option', () => {
 
     config = loadConfig(tmpDir);
     config.agyHomesDir = agyHomesDir;
+    config.disk.minFreeGB = 0;
 
     db = openDatabase(config.dbPath);
     projectRepo = new ProjectRepo(db);
@@ -45,7 +46,7 @@ describe('settings.worktree.install option', () => {
 
     projectPath = path.join(tmpDir, 'project');
     fs.mkdirSync(projectPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: projectPath });
+    execFileSync('git', ['init', '--template='], { cwd: projectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
     fs.writeFileSync(path.join(projectPath, 'README.md'), '# Project');
     fs.writeFileSync(path.join(projectPath, 'package.json'), JSON.stringify({ name: 'test' }));

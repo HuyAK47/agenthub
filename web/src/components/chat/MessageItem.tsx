@@ -19,7 +19,7 @@ function highlightedCode(code: string, language: string) {
     const isComment = /^\/\//.test(part) || (language === 'python' && /^#/.test(part));
     const isString = /^("|')/.test(part);
     const isKeyword = /^(const|let|var|function|return|if|else|for|while|class|import|from|export|async|await|true|false|null)$/.test(part);
-    return <span key={`${index}-${part}`} className={isComment ? 'text-emerald-400' : isString ? 'text-amber-300' : isKeyword ? 'text-sky-300' : undefined}>{part}</span>;
+    return <span key={`${index}-${part}`} className={isComment ? 'text-[var(--t-ok)]' : isString ? 'text-[var(--t-warn)]' : isKeyword ? 'text-[var(--t-accent)]' : undefined}>{part}</span>;
   });
 }
 
@@ -40,15 +40,15 @@ function CodeBlock({ children, className }: { children: any; className?: string 
   };
 
   return (
-    <div className="relative group my-3 rounded-lg overflow-hidden border border-[var(--border-default)] bg-[var(--t-bg)]">
+    <div className="relative group my-3 rounded-lg overflow-hidden border border-[var(--t-border)] bg-[var(--t-bg)]">
       {/* Code Header */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--t-bg)] text-xs text-[var(--t-text-3)] border-b border-[var(--border-default)] font-mono">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--t-bg)] text-xs text-[var(--t-text-3)] border-b border-[var(--t-border)] font-mono">
         <span>{match ? match[1] : 'code'}</span>
         <button
           type="button"
           onClick={handleCopy}
           aria-label={copied ? t('extra.copied') : t('extra.copy')}
-          className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
+          className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] hover:text-[var(--t-text)] hover:bg-[var(--t-hover)] transition-colors cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
         >
           {copied ? (
             <>
@@ -71,15 +71,15 @@ function CodeBlock({ children, className }: { children: any; className?: string 
   );
 }
 
-function formatDuration(durationMs: number, secondLabel = 'seconds'): string {
+function formatDuration(durationMs: number, secondLabel = 'seconds', locale: 'vi' | 'en' = 'vi'): string {
   const sec = durationMs / 1000;
-  return sec.toLocaleString('vi-VN', { maximumFractionDigits: 1 }) + ` ${secondLabel}`;
+  return sec.toLocaleString(locale === 'vi' ? 'vi-VN' : 'en-US', { maximumFractionDigits: 1 }) + ` ${secondLabel}`;
 }
 
-function formatStats(meta: ChatMessage['meta'] | undefined, secondLabel: string, turnLabel: string): string | null {
+function formatStats(meta: ChatMessage['meta'] | undefined, secondLabel: string, turnLabel: string, locale: 'vi' | 'en' = 'vi'): string | null {
   if (!meta || meta.durationMs === undefined) return null;
   const parts: string[] = [];
-  parts.push(formatDuration(meta.durationMs, secondLabel));
+  parts.push(formatDuration(meta.durationMs, secondLabel, locale));
   if (meta.numTurns !== undefined) {
     parts.push(`${meta.numTurns} ${turnLabel}`);
   }
@@ -92,17 +92,17 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onRetry,
   onEdit,
 }) => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
 
   // User message
   if (message.role === 'user') {
     return (
       <div className="group flex justify-end my-3 items-end gap-2">
         <div className="hidden group-hover:flex items-center gap-1">
-          <button type="button" onClick={() => navigator.clipboard?.writeText(message.content)} aria-label={t('extra.copy')} className="p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)]"><Copy className="w-3.5 h-3.5" /></button>
-          {onEdit && <button type="button" onClick={onEdit} aria-label={t('extra.editMessage')} className="p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)]">✎</button>}
+          <button type="button" onClick={() => navigator.clipboard?.writeText(message.content)} aria-label={t('extra.copy')} className="p-1 text-[var(--t-text-3)] hover:text-[var(--t-text)]"><Copy className="w-3.5 h-3.5" /></button>
+          {onEdit && <button type="button" onClick={onEdit} aria-label={t('extra.editMessage')} className="p-1 text-[var(--t-text-3)] hover:text-[var(--t-text)]">✎</button>}
         </div>
-        <div className="max-w-2xl px-4 py-2.5 rounded-2xl rounded-tr-xs bg-[var(--t-accent)] text-white text-sm shadow-xs whitespace-pre-wrap break-words leading-relaxed">
+        <div className="max-w-2xl px-4 py-2.5 rounded-2xl rounded-tr-xs bg-[var(--t-accent)] text-[var(--t-on-accent)] text-sm shadow-xs whitespace-pre-wrap break-words leading-relaxed">
           {message.content}
         </div>
       </div>
@@ -113,7 +113,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   if (message.role === 'system') {
     return (
       <div className="flex justify-center my-3" data-testid="system-message">
-        <div className="px-3.5 py-1.5 rounded-full bg-[var(--bg-surface-subtle)] border border-[var(--border-default)] text-[var(--text-secondary)] text-xs font-medium shadow-xs text-center">
+        <div className="px-3.5 py-1.5 rounded-full bg-[var(--t-surface-2)] border border-[var(--t-border)] text-[var(--t-text-2)] text-xs font-medium shadow-xs text-center">
           {message.content}
         </div>
       </div>
@@ -133,7 +133,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <div className="whitespace-pre-wrap break-words">{message.content}</div>
             {onRetry && (
               <button type="button" onClick={onRetry} className="text-xs underline font-semibold cursor-pointer">
-                {t('extra.retry') === 'extra.retry' ? 'Thử lại' : t('extra.retry')}
+                {t('extra.retry')}
               </button>
             )}
           </div>
@@ -143,13 +143,13 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }
 
   // Assistant message
-  const statsText = formatStats(message.meta, t('extra.seconds'), t('extra.turns'));
+  const statsText = formatStats(message.meta, t('extra.seconds'), t('extra.turns'), locale);
 
   return (
     <div className="flex gap-3 my-3">
       {/* Claude Avatar */}
       <div
-        className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-xs mt-0.5"
+        className="w-7 h-7 rounded-full flex items-center justify-center text-[var(--t-on-accent)] font-bold text-xs shrink-0 shadow-xs mt-0.5"
         style={{ backgroundColor: 'var(--t-claude)' }}
       >
         C
@@ -160,7 +160,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         className="flex-1 min-w-0 space-y-2"
         aria-live={isStreaming ? 'polite' : undefined}
       >
-        <div className="text-sm text-[var(--text-primary)] leading-relaxed space-y-2 markdown-body overflow-hidden break-words">
+        <div className="text-sm text-[var(--t-text)] leading-relaxed space-y-2 markdown-body overflow-hidden break-words">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
@@ -174,7 +174,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                 if (inline) {
                   return (
                     <code
-                      className="px-1.5 py-0.5 rounded bg-[var(--bg-surface-subtle)] text-[var(--text-primary)] font-mono text-xs border border-[var(--border-subtle)]"
+                      className="px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] font-mono text-xs border border-[var(--t-border)]"
                       {...props}
                     >
                       {children}
@@ -194,7 +194,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
         {/* Turn stats (duration, turns) */}
         {statsText && (
-          <div className="text-[11px] text-[var(--text-secondary)] font-mono">
+          <div className="text-[11px] text-[var(--t-text-2)] font-mono">
             {statsText}
           </div>
         )}

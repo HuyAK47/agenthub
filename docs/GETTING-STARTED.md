@@ -33,6 +33,16 @@ AgentHub chạy trên máy của bạn. Nó chia việc lập trình cho các wo
 | **Claude Code** | Bắt buộc nếu muốn để Claude điều phối (cài extension Claude Code cho VS Code, hoặc CLI `claude`). |
 | **Tài nguyên máy** | Mỗi worker có thể build/test nặng. Tham khảo: máy 12 nhân / 15 GB RAM chạy ổn ~4 worker song song. |
 
+### Cài Antigravity CLI (`agy`)
+
+Trong trang **Thiết lập**, bấm **Cài đặt** ở dòng Antigravity CLI để chạy bộ cài chính thức. AgentHub hiển thị log và kiểm tra lại binary sau khi chạy:
+
+```sh
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+Nếu cài xong nhưng AgentHub vẫn báo thiếu `agy`, daemon có thể có PATH khác shell tương tác. Đặt đường dẫn tuyệt đối bằng `AGENTHUB_AGY_BIN=/đường/dẫn/agy` rồi khởi động lại daemon. AgentHub tự dò PATH, `~/.local/bin/agy` và `~/.gemini/bin/agy`; log ở `~/.agenthub/logs/setup-agy.log`.
+
 ## 2. Cài đặt
 
 Cách cài đặt một lệnh (hãy đọc script trước khi chạy):
@@ -168,7 +178,9 @@ Trong AgentHub, một **project** là một git repository trên máy của bạ
 
 1. **Chuẩn bị repo**: Clone repo về máy (nếu chưa có). Đảm bảo repo đã được khởi tạo git và có nhánh mặc định (như `main`).
 2. **Đăng ký project vào hub**:
-   - **Trên Web Dashboard**: Truy cập trang **Thiết lập** (Setup) và bấm nút **"Thêm dự án"**, hoặc vào trang **Projects** bấm **"Đăng ký Project"** (hoặc mở trực tiếp đường dẫn `/projects?new=1`). Điền tên gợi nhớ và đường dẫn tuyệt đối tới thư mục repo git.
+   - **Đưa dự án có sẵn vào hub**: Truy cập trang **Projects**, mở **Trình hướng dẫn đăng ký**, chọn **Repo có sẵn trên máy**, nhập đường dẫn tuyệt đối rồi để AgentHub dò nhánh, lockfile, hooks, ngôn ngữ, tài liệu hướng dẫn và các phiên Claude Code cũ. Kiểm tra các gợi ý trước khi tạo; phần **Nâng cao** vẫn cho phép điền tay.
+   - **Tạo dự án mới**: Trong cùng trình hướng dẫn, chọn **Dự án mới**. AgentHub sẽ tạo thư mục mới, chạy `git init`, tạo commit rỗng và nhánh mặc định ngay trên máy trước khi đăng ký project.
+   - Luôn kiểm tra đường dẫn và nhánh gốc. Nhánh tích hợp (nếu bật) chỉ được hub merge local, không bao giờ tự push.
    - **Hoặc qua CLI**:
      ```bash
      agenthub project add <tên> /đường/dẫn/tuyệt/đối/tới/repo
@@ -388,6 +400,17 @@ Khi tài khoản Claude chính gặp giới hạn tốc độ (rate limit / HTTP
 }
 ```
 
+Để xem dashboard từ thiết bị trong LAN, có thể cấu hình bind address và các hostname/IP được phép:
+
+```json
+{
+  "host": "0.0.0.0",
+  "allowedHosts": ["192.168.111.15"]
+}
+```
+
+Hai biến môi trường tương ứng là `AGENTHUB_HOST` và `AGENTHUB_ALLOWED_HOSTS` (phân tách bằng dấu phẩy). Mặc định daemon chỉ bind `127.0.0.1`; chỉ bật LAN khi cần, khai báo địa chỉ cụ thể và không chia sẻ bearer token.
+
 Bạn cũng có thể xem trạng thái bước fallback hiện tại, chi phí tiêu thụ trong ngày và cấu hình trực quan trên trang **Settings** của Web Dashboard.
 
 ## 10. Vòng đời một task
@@ -468,6 +491,17 @@ Các bước deploy chỉ được khai báo trong `~/.agenthub/config.json`, kh
 ```
 
 Mỗi bước chạy bằng argv trong worktree tích hợp, có log tại `~/.agenthub/logs/deploy/<project>/<time>.log`. `push` mặc định tắt; khi bật chỉ fast-forward.
+
+### Worktree tích hợp cho merge và deploy
+
+AgentHub hỗ trợ hai cách cấu hình worktree tích hợp:
+1. **Worktree tự quản lý (`settings.integration.enabled = true`)** (khuyến nghị):
+   - Nằm tại `<worktree.root>/.integration` (nếu dự án cấu hình `settings.worktree.root`) hoặc `~/.agenthub/integration/<projectId>`, checkout nhánh `settings.integration.branch` (mặc định `agenthub/integration`).
+   - Được dùng cho cả merge tự động (`mergeTaskIntoBase`), chạy merge-checks và tự động triển khai sau merge (self-deploy).
+   - AgentHub tự động quản lý vòng đời và áp dụng cùng chính sách cài đặt dependency như worktree của task (`worktree.install`: `auto` dùng cache/symlink hoặc `npm ci`). Nếu `package-lock.json` hoặc file lock thay đổi sau commit merge, hub tự động cài đặt lại dependency trước khi chạy merge-check.
+2. **Worktree khai báo thủ công (`project.merge.worktrees`)** (legacy):
+   - Khai báo đường dẫn tuyệt đối cho từng baseRef trong cấu hình merge của project.
+   - Chỉ áp dụng khi `settings.integration.enabled = false`. Khi bật `settings.integration.enabled = true`, hub ưu tiên worktree tự quản lý và bỏ qua cấu hình legacy này.
 
 Để tránh gây quá tải cho CI khi merge liên tục, hub hỗ trợ **gom lượt push** bằng tuỳ chọn `minIntervalMin` (mặc định 30 phút):
 - Sau mỗi lượt deploy thành công, hub chỉ push nếu khoảng cách từ lần push trước đó ≥ `minIntervalMin`.

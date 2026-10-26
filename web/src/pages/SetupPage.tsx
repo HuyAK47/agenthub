@@ -85,6 +85,12 @@ export const SetupCheckRow: React.FC<SetupCheckRowProps> = ({
               </a>
             </div>
           )}
+          {item.key === 'agy' && !item.ok && (
+            <div className="mt-2 rounded-lg border border-[var(--t-warn)]/30 bg-[var(--t-warn)]/10 p-2.5 text-xs text-[var(--t-text)]">
+              <div>{t('setup.agyManualHint')}</div>
+              <code className="mt-1 block select-text break-all font-mono">curl -fsSL https://antigravity.google/cli/install.sh | bash</code>
+            </div>
+          )}
         </div>
       </div>
 
@@ -222,7 +228,7 @@ export const SetupActions: React.FC<SetupActionsProps> = ({
 export const SetupPage: React.FC = () => {
   const { t } = useLocale();
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['setup-status'],
     queryFn: getSetupStatus,
     refetchInterval: 3000,
@@ -233,6 +239,7 @@ export const SetupPage: React.FC = () => {
   });
 
   const [logs, setLogs] = useState<Record<string, string>>({});
+  const [installErrors, setInstallErrors] = useState<Record<string, string>>({});
   const [installingTool, setInstallingTool] = useState<string | null>(null);
   const [installResult, setInstallResult] = useState<Record<string, boolean>>({});
 
@@ -258,6 +265,7 @@ export const SetupPage: React.FC = () => {
       }
       if (event.type === 'setup.install_done') {
         setInstallResult((old) => ({ ...old, [tool]: Boolean(event.payload.ok) }));
+        if (event.payload.error) setInstallErrors((old) => ({ ...old, [tool]: String(event.payload.error) }));
         queryClient.invalidateQueries({ queryKey: ['setup-status'] });
       }
     });
@@ -268,8 +276,10 @@ export const SetupPage: React.FC = () => {
   }, [data]);
 
   const installOne = async (tool: string) => {
+    if (tool === 'agy' && typeof window !== 'undefined' && !window.confirm(t('setup.agyInstallConfirm'))) return;
     setInstallingTool(tool);
     setLogs((old) => ({ ...old, [tool]: '' }));
+    setInstallErrors((old) => ({ ...old, [tool]: '' }));
     let stop: (() => void) | undefined;
     const completed = new Promise<void>((resolve) => {
       const unsubscribe = subscribeToEvents((event) => {
@@ -384,7 +394,7 @@ export const SetupPage: React.FC = () => {
         action: projects.length < 1 ? (
           <Link
             to="/projects?new=1"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold cursor-pointer"
           >
             <span>{t('setup.addProject')}</span>
           </Link>
@@ -397,11 +407,23 @@ export const SetupPage: React.FC = () => {
     return checks.filter((c) => c.ok).length;
   }, [checks]);
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center p-12 text-[var(--t-text-3)] text-sm">
         <Loader2 className="w-5 h-5 animate-spin mr-2" />
         <span>{t('setup.loading')}</span>
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <div className="p-8 text-center space-y-4 max-w-md mx-auto">
+        <AlertCircle className="w-8 h-8 text-[var(--t-crit)] mx-auto" />
+        <p className="text-sm text-[var(--t-text)]">{t('setup.loadError')}</p>
+        <Button variant="secondary" onClick={() => refetch()}>
+          {t('common.retry')}
+        </Button>
       </div>
     );
   }
@@ -458,7 +480,7 @@ export const SetupPage: React.FC = () => {
               key={item.key}
               item={item}
               result={installResult[item.key]}
-              log={logs[item.key]}
+              log={installErrors[item.key] ? `${installErrors[item.key]}\n\n${logs[item.key] || ''}` : logs[item.key]}
             />
           ))}
         </div>

@@ -86,10 +86,10 @@ describe('LoginTerminal', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  const renderIt = (onClose = vi.fn()) =>
+  const renderIt = (onClose = vi.fn(), onReconnect?: () => Promise<string>) =>
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <LoginTerminal profileName="g3" sessionId="s1" onClose={onClose} />
+        <LoginTerminal profileName="g3" sessionId="s1" onClose={onClose} onReconnect={onReconnect} />
       </QueryClientProvider>,
     );
 
@@ -174,5 +174,16 @@ describe('LoginTerminal', () => {
     fireEvent.keyDown(closeBtn, { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
     expect(FakeWS.last.sent).toContain(JSON.stringify({ type: 'input', data: '\x03' }));
+  });
+
+  it('hiện lỗi reconnect và cho thử lại khi callback thất bại', async () => {
+    const onReconnect = vi.fn().mockRejectedValue(new Error('agy không khả dụng'));
+    renderIt(vi.fn(), onReconnect);
+    act(() => FakeWS.last.onerror?.());
+    const button = screen.getByRole('button', { name: 'Kết nối lại' });
+    await act(async () => { fireEvent.click(button); });
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('agy không khả dụng')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Kết nối lại' })).toBeInTheDocument();
   });
 });

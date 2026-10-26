@@ -1,13 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { cmdRollback, cmdSetup } from '../src/cli.js';
+import { makeTestTempDir } from './temp.js';
+import { prepareMacosNativeBinaries } from '../scripts/package-native.mjs';
 
 const installer = path.resolve('scripts/install.sh');
+const tempDirs: string[] = [];
+
+function makeTemp(prefix: string) {
+  const dir = makeTestTempDir(prefix);
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(command, args, { env: { ...process.env, ...env }, encoding: 'utf8' });
@@ -27,7 +41,7 @@ type ReleaseOptions = {
 function makeRelease(base: string, version: string, options: ReleaseOptions | boolean = {}) {
   const normalized = typeof options === 'boolean' ? { checksum: options } : options;
   const releaseDir = path.join(base, 'releases', 'download', `v${version}`);
-  const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-fixture-'));
+  const staging = makeTestTempDir('agenthub-release-fixture-');
   fs.mkdirSync(path.join(staging, 'bin'), { recursive: true });
   fs.writeFileSync(path.join(staging, 'package.json'), JSON.stringify({ name: 'agenthub', version }));
   fs.writeFileSync(path.join(staging, 'package-lock.json'), JSON.stringify({
@@ -42,8 +56,18 @@ case "${'${1:-}'}" in
     ln -sfn "${'${0}'}.target" "${'${AGENTHUB_LINK_DIR:-$HOME/.local/bin}'}/agenthub"
     ;;
   install-service)
-    mkdir -p "${'${HOME}'}/.config/systemd/user"
-    printf 'ExecStart=%s\n' "${'${0}'}" > "${'${HOME}'}/.config/systemd/user/agenthub.service"
+    case "$(uname -s)" in
+      Darwin*)
+        plist="${'${HOME}'}/Library/LaunchAgents/dev.agenthub.plist"
+        mkdir -p "$(dirname "$plist")"
+        printf '<plist><dict><key>Label</key><string>dev.agenthub</string></dict></plist>\n' > "$plist"
+        "${'${AGENTHUB_LAUNCHCTL:-launchctl}'}" bootstrap "gui/$(id -u)" "$plist"
+        ;;
+      *)
+        mkdir -p "${'${HOME}'}/.config/systemd/user"
+        printf 'ExecStart=%s\n' "${'${0}'}" > "${'${HOME}'}/.config/systemd/user/agenthub.service"
+        ;;
+    esac
     ${normalized.serviceFails ? 'exit 1' : ':'}
     ;;
   setup)
@@ -67,9 +91,21 @@ exit 0
 }
 
 describe('release packaging and installation', () => {
+  it('makes macOS node-pty spawn-helper executable without requiring a macOS host', () => {
+    const staging = makeTemp('agenthub-package-macos-native-');
+    const helper = path.join(staging, 'node_modules', 'node-pty', 'build', 'Release', 'spawn-helper');
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(helper, '#!/bin/sh\n');
+    fs.chmodSync(helper, 0o644);
+
+    prepareMacosNativeBinaries(staging, 'darwin');
+
+    expect(fs.statSync(helper).mode & 0o777).toBe(0o755);
+  });
+
   it('creates a complete archive without development or local state files', () => {
     const dist = path.resolve('dist');
-    const backup = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-dist-backup-'));
+    const backup = makeTestTempDir('agenthub-dist-backup-');
     if (fs.existsSync(dist)) fs.cpSync(dist, path.join(backup, 'dist'), { recursive: true });
     try {
       const result = run('npm', ['run', 'package']);
@@ -95,7 +131,7 @@ describe('release packaging and installation', () => {
   });
 
   it('rejects a bad checksum without changing current and keeps two old releases', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-install-'));
+    const home = makeTemp('agenthub-release-install-');
     const base = path.join(home, 'fake-release');
     const app = path.join(home, 'app');
     const fakeSystemctl = path.join(home, 'systemctl');
@@ -129,8 +165,95 @@ describe('release packaging and installation', () => {
     expect(fs.existsSync(path.join(app, '3.0.0'))).toBe(true);
   });
 
-  it('rolls back current, cli link, and service when install-service fails', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-service-rollback-'));
+  it('installs a macOS release through launchctl shims without host Node or git', () => {
+    const home = makeTemp('agenthub-release-darwin-shim-');
+    const base = path.join(home, 'fake-release');
+    const app = path.join(home, 'app');
+    const linkDir = path.join(home, 'links');
+    const shimBin = path.join(home, 'shim-bin');
+    const launchctlLog = path.join(home, 'launchctl.log');
+    fs.mkdirSync(shimBin, { recursive: true });
+    fs.writeFileSync(path.join(shimBin, 'uname'), '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(shimBin, 'node'), '#!/bin/sh\ncase "$1" in -p) echo 22 ;; *) exit 0 ;; esac\n', { mode: 0o755 });
+    const fakeLaunchctl = path.join(shimBin, 'launchctl');
+    fs.writeFileSync(fakeLaunchctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${launchctlLog}'\n`, { mode: 0o755 });
+    makeRelease(base, '1.0.0');
+    const releaseDir = path.join(base, 'releases', 'download', 'v1.0.0');
+    const archive = path.join(releaseDir, `agenthub-1.0.0-${PLATFORM_ARCH}.tar.gz`);
+    const macArchive = path.join(releaseDir, 'agenthub-1.0.0-macos-arm64.tar.gz');
+    if (archive !== macArchive) {
+      fs.renameSync(archive, macArchive);
+    }
+    fs.writeFileSync(releaseDir + '/SHA256SUMS', `${crypto.createHash('sha256').update(fs.readFileSync(macArchive)).digest('hex')}  ${path.basename(macArchive)}\n`);
+
+    const result = run('/bin/sh', [installer, '--from-release', '1.0.0'], {
+      HOME: home,
+      PATH: `${shimBin}:/usr/bin:/bin`,
+      AGENTHUB_DIR: app,
+      AGENTHUB_HOME: path.join(home, 'data'),
+      AGENTHUB_LINK_DIR: linkDir,
+      AGENTHUB_RELEASE_BASE: base,
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
+      AGENTHUB_NO_BROWSER: '1',
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.existsSync(path.join(home, 'Library', 'LaunchAgents', 'dev.agenthub.plist'))).toBe(true);
+    expect(fs.readFileSync(launchctlLog, 'utf8')).toContain('bootstrap gui/');
+    expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.0.0');
+  });
+
+  it('rolls back a failed Darwin service update and restores the previous plist', () => {
+    const home = makeTemp('agenthub-release-darwin-rollback-');
+    const base = path.join(home, 'fake-release');
+    const app = path.join(home, 'app');
+    const linkDir = path.join(home, 'links');
+    const shimBin = path.join(home, 'shim-bin');
+    const launchctlLog = path.join(home, 'launchctl.log');
+    fs.mkdirSync(shimBin, { recursive: true });
+    fs.writeFileSync(path.join(shimBin, 'uname'), '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(shimBin, 'node'), '#!/bin/sh\ncase "$1" in -p) echo 22 ;; *) exit 0 ;; esac\n', { mode: 0o755 });
+    const fakeLaunchctl = path.join(shimBin, 'launchctl');
+    fs.writeFileSync(fakeLaunchctl, `#!/bin/sh
+printf '%s\n' "$*" >> '${launchctlLog}'
+` , { mode: 0o755 });
+    for (const [version, options] of [['1.0.0', {}], ['2.0.0', { serviceFails: true }]] as const) {
+      makeRelease(base, version, options);
+      const releaseDir = path.join(base, 'releases', 'download', `v${version}`);
+      const archive = path.join(releaseDir, `agenthub-${version}-${PLATFORM_ARCH}.tar.gz`);
+      const macArchive = path.join(releaseDir, `agenthub-${version}-macos-arm64.tar.gz`);
+      if (archive !== macArchive) {
+        fs.renameSync(archive, macArchive);
+      }
+      fs.writeFileSync(path.join(releaseDir, 'SHA256SUMS'), `${crypto.createHash('sha256').update(fs.readFileSync(macArchive)).digest('hex')}  ${path.basename(macArchive)}\n`);
+    }
+    const env = {
+      HOME: home,
+      PATH: `${shimBin}:/usr/bin:/bin`,
+      AGENTHUB_DIR: app,
+      AGENTHUB_HOME: path.join(home, 'data'),
+      AGENTHUB_LINK_DIR: linkDir,
+      AGENTHUB_RELEASE_BASE: base,
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
+      AGENTHUB_NO_BROWSER: '1',
+    };
+
+    expect(run('/bin/sh', [installer, '--from-release', '1.0.0'], env).status).toBe(0);
+    const plist = path.join(home, 'Library', 'LaunchAgents', 'dev.agenthub.plist');
+    const oldPlist = fs.readFileSync(plist, 'utf8');
+    const failed = run('/bin/sh', [installer, '--from-release', '2.0.0'], env);
+
+    expect(failed.status).not.toBe(0);
+    expect(fs.readFileSync(plist, 'utf8')).toBe(oldPlist);
+    expect(fs.readlinkSync(path.join(app, 'current'))).toBe('1.0.0');
+    expect(fs.readFileSync(launchctlLog, 'utf8')).toContain('bootout gui/');
+    expect(failed.stderr).toContain('Đã hoàn tác về bản trước');
+  });
+
+  it.skipIf(process.platform === 'darwin')('rolls back current, cli link, and service when install-service fails', () => {
+    // Skipped on Darwin: install-service installs systemd on Linux and launchctl on Darwin;
+    // Darwin service rollback is tested in the previous test case.
+    const home = makeTemp('agenthub-release-service-rollback-');
     const base = path.join(home, 'fake-release');
     const app = path.join(home, 'app');
     const linkDir = path.join(home, 'links');
@@ -166,15 +289,18 @@ printf '%s\n' "$*" >> '${systemctlLog}'
   });
 
   it('keeps the running release intact when reinstalling the same version fails in setup', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-same-version-'));
+    const home = makeTemp('agenthub-release-same-version-');
     const base = path.join(home, 'fake-release');
     const app = path.join(home, 'app');
+    const fakeLaunchctl = path.join(home, 'fake-launchctl');
+    fs.writeFileSync(fakeLaunchctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const env = {
       HOME: home,
       AGENTHUB_DIR: app,
       AGENTHUB_HOME: path.join(home, 'data'),
       AGENTHUB_RELEASE_BASE: base,
       AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
     };
     makeRelease(base, '1.0.0');
     expect(run('/bin/sh', [installer, '--from-release', '1.0.0'], env).status).toBe(0);
@@ -192,15 +318,18 @@ printf '%s\n' "$*" >> '${systemctlLog}'
   });
 
   it('rejects a broken native file before switching current and identifies the file', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-native-'));
+    const home = makeTemp('agenthub-release-native-');
     const base = path.join(home, 'fake-release');
     const app = path.join(home, 'app');
+    const fakeLaunchctl = path.join(home, 'fake-launchctl');
+    fs.writeFileSync(fakeLaunchctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const env = {
       HOME: home,
       AGENTHUB_DIR: app,
       AGENTHUB_HOME: path.join(home, 'data'),
       AGENTHUB_RELEASE_BASE: base,
       AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
     };
     makeRelease(base, '1.0.0');
     makeRelease(base, '2.0.0', { brokenNative: true });
@@ -216,7 +345,7 @@ printf '%s\n' "$*" >> '${systemctlLog}'
   });
 
   it.each(['', '../x', '1.0;rm'])('rejects invalid release version %j before creating app paths', (version) => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-release-invalid-'));
+    const home = makeTemp('agenthub-release-invalid-');
     const app = path.join(home, 'app');
     const result = run('/bin/sh', [installer, '--from-release', version], { HOME: home, AGENTHUB_DIR: app, AGENTHUB_HOME: path.join(home, 'data') });
     expect(result.status).not.toBe(0);
@@ -226,7 +355,7 @@ printf '%s\n' "$*" >> '${systemctlLog}'
 
 describe('setup in worker mode', () => {
   it('creates the token but does not install a service', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-setup-'));
+    const home = makeTemp('agenthub-setup-');
     const previous = { HOME: process.env.HOME, AGENTHUB_HOME: process.env.AGENTHUB_HOME, AGENTHUB_WORKER: process.env.AGENTHUB_WORKER };
     process.env.HOME = home;
     process.env.AGENTHUB_HOME = path.join(home, 'data');
@@ -247,7 +376,7 @@ describe('setup in worker mode', () => {
 
 describe('release rollback', () => {
   it('switches current to a requested or previous release and rejects missing history', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-rollback-'));
+    const home = makeTemp('agenthub-rollback-');
     const app = path.join(home, 'app');
     const fakeSystemctl = path.join(home, 'systemctl');
     fs.writeFileSync(fakeSystemctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -282,7 +411,7 @@ describe('release rollback', () => {
       else process.env.AGENTHUB_LAUNCHCTL = previous.AGENTHUB_LAUNCHCTL;
     }
 
-    const onlyCurrent = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-rollback-empty-'));
+    const onlyCurrent = makeTemp('agenthub-rollback-empty-');
     fs.mkdirSync(path.join(onlyCurrent, '1.0.0'), { recursive: true });
     fs.writeFileSync(path.join(onlyCurrent, '1.0.0', 'package.json'), JSON.stringify({ version: '1.0.0' }));
     fs.symlinkSync('1.0.0', path.join(onlyCurrent, 'current'));

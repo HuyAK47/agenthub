@@ -137,4 +137,38 @@ describe('database migrations', () => {
 
     db.close();
   });
+
+  it('migration 56 keeps the schema 55 task column order and preserves rows', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-migration-56-order-test-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'hub.db');
+    const oldDb = new Database(dbPath);
+    for (let version = 0; version <= 55; version += 1) {
+      oldDb.exec(MIGRATIONS[version]);
+      oldDb.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(version));
+      if (version === 0) {
+        oldDb.prepare('INSERT INTO projects (id, name, path) VALUES (?, ?, ?)').run('p', 'Project', dir);
+      }
+    }
+    oldDb.prepare(`
+      INSERT INTO tasks (id, projectId, slug, title, externalRef, body, level, status, waitReason)
+      VALUES ('p/task', 'p', 'task', 'Title', 'ref-1', 'body', 'hard', 'queued', 'focus')
+    `).run();
+    oldDb.close();
+
+    const migrated = openDatabase(dbPath);
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-migration-56-fresh-test-'));
+    tempDirs.push(freshDir);
+    const fresh = openDatabase(path.join(freshDir, 'hub.db'));
+    const columns = (db: Database.Database) =>
+      (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map((column) => column.name);
+
+    expect(columns(migrated)).toEqual(columns(fresh));
+    expect(migrated.prepare('SELECT id, externalRef, body, level, waitReason FROM tasks').get()).toEqual({
+      id: 'p/task', externalRef: 'ref-1', body: 'body', level: 'hard', waitReason: 'focus',
+    });
+    expect(migrated.prepare("SELECT value FROM meta WHERE key = 'schema_version'").pluck().get()).toBe('57');
+    migrated.close();
+    fresh.close();
+  });
 });

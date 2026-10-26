@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { QueryClientContext, useQuery } from '@tanstack/react-query';
+import { QueryClientContext, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
 import { VersionBanner } from './VersionBanner';
 import { subscribeConnectionState } from '../api/sse';
-import { getBatches } from '../api/client';
+import { getBatches, getStatus, setFocus } from '../api/client';
 import { useBranding } from '../context/BrandingContext';
 import {
   Activity,
@@ -54,6 +54,30 @@ const PlansBadge: React.FC = () => {
   return <PlansBadgeInner />;
 };
 
+const FocusBannerInner: React.FC = () => {
+  const { t } = useLocale();
+  const queryClient = useQueryClient();
+  const { data: status } = useQuery({ queryKey: ['status'], queryFn: getStatus, staleTime: 2000 });
+  const clearFocus = useMutation({
+    mutationFn: () => setFocus(null),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['status'] }),
+  });
+  if (!status?.focus?.projectId) return null;
+  const waitingCount = status.tasks.focusWaiting ?? 0;
+  return (
+    <div className="flex items-center justify-between gap-3 px-6 py-2 text-sm bg-[var(--t-selected)] border-b border-[var(--t-accent)]/30">
+      <span>🎯 {t('common.focusBanner', { project: status.focus.projectId, count: waitingCount })}</span>
+      <button type="button" className="underline" onClick={() => clearFocus.mutate()} disabled={clearFocus.isPending}>{t('common.stopFocus')}</button>
+    </div>
+  );
+};
+
+const FocusBanner: React.FC = () => {
+  const client = React.useContext(QueryClientContext);
+  if (!client) return null;
+  return <FocusBannerInner />;
+};
+
 export const Layout: React.FC = () => {
   const { mode, setMode } = useTheme();
   const { t, toggleLocale, locale } = useLocale();
@@ -88,7 +112,7 @@ export const Layout: React.FC = () => {
     { to: '/', label: t('common.dashboard'), icon: Activity },
     { to: '/chat', label: 'Chat', icon: MessageSquare },
     { to: '/plans', label: t('common.plans'), icon: Layers },
-    { to: '/tasks', label: 'Task', icon: CheckSquare },
+    { to: '/tasks', label: t('common.tasks'), icon: CheckSquare },
     { to: '/savings', label: t('extra.pageSavings'), icon: TrendingUp },
     { to: '/profiles', label: t('common.profiles'), icon: Users },
     { to: '/projects', label: t('common.projects'), icon: FolderGit2 },
@@ -145,7 +169,7 @@ export const Layout: React.FC = () => {
             aria-label={branding.name}
             className="flex items-center gap-3 overflow-hidden rounded-lg focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--t-surface)]"
           >
-            <div className="w-8 h-8 rounded-lg bg-[var(--t-accent)] flex items-center justify-center text-white shrink-0 shadow-xs">
+            <div className="w-8 h-8 rounded-lg bg-[var(--t-accent)] flex items-center justify-center text-[var(--t-on-accent)] shrink-0 shadow-xs">
               {branding.logo ? <img src={`/api/branding/logo?v=${branding.logoVersion ?? encodeURIComponent(branding.logo)}`} alt="" className="w-full h-full rounded-lg object-contain" /> : <Bot size={18} />}
             </div>
             <span className="font-bold text-base tracking-tight text-[var(--t-text)] max-[1100px]:hidden truncate">
@@ -187,6 +211,7 @@ export const Layout: React.FC = () => {
       {/* Main Content Area */}
       <div className="flex-1 min-w-0 flex flex-col">
         <VersionBanner />
+        <FocusBanner />
 
         {/* Header 56px */}
         <header className="h-[56px] sticky top-0 z-20 bg-[var(--t-surface)]/90 backdrop-blur border-b border-[var(--t-border)] px-6 flex items-center justify-between gap-4">

@@ -16,6 +16,7 @@ let ctx: ReturnType<typeof createContext>;
 let server: ReturnType<typeof createServer>;
 let token: string;
 let fakeEngine: FakeEngine;
+let previousHome: string | undefined;
 
 function authHeaders() {
   return {
@@ -26,7 +27,7 @@ function authHeaders() {
 
 function initGitRepo(repoPath: string) {
   fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: repoPath });
+  execFileSync('git', ['init', '--template='], { cwd: repoPath });
   execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# Test Repo\n');
   execFileSync('git', ['add', '.'], { cwd: repoPath });
@@ -49,6 +50,8 @@ describe('AgentHub API Extra Endpoints', () => {
     fs.mkdirSync(agyHomesDir, { recursive: true });
 
     process.env.AGENTHUB_HOME = tmpDir;
+    previousHome = process.env.HOME;
+    process.env.HOME = path.join(tmpDir, 'home');
     process.env.AGENTHUB_AGY_HOMES = agyHomesDir;
     process.env.AGENTHUB_DEFAULT_LOG_DIR = path.resolve(__dirname, 'fixtures', 'fake-gemini-log');
     process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-login.mjs');
@@ -81,6 +84,8 @@ describe('AgentHub API Extra Endpoints', () => {
       // ignore
     }
     delete process.env.AGENTHUB_HOME;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
     delete process.env.AGENTHUB_AGY_HOMES;
     delete process.env.AGENTHUB_DEFAULT_LOG_DIR;
     delete process.env.AGENTHUB_AGY_BIN;
@@ -243,8 +248,9 @@ describe('AgentHub API Extra Endpoints', () => {
       expect(res2.statusCode).toBe(400);
     });
 
-    it('PUT /api/config validates notifications (desktop must be boolean)', async () => {
-      const res = await server.inject({
+    it('PUT /api/config validates notifications (desktop must be boolean, desktopLevel enum, quietHours format)', async () => {
+      // Invalid desktop type
+      const res1 = await server.inject({
         method: 'PUT',
         url: '/api/config',
         headers: authHeaders(),
@@ -252,8 +258,158 @@ describe('AgentHub API Extra Endpoints', () => {
           notifications: { desktop: 'enabled' },
         },
       });
-      expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).error).toBe('bad_request');
+      expect(res1.statusCode).toBe(400);
+      expect(JSON.parse(res1.body).error).toBe('bad_request');
+
+      // Invalid desktopLevel enum
+      const res2 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { desktopLevel: 'super_high' },
+        },
+      });
+      expect(res2.statusCode).toBe(400);
+
+      // Invalid quietHours start time (out of range hour)
+      const res3 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { quietHours: { start: '25:00' } },
+        },
+      });
+      expect(res3.statusCode).toBe(400);
+
+      // Invalid quietHours end time (invalid minute)
+      const res4 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { quietHours: { end: '07:60' } },
+        },
+      });
+      expect(res4.statusCode).toBe(400);
+
+      // Invalid quietHours format (non-HH:MM string)
+      const res5 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { quietHours: { start: 'not-a-time' } },
+        },
+      });
+      expect(res5.statusCode).toBe(400);
+    });
+
+    it('PUT /api/config saves desktopLevel and quietHours independently and persists to file', async () => {
+      // 1. Initial state check
+      const getRes1 = await server.inject({
+        method: 'GET',
+        url: '/api/config',
+        headers: authHeaders(),
+      });
+      expect(getRes1.statusCode).toBe(200);
+      const initialDesktop = JSON.parse(getRes1.body).notifications.desktop;
+
+      // 2. PUT with only desktopLevel
+      const putRes1 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { desktopLevel: 'critical' },
+        },
+      });
+      expect(putRes1.statusCode).toBe(200);
+      const body1 = JSON.parse(putRes1.body);
+      expect(body1.notifications.desktopLevel).toBe('critical');
+      expect(body1.notifications.desktop).toBe(initialDesktop);
+
+      // Read back via GET
+      const getRes2 = await server.inject({
+        method: 'GET',
+        url: '/api/config',
+        headers: authHeaders(),
+      });
+      const getBody2 = JSON.parse(getRes2.body);
+      expect(getBody2.notifications.desktopLevel).toBe('critical');
+      expect(getBody2.notifications.desktop).toBe(initialDesktop);
+
+      // Read back from config.json on disk
+      const onDisk1 = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk1.notifications.desktopLevel).toBe('critical');
+
+      // 3. PUT with desktop: false (preserves desktopLevel)
+      const putRes2 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { desktop: false },
+        },
+      });
+      expect(putRes2.statusCode).toBe(200);
+      const body2 = JSON.parse(putRes2.body);
+      expect(body2.notifications.desktop).toBe(false);
+      expect(body2.notifications.desktopLevel).toBe('critical');
+
+      // Verify on disk that both desktop and desktopLevel are now present
+      const onDisk2 = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk2.notifications.desktop).toBe(false);
+      expect(onDisk2.notifications.desktopLevel).toBe('critical');
+
+      // 4. PUT with quietHours
+      const putRes3 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: {
+            quietHours: { enabled: true, start: '23:30', end: '06:30' },
+          },
+        },
+      });
+      expect(putRes3.statusCode).toBe(200);
+      const body3 = JSON.parse(putRes3.body);
+      expect(body3.notifications.desktopLevel).toBe('critical');
+      expect(body3.notifications.desktop).toBe(false);
+      expect(body3.notifications.quietHours).toEqual({
+        enabled: true,
+        start: '23:30',
+        end: '06:30',
+      });
+
+      // Partial patch to quietHours (only change end)
+      const putRes4 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: {
+            quietHours: { end: '08:00' },
+          },
+        },
+      });
+      expect(putRes4.statusCode).toBe(200);
+      const body4 = JSON.parse(putRes4.body);
+      expect(body4.notifications.quietHours.enabled).toBe(true);
+      expect(body4.notifications.quietHours.start).toBe('23:30');
+      expect(body4.notifications.quietHours.end).toBe('08:00');
+      expect(body4.notifications.desktopLevel).toBe('critical');
+      expect(body4.notifications.desktop).toBe(false);
+
+      // Verify on disk file
+      const onDisk3 = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk3.notifications.desktop).toBe(false);
+      expect(onDisk3.notifications.desktopLevel).toBe('critical');
+      expect(onDisk3.notifications.quietHours.enabled).toBe(true);
+      expect(onDisk3.notifications.quietHours.start).toBe('23:30');
+      expect(onDisk3.notifications.quietHours.end).toBe('08:00');
     });
 
     it('PUT /api/config validates chat.* properties', async () => {
@@ -289,6 +445,66 @@ describe('AgentHub API Extra Endpoints', () => {
         },
       });
       expect(res3.statusCode).toBe(400);
+    });
+
+    it('PUT /api/config validates and persists load.autoPauseThresholdSec', async () => {
+      // 1. Validation: non-positive or non-integer is rejected
+      const res1 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 0 },
+        },
+      });
+      expect(res1.statusCode).toBe(400);
+
+      const res2 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: -10 },
+        },
+      });
+      expect(res2.statusCode).toBe(400);
+
+      const res3 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 45.5 },
+        },
+      });
+      expect(res3.statusCode).toBe(400);
+
+      // 2. PUT with valid autoPauseThresholdSec
+      const putRes = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 90 },
+        },
+      });
+      expect(putRes.statusCode).toBe(200);
+      const putBody = JSON.parse(putRes.body);
+      expect(putBody.load.autoPauseThresholdSec).toBe(90);
+
+      // 3. GET /api/config reflects the saved value
+      const getRes = await server.inject({
+        method: 'GET',
+        url: '/api/config',
+        headers: authHeaders(),
+      });
+      expect(getRes.statusCode).toBe(200);
+      const getBody = JSON.parse(getRes.body);
+      expect(getBody.load.autoPauseThresholdSec).toBe(90);
+
+      // 4. Persisted on disk in config.json
+      const onDisk = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk.load.autoPauseThresholdSec).toBe(90);
     });
   });
 
@@ -1287,6 +1503,87 @@ describe('AgentHub API Extra Endpoints', () => {
       const reviewEvt = body.recentEvents.find((e: { type: string }) => e.type === 'task.review_ready');
       expect(reviewEvt).toBeDefined();
       expect(reviewEvt.taskId).toBe('proj-status-a/t3');
+    });
+  });
+
+  describe('project wizard context API', () => {
+    it('returns bounded inspect metadata and exposes context task status without raw transcript content', async () => {
+      const repoPath = path.join(tmpDir, 'wizard-api-repo');
+      initGitRepo(repoPath);
+      const sessionDir = path.join(process.env.HOME as string, '.claude', 'projects', repoPath.replace(/[^a-zA-Z0-9]/g, '-'));
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionDir, 'old.jsonl'), JSON.stringify({ message: { role: 'assistant', content: 'Use the stable API contract.' } }) + '\n');
+      ctx.projectRepo.insert({ id: 'wizard-api', name: 'Wizard API', path: repoPath, defaultBranch: 'main', maxParallel: 1 });
+
+      const inspect = await server.inject({ method: 'POST', url: '/api/projects/inspect', headers: authHeaders(), payload: { path: repoPath } });
+      expect(inspect.statusCode).toBe(200);
+      expect(JSON.parse(inspect.body)).toMatchObject({ path: repoPath, isGitRepo: true, sizeTruncated: false });
+
+      const start = await server.inject({
+        method: 'POST',
+        url: '/api/projects/wizard-api/summarize-context',
+        headers: authHeaders(),
+        payload: { sessions: ['old.jsonl'], selections: [{ session: 'old.jsonl', text: 'Use the stable API contract.' }] },
+      });
+      expect(start.statusCode).toBe(200);
+      const started = JSON.parse(start.body) as { taskId: string; status: string; summary: string | null };
+      expect(started.taskId).toContain('summarize-previous-context');
+      expect(started.summary).toBeNull();
+
+      const status = await server.inject({ method: 'GET', url: `/api/projects/wizard-api/summarize-context/${encodeURIComponent(started.taskId.replace('/', '~'))}`, headers: authHeaders() });
+      expect(status.statusCode).toBe(200);
+      expect(JSON.parse(status.body)).toMatchObject({ taskId: started.taskId, summary: null });
+      expect(status.body).not.toContain('Use the stable API contract.');
+    });
+
+    it('creates a sensitive new project and provisions its project-local worktree root', async () => {
+      const projectPath = path.join(tmpDir, 'sensitive-new');
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/projects/new',
+        headers: authHeaders(),
+        payload: {
+          name: 'Sensitive New',
+          path: projectPath,
+          defaultBranch: 'main',
+          settings: {
+            brain: { permissions: 'standard' },
+            worktree: { root: path.join(tmpDir, '.agenthub-worktrees'), logsInRoot: true },
+            notifications: { telegramContent: 'minimal' },
+          },
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body) as { settings: { worktree: { root: string; logsInRoot: boolean }; notifications: { telegramContent: string } } };
+      expect(fs.statSync(path.join(tmpDir, '.agenthub-worktrees')).isDirectory()).toBe(true);
+      expect(body.settings.worktree).toMatchObject({ root: path.join(tmpDir, '.agenthub-worktrees'), logsInRoot: true });
+      expect(body.settings.notifications.telegramContent).toBe('minimal');
+    });
+  });
+
+  describe('GET /api/tasks pagination', () => {
+    it('returns paged metadata/cursor and preserves the legacy array response', async () => {
+      ctx.projectRepo.insert({ id: 'page-api-a', name: 'Page A', path: path.join(tmpDir, 'page-a'), defaultBranch: 'main', maxParallel: 2 });
+      ctx.projectRepo.insert({ id: 'page-api-b', name: 'Page B', path: path.join(tmpDir, 'page-b'), defaultBranch: 'main', maxParallel: 2 });
+      for (const [projectId, slug, status] of [['page-api-a', 'first', 'queued'], ['page-api-a', 'second', 'running'], ['page-api-b', 'other', 'queued']] as const) {
+        ctx.taskRepo.insert({ id: `${projectId}/${slug}`, projectId, slug, title: `${projectId} ${slug}`, status });
+      }
+
+      const first = await server.inject({ method: 'GET', url: '/api/tasks?project=page-api-a&limit=1', headers: authHeaders() });
+      expect(first.statusCode).toBe(200);
+      const firstBody = JSON.parse(first.body) as { items: Array<{ projectId: string }>; total: number; nextCursor: string | null };
+      expect(firstBody.total).toBe(2);
+      expect(firstBody.items).toHaveLength(1);
+      expect(firstBody.items[0].projectId).toBe('page-api-a');
+      expect(firstBody.nextCursor).toBeTruthy();
+
+      const second = await server.inject({ method: 'GET', url: `/api/tasks?project=page-api-a&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor!)}`, headers: authHeaders() });
+      expect(second.statusCode).toBe(200);
+      expect(JSON.parse(second.body).items).toHaveLength(1);
+
+      const legacy = await server.inject({ method: 'GET', url: '/api/tasks?project=page-api-a', headers: authHeaders() });
+      expect(legacy.statusCode).toBe(200);
+      expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
     });
   });
 });

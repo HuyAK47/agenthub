@@ -70,7 +70,7 @@ const KIND_STYLE: Record<ToastKind, { color: string; Icon: React.ComponentType<{
   loading: { color: 'var(--t-accent)', Icon: Loader2 },
 };
 
-export function ToastViewport({ toasts, onDismiss, closeLabel = 'Đóng' }: {
+export function ToastViewport({ toasts, onDismiss, closeLabel = 'Close' }: {
   toasts: ToastItem[];
   onDismiss: (id: number) => void;
   closeLabel?: string;

@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, ProfileRepo, QuotaMarkRepo, QuotaUsageRepo } from '../src/db/index.js';
 import { hasClaudeQuotaAvailable, parseUsage, QuotaUsageService } from '../src/quota/usage.js';
 import { ProfileLockService } from '../src/profiles/locks.js';
 import { AppService } from '../src/services/index.js';
 import { ClaudeSessionRepo } from '../src/claude-sessions/repo.js';
 
-const sampleResetAt = Math.floor(Date.now() / 1000) + 3600;
+const sampleResetAt = Math.floor(new Date('2026-10-23T11:00:00+07:00').getTime() / 1000);
 const sample = [
   `Gemini Models\tWeekly Limit Remaining\t85%\t${new Date((sampleResetAt + 7 * 3600) * 1000).toISOString()}`,
   `Gemini Models\tFive Hour Limit Remaining\t45%\t${new Date((sampleResetAt + 60) * 1000).toISOString()}`,
@@ -18,6 +18,15 @@ const sample = [
 ].join('\n');
 
 describe('quota usage', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('requires every Claude window to have quota remaining', () => {
     expect(hasClaudeQuotaAvailable([
       { grp: 'Claude and GPT models', remainingPct: 0 },
@@ -138,6 +147,19 @@ describe('quota usage', () => {
   });
 });
 
+function hasCommand(name: string): boolean {
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, name);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (process.platform === 'win32' || (stat.mode & 0o111) !== 0)) return true;
+    } catch { /* next */ }
+  }
+  return false;
+}
+
+const canRunExternalLock = process.platform === 'darwin' ? fs.existsSync('/usr/bin/lockf') : hasCommand('flock');
+
 describe('profile locks', () => {
   it('gives Codex two compatible lock slots', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-lock-'));
@@ -149,7 +171,7 @@ describe('profile locks', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('detects an external flock-held slot', async () => {
+  it.skipIf(!canRunExternalLock)('detects an external flock-held slot', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-lock-'));
     const lock = path.join(dir, 'g1.lock');
     fs.writeFileSync(lock, '');

@@ -1,4 +1,6 @@
 import { EventItem } from './types/api';
+import { getActiveLocale } from './utils/apiError';
+import { formatEventType } from './utils/events';
 
 const IMPORTANT = new Set(['brain.notify', 'task.review_ready', 'task.failed', 'task.blocked', 'review.escalated', 'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed']);
 const DESKTOP_EVENTS = new Set([
@@ -60,44 +62,60 @@ export function isEngineWideQuotaExhausted(
   return active.every((profile) => profile.quotaMarks?.some((mark) => typeof mark.until === 'number' && mark.until > now));
 }
 
-export function browserNotificationBody(event: EventItem): string {
+export function browserNotificationBody(event: EventItem, locale: 'vi' | 'en' = 'vi'): string {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
   const appName = 'AgentHub';
+  const isEn = locale === 'en';
+
   if (event.type === 'task.paused' || event.type === 'load.task_paused' || event.type === 'load.high') {
-    return `${appName}: Đã tạm dừng task hoặc gặp tải cao; xem dashboard để biết chi tiết`;
+    return isEn
+      ? `${appName}: Task paused or high load; check dashboard for details`
+      : `${appName}: Đã tạm dừng task hoặc gặp tải cao; xem dashboard để biết chi tiết`;
   }
   if (event.type === 'disk.low') {
     const freeGB = typeof payload.freeGB === 'number' ? payload.freeGB : (payload.freeGB ?? '?');
     const minFreeGB = typeof payload.minFreeGB === 'number' ? payload.minFreeGB : 3;
-    const cacheDir = typeof payload.cacheDir === 'string' ? ` Cache node_modules: ${payload.cacheDir}.` : '';
-    const largest = typeof payload.largestCacheEntry === 'string'
-      ? ` Bản lớn nhất: ${payload.largestCacheEntry}${typeof payload.largestCacheEntryBytes === 'number' ? ` (${(payload.largestCacheEntryBytes / 1024 ** 3).toFixed(2)} GB)` : ''}.`
+    const cacheDir = typeof payload.cacheDir === 'string'
+      ? (isEn ? ` Cache node_modules: ${payload.cacheDir}.` : ` Cache node_modules: ${payload.cacheDir}.`)
       : '';
-    return `Ổ đĩa còn ${freeGB} GB (< ${minFreeGB} GB): tạm dừng khởi chạy task${cacheDir}${largest}`;
+    const largest = typeof payload.largestCacheEntry === 'string'
+      ? (isEn
+        ? ` Largest: ${payload.largestCacheEntry}${typeof payload.largestCacheEntryBytes === 'number' ? ` (${(payload.largestCacheEntryBytes / 1024 ** 3).toFixed(2)} GB)` : ''}.`
+        : ` Bản lớn nhất: ${payload.largestCacheEntry}${typeof payload.largestCacheEntryBytes === 'number' ? ` (${(payload.largestCacheEntryBytes / 1024 ** 3).toFixed(2)} GB)` : ''}.`)
+      : '';
+    return isEn
+      ? `Disk space low: ${freeGB} GB (< ${minFreeGB} GB): pausing task launches${cacheDir}${largest}`
+      : `Ổ đĩa còn ${freeGB} GB (< ${minFreeGB} GB): tạm dừng khởi chạy task${cacheDir}${largest}`;
   }
   if (event.type === 'disk.ok') {
     const freeGB = typeof payload.freeGB === 'number' ? payload.freeGB : (payload.freeGB ?? '?');
-    return `Ổ đĩa đã đủ chỗ (${freeGB} GB): tiếp tục chạy task`;
+    return isEn
+      ? `Disk space recovered (${freeGB} GB): resuming tasks`
+      : `Ổ đĩa đã đủ chỗ (${freeGB} GB): tiếp tục chạy task`;
   }
   if (event.type === 'disk.docker_low') {
     const freeGB = typeof payload.freeGB === 'number' ? payload.freeGB : (payload.freeGB ?? '?');
     const minFreeGB = typeof payload.minFreeGB === 'number' ? payload.minFreeGB : 5;
-    return `Ổ đĩa Docker còn ${freeGB} GB (< ${minFreeGB} GB): không chạy docker build/pull/compose up`;
+    return isEn
+      ? `Docker disk space low: ${freeGB} GB (< ${minFreeGB} GB): skipping docker build/pull/compose up`
+      : `Ổ đĩa Docker còn ${freeGB} GB (< ${minFreeGB} GB): không chạy docker build/pull/compose up`;
   }
   if (event.type === 'quota.exhausted') {
-    return `${appName}: Mọi tài khoản đều đã hết quota`;
+    return isEn
+      ? `${appName}: All accounts have exhausted quota`
+      : `${appName}: Mọi tài khoản đều đã hết quota`;
   }
   if (event.type === 'task.failed') {
     const title = typeof payload.title === 'string' ? payload.title : (event.taskId || 'Task');
-    return `${appName}: ${title} thất bại`;
+    return isEn ? `${appName}: ${title} failed` : `${appName}: ${title} thất bại`;
   }
   if (event.type === 'task.blocked') {
     const title = typeof payload.title === 'string' ? payload.title : (event.taskId || 'Task');
-    return `${appName}: ${title} bị chặn`;
+    return isEn ? `${appName}: ${title} blocked` : `${appName}: ${title} bị chặn`;
   }
   if (event.type === 'task.review_ready') {
     const title = typeof payload.title === 'string' ? payload.title : (event.taskId || 'Task');
-    let msg = `${appName}: ${title} chờ review`;
+    let msg = isEn ? `${appName}: ${title} waiting for review` : `${appName}: ${title} chờ review`;
     if ('checksPassed' in payload) {
       msg += ` (${payload.checksPassed ? '✓' : '✗'} checks)`;
     }
@@ -105,57 +123,75 @@ export function browserNotificationBody(event: EventItem): string {
   }
   if (event.type === 'review.escalated') {
     const title = typeof payload.title === 'string' ? payload.title : (event.taskId || 'Task');
-    return `Cần người duyệt: ${title}`;
+    return isEn ? `Approval required: ${title}` : `Cần người duyệt: ${title}`;
   }
   if (event.type === 'brain.notify') {
     const text = typeof payload.text === 'string' ? payload.text : '';
-    if (payload.level === 'incident') return `🚨 Sự cố ${appName}: ${text}`;
-    if (payload.level === 'decision') return `📌 Cần quyết định: ${text}`;
+    if (payload.level === 'incident') return isEn ? `🚨 Incident ${appName}: ${text}` : `🚨 Sự cố ${appName}: ${text}`;
+    if (payload.level === 'decision') return isEn ? `📌 Decision needed: ${text}` : `📌 Cần quyết định: ${text}`;
     return `ℹ️ ${appName}: ${text}`;
   }
   if (event.type === 'batch.created') {
     const count = typeof payload.taskCount === 'number' ? payload.taskCount : 0;
     const who = typeof payload.createdBy === 'string' && payload.createdBy ? payload.createdBy : 'Claude';
     const label = who.toLowerCase() === 'claude' ? 'Claude' : who;
-    return `${label} đề xuất ${count} task, chờ bạn duyệt`;
+    return isEn
+      ? `${label} proposed ${count} task(s), awaiting your review`
+      : `${label} đề xuất ${count} task, chờ bạn duyệt`;
   }
   if (event.type === 'task.resumed' || event.type === 'load.task_resumed') {
     const title = typeof payload.title === 'string' ? payload.title : (event.taskId || 'Task');
-    return `Tiếp tục task ${title}`;
+    return isEn ? `Resumed task ${title}` : `Tiếp tục task ${title}`;
   }
   if (event.type === 'claude.fallback_changed') {
     const step = payload.step && typeof payload.step === 'object' ? payload.step as Record<string, unknown> : null;
-    const label = step?.type === 'model' ? `model ${String(step.model)}`
-      : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
-      : step?.type === 'apiKey' ? 'API key'
-      : step?.type === 'engine' ? `engine ${String(step.engine)}`
-      : step?.type === 'wait' ? 'chờ reset' : 'cấu hình chính';
-    return `Claude fallback: đang dùng ${label}`;
+    const label = isEn
+      ? (step?.type === 'model' ? `model ${String(step.model)}`
+        : step?.type === 'profile' ? `profile ${String(step.profile || 'other')}`
+        : step?.type === 'apiKey' ? 'API key'
+        : step?.type === 'engine' ? `engine ${String(step.engine)}`
+        : step?.type === 'wait' ? 'waiting for reset' : 'primary configuration')
+      : (step?.type === 'model' ? `model ${String(step.model)}`
+        : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
+        : step?.type === 'apiKey' ? 'API key'
+        : step?.type === 'engine' ? `engine ${String(step.engine)}`
+        : step?.type === 'wait' ? 'chờ reset' : 'cấu hình chính');
+    return isEn ? `Claude fallback: currently using ${label}` : `Claude fallback: đang dùng ${label}`;
   }
   if (event.type === 'claude.auto_resumed') {
-    if (payload.started === true) return 'Claude đã tự tiếp tục phiên sau khi hết giới hạn';
-    return 'Claude tự tiếp tục nhưng phiên đã lỗi';
+    if (payload.started === true) {
+      return isEn
+        ? 'Claude automatically resumed session after limit reset'
+        : 'Claude đã tự tiếp tục phiên sau khi hết giới hạn';
+    }
+    return isEn
+      ? 'Claude attempted auto-resume but session encountered an error'
+      : 'Claude tự tiếp tục nhưng phiên đã lỗi';
   }
   if (event.type === 'profile.auth_expired') {
-    const name = typeof payload.name === 'string' ? payload.name : 'tài khoản';
-    return `Hồ sơ ${name} cần đăng nhập lại`;
+    const name = typeof payload.name === 'string' ? payload.name : (isEn ? 'profile' : 'tài khoản');
+    return isEn ? `Profile ${name} requires re-authentication` : `Hồ sơ ${name} cần đăng nhập lại`;
   }
   if (event.type === 'ci.failed') {
-    const projId = (typeof payload.projectId === 'string' ? payload.projectId : event.taskId) || 'dự án';
+    const projId = (typeof payload.projectId === 'string' ? payload.projectId : event.taskId) || (isEn ? 'project' : 'dự án');
     const workflow = (typeof payload.workflow === 'string' ? payload.workflow : '') || 'CI';
     const sha = typeof payload.sha === 'string' ? payload.sha.slice(0, 7) : '';
     const jobs = Array.isArray(payload.jobs) ? (payload.jobs as Array<{ name?: string }>) : [];
     const failedJobNames = jobs.map((j) => j.name).filter(Boolean);
     const jobDetails = failedJobNames.length > 0 ? ` (${failedJobNames.join(', ')})` : '';
-    return `CI thất bại [${projId}]: ${workflow}${sha ? ` @ ${sha}` : ''}${jobDetails}`;
+    return isEn
+      ? `CI failed [${projId}]: ${workflow}${sha ? ` @ ${sha}` : ''}${jobDetails}`
+      : `CI thất bại [${projId}]: ${workflow}${sha ? ` @ ${sha}` : ''}${jobDetails}`;
   }
   if (event.type === 'ci.passed') {
-    const projId = (typeof payload.projectId === 'string' ? payload.projectId : event.taskId) || 'dự án';
+    const projId = (typeof payload.projectId === 'string' ? payload.projectId : event.taskId) || (isEn ? 'project' : 'dự án');
     const workflow = (typeof payload.workflow === 'string' ? payload.workflow : '') || 'CI';
     const sha = typeof payload.sha === 'string' ? payload.sha.slice(0, 7) : '';
-    return `CI đã xanh: [${projId}] ${workflow}${sha ? ` @ ${sha}` : ''}`;
+    return isEn
+      ? `CI passed: [${projId}] ${workflow}${sha ? ` @ ${sha}` : ''}`
+      : `CI đã xanh: [${projId}] ${workflow}${sha ? ` @ ${sha}` : ''}`;
   }
-  return `${appName} có cập nhật cần chú ý`;
+  return isEn ? `${appName} has an update requiring attention` : `${appName} có cập nhật cần chú ý`;
 }
 
 export function shouldNotifyBrowserEvent(
@@ -231,7 +267,7 @@ export function notifyBrowserEvent(
     const previous = Number(localStorage.getItem(key) || 0);
     if (previous && now - previous < throttleWindow) return;
     localStorage.setItem(key, String(now));
-    new Notification(event.type, { body: browserNotificationBody(event) });
+    new Notification(formatEventType(event.type, getActiveLocale()), { body: browserNotificationBody(event, getActiveLocale()) });
   } catch {
     // Browser notification APIs may be unavailable or blocked by policy.
   }

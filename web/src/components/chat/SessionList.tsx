@@ -32,6 +32,9 @@ export interface SessionListProps {
   onRenameSession?: (sessionId: string, newTitle: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => void;
   onExportSession?: (session: ChatSession) => void;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   isDeletingId?: string | null;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -41,6 +44,7 @@ export interface SessionListProps {
 function formatRelativeTime(
   dateString: string,
   t: (key: string, params?: Record<string, string | number>) => string,
+  locale: 'vi' | 'en' = 'vi',
 ): string {
   try {
     const date = new Date(dateString);
@@ -50,7 +54,7 @@ function formatRelativeTime(
     if (diffSec < 60) return t('extra.justNow');
     if (diffSec < 3600) return t('extra.minutesAgo', { count: Math.floor(diffSec / 60) });
     if (diffSec < 86400) return t('extra.hoursAgo', { count: Math.floor(diffSec / 3600) });
-    return date.toLocaleDateString();
+    return date.toLocaleDateString(locale === 'vi' ? 'vi-VN' : 'en-US');
   } catch {
     return dateString;
   }
@@ -66,12 +70,15 @@ export const SessionList: React.FC<SessionListProps> = ({
   onRenameSession,
   onArchiveSession,
   onExportSession,
+  hasMore = false,
+  isLoadingMore = false,
+  onLoadMore,
   isDeletingId,
   isCollapsed = false,
   onToggleCollapse,
   className = '',
 }) => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');
 
@@ -147,7 +154,7 @@ export const SessionList: React.FC<SessionListProps> = ({
       a.click();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(err.message || 'Không thể xuất Markdown');
+      alert(err.message || t('extra.exportMarkdownError'));
     }
   };
 
@@ -159,13 +166,13 @@ export const SessionList: React.FC<SessionListProps> = ({
 
   if (isCollapsed) {
     return (
-      <div className={`flex flex-col items-center py-3 bg-[var(--bg-surface)] border-r border-[var(--border-default)] w-14 shrink-0 h-full ${className}`}>
+      <div className={`flex flex-col items-center py-3 bg-[var(--t-surface)] border-r border-[var(--t-border)] w-14 shrink-0 h-full ${className}`}>
         <button
           type="button"
           onClick={onToggleCollapse}
           title={t('extra.expandSessions')}
           aria-label={t('extra.expandSessions')}
-          className="p-2 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+          className="p-2 rounded-xl text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)] cursor-pointer"
         >
           <ChevronRight className="w-5 h-5" />
         </button>
@@ -174,7 +181,7 @@ export const SessionList: React.FC<SessionListProps> = ({
           onClick={onNewSession}
           title={t('extra.newChat')}
           aria-label={t('extra.newChat')}
-          className="mt-3 p-2.5 rounded-xl bg-[var(--t-accent)] text-white shadow-xs hover:bg-[var(--t-accent-hover)] cursor-pointer"
+          className="mt-3 p-2.5 rounded-xl bg-[var(--t-accent)] text-[var(--t-on-accent)] shadow-xs hover:bg-[var(--t-accent-hover)] cursor-pointer"
         >
           <Plus className="w-4 h-4" />
         </button>
@@ -183,15 +190,15 @@ export const SessionList: React.FC<SessionListProps> = ({
   }
 
   return (
-    <div data-tour="chat-sessions" className={`flex flex-col h-full bg-[var(--bg-surface)] border-r border-[var(--border-default)] ${className}`}>
+    <div data-tour="chat-sessions" className={`flex flex-col h-full bg-[var(--t-surface)] border-r border-[var(--t-border)] ${className}`}>
       {/* Top Header / New Chat Button & Collapse Button */}
-      <div className="p-3 border-b border-[var(--border-default)] space-y-2.5">
+      <div className="p-3 border-b border-[var(--t-border)] space-y-2.5">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onNewSession}
             data-tour="new-session"
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white font-medium text-xs shadow-xs transition-colors cursor-pointer"
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] font-medium text-xs shadow-xs transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>+ {t('extra.newChat')}</span>
@@ -202,7 +209,7 @@ export const SessionList: React.FC<SessionListProps> = ({
               onClick={onToggleCollapse}
               title={t('extra.collapseSessions')}
               aria-label={t('extra.collapseSessions')}
-              className="p-2 rounded-xl border border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] cursor-pointer shrink-0"
+              className="p-2 rounded-xl border border-[var(--t-border)] text-[var(--t-text-2)] hover:bg-[var(--t-hover)] cursor-pointer shrink-0"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -211,20 +218,20 @@ export const SessionList: React.FC<SessionListProps> = ({
 
         {/* Search input */}
         <div className="relative">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--t-text-3)] pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('extra.searchSessionsPlaceholder')}
             aria-label={t('extra.searchSessionsAria')}
-            className="w-full pl-8 pr-7 py-1.5 rounded-lg text-xs bg-[var(--bg-surface-subtle)] border border-[var(--border-default)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-hidden focus:border-[var(--t-accent)]"
+            className="w-full pl-8 pr-7 py-1.5 rounded-lg text-xs bg-[var(--t-surface-2)] border border-[var(--t-border)] text-[var(--t-text)] placeholder-[var(--t-text-3)] focus:outline-hidden focus:border-[var(--t-accent)]"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-[var(--t-text-3)] hover:text-[var(--t-text)] cursor-pointer"
             >
               <X className="w-3 h-3" />
             </button>
@@ -232,14 +239,14 @@ export const SessionList: React.FC<SessionListProps> = ({
         </div>
 
         {/* Filter Tabs: Active vs Archived */}
-        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--bg-surface-subtle)] border border-[var(--border-subtle)] text-[11px]">
+        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] text-[11px]">
           <button
             type="button"
             onClick={() => setActiveTab('active')}
             className={`flex-1 py-1 rounded-md text-center font-medium transition-colors cursor-pointer ${
               activeTab === 'active'
-                ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-xs'
+                : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
             }`}
           >
             {t('extra.tabActive')}
@@ -249,8 +256,8 @@ export const SessionList: React.FC<SessionListProps> = ({
             onClick={() => setActiveTab('archived')}
             className={`flex-1 py-1 rounded-md text-center font-medium transition-colors cursor-pointer ${
               activeTab === 'archived'
-                ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                ? 'bg-[var(--t-surface)] text-[var(--t-text)] shadow-xs'
+                : 'text-[var(--t-text-2)] hover:text-[var(--t-text)]'
             }`}
           >
             {t('extra.tabArchived')}
@@ -261,11 +268,11 @@ export const SessionList: React.FC<SessionListProps> = ({
       {/* Session list */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {filteredSessions.length === 0 ? (
-          <div className="p-6 text-center text-xs text-[var(--text-secondary)]">
+          <div className="p-6 text-center text-xs text-[var(--t-text-2)]">
             {searchQuery
-              ? 'Không tìm thấy phiên chat phù hợp'
+              ? t('extra.noMatchingChats')
               : activeTab === 'archived'
-              ? 'Chưa có phiên chat nào được lưu trữ'
+              ? t('extra.noArchivedChats')
               : t('extra.noChats')}
           </div>
         ) : (
@@ -279,7 +286,7 @@ export const SessionList: React.FC<SessionListProps> = ({
             const groupLabel = brainGroup === 'assistant' ? t('extra.assistantChats') : brainGroup === 'system' ? t('extra.systemBrain') : t('extra.projectBrains');
             return (
               <React.Fragment key={session.id}>
-                {brainGroup && (filteredSessions.findIndex((item) => (item.kind === 'assistant' ? 'assistant' : item.id === 'brain' ? 'system' : item.id.startsWith('brain:') ? 'project' : null) === brainGroup) === filteredSessions.indexOf(session)) && <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{groupLabel}</div>}
+                {brainGroup && (filteredSessions.findIndex((item) => (item.kind === 'assistant' ? 'assistant' : item.id === 'brain' ? 'system' : item.id.startsWith('brain:') ? 'project' : null) === brainGroup) === filteredSessions.indexOf(session)) && <div className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--t-text-3)]">{groupLabel}</div>}
               <div
                 key={session.id}
                 role="button"
@@ -292,15 +299,15 @@ export const SessionList: React.FC<SessionListProps> = ({
                 }}
                 className={`group relative p-2.5 rounded-xl cursor-pointer transition-all border text-left ${
                   isActive
-                    ? 'bg-[var(--t-selected)] border-[var(--t-accent)]/30 text-[var(--text-primary)]'
-                    : 'border-transparent hover:bg-[var(--bg-surface-hover)] text-[var(--text-primary)]'
+                    ? 'bg-[var(--t-selected)] border-[var(--t-accent)]/30 text-[var(--t-text)]'
+                    : 'border-transparent hover:bg-[var(--t-hover)] text-[var(--t-text)]'
                 }`}
               >
                 <div className="flex items-start justify-between gap-1.5">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
                     <MessageSquare
                       className={`w-4 h-4 shrink-0 ${
-                        isActive ? 'text-[var(--t-accent)]' : 'text-[var(--text-secondary)]'
+                        isActive ? 'text-[var(--t-accent)]' : 'text-[var(--t-text-2)]'
                       }`}
                     />
                     {isEditing ? (
@@ -318,14 +325,14 @@ export const SessionList: React.FC<SessionListProps> = ({
                           }}
                           autoFocus
                           aria-label={t('extra.newNameAria')}
-                          className="w-full px-2 py-0.5 text-xs rounded border border-[var(--t-accent)] bg-[var(--bg-surface)] text-[var(--text-primary)] focus:outline-hidden"
+                          className="w-full px-2 py-0.5 text-xs rounded border border-[var(--t-accent)] bg-[var(--t-surface)] text-[var(--t-text)] focus:outline-hidden"
                         />
                         <button
                           type="button"
                           onClick={(e) => handleSaveRename(session.id, e)}
                           title={t('extra.saveName')}
                           aria-label={t('extra.saveName')}
-                          className="p-1 rounded text-[var(--t-ok)] hover:bg-[var(--bg-surface-subtle)]"
+                          className="p-1 rounded text-[var(--t-ok)] hover:bg-[var(--t-surface-2)]"
                         >
                           <Check className="w-3.5 h-3.5" />
                         </button>
@@ -334,7 +341,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                           onClick={handleCancelRename}
                           title={t('extra.cancelRename')}
                           aria-label={t('extra.cancelRename')}
-                          className="p-1 rounded text-[var(--text-muted)] hover:bg-[var(--bg-surface-subtle)]"
+                          className="p-1 rounded text-[var(--t-text-3)] hover:bg-[var(--t-surface-2)]"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
@@ -364,7 +371,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                             e.stopPropagation();
                             onPinSession(session.id, !isPinned);
                           }}
-                          className={`p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--t-warn)] hover:bg-[var(--bg-surface-subtle)] transition-colors ${
+                          className={`p-1 rounded-md text-[var(--t-text-3)] hover:text-[var(--t-warn)] hover:bg-[var(--t-surface-2)] transition-colors ${
                             isPinned ? 'text-[var(--t-warn)]' : ''
                           }`}
                         >
@@ -379,7 +386,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                           title={t('extra.renameSession')}
                           aria-label={t('extra.renameSession')}
                           onClick={(e) => handleStartRename(session, e)}
-                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-subtle)] transition-colors"
+                          className="p-1 rounded-md text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-surface-2)] transition-colors"
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
@@ -395,7 +402,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                             e.stopPropagation();
                             onArchiveSession(session.id, !isArchived);
                           }}
-                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-subtle)] transition-colors"
+                          className="p-1 rounded-md text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-surface-2)] transition-colors"
                         >
                           {isArchived ? (
                             <ArchiveRestore className="w-3.5 h-3.5" />
@@ -411,7 +418,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                         title={t('extra.exportMarkdown')}
                         aria-label={t('extra.exportMarkdown')}
                         onClick={(e) => handleExport(session, e)}
-                        className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-subtle)] transition-colors"
+                        className="p-1 rounded-md text-[var(--t-text-3)] hover:text-[var(--t-text)] hover:bg-[var(--t-surface-2)] transition-colors"
                       >
                         <Download className="w-3.5 h-3.5" />
                       </button>
@@ -431,7 +438,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                           setSessionToDelete(session);
                         }}
                         disabled={isDeletingId === session.id}
-                        className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--t-crit)] hover:bg-[var(--t-crit)]/10 transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
+                        className="p-1 rounded-md text-[var(--t-text-3)] hover:text-[var(--t-crit)] hover:bg-[var(--t-crit)]/10 transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--t-accent)]"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -456,7 +463,7 @@ export const SessionList: React.FC<SessionListProps> = ({
 
                   {/* Project badge */}
                   {session.projectId && (
-                    <span className="px-1.5 py-0.5 rounded bg-[var(--bg-surface-subtle)] text-[var(--text-secondary)] border border-[var(--border-subtle)] font-mono">
+                    <span className="px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text-2)] border border-[var(--t-border)] font-mono">
                       {session.projectId}
                     </span>
                   )}
@@ -471,9 +478,9 @@ export const SessionList: React.FC<SessionListProps> = ({
 
                   {/* Time */}
                   {!session.busy && (
-                    <span className="inline-flex items-center gap-1 text-[var(--text-muted)] ml-auto">
+                    <span className="inline-flex items-center gap-1 text-[var(--t-text-3)] ml-auto">
                       <Clock className="w-3 h-3" />
-                      <span>{formatRelativeTime(session.updatedAt, t)}</span>
+                      <span>{formatRelativeTime(session.updatedAt, t, locale)}</span>
                     </span>
                   )}
                 </div>
@@ -481,6 +488,16 @@ export const SessionList: React.FC<SessionListProps> = ({
               </React.Fragment>
             );
           })
+        )}
+        {hasMore && onLoadMore && (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={isLoadingMore}
+            className="w-full rounded-lg px-3 py-2 text-xs font-medium text-[var(--t-accent)] hover:bg-[var(--t-hover)] disabled:opacity-50"
+          >
+            {isLoadingMore ? t('pagination.loading') : t('tasks.showMore')}
+          </button>
         )}
       </div>
 
@@ -490,16 +507,16 @@ export const SessionList: React.FC<SessionListProps> = ({
           role="dialog"
           aria-modal="true"
           aria-label={t('extra.confirmDeleteTitle')}
-          className="fixed inset-0 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in"
+          className="fixed inset-0 flex items-center justify-center p-4 bg-[var(--t-overlay)] backdrop-blur-xs animate-fade-in"
           style={{ zIndex: UI_Z_INDEX.modal }}
         >
-          <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-4">
+          <div className="bg-[var(--t-surface)] border border-[var(--t-border)] rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-4">
             <div className="flex items-center gap-2.5 text-[var(--t-crit)] font-semibold text-sm">
               <AlertTriangle className="w-5 h-5 shrink-0" />
               <span>{t('extra.confirmDeleteTitle')}</span>
             </div>
 
-            <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+            <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
               {t('extra.confirmDeleteDesc', { title: sessionToDelete.title || t('extra.chat') })}
             </p>
 
@@ -507,7 +524,7 @@ export const SessionList: React.FC<SessionListProps> = ({
               <button
                 type="button"
                 onClick={() => setSessionToDelete(null)}
-                className="px-3 py-1.5 rounded-xl border border-[var(--border-default)] hover:bg-[var(--bg-surface-hover)] text-xs text-[var(--text-secondary)] font-medium cursor-pointer"
+                className="px-3 py-1.5 rounded-xl border border-[var(--t-border)] hover:bg-[var(--t-hover)] text-xs text-[var(--t-text-2)] font-medium cursor-pointer"
               >
                 {t('common.cancel')}
               </button>
@@ -515,7 +532,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 type="button"
                 onClick={confirmDelete}
                 data-testid="confirm-delete-button"
-                className="px-3 py-1.5 rounded-xl bg-[var(--t-crit)] hover:bg-[var(--t-crit)]/90 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                className="px-3 py-1.5 rounded-xl bg-[var(--t-crit)] hover:bg-[var(--t-crit)]/90 text-[var(--t-on-accent)] text-xs font-semibold shadow-xs cursor-pointer"
               >
                 {t('extra.confirmDeleteBtn')}
               </button>

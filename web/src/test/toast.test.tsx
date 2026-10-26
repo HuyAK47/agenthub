@@ -8,6 +8,7 @@ describe('Toast', () => {
     render(
       <ToastViewport
         onDismiss={onDismiss}
+        closeLabel="Đóng"
         toasts={[
           { id: 1, kind: 'success', title: 'Đã lưu', message: 'Chi tiết', duration: 6000 },
           { id: 2, kind: 'error', title: 'Lỗi', duration: 9000 },

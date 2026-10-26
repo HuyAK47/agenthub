@@ -19,7 +19,8 @@ export class NotificationDeduper {
   shouldSend(type: string, taskId?: string, payload?: unknown): boolean {
     if (!taskId || PROGRESS_EVENT_RE.test(type)) return true;
     if (type === 'task.review_ready' && payload && typeof payload === 'object' && 'checksPassed' in payload) return true;
-    const key = `${type}:${taskId}`;
+    const projectId = this.projectId(taskId, payload);
+    const key = `${type}:${projectId}:${taskId}`;
     const now = this.now();
     const previous = this.seen.get(key);
     if (previous !== undefined && now - previous < this.windowMs) return false;
@@ -30,5 +31,14 @@ export class NotificationDeduper {
       }
     }
     return true;
+  }
+
+  private projectId(taskId: string, payload: unknown): string {
+    if (payload && typeof payload === 'object' && 'projectId' in payload) {
+      const projectId = (payload as { projectId?: unknown }).projectId;
+      if (typeof projectId === 'string' && projectId) return projectId;
+    }
+    const separator = taskId.indexOf('/');
+    return separator > 0 ? taskId.slice(0, separator) : '';
   }
 }

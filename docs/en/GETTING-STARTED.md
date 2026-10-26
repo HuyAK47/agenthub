@@ -33,6 +33,16 @@ AgentHub runs locally on your machine. It breaks down development tasks and sche
 | **Claude Code** | Required to use Claude as the orchestrator Brain (Claude Code extension for VS Code or the `claude` CLI). |
 | **Hardware Resources** | Workers execute builds and test suites concurrently. Recommended benchmark: 12 CPU cores / 16 GB RAM comfortably runs ~4 concurrent worker processes. |
 
+### Install the Antigravity CLI (`agy`)
+
+On the **Setup** page, click **Install** next to Antigravity CLI to run the official installer. AgentHub streams its output and verifies the binary after it completes:
+
+```sh
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+If installation succeeds but AgentHub still cannot find `agy`, the daemon may have a different PATH from your interactive shell. Set an absolute path with `AGENTHUB_AGY_BIN=/path/to/agy` and restart the daemon. AgentHub searches PATH, `~/.local/bin/agy`, and `~/.gemini/bin/agy`; the log is at `~/.agenthub/logs/setup-agy.log`.
+
 ---
 
 ## 2. Installation
@@ -172,7 +182,9 @@ In AgentHub, a **project** represents a local git repository on your machine. Wh
 
 1. **Prepare the repository**: Clone the repo onto your machine (if not already present). Ensure it is initialized as a git repository with a default branch (such as `main`).
 2. **Register the project in AgentHub**:
-   - **Via Web Dashboard**: Open the **Setup** page and click **"Add project"**, or visit the **Projects** page and click **"Register Project"** (or go directly to `/projects?new=1`). Enter a project name and the absolute path to the repository directory.
+   - **Bring an existing project into the hub**: Open **Projects**, launch the **registration wizard**, choose **Existing repository**, and enter an absolute path. AgentHub inspects branches, lockfiles, hooks, language, guidance files, and previous Claude Code sessions. Review the suggestions before creating; the **Advanced** form remains available for manual settings.
+   - **Create a new project**: In the same wizard, choose **New project**. AgentHub creates the directory, runs `git init`, makes an empty initial commit, and creates the default branch before registering the project.
+   - Always verify the path and base branch. An enabled integration branch is local-only: the hub merges locally and never pushes it automatically.
    - **Or via CLI**:
      ```bash
      agenthub project add <project_name> /absolute/path/to/git/repository
@@ -487,6 +499,17 @@ Deploy steps are trusted configuration in `~/.agenthub/config.json` only; they a
 ```
 
 Each step runs as argv in the integration worktree and is logged under `~/.agenthub/logs/deploy/<project>/<time>.log`. Push is disabled by default and is fast-forward-only when enabled.
+
+### Integration worktrees for merge and deploy
+
+AgentHub supports two types of integration worktrees:
+1. **Hub-managed integration worktree (`settings.integration.enabled = true`)** (recommended):
+   - Located at `<worktree.root>/.integration` (if `settings.worktree.root` is configured) or `~/.agenthub/integration/<projectId>`, checking out `settings.integration.branch` (defaults to `agenthub/integration`).
+   - Used for both automated merging (`mergeTaskIntoBase`), executing merge-checks, and post-merge self-deployment.
+   - AgentHub automatically manages lifecycle and dependency installation matching the task worktree policy (`worktree.install`: `auto` using cache/symlink or `npm ci`). If `package-lock.json` or lockfiles change in a merge commit, dependencies are automatically reinstalled before running merge-checks.
+2. **Manually declared worktrees (`project.merge.worktrees`)** (legacy):
+   - Explicit absolute paths configured per baseRef in project merge settings.
+   - Used only when `settings.integration.enabled = false`. When `settings.integration.enabled = true`, the hub-managed worktree takes precedence and the legacy configuration is ignored.
 
 To avoid overloading CI workflows during frequent merges, AgentHub supports **batched pushes** configured via `minIntervalMin` (defaults to 30 minutes):
 - After a successful deploy, the hub only pushes to the remote if the time elapsed since the previous push is ≥ `minIntervalMin`.

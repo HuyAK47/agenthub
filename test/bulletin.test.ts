@@ -26,7 +26,7 @@ describe('Context Bulletin & Overlap Coordination', () => {
 
   function initGitRepo(targetDir: string) {
     fs.mkdirSync(targetDir, { recursive: true });
-    execFileSync('git', ['init'], { cwd: targetDir });
+    execFileSync('git', ['init', '--template='], { cwd: targetDir });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: targetDir });
     fs.writeFileSync(path.join(targetDir, 'shared.ts'), 'export const version = 1;\n');
     fs.writeFileSync(path.join(targetDir, 'other.ts'), 'export const other = true;\n');

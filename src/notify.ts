@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { AgentHubConfig } from './config.js';
+import { AgentHubConfig, updateConfigInMemory } from './config.js';
 import { EventBus } from './scheduler/index.js';
 import { QuotaMarkRepo, TaskRepo, ProfileRepo, CiRepo } from './db/index.js';
 import { toTaskId } from './services/index.js';
@@ -8,6 +8,8 @@ import { effectiveBrainMode } from './brain/mode.js';
 import { formatReset } from './time-format.js';
 import { quotaLowText } from './quota/alerts.js';
 import { NotificationDeduper } from './notification-dedupe.js';
+
+const WAITING_QUOTA_BATCH_DELAY_MS = 100;
 
 export type NotifyExecFn = (
   file: string,
@@ -38,12 +40,16 @@ export class NotificationService {
   private now: () => number;
   private lastSent = new Map<string, number>();
   private lastSentCi = new Map<string, number>();
+  private allQuotaNotified = new Set<string>();
+  private waitingQuotaNotified = false;
+  private waitingQuotaCheckTimer: ReturnType<typeof setTimeout> | undefined;
   private lastSentSummary = new Map<string, number>();
   private lastSentDisk = new Map<'low' | 'ok', number>();
   private diskState: 'low' | 'ok' | undefined;
   private readonly eventDeduper: NotificationDeduper;
   private boundHandler: ((type: string, taskId?: string, payload?: unknown) => void) | null = null;
   private quietHoursQueue: Array<{ type: string; taskId?: string; payload?: unknown; timestamp: number }> = [];
+  private focusDigest = new Map<string, number>();
   private get appName(): string { return this.config.branding?.name || 'AgentHub'; }
   private checkTimer?: NodeJS.Timeout;
 
@@ -99,6 +105,7 @@ export class NotificationService {
     this.eventBus.on('*', this.boundHandler);
     this.checkTimer = setInterval(() => {
       this.checkQuietHoursEnd();
+      this.flushFocusDigest();
     }, 60_000);
     this.checkTimer.unref?.();
   }
@@ -112,9 +119,24 @@ export class NotificationService {
       clearInterval(this.checkTimer);
       this.checkTimer = undefined;
     }
+    if (this.waitingQuotaCheckTimer) {
+      clearTimeout(this.waitingQuotaCheckTimer);
+      this.waitingQuotaCheckTimer = undefined;
+    }
+  }
+
+  updateConfig(config: AgentHubConfig): void {
+    this.config = config;
   }
 
   handleEvent(type: string, taskId?: string, payload?: unknown): void {
+    if (type === 'config.updated') {
+      if (payload && typeof payload === 'object') {
+        updateConfigInMemory(this.config, payload as Parameters<typeof updateConfigInMemory>[1]);
+      }
+      return;
+    }
+
     if (!this.config.notifications || this.config.notifications.desktop === false) {
       return;
     }
@@ -124,20 +146,34 @@ export class NotificationService {
     if (level === 'off') return;
     if (level === 'important' && !new Set([
       'brain.notify', 'task.review_ready', 'task.failed', 'task.blocked', 'review.escalated',
-      'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed',
+      'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed', 'task.waiting_quota',
     ]).has(type)) return;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    if (type === 'quota.exhausted') {
-      const allExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
-      // Individual quota exhaustion remains visible in the dashboard. Desktop
-      // should only interrupt the user when an entire engine is unavailable.
-      if (!allExhausted) return;
+    const notifyConfig = this.config.telegram?.notify;
+    const notifyPerModel = notifyConfig
+      ? typeof notifyConfig.quotaPerModel === 'boolean' ? notifyConfig.quotaPerModel : (notifyConfig as unknown as { quota?: boolean }).quota === true
+      : false;
+    const notifyAllExhausted = notifyConfig?.quotaAllExhausted !== false;
+    if (type === 'quota.cleared') {
+      this.allQuotaNotified.delete('all');
+      if (typeof p.family === 'string') this.allQuotaNotified.delete(p.family);
+      this.lastSent.delete('critical:AgentHub: Mọi tài khoản đều đã hết quota');
     }
+    if (type === 'task.waiting_quota' && p.reason === 'quota' && this.taskRepo) {
+      this.queueWaitingQuotaCheck(notifyAllExhausted);
+      return;
+    }
+    if ((type === 'quota.cleared' || type === 'task.queued') && this.taskRepo) this.queueWaitingQuotaCheck(notifyAllExhausted);
     if (!this.eventDeduper.shouldSend(type, taskId, payload)) return;
 
     // 1. In brain auto mode: suppress raw task notifications
     const taskProjectId = taskId?.includes('/') ? taskId.slice(0, taskId.indexOf('/')) : typeof p.projectId === 'string' ? p.projectId : null;
+    const focusProjectId = this.config.focus?.projectId;
+    if (focusProjectId && taskProjectId && taskProjectId !== focusProjectId && this.isFocusDeferredEvent(type)) {
+      this.focusDigest.set(taskProjectId, (this.focusDigest.get(taskProjectId) || 0) + 1);
+      return;
+    }
     const effectiveMode = effectiveBrainMode(taskProjectId, taskProjectId ? this.projectRepo?.get(taskProjectId) : null, this.config.brain);
     if (effectiveMode === 'auto') {
       const allExhausted =
@@ -153,7 +189,8 @@ export class NotificationService {
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
-        allExhausted;
+        allExhausted ||
+        (type === 'task.waiting_quota' && p.reason === 'no_department_profile');
 
       if (!isSystemEvent) {
         return;
@@ -176,6 +213,13 @@ export class NotificationService {
     }
 
     switch (type) {
+      case 'task.waiting_quota': {
+        if (p.reason !== 'no_department_profile') break;
+        const department = typeof p.departmentName === 'string' ? p.departmentName : 'phòng ban';
+        const message = typeof p.message === 'string' ? p.message : `Gán tài khoản cho ${department} hoặc bỏ gán`;
+        this.notify(`${this.appName}: task đang chờ vì phòng ${department} chưa có tài khoản được phép. ${message}`, 'critical');
+        break;
+      }
       case 'brain.notify': {
         const text = typeof p.text === 'string' ? p.text : '';
         if (!text) break;
@@ -269,16 +313,25 @@ export class NotificationService {
       }
 
       case 'quota.exhausted': {
+        const family = typeof p.family === 'string' ? p.family : typeof p.model === 'string' ? p.model : '';
+        const quotaKey = family || 'all';
         const isAllExhausted = isQuotaEventEngineWide(p, this.profileRepo, this.quotaMarkRepo, this.now());
+        if (!isAllExhausted) this.allQuotaNotified.delete(quotaKey);
         if (effectiveMode === 'auto') {
-          if (isAllExhausted) {
+          if (isAllExhausted && notifyAllExhausted && !this.allQuotaNotified.has(quotaKey)) {
+            this.allQuotaNotified.add(quotaKey);
             this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
           }
           break;
         }
-        if (level === 'important' && !isAllExhausted) break;
+        if (isAllExhausted) {
+          if (!notifyAllExhausted || this.allQuotaNotified.has(quotaKey)) break;
+          this.allQuotaNotified.add(quotaKey);
+          this.notify('AgentHub: Mọi tài khoản đều đã hết quota', 'critical');
+          break;
+        }
+        if (!notifyPerModel) break;
         const name = (p.profile || p.worker || p.profileName || 'Hồ sơ') as string;
-        const family = (p.family || p.model || '') as string;
         const resetTimeStr = this.resolveResetTime(p, name, family);
         const msg = isAllExhausted
           ? 'AgentHub: Mọi tài khoản đều đã hết quota'
@@ -296,6 +349,7 @@ export class NotificationService {
 
       case 'claude.fallback_changed': {
         const step = p.step && typeof p.step === 'object' ? p.step as Record<string, unknown> : null;
+        if (p.fallbackAvailable === true || (step && step.type !== 'wait')) break;
         const label = step?.type === 'model' ? `model ${String(step.model)}`
           : step?.type === 'profile' ? `tài khoản ${String(step.profile || 'khác')}`
           : step?.type === 'apiKey' ? 'API key'
@@ -360,6 +414,35 @@ export class NotificationService {
         break;
       }
     }
+  }
+
+  private isFocusDeferredEvent(type: string): boolean {
+    return type.startsWith('task.') || type.startsWith('assistant.') || type.startsWith('brain.');
+  }
+
+  private flushFocusDigest(): void {
+    if (this.focusDigest.size === 0) return;
+    const parts = [...this.focusDigest.entries()].map(([project, count]) => `${project}: ${count}`);
+    this.focusDigest.clear();
+    this.notify(`${this.appName}: ${parts.join(', ')} thông báo từ project khác trong lúc đang tập trung`, 'normal');
+  }
+
+  private queueWaitingQuotaCheck(notifyAllExhausted: boolean): void {
+    if (this.waitingQuotaCheckTimer || !this.taskRepo) return;
+    this.waitingQuotaCheckTimer = setTimeout(() => {
+      this.waitingQuotaCheckTimer = undefined;
+      const waiting = this.taskRepo?.getByStatus('waiting_quota').filter((task) => task.waitReason === 'quota') || [];
+      if (waiting.length === 0) {
+        this.waitingQuotaNotified = false;
+        return;
+      }
+      if (!notifyAllExhausted || this.waitingQuotaNotified) return;
+      this.waitingQuotaNotified = true;
+      const active = this.quotaMarkRepo?.getActive(Math.floor(this.now() / 1000)) || [];
+      const until = active.length > 0 ? Math.min(...active.map((mark) => mark.until)) : 0;
+      const time = until ? new Date(until * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'sớm';
+      this.notify(`${waiting.length} task đang chờ quota, sớm nhất mở lại lúc ${time}`, 'warning');
+    }, WAITING_QUOTA_BATCH_DELAY_MS);
   }
 
   private resolveTaskTitle(taskId?: string, payload?: Record<string, unknown>): string {

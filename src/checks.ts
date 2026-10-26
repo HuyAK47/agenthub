@@ -73,9 +73,30 @@ function changedFiles(repo: string, task: TaskRow, project: ProjectRow): string[
   } catch { /* ignore */ }
   return [...names];
 }
+
+function committedAgentHubFiles(repo: string, task: TaskRow, project: ProjectRow): string[] {
+  try {
+    return execFileSync('git', ['diff', '--name-only', `${task.baseRef || project.defaultBranch}...${task.branch || 'HEAD'}`], { cwd: repo, encoding: 'utf8' })
+      .split('\n')
+      .map((name) => name.trim())
+      .filter((name) => name === '.agenthub' || name.startsWith('.agenthub/'));
+  } catch {
+    return [];
+  }
+}
+
 export function mandatoryChecks(repo: string, task: TaskRow, project: ProjectRow): CheckDefinition[] {
   const files = changedFiles(repo, task, project);
-  return ['zero-byte', 'uncommitted', 'conflict-markers'].map((name) => ({ name, cmd: [], timeoutSec: 30, _files: files } as CheckDefinition & { _files: string[] }));
+  const checks = [
+    { name: 'zero-byte', files },
+    { name: 'uncommitted', files },
+    { name: 'conflict-markers', files },
+    { name: 'agenthub-files', files: committedAgentHubFiles(repo, task, project) },
+  ].map(({ name, files: checkFiles }) => ({ name, cmd: [], timeoutSec: 30, _files: checkFiles } as CheckDefinition & { _files: string[] }));
+  if (project.settings && (projectSettings(project).commitConvention.commitRegex || projectSettings(project).commitConvention.commitTemplate.includes('{ref}'))) {
+    checks.push({ name: 'commit-message', cmd: [], timeoutSec: 30, _files: [] } as CheckDefinition & { _files: string[] });
+  }
+  return checks;
 }
 function tail(value: string): string { return value.length > MAX_OUTPUT ? value.slice(-MAX_OUTPUT) : value; }
 function worktreeHead(repo: string): string | null {
@@ -90,9 +111,9 @@ function envFromFiles(repo: string, hubHome: string, project?: ProjectRow): Node
   for (const file of ['.env', '.env.local']) if (fs.existsSync(path.join(repo, file))) for (const line of fs.readFileSync(path.join(repo, file), 'utf8').split('\n')) { const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^['"]|['"]$/g, ''); }
   return workerEnvironment(hubHome, env, { project, guards: false, workerCount: project?.maxParallel });
 }
-async function runOne(check: CheckDefinition, repo: string, hubHome: string, project?: ProjectRow): Promise<CheckResult> {
+async function runOne(check: CheckDefinition, repo: string, hubHome: string, project?: ProjectRow, task?: TaskRow): Promise<CheckResult> {
   const started = Date.now();
-  if (['zero-byte', 'uncommitted', 'conflict-markers'].includes(check.name)) {
+  if (['zero-byte', 'uncommitted', 'conflict-markers', 'agenthub-files'].includes(check.name)) {
     const files = (check as CheckDefinition & { _files?: string[] })._files || []; let output = '';
     if (check.name === 'uncommitted') {
       try {
@@ -125,7 +146,30 @@ async function runOne(check: CheckDefinition, repo: string, hubHome: string, pro
       }
     }
     else if (check.name === 'zero-byte') output = files.filter((f) => !f.endsWith('.gitkeep') && !f.endsWith('__init__.py') && fs.existsSync(path.join(repo, f)) && fs.statSync(path.join(repo, f)).size === 0).join('\n');
+    else if (check.name === 'agenthub-files') output = files.length > 0
+      ? `Không được commit file trong .agenthub/:\n${files.join('\n')}`
+      : '';
     else output = files.filter((f) => { try { return CONFLICT_MARKER_REGEX.test(fs.readFileSync(path.join(repo, f), 'utf8')); } catch { return false; } }).join('\n');
+    return { name: check.name, ok: !output, exitCode: output ? 1 : 0, durationMs: Date.now() - started, outputTail: tail(output || 'OK') };
+  }
+  if (check.name === 'commit-message' && project && task) {
+    let output = '';
+    const convention = projectSettings(project).commitConvention;
+    try {
+      const range = `${(task.baseRef || project.defaultBranch || 'main')}..HEAD`;
+      const log = execFileSync('git', ['log', '--no-merges', '--format=%H%x00%s', range], { cwd: repo, encoding: 'utf8' });
+      const regex = convention.commitRegex ? new RegExp(convention.commitRegex) : null;
+      const bad: string[] = [];
+      for (const line of log.split('\n').filter(Boolean)) {
+        const [hash, message] = line.split('\0');
+        if ((regex && !regex.test(message)) || (convention.commitTemplate.includes('{ref}') && (!task.externalRef || !message.includes(task.externalRef)))) {
+          bad.push(`${hash.slice(0, 10)} ${message}`);
+        }
+      }
+      output = bad.join('\n');
+    } catch (error) {
+      output = `Không đọc được commit: ${String(error)}`;
+    }
     return { name: check.name, ok: !output, exitCode: output ? 1 : 0, durationMs: Date.now() - started, outputTail: tail(output || 'OK') };
   }
   const r = await runInProcessGroup(check.cmd[0], check.cmd.slice(1), { cwd: repo, env: envFromFiles(repo, hubHome, project), timeoutMs: (check.timeoutSec || 600) * 1000 });
@@ -160,7 +204,7 @@ export class CheckRunner {
         results.push({ ...saved, ok: Boolean(saved.ok) });
         continue;
       }
-      const result = await runOne(check, repo, hubHome, project);
+      const result = await runOne(check, repo, hubHome, project, task);
       results.push(result);
       this.db.prepare('INSERT INTO check_results (taskId, runId, name, ok, exitCode, durationMs, outputTail, head) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .run(task.id, runId, result.name, result.ok ? 1 : 0, result.exitCode, result.durationMs, result.outputTail, head);

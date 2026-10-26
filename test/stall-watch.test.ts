@@ -31,7 +31,7 @@ describe('Stall & Looping Detection (g-no-commit-watch)', () => {
 
     projectPath = path.join(tmpDir, 'repo');
     fs.mkdirSync(projectPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: projectPath });
+    execFileSync('git', ['init', '--template='], { cwd: projectPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
     fs.writeFileSync(path.join(projectPath, 'README.md'), '# Main Repo');
     execFileSync('git', ['add', '.'], { cwd: projectPath });

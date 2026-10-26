@@ -6,6 +6,7 @@ import type { ExtraDiskPath } from './disk.js';
 import { normalizeFallbackSteps, ClaudeFallbackStep } from './chat/failover.js';
 import { DEFAULT_WAKEUP_CONFIG, type WakeupConfig } from './quota/wakeup.js';
 import { BrandingConfig, parseBranding } from './branding.js';
+import { DEFAULT_REVIEWER_ARBITER, reviewerSettingsFromLegacy, type ReviewerArbiter, type ReviewerFallback, type ReviewerOrderItem } from './reviewer-config.js';
 
 export interface ChatConfig {
   claudeBin?: string;
@@ -54,11 +55,14 @@ export const DEFAULT_BRAIN_DIGEST_CONFIG: BrainDigestConfig = {
 };
 
 export interface BrainConfig {
+  engine?: 'claude' | 'codex';
   fallback: ClaudeFallbackStep[];
   policy: string[];
   claudeProfile: string;
   claudeProfileExplicit?: boolean;
   model: string;
+  codexProfile?: string;
+  codexModel?: string;
   mode: 'off' | 'suggest' | 'auto';
   permissions: 'standard' | 'trusted' | 'full';
   maxConcurrent: number;
@@ -66,6 +70,14 @@ export interface BrainConfig {
   dailyTokenBudget: number;
   turnTimeoutSec?: number;
   digest: BrainDigestConfig;
+  /** Optional cross-department coordinator. Disabled unless explicitly enabled. */
+  director?: {
+    enabled: boolean;
+    engine: 'claude' | 'codex';
+    model: string;
+    codexProfile?: string;
+    permissions: 'standard' | 'trusted' | 'full';
+  };
 }
 
 export interface AssistantConfig {
@@ -112,7 +124,8 @@ export interface TelegramNotifyConfig {
   reviewReady: boolean;
   failed: boolean;
   blocked: boolean;
-  quota: boolean;
+  quotaPerModel: boolean;
+  quotaAllExhausted: boolean;
   fallback: boolean;
   brainWaiting?: boolean;
 }
@@ -122,15 +135,25 @@ export interface TelegramChat {
   name: string;
   username?: string;
   /** Optional: associate this chat entry with a project for /use routing. */
-  kind?: 'chat';
+  kind?: 'chat' | 'group' | 'supergroup' | 'channel';
   projectId?: string;
 }
+
+export interface TelegramProjectTopic {
+  chatId: number;
+  threadId: number;
+}
+
+export type TelegramDepartmentTopic = TelegramProjectTopic;
 
 export interface TelegramConfig {
   enabled: boolean;
   botTokenFile: string;
   allowedChatIds: number[];
   chats: TelegramChat[];
+  topicMode?: 'project' | 'department';
+  projectTopics: Record<string, TelegramProjectTopic>;
+  departmentTopics?: Record<string, TelegramProjectTopic>;
   notify: TelegramNotifyConfig;
 }
 
@@ -158,7 +181,8 @@ export const DEFAULT_TELEGRAM_NOTIFY: TelegramNotifyConfig = {
   reviewReady: true,
   failed: true,
   blocked: true,
-  quota: true,
+  quotaPerModel: false,
+  quotaAllExhausted: true,
   fallback: true,
   brainWaiting: true,
 };
@@ -260,11 +284,18 @@ export interface AgentHubConfig {
   tokenPath: string;
   configFilePath: string;
   port: number;
+  host: string;
+  allowedHosts: string[];
   defaultModelChains: {
     hard: string[];
     easy: string[];
   };
   defaultTimeout: number;
+  focus: {
+    projectId: string | null;
+    since: string | null;
+    pauseRunning: boolean;
+  };
   multiplePerProvider: boolean;
   multiplePerProviderConfigured: boolean;
   slotsPerAgyProfile: number;
@@ -292,6 +323,9 @@ export interface AgentHubConfig {
     claudeModel: string;
     /** Minutes a review may wait for a busy Codex account before Claude reviews instead. */
     claudeFallbackAfterMin: number;
+    order: ReviewerOrderItem[];
+    fallback: ReviewerFallback;
+    arbiter: ReviewerArbiter;
   };
   notifications: NotificationsConfig;
   /** Đánh thức quota theo giờ hẹn (src/quota/wakeup.ts). */
@@ -322,6 +356,11 @@ export interface AgentHubConfig {
   deploy: Record<string, DeployProjectConfig>;
 }
 
+type ReviewerConfigPatch = Partial<Omit<AgentHubConfig['reviewer'], 'fallback' | 'arbiter'>> & {
+  fallback?: Partial<ReviewerFallback>;
+  arbiter?: Partial<ReviewerArbiter>;
+};
+
 const DEFAULT_MODEL_CHAINS = {
   hard: ['codex:gpt-5.6-luna', 'gemini-3.8-flash-high'],
   easy: ['gemini-3.8-flash-medium', 'codex:gpt-5.6-luna'],
@@ -333,6 +372,7 @@ export function saveConfig(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    focus?: Partial<AgentHubConfig['focus']>;
     multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
@@ -340,9 +380,12 @@ export function saveConfig(
     port: number;
     autoFixOnFail?: boolean;
     chat: Partial<ChatConfig>;
-    brain?: Partial<BrainConfig>;
+    brain?: Partial<Omit<BrainConfig, 'digest' | 'director'>> & {
+      digest?: Partial<BrainDigestConfig>;
+      director?: Partial<BrainConfig['director']>;
+    };
     assistant?: Partial<AssistantConfig>;
-    reviewer: Partial<AgentHubConfig['reviewer']>;
+    reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
       desktop: boolean;
       desktopLevel: NotificationsConfig['desktopLevel'];
@@ -367,6 +410,9 @@ export function saveConfig(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      topicMode?: 'project' | 'department';
+      projectTopics?: Record<string, TelegramProjectTopic>;
+      departmentTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -411,6 +457,14 @@ export function saveConfig(
                   },
                 }
               : {}),
+            ...(patch.brain.director && typeof patch.brain.director === 'object'
+              ? {
+                  director: {
+                    ...((((current.brain as Record<string, unknown>) || {}).director as Record<string, unknown>) || {}),
+                    ...patch.brain.director,
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -425,6 +479,7 @@ export function saveConfig(
             ...(patch.notifications.quietHours && typeof patch.notifications.quietHours === 'object'
               ? {
                   quietHours: {
+                    ...DEFAULT_QUIET_HOURS_CONFIG,
                     ...((((current.notifications as Record<string, unknown>) || {}).quietHours as Record<string, unknown>) || {}),
                     ...patch.notifications.quietHours,
                   },
@@ -435,6 +490,9 @@ export function saveConfig(
       : {}),
     ...(patch.reviewer && typeof patch.reviewer === 'object'
       ? { reviewer: { ...((current.reviewer as Record<string, unknown>) || {}), ...patch.reviewer } }
+      : {}),
+    ...(patch.focus && typeof patch.focus === 'object'
+      ? { focus: { ...((current.focus as Record<string, unknown>) || {}), ...patch.focus } }
       : {}),
     ...(patch.disk ? { disk: { ...((current.disk as Record<string, unknown>) || {}), ...patch.disk } } : {}),
     ...(patch.cleanup ? { cleanup: { ...((current.cleanup as Record<string, unknown>) || {}), ...patch.cleanup } } : {}),
@@ -506,15 +564,19 @@ export function updateConfigInMemory(
     modelChainHard: string[];
     modelChainEasy: string[];
     defaultTimeout: number;
+    focus?: Partial<AgentHubConfig['focus']>;
     multiplePerProvider?: boolean;
     slotsPerAgyProfile: number;
     slotsPerCodexProfile: number;
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
     autoFixOnFail: boolean;
     chat: Partial<ChatConfig>;
-    brain?: Partial<BrainConfig>;
+    brain?: Partial<Omit<BrainConfig, 'digest' | 'director'>> & {
+      digest?: Partial<BrainDigestConfig>;
+      director?: Partial<BrainConfig['director']>;
+    };
     assistant?: Partial<AssistantConfig>;
-    reviewer: Partial<AgentHubConfig['reviewer']>;
+    reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
       desktop: boolean;
       desktopLevel: NotificationsConfig['desktopLevel'];
@@ -539,6 +601,9 @@ export function updateConfigInMemory(
       botTokenFile?: string;
       allowedChatIds?: number[];
       chats?: TelegramChat[];
+      topicMode?: 'project' | 'department';
+      projectTopics?: Record<string, TelegramProjectTopic>;
+      departmentTopics?: Record<string, TelegramProjectTopic>;
       notify?: Partial<TelegramNotifyConfig>;
     }>;
     workers?: Partial<WorkersConfig>;
@@ -555,6 +620,7 @@ export function updateConfigInMemory(
   if (patch.defaultTimeout !== undefined) {
     config.defaultTimeout = patch.defaultTimeout;
   }
+  if (patch.focus) config.focus = { ...config.focus, ...patch.focus };
   if (patch.multiplePerProvider !== undefined) {
     config.multiplePerProvider = patch.multiplePerProvider;
     config.multiplePerProviderConfigured = true;
@@ -594,12 +660,24 @@ export function updateConfigInMemory(
     if (patch.brain.policy) config.brain.policy = [...patch.brain.policy];
     if (patch.brain.claudeProfile !== undefined) config.brain.claudeProfile = patch.brain.claudeProfile;
     if (patch.brain.model !== undefined) config.brain.model = patch.brain.model;
+    if (patch.brain.engine !== undefined) config.brain.engine = patch.brain.engine;
+    if (patch.brain.codexProfile !== undefined) config.brain.codexProfile = patch.brain.codexProfile;
+    if (patch.brain.codexModel !== undefined) config.brain.codexModel = patch.brain.codexModel;
     if (patch.brain.mode !== undefined) config.brain.mode = patch.brain.mode;
     if (patch.brain.permissions !== undefined) config.brain.permissions = patch.brain.permissions;
     if (patch.brain.maxTurnsPerHour !== undefined) config.brain.maxTurnsPerHour = patch.brain.maxTurnsPerHour;
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
     if (patch.brain.maxConcurrent !== undefined) config.brain.maxConcurrent = patch.brain.maxConcurrent;
+    if (patch.brain.director) {
+      config.brain.director = {
+        enabled: patch.brain.director.enabled ?? config.brain.director?.enabled ?? false,
+        engine: patch.brain.director.engine ?? config.brain.director?.engine ?? 'claude',
+        model: patch.brain.director.model ?? config.brain.director?.model ?? 'opus',
+        codexProfile: patch.brain.director.codexProfile ?? config.brain.director?.codexProfile,
+        permissions: patch.brain.director.permissions ?? config.brain.director?.permissions ?? 'standard',
+      };
+    }
     if (patch.brain.digest) {
       config.brain.digest = {
         ...config.brain.digest,
@@ -610,8 +688,21 @@ export function updateConfigInMemory(
   if (patch.assistant) {
     config.assistant = { ...config.assistant, ...patch.assistant };
   }
-  if (patch.reviewer) config.reviewer = { ...config.reviewer, ...patch.reviewer };
+  if (patch.reviewer) {
+    config.reviewer = {
+      ...config.reviewer,
+      ...patch.reviewer,
+      fallback: { ...config.reviewer.fallback, ...patch.reviewer.fallback },
+      arbiter: { ...config.reviewer.arbiter, ...patch.reviewer.arbiter },
+    };
+  }
   if (patch.notifications) {
+    if (!config.notifications) {
+      config.notifications = {
+        desktop: true,
+        desktopLevel: 'important',
+      };
+    }
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
     }
@@ -696,6 +787,9 @@ export function updateConfigInMemory(
           ? [...patch.telegram.allowedChatIds]
           : config.telegram.allowedChatIds,
       chats: patch.telegram.chats !== undefined ? [...patch.telegram.chats] : config.telegram.chats,
+      topicMode: patch.telegram.topicMode !== undefined ? patch.telegram.topicMode : config.telegram.topicMode,
+      projectTopics: patch.telegram.projectTopics !== undefined ? { ...patch.telegram.projectTopics } : config.telegram.projectTopics,
+      departmentTopics: patch.telegram.departmentTopics !== undefined ? { ...patch.telegram.departmentTopics } : config.telegram.departmentTopics,
       notify: {
         ...config.telegram.notify,
         ...(patch.telegram.notify || {}),
@@ -771,6 +865,13 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
 
   const envPort = process.env.AGENTHUB_PORT ? parseInt(process.env.AGENTHUB_PORT, 10) : undefined;
   const port = (envPort && !isNaN(envPort)) ? envPort : ((userConfig.port as number) || 7700);
+  const host = process.env.AGENTHUB_HOST || (userConfig.host as string) || '127.0.0.1';
+  const allowedHosts = process.env.AGENTHUB_ALLOWED_HOSTS !== undefined
+    ? process.env.AGENTHUB_ALLOWED_HOSTS.split(',').map((value) => value.trim()).filter(Boolean)
+    : Array.isArray(userConfig.allowedHosts)
+      ? userConfig.allowedHosts.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
+      : [];
+  const rawFocus = (userConfig.focus && typeof userConfig.focus === 'object' ? userConfig.focus : {}) as Record<string, unknown>;
 
   const chatRaw = (userConfig.chat as Record<string, unknown>) || {};
   const chat: ChatConfig = {
@@ -890,11 +991,26 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
           Boolean(chat && typeof chat === 'object' && typeof (chat as TelegramChat).id === 'number' && typeof (chat as TelegramChat).name === 'string'),
         )
       : [],
+    topicMode: rawTelegram.topicMode === 'department' ? 'department' : 'project',
+    projectTopics: rawTelegram.projectTopics && typeof rawTelegram.projectTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.projectTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([projectId, topic]) => [projectId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
+    departmentTopics: rawTelegram.departmentTopics && typeof rawTelegram.departmentTopics === 'object'
+      ? Object.fromEntries(Object.entries(rawTelegram.departmentTopics).filter(([, topic]) => Boolean(
+          topic && typeof topic === 'object' && typeof (topic as TelegramProjectTopic).chatId === 'number' && typeof (topic as TelegramProjectTopic).threadId === 'number',
+        )).map(([deptId, topic]) => [deptId, { chatId: (topic as TelegramProjectTopic).chatId, threadId: (topic as TelegramProjectTopic).threadId }]))
+      : {},
     notify: {
       reviewReady: rawTelegramNotify.reviewReady !== false,
       failed: rawTelegramNotify.failed !== false,
       blocked: rawTelegramNotify.blocked !== false,
-      quota: rawTelegramNotify.quota !== false,
+      // `quota` was the old switch for per-model notifications.
+      quotaPerModel: typeof rawTelegramNotify.quotaPerModel === 'boolean'
+        ? rawTelegramNotify.quotaPerModel
+        : rawTelegramNotify.quota === true,
+      quotaAllExhausted: rawTelegramNotify.quotaAllExhausted !== false,
       fallback: rawTelegramNotify.fallback !== false,
       brainWaiting: rawTelegramNotify.brainWaiting !== false,
     },
@@ -972,11 +1088,18 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     tokenPath: path.join(hubHome, 'token'),
     configFilePath,
     port,
+    host,
+    allowedHosts,
     defaultModelChains: {
       hard: (userConfig as Record<string, unknown>).modelChainHard as string[] || [...DEFAULT_MODEL_CHAINS.hard],
       easy: (userConfig as Record<string, unknown>).modelChainEasy as string[] || [...DEFAULT_MODEL_CHAINS.easy],
     },
     defaultTimeout: (userConfig.defaultTimeout as number) || 3 * 60 * 60,
+    focus: {
+      projectId: typeof rawFocus.projectId === 'string' ? rawFocus.projectId : null,
+      since: typeof rawFocus.since === 'string' ? rawFocus.since : null,
+      pauseRunning: rawFocus.pauseRunning !== false,
+    },
     multiplePerProvider: userConfig.multiplePerProvider !== false,
     multiplePerProviderConfigured: Object.prototype.hasOwnProperty.call(userConfig, 'multiplePerProvider'),
     slotsPerAgyProfile: (userConfig.slotsPerAgyProfile as number) || 2,
@@ -989,6 +1112,7 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
     autoFixOnFail: userConfig.autoFixOnFail === true,
     chat,
     brain: {
+      engine: brainRaw.engine === 'codex' ? 'codex' : 'claude',
       fallback: normalizeFallbackSteps(brainRaw.fallback),
       policy: Array.isArray(brainRaw.policy)
         ? brainRaw.policy.filter((pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0)
@@ -1002,6 +1126,8 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       model: typeof brainRaw.model === 'string' && brainRaw.model
         ? brainRaw.model
         : (chat.models.includes('opus') ? 'opus' : 'sonnet'),
+      codexProfile: typeof brainRaw.codexProfile === 'string' && brainRaw.codexProfile.trim() ? brainRaw.codexProfile.trim() : undefined,
+      codexModel: typeof brainRaw.codexModel === 'string' && brainRaw.codexModel.trim() ? brainRaw.codexModel.trim() : undefined,
       mode: brainRaw.mode === 'off' || brainRaw.mode === 'auto' ? brainRaw.mode : 'suggest',
       permissions: brainRaw.permissions === 'trusted' || brainRaw.permissions === 'full' ? brainRaw.permissions : 'standard',
       maxConcurrent: typeof brainRaw.maxConcurrent === 'number' && brainRaw.maxConcurrent > 0
@@ -1026,6 +1152,16 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
               : DEFAULT_BRAIN_DIGEST_CONFIG.time,
           }
         : { ...DEFAULT_BRAIN_DIGEST_CONFIG },
+      director: {
+        enabled: (brainRaw.director as Record<string, unknown> | undefined)?.enabled === true,
+        engine: (brainRaw.director as Record<string, unknown> | undefined)?.engine === 'codex' ? 'codex' : 'claude',
+        model: typeof (brainRaw.director as Record<string, unknown> | undefined)?.model === 'string'
+          ? (brainRaw.director as Record<string, unknown>).model as string : 'opus',
+        codexProfile: typeof (brainRaw.director as Record<string, unknown> | undefined)?.codexProfile === 'string'
+          ? (brainRaw.director as Record<string, unknown>).codexProfile as string : undefined,
+        permissions: (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'full'
+          ? 'full' : (brainRaw.director as Record<string, unknown> | undefined)?.permissions === 'trusted' ? 'trusted' : 'standard',
+      },
     },
     assistant: {
       enabled: assistantRaw.enabled !== false,
@@ -1064,6 +1200,22 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
         : [],
       claudeModel: typeof reviewerRaw.claudeModel === 'string' && reviewerRaw.claudeModel ? reviewerRaw.claudeModel : 'sonnet',
       claudeFallbackAfterMin: typeof reviewerRaw.claudeFallbackAfterMin === 'number' ? reviewerRaw.claudeFallbackAfterMin : 10,
+      ...(() => {
+        const migrated = reviewerSettingsFromLegacy(reviewerRaw);
+        return {
+          order: migrated.order,
+          fallback: migrated.fallback,
+          arbiter: (() => {
+            const raw = reviewerRaw.arbiter;
+            if (!raw || typeof raw !== 'object') return DEFAULT_REVIEWER_ARBITER;
+            const value = raw as Record<string, unknown>;
+            return {
+              engine: value.engine === 'codex' ? 'codex' : 'claude',
+              model: typeof value.model === 'string' && value.model ? value.model : DEFAULT_REVIEWER_ARBITER.model,
+            };
+          })(),
+        };
+      })(),
     },
     wakeup: parseWakeupConfig(userConfig.wakeup),
     notifications: {
@@ -1135,7 +1287,10 @@ export function loadConfig(overrideHome?: string): AgentHubConfig {
       installers: {
         claude: installer('claude', { package: '@anthropic-ai/claude-code', versionArgs: ['--version'] }),
         codex: installer('codex', { package: '@openai/codex', versionArgs: ['--version'] }),
-        agy: installer('agy', { docsUrl: 'https://antigravity.google/' }),
+        agy: installer('agy', {
+          command: ['sh', '-c', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'],
+          docsUrl: 'https://antigravity.google/',
+        }),
       },
     },
     workers,

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
 import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../projects/paths.js';
-import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
+import { ensureIntegrationNodeModules, ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z, ZodError } from 'zod';
-import { AgentHubConfig, TelegramChat, saveConfig, updateConfigInMemory } from '../config.js';
+import { AgentHubConfig, TelegramChat, TelegramProjectTopic, saveConfig, updateConfigInMemory } from '../config.js';
 import {
   ProjectRepo,
   DepartmentRepo,
@@ -54,7 +54,9 @@ import { parseAuthState, parseCodexLoginStatus } from '../profiles/auth.js';
 import { SavingsService } from '../savings.js';
 import { getDailyUsageReport } from '../daily-usage.js';
 import { ClaudeSessionRepo } from '../claude-sessions/repo.js';
+import type { ClaudeSessionRow } from '../claude-sessions/repo.js';
 import { isClaudeProcessOpen, isClaudeQuotaLimited, ClaudeSessionScanner } from '../claude-sessions/scanner.js';
+import type { PageResult } from '../pagination.js';
 import { findClaudeBin, getClaudeVersion } from '../chat/claude.js';
 import { listAllWorktreeProcesses, reapSyncForWorktree } from '../reaper.js';
 import { mergeTaskIntoBase, MergeError } from '../merge.js';
@@ -63,7 +65,9 @@ import { excerptHash, extractFileLocations, toMarkdownCodeBlock, truncateExcerpt
 import type { TelegramBotService } from '../telegram.js';
 import { ReviewChainSchema, parseReviewChain, type ReviewChainStep } from '../review-chain.js';
 import { isKnownModel } from '../quota/index.js';
+import { isValidReviewerModel, ReviewerArbiterSchema, ReviewerFallbackSchema, ReviewerOrderSchema, reviewerSettingsFromLegacy } from '../reviewer-config.js';
 import { SetupManager } from '../tools/setup.js';
+import { createNewGitProject, inspectProject, readClaudeSessionExcerpt } from '../projects/inspect.js';
 import type { DeployService } from '../deploy.js';
 import type { PerfCollector } from '../perf.js';
 
@@ -233,10 +237,19 @@ export const VALID_AGY_MODELS = new Set([
   'gpt-oss-120b-medium',
 ]);
 
-export const modelValidator = z.string().refine(
-  (m) => (m.startsWith('codex:') && m.length > 6) || VALID_AGY_MODELS.has(m),
-  { message: 'Mỗi model phải là id agy hợp lệ hoặc có tiền tố codex:' },
+export const modelValidator = z.string().trim().min(1, 'Model không được để trống').refine(
+  (m) => (m.startsWith('codex:') && isValidReviewerModel('codex', m.slice('codex:'.length))) || VALID_AGY_MODELS.has(m),
+  { message: 'Mỗi model phải là id agy hợp lệ hoặc model codex hợp lệ (codex:gpt-...)' },
 );
+
+export const reviewerModelValidator = z
+  .string()
+  .trim()
+  .min(1, 'Model của reviewer không được để trống')
+  .refine(
+    (m) => isValidReviewerModel('codex', m) || isValidReviewerModel('claude', m),
+    { message: 'Model của reviewer phải theo cú pháp engine codex hoặc claude hợp lệ' },
+  );
 const taskModelValidator = z.string().trim().min(1, 'Model không được để trống');
 
 export const ProjectHooksSchema = z.object({
@@ -275,9 +288,16 @@ export const DepartmentInputSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1).max(120),
   priority: z.number().int().default(0),
-  maxParallel: z.number().int().positive().default(3),
+  maxParallel: z.number().int().nonnegative().default(0),
   claudeDailyTokenBudget: z.number().int().nonnegative().default(0),
   telegramTopicId: z.number().int().positive().nullable().default(null),
+  brainEngine: z.enum(['claude', 'codex']).default('claude'),
+  brainModel: z.string().min(1).default('sonnet'),
+  brainCodexProfile: z.string().min(1).nullable().default(null),
+  brainMode: z.enum(['inherit', 'off', 'suggest', 'auto']).default('inherit'),
+  brainPermissions: z.enum(['inherit', 'standard', 'trusted', 'full']).default('full'),
+  brainDailyTokenBudget: z.number().int().nonnegative().default(0),
+  brainMaxTurnsPerHour: z.number().int().positive().default(20),
 });
 
 export const CreateProjectSchema = z.object({
@@ -314,6 +334,7 @@ export const CreateTaskSchema = z.object({
   project: z.string().min(1),
   slug: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
   title: z.string().min(1),
+  externalRef: z.string().trim().max(200).optional(),
   body: z.string().optional(),
   level: z.enum(['easy', 'hard']).default('easy'),
   dependsOn: z.array(z.string()).optional(),
@@ -431,6 +452,8 @@ export const MarkQuotaSchema = z.object({
   reason: z.string().optional(),
 });
 
+export const timeStringValidator = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Định dạng giờ phải là HH:MM (00:00 - 23:59)');
+
 export const UpdateConfigSchema = z.object({
   branding: z.object({
     name: z.string().trim().min(1).max(80).optional(),
@@ -473,14 +496,15 @@ export const UpdateConfigSchema = z.object({
       maxConcurrent: z.number().int().positive().optional(),
       idleTimeoutSec: z.number().int().positive().optional(),
       permissionTimeoutSec: z.number().int().positive().optional(),
+      claudeProfile: z.string().optional(),
       model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
-      models: z.array(z.string().trim().min(1)).min(1).optional(),
+      models: z.array(z.enum(['opus', 'sonnet', 'haiku'])).min(1).optional(),
       autoCompactPercent: z.number().min(0).max(100).optional(),
     })
     .optional(),
   reviewer: z.object({
     enabled: z.boolean().optional(),
-    model: modelValidator.optional(),
+    model: reviewerModelValidator.or(z.literal('')).optional(),
     timeoutSec: z.number().int().positive().optional(),
     failoverSec: z.number().int().positive().optional(),
     maxChangesRequested: z.number().int().positive().optional(),
@@ -488,23 +512,46 @@ export const UpdateConfigSchema = z.object({
     claudeProfiles: z.array(z.string().min(1)).max(20).optional(),
     claudeModel: z.enum(['opus', 'sonnet', 'haiku']).optional(),
     claudeFallbackAfterMin: z.number().int().min(1).max(1440).optional(),
+    order: ReviewerOrderSchema.optional(),
+    fallback: ReviewerFallbackSchema.partial().optional(),
+    arbiter: ReviewerArbiterSchema.optional(),
+  }).optional(),
+  focus: z.object({
+    projectId: z.string().min(1).nullable().optional(),
+    since: z.string().nullable().optional(),
+    pauseRunning: z.boolean().optional(),
   }).optional(),
   brain: z.object({
+    engine: z.enum(['claude', 'codex']).optional(),
     fallback: z.array(z.discriminatedUnion('type', [
-      z.object({ type: z.literal('profile'), profile: z.string().min(1).optional() }),
-      z.object({ type: z.literal('model'), model: z.string().min(1) }),
-      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive() }),
+      z.object({ type: z.literal('profile'), profile: z.string().trim().min(1, 'Tên profile không được để trống').optional() }),
+      z.object({ type: z.literal('model'), model: z.string().trim().min(1, 'Tên model không được để trống') }),
+      z.object({ type: z.literal('apiKey'), dailyCapUSD: z.number().positive('Hạn mức ngày phải là số dương') }),
       z.object({ type: z.literal('engine'), engine: z.literal('codex') }),
       z.object({ type: z.literal('wait') }),
     ])).max(10).optional(),
     policy: z.array(z.string().min(1)).max(100).optional(),
     claudeProfile: z.string().min(1).optional(),
+    codexProfile: z.string().min(1).optional(),
+    codexModel: z.string().trim().min(1).optional(),
     model: z.enum(['', 'opus', 'sonnet', 'haiku']).optional(),
     mode: z.enum(['off', 'suggest', 'auto']).optional(),
     permissions: z.enum(['standard', 'trusted', 'full']).optional(),
     maxConcurrent: z.number().int().positive().optional(),
     maxTurnsPerHour: z.number().int().positive().optional(),
     dailyTokenBudget: z.number().int().nonnegative().optional(),
+    turnTimeoutSec: z.number().int().positive().optional(),
+    digest: z.object({
+      enabled: z.boolean().optional(),
+      time: timeStringValidator,
+    }).partial().optional(),
+    director: z.object({
+      enabled: z.boolean().optional(),
+      engine: z.enum(['claude', 'codex']).optional(),
+      model: z.string().trim().min(1).optional(),
+      codexProfile: z.string().trim().min(1).optional(),
+      permissions: z.enum(['standard', 'trusted', 'full']).optional(),
+    }).partial().optional(),
   }).optional(),
   assistant: z.object({
     enabled: z.boolean().optional(),
@@ -513,13 +560,13 @@ export const UpdateConfigSchema = z.object({
     permissions: z.enum(['guarded', 'full']).optional(),
   }).optional(),
   notifications: z.object({
-    desktop: z.boolean(),
-    // Trước đây thiếu nên zod bỏ quietHours: giờ yên lặng chỉnh trên web không được lưu.
+    desktop: z.boolean().optional(),
+    desktopLevel: z.enum(['all', 'important', 'critical', 'off']).optional(),
     quietHours: z.object({
       enabled: z.boolean().optional(),
-      start: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
-      end: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
-    }).optional(),
+      start: timeStringValidator,
+      end: timeStringValidator,
+    }).partial().optional(),
     /** Báo khi quota 5h/tuần của một tài khoản tụt xuống dưới ngưỡng này (%); 0 = tắt. */
     quotaLowPct: z.number().int().min(0).max(95).optional(),
   }).optional(),
@@ -549,6 +596,9 @@ export const UpdateConfigSchema = z.object({
     pressureOk: z.number().positive().optional(),
     minFreeMemGB: z.number().positive().optional(),
     recoverAfterSec: z.number().int().positive().optional(),
+    pausePolicy: z.enum(['recent', 'rss']).optional(),
+    maxAutoPaused: z.number().int().positive().optional(),
+    autoPauseThresholdSec: z.number().int().positive().optional(),
   }).optional(),
   stall: z.object({
     noCommitMin: z.number().positive().optional(),
@@ -558,17 +608,44 @@ export const UpdateConfigSchema = z.object({
     minFreeGB: z.number().positive().optional(),
     extraPaths: z.array(z.object({ path: z.string().min(1), minFreeGB: z.number().positive(), label: z.string().min(1) })).optional(),
   }).optional(),
+  cleanup: z.object({
+    nodeModulesOnDone: z.boolean().optional(),
+    worktreeOnDoneAfterHours: z.number().int().nonnegative().optional(),
+  }).optional(),
+  cacheDir: z.string().optional(),
+  cacheMaxEntries: z.number().int().positive().optional(),
+  cacheMaxGB: z.number().positive().optional(),
   telegram: z.object({
     enabled: z.boolean().optional(),
     botTokenFile: z.string().optional(),
     allowedChatIds: z.array(z.number()).optional(),
+    chats: z.array(z.object({
+      id: z.number(),
+      name: z.string(),
+      username: z.string().optional(),
+      kind: z.enum(['chat', 'group', 'supergroup', 'channel']).optional(),
+      projectId: z.string().optional(),
+    })).optional(),
+    topicMode: z.enum(['project', 'department']).optional(),
+    projectTopics: z.record(z.object({ chatId: z.number(), threadId: z.number() })).optional(),
+    departmentTopics: z.record(z.object({ chatId: z.number(), threadId: z.number() })).optional(),
     notify: z.object({
       reviewReady: z.boolean().optional(),
       failed: z.boolean().optional(),
       blocked: z.boolean().optional(),
       quota: z.boolean().optional(),
+      quotaPerModel: z.boolean().optional(),
+      quotaAllExhausted: z.boolean().optional(),
       fallback: z.boolean().optional(),
+      brainWaiting: z.boolean().optional(),
     }).optional(),
+  }).optional(),
+  updates: z.object({
+    check: z.boolean().optional(),
+    repo: z.string().optional(),
+  }).optional(),
+  workers: z.object({
+    codexSandbox: z.enum(['off', 'workspace-write']).optional(),
   }).optional(),
   ui: z.object({
     tours: z.record(z.boolean()).optional(),
@@ -711,6 +788,9 @@ export function formatEventSummary(
       }
       if (reason === 'profile_busy') {
         return `${taskLabel} chờ tài khoản rảnh`;
+      }
+      if (reason === 'focus') {
+        return `${taskLabel} chờ vì đang tập trung cho project khác`;
       }
       return `${taskLabel} chờ quota khả dụng`;
     }
@@ -855,6 +935,7 @@ export class AppService {
   private gitVersion: { value: string | null; checkedAt: number } | null = null;
   private gitVersionCheck?: Promise<string | null>;
   private static readonly SETUP_VERSION_CACHE_MS = 10 * 60 * 1000;
+  private failedAutoMerges = new Set<string>();
   constructor(
     public config: AgentHubConfig,
     public projectRepo: ProjectRepo,
@@ -903,6 +984,7 @@ export class AppService {
     if (!id) throw new HttpError(400, 'bad_request', 'Tên phòng ban không hợp lệ');
     if (this.departmentRepo.get(id)) throw new HttpError(409, 'conflict', `Department ID "${id}" đã tồn tại`);
     this.departmentRepo.insert({ id, ...parsed });
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'created' });
     return this.getDepartment(id);
   }
 
@@ -910,12 +992,14 @@ export class AppService {
     if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
     const parsed = DepartmentInputSchema.partial().parse(raw);
     this.departmentRepo!.update(id, parsed);
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'updated' });
     return this.getDepartment(id);
   }
 
   deleteDepartment(id: string) {
     if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
     try { this.departmentRepo.delete(id); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : 'Không thể xóa phòng ban'); }
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'deleted' });
     return { ok: true };
   }
 
@@ -926,6 +1010,7 @@ export class AppService {
       if (!this.profileRepo.get(profile.profileName)) throw new HttpError(404, 'not_found', `Profile "${profile.profileName}" không tồn tại`);
     }
     this.departmentRepo.setProfiles(id, parsed.profiles);
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'profiles' });
     return this.getDepartment(id);
   }
 
@@ -973,11 +1058,10 @@ export class AppService {
   getSetupLogPath(tool: string) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.getLogPath(tool); }
   completeSetup(skip = false) { if (!this.setupManager) throw new HttpError(500, 'internal_error', 'Setup service chưa sẵn sàng'); return this.setupManager.complete(skip); }
 
-  listClaudeSessions(activeWithinMin?: number) {
-    if (!this.claudeSessionRepo) return [];
+  private decorateClaudeSessions(rows: ClaudeSessionRow[], activeWithinMin?: number) {
     const min = typeof activeWithinMin === 'number' && !Number.isNaN(activeWithinMin) ? activeWithinMin : (this.config.claudeSessions?.activeWithinMin ?? 10);
     const cutoff = Date.now() - min * 60_000;
-    return this.claudeSessionRepo.list().map((session) => {
+    return rows.map((session) => {
       const active = (!!session.lastAt && Date.parse(session.lastAt) >= cutoff) || (!!session.cwd && isClaudeProcessOpen(session.cwd));
       const title = session.title || (session.sessionId.length > 8 ? session.sessionId.slice(0, 8) : session.sessionId);
       return {
@@ -987,6 +1071,21 @@ export class AppService {
         topTasks: this.claudeSessionRepo!.topTasks(session.sessionId),
       };
     });
+  }
+  listClaudeSessions(activeWithinMin?: number) {
+    if (!this.claudeSessionRepo) return [];
+    return this.decorateClaudeSessions(this.claudeSessionRepo.list(), activeWithinMin);
+  }
+  pageClaudeSessions(options?: { activeWithinMin?: number; limit?: string | number; offset?: string | number; cursor?: string; sort?: string; order?: string }) {
+    if (!this.claudeSessionRepo) return { items: [], total: 0, nextCursor: null };
+    const rawLimit = typeof options?.limit === 'number' ? options.limit : Number(options?.limit);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(100, Math.floor(rawLimit)) : 20;
+    const rawOffset = typeof options?.offset === 'number' ? options.offset : Number(options?.offset);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+    const sort = options?.sort === 'title' || options?.sort === 'messages' || options?.sort === 'effectiveTokens' ? options.sort : 'lastAt';
+    const order = options?.order === 'asc' ? 'asc' : 'desc';
+    const page = this.claudeSessionRepo.page(limit, offset, options?.cursor, sort, order);
+    return { ...page, items: this.decorateClaudeSessions(page.items, options?.activeWithinMin) };
   }
   getClaudeSession(id: string, activeWithinMin?: number) {
     if (!this.claudeSessionRepo) throw new HttpError(500, 'internal_error', 'Claude session service chưa sẵn sàng');
@@ -1157,6 +1256,7 @@ export class AppService {
       done: 0,
       blocked: 0,
       cancelled: 0,
+      focusWaiting: 0,
     };
 
     const tasksByProject: Record<string, Record<string, number>> = {};
@@ -1175,8 +1275,10 @@ export class AppService {
       };
     }
 
+    const focusWaitingTaskIds = new Set<string>();
     for (const t of tasks) {
       byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+      if (t.waitReason === 'focus') focusWaitingTaskIds.add(t.id);
       if (!tasksByProject[t.projectId]) {
         tasksByProject[t.projectId] = {
           draft: 0,
@@ -1193,6 +1295,11 @@ export class AppService {
       }
       tasksByProject[t.projectId][t.status] = (tasksByProject[t.projectId][t.status] || 0) + 1;
     }
+
+    for (const [taskId, runtime] of runningMap.entries()) {
+      if (runtime.paused && runtime.pauseReason === 'focus') focusWaitingTaskIds.add(taskId);
+    }
+    byStatus.focusWaiting = focusWaitingTaskIds.size;
 
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
@@ -1299,6 +1406,7 @@ export class AppService {
       recentEvents,
       brain: this.brainService?.getStatus(),
       schedulerPaused: this.scheduler.isPaused(),
+      focus: this.config.focus,
       disk: {
         freeGB: disk.freeGB,
         totalGB: disk.totalGB,
@@ -1351,6 +1459,154 @@ export class AppService {
   listProjects(includeArchived = false): ProjectRow[] {
     const projects = includeArchived ? this.projectRepo.getAllIncludingArchived() : this.projectRepo.getAll();
     return projects.map((p) => ({ ...apiProject(p, this.config.hubHome, this.ciRepo), afterMerge: this.config.deploy?.[p.id] || null } as ProjectRow));
+  }
+
+  inspectProject(raw: unknown) {
+    const input = z.object({ path: z.string().min(1) }).parse(raw);
+    if (!path.isAbsolute(input.path)) throw new HttpError(400, 'bad_request', 'Đường dẫn phải là đường dẫn tuyệt đối');
+    return inspectProject(input.path);
+  }
+
+  writeProjectGuidance(id: string, raw: unknown) {
+    const input = z.object({ content: z.string().min(1).max(32_000), confirm: z.literal(true) }).parse(raw);
+    const project = this.projectRepo.get(id);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+    const target = path.join(project.path, 'AGENTS.md');
+    if (fs.existsSync(target)) throw new HttpError(409, 'conflict', 'AGENTS.md đã tồn tại trong project');
+    fs.writeFileSync(target, input.content, { encoding: 'utf8', flag: 'wx', mode: 0o644 });
+    return { ok: true };
+  }
+
+  sanitizeErrorText(raw: unknown): string {
+    if (!raw) return 'Đã xảy ra lỗi không xác định';
+    let str = typeof raw === 'string' ? raw : (raw instanceof Error ? raw.message : String(raw));
+    const lines = str.split('\n');
+    const filtered = lines.filter((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('at ')) return false;
+      if (/\b(?:node_modules|\w+\.(?:ts|js|mjs|tsx|jsx)):\d+:\d+\b/.test(trimmed)) return false;
+      return true;
+    });
+    str = filtered.join('\n').trim();
+    str = str.replace(/^Error:\s*/, '');
+    return str || 'Đã xảy ra lỗi không xác định';
+  }
+
+  summarizeProjectContext(id: string, raw: unknown): { taskId: string; status: string; summary: string | null } {
+    const input = z.object({
+      sessions: z.array(z.string().min(1)).min(1),
+      selections: z.array(z.object({ session: z.string().min(1), text: z.string().min(1).max(4_000) })).max(100).optional(),
+      notes: z.string().optional(),
+    }).parse(raw);
+    const project = this.projectRepo.get(id);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${id}" không tồn tại`);
+
+    const sessionContext = input.sessions.map((session) => {
+      const excerpt = readClaudeSessionExcerpt(project.path, session);
+      if (excerpt === null) {
+        throw new HttpError(400, 'bad_request', `Phiên Claude không hợp lệ hoặc không còn tồn tại: ${session}`);
+      }
+      return [`### ${session}`, excerpt || 'Phiên không có nội dung văn bản; chỉ dùng các mục người dùng đã chọn bên dưới.'].join('\n');
+    });
+
+    const body = [
+      'Read the selected previous session files and summarize durable project knowledge.',
+      'The session excerpts below are the approved input. Do not access ~/.claude or any other session file directly.',
+      '',
+      'Selected session excerpts:',
+      ...sessionContext,
+      ...(input.selections?.length ? ['', 'Selected transcript items:', ...input.selections.map((item) => `- ${item.session}: ${item.text}`)] : []),
+      ...(input.notes ? ['', 'Additional notes:', input.notes] : []),
+    ].join('\n');
+
+    const taskId = `${project.id}/summarize-previous-context`;
+    const existing = this.taskRepo.get(taskId);
+    if (existing) {
+      if (existing.status === 'done') {
+        const summary = existing.doneReport?.trim() || null;
+        return { taskId: existing.id, status: existing.status, summary };
+      }
+      if (existing.status === 'running') {
+        return { taskId: existing.id, status: existing.status, summary: null };
+      }
+      // Re-queue existing task for retry
+      this.taskRepo.update(taskId, {
+        status: 'queued',
+        resume: 1,
+        attempt: existing.attempt + 1,
+        transientRetries: 0,
+        notBefore: null,
+        body,
+        reviewerChangesRequested: 0,
+        reviewerEscalated: 0,
+        reviewerEscalatedAt: null,
+        reviewerEscalationReason: null,
+      });
+      if (existing.worktreePath) {
+        for (const marker of ['DONE', 'BLOCKED']) {
+          try {
+            fs.unlinkSync(path.join(existing.worktreePath, '.agenthub', marker));
+          } catch {
+            // Marker is absent or already removed.
+          }
+        }
+      }
+      this.scheduler.getEventBus().emit('task.queued', taskId, { reason: 'retry' });
+      this.scheduler.triggerTick();
+      const updated = this.taskRepo.get(taskId)!;
+      return { taskId: updated.id, status: updated.status, summary: null };
+    }
+
+    const task = this.createTask({
+      project: project.id,
+      slug: 'summarize-previous-context',
+      title: 'Review and summarize previous Claude Code context',
+      body,
+      level: 'easy',
+      start: true,
+    });
+    return { taskId: task.id, status: task.status, summary: null };
+  }
+
+  async getProjectContextSummary(projectId: string, taskIdParam: string): Promise<{ taskId: string; status: string; summary: string | null; error?: string; waitReason?: string }> {
+    const project = this.projectRepo.get(projectId);
+    if (!project) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    const taskId = toTaskId(taskIdParam);
+    const task = this.taskRepo.get(taskId);
+    if (!task || task.projectId !== projectId || !task.slug.startsWith('summarize-previous-context')) {
+      throw new HttpError(404, 'not_found', 'Task tóm tắt không tồn tại');
+    }
+    const detail = await this.getTask(taskId);
+    const summary = detail.doneContent?.trim() || null;
+    let error: string | undefined = undefined;
+    if (task.status === 'failed' || task.status === 'blocked') {
+      const rawError = detail.blockedContent?.trim() || task.reviewerEscalationReason || 'Task tóm tắt thất bại trong quá trình thực thi.';
+      error = this.sanitizeErrorText(rawError);
+    } else if (task.status === 'waiting_quota') {
+      error = 'Chưa có engine khả dụng hoặc đang hết quota.';
+    }
+    return {
+      taskId,
+      status: task.status,
+      summary,
+      ...(error ? { error } : {}),
+      ...(task.waitReason ? { waitReason: task.waitReason } : {}),
+    };
+  }
+
+  createNewProject(raw: unknown): ProjectRow {
+    const input = z.object({
+      name: z.string().min(1), path: z.string().min(1), defaultBranch: z.string().min(1).default('main'),
+      maxParallel: z.number().int().positive().default(3), checks: z.array(z.object({ name: z.string().min(1), cmd: z.array(z.string()).min(1), timeoutSec: z.number().int().positive().optional() })).nullable().optional(), settings: ProjectSettingsInputSchema.optional(),
+    }).parse(raw);
+    if (!path.isAbsolute(input.path)) throw new HttpError(400, 'bad_request', 'Đường dẫn phải là đường dẫn tuyệt đối');
+    try { createNewGitProject(input.path, input.defaultBranch); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
+    try {
+      return this.createProject({ ...input, path: path.resolve(input.path) });
+    } catch (error) {
+      try { fs.rmSync(path.resolve(input.path), { recursive: true, force: true }); } catch { /* best effort cleanup */ }
+      throw error;
+    }
   }
 
   getProject(id: string): ProjectRow {
@@ -1506,7 +1762,11 @@ export class AppService {
   }
 
   createProject(raw: unknown): ProjectRow {
-    const parsed = CreateProjectSchema.parse(raw);
+    const parseResult = CreateProjectSchema.safeParse(raw);
+    if (!parseResult.success) {
+      throw new HttpError(400, 'bad_request', parseResult.error.issues[0]?.message || 'Dữ liệu project không hợp lệ');
+    }
+    const parsed = parseResult.data;
     if (this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
       throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
     }
@@ -1527,6 +1787,15 @@ export class AppService {
 
     const effectiveSettings = parsed.settings ? mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, parsed.settings) : DEFAULT_PROJECT_SETTINGS;
     if (effectiveSettings.worktree.root) {
+      const worktreeRoot = path.resolve(effectiveSettings.worktree.root);
+      const projectStorageRoot = path.join(path.dirname(resolvedPath), '.agenthub-worktrees');
+      if (worktreeRoot === projectStorageRoot && !fs.existsSync(worktreeRoot)) {
+        try {
+          fs.mkdirSync(worktreeRoot, { recursive: true, mode: 0o700 });
+        } catch (error) {
+          throw new HttpError(400, 'bad_request', `Không thể tạo thư mục worktree: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       try { validateProjectWorktreeRoot(effectiveSettings.worktree.root, resolvedPath, this.config.hubHome); }
       catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error)); }
     }
@@ -1613,19 +1882,32 @@ export class AppService {
     });
 
     if (effectiveSettings.integration.enabled) {
-      ensureIntegrationWorktree(
-        { id, path: resolvedPath, defaultBranch: parsed.defaultBranch, settings: JSON.stringify(effectiveSettings) },
-        this.config.hubHome,
-      );
+      const projLike = { id, path: resolvedPath, defaultBranch: parsed.defaultBranch, settings: JSON.stringify(effectiveSettings) };
+      ensureIntegrationWorktree(projLike, this.config.hubHome);
+      if (effectiveSettings.worktree.install !== 'skip') {
+        void ensureIntegrationNodeModules(projLike, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[projects] Failed to prepare integration node_modules: ${String(err)}`);
+        });
+      }
     }
 
     this.invalidateOutOfScopeClaudeScanStates();
-    return this.getProject(id);
+    const created = this.getProject(id);
+    void this.telegramBotService?.ensureProjectTopic(id);
+    return created;
   }
 
   updateProject(id: string, raw: unknown): ProjectRow {
     this.getProject(id);
-    const parsed = UpdateProjectSchema.parse(raw);
+    const parseResult = UpdateProjectSchema.safeParse(raw);
+    if (!parseResult.success) {
+      throw new HttpError(400, 'bad_request', parseResult.error.issues[0]?.message || 'Dữ liệu cập nhật project không hợp lệ');
+    }
+    const parsed = parseResult.data;
     const current = this.projectRepo.get(id)!;
     if (parsed.departmentId && this.departmentRepo && !this.departmentRepo.get(parsed.departmentId)) {
       throw new HttpError(400, 'bad_request', `Department "${parsed.departmentId}" không tồn tại`);
@@ -1655,9 +1937,27 @@ export class AppService {
       review: parsed.review === undefined ? undefined : parsed.review ? JSON.stringify(parsed.review) : null,
     });
 
+    if (parsed.departmentId !== undefined && parsed.departmentId !== current.departmentId) {
+      this.scheduler.getEventBus().emit('department.changed', undefined, {
+        projectId: id,
+        fromDepartmentId: current.departmentId,
+        departmentId: parsed.departmentId,
+        action: 'project_moved',
+      });
+    }
+
     if (mergedSettings.integration.enabled) {
       const updatedProject = this.projectRepo.get(id)!;
       ensureIntegrationWorktree(updatedProject, this.config.hubHome);
+      if (mergedSettings.worktree.install !== 'skip') {
+        void ensureIntegrationNodeModules(updatedProject, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[projects] Failed to prepare integration node_modules: ${String(err)}`);
+        });
+      }
     }
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -2771,8 +3071,7 @@ export class AppService {
   }
 
   // --- Tasks ---
-  listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
-    const tasks = this.taskRepo.list(filter);
+  private decorateTasks(tasks: TaskRow[]): TaskRow[] {
     const projects = new Map(this.projectRepo.getAll().map((project) => [project.id, project]));
     const running = this.scheduler.getRunning();
     return tasks.map((task) => {
@@ -2785,10 +3084,17 @@ export class AppService {
       // Keep this lookup scoped to the task. A global recent-event window can
       // forget an older fallback after unrelated events push it out of that window.
       const isFallback = this.eventRepo?.getByTask(task.id).some((event) => event.type === 'review.fallback') ?? false;
+      const fallbackEvent = this.eventRepo?.getByTask(task.id).filter((event) => event.type === 'review.fallback').at(-1);
+      let fallbackReviewer: 'codex' | 'claude' = 'claude';
+      if (fallbackEvent?.payload) {
+        try { fallbackReviewer = JSON.parse(fallbackEvent.payload).to === 'codex' ? 'codex' : 'claude'; } catch { /* legacy payload */ }
+      }
+      const configuredOrder = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>).order;
+      const projectOrder = project ? projectSettings(project).review?.order : undefined;
       const reviewerRun = this.scheduler?.getReviewerRun?.(task.id);
       const reviewer = reviewerRun
         ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
-        : (isFallback ? 'claude' : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex'));
+        : (isFallback ? fallbackReviewer : (reviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : (projectOrder || configuredOrder)[task.reviewStep ?? 0]?.engine || 'codex'));
       return {
         ...apiTask(task),
         reviewChain,
@@ -2811,6 +3117,15 @@ export class AppService {
         } : null,
       };
     }) as TaskRow[];
+  }
+
+  listTasks(filter?: { project?: string; status?: string }): TaskRow[] {
+    return this.decorateTasks(this.taskRepo.list(filter));
+  }
+
+  listTasksPage(filter?: { project?: string; status?: string; search?: string; limit?: string | number; cursor?: string; offset?: string | number; sort?: string; order?: string }): PageResult<TaskRow> {
+    const page = this.taskRepo.page(filter);
+    return { ...page, items: this.decorateTasks(page.items) };
   }
 
   getTasksGraph(options?: { project?: string; includeDone?: string | boolean }) {
@@ -2894,12 +3209,29 @@ export class AppService {
       };
     });
 
+    const completedReviewEvents = events.filter((event) => event.type === 'review.completed');
+    const reviewsWithModels = reviews.map((review) => {
+      const event = completedReviewEvents.find((candidate) => {
+        if (!candidate.payload || typeof candidate.payload !== 'object') return false;
+        const payload = candidate.payload as { actor?: string; verdict?: string; model?: string };
+        return payload.actor === review.actor && payload.verdict === review.verdict && typeof payload.model === 'string';
+      });
+      const model = event && typeof event.payload === 'object' && event.payload
+        ? (event.payload as { model?: string }).model
+        : undefined;
+      return model ? { ...review, model } : review;
+    });
+
     const isFallback = events.some((e) => e.type === 'review.fallback');
     const reviewerRun = this.scheduler?.getReviewerRun?.(taskId);
     const activeReviewChain: ReviewChainStep[] = (Array.isArray(reviewSettings?.chain) ? reviewSettings.chain as ReviewChainStep[] : undefined) || parseReviewChain(project?.reviewChain);
+    const fallbackEvent = events.filter((event) => event.type === 'review.fallback').at(-1);
+    const fallbackReviewer = fallbackEvent && typeof fallbackEvent.payload === 'object' && fallbackEvent.payload && (fallbackEvent.payload as { to?: string }).to === 'codex' ? 'codex' : 'claude';
+    const configuredOrder = reviewerSettingsFromLegacy(this.config.reviewer as unknown as Record<string, unknown>).order;
+    const projectOrder = project ? projectSettings(project).review?.order : undefined;
     const reviewer = reviewerRun
       ? (reviewerRun.engine.id === 'claude' ? 'claude' : 'codex')
-      : (isFallback ? 'claude' : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : 'codex')));
+      : (isFallback ? fallbackReviewer : (reviews.at(-1)?.actor === 'claude-reviewer' ? 'claude' : (activeReviewChain[task.reviewStep ?? 0]?.reviewer?.startsWith('claude') ? 'claude' : (projectOrder || configuredOrder)[task.reviewStep ?? 0]?.engine || 'codex')));
 
     return {
       ...apiTask(task),
@@ -2921,7 +3253,7 @@ export class AppService {
         cpu: activeRun.cpu ?? 0,
       } : null,
       runs: runs.map(apiRun),
-      reviews: reviews.map(apiReview),
+      reviews: reviewsWithModels.map(apiReview),
       reviewChain: reviewSettings?.chain || parseReviewChain(project?.reviewChain),
       mergeAvailable: configuredMerge,
       mergeUnavailableReason: configuredMerge ? null : 'Project chưa cấu hình merge tự động. Mở Cài đặt dự án → Integration để bật.',
@@ -3021,6 +3353,7 @@ export class AppService {
       projectId: parsed.project,
       slug: parsed.slug,
       title: parsed.title,
+      externalRef: parsed.externalRef,
       body: parsed.body,
       level: parsed.level,
       modelChain: parsed.modelChain ? JSON.stringify(parsed.modelChain) : undefined,
@@ -3339,6 +3672,18 @@ export class AppService {
     }));
   }
 
+  pageBatches(params?: { project?: string; status?: string; limit?: string | number; cursor?: string; offset?: string | number }): PageResult<TaskBatchRow & { progress: BatchProgress }> {
+    if (!this.taskBatchRepo) return { items: [], total: 0, nextCursor: null };
+    const page = this.taskBatchRepo.page(params);
+    return {
+      ...page,
+      items: page.items.map((batch) => ({
+        ...apiBatch(batch),
+        progress: batchProgress(this.taskRepo.getByBatch(batch.id)),
+      })),
+    };
+  }
+
   dispatchBatch(id: string): { ok: boolean; batchId: string; dispatchedCount: number } {
     if (!this.taskBatchRepo) {
       throw new HttpError(500, 'internal_error', 'TaskBatchRepo chưa được khởi tạo');
@@ -3569,10 +3914,38 @@ export class AppService {
       const project = this.projectRepo.get(task.projectId);
       if (!project) throw new HttpError(404, 'not_found', `Project "${task.projectId}" không tồn tại`);
       try {
-        mergeResult = await mergeTaskIntoBase(task, project, { hubHome: this.config.hubHome });
+        mergeResult = await mergeTaskIntoBase(task, project, {
+          hubHome: this.config.hubHome,
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+          cachePolicy: {
+            maxEntries: this.config.cacheMaxEntries,
+            maxBytes: this.config.cacheMaxGB * 1024 ** 3,
+          },
+        });
       } catch (error) {
         if (error instanceof MergeError) {
-          if (!error.configuration) this.createMergeFailureDraft(task, error.message);
+          if (!error.configuration && !error.environment) this.createMergeFailureDraft(task, error.message);
+          if (error.environment) {
+            this.scheduler.getEventBus().emit('merge.failed', taskId, {
+              actor: parsed.by || 'review',
+              message: error.message,
+              environment: true,
+            });
+            if (this.taskNoteRepo) {
+              try {
+                this.taskNoteRepo.insert({
+                  projectId: task.projectId,
+                  taskId: task.id,
+                  kind: 'note',
+                  content: `Lỗi môi trường khi merge (không phải lỗi worker): ${error.message}`,
+                });
+              } catch {
+                // ignore
+              }
+            }
+          }
           throw new HttpError(error.statusCode, error.error, error.message);
         }
         throw error;
@@ -3606,9 +3979,13 @@ export class AppService {
     }
   }
 
+  clearFailedAutoMerge(taskId: string): void {
+    this.failedAutoMerges.delete(taskId);
+  }
+
   /**
    * Merges a task whose review chain finished on a Codex approval, when the project opted in with
-   * `integration.autoMerge`. A merged task then self-deploys through the usual task.merged hook.
+   * `integration.autoMerge` or `review.autoMerge`. A merged task then self-deploys through the usual task.merged hook.
    */
   async autoMergeReviewedTask(taskId: string): Promise<void> {
     const task = this.taskRepo.get(taskId);
@@ -3616,11 +3993,19 @@ export class AppService {
     const project = this.projectRepo.get(task.projectId);
     if (!project) return;
     const settings = projectSettings(project);
-    if (!settings.integration.autoMerge || (!settings.integration.enabled && !project.merge)) return;
+    if (!(settings.review.autoMerge || settings.integration.autoMerge)) return;
     const last = this.reviewRepo.getByTask(taskId).at(-1);
     if (!last || (last.actor !== 'codex-reviewer' && last.actor !== 'claude-reviewer') || last.verdict !== 'approved') return;
+    const checks = this.scheduler.getCheckResults(taskId);
+    if (checks.length === 0 || checks.some((c) => !c.ok)) return;
+    if (this.failedAutoMerges.has(taskId)) return;
     // The ready event can arrive twice for one approval; the first call is already merging.
-    if (this.reviewingTasks.has(taskId)) return;
+    if (this.reviewingTasks.has(taskId)) {
+      // A reviewer approval emits task.review_ready before the outer review API call
+      // releases its guard. Retry once on the next event-loop turn after that call ends.
+      setImmediate(() => void this.autoMergeReviewedTask(taskId));
+      return;
+    }
     try {
       await this.reviewTask(toRouteId(taskId), {
         verdict: 'approved',
@@ -3628,21 +4013,19 @@ export class AppService {
         by: 'auto-merge',
         feedback: 'Tự merge sau khi Codex reviewer chấp thuận.',
       });
+      this.failedAutoMerges.delete(taskId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.scheduler.getEventBus().emit('merge.failed', taskId, { actor: 'auto-merge', message });
-      // A conflict means the branch fell behind the merge target: hand it back to the worker.
-      if (error instanceof HttpError && error.statusCode === 409 && /xung đột|conflict/i.test(message)) {
-        try {
-          await this.reviewTask(toRouteId(taskId), {
-            verdict: 'changes_requested',
-            by: 'auto-merge',
-            feedback: `Reviewer đã duyệt nhưng merge tự động bị xung đột: ${message}\n\nCập nhật nhánh lên nhánh đích mới nhất (rebase hoặc merge), giải xung đột, giữ nguyên phần đã được duyệt, chạy lại lint/typecheck/test rồi commit.`,
-          });
-        } catch (retryError) {
-          console.error(`[review] could not hand merge conflict back for ${taskId}: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
-        }
-      }
+      this.failedAutoMerges.add(taskId);
+      const isConflict = (error instanceof HttpError && (error.error === 'conflict' || error.statusCode === 409)) ||
+        (error instanceof MergeError && error.error === 'conflict') ||
+        (error instanceof Error && /conflict/i.test(error.message));
+      const isEnvironment = (error instanceof HttpError && (error.error === 'environment_error' || error.statusCode === 503)) ||
+        (error instanceof MergeError && error.environment);
+      this.scheduler.getEventBus().emit(isConflict ? 'merge.conflict' : 'merge.failed', taskId, {
+        actor: 'auto-merge',
+        message: error instanceof Error ? error.message : String(error),
+        environment: isEnvironment || undefined,
+      });
     }
   }
 
@@ -3714,6 +4097,47 @@ export class AppService {
     } catch {
       return null;
     }
+  }
+
+  async cleanupOrphanedMergeFixTasks(sourceTaskId?: string): Promise<number> {
+    const sources = sourceTaskId
+      ? [this.taskRepo.get(sourceTaskId)].filter((task): task is TaskRow => Boolean(task))
+      : this.taskRepo.getByStatus('done');
+    let cancelled = 0;
+    const reason = 'Task gốc đã merge thành công qua đường khác, tự đóng task fix-merge liên quan';
+
+    for (const source of sources) {
+      if (source.status !== 'done') continue;
+      const project = this.projectRepo.getIncludingArchived(source.projectId);
+      if (!project) continue;
+
+      for (const derived of this.taskRepo.getDerivedFrom(source.id)) {
+        if (!/-fix-merge(?:-\d+)?$/.test(derived.slug)) continue;
+        if (!['draft', 'queued', 'waiting_quota'].includes(derived.status) || derived.attempt > 0) continue;
+        let sourceRef: { checkName?: unknown };
+        try {
+          sourceRef = JSON.parse(derived.sourceRef || '{}') as { checkName?: unknown };
+        } catch {
+          continue;
+        }
+        if (sourceRef.checkName !== 'merge') continue;
+
+        const commits = derived.branch
+          ? await getGitCommits(project.path, derived.baseRef || project.defaultBranch, derived.branch)
+          : [];
+        const current = this.taskRepo.get(derived.id);
+        if (!current || !['draft', 'queued', 'waiting_quota'].includes(current.status) || current.attempt > 0 || commits.length > 0) continue;
+
+        this.taskRepo.updateStatus(current.id, 'cancelled');
+        this.scheduler.getEventBus().emit('task.cancelled', current.id, {
+          reason: 'orphaned_merge_fix',
+          sourceTaskId: source.id,
+          message: reason,
+        });
+        cancelled += 1;
+      }
+    }
+    return cancelled;
   }
 
   retryTask(idParam: string, raw: unknown): TaskRow {
@@ -3934,9 +4358,45 @@ export class AppService {
     return notes.map(apiTaskNote);
   }
 
+  pageTaskRuns(idParam: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
+    const taskId = toTaskId(idParam);
+    if (!this.taskRepo.get(taskId)) throw new HttpError(404, 'not_found', `Task "${taskId}" không tồn tại`);
+    return this.runRepo.pageByTask(taskId, options?.limit, options?.cursor, options?.offset);
+  }
+
+  pageEvents(options?: { taskId?: string; limit?: string | number; cursor?: string; offset?: string | number }) {
+    const page = this.eventRepo.page(options);
+    return {
+      ...page,
+      items: page.items.map((event) => {
+        let payload: unknown = null;
+        if (event.payload) {
+          try {
+            payload = JSON.parse(event.payload);
+          } catch {
+            payload = event.payload;
+          }
+        }
+        return { id: event.id, ts: toApiTime(event.ts)!, type: event.type, taskId: event.taskId, payload };
+      }),
+    };
+  }
+
   listKnowledge(projectId: string): KnowledgeEntryRow[] {
     if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
     return this.knowledgeRepo?.getByProject(projectId).map(apiKnowledgeEntry) || [];
+  }
+
+  pageKnowledge(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
+    if (!this.projectRepo.get(projectId)) throw new HttpError(404, 'not_found', `Project "${projectId}" không tồn tại`);
+    if (!this.knowledgeRepo) return { items: [], total: 0, nextCursor: null };
+    const page = this.knowledgeRepo.pageByProject(projectId, options?.limit, options?.cursor, options?.offset);
+    return { ...page, items: page.items.map(apiKnowledgeEntry) };
+  }
+
+  pageCiRuns(projectId: string, options?: { limit?: string | number; cursor?: string; offset?: string | number }) {
+    if (!this.ciRepo) return { items: [], total: 0, nextCursor: null };
+    return this.ciRepo.pageByProject(projectId, options);
   }
 
   reviewChecklistPreview(projectId: string) {
@@ -4020,8 +4480,37 @@ export class AppService {
       hasToken: Boolean(this.telegramBotService?.hasValidToken()),
       chats: this.config.telegram.chats || [],
       allowedChatIds: this.config.telegram.allowedChatIds,
+      topicMode: this.config.telegram.topicMode || 'project',
       notify: this.config.telegram.notify,
+      projectTopics: this.config.telegram.projectTopics || {},
+      departmentTopics: this.telegramBotService?.getDepartmentTopics() || this.config.telegram.departmentTopics || {},
     };
+  }
+
+  async setupTelegramTopics(mode?: 'project' | 'department'): Promise<Record<string, TelegramProjectTopic>> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    return this.telegramBotService.setupTopics(mode);
+  }
+
+  async createTelegramProjectTopic(projectId: string): Promise<TelegramProjectTopic> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try { return await this.telegramBotService.createProjectTopic(projectId); } catch (error) {
+      throw new HttpError(502, 'telegram_error', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async createTelegramDepartmentTopic(departmentId: string): Promise<TelegramProjectTopic> {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try { return await this.telegramBotService.createDepartmentTopic(departmentId); } catch (error) {
+      throw new HttpError(502, 'telegram_error', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  attachTelegramProjectChat(projectId: string, chatId: number): { ok: boolean } {
+    if (!this.telegramBotService) throw new HttpError(500, 'internal_error', 'Telegram bot service chưa sẵn sàng');
+    try { this.telegramBotService.setProjectChat(projectId, chatId); return { ok: true }; } catch (error) {
+      throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : String(error));
+    }
   }
 
   getTelegramPairingCode(refresh = false): { code: string; expiresInSec: number; enabled: boolean; allowedChatIds: number[]; chats: TelegramChat[] } {
@@ -4095,22 +4584,33 @@ export class AppService {
         model: this.config.chat.model,
         autoCompactPercent: this.config.chat.autoCompactPercent ?? 85,
         models: this.config.chat.models,
+        claudeProfile: this.config.chat.claudeProfile,
       },
       brain: {
+        engine: this.config.brain.engine || 'claude',
         mode: this.config.brain.mode,
         maxConcurrent: this.config.brain.maxConcurrent,
         digest: this.config.brain.digest,
         fallback: this.config.brain.fallback,
         policy: this.config.brain.policy,
+        codexProfile: this.config.brain.codexProfile,
+        codexModel: this.config.brain.codexModel,
+        turnTimeoutSec: this.config.brain.turnTimeoutSec,
+        director: this.config.brain.director,
       },
       assistant: this.config.assistant,
       reviewer: this.config.reviewer,
+      focus: this.config.focus,
       notifications: this.config.notifications,
       wakeup: this.config.wakeup,
       savings: this.config.savings,
       load: this.config.load,
       stall: this.config.stall,
       disk: this.config.disk,
+      cleanup: this.config.cleanup,
+      cacheDir: this.config.cacheDir,
+      cacheMaxEntries: this.config.cacheMaxEntries,
+      cacheMaxGB: this.config.cacheMaxGB,
       context: this.config.context,
       telegram: {
         enabled: this.config.telegram.enabled,
@@ -4119,8 +4619,32 @@ export class AppService {
         chats: this.config.telegram.chats,
         notify: this.config.telegram.notify,
       },
+      updates: this.config.updates,
+      workers: this.config.workers,
       ui: this.config.ui,
     };
+  }
+
+  getFocus() {
+    return this.config.focus;
+  }
+
+  setFocus(raw: unknown) {
+    const parsed = z.object({ projectId: z.string().min(1).nullable(), pauseRunning: z.boolean().optional() }).parse(raw);
+    if (parsed.projectId && !this.projectRepo.get(parsed.projectId)) {
+      throw new HttpError(404, 'not_found', `Project "${parsed.projectId}" không tồn tại`);
+    }
+    const focus = {
+      projectId: parsed.projectId,
+      since: parsed.projectId ? new Date().toISOString() : null,
+      pauseRunning: parsed.pauseRunning ?? this.config.focus.pauseRunning,
+    };
+    updateConfigInMemory(this.config, { focus });
+    saveConfig(this.config.hubHome, { focus });
+    const changes = this.scheduler.applyFocus();
+    this.scheduler.triggerTick();
+    this.scheduler.getEventBus().emit('focus.changed', undefined, { focus, ...changes });
+    return { focus, ...changes };
   }
 
   getModelOptions() {
@@ -4148,6 +4672,10 @@ export class AppService {
 
     // Save to config.json
     saveConfig(this.config.hubHome, parsed);
+    if (parsed.focus) {
+      this.scheduler.applyFocus();
+      this.scheduler.triggerTick();
+    }
 
     if (parsed.telegram?.enabled !== undefined && this.telegramBotService) {
       if (parsed.telegram.enabled) {

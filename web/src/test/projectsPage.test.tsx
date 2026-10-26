@@ -27,6 +27,10 @@ describe('ProjectsPage', () => {
       },
     });
     vi.spyOn(client, 'getProjects').mockResolvedValue([mockProject]);
+    vi.spyOn(client, 'getDepartments').mockResolvedValue([
+      { id: 'chung', name: 'Chung', priority: 0, maxParallel: 0, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 'engineering', name: 'Engineering', priority: 1, maxParallel: 2, claudeDailyTokenBudget: 0, telegramTopicId: null, profiles: [], projects: [], createdAt: '2026-01-01T00:00:00Z' },
+    ]);
     vi.spyOn(client, 'getConfig').mockResolvedValue({
       modelChainHard: ['codex:gpt-5.6-luna'],
       modelChainEasy: ['gemini-3.8-flash-high'],
@@ -193,6 +197,20 @@ describe('ProjectsPage', () => {
       }),
       expect.anything(),
     );
+  });
+
+  it('3b. Gán department khi đăng ký project', async () => {
+    const createSpy = vi.spyOn(client, 'createProject').mockResolvedValue({ ...mockProject, id: 'proj-2', departmentId: 'engineering' });
+
+    renderPage();
+    await screen.findByText('XFarm');
+    fireEvent.click(screen.getByRole('button', { name: /Đăng ký Project/i }));
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'engineering' } });
+    fireEvent.change(screen.getByPlaceholderText('vd: XFarm, AgentHub'), { target: { value: 'AgentHub' } });
+    fireEvent.change(screen.getByPlaceholderText('vd: /home/user/projects/xfarm'), { target: { value: '/tmp/agenthub' } });
+    fireEvent.click(screen.getByRole('button', { name: /Lưu Project/i }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ departmentId: 'engineering' }), expect.anything()));
   });
 
   it('4. Bấm nút xóa project có xác nhận window.confirm và gọi deleteProject', async () => {
@@ -657,7 +675,45 @@ describe('ProjectsPage', () => {
     expect(offRadio).not.toBeChecked();
   });
 
-  it('19. Tự động kiểm tra Git repo khi nhập path, điền tên project và gợi ý các nhánh', async () => {
+  it('19. Chỉ đếm task đang chạy hoặc chờ (running, queued, waiting_quota) trong thẻ tóm tắt task của project', async () => {
+    vi.spyOn(client, 'getTasks').mockResolvedValue([
+      { id: 'proj-1~t1', projectId: 'proj-1', slug: 't1', title: 'Running', status: 'running' } as any,
+      { id: 'proj-1~t2', projectId: 'proj-1', slug: 't2', title: 'Queued', status: 'queued' } as any,
+      { id: 'proj-1~t3', projectId: 'proj-1', slug: 't3', title: 'Quota', status: 'waiting_quota' } as any,
+      { id: 'proj-1~t4', projectId: 'proj-1', slug: 't4', title: 'Review', status: 'review' } as any,
+      { id: 'proj-1~t5', projectId: 'proj-1', slug: 't5', title: 'Checking', status: 'checking' } as any,
+      { id: 'proj-1~t6', projectId: 'proj-1', slug: 't6', title: 'Blocked', status: 'blocked' } as any,
+      { id: 'proj-1~t7', projectId: 'proj-1', slug: 't7', title: 'Done', status: 'done' } as any,
+      { id: 'other~t8', projectId: 'other', slug: 't8', title: 'Other running', status: 'running' } as any,
+    ]);
+
+    renderPage();
+    await screen.findByText('XFarm');
+
+    const summaryLink = await screen.findByTestId('project-task-summary-proj-1');
+    expect(summaryLink).toBeInTheDocument();
+    expect(summaryLink).toHaveAttribute('href', '/tasks?project=proj-1');
+    expect(summaryLink).toHaveTextContent('3 · Xem task');
+  });
+
+  it('20. Lỗi tải danh sách project hiển thị thông báo và nút thử lại', async () => {
+    const getProjectsSpy = vi.spyOn(client, 'getProjects').mockRejectedValueOnce(new Error('Failed to load'));
+
+    renderPage();
+
+    expect(await screen.findByText('Không thể tải danh sách project.')).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: /Thử lại/i });
+    expect(retryBtn).toBeInTheDocument();
+
+    getProjectsSpy.mockResolvedValueOnce([mockProject]);
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+
+    expect(await screen.findByText('XFarm')).toBeInTheDocument();
+  });
+
+  it('21. Tự động kiểm tra Git repo khi nhập path, điền tên project và gợi ý các nhánh', async () => {
     const inspectSpy = vi.spyOn(client, 'inspectGitRepo').mockResolvedValue({
       valid: true,
       suggestedName: 'drone-strike',
@@ -713,7 +769,7 @@ describe('ProjectsPage', () => {
     expect(branchInput).toHaveValue('develop');
   });
 
-  it('20. Đổi nhánh mặc định trong Drawer cài đặt project và lưu thành công', async () => {
+  it('22. Đổi nhánh mặc định trong Drawer cài đặt project và lưu thành công', async () => {
     const updateSpy = vi.spyOn(client, 'updateProject').mockResolvedValue({
       id: 'xfarm',
       name: 'XFarm',
@@ -745,7 +801,7 @@ describe('ProjectsPage', () => {
     });
   });
 
-  it('21. Cho phép xoá vĩnh viễn (purge) dự án trong danh sách dự án đã ẩn', async () => {
+  it('23. Cho phép xoá vĩnh viễn (purge) dự án trong danh sách dự án đã ẩn', async () => {
     vi.spyOn(client, 'getArchivedProjects').mockResolvedValue([
       {
         id: 'archived-proj',

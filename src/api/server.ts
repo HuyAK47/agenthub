@@ -17,6 +17,7 @@ import { registerChatRoutes } from '../chat/service.js';
 import { runMcpInstall } from '../tools/mcp-install.js';
 import { findClaudeBin } from '../chat/claude.js';
 import { brandingLogoPath, saveBrandingLogo } from '../branding.js';
+import { decodeCursor } from '../pagination.js';
 
 export function resolveWebDistDir(customDir?: string): string {
   return path.resolve(customDir || resolveWebDir(import.meta.url, process.env));
@@ -79,7 +80,7 @@ export async function createServer(
     if (addr && typeof addr === 'object') return addr.port;
     return config.port;
   };
-  registerSecurityHooks(fastify, token, getPort);
+  registerSecurityHooks(fastify, token, getPort, config.allowedHosts);
 
   // Register WebSocket support
   await fastify.register(fastifyWebsocket);
@@ -166,6 +167,8 @@ export async function createServer(
 
   fastify.post('/api/scheduler/pause', async () => service.pauseScheduler());
   fastify.post('/api/scheduler/resume', async () => service.resumeScheduler());
+  fastify.get('/api/focus', async () => service.getFocus());
+  fastify.put('/api/focus', async (req) => service.setFocus(req.body));
 
   // --- Telegram API ---
   fastify.get('/api/telegram/pairing-code', async (req) => {
@@ -192,6 +195,26 @@ export async function createServer(
   });
   fastify.get('/api/telegram/status', async () => {
     return service.getTelegramStatus();
+  });
+  fastify.post('/api/telegram/topics/setup', async (req) => {
+    const body = req.body as { mode?: 'project' | 'department' } | undefined;
+    return service.setupTelegramTopics(body?.mode);
+  });
+  fastify.post('/api/telegram/projects/:id/topic', async (req) => {
+    const { id } = req.params as { id: string };
+    return service.createTelegramProjectTopic(id);
+  });
+  fastify.post('/api/telegram/departments/:id/topic', async (req) => {
+    const { id } = req.params as { id: string };
+    return service.createTelegramDepartmentTopic(id);
+  });
+  fastify.put('/api/telegram/projects/:id/chat', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { chatId?: unknown };
+    if (typeof body?.chatId !== 'number' || !Number.isSafeInteger(body.chatId)) {
+      throw new HttpError(400, 'bad_request', 'chatId không hợp lệ');
+    }
+    return service.attachTelegramProjectChat(id, body.chatId);
   });
 
   fastify.get('/api/system/orphans', async () => service.getOrphans());
@@ -230,6 +253,29 @@ export async function createServer(
     const includeArchived = query?.archived === true || query?.archived === 'true' || query?.archived === '1';
     return service.listProjects(includeArchived);
   });
+
+  fastify.post('/api/projects/inspect', async (req: FastifyRequest) => service.inspectProject(req.body));
+
+  fastify.post('/api/projects/:id/guidance', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.writeProjectGuidance(id, req.body);
+  });
+
+  fastify.post('/api/projects/:id/summarize-context', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    return service.summarizeProjectContext(id, req.body);
+  });
+
+  fastify.get('/api/projects/:id/summarize-context/:taskId', async (req: FastifyRequest) => {
+    const { id, taskId } = req.params as { id: string; taskId: string };
+    return service.getProjectContextSummary(id, taskId);
+  });
+
+  // Creating a repository is intentionally separate from registering an existing one.
+  // Keep both spellings for clients that adopted the early wizard contract.
+  for (const route of ['/api/projects/new', '/api/projects/create']) {
+    fastify.post(route, async (req: FastifyRequest, reply: FastifyReply) => reply.status(201).send(service.createNewProject(req.body)));
+  }
 
   fastify.get('/api/projects/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
@@ -287,7 +333,24 @@ export async function createServer(
 
   fastify.get('/api/projects/:id/knowledge', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
-    return service.listKnowledge(id);
+    const query = req.query as { limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return query.limit === undefined ? service.listKnowledge(id) : service.pageKnowledge(id, query);
+  });
+
+  fastify.get('/api/projects/:id/ci/runs', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit === undefined) return service.ciRepo?.listByProject(id) || [];
+    return service.pageCiRuns(id, query);
+  });
+
+  fastify.get('/api/events/history', async (req: FastifyRequest) => {
+    const query = req.query as { taskId?: string; limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit === undefined) return query.taskId ? service.eventRepo.getByTask(query.taskId) : service.eventRepo.getRecent(50);
+    return service.pageEvents(query);
   });
 
   fastify.get('/api/projects/:id/review-checklist/preview', async (req: FastifyRequest) => {
@@ -393,8 +456,12 @@ export async function createServer(
 
   // --- Tasks API ---
   fastify.get('/api/tasks', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; status?: string };
-    return service.listTasks(query);
+    const query = req.query as { project?: string; status?: string; search?: string; q?: string; limit?: string; cursor?: string; offset?: string; sort?: string; order?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) {
+      throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    }
+    if (query.limit === undefined) return service.listTasks(query);
+    return service.listTasksPage({ ...query, search: query.search ?? query.q });
   });
 
   fastify.get('/api/tasks/graph', async (req: FastifyRequest) => {
@@ -485,6 +552,14 @@ export async function createServer(
     return service.getTaskNotes(id);
   });
 
+  fastify.get('/api/tasks/:id/runs', async (req: FastifyRequest) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit === undefined) return service.runRepo.getByTask(id.replace('~', '/'));
+    return service.pageTaskRuns(id, query);
+  });
+
   fastify.delete('/api/tasks/:id', async (req: FastifyRequest) => {
     const { id } = req.params as { id: string };
     return service.deleteTask(id);
@@ -492,7 +567,9 @@ export async function createServer(
 
   // --- Batches API ---
   fastify.get('/api/batches', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; status?: string };
+    const query = req.query as { project?: string; status?: string; limit?: string; cursor?: string; offset?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    if (query.limit !== undefined) return service.pageBatches(query);
     return service.listBatches(query);
   });
 
@@ -576,7 +653,8 @@ export async function createServer(
 
   // --- Savings API ---
   fastify.get('/api/savings', async (req: FastifyRequest) => {
-    const query = req.query as { project?: string; since?: string };
+    const query = req.query as { project?: string; since?: string; limit?: string; offset?: string; cursor?: string };
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
     return service.getSavings(query);
   });
 
@@ -588,8 +666,11 @@ export async function createServer(
   });
 
   fastify.get('/api/claude/sessions', async (req: FastifyRequest) => {
-    const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;
-    return service.listClaudeSessions(raw ? Number(raw) : undefined);
+    const query = (req.query as { activeWithinMin?: string; limit?: string; offset?: string; cursor?: string; sort?: string; order?: string } | undefined) || {};
+    const activeWithinMin = query.activeWithinMin ? Number(query.activeWithinMin) : undefined;
+    if (query.limit === undefined) return service.listClaudeSessions(activeWithinMin);
+    if (query.cursor && !decodeCursor(query.cursor)) throw new HttpError(400, 'bad_request', 'Invalid pagination cursor');
+    return service.pageClaudeSessions({ activeWithinMin, limit: query.limit, offset: query.offset, cursor: query.cursor, sort: query.sort, order: query.order });
   });
   fastify.get('/api/claude/sessions/:id', async (req: FastifyRequest) => {
     const raw = (req.query as { activeWithinMin?: string } | undefined)?.activeWithinMin;

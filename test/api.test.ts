@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -25,7 +25,7 @@ function authHeaders() {
 
 function initGitRepo(repoPath: string) {
   fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: repoPath });
+  execFileSync('git', ['init', '--template='], { cwd: repoPath });
   execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# Initial Repo\n');
   execFileSync('git', ['add', '.'], { cwd: repoPath });
@@ -564,6 +564,72 @@ describe('AgentHub HTTP API Endpoints', () => {
   });
 
   // --- Tasks API ---
+  it('GET /api/tasks supports cursor pagination, filters, totals, and legacy responses', async () => {
+    ctx.projectRepo.insert({ id: 'pageproj', name: 'Page Project', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 2 });
+    for (const [slug, status, title, date] of [
+      ['one', 'queued', 'Đăng nhập', '2026-01-01'],
+      ['two', 'running', 'Build app', '2026-01-02'],
+      ['three', 'done', 'Đăng xuất', '2026-01-03'],
+    ] as const) {
+      ctx.taskRepo.insert({ id: `pageproj/${slug}`, projectId: 'pageproj', slug, title, status });
+      ctx.db.prepare('UPDATE tasks SET createdAt = ?, updatedAt = ? WHERE id = ?').run(date, date, `pageproj/${slug}`);
+    }
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj', headers: authHeaders() });
+    expect(legacy.statusCode).toBe(200);
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+
+    const first = await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&limit=1', headers: authHeaders() });
+    expect(first.statusCode).toBe(200);
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody.total).toBe(3);
+    expect(firstBody.items.map((task: { slug: string }) => task.slug)).toEqual(['three']);
+
+    const second = await server.inject({ method: 'GET', url: `/api/tasks?project=pageproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(second.body).items.map((task: { slug: string }) => task.slug)).toEqual(['two']);
+    const filtered = JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&status=running&search=BUILD&limit=20', headers: authHeaders() })).body);
+    expect(filtered.items).toHaveLength(1);
+    expect(filtered.items[0].projectId).toBe('pageproj');
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=missing&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%25&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect(JSON.parse((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&search=%5F&limit=20', headers: authHeaders() })).body).items).toHaveLength(0);
+    expect((await server.inject({ method: 'GET', url: '/api/tasks?project=pageproj&cursor=broken&limit=1', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
+  it('GET /api/claude/sessions pages sessions and keeps the legacy response without limit', async () => {
+    ctx.claudeSessionRepo.upsert({ sessionId: 'session-old', cwd: tmpDir, title: 'Old', lastAt: '2026-01-01T00:00:00Z' });
+    ctx.claudeSessionRepo.upsert({ sessionId: 'session-new', cwd: tmpDir, title: 'New', lastAt: '2026-01-02T00:00:00Z' });
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/claude/sessions', headers: authHeaders() });
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+
+    const page = await server.inject({ method: 'GET', url: '/api/claude/sessions?limit=1', headers: authHeaders() });
+    expect(page.statusCode).toBe(200);
+    const body = JSON.parse(page.body);
+    expect(body.total).toBe(2);
+    expect(body.items.map((session: { sessionId: string }) => session.sessionId)).toEqual(['session-new']);
+    const next = await server.inject({ method: 'GET', url: `/api/claude/sessions?limit=1&cursor=${encodeURIComponent(body.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(next.body).items.map((session: { sessionId: string }) => session.sessionId)).toEqual(['session-old']);
+    expect((await server.inject({ method: 'GET', url: '/api/claude/sessions?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
+  it('GET /api/batches supports cursor pagination and keeps the legacy response', async () => {
+    ctx.projectRepo.insert({ id: 'batchproj', name: 'Batch Project', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 2 });
+    ctx.service.taskBatchRepo?.create({ id: 'batch-old', projectId: 'batchproj', title: 'Old batch' });
+    ctx.service.taskBatchRepo?.create({ id: 'batch-new', projectId: 'batchproj', title: 'New batch' });
+    ctx.db.prepare("UPDATE task_batches SET createdAt = CASE id WHEN 'batch-old' THEN '2026-01-01' ELSE '2026-01-02' END WHERE id IN ('batch-old', 'batch-new')").run();
+
+    const legacy = await server.inject({ method: 'GET', url: '/api/batches?project=batchproj', headers: authHeaders() });
+    expect(Array.isArray(JSON.parse(legacy.body))).toBe(true);
+    const first = await server.inject({ method: 'GET', url: '/api/batches?project=batchproj&limit=1', headers: authHeaders() });
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody.total).toBe(2);
+    expect(firstBody.items.map((batch: { id: string }) => batch.id)).toEqual(['batch-new']);
+    const next = await server.inject({ method: 'GET', url: `/api/batches?project=batchproj&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, headers: authHeaders() });
+    expect(JSON.parse(next.body).items.map((batch: { id: string }) => batch.id)).toEqual(['batch-old']);
+    expect((await server.inject({ method: 'GET', url: '/api/batches?limit=1&cursor=broken', headers: authHeaders() })).statusCode).toBe(400);
+  });
+
   it('keeps the Claude reviewer in task lists after older fallback events leave the global recent window', async () => {
     ctx.projectRepo.insert({
       id: 'fallback-list',
@@ -669,7 +735,7 @@ describe('AgentHub HTTP API Endpoints', () => {
     // 5. Test detail endpoint with git commits and worktree DONE/BLOCKED
     const worktreeDir = path.join(tmpDir, 'worktrees', 'myproj', 'task-abc');
     fs.mkdirSync(path.join(worktreeDir, '.agenthub'), { recursive: true });
-    execFileSync('git', ['init'], { cwd: worktreeDir });
+    execFileSync('git', ['init', '--template='], { cwd: worktreeDir });
     execFileSync('git', ['config', 'user.name', 'test'], { cwd: worktreeDir });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
     fs.writeFileSync(path.join(worktreeDir, '.agenthub', 'DONE'), 'All completed successfully');
@@ -756,6 +822,43 @@ describe('AgentHub HTTP API Endpoints', () => {
     });
     expect(delWtRes.statusCode).toBe(200);
     expect(fs.existsSync(worktreeDir)).toBe(false);
+  });
+
+  it('cancels an unstarted merge-fix task when its source is done', async () => {
+    ctx.projectRepo.insert({ id: 'merge-cleanup', name: 'Merge cleanup', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    ctx.taskRepo.insert({ id: 'merge-cleanup/source', projectId: 'merge-cleanup', slug: 'source', title: 'Source', status: 'done' });
+    ctx.taskRepo.insert({
+      id: 'merge-cleanup/source-fix-merge',
+      projectId: 'merge-cleanup',
+      slug: 'source-fix-merge',
+      title: 'Fix merge',
+      status: 'draft',
+      sourceRef: JSON.stringify({ taskId: 'merge-cleanup/source', checkName: 'merge', excerptHash: 'hash' }),
+    });
+
+    ctx.scheduler.getEventBus().emit('task.done', 'merge-cleanup/source');
+    await vi.waitFor(() => expect(ctx.taskRepo.get('merge-cleanup/source-fix-merge')?.status).toBe('cancelled'));
+    const event = ctx.eventRepo.getByTask('merge-cleanup/source-fix-merge').find((item) => item.type === 'task.cancelled');
+    expect(event?.payload).toContain('orphaned_merge_fix');
+  });
+
+  it('keeps a merge-fix task that has already attempted work', async () => {
+    ctx.projectRepo.insert({ id: 'merge-keep', name: 'Merge keep', path: tmpDir, defaultBranch: 'main', envTemplate: null, maxParallel: 1 });
+    ctx.taskRepo.insert({ id: 'merge-keep/source', projectId: 'merge-keep', slug: 'source', title: 'Source', status: 'done' });
+    ctx.taskRepo.insert({
+      id: 'merge-keep/source-fix-merge',
+      projectId: 'merge-keep',
+      slug: 'source-fix-merge',
+      title: 'Fix merge',
+      status: 'queued',
+      sourceRef: JSON.stringify({ taskId: 'merge-keep/source', checkName: 'merge', excerptHash: 'hash' }),
+    });
+    ctx.taskRepo.update('merge-keep/source-fix-merge', { attempt: 1 });
+
+    ctx.scheduler.getEventBus().emit('task.done', 'merge-keep/source');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(ctx.taskRepo.get('merge-keep/source-fix-merge')?.status).toBe('queued');
+    expect(ctx.eventRepo.getByTask('merge-keep/source-fix-merge').some((item) => item.type === 'task.cancelled')).toBe(false);
   });
 
   it('rejects a concurrent merge review and does not create a merge-fix task', async () => {

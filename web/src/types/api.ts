@@ -92,6 +92,8 @@ export interface ProjectMerge {
 }
 export interface ReviewChainStep { reviewer: string; mode: 'gate' | 'final'; }
 export interface ProjectReview { chain: ReviewChainStep[]; maxRounds: number; }
+export interface ReviewerOrderItem { engine: 'codex' | 'claude'; model: string; profiles: string[]; }
+export interface ReviewerFallback { onUnavailable: boolean; onBusyAfterMin: number; onError: boolean; }
 
 export interface IntegrationStatus {
   path: string;
@@ -110,6 +112,7 @@ export interface Project {
   defaultBranch: string;
   envTemplate?: string | null;
   maxParallel: number;
+  priority?: number;
   departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | string | null;
   hooks?: ProjectHooks | string | null;
@@ -121,6 +124,30 @@ export interface Project {
   ciStatus?: CiStatusSummary | null;
   createdAt?: string;
   afterMerge?: { steps: string[][]; timeoutSec: number; restartHub: boolean; push?: { remote: string; from: string; to: string; ffOnly: boolean } } | null;
+}
+
+export interface ProjectInspection {
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  isGitRepo: boolean;
+  currentBranch: string | null;
+  branches: string[];
+  remoteHost: string | null;
+  estimatedSizeBytes: number;
+  sizeTruncated: boolean;
+  lockfiles: string[];
+  monorepo: { detected: boolean; type: string | null };
+  gitHooks: { husky: boolean; commitlint: boolean };
+  language: string;
+  projectFiles: string[];
+  guidanceFiles: string[];
+  mount: { mountpoint: string | null; temporary: boolean; encrypted: boolean };
+  claudeSessions: Array<{ name: string; modifiedAt: string; sizeBytes: number }>;
+  claudeSessionPreviews: Array<{ name: string; content: string }>;
+  hasClaudeMemory: boolean;
+  memoryPreview: string | null;
+  suggestedSettings: { skipInstall: boolean; skipGitHooks: boolean; sensitiveProject: boolean; checks: Array<{ name: string; cmd: string[]; reason: string }> };
 }
 
 export interface DepartmentProfile {
@@ -136,6 +163,13 @@ export interface Department {
   maxParallel: number;
   claudeDailyTokenBudget: number;
   telegramTopicId: number | null;
+  brainEngine?: 'claude' | 'codex';
+  brainModel?: string;
+  brainCodexProfile?: string | null;
+  brainMode?: 'inherit' | 'off' | 'suggest' | 'auto';
+  brainPermissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+  brainDailyTokenBudget?: number;
+  brainMaxTurnsPerHour?: number;
   createdAt: string;
   projectCount?: number;
   profiles: DepartmentProfile[];
@@ -183,9 +217,18 @@ export interface DeployStatus {
 
 /** Mirrors src/projects/settings.ts. */
 export interface ProjectSettings {
-  brain: { mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external'; permissions?: 'inherit' | 'standard' | 'trusted' | 'full'; dailyTokenBudget?: number; maxTurnsPerHour?: number };
+  commitConvention?: { branchTemplate: string; commitTemplate: string; commitRegex?: string; mergeMessageTemplate: string };
+  brain: {
+    engine?: 'inherit' | 'claude' | 'codex';
+    codexProfile?: string;
+    mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+    permissions?: 'inherit' | 'standard' | 'trusted' | 'full';
+    dailyTokenBudget?: number;
+    maxTurnsPerHour?: number;
+  };
   worktree: { root?: string; logsInRoot?: boolean; install: 'auto' | 'skip'; gitHooks: 'run' | 'skip' };
   integration: { enabled: boolean; branch?: string; baseRef?: string; autoMerge?: boolean };
+  review?: { autoMerge?: boolean; order?: ReviewerOrderItem[]; fallback?: Partial<ReviewerFallback> };
   ci: { enabled?: boolean; branch?: string };
   references: Array<{ name: string; path: string; inject: boolean }>;
   reviewChecklist?: string[];
@@ -224,15 +267,17 @@ export interface Review {
   feedback?: string | null;
   createdAt: string;
   actor?: string;
+  model?: string;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'profile_busy' | 'project_unavailable' | null;
+export type WaitReason = 'disk' | 'quota' | 'no_department_profile' | 'no_matching_profile' | 'parallel' | 'department_parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
 
 export interface Task {
   id: string; // project~slug or project/slug
   projectId: string;
   slug: string;
   title: string;
+  externalRef?: string | null;
   body?: string;
   level: TaskLevel;
   modelChain?: string | string[] | null;
@@ -268,12 +313,12 @@ export interface Task {
     model?: string;
     profileName?: string;
     paused?: boolean;
-    pauseReason?: 'manual' | 'load' | null;
+    pauseReason?: 'manual' | 'load' | 'focus' | null;
     rss?: number;
     cpu?: number;
   } | null;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
   checks?: CheckResult[];
   sourceRef?: {
     taskId: string;
@@ -381,7 +426,7 @@ export interface RunningWorker {
   rss?: number;
   cpu?: number;
   paused?: boolean;
-  pauseReason?: 'manual' | 'load' | null;
+  pauseReason?: 'manual' | 'load' | 'focus' | null;
 }
 
 export type BrainActivity =
@@ -411,6 +456,7 @@ export interface ProjectBrain {
   projectId: string | null;
   projectName: string;
   mode: 'inherit' | 'off' | 'suggest' | 'auto' | 'external';
+  engine?: 'claude' | 'codex';
   permissions?: 'standard' | 'trusted' | 'full';
   sessionMode?: 'safe' | 'full';
   sessionId: string;
@@ -460,6 +506,7 @@ export interface TaskNote {
 }
 
 export interface HubStatus {
+  focus?: { projectId: string | null; since: string | null; pauseRunning: boolean };
   tasks: Record<string, number>;
   profiles?: Profile[];
   running: RunningWorker[];
@@ -572,6 +619,8 @@ export interface SavingsReport {
   byModel: Record<string, { tokens: number; taskCount: number }>;
   byDay: SavingsDailyItem[];
   tasks: SavingsTaskItem[];
+  tasksTotal?: number;
+  tasksNextCursor?: string | null;
 }
 
 export interface ProfileQuotaInfo {
@@ -646,7 +695,7 @@ export interface SystemConfig {
   runTimeoutHours?: number;
   chat?: ChatConfig;
   reviewer?: {
-    model: string;
+    model?: string;
     enabled?: boolean;
     timeoutSec?: number;
     failoverSec?: number;
@@ -654,8 +703,15 @@ export interface SystemConfig {
     claudeFallback?: boolean;
     claudeProfiles?: string[];
     claudeModel?: string;
+    claudeFallbackAfterMin?: number;
+    order?: ReviewerOrderItem[];
+    fallback?: Partial<ReviewerFallback>;
+    arbiter?: { engine: 'codex' | 'claude'; model: string };
   };
   brain?: {
+    engine?: 'claude' | 'codex';
+    codexProfile?: string;
+    codexModel?: string;
     mode?: 'off' | 'suggest' | 'auto';
     permissions?: 'standard' | 'trusted' | 'full';
     maxConcurrent?: number;
@@ -805,10 +861,20 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   envTemplate?: string | null;
   maxParallel?: number;
+  departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
   review?: ProjectReview | null;
+  settings?: ProjectSettings;
+}
+
+export interface CreateNewProjectInput {
+  name: string;
+  path: string;
+  defaultBranch?: string;
+  maxParallel?: number;
+  checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   settings?: ProjectSettings;
 }
 
@@ -817,6 +883,7 @@ export interface UpdateProjectInput {
   defaultBranch?: string;
   envTemplate?: string | null;
   maxParallel?: number;
+  departmentId?: string;
   checks?: Array<{ name: string; cmd: string[]; timeoutSec?: number }> | null;
   hooks?: ProjectHooks | null;
   merge?: ProjectMerge | null;
@@ -855,6 +922,7 @@ export interface CreateTaskInput {
   project: string;
   slug: string;
   title: string;
+  externalRef?: string;
   body?: string;
   level: TaskLevel;
   dependsOn?: string[];

@@ -259,6 +259,32 @@ export function isQuotaEventEngineWide(
   return Boolean(p.allExhausted === true);
 }
 
+/** Whether every enabled profile for the engine/family has an active mark. */
+export function areAllProfilesQuotaExhaustedForFamily(
+  profileRepo?: ProfileRepo,
+  quotaMarkRepo?: QuotaMarkRepo,
+  family?: string,
+  now = Date.now(),
+  engine?: string,
+): boolean {
+  if (!profileRepo || !quotaMarkRepo || !family) return false;
+  const allEnabled = profileRepo.getAll(true);
+  const profiles = allEnabled.filter((profile) => {
+    if (engine) return profile.engine === engine;
+    if (family === 'codex') return profile.engine === 'codex';
+    if (family === 'claude') return profile.engine === 'claude' || profile.engine === 'agy';
+    return profile.engine === 'agy';
+  });
+  if (profiles.length === 0) return false;
+  const epoch = Math.floor(now / 1000);
+  const exhausted = new Set(
+    quotaMarkRepo.getActive(epoch)
+      .filter((mark) => mark.until > epoch && mark.family === family)
+      .map((mark) => mark.profileName),
+  );
+  return profiles.every((profile) => exhausted.has(profile.name));
+}
+
 /**
  * Checks whether an event qualifies as a system incident that should bypass quiet hours and auto-mode suppression.
  */

@@ -93,7 +93,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
                 />
                 <button
                   type="submit"
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white cursor-pointer"
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] cursor-pointer"
                 >
                   {t('authGate.confirm')}
                 </button>

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { assertWorkerMayControlHub, workerEnvironment, WORKER_SERVICE_MESSAGE } from '../src/worker-guard.js';
+import { makeTestTempDir } from './temp.js';
 
 describe('worker service guard', () => {
   it('blocks hub service control but forwards unrelated systemctl commands', () => {
@@ -29,8 +30,13 @@ describe('worker service guard', () => {
     process.env.AGENTHUB_WORKER = '1';
     delete process.env.AGENTHUB_HOME;
     expect(() => assertWorkerMayControlHub('install-service')).toThrow(WORKER_SERVICE_MESSAGE);
-    const env = workerEnvironment(fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-worker-env-')), {});
-    expect(env.AGENTHUB_WORKER).toBe('1');
+    const tmp = makeTestTempDir('agenthub-worker-env-');
+    try {
+      const env = workerEnvironment(tmp, {});
+      expect(env.AGENTHUB_WORKER).toBe('1');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
     if (previousWorker === undefined) delete process.env.AGENTHUB_WORKER; else process.env.AGENTHUB_WORKER = previousWorker;
     if (previousHome === undefined) delete process.env.AGENTHUB_HOME; else process.env.AGENTHUB_HOME = previousHome;
   });
@@ -41,7 +47,7 @@ describe('worker service guard', () => {
     const repo = path.join(root, 'repo');
     fs.mkdirSync(repo);
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
     fs.writeFileSync(path.join(repo, 'file.txt'), 'hello');
 
@@ -108,7 +114,7 @@ describe('worker service guard', () => {
     const repo = path.join(root, 'repo');
     fs.mkdirSync(repo);
 
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repo });
     fs.writeFileSync(path.join(repo, 'a.txt'), 'content');
 
@@ -161,6 +167,65 @@ describe('worker service guard', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('enforces brain policy shims independently of Codex approvals', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-guard-'));
+    const hub = path.join(root, 'hub');
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    execFileSync('git', ['init', '--template='], { cwd: repo });
+    const standard = workerEnvironment(hub, { ...process.env }, { cwd: repo, brainPolicy: 'standard' });
+
+    for (const command of ['rm', 'systemctl', 'sudo']) {
+      expect(() => execFileSync(command, ['-rf', path.join(repo, 'missing')], { cwd: repo, env: standard, stdio: 'pipe' }))
+        .toThrow(`AgentHub: brain policy chặn lệnh '${command}'`);
+    }
+    expect(() => execFileSync('git', ['commit', '-m', 'blocked'], { cwd: repo, env: standard, stdio: 'pipe' }))
+      .toThrow('AgentHub: brain standard policy chặn git commit');
+    expect(execFileSync('git', ['status', '--short'], { cwd: repo, env: standard, encoding: 'utf8' })).toBe('');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('resolves read-command symlinks before allowing access', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-brain-read-links-'));
+    const hub = path.join(root, 'hub');
+    const repo = path.join(root, 'repo');
+    const outside = path.join(root, 'outside');
+    const secret = path.join(repo, 'secrets');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(outside);
+    fs.mkdirSync(secret);
+    fs.writeFileSync(path.join(outside, 'outside.txt'), 'outside\n');
+    fs.mkdirSync(path.join(outside, 'nested'));
+    fs.writeFileSync(path.join(outside, 'nested', 'token.txt'), 'outside-secret\n');
+    fs.writeFileSync(path.join(secret, 'auth.json'), '{"token":"do-not-read"}\n');
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, 'outside-link'));
+    fs.symlinkSync(path.join(secret, 'auth.json'), path.join(repo, 'secret-link'));
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, '-secret-link'));
+    fs.symlinkSync(path.join(outside, 'outside.txt'), path.join(repo, '1secret-link'));
+    fs.symlinkSync(path.join(outside, 'nested'), path.join(repo, 'outside-dir-link'));
+
+    const env = workerEnvironment(hub, { ...process.env }, { cwd: repo, brainPolicy: 'standard' });
+    expect(() => execFileSync('cat', ['outside-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
+    expect(() => execFileSync('cat', ['secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc secret hoặc .git');
+    expect(() => execFileSync('cat', ['--', '-secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
+    expect(() => execFileSync('cat', ['1secret-link'], { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+      .toThrow('AgentHub: brain policy chặn đọc ngoài project/worktree');
+    for (const args of [
+      ['grep', '--file=' + path.join(outside, 'outside.txt'), 'outside', 'package.json'],
+      ['grep', '-f', path.join(outside, 'outside.txt'), 'outside', 'package.json'],
+      ['grep', '-R', 'outside-secret', 'outside-dir-link'],
+    ]) {
+      expect(() => execFileSync(args[0], args.slice(1), { cwd: repo, env, encoding: 'utf8', stdio: 'pipe' }))
+        .toThrow('AgentHub: brain policy chặn grep đệ quy hoặc đọc pattern từ file');
+    }
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('can disable worker command guards for hub git operations while keeping service shims', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-hub-env-'));
     const hub = path.join(root, 'hub');
@@ -174,7 +239,7 @@ describe('worker service guard', () => {
 
     const workRepo = path.join(root, 'work');
     fs.mkdirSync(workRepo, { recursive: true });
-    execFileSync('git', ['init'], { cwd: workRepo });
+    execFileSync('git', ['init', '--template='], { cwd: workRepo });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: workRepo });
     fs.writeFileSync(path.join(workRepo, 'file.txt'), 'hello');
     execFileSync('git', ['add', '.'], { cwd: workRepo });
@@ -308,7 +373,7 @@ describe('worker service guard', () => {
     const home = path.join(root, 'home');
     fs.mkdirSync(repo);
     fs.mkdirSync(home);
-    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--template='], { cwd: repo });
 
     const cleanEnv = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' };
     delete cleanEnv.GIT_AUTHOR_NAME;

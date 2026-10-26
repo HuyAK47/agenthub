@@ -388,7 +388,13 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
     try {
       const tempNm = path.join(tempDir, 'node_modules');
       if (sourceNodeModules) {
-        await runner('cp', ['-al', sourceNodeModules, tempNm], { timeout: INSTALL_TIMEOUT_MS });
+        try {
+          await runner('cp', ['-al', sourceNodeModules, tempNm], { timeout: INSTALL_TIMEOUT_MS });
+        } catch {
+          // Hard links cannot cross filesystems (common with a custom worktree root).
+          // Let the caller install directly instead of treating a cache miss as fatal.
+          return null;
+        }
       } else {
         fs.copyFileSync(pkgPath, path.join(tempDir, 'package.json'));
         fs.copyFileSync(worktreeLock.path, path.join(tempDir, worktreeLock.file));
@@ -470,6 +476,7 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
           matchesProject = true;
           if (fs.existsSync(projectNm)) cacheNm = await createCacheAtomically(projectNm);
           if (cacheNm) createdCache = true;
+          else if (fs.existsSync(projectNm)) return installInWorktree();
         }
       }
     } else {
@@ -488,9 +495,13 @@ export async function ensureNodeModules(opts: EnsureNodeModulesOptions): Promise
 
   if (cacheNm && fs.existsSync(cacheNm)) {
     touchCacheEntry(cacheEntryDir);
-    await runner('cp', ['-al', cacheNm, targetNodeModules], { timeout: INSTALL_TIMEOUT_MS });
-    writeHash();
-    return verifyOrInstall({ cached: true, createdCache, usedNpmCi: false });
+    try {
+      await runner('cp', ['-al', cacheNm, targetNodeModules], { timeout: INSTALL_TIMEOUT_MS });
+      writeHash();
+      return verifyOrInstall({ cached: true, createdCache, usedNpmCi: false });
+    } catch {
+      return installInWorktree();
+    }
   }
 
   return { cached: false, createdCache: false, usedNpmCi: true };

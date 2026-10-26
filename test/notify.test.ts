@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config.js';
 import { openDatabase, TaskRepo, QuotaMarkRepo, EventRepo, ProjectRepo, ProfileRepo } from '../src/db/index.js';
 import { EventBus } from '../src/scheduler/index.js';
 import { NotificationService } from '../src/notify.js';
+import { areAllProfilesQuotaExhaustedForFamily } from '../src/brain/digest.js';
 
 describe('NotificationService (Desktop Notifications)', () => {
   let tmpDir: string;
@@ -20,6 +21,8 @@ describe('NotificationService (Desktop Notifications)', () => {
   let execCalls: Array<{ file: string; args: string[] }>;
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T10:00:00+07:00'));
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-notify-test-'));
     process.env.AGENTHUB_HOME = tmpDir;
     config = loadConfig(tmpDir);
@@ -42,6 +45,7 @@ describe('NotificationService (Desktop Notifications)', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     db.close();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -117,13 +121,23 @@ describe('NotificationService (Desktop Notifications)', () => {
     notifier.stop();
   });
 
-  it('notifies when Claude changes fallback step without including credentials', () => {
+  it('notifies when Claude has no fallback step without including credentials', () => {
     const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
     notifier.start();
-    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'apiKey' }, reason: 'quota' });
+    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'wait' }, reason: 'quota' });
     expect(execCalls).toHaveLength(1);
-    expect(execCalls[0].args.at(-1)).toBe('Claude fallback: đang dùng API key');
+    expect(execCalls[0].args.at(-1)).toBe('Claude fallback: đang dùng chờ reset');
     expect(execCalls.join(' ')).not.toContain('sk-');
+  });
+
+  it('does not notify when Claude still has a fallback step', () => {
+    const notifier = new NotificationService({ eventBus, config, exec: fakeExec });
+    notifier.start();
+
+    eventBus.emit('claude.fallback_changed', undefined, { step: { type: 'model', model: 'claude-sonnet' }, reason: 'quota' });
+
+    expect(execCalls).toHaveLength(0);
+    notifier.stop();
   });
 
   it('uses critical urgency only for task.failed', () => {
@@ -203,6 +217,7 @@ describe('NotificationService (Desktop Notifications)', () => {
       eventBus,
       config,
       taskRepo,
+      profileRepo,
       quotaMarkRepo,
       exec: fakeExec,
     });
@@ -216,13 +231,46 @@ describe('NotificationService (Desktop Notifications)', () => {
     });
     expect(execCalls).toHaveLength(0);
 
-    // A second individual profile is also suppressed.
-    quotaMarkRepo.mark('chinh', 'claude', resetEpoch, 'test');
+    // From an active quota mark, while another account remains available.
+    quotaMarkRepo.mark('g1', 'claude', resetEpoch, 'test');
     eventBus.emit('quota.exhausted', undefined, {
-      profile: 'chinh',
+      profile: 'g1',
       family: 'claude',
     });
     expect(execCalls).toHaveLength(0);
+
+    notifier.stop();
+  });
+
+  it('groups waiting quota tasks and notifies again after the blockage clears', async () => {
+    for (let i = 1; i <= 3; i += 1) {
+      taskRepo.insert({
+        id: `proj/quota-${i}`,
+        projectId: 'proj',
+        slug: `quota-${i}`,
+        title: `Quota ${i}`,
+        status: 'waiting_quota',
+        waitReason: 'quota',
+      });
+    }
+
+    const notifier = new NotificationService({ eventBus, config, taskRepo, quotaMarkRepo, exec: fakeExec });
+    notifier.start();
+    eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
+    eventBus.emit('task.waiting_quota', 'proj/quota-2', { reason: 'quota' });
+    eventBus.emit('task.waiting_quota', 'proj/quota-3', { reason: 'quota' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toContain('3 task đang chờ quota');
+
+    eventBus.emit('quota.cleared', undefined, { family: 'gemini' });
+    for (let i = 1; i <= 3; i += 1) taskRepo.updateStatus(`proj/quota-${i}`, 'queued');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    taskRepo.updateStatus('proj/quota-1', 'waiting_quota', 'quota');
+    eventBus.emit('task.waiting_quota', 'proj/quota-1', { reason: 'quota' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(execCalls).toHaveLength(2);
 
     notifier.stop();
   });
@@ -281,6 +329,38 @@ describe('NotificationService (Desktop Notifications)', () => {
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0].args.at(-1)).toBe('AgentHub: Mọi tài khoản đều đã hết quota');
     notifier.stop();
+  });
+
+  it('areAllProfilesQuotaExhaustedForFamily does not conflate claude engine profiles with agy profiles', () => {
+    profileRepo.upsert({ name: 'claude-1', engine: 'claude', kind: 'isolated', home: tmpDir, email: null, enabled: 1 });
+    const future = Math.floor(Date.now() / 1000) + 3600;
+
+    // Only claude engine profile exhausted on claude family, agy profiles are still available
+    quotaMarkRepo.mark('claude-1', 'claude', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'agy')).toBe(false);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(false);
+    quotaMarkRepo.clear('claude-1', 'claude');
+
+    // Both agy profiles exhausted on claude family
+    quotaMarkRepo.mark('g1', 'claude', future);
+    quotaMarkRepo.mark('chinh', 'claude', future);
+
+    // agy engine is exhausted for claude, but claude engine is not
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'agy')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(false);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(false);
+
+    // When claude engine exhausts as well
+    quotaMarkRepo.mark('claude-1', 'claude', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude', undefined, 'claude')).toBe(true);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'claude')).toBe(true);
+
+    // For gemini, claude-1 profile is not conflated with agy
+    quotaMarkRepo.mark('g1', 'gemini', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'gemini')).toBe(false);
+    quotaMarkRepo.mark('chinh', 'gemini', future);
+    expect(areAllProfilesQuotaExhaustedForFamily(profileRepo, quotaMarkRepo, 'gemini')).toBe(true);
   });
 
   it('deduplicates identical notifications within 30 minutes', () => {
@@ -637,6 +717,141 @@ describe('NotificationService (Desktop Notifications)', () => {
     }
 
     expect(execCalls.length).toBeLessThanOrEqual(10);
+    notifier.stop();
+  });
+
+  it('applies updated notification config immediately without restarting notifier', () => {
+    config.notifications.desktop = true;
+    config.notifications.desktopLevel = 'critical';
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+      now: () => Date.now(),
+    });
+    notifier.start();
+
+    // At desktopLevel='critical', normal events like task.review_ready do not trigger critical alert
+    eventBus.emit('task.review_ready', 'proj/t1', {});
+    expect(execCalls.length).toBe(0);
+
+    // Update config to 'all' via config.updated eventBus event
+    eventBus.emit('config.updated', undefined, {
+      notifications: { desktopLevel: 'all' },
+    });
+
+    // Now task.review_ready triggers notification immediately
+    eventBus.emit('task.review_ready', 'proj/t2', {});
+    expect(execCalls.length).toBe(1);
+
+    // Update to desktop=false via notifier.updateConfig
+    notifier.updateConfig({
+      ...config,
+      notifications: {
+        ...config.notifications,
+        desktop: false,
+      },
+    });
+
+    // Should not notify when desktop is disabled
+    eventBus.emit('task.failed', 'proj/t3', { error: 'fail' });
+    expect(execCalls.length).toBe(1);
+
+    notifier.stop();
+  });
+
+  it('notifies for no_department_profile wait reason with critical urgency, ignores other wait reasons, and deduplicates for 30 minutes', () => {
+    config.notifications.desktopLevel = 'critical';
+    let mockTime = 1_000_000_000;
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+      now: () => mockTime,
+    });
+    notifier.start();
+
+    // 1. no_department_profile should send critical notification
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args).toContain('-u');
+    expect(execCalls[0].args).toContain('critical');
+    expect(execCalls[0].args.at(-1)).toContain('task đang chờ vì phòng Phòng SYSTEM chưa có tài khoản được phép');
+    expect(execCalls[0].args.at(-1)).toContain('Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán');
+
+    // 2. other wait reasons (e.g. no_matching_profile, disk) must not send desktop notification
+    eventBus.emit('task.waiting_quota', 'proj/t-no-matching', {
+      reason: 'no_matching_profile',
+    });
+    eventBus.emit('task.waiting_quota', 'proj/t-disk', {
+      reason: 'disk',
+    });
+    expect(execCalls).toHaveLength(1);
+
+    // 3. Deduplication: same task with no_department_profile within 30 minutes is ignored
+    mockTime += 10 * 60 * 1000; // 10 minutes later
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+    expect(execCalls).toHaveLength(1);
+
+    // 4. After 30 minutes (31 minutes later), notification fires again
+    mockTime += 21 * 60 * 1000; // Total 31 minutes since first notification
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+    expect(execCalls).toHaveLength(2);
+
+    notifier.stop();
+  });
+
+  it('notifies for no_department_profile wait reason even in brain auto mode', () => {
+    config.brain.mode = 'auto';
+    config.notifications.desktopLevel = 'critical';
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+    });
+    notifier.start();
+
+    // Raw task events and other wait reasons are suppressed in auto mode
+    eventBus.emit('task.waiting_quota', 'proj/t-no-match', {
+      reason: 'no_matching_profile',
+    });
+    expect(execCalls).toHaveLength(0);
+
+    // no_department_profile is a configuration error that must bypass auto mode suppression
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toContain('task đang chờ vì phòng Phòng SYSTEM chưa có tài khoản được phép');
+
     notifier.stop();
   });
 });

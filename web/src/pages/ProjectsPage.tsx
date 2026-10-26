@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
+import { Link, useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addProjectKnowledge,
@@ -7,12 +7,18 @@ import {
   deleteProject,
   restoreProject,
   deleteProjectKnowledge,
-  getProjectKnowledge,
+  getProjectKnowledgePage,
+  getCiRunsPage,
   getArchivedProjects,
   getProjects,
+  getDepartments,
+  getFocus,
+  setFocus,
+  getTasks,
   updateProjectKnowledge,
   inspectGitRepo,
   GitInspectResult,
+  getProfiles,
 } from '../api/client';
 import {
   FolderGit2,
@@ -31,7 +37,8 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-react';
-import { Card, Button, Input } from '../components/ui';
+import { Card, Button, Input, DataTable, SelectOrCustomInput } from '../components/ui';
+import { DEFAULT_COMMON_BRANCHES, validateBranchSyntax } from '../utils/models';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { useTour } from '../components/tour/TourContext';
@@ -40,6 +47,7 @@ import {
   ProjectSettingsDrawer,
   defaultProjectSettings,
 } from '../components/ProjectSettingsDrawer';
+import { ProjectWizard } from '../components/ProjectWizard';
 
 function parsePositiveInt(val: string): number | undefined {
   const trimmed = val.trim();
@@ -61,6 +69,9 @@ function ProjectSettingsForm({
   const { t } = useLocale();
   const { suggestModalTour } = useTour();
   const [confirmFullPermission, setConfirmFullPermission] = useState(false);
+  const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
+  const codexProfileOptions = profiles.filter((p) => p.engine === 'codex').map((p) => p.name);
+
   const update = (section: keyof NonNullable<Project['settings']>, patch: object) =>
     onChange({ ...value, [section]: { ...value[section], ...patch } });
   const addReference = () =>
@@ -71,7 +82,33 @@ function ProjectSettingsForm({
 
   return (
     <div className="space-y-4" data-testid="project-settings-form" data-tour="project-register">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <label className="text-xs space-y-1">
+          <span className="font-semibold">{t('projects.brainEngine')}</span>
+          <select
+            value={value.brain.engine ?? 'inherit'}
+            onChange={(e) => update('brain', { engine: e.target.value })}
+            className="w-full rounded border p-2 bg-[var(--t-surface-2)]"
+          >
+            <option value="inherit">{t('projects.brainEngineInherit')}</option>
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+          </select>
+        </label>
+
+        <label className="text-xs space-y-1 block">
+          <span className="font-semibold block">{t('projects.codexProfile')}</span>
+          <SelectOrCustomInput
+            value={value.brain.codexProfile ?? ''}
+            onChange={(val) => update('brain', { codexProfile: val.trim() || undefined })}
+            options={codexProfileOptions}
+            allowEmpty={true}
+            emptyLabel={t('projects.codexProfileAuto')}
+            placeholder={t('projects.codexProfileAuto')}
+            ariaLabel={t('projects.codexProfile')}
+          />
+        </label>
+
         <label className="text-xs space-y-1">
           <span className="font-semibold">{t('projects.brainMode')}</span>
           <select
@@ -193,26 +230,43 @@ function ProjectSettingsForm({
         </label>
         {value.integration.enabled && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <input
-              aria-label={t('projects.integrationBranch')}
+            <SelectOrCustomInput
+              ariaLabel={t('projects.integrationBranch')}
               placeholder={t('projects.integrationBranch')}
               value={value.integration.branch ?? ''}
-              onChange={(e) =>
-                update('integration', { branch: e.target.value || undefined })
+              onChange={(val) =>
+                update('integration', { branch: val || undefined })
               }
-              className="rounded border p-2 bg-[var(--t-surface-2)]"
+              options={DEFAULT_COMMON_BRANCHES}
+              validate={(val) => validateBranchSyntax(val, t)}
+              allowEmpty={true}
+              className="flex-1"
             />
-            <input
-              aria-label={t('projects.integrationBaseRef')}
+            <SelectOrCustomInput
+              ariaLabel={t('projects.integrationBaseRef')}
               placeholder={t('projects.integrationBaseRef')}
               value={value.integration.baseRef ?? ''}
-              onChange={(e) =>
-                update('integration', { baseRef: e.target.value || undefined })
+              onChange={(val) =>
+                update('integration', { baseRef: val || undefined })
               }
-              className="rounded border p-2 bg-[var(--t-surface-2)]"
+              options={DEFAULT_COMMON_BRANCHES}
+              validate={(val) => validateBranchSyntax(val, t)}
+              allowEmpty={true}
+              className="flex-1"
             />
           </div>
         )}
+      </div>
+
+      <div className="space-y-2 text-xs">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={value.review?.autoMerge ?? false}
+            onChange={(e) => update('review', { autoMerge: e.target.checked })}
+          />
+          <span className="font-semibold">{t('projects.reviewAutoMerge')}</span>
+        </label>
       </div>
 
       <div className="space-y-2 text-xs">
@@ -225,14 +279,17 @@ function ProjectSettingsForm({
           <span className="font-semibold">{t('projects.ciEnabled')}</span>
         </label>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <input
-            aria-label={t('projects.ciBranch')}
+          <SelectOrCustomInput
+            ariaLabel={t('projects.ciBranch')}
             placeholder={t('projects.ciBranch')}
             value={value.ci?.branch ?? ''}
-            onChange={(e) =>
-              update('ci', { branch: e.target.value || undefined })
+            onChange={(val) =>
+              update('ci', { branch: val || undefined })
             }
-            className="rounded border p-2 bg-[var(--t-surface-2)]"
+            options={DEFAULT_COMMON_BRANCHES}
+            validate={(val) => validateBranchSyntax(val, t)}
+            allowEmpty={true}
+            className="flex-1"
           />
         </div>
       </div>
@@ -323,7 +380,7 @@ function ProjectSettingsForm({
         </p>
       )}
       {confirmFullPermission && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4" style={{ zIndex: UI_Z_INDEX.modal }} role="dialog" aria-modal="true" data-tour="modal-full-permission">
+        <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-4" style={{ zIndex: UI_Z_INDEX.modal }} role="dialog" aria-modal="true" data-tour="modal-full-permission">
           <div className="w-full max-w-md rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] p-5 shadow-2xl">
             <h2 className="text-base font-semibold">{t('common.confirm')}</h2>
             <p className="mt-2 text-sm text-[var(--t-text-2)]">{t('extra.fullModeConfirm')}</p>
@@ -348,6 +405,7 @@ export const ProjectsPage: React.FC = () => {
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   const [drawerProject, setDrawerProject] = useState<Project | null>(null);
 
   useEffect(() => {
@@ -360,6 +418,7 @@ export const ProjectsPage: React.FC = () => {
   const [path, setPath] = useState('');
   const [defaultBranch, setDefaultBranch] = useState('main');
   const [maxParallel, setMaxParallel] = useState(3);
+  const [departmentId, setDepartmentId] = useState('chung');
   const [envTemplate, setEnvTemplate] = useState('');
   const [checksJson, setChecksJson] = useState('');
   const [hooksText, setHooksText] = useState('');
@@ -440,7 +499,7 @@ export const ProjectsPage: React.FC = () => {
         }
       } catch {
         if (!active) return;
-        setGitInspectResult({ valid: false, message: 'Không thể kiểm tra đường dẫn', branches: [] });
+        setGitInspectResult({ valid: false, message: t('projects.gitInspectFailed'), branches: [] });
         setGitBranches([]);
       } finally {
         if (active) setIsInspectingGit(false);
@@ -453,6 +512,11 @@ export const ProjectsPage: React.FC = () => {
     };
   }, [path, nameManuallyEdited, defaultBranch]);
 
+  const [knowledgePage, setKnowledgePage] = useState(1);
+  const knowledgePageSize = 20;
+  const [ciProject, setCiProject] = useState<string | null>(null);
+  const [ciPage, setCiPage] = useState(1);
+  const ciPageSize = 20;
   useEffect(() => {
     if (showAddForm) suggestModalTour('modal-register-project');
   }, [showAddForm, suggestModalTour]);
@@ -460,6 +524,23 @@ export const ProjectsPage: React.FC = () => {
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+  });
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: getDepartments,
+  });
+  const { data: focus } = useQuery({ queryKey: ['focus'], queryFn: getFocus });
+  const focusMutation = useMutation({
+    mutationFn: (projectId: string | null) => setFocus(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['focus'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+  });
+  const { data: projectTasks = [] } = useQuery({
+    queryKey: ['tasks'],
+    queryFn: () => getTasks(),
+    refetchInterval: 10_000,
   });
   const { data: archivedProjects = [] } = useQuery({
     queryKey: ['projects', 'archived'],
@@ -511,9 +592,14 @@ export const ProjectsPage: React.FC = () => {
   });
 
   const knowledgeQuery = useQuery({
-    queryKey: ['project-knowledge', knowledgeProject],
-    queryFn: () => getProjectKnowledge(knowledgeProject!),
+    queryKey: ['project-knowledge', knowledgeProject, knowledgePage],
+    queryFn: () => getProjectKnowledgePage(knowledgeProject!, { limit: knowledgePageSize, offset: (knowledgePage - 1) * knowledgePageSize }),
     enabled: knowledgeProject !== null,
+  });
+  const ciRunsQuery = useQuery({
+    queryKey: ['ci-runs', ciProject, ciPage],
+    queryFn: () => getCiRunsPage(ciProject!, { limit: ciPageSize, offset: (ciPage - 1) * ciPageSize }),
+    enabled: ciProject !== null,
   });
 
   const addKnowledgeMutation = useMutation({
@@ -559,6 +645,7 @@ export const ProjectsPage: React.FC = () => {
     setPath('');
     setDefaultBranch('main');
     setMaxParallel(3);
+    setDepartmentId('chung');
     setEnvTemplate('');
     setChecksJson('');
     setHooksText('');
@@ -628,6 +715,7 @@ export const ProjectsPage: React.FC = () => {
       path: path.trim(),
       defaultBranch: defaultBranch.trim() || 'main',
       maxParallel: Number(maxParallel) || 3,
+      ...(departmentId !== 'chung' ? { departmentId } : {}),
       envTemplate: envTemplate.trim() ? envTemplate.trim() : null,
       checks: checks as any,
       ...(JSON.stringify(newSettings) !== JSON.stringify(defaultProjectSettings())
@@ -671,7 +759,12 @@ export const ProjectsPage: React.FC = () => {
               : t('projects.registerBtn')}
           </span>
         </Button>
+        <Button type="button" variant="secondary" onClick={() => { resetForm(); setShowWizard(true); }} className="gap-1.5 self-start sm:self-auto">
+          <span>{t('projects.wizardOpen')}</span>
+        </Button>
       </div>
+
+      {showWizard && <ProjectWizard onClose={() => setShowWizard(false)} />}
 
       <div>
         <Button type="button" variant="ghost" size="sm" onClick={() => setShowArchived((value) => !value)}>
@@ -695,15 +788,15 @@ export const ProjectsPage: React.FC = () => {
                   size="sm"
                   variant="ghost"
                   onClick={() => {
-                    if (window.confirm(`Xoá vĩnh viễn dự án "${project.name}" (${project.id})? Toàn bộ dữ liệu tác vụ và liên kết sẽ bị xóa hoàn toàn khỏi hệ thống.`)) {
+                    if (window.confirm(t('projects.purgeArchivedConfirm', { name: project.name, id: project.id }))) {
                       deleteMutation.mutate({ id: project.id, purge: true, confirm: project.id });
                     }
                   }}
                   className="text-[var(--t-crit)] hover:bg-[color-mix(in_srgb,var(--t-crit)_10%,transparent)] gap-1 px-2.5"
-                  title="Xoá vĩnh viễn dự án"
+                  title={t('projects.purgeTitle')}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Xoá vĩnh viễn</span>
+                  <span>{t('projects.purge')}</span>
                 </Button>
               </div>
             </div>
@@ -750,6 +843,21 @@ export const ProjectsPage: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
+                  {t('departments.department')}
+                </label>
+                <select
+                  value={departmentId}
+                  onChange={(e) => setDepartmentId(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--t-border)] p-2.5 bg-[var(--t-surface-2)] text-sm"
+                >
+                  {departments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
                   {t('projects.pathLabel')}
                 </label>
                 <p className="text-xs text-[var(--t-text-3)] mb-1.5">
@@ -764,22 +872,22 @@ export const ProjectsPage: React.FC = () => {
                 {isInspectingGit && (
                   <p className="mt-1.5 text-xs text-[var(--t-text-3)] flex items-center gap-1.5 animate-pulse">
                     <RefreshCw className="h-3 w-3 animate-spin text-[var(--t-accent)]" />
-                    <span>Đang kiểm tra Git repository...</span>
+                    <span>{t('projects.gitChecking')}</span>
                   </p>
                 )}
                 {!isInspectingGit && gitInspectResult?.valid && (
                   <p className="mt-1.5 text-xs text-[var(--t-ok)] flex items-center gap-1">
                     <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                     <span>
-                      Đã nhận diện Git repository ({gitBranches.length} nhánh)
-                      {gitInspectResult.currentBranch && ` • Nhánh hiện tại: ${gitInspectResult.currentBranch}`}
+                      {t('projects.gitDetected', { count: gitBranches.length })}
+                      {gitInspectResult.currentBranch && t('projects.gitCurrentBranch', { branch: gitInspectResult.currentBranch })}
                     </span>
                   </p>
                 )}
                 {!isInspectingGit && gitInspectResult && !gitInspectResult.valid && (
                   <p className="mt-1.5 text-xs text-[var(--t-warn)] flex items-center gap-1">
                     <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                    <span>{gitInspectResult.message || 'Thư mục không phải Git repository'}</span>
+                    <span>{gitInspectResult.message || t('projects.gitNotRepo')}</span>
                   </p>
                 )}
               </div>
@@ -792,13 +900,13 @@ export const ProjectsPage: React.FC = () => {
                   {path.trim() && (
                     <button
                       type="button"
-                      title="Làm mới danh sách nhánh từ Git repo"
+                      title={t('projects.refreshBranchesTitle')}
                       disabled={isInspectingGit}
                       onClick={handleRefreshBranches}
                       className="inline-flex items-center gap-1 text-[11px] text-[var(--t-accent)] hover:underline cursor-pointer disabled:opacity-50"
                     >
                       <RefreshCw className={`h-3 w-3 ${isInspectingGit ? 'animate-spin' : ''}`} />
-                      <span>Làm mới nhánh</span>
+                      <span>{t('projects.refreshBranches')}</span>
                     </button>
                   )}
                 </div>
@@ -820,8 +928,8 @@ export const ProjectsPage: React.FC = () => {
                   />
                   <button
                     type="button"
-                    aria-label="Xem danh sách nhánh"
-                    title="Xem danh sách nhánh"
+                    aria-label={t('projects.showBranchList')}
+                    title={t('projects.showBranchList')}
                     onClick={() => {
                       setIsBranchDropdownOpen((prev) => !prev);
                       setBranchSearchFilter('');
@@ -841,18 +949,18 @@ export const ProjectsPage: React.FC = () => {
                     {gitBranches.length === 0 ? (
                       <div className="px-3 py-2 text-xs text-[var(--t-text-3)] text-center">
                         {isInspectingGit
-                          ? 'Đang tải danh sách nhánh...'
-                          : 'Chưa có danh sách nhánh. Hãy nhập đường dẫn Git repo hợp lệ ở trên.'}
+                          ? t('projects.loadingBranches')
+                          : t('projects.noBranchesForm')}
                       </div>
                     ) : (
                       <>
                         <div className="px-3 py-1.5 text-[11px] font-medium text-[var(--t-text-3)] border-b border-[var(--t-border)] flex items-center justify-between bg-[var(--t-surface-2)]">
                           <span>
-                            Danh sách nhánh ({gitBranches.length})
+                            {t('projects.branchListCount', { count: gitBranches.length })}
                           </span>
                           {branchSearchFilter.trim() && (
                             <span className="text-[10px] text-[var(--t-accent)]">
-                              Khớp {displayBranches.length}/{gitBranches.length}
+                              {t('projects.branchMatchCount', { matched: displayBranches.length, total: gitBranches.length })}
                             </span>
                           )}
                         </div>
@@ -862,7 +970,7 @@ export const ProjectsPage: React.FC = () => {
                               <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[var(--t-text-3)]" />
                               <input
                                 type="text"
-                                placeholder="Lọc nhánh..."
+                                placeholder={t('projects.filterBranches')}
                                 value={branchSearchFilter}
                                 onChange={(e) => setBranchSearchFilter(e.target.value)}
                                 className="w-full h-7 pl-7 pr-2 text-xs bg-[var(--t-surface)] text-[var(--t-text)] border border-[var(--t-border)] rounded focus:outline-hidden focus:border-[var(--t-accent)]"
@@ -873,7 +981,7 @@ export const ProjectsPage: React.FC = () => {
                         <ul className="max-h-56 overflow-y-auto py-1">
                           {displayBranches.length === 0 ? (
                             <li className="px-3 py-2 text-xs text-[var(--t-text-3)] text-center">
-                              Không tìm thấy nhánh phù hợp
+                              {t('projects.noBranchMatch')}
                             </li>
                           ) : (
                             displayBranches.map((b) => {
@@ -902,12 +1010,12 @@ export const ProjectsPage: React.FC = () => {
                                     <span className="flex items-center gap-1.5 shrink-0 ml-2">
                                       {isDefault && (
                                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-accent)]/10 text-[var(--t-accent)]">
-                                          mặc định
+                                          {t('projects.branchDefaultTag')}
                                         </span>
                                       )}
                                       {isCurrent && !isDefault && (
                                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-[var(--t-surface-2)] text-[var(--t-text-3)]">
-                                          hiện tại
+                                          {t('projects.branchCurrentTag')}
                                         </span>
                                       )}
                                       {isSelected && <Check className="h-3.5 w-3.5 text-[var(--t-accent)]" />}
@@ -927,7 +1035,7 @@ export const ProjectsPage: React.FC = () => {
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     <span className="text-[11px] text-[var(--t-text-3)] flex items-center gap-1">
                       <GitBranch className="h-3 w-3" />
-                      Gợi ý:
+                      {t('projects.branchSuggestions')}
                     </span>
                     {gitBranches.map((b) => (
                       <button
@@ -940,7 +1048,7 @@ export const ProjectsPage: React.FC = () => {
                         }}
                         className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition-colors cursor-pointer ${
                           defaultBranch === b
-                            ? 'bg-[var(--t-accent)] text-white font-semibold'
+                            ? 'bg-[var(--t-accent)] text-[var(--t-on-accent)] font-semibold'
                             : 'bg-[var(--t-surface-2)] text-[var(--t-text-2)] hover:bg-[var(--t-hover)] hover:text-[var(--t-text)]'
                         }`}
                       >
@@ -1096,8 +1204,15 @@ export const ProjectsPage: React.FC = () => {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--t-accent)]" />
           </div>
         ) : error ? (
-          <div className="col-span-2 p-8 text-center text-[var(--t-crit)] text-sm">
-            {t('projects.loadError')}
+          <div className="col-span-2 p-8 text-center space-y-3">
+            <p className="text-[var(--t-crit)] text-sm">{t('projects.loadError')}</p>
+            <button
+              type="button"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['projects'] })}
+              className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] text-xs font-medium hover:bg-[var(--t-surface-2)] cursor-pointer"
+            >
+              {t('common.retry')}
+            </button>
           </div>
         ) : projects.length === 0 ? (
           <div
@@ -1120,7 +1235,7 @@ export const ProjectsPage: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   1
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -1129,7 +1244,7 @@ export const ProjectsPage: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   2
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -1138,7 +1253,7 @@ export const ProjectsPage: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-lg bg-[var(--t-surface-2)] border border-[var(--t-border)] space-y-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-white text-xs flex items-center justify-center font-bold">
+                <div className="w-6 h-6 rounded-full bg-[var(--t-accent)] text-[var(--t-on-accent)] text-xs flex items-center justify-center font-bold">
                   3
                 </div>
                 <p className="text-xs text-[var(--t-text-2)] leading-relaxed">
@@ -1202,11 +1317,22 @@ export const ProjectsPage: React.FC = () => {
                       <Settings2 className="w-3.5 h-3.5" />
                       <span>{t('projects.settings')}</span>
                     </Button>
+                    <Button
+                      variant={focus?.projectId === proj.id ? 'primary' : 'ghost'}
+                      size="sm"
+                      onClick={() => focusMutation.mutate(focus?.projectId === proj.id ? null : proj.id)}
+                      disabled={focusMutation.isPending}
+                      className="gap-1.5"
+                    >
+                      <span aria-hidden="true">🎯</span>
+                      <span>{focus?.projectId === proj.id ? t('projects.unfocusProject') : t('projects.focusProject')}</span>
+                    </Button>
 
                     <Button
                       variant="ghost"
                       size="sm"
                       title={t('extra.deleteProject')}
+                      aria-label={t('extra.deleteProject')}
                       onClick={() => {
                         if (window.confirm(t('projects.archiveConfirm', { name: proj.name }))) {
                           deleteMutation.mutate({ id: proj.id });
@@ -1333,24 +1459,32 @@ export const ProjectsPage: React.FC = () => {
                       )}
                     </div>
                   )}
+                  {proj.ciStatus && (
+                    <button type="button" className="text-xs text-[var(--t-accent)] hover:underline" onClick={() => { setCiProject(ciProject === proj.id ? null : proj.id); setCiPage(1); }}>
+                      {t('projects.ciLabel')}
+                    </button>
+                  )}
                 </div>
               </div>
 
               {/* Card Footer: Knowledge button */}
               <div className="pt-2 border-t border-[var(--t-border)] space-y-2">
+                {(() => {
+                  const activeCount = projectTasks.filter((task) => task.projectId === proj.id && ['running', 'queued', 'waiting_quota'].includes(task.status)).length;
+                  return <Link to={`/tasks?project=${encodeURIComponent(proj.id)}`} className="flex items-center justify-between rounded-lg border border-[var(--t-border)] px-2.5 py-2 text-xs hover:border-[var(--t-accent)] transition-colors" data-testid={`project-task-summary-${proj.id}`}><span className="text-[var(--t-text-2)]">{t('projects.activeTasks')}</span><span className="font-semibold text-[var(--t-accent)]">{activeCount} · {t('projects.viewTasks')}</span></Link>;
+                })()}
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    setKnowledgeProject(
-                      knowledgeProject === proj.id ? null : proj.id,
-                    )
-                  }
+                  onClick={() => {
+                    setKnowledgeProject(knowledgeProject === proj.id ? null : proj.id);
+                    setKnowledgePage(1);
+                  }}
                   className="inline-flex items-center gap-1 text-xs text-[var(--t-accent)] px-2 h-7"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
-                  <span>Kiến thức</span>
+                  <span>{t('projects.knowledge')}</span>
                 </Button>
 
                 {knowledgeProject === proj.id && (
@@ -1359,7 +1493,7 @@ export const ProjectsPage: React.FC = () => {
                       <Input
                         value={knowledgeDraft}
                         onChange={(e) => setKnowledgeDraft(e.target.value)}
-                        placeholder={t('extra.addKnowledgePlaceholder')}
+                        placeholder={t('projects.addKnowledgePlaceholder')}
                         className="text-xs h-8"
                       />
                       <Button
@@ -1373,28 +1507,47 @@ export const ProjectsPage: React.FC = () => {
                         onClick={() => addKnowledgeMutation.mutate()}
                         className="h-8"
                       >
-                        {t('extra.knowledgeAdd')}
+                        {t('projects.addKnowledgeBtn')}
                       </Button>
                     </div>
-                    {(knowledgeQuery.data || []).map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="flex items-start gap-2 text-xs"
-                      >
+                    <DataTable
+                      rows={knowledgeQuery.data?.items || []}
+                      loading={knowledgeQuery.isLoading}
+                      error={knowledgeQuery.error instanceof Error ? knowledgeQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      page={knowledgePage}
+                      pageSize={knowledgePageSize}
+                      total={knowledgeQuery.data?.total || 0}
+                      onPageChange={setKnowledgePage}
+                      columns={[{
+                        key: 'content',
+                        title: t('extra.knowledge'),
+                        sortable: true,
+                        sortValue: (entry) => entry.content,
+                        render: (entry) => <div className="flex items-start gap-2 text-xs">
                         <button
                           type="button"
-                          title={t('extra.pinKnowledge')}
+                          title={
+                            entry.pinned
+                              ? t('projects.unpinKnowledge')
+                              : t('projects.pinKnowledge')
+                          }
+                          aria-label={
+                            entry.pinned
+                              ? t('projects.unpinKnowledge')
+                              : t('projects.pinKnowledge')
+                          }
                           onClick={() =>
                             updateKnowledgeMutation.mutate({
                               id: entry.id,
                               pinned: !entry.pinned,
                             })
                           }
-                          className={
+                          className={`cursor-pointer ${
                             entry.pinned
                               ? 'text-[var(--t-accent)]'
                               : 'text-[var(--t-text-3)]'
-                          }
+                          }`}
                         >
                           <Pin className="w-3.5 h-3.5 mt-0.5" />
                         </button>
@@ -1416,12 +1569,41 @@ export const ProjectsPage: React.FC = () => {
                           onClick={() =>
                             deleteKnowledgeMutation.mutate(entry.id)
                           }
-                          className="text-[var(--t-crit)]"
+                          aria-label={t('common.delete')}
+                          title={t('common.delete')}
+                          className="text-[var(--t-crit)] cursor-pointer"
                         >
                           ×
                         </button>
-                      </div>
-                    ))}
+                        </div>,
+                      }, {
+                        key: 'createdAt',
+                        title: t('common.createdAt'),
+                        sortable: true,
+                        sortValue: (entry) => entry.createdAt,
+                        render: (entry) => <span className="whitespace-nowrap text-xs text-[var(--t-text-3)]">{entry.createdAt}</span>,
+                      }]}
+                    />
+                  </div>
+                )}
+                {ciProject === proj.id && (
+                  <div className="pt-2 border-t border-[var(--t-border)]">
+                    <DataTable
+                      rows={ciRunsQuery.data?.items || []}
+                      loading={ciRunsQuery.isLoading}
+                      error={ciRunsQuery.error instanceof Error ? ciRunsQuery.error.message : null}
+                      emptyTitle={t('common.empty')}
+                      columns={[
+                        { key: 'runId', title: 'Run', sortable: true, sortValue: (row) => row.runId, render: (row) => <span className="font-mono">#{row.runId}</span> },
+                        { key: 'workflow', title: 'Workflow', render: (row) => row.workflow },
+                        { key: 'status', title: 'Status', render: (row) => row.conclusion || row.status },
+                        { key: 'sha', title: 'SHA', render: (row) => <span className="font-mono">{row.sha.slice(0, 8)}</span> },
+                      ]}
+                      page={ciPage}
+                      pageSize={ciPageSize}
+                      total={ciRunsQuery.data?.total || 0}
+                      onPageChange={setCiPage}
+                    />
                   </div>
                 )}
               </div>
@@ -1433,6 +1615,7 @@ export const ProjectsPage: React.FC = () => {
       {/* Project Settings Drawer */}
       <ProjectSettingsDrawer
         project={drawerProject}
+        departments={departments}
         isOpen={drawerProject !== null}
         onClose={() => {
           setDrawerProject(null);

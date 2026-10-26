@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { HttpError } from '../errors.js';
 import { projectSettings } from './settings.js';
 import { isProjectWorktreeRootAccessible, projectWorktreeRoot } from './paths.js';
+import { ensureWorktreeNodeModules, type NodeModulesCachePolicy, type EnsureNodeModulesOptions } from '../cache.js';
 
 export interface IntegrationStatus {
   path: string;
@@ -56,27 +57,59 @@ export function getIntegrationPath(projectOrHubHome: ProjectLike | string, hubHo
   return path.join(projectWorktreeRoot({ id: projectOrHubHome.id, path: projectOrHubHome.path || hubHomeOrProjectId, settings: projectOrHubHome.settings }, hubHomeOrProjectId), '.integration');
 }
 
-function addExcludeRules(worktreePath: string): void {
+export function addExcludeRules(worktreePath: string): void {
   try {
-    const gitDir = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-dir'], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-    }).trim();
-    const resolvedGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(worktreePath, gitDir);
-    const excludePath = path.join(resolvedGitDir, 'info', 'exclude');
-    const infoDir = path.dirname(excludePath);
-    if (!fs.existsSync(infoDir)) {
-      fs.mkdirSync(infoDir, { recursive: true });
+    const excludePaths: string[] = [];
+
+    try {
+      const gitPath = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-path', 'info/exclude'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      if (gitPath) {
+        excludePaths.push(path.isAbsolute(gitPath) ? gitPath : path.join(worktreePath, gitPath));
+      }
+    } catch {
+      // ignore
     }
-    let content = '';
-    if (fs.existsSync(excludePath)) {
-      content = fs.readFileSync(excludePath, 'utf-8');
+
+    try {
+      const commonDir = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-common-dir'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      const resolvedCommonDir = path.isAbsolute(commonDir) ? commonDir : path.join(worktreePath, commonDir);
+      excludePaths.push(path.join(resolvedCommonDir, 'info', 'exclude'));
+    } catch {
+      // ignore
     }
-    const lines = content.split('\n').map((l) => l.trim());
-    let toAppend = '';
-    if (!lines.includes('.agenthub/')) toAppend += '\n.agenthub/\n';
-    if (!lines.includes('node_modules')) toAppend += 'node_modules\n';
-    if (toAppend) fs.appendFileSync(excludePath, toAppend);
+
+    try {
+      const gitDir = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-dir'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      const resolvedGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(worktreePath, gitDir);
+      excludePaths.push(path.join(resolvedGitDir, 'info', 'exclude'));
+    } catch {
+      // ignore
+    }
+
+    for (const excludePath of new Set(excludePaths)) {
+      const infoDir = path.dirname(excludePath);
+      if (!fs.existsSync(infoDir)) {
+        fs.mkdirSync(infoDir, { recursive: true });
+      }
+      let content = '';
+      if (fs.existsSync(excludePath)) {
+        content = fs.readFileSync(excludePath, 'utf-8');
+      }
+      const lines = content.split('\n').map((l) => l.trim());
+      let toAppend = '';
+      if (!lines.includes('.agenthub/')) toAppend += '\n.agenthub/\n';
+      if (!lines.includes('node_modules')) toAppend += 'node_modules\n';
+      if (toAppend) fs.appendFileSync(excludePath, toAppend);
+    }
   } catch {
     // non-critical
   }
@@ -232,6 +265,46 @@ export function ensureIntegrationWorktree(project: ProjectLike, hubHome: string)
 
   addExcludeRules(integrationPath);
   return integrationPath;
+}
+
+/**
+ * Ensure node_modules are prepared in the integration worktree according to worktree.install policy.
+ */
+export async function ensureIntegrationNodeModules(
+  project: ProjectLike,
+  hubHome: string,
+  options?: {
+    cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
+    cachePolicy?: NodeModulesCachePolicy;
+    execFn?: EnsureNodeModulesOptions['execFn'];
+  },
+): Promise<void> {
+  const settings = projectSettings(project);
+  if (settings.worktree.install === 'skip') return;
+  const integrationPath = getIntegrationPath(project, hubHome);
+  if (!fs.existsSync(integrationPath)) return;
+  const hasDependencyLock = (dir: string): boolean =>
+    fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
+  if (
+    !hasDependencyLock(integrationPath) &&
+    !hasDependencyLock(path.join(integrationPath, 'web')) &&
+    !fs.existsSync(path.join(integrationPath, 'package.json'))
+  ) {
+    return;
+  }
+  const cachePolicy = options?.cachePolicy || {
+    maxEntries: options?.cacheMaxEntries,
+    maxBytes: options?.cacheMaxGB !== undefined ? options.cacheMaxGB * 1024 ** 3 : undefined,
+  };
+  await ensureWorktreeNodeModules(
+    integrationPath,
+    project.path || undefined,
+    options?.cacheDir,
+    options?.execFn,
+    cachePolicy,
+  );
 }
 
 function branchExistsInRepo(repoPath: string, branch: string): boolean {

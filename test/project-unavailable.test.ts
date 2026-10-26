@@ -29,6 +29,7 @@ describe('Project availability and unmounted drive handling', () => {
 
     config = loadConfig(tmpDir);
     config.agyHomesDir = agyHomesDir;
+    config.disk.minFreeGB = 0;
 
     db = openDatabase(config.dbPath);
     projectRepo = new ProjectRepo(db);
@@ -68,7 +69,7 @@ describe('Project availability and unmounted drive handling', () => {
 
     const gitDir = path.join(tmpDir, 'git-repo');
     fs.mkdirSync(gitDir);
-    execFileSync('git', ['init'], { cwd: gitDir });
+    execFileSync('git', ['init', '--template='], { cwd: gitDir });
     expect(isProjectAccessible(gitDir)).toBe(true);
   });
 
@@ -120,7 +121,7 @@ describe('Project availability and unmounted drive handling', () => {
 
     // 2. Restore project path (drive mounted)
     fs.mkdirSync(unmountedPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: unmountedPath });
+    execFileSync('git', ['init', '--template='], { cwd: unmountedPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: unmountedPath });
     fs.writeFileSync(path.join(unmountedPath, 'README.md'), '# Repo');
     execFileSync('git', ['add', '.'], { cwd: unmountedPath });
@@ -157,7 +158,7 @@ describe('Project availability and unmounted drive handling', () => {
   it('task đã có worktree mà worktree mất cũng chuyển waiting_quota/project_unavailable và khôi phục khi worktree trở lại', async () => {
     const repoPath = path.join(tmpDir, 'valid-repo');
     fs.mkdirSync(repoPath, { recursive: true });
-    execFileSync('git', ['init'], { cwd: repoPath });
+    execFileSync('git', ['init', '--template='], { cwd: repoPath });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
     fs.writeFileSync(path.join(repoPath, 'README.md'), '# Valid Repo');
     execFileSync('git', ['add', '.'], { cwd: repoPath });

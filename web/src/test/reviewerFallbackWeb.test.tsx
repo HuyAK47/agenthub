@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LocaleProvider } from '../context/LocaleContext';
@@ -118,8 +118,8 @@ describe('Reviewer Fallback Web Controls & Badges (b8-claude-review-fallback)', 
 
       // 2. Select both claude-primary and claude-backup
       const profilesSelect = screen.getByTestId('claude-profiles-select');
-      const opt1 = screen.getByRole('option', { name: 'claude-primary' }) as HTMLOptionElement;
-      const opt2 = screen.getByRole('option', { name: 'claude-backup' }) as HTMLOptionElement;
+      const opt1 = within(profilesSelect).getByRole('option', { name: 'claude-primary' }) as HTMLOptionElement;
+      const opt2 = within(profilesSelect).getByRole('option', { name: 'claude-backup' }) as HTMLOptionElement;
       opt1.selected = true;
       opt2.selected = true;
       fireEvent.change(profilesSelect);
@@ -312,7 +312,7 @@ describe('Reviewer Fallback Web Controls & Badges (b8-claude-review-fallback)', 
       expect(screen.getByTestId('task-timeline')).toBeInTheDocument();
       const fallbackEvent = screen.getByTestId('timeline-event-review.fallback');
       expect(fallbackEvent).toBeInTheDocument();
-      expect(fallbackEvent).toHaveTextContent('review.fallback');
+      expect(fallbackEvent).toHaveTextContent('Chuyển reviewer dự phòng');
       expect(fallbackEvent).toHaveTextContent('Codex hết quota, Claude đang duyệt (claude-primary)');
     });
   });

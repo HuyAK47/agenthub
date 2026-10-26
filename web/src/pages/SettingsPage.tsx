@@ -1,32 +1,55 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles } from '../api/client';
-import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell } from 'lucide-react';
+import { getConfig, updateConfig, uploadBrandingLogo, getClaudeApiKeyStatus, setClaudeApiKey, getStatus, shutdownHub, getProfiles, getModelOptions } from '../api/client';
+import type { ReviewerFallback, ReviewerOrderItem } from '../types/api';
+import { Save, CheckCircle2, AlertCircle, Info, MessageSquare, Bell, ArrowUp, ArrowDown, Plus, Trash2 } from 'lucide-react';
 import { useLocale } from '../context/LocaleContext';
 import { TelegramCard } from '../components/TelegramCard';
 import { deletePermissionRule, getPermissionRules } from '../api/chat';
 import { useTour } from '../components/tour/TourContext';
 import { InfoTooltip } from '../components/tour/InfoTooltip';
+import { DataTable, SelectOrCustomInput, SortableModelList } from '../components/ui';
+import {
+  DEFAULT_CLAUDE_MODELS,
+  validateModelSyntax,
+  validateChatModelSyntax,
+  validateReviewerModelSyntax,
+} from '../utils/models';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLocale();
   const { openTour } = useTour();
   const queryClient = useQueryClient();
-  const permissionRules = useQuery({ queryKey: ['permissionRules'], queryFn: getPermissionRules });
+  const [permissionPage, setPermissionPage] = useState(1);
+  const [permissionCursors, setPermissionCursors] = useState<Record<number, string | undefined>>({});
+  const permissionRules = useQuery({
+    queryKey: ['permissionRules', permissionPage, permissionCursors[permissionPage - 1]],
+    queryFn: () => getPermissionRules({ limit: 20, cursor: permissionCursors[permissionPage - 1] }),
+  });
+  useEffect(() => {
+    if (permissionRules.data?.nextCursor) setPermissionCursors((current) => ({ ...current, [permissionPage]: permissionRules.data!.nextCursor || undefined }));
+  }, [permissionPage, permissionRules.data?.nextCursor]);
   const deleteRule = useMutation({ mutationFn: deletePermissionRule, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['permissionRules'] }) });
+  const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: getProfiles });
+  const codexProfiles = profiles.filter((p) => p.engine === 'codex' && Boolean(p.enabled));
 
-  const [hardChain, setHardChain] = useState<string>('');
-  const [easyChain, setEasyChain] = useState<string>('');
+  const [hardChainModels, setHardChainModels] = useState<string[]>([]);
+  const [easyChainModels, setEasyChainModels] = useState<string[]>([]);
   const [timeoutHours, setTimeoutHours] = useState<number>(3);
   const [multiplePerProvider, setMultiplePerProvider] = useState<boolean>(true);
   const [claudeBin, setClaudeBin] = useState<string>('claude');
   const [allowFullMode, setAllowFullMode] = useState<boolean>(false);
   const [chatModel, setChatModel] = useState<string>('sonnet');
   const [chatModels, setChatModels] = useState<string[]>(['opus', 'sonnet', 'haiku']);
-  const [reviewerModel, setReviewerModel] = useState<string>('codex:gpt-5.6-luna');
+  const [newChatModel, setNewChatModel] = useState<string>('sonnet');
+  const [reviewerModel, setReviewerModel] = useState<string>('');
   const [claudeFallback, setClaudeFallback] = useState<boolean>(true);
   const [claudeProfiles, setClaudeProfiles] = useState<string[]>([]);
   const [claudeModel, setClaudeModel] = useState<string>('sonnet');
+  const [reviewOrder, setReviewOrder] = useState<ReviewerOrderItem[]>([]);
+  const [reviewFallback, setReviewFallback] = useState<ReviewerFallback>({ onUnavailable: true, onBusyAfterMin: 10, onError: true });
+  const [arbiter, setArbiter] = useState<{ engine: 'codex' | 'claude'; model: string }>({ engine: 'claude', model: 'opus' });
+  const [draggedReviewer, setDraggedReviewer] = useState<number | null>(null);
   const [maxConcurrent, setMaxConcurrent] = useState<number>(2);
   const [autoCompactPercent, setAutoCompactPercent] = useState<number>(85);
   const [bucketGemini, setBucketGemini] = useState<number>(5_000_000);
@@ -35,6 +58,8 @@ export const SettingsPage: React.FC = () => {
   const [claudeOverhead, setClaudeOverhead] = useState<number>(40_000);
   const [fallback, setFallback] = useState<NonNullable<NonNullable<import('../types/api').SystemConfig['brain']>['fallback']>>([]);
   const [desktopNotify, setDesktopNotify] = useState<boolean>(true);
+  const [brainEngine, setBrainEngine] = useState<'claude' | 'codex'>('claude');
+  const [codexProfile, setCodexProfile] = useState<string>('');
   const [desktopNotifyLevel, setDesktopNotifyLevel] = useState<'all' | 'important' | 'critical' | 'off'>('important');
   const [brainMode, setBrainMode] = useState<'off' | 'suggest' | 'auto'>('suggest');
   const [brainPermissions, setBrainPermissions] = useState<'standard' | 'trusted' | 'full'>('standard');
@@ -75,6 +100,18 @@ export const SettingsPage: React.FC = () => {
     queryFn: getProfiles,
   });
 
+  const { data: modelOptions } = useQuery({
+    queryKey: ['model-options'],
+    queryFn: getModelOptions,
+  });
+
+  const availableWorkerModels = useMemo(() => {
+    const fromApi = modelOptions?.suggestions || [];
+    const fromConfig = modelOptions?.configured || [];
+    const set = new Set([...fromApi, ...fromConfig, ...hardChainModels, ...easyChainModels]);
+    return Array.from(set).filter(Boolean);
+  }, [modelOptions, hardChainModels, easyChainModels]);
+
   const availableClaudeProfiles = useMemo(
     () => allProfiles.filter((p) => p.engine === 'claude'),
     [allProfiles],
@@ -84,6 +121,56 @@ export const SettingsPage: React.FC = () => {
     const fromProfiles = availableClaudeProfiles.map((p) => p.name);
     return Array.from(new Set([...fromProfiles, ...claudeProfiles]));
   }, [availableClaudeProfiles, claudeProfiles]);
+
+  const fallbackProfileOptions = useMemo(() => {
+    const fromProfiles = availableClaudeProfiles.map((p) => p.name);
+    const fromFallback = fallback
+      .filter((s): s is { type: 'profile'; profile?: string } => s.type === 'profile' && Boolean(s.profile))
+      .map((s) => s.profile!.trim())
+      .filter(Boolean);
+    const activeNames = new Set(availableClaudeProfiles.map((p) => p.name));
+    const allNames = Array.from(new Set([...fromProfiles, ...claudeProfiles, ...fromFallback]));
+    return allNames.map((name) => {
+      if (activeNames.has(name)) {
+        return name;
+      }
+      return {
+        value: name,
+        label: `${name} (${t('settings.inactiveOrOld')})`,
+      };
+    });
+  }, [availableClaudeProfiles, claudeProfiles, fallback, t]);
+
+  const availableCodexReviewerModels = useMemo(() => {
+    const fromApi = (modelOptions?.suggestions || []).filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    const fromConfigured = (modelOptions?.configured || []).filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    const reviewerModels = reviewOrder.filter((r) => r.engine === 'codex').map((r) => r.model);
+    const arbiterModel = arbiter.engine === 'codex' && arbiter.model ? [arbiter.model] : [];
+    const chainCodex = [...hardChainModels, ...easyChainModels].filter((m) => m.startsWith('codex:') || m.startsWith('gpt-'));
+    return Array.from(new Set([
+      ...fromApi,
+      ...fromConfigured,
+      ...reviewerModels,
+      ...arbiterModel,
+      ...chainCodex,
+    ])).filter(Boolean);
+  }, [modelOptions, reviewOrder, arbiter, hardChainModels, easyChainModels]);
+
+  const availableClaudeReviewerModels = useMemo(() => {
+    const fromChat = chatModels;
+    const fromApi = (modelOptions?.suggestions || []).filter((m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'));
+    const fromConfigured = (modelOptions?.configured || []).filter((m) => DEFAULT_CLAUDE_MODELS.includes(m) || m.startsWith('claude'));
+    const reviewerModels = reviewOrder.filter((r) => r.engine === 'claude').map((r) => r.model);
+    const arbiterModel = arbiter.engine === 'claude' && arbiter.model ? [arbiter.model] : [];
+    return Array.from(new Set([
+      ...DEFAULT_CLAUDE_MODELS,
+      ...fromChat,
+      ...fromApi,
+      ...fromConfigured,
+      ...reviewerModels,
+      ...arbiterModel,
+    ])).filter(Boolean);
+  }, [modelOptions, reviewOrder, arbiter, chatModels]);
 
   useEffect(() => {
     if (config) {
@@ -99,18 +186,40 @@ export const SettingsPage: React.FC = () => {
           : config.runTimeoutHours
           ? config.runTimeoutHours * 3600
           : 10800;
-      setHardChain(hardList.join('\n'));
-      setEasyChain(easyList.join('\n'));
+      setHardChainModels(hardList);
+      setEasyChainModels(easyList);
       setTimeoutHours(Math.max(1, Math.round(timeoutSec / 3600)));
       setMultiplePerProvider(config.multiplePerProvider !== false);
       setClaudeBin(config.chat?.claudeBin || 'claude');
       setAllowFullMode(Boolean(config.chat?.allowFullMode));
       setChatModel(config.chat?.model || 'sonnet');
       setChatModels(config.chat?.models?.length ? config.chat.models : ['opus', 'sonnet', 'haiku']);
-      setReviewerModel(config.reviewer?.model || 'codex:gpt-5.6-luna');
+      setReviewerModel(config.reviewer?.model || '');
       setClaudeFallback(config.reviewer?.claudeFallback !== false);
       setClaudeProfiles(config.reviewer?.claudeProfiles || []);
       setClaudeModel(config.reviewer?.claudeModel || 'sonnet');
+      const defaultReviewOrder: ReviewerOrderItem[] = [];
+      if (config.reviewer?.model) {
+        defaultReviewOrder.push({
+          engine: (config.reviewer.model.startsWith('claude') ? 'claude' : 'codex') as ReviewerOrderItem['engine'],
+          model: config.reviewer.model.replace(/^codex:/, ''),
+          profiles: [],
+        });
+      }
+      if (config.reviewer?.claudeFallback !== false && config.reviewer?.claudeModel) {
+        defaultReviewOrder.push({
+          engine: 'claude',
+          model: config.reviewer.claudeModel,
+          profiles: config.reviewer?.claudeProfiles || [],
+        });
+      }
+      setReviewOrder(config.reviewer?.order || defaultReviewOrder);
+      setReviewFallback({
+        onUnavailable: config.reviewer?.fallback?.onUnavailable ?? true,
+        onBusyAfterMin: config.reviewer?.fallback?.onBusyAfterMin ?? config.reviewer?.claudeFallbackAfterMin ?? 10,
+        onError: config.reviewer?.fallback?.onError ?? true,
+      });
+      setArbiter(config.reviewer?.arbiter || { engine: 'claude', model: 'opus' });
       setMaxConcurrent(config.chat?.maxConcurrent ?? 2);
       setAutoCompactPercent(config.chat?.autoCompactPercent ?? 85);
       setFallback(config.brain?.fallback || [{ type: 'engine', engine: 'codex' }]);
@@ -132,6 +241,8 @@ export const SettingsPage: React.FC = () => {
         }
       }
       setDesktopNotify(config.notifications?.desktop ?? true);
+      setBrainEngine(config.brain?.engine || 'claude');
+      setCodexProfile(config.brain?.codexProfile || '');
       setDesktopNotifyLevel(config.notifications?.desktopLevel ?? 'important');
       setBrainMode(config.brain?.mode ?? 'suggest');
       setBrainPermissions(config.brain?.permissions ?? 'standard');
@@ -172,13 +283,11 @@ export const SettingsPage: React.FC = () => {
     setSaveSuccess(false);
     setSaveError(null);
 
-    const hardModels = hardChain
-      .split('\n')
+    const hardModels = hardChainModels
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const easyModels = easyChain
-      .split('\n')
+    const easyModels = easyChainModels
       .map((s) => s.trim())
       .filter(Boolean);
 
@@ -188,6 +297,45 @@ export const SettingsPage: React.FC = () => {
     }
     if (easyModels.length === 0) {
       setSaveError(t('settings.easyChainRequired'));
+      return;
+    }
+
+    const invalidHard = hardModels.find((m) => validateModelSyntax(m, t));
+    if (invalidHard) {
+      setSaveError(`${t('settings.hardChainLabel')}: ${validateModelSyntax(invalidHard, t)} ("${invalidHard}")`);
+      return;
+    }
+    const invalidEasy = easyModels.find((m) => validateModelSyntax(m, t));
+    if (invalidEasy) {
+      setSaveError(`${t('settings.easyChainLabel')}: ${validateModelSyntax(invalidEasy, t)} ("${invalidEasy}")`);
+      return;
+    }
+
+    const invalidChat = validateChatModelSyntax(chatModel, t);
+    if (invalidChat) {
+      setSaveError(`${t('extra.chatModel')}: ${invalidChat} ("${chatModel}")`);
+      return;
+    }
+
+    const invalidReviewer = reviewerModel.trim()
+      ? validateReviewerModelSyntax(reviewerModel, reviewerModel.startsWith('claude') ? 'claude' : 'codex', t)
+      : null;
+    if (invalidReviewer) {
+      setSaveError(`${t('extra.reviewerModel')}: ${invalidReviewer} ("${reviewerModel}")`);
+      return;
+    }
+
+    for (let i = 0; i < reviewOrder.length; i++) {
+      const err = validateReviewerModelSyntax(reviewOrder[i].model, reviewOrder[i].engine, t);
+      if (err) {
+        setSaveError(`${t('settings.reviewerOrder')} ${i + 1}: ${err} ("${reviewOrder[i].model}")`);
+        return;
+      }
+    }
+
+    const invalidArbiter = validateReviewerModelSyntax(arbiter.model, arbiter.engine, t);
+    if (invalidArbiter) {
+      setSaveError(`${t('settings.arbiter')}: ${invalidArbiter} ("${arbiter.model}")`);
       return;
     }
 
@@ -213,10 +361,13 @@ export const SettingsPage: React.FC = () => {
         models: chatModels,
       },
       reviewer: {
-        model: reviewerModel,
+        model: reviewerModel.trim() || undefined,
         claudeFallback,
         claudeProfiles,
         claudeModel,
+        order: reviewOrder,
+        fallback: reviewFallback,
+        arbiter,
       },
       savings: {
         bucketTokens: {
@@ -227,6 +378,8 @@ export const SettingsPage: React.FC = () => {
         claudeOverheadPerTask: Number(claudeOverhead) || 40_000,
       },
       brain: {
+        engine: brainEngine,
+        codexProfile: codexProfile.trim() || undefined,
         mode: brainMode,
         permissions: brainPermissions,
         maxConcurrent: Number(brainMaxConcurrent) || 2,
@@ -372,39 +525,28 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             {/* Hard chain */}
-            <div data-tour="model-chain">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
-                {t('settings.hardChainLabel')}
-                <InfoTooltip text={t('settings.hardChainInfo')} label={t('settings.hardChainLabel')} />
-              </label>
-              <textarea
-                rows={4}
-                value={hardChain}
-                onChange={(e) => setHardChain(e.target.value)}
-                placeholder="codex:gpt-5.6-luna&#10;gemini-3.8-flash-high"
-                className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
-              />
-              <p className="text-[11px] text-[var(--t-text-3)] mt-1">
-                {t('settings.hardChainHint')}
-              </p>
-            </div>
+            <SortableModelList
+              dataTour="model-chain"
+              dataTestId="hard-chain-list"
+              title={t('settings.hardChainLabel')}
+              hint={t('settings.hardChainHint')}
+              infoTooltip={<InfoTooltip text={t('settings.hardChainInfo')} label={t('settings.hardChainLabel')} />}
+              models={hardChainModels}
+              onChange={setHardChainModels}
+              availableOptions={availableWorkerModels}
+              ariaLabel={t('settings.hardChainLabel')}
+            />
 
             {/* Easy chain */}
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text)] mb-1">
-                {t('settings.easyChainLabel')}
-              </label>
-              <textarea
-                rows={3}
-                value={easyChain}
-                onChange={(e) => setEasyChain(e.target.value)}
-                placeholder="gemini-3.8-flash-medium&#10;codex:gpt-5.6-luna"
-                className="w-full text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 text-[var(--t-text)] focus:outline-none focus:ring-2 focus:ring-[var(--t-accent)]"
-              />
-              <p className="text-[11px] text-[var(--t-text-3)] mt-1">
-                {t('settings.easyChainHint')}
-              </p>
-            </div>
+            <SortableModelList
+              dataTestId="easy-chain-list"
+              title={t('settings.easyChainLabel')}
+              hint={t('settings.easyChainHint')}
+              models={easyChainModels}
+              onChange={setEasyChainModels}
+              availableOptions={availableWorkerModels}
+              ariaLabel={t('settings.easyChainLabel')}
+            />
 
             {/* Timeout */}
             <div>
@@ -503,12 +645,73 @@ export const SettingsPage: React.FC = () => {
                 </p>
               </div>
 
-              {/* allowFullMode selector */}
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">{t('extra.chatModel')}</label>
-                <input value={chatModel} onChange={(e) => setChatModel(e.target.value)} className="w-full max-w-sm text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] px-3 py-2 text-[var(--t-text)]" />
-                <p className="text-[11px] text-[var(--t-text-3)] mt-1">{t('extra.defaultChatModel')} {chatModels.join(', ')}</p>
-                <input value={chatModels.join(', ')} onChange={(e) => setChatModels(e.target.value.split(',').map((model) => model.trim()).filter(Boolean))} className="mt-2 w-full max-w-sm text-xs font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" aria-label={t('extra.chatModelsLabel')} />
+              {/* Chat model and models list */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">
+                    {t('extra.chatModel')}
+                  </label>
+                  <SelectOrCustomInput
+                    ariaLabel={t('extra.chatModel')}
+                    value={chatModel}
+                    onChange={setChatModel}
+                    options={Array.from(new Set([...chatModels, ...DEFAULT_CLAUDE_MODELS]))}
+                    validate={(m) => validateChatModelSyntax(m, t)}
+                    placeholder="sonnet"
+                    className="w-full max-w-sm"
+                  />
+                  <p className="text-[11px] text-[var(--t-text-3)] mt-1">
+                    {t('extra.defaultChatModel')} {chatModels.join(', ')}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--t-text-2)] mb-1">
+                    {t('extra.chatModelsLabel')}
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 mb-2" aria-label={t('extra.chatModelsLabel')}>
+                    {chatModels.map((m) => (
+                      <span
+                        key={m}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-[var(--t-surface-2)] border border-[var(--t-border)] text-[var(--t-text)]"
+                      >
+                        <span>{m}</span>
+                        <button
+                          type="button"
+                          aria-label={`${t('common.remove')} ${m}`}
+                          onClick={() => setChatModels(chatModels.filter((item) => item !== m))}
+                          className="text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 max-w-sm">
+                    <SelectOrCustomInput
+                      value={newChatModel}
+                      onChange={setNewChatModel}
+                      options={DEFAULT_CLAUDE_MODELS.filter((m) => !chatModels.includes(m))}
+                      validate={(m) => validateChatModelSyntax(m, t)}
+                      placeholder="opus"
+                      ariaLabel={t('extra.chatModelsLabel')}
+                      className="flex-1"
+                    />
+                    <button
+                      type="button"
+                      disabled={!newChatModel.trim() || chatModels.includes(newChatModel.trim()) || Boolean(validateChatModelSyntax(newChatModel.trim(), t))}
+                      onClick={() => {
+                        const trimmed = newChatModel.trim();
+                        if (trimmed && !chatModels.includes(trimmed)) {
+                          setChatModels([...chatModels, trimmed]);
+                        }
+                      }}
+                      className="px-3 py-2 text-xs font-medium rounded-lg border border-[var(--t-border)] bg-[var(--t-surface)] text-[var(--t-text)] hover:bg-[var(--t-surface-2)] disabled:opacity-40 cursor-pointer shrink-0"
+                    >
+                      {t('settings.addModel')}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* allowFullMode toggle */}
@@ -542,9 +745,179 @@ export const SettingsPage: React.FC = () => {
 
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-4 shadow-xs" data-testid="reviewer-settings">
             <h2 className="text-base font-semibold text-[var(--t-text)]">{t('extra.reviewer')}</h2>
+            <div className="space-y-3" data-testid="reviewer-order">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-[var(--t-text)]">{t('settings.reviewerOrder')}</h3>
+                  <p className="text-xs text-[var(--t-text-3)]">{t('settings.reviewerOrderHint')}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReviewOrder((current) => [...current, { engine: 'codex', model: availableCodexReviewerModels[0] || '', profiles: [] }])}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] text-[var(--t-text)] hover:bg-[var(--t-surface)] cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{t('settings.addReviewer')}</span>
+                </button>
+              </div>
+              {reviewOrder.map((item, index) => {
+                const profiles = allProfiles.filter((profile) => profile.engine === item.engine);
+                const activeProfileNames = new Set(profiles.map((p) => p.name));
+                const missingProfiles = (item.profiles || []).filter((name) => !activeProfileNames.has(name));
+                const engineModelOptions = item.engine === 'codex' ? availableCodexReviewerModels : availableClaudeReviewerModels;
+                return (
+                  <div
+                    key={`${item.engine}-${index}`}
+                    draggable
+                    onDragStart={() => setDraggedReviewer(index)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => {
+                      if (draggedReviewer === null || draggedReviewer === index) return;
+                      setReviewOrder((current) => {
+                        const next = [...current];
+                        const [moved] = next.splice(draggedReviewer, 1);
+                        next.splice(index, 0, moved);
+                        return next;
+                      });
+                      setDraggedReviewer(null);
+                    }}
+                    className="rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] p-3 space-y-2 cursor-grab"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-[var(--t-text-3)]">{index + 1}.</span>
+                      <select
+                        aria-label={`${t('settings.reviewerOrder')} ${index + 1}`}
+                        value={item.engine}
+                        onChange={(event) => {
+                          const newEngine = event.target.value as ReviewerOrderItem['engine'];
+                          setReviewOrder((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index
+                                ? {
+                                    ...row,
+                                    engine: newEngine,
+                                    model: newEngine === 'codex'
+                                      ? (availableCodexReviewerModels[0] || '')
+                                      : (availableClaudeReviewerModels[0] || ''),
+                                    profiles: [],
+                                  }
+                                : row,
+                            ),
+                          );
+                        }}
+                        className="text-sm rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1.5 text-[var(--t-text)]"
+                      >
+                        <option value="codex">Codex</option>
+                        <option value="claude">Claude</option>
+                      </select>
+                      <div className="min-w-0 flex-1">
+                        <SelectOrCustomInput
+                          ariaLabel={`${t('settings.reviewerModel')} ${index + 1}`}
+                          value={item.model}
+                          onChange={(val) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, model: val } : row))}
+                          options={engineModelOptions}
+                          validate={(val) => validateReviewerModelSyntax(val, item.engine, t)}
+                          placeholder={item.engine === 'codex' ? 'codex:model' : 'sonnet'}
+                        />
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => {
+                            if (index === 0) return;
+                            setReviewOrder((current) => {
+                              const next = [...current];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index - 1, 0, moved);
+                              return next;
+                            });
+                          }}
+                          aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                          className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={index === reviewOrder.length - 1}
+                          onClick={() => {
+                            if (index === reviewOrder.length - 1) return;
+                            setReviewOrder((current) => {
+                              const next = [...current];
+                              const [moved] = next.splice(index, 1);
+                              next.splice(index + 1, 0, moved);
+                              return next;
+                            });
+                          }}
+                          aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                          className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReviewOrder((current) => current.filter((_, i) => i !== index))}
+                          aria-label={`${t('common.remove')} ${index + 1}`}
+                          className="p-1 rounded hover:bg-[var(--t-hover)] text-[var(--t-crit)] hover:opacity-80 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <select
+                      aria-label={`${t('settings.claudeProfiles')} ${index + 1}`}
+                      multiple
+                      value={item.profiles}
+                      onChange={(event) => setReviewOrder((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, profiles: Array.from(event.target.selectedOptions).map((option) => option.value) } : row))}
+                      className="w-full text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1 text-[var(--t-text)] min-h-[56px]"
+                    >
+                      {profiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name}</option>)}
+                      {missingProfiles.map((name) => (
+                        <option key={name} value={name}>
+                          {name} ({t('settings.inactiveOrOld')})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <label className="flex items-center gap-2"><input type="checkbox" checked={reviewFallback.onUnavailable} onChange={(event) => setReviewFallback((value) => ({ ...value, onUnavailable: event.target.checked }))} />{t('settings.fallbackUnavailable')}</label>
+                <label className="flex items-center gap-2"><input type="checkbox" checked={reviewFallback.onError} onChange={(event) => setReviewFallback((value) => ({ ...value, onError: event.target.checked }))} />{t('settings.fallbackError')}</label>
+                <label className="flex items-center gap-2">{t('settings.fallbackBusy')}<input type="number" min={0} max={1440} value={reviewFallback.onBusyAfterMin} onChange={(event) => setReviewFallback((value) => ({ ...value, onBusyAfterMin: Number(event.target.value) || 0 }))} className="w-16 rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-1 py-1" /></label>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center text-xs">
+                <label className="font-semibold text-[var(--t-text)]">{t('settings.arbiter')}</label>
+                <select value={arbiter.engine} onChange={(event) => setArbiter((value) => ({ ...value, engine: event.target.value as 'codex' | 'claude' }))} className="rounded border border-[var(--t-border)] bg-[var(--t-surface)] px-2 py-1.5 text-[var(--t-text)]">
+                  <option value="claude">Claude</option>
+                  <option value="codex">Codex</option>
+                </select>
+                <div className="w-48">
+                  <SelectOrCustomInput
+                    ariaLabel={`${t('settings.arbiter')} ${t('settings.reviewerModel')}`}
+                    value={arbiter.model}
+                    onChange={(val) => setArbiter((value) => ({ ...value, model: val }))}
+                    options={arbiter.engine === 'codex' ? availableCodexReviewerModels : availableClaudeReviewerModels}
+                    validate={(val) => validateReviewerModelSyntax(val, arbiter.engine, t)}
+                    placeholder={arbiter.engine === 'codex' ? 'codex:model' : 'sonnet'}
+                  />
+                </div>
+              </div>
+            </div>
             <div>
               <label htmlFor="reviewer-model-input" className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.reviewerModel')}</label>
-              <input id="reviewer-model-input" value={reviewerModel} onChange={(e) => setReviewerModel(e.target.value)} className="w-full text-sm font-mono rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)]" />
+              <SelectOrCustomInput
+                id="reviewer-model-input"
+                testId="reviewer-model-input"
+                ariaLabel={t('extra.reviewerModel')}
+                value={reviewerModel}
+                onChange={setReviewerModel}
+                options={availableCodexReviewerModels}
+                validate={(val) => validateReviewerModelSyntax(val, val.startsWith('claude') ? 'claude' : 'codex', t)}
+                placeholder="codex:model"
+                className="w-full"
+              />
             </div>
 
             <div className="pt-2 border-t border-[var(--t-border)] space-y-4">
@@ -625,7 +998,7 @@ export const SettingsPage: React.FC = () => {
                           {idx > 0 && (
                             <button
                               type="button"
-                              title="Move up"
+                              title={t('common.moveUp')}
                               onClick={() => {
                                 const next = [...claudeProfiles];
                                 const tmp = next[idx - 1];
@@ -641,7 +1014,7 @@ export const SettingsPage: React.FC = () => {
                           {idx < claudeProfiles.length - 1 && (
                             <button
                               type="button"
-                              title="Move down"
+                              title={t('common.moveDown')}
                               onClick={() => {
                                 const next = [...claudeProfiles];
                                 const tmp = next[idx + 1];
@@ -656,7 +1029,7 @@ export const SettingsPage: React.FC = () => {
                           )}
                           <button
                             type="button"
-                            title="Remove"
+                            title={t('common.remove')}
                             onClick={() => {
                               setClaudeProfiles(claudeProfiles.filter((name) => name !== pName));
                             }}
@@ -679,18 +1052,85 @@ export const SettingsPage: React.FC = () => {
               <p className="text-xs text-[var(--t-text-3)]">{t('extra.fallbackHint')}</p>
             </div>
             {fallback.map((step, index) => (
-              <div key={`${step.type}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const from = Number(event.dataTransfer.getData('text/plain')); if (!Number.isInteger(from) || from === index) return; const next = [...fallback]; const [moved] = next.splice(from, 1); next.splice(index, 0, moved); setFallback(next); }} className="flex items-center gap-2 p-2 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-grab">
-                <span className="text-xs text-[var(--t-text-3)]">⠿</span>
-                <select value={step.type} onChange={(event) => { const next = [...fallback]; const type = event.target.value; next[index] = type === 'model' ? { type: 'model', model: 'sonnet' } : type === 'apiKey' ? { type: 'apiKey', dailyCapUSD: 5 } : type === 'profile' ? { type: 'profile', profile: '' } : type === 'wait' ? { type: 'wait' } : { type: 'engine', engine: 'codex' }; setFallback(next); }} className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]">
+              <div key={`${step.type}-${index}`} draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { const from = Number(event.dataTransfer.getData('text/plain')); if (!Number.isInteger(from) || from === index) return; const next = [...fallback]; const [moved] = next.splice(from, 1); next.splice(index, 0, moved); setFallback(next); }} className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] cursor-grab">
+                <span className="text-xs text-[var(--t-text-3)] shrink-0">⠿ {index + 1}.</span>
+                <select value={step.type} onChange={(event) => { const next = [...fallback]; const type = event.target.value; next[index] = type === 'model' ? { type: 'model', model: 'sonnet' } : type === 'apiKey' ? { type: 'apiKey', dailyCapUSD: 5 } : type === 'profile' ? { type: 'profile', profile: '' } : type === 'wait' ? { type: 'wait' } : { type: 'engine', engine: 'codex' }; setFallback(next); }} className="text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1.5 text-[var(--t-text)] shrink-0">
                   <option value="profile">profile</option><option value="model">model</option><option value="apiKey">apiKey</option><option value="engine">engine: codex</option><option value="wait">wait</option>
                 </select>
-                {step.type === 'profile' && <input value={step.profile || ''} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, profile: event.target.value }; setFallback(next); }} placeholder="profile name" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                {step.type === 'model' && <input value={step.model} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, model: event.target.value }; setFallback(next); }} placeholder="sonnet" className="flex-1 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1 text-[var(--t-text)]" />}
-                <button type="button" onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))} className="text-xs text-[var(--t-crit)]">{t('extra.remove')}</button>
+                {step.type === 'profile' && (
+                  <div className="flex-1 min-w-[140px]">
+                    <SelectOrCustomInput
+                      value={step.profile || ''}
+                      onChange={(val) => { const next = [...fallback]; next[index] = { ...step, profile: val }; setFallback(next); }}
+                      options={fallbackProfileOptions}
+                      placeholder="profile name"
+                      ariaLabel={`Fallback profile ${index + 1}`}
+                    />
+                  </div>
+                )}
+                {step.type === 'model' && (
+                  <div className="flex-1 min-w-[140px]">
+                    <SelectOrCustomInput
+                      value={step.model}
+                      onChange={(val) => { const next = [...fallback]; next[index] = { ...step, model: val }; setFallback(next); }}
+                      options={Array.from(new Set([...DEFAULT_CLAUDE_MODELS, ...chatModels, step.model].filter(Boolean)))}
+                      validate={(m) => validateChatModelSyntax(m, t)}
+                      placeholder="sonnet"
+                      ariaLabel={`Fallback model ${index + 1}`}
+                    />
+                  </div>
+                )}
+                {step.type === 'apiKey' && <input type="number" min={0.01} step={0.01} value={step.dailyCapUSD} onChange={(event) => { const next = [...fallback]; next[index] = { ...step, dailyCapUSD: Number(event.target.value) }; setFallback(next); }} className="w-24 text-xs rounded border border-[var(--t-border)] bg-[var(--t-surface)] p-1.5 text-[var(--t-text)]" />}
+                <div className="flex items-center gap-1 shrink-0 ml-auto">
+                  <button
+                    type="button"
+                    disabled={index === 0}
+                    onClick={() => {
+                      if (index === 0) return;
+                      const next = [...fallback];
+                      const [moved] = next.splice(index, 1);
+                      next.splice(index - 1, 0, moved);
+                      setFallback(next);
+                    }}
+                    aria-label={`${t('settings.moveUp')} ${index + 1}`}
+                    className="p-1 text-xs rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={index === fallback.length - 1}
+                    onClick={() => {
+                      if (index === fallback.length - 1) return;
+                      const next = [...fallback];
+                      const [moved] = next.splice(index, 1);
+                      next.splice(index + 1, 0, moved);
+                      setFallback(next);
+                    }}
+                    aria-label={`${t('settings.moveDown')} ${index + 1}`}
+                    className="p-1 text-xs rounded hover:bg-[var(--t-hover)] text-[var(--t-text-3)] hover:text-[var(--t-text)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowDown className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFallback(fallback.filter((_, itemIndex) => itemIndex !== index))}
+                    aria-label={`${t('extra.remove')} ${index + 1}`}
+                    className="text-xs text-[var(--t-crit)] hover:opacity-80 p-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             ))}
-            <button type="button" onClick={() => setFallback([...fallback, { type: 'wait' }])} className="text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)]">{t('extra.addStep')}</button>
+            <button
+              type="button"
+              onClick={() => setFallback([...fallback, { type: 'wait' }])}
+              className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded border border-[var(--t-border)] text-[var(--t-text)] hover:bg-[var(--t-surface-2)] cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t('extra.addStep')}</span>
+            </button>
             <div className="pt-3 border-t border-[var(--t-border)]">
               <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">{t('extra.apiKey')}</label>
               <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={apiKeyConfigured ? t('extra.configuredReplace') : 'sk-ant-…'} autoComplete="new-password" className="w-full text-xs font-mono rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-[var(--t-text)]" />
@@ -700,7 +1140,7 @@ export const SettingsPage: React.FC = () => {
           {/* Savings config block */}
           <div className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-6 shadow-xs">
             <div>
-              <h2 className="text-base font-semibold text-[var(--text-primary)]">
+              <h2 className="text-base font-semibold text-[var(--t-text)]">
                 {t('settings.savingsSectionTitle')}
               </h2>
               <p className="text-xs text-[var(--t-text-3)] mt-0.5">
@@ -830,6 +1270,60 @@ export const SettingsPage: React.FC = () => {
             <div className="py-2 border-b border-[var(--t-border)] space-y-2">
               <div>
                 <label className="text-sm font-semibold text-[var(--t-text)]">
+                  {t('settings.brainEngineLabel')}
+                </label>
+                <p className="text-xs text-[var(--t-text-3)]">
+                  {t('settings.brainEngineHint')}
+                </p>
+              </div>
+              <div className="flex gap-4">
+                {(['claude', 'codex'] as const).map((eng) => (
+                  <label key={eng} className="flex items-center gap-2 text-xs text-[var(--t-text)] cursor-pointer">
+                    <input
+                      type="radio"
+                      name="brainEngine"
+                      value={eng}
+                      checked={brainEngine === eng}
+                      onChange={() => setBrainEngine(eng)}
+                    />
+                    <span className="capitalize">{eng}</span>
+                  </label>
+                ))}
+              </div>
+              {brainEngine === 'codex' && (
+                <div className="pt-2">
+                  <label className="block text-xs font-semibold text-[var(--t-text)] mb-1">
+                    {t('settings.codexProfileLabel')}
+                  </label>
+                  <select
+                    value={codexProfile}
+                    onChange={(e) => setCodexProfile(e.target.value)}
+                    className="w-full max-w-xs rounded border border-[var(--t-border)] bg-[var(--t-surface-2)] p-2 text-xs"
+                  >
+                    <option value="">{t('settings.codexProfileAuto')}</option>
+                    {codexProfiles.map((p) => (
+                      <option key={p.name} value={p.name}>{p.name} {p.email ? `(${p.email})` : ''}</option>
+                    ))}
+                    {!codexProfiles.some((p) => p.name === codexProfile) && Boolean(codexProfile.trim()) && (
+                      <option key={codexProfile} value={codexProfile}>
+                        {(() => {
+                          const matched = allProfiles.find((p) => p.name === codexProfile) || profiles.find((p) => p.name === codexProfile);
+                          const emailSuffix = matched?.email ? ` (${matched.email})` : '';
+                          return `${codexProfile}${emailSuffix} (${t('settings.inactiveOrOld')})`;
+                        })()}
+                      </option>
+                    )}
+                  </select>
+                  <p className="text-xs text-[var(--t-text-3)] mt-1">
+                    {t('settings.codexProfileHint')}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="py-2 border-b border-[var(--t-border)] space-y-2">
+              <div>
+                <label className="text-sm font-semibold text-[var(--t-text)]">
                   {t('settings.brainModeLabel')}
                 </label>
                 <p className="text-xs text-[var(--t-text-3)]">
@@ -882,6 +1376,7 @@ export const SettingsPage: React.FC = () => {
                     </label>
                     <input
                       type="time"
+                      data-testid="quiet-hours-start"
                       value={quietHoursStart}
                       onChange={(e) => setQuietHoursStart(e.target.value)}
                       className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"
@@ -893,6 +1388,7 @@ export const SettingsPage: React.FC = () => {
                     </label>
                     <input
                       type="time"
+                      data-testid="quiet-hours-end"
                       value={quietHoursEnd}
                       onChange={(e) => setQuietHoursEnd(e.target.value)}
                       className="w-full text-sm rounded-lg border border-[var(--t-border)] bg-[var(--t-surface-2)] px-3 py-2 text-[var(--t-text)] font-mono"
@@ -1002,26 +1498,33 @@ export const SettingsPage: React.FC = () => {
             <h2 className="text-sm font-semibold">{t('settings.shutdownTitle')}</h2>
             {shutdownDone ? <p className="text-sm text-[var(--t-ok)]">{t('settings.shutdownDone')} <code>agenthub start</code></p> : <>
               <p className="text-xs text-[var(--t-text-3)]">{t('settings.shutdownDescription', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
-              <button type="button" onClick={() => setShutdownOpen(true)} className="rounded-lg bg-[var(--t-crit)] px-4 py-2 text-xs font-semibold text-white">{t('settings.shutdownButton')}</button>
+              <button type="button" onClick={() => setShutdownOpen(true)} className="rounded-lg bg-[var(--t-crit)] px-4 py-2 text-xs font-semibold text-[var(--t-on-accent)]">{t('settings.shutdownButton')}</button>
             </>}
           </section>
 
           <section className="bg-[var(--t-surface)] rounded-xl border border-[var(--t-border)] p-6 space-y-3" data-testid="permission-rules">
             <h2 className="text-sm font-semibold">{t('extra.grantedPermissions')}</h2>
             <p className="text-xs text-[var(--t-text-3)]">{t('extra.grantedPermissionsDesc')}</p>
-            {!permissionRules.data?.length ? <p className="text-xs text-[var(--t-text-3)]">{t('extra.noPermissionRules')}</p> : permissionRules.data.map((rule) => (
-              <div key={rule.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--t-border)] px-3 py-2 text-xs">
-                <code className="break-all">{rule.toolName} {rule.pattern}</code>
-                <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button>
-              </div>
-            ))}
+            <DataTable
+              rows={permissionRules.data?.items || []}
+              emptyTitle={t('extra.noPermissionRules')}
+              columns={[
+                { key: 'tool', title: t('extra.permissionTool'), sortable: true, sortValue: (rule) => `${rule.toolName} ${rule.pattern}`, render: (rule) => <code className="break-all">{rule.toolName} {rule.pattern}</code> },
+                { key: 'scope', title: t('extra.permissionScope'), sortable: true, sortValue: (rule) => rule.scope, render: (rule) => <span>{rule.scope}</span> },
+                { key: 'actions', title: t('extra.actions'), render: (rule) => <button type="button" onClick={() => deleteRule.mutate(rule.id)} className="text-[var(--t-crit)] shrink-0">{t('extra.remove')}</button> },
+              ]}
+              page={permissionPage}
+              pageSize={20}
+              total={permissionRules.data?.total || 0}
+              onPageChange={setPermissionPage}
+            />
           </section>
 
           <div className="flex justify-end">
             <button
               type="submit"
               disabled={mutation.isPending}
-              className="px-5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-white text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
+              className="px-5 py-2 rounded-lg bg-[var(--t-accent)] hover:bg-[var(--t-accent-hover)] text-[var(--t-on-accent)] text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
             >
               <Save className="w-4 h-4" />
               <span>{mutation.isPending ? t('common.loading') : t('settings.saveConfigBtn')}</span>
@@ -1029,12 +1532,12 @@ export const SettingsPage: React.FC = () => {
           </div>
         </form>
       )}
-      {shutdownOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+      {shutdownOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--t-overlay)] p-4" role="dialog" aria-modal="true">
         <div className="max-w-md rounded-xl bg-[var(--t-surface)] p-6 shadow-xl space-y-4">
           <h2 className="font-semibold">{t('settings.shutdownConfirmTitle')}</h2>
           <p className="text-sm text-[var(--t-text-2)]">{t('settings.shutdownConfirm', { count: String((hubStatus.data?.tasks?.running || 0) + (hubStatus.data?.tasks?.checking || 0)) })}</p>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shutdownDisable} onChange={(e) => setShutdownDisable(e.target.checked)} />{t('settings.shutdownDisable')}</label>
-          <div className="flex justify-end gap-2"><button type="button" onClick={() => setShutdownOpen(false)} className="rounded-lg border px-3 py-2 text-xs">{t('common.cancel')}</button><button type="button" onClick={() => shutdownMutation.mutate()} className="rounded-lg bg-[var(--t-crit)] px-3 py-2 text-xs text-white">{t('settings.shutdownButton')}</button></div>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setShutdownOpen(false)} className="rounded-lg border px-3 py-2 text-xs">{t('common.cancel')}</button><button type="button" onClick={() => shutdownMutation.mutate()} className="rounded-lg bg-[var(--t-crit)] px-3 py-2 text-xs text-[var(--t-on-accent)]">{t('settings.shutdownButton')}</button></div>
         </div>
       </div>}
     </div>

@@ -2,6 +2,7 @@ import React from 'react';
 import { QueryClientContext } from '@tanstack/react-query';
 import { TaskStatus, WaitReason, HubStatus } from '../types/api';
 import { useLocale } from '../context/LocaleContext';
+import { formatReason } from '../utils/events';
 
 export type ExtendedTaskStatus = TaskStatus | 'checking';
 
@@ -24,7 +25,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   className = '',
   size = 'md',
 }) => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const queryClient = React.useContext(QueryClientContext);
   const cachedStatus = queryClient?.getQueryData<HubStatus>(['status']);
 
@@ -41,12 +42,22 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       }
     } else if (waitReason === 'quota') {
       label = t('waitReason.quota');
+    } else if (waitReason === 'no_department_profile') {
+      label = t('waitReason.no_department_profile');
+    } else if (waitReason === 'no_matching_profile') {
+      label = t('waitReason.no_matching_profile');
     } else if (waitReason === 'parallel') {
       label = t('waitReason.parallel');
+    } else if (waitReason === 'department_parallel') {
+      label = t('waitReason.department_parallel', { department: 'department' });
     } else if (waitReason === 'profile_busy') {
       label = t('waitReason.profile_busy');
     } else if (waitReason === 'project_unavailable') {
       label = t('waitReason.project_unavailable');
+    } else if (waitReason === 'focus') {
+      label = t('waitReason.focus');
+    } else {
+      label = formatReason(waitReason, locale);
     }
   }
 

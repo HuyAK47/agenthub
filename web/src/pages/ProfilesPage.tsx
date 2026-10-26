@@ -170,7 +170,7 @@ export const ProfilesPage: React.FC = () => {
         clearTimeout(checkTimers.current[name]);
         setChecking((old) => ({ ...old, [name]: false }));
         const ok = Boolean((event.payload as any)?.ok);
-        const detail = (event.payload as any)?.message || (ok ? 'Kiểm tra thành công' : 'Kiểm tra thất bại');
+        const detail = (event.payload as any)?.message || (ok ? t('profiles.checkSuccess') : t('profiles.checkFailed'));
         const duration = (event.payload as any)?.durationMs ? ` · ${(event.payload as any).durationMs}ms` : '';
         toast(t(ok ? 'profiles.checkOkTitle' : 'profiles.checkFailTitle', { name }), ok ? 'success' : 'error', `${detail}${duration}`);
         queryClient.invalidateQueries({ queryKey: ['profiles'] });
@@ -266,7 +266,7 @@ export const ProfilesPage: React.FC = () => {
             e.stopPropagation();
             setShowAdd(true);
           }}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-semibold text-white"
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--t-accent)] px-4 py-2 text-sm font-semibold text-[var(--t-on-accent)]"
         >
           <Plus className="h-4 w-4" />
           {t('profiles.addBtn')}
@@ -276,8 +276,15 @@ export const ProfilesPage: React.FC = () => {
       {isLoading ? (
         <div className="p-12 text-center">{t('profiles.loading')}</div>
       ) : error ? (
-        <div className="p-8 text-center text-[var(--t-crit)]">
-          {t('profiles.loadError')}
+        <div className="p-8 text-center space-y-3 text-[var(--t-crit)]">
+          <p className="text-sm">{t('profiles.loadError')}</p>
+          <button
+            type="button"
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['profiles'] })}
+            className="px-3 py-1.5 rounded-lg border border-[var(--t-border)] text-xs font-medium hover:bg-[var(--t-surface-2)] cursor-pointer text-[var(--t-text)]"
+          >
+            {t('common.retry')}
+          </button>
         </div>
       ) : (
         <div className="space-y-8">
@@ -431,7 +438,7 @@ export const ProfilesPage: React.FC = () => {
           e.stopPropagation();
           setShowAdd(true);
         }}
-        className={`fixed bottom-8 right-8 z-30 flex items-center gap-2 rounded-full bg-[var(--t-accent)] p-3 sm:px-4 sm:py-3 text-sm font-semibold text-white shadow-xl shadow-[var(--t-accent)]/30 ring-1 ring-white/20 transition-all duration-300 ease-out hover:scale-105 hover:shadow-2xl hover:shadow-[var(--t-accent)]/45 active:scale-95 cursor-pointer ${
+        className={`fixed bottom-8 right-8 z-30 flex items-center gap-2 rounded-full bg-[var(--t-accent)] p-3 sm:px-4 sm:py-3 text-sm font-semibold text-[var(--t-on-accent)] shadow-xl shadow-[var(--t-accent)]/30 ring-1 ring-[var(--t-on-accent)]/20 transition-all duration-300 ease-out hover:scale-105 hover:shadow-2xl hover:shadow-[var(--t-accent)]/45 active:scale-95 cursor-pointer ${
           showFab
             ? 'translate-y-0 opacity-100 pointer-events-auto'
             : 'translate-y-6 opacity-0 pointer-events-none'
@@ -482,7 +489,7 @@ function ProfileAvatar({ profile }: { profile: Profile }) {
   if (initial) {
     return (
       <div
-        className="flex h-9 w-9 shrink-0 select-none items-center justify-center rounded-xl font-bold text-white shadow-xs"
+        className="flex h-9 w-9 shrink-0 select-none items-center justify-center rounded-xl font-bold text-[var(--t-on-accent)] shadow-xs"
         style={{ background: getAvatarGradient(profile.email || profile.name) }}
       >
         <span className="text-sm tracking-wider drop-shadow-xs">{initial}</span>
@@ -867,7 +874,7 @@ function ProfileCard({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--t-border)] pt-2.5">
         <label className="flex items-center gap-1.5 text-xs text-[var(--t-text-3)] cursor-pointer select-none">
           <button type="button" aria-label={t('profiles.toggleAria', { name: profile.name })} disabled={profile.kind === 'system'} onClick={() => onToggle(!Boolean(profile.enabled))} className={`h-4.5 w-8 rounded-full p-0.5 ${profile.enabled ? 'bg-[var(--t-accent)]' : 'bg-[var(--t-surface-2)]'} transition-colors cursor-pointer`}>
-            <span className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform ${profile.enabled ? 'translate-x-3.5' : ''}`} />
+            <span className={`block h-3.5 w-3.5 rounded-full bg-[var(--t-surface)] transition-transform ${profile.enabled ? 'translate-x-3.5' : ''}`} />
           </button>
           <span>{t('profiles.enable')}</span>
         </label>
@@ -925,7 +932,7 @@ function Modal({
   const { t } = useLocale();
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-4"
       style={{ zIndex: UI_Z_INDEX.modal }}
       role="dialog"
       aria-modal="true"
@@ -1193,7 +1200,7 @@ export function AddProfileModal({
                       {t('profiles.importBack')}
                     </button>
                   )}
-                  {cockpitResult.results.some((item) => item.status === 'error' && item.message?.includes('Cho phép nhiều tài khoản')) && (
+                  {cockpitResult.results.some((item) => item.status === 'error' && (item.message?.includes('Cho phép nhiều tài khoản') || item.message?.includes('Allow multiple accounts'))) && (
                     <button type="button" disabled={cockpitLoading} onClick={enableAndRetryImport} className="button-secondary">
                       {cockpitLoading ? t('profiles.importingTokens') : t('profiles.enableMultipleAndRetry')}
                     </button>
@@ -1313,7 +1320,7 @@ function TokenLoginModal({
           <p className="rounded bg-[var(--t-crit)]/10 p-2 text-xs text-[var(--t-crit)]">{error}</p>
         )}
         <label className="block text-sm">
-          Email
+          {t('profiles.email')}
           <input
             type="email"
             autoFocus={!email}
@@ -1324,7 +1331,7 @@ function TokenLoginModal({
           />
         </label>
         <label className="block text-sm">
-          Refresh token
+          {t('profiles.refreshToken')}
           <textarea
             autoFocus={Boolean(email)}
             spellCheck={false}
@@ -1497,8 +1504,7 @@ function DeleteModal({
         }}
       >
         <p className="text-sm text-[var(--t-text-3)]">
-          Nhập lại <code className="font-mono text-[var(--t-text)]">{profile.name}</code> để xác
-          nhận.
+          {t('profiles.confirmDeletePrompt', { name: profile.name })}
         </p>
         <input
           className="field"
@@ -1512,17 +1518,17 @@ function DeleteModal({
         ) : (
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-            Xoá cả thư mục dữ liệu đăng nhập
+            {t('profiles.deletePurgeData')}
           </label>
         )}
         {error && <p className="text-xs text-[var(--t-crit)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="button-secondary" onClick={onClose}>
-            Huỷ
+            {t('common.cancel')}
           </button>
           <button disabled={typed !== profile.name} className="button-danger">
             <Trash2 className="h-3 w-3" />
-            Xoá hồ sơ
+            {t('profiles.deleteProfile')}
           </button>
         </div>
       </form>
@@ -1540,36 +1546,47 @@ function LoginWizard({
   sessionId: string;
   onClose: () => void;
 }) {
+  const { t } = useLocale();
+  const [currentSessionId, setCurrentSessionId] = useState(sessionId);
   const provider = engine === 'codex'
     ? 'Codex'
     : engine === 'claude'
       ? 'Claude'
       : 'Antigravity';
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/75 p-3" style={{ zIndex: UI_Z_INDEX.modal }}>
+    <div className="fixed inset-0 flex items-center justify-center bg-[var(--t-overlay)] p-3" style={{ zIndex: UI_Z_INDEX.modal }}>
       <div className="flex h-[90vh] w-[96vw] max-w-[1400px] flex-col overflow-hidden rounded-xl border border-[var(--t-border)] bg-[var(--t-surface)] shadow-2xl">
         <div className="border-b border-[var(--t-border)] p-4">
           <h2 className="text-lg font-semibold">
-            Hướng dẫn đăng nhập {provider} · {profileName}
+            {t('profiles.loginGuideTitle', { provider, profileName })}
           </h2>
           <div className="mt-3 grid gap-2 text-xs text-[var(--t-text-3)] sm:grid-cols-4">
             <Step
               n="1"
               text={
                 provider === 'Antigravity'
-                  ? 'Chọn Google OAuth'
+                  ? t('profiles.stepGoogleOAuth')
                   : provider === 'Codex'
-                    ? 'Chạy device-auth'
-                    : 'Gửi /login'
+                    ? t('profiles.stepDeviceAuth')
+                    : t('profiles.stepSendLogin')
               }
             />
-            <Step n="2" text="Mở link và đăng nhập" />
-            <Step n="3" text="Copy mã xác thực" />
-            <Step n="4" text="Dán mã và chờ xác nhận" />
+            <Step n="2" text={t('profiles.stepOpenLink')} />
+            <Step n="3" text={t('profiles.stepCopyCode')} />
+            <Step n="4" text={t('profiles.stepPasteCode')} />
           </div>
         </div>
         <div className="min-h-0 flex-1">
-          <LoginTerminal profileName={profileName} sessionId={sessionId} onClose={onClose} />
+          <LoginTerminal
+            profileName={profileName}
+            sessionId={currentSessionId}
+            onClose={onClose}
+            onReconnect={async () => {
+              const next = await loginProfile(profileName);
+              setCurrentSessionId(next.sessionId);
+              return next.sessionId;
+            }}
+          />
         </div>
       </div>
     </div>

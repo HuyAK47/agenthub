@@ -14,7 +14,7 @@ import { FakeEngine, Engine } from '../src/engines/index.js';
 
 function initGitRepo(repoPath: string) {
   fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync('git', ['init'], { cwd: repoPath });
+  execFileSync('git', ['init', '--template='], { cwd: repoPath });
   execFileSync('git', ['checkout', '-b', 'main'], { cwd: repoPath });
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# Initial Repo\n');
   execFileSync('git', ['add', '.'], { cwd: repoPath });
@@ -465,5 +465,23 @@ describe('Daemon and server shutdown', () => {
     await server.close();
     ctx.scheduler.stop();
     ctx.db.close();
+  });
+
+  it('stops chat service and tears down active callbacks before database shutdown', async () => {
+    ctx = createContext(config, engines);
+    ctx.chatSessionRepo.insert({
+      id: 'session-shutdown',
+      mode: 'safe',
+      model: 'claude-3-7-sonnet',
+    });
+
+    const chatService = ctx.chatService;
+    chatService.sendMessage('session-shutdown', 'Test shutdown');
+
+    chatService.stop();
+    ctx.scheduler.stop();
+    ctx.db.close();
+
+    expect(ctx.chatSessionRepo.get('session-shutdown')).toBeUndefined();
   });
 });

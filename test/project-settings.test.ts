@@ -13,13 +13,25 @@ import {
   projectSettings,
 } from '../src/projects/settings.js';
 import { projectWorktreeRoot } from '../src/projects/paths.js';
+import { effectiveBrainEngine } from '../src/brain/engine.js';
 
 describe('project settings parsing', () => {
+  it('resolves project engine before global engine and inherits by default', () => {
+    expect(effectiveBrainEngine(null, { engine: 'codex' })).toBe('codex');
+    expect(effectiveBrainEngine({ settings: JSON.stringify({ brain: { engine: 'claude' } }) }, { engine: 'codex' })).toBe('claude');
+    expect(effectiveBrainEngine({ settings: JSON.stringify({}) }, { engine: 'codex' })).toBe('codex');
+  });
   it('defaults reproduce the behaviour from before settings existed', () => {
     expect(DEFAULT_PROJECT_SETTINGS).toEqual({
-      brain: { mode: 'inherit', permissions: 'inherit' },
+      commitConvention: {
+        branchTemplate: 'agenthub/{slug}',
+        commitTemplate: '{type}: {summary}',
+        mergeMessageTemplate: "Merge branch '{branch}' into {target}",
+      },
+      brain: { engine: 'inherit', mode: 'inherit', permissions: 'inherit' },
       worktree: { install: 'auto', gitHooks: 'run' },
       integration: { enabled: false, autoMerge: false },
+      review: { autoMerge: false },
       ci: {},
       references: [],
       reviewChecklist: [],
@@ -48,7 +60,7 @@ describe('project settings parsing', () => {
       brain: { dailyTokenBudget: 5000 },
       references: [{ name: 'glossary', path: '/data/glossary.md', inject: true }],
     });
-    expect(next.brain).toEqual({ mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
+    expect(next.brain).toEqual({ engine: 'inherit', mode: 'auto', permissions: 'inherit', dailyTokenBudget: 5000 });
     expect(next.references).toEqual([{ name: 'glossary', path: '/data/glossary.md', inject: true }]);
     expect(next.worktree).toEqual(DEFAULT_PROJECT_SETTINGS.worktree);
   });
@@ -63,6 +75,37 @@ describe('project settings parsing', () => {
       ci: { branch: 'staging' },
     });
     expect(partial.ci).toEqual({ enabled: true, branch: 'staging' });
+  });
+
+  it('clears reviewer order and fallback overrides when set to null in mergeProjectSettings', () => {
+    const withOverrides = mergeProjectSettings(DEFAULT_PROJECT_SETTINGS, {
+      review: {
+        order: [{ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }],
+        fallback: { onUnavailable: false, onError: false, onBusyAfterMin: 5 },
+      },
+    });
+    expect(withOverrides.review.order).toEqual([{ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }]);
+    expect(withOverrides.review.fallback).toEqual({ onUnavailable: false, onError: false, onBusyAfterMin: 5 });
+
+    // Clearing only order with null preserves fallback
+    const clearedOrder = mergeProjectSettings(withOverrides, {
+      review: { order: null },
+    });
+    expect(clearedOrder.review.order).toBeUndefined();
+    expect(clearedOrder.review.fallback).toEqual({ onUnavailable: false, onError: false, onBusyAfterMin: 5 });
+
+    // Clearing only fallback with null preserves order
+    const clearedFallback = mergeProjectSettings(withOverrides, {
+      review: { fallback: null },
+    });
+    expect(clearedFallback.review.order).toEqual([{ engine: 'codex', model: 'codex:gpt-5.6-luna', profiles: [] }]);
+    expect(clearedFallback.review.fallback).toBeUndefined();
+
+    // Clearing both with null
+    const clearedBoth = mergeProjectSettings(withOverrides, {
+      review: { order: null, fallback: null },
+    });
+    expect(clearedBoth.review).toEqual({ autoMerge: false });
   });
 
   it('supports an explicit worktree root and keeps the legacy default', () => {
@@ -158,6 +201,26 @@ describe('project settings through the service', () => {
       path: path.join(tmpDir, 'repo'),
       settings: { worktree: { root: path.join(tmpDir, 'missing-root') } },
     })).toThrow(/không tồn tại/);
+    expect(() => ctx.service.createProject({
+      name: 'bad6',
+      path: path.join(tmpDir, 'repo'),
+      settings: { integration: { branch: 'invalid branch with spaces' } },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad7',
+      path: path.join(tmpDir, 'repo'),
+      settings: { review: { order: [{ engine: 'claude', model: '   ' }] } },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad8',
+      path: path.join(tmpDir, 'repo'),
+      settings: { review: { order: [{ engine: 'claude', model: 'gpt-5.6-luna' }] } },
+    })).toThrow();
+    expect(() => ctx.service.createProject({
+      name: 'bad9',
+      path: path.join(tmpDir, 'repo'),
+      reviewChain: [{ reviewer: 'codex:', mode: 'gate' }],
+    })).toThrow();
   });
 
   it('accepts an existing external worktree root', () => {
@@ -169,5 +232,52 @@ describe('project settings through the service', () => {
       settings: { worktree: { root } },
     }) as unknown as { settings: { worktree: { root?: string } } };
     expect(created.settings.worktree.root).toBe(root);
+  });
+
+  it('creates the project-local worktree root used by sensitive projects', () => {
+    const root = path.join(tmpDir, '.agenthub-worktrees');
+    const created = ctx.service.createProject({
+      name: 'sensitive',
+      path: path.join(tmpDir, 'repo'),
+      settings: { worktree: { root, logsInRoot: true } },
+    }) as unknown as { settings: { worktree: { root?: string; logsInRoot?: boolean } } };
+
+    expect(fs.statSync(root).isDirectory()).toBe(true);
+    expect(created.settings.worktree).toMatchObject({ root, logsInRoot: true });
+  });
+
+  it('supports round-trip removal of reviewer order and fallback overrides via null', () => {
+    ctx.service.createProject({
+      name: 'override-proj',
+      path: path.join(tmpDir, 'repo'),
+      settings: {
+        review: {
+          order: [{ engine: 'claude', model: 'sonnet', profiles: [] }],
+          fallback: { onUnavailable: false, onError: true, onBusyAfterMin: 15 },
+        },
+      },
+    });
+
+    // Check project settings after creation
+    const proj1 = ctx.service.getProject('override-proj') as unknown as { settings: typeof DEFAULT_PROJECT_SETTINGS };
+    expect(proj1.settings.review.order).toEqual([{ engine: 'claude', model: 'sonnet', profiles: [] }]);
+    expect(proj1.settings.review.fallback).toMatchObject({ onUnavailable: false, onBusyAfterMin: 15 });
+
+    // Update with order: null to remove reviewer order override
+    ctx.service.updateProject('override-proj', {
+      settings: { review: { order: null } },
+    });
+    const proj2 = ctx.service.getProject('override-proj') as unknown as { settings: typeof DEFAULT_PROJECT_SETTINGS };
+    expect(proj2.settings.review.order).toBeUndefined();
+    expect(proj2.settings.review.fallback).toMatchObject({ onUnavailable: false, onBusyAfterMin: 15 });
+
+    // Update with fallback: null to remove fallback override
+    ctx.service.updateProject('override-proj', {
+      settings: { review: { fallback: null } },
+    });
+    const proj3 = ctx.service.getProject('override-proj') as unknown as { settings: typeof DEFAULT_PROJECT_SETTINGS };
+    expect(proj3.settings.review.order).toBeUndefined();
+    expect(proj3.settings.review.fallback).toBeUndefined();
+    expect(proj3.settings.review).toEqual({ autoMerge: false });
   });
 });

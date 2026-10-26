@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LIMITED_TEST_ENV, lowPriority, runInProcessGroup, testThreadLimit } from '../src/priority.js';
+import { lowPriority, runInProcessGroup, testThreadLimit } from '../src/priority.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -27,9 +27,12 @@ describe('priority helpers', () => {
   });
   it('wraps commands with nice on linux and macos', () => {
     const [exe, args] = lowPriority('/bin/echo', ['hi']);
-    const usesNice =
-      (process.platform === 'linux' && fs.existsSync('/usr/bin/nice')) ||
-      (process.platform === 'darwin' && process.env.AGENTHUB_NO_NICE !== '1');
+    const hasNice = process.platform === 'linux'
+      ? ['/usr/bin/nice', '/bin/nice', '/usr/local/bin/nice'].some((p) => {
+          try { return fs.statSync(p).isFile(); } catch { return false; }
+        })
+      : process.platform === 'darwin' && fs.existsSync('/usr/bin/nice');
+    const usesNice = process.env.AGENTHUB_NO_NICE !== '1' && hasNice;
     if (usesNice) {
       expect(exe).toMatch(/nice$/);
       expect(args).toContain('/bin/echo');
@@ -42,13 +45,16 @@ describe('priority helpers', () => {
   it('passes vitest worker limits to the child', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-prio-'));
     dirs.push(dir);
+    const env = { ...process.env };
+    delete env.AGENTHUB_WORKER_COUNT;
     const r = await runInProcessGroup(process.execPath, ['-e', 'process.stdout.write(process.env.VITEST_MAX_THREADS || "")'], {
       cwd: dir,
-      env: process.env,
+      env,
       timeoutMs: 10_000,
     });
     expect(r.code).toBe(0);
-    expect(r.output).toBe(LIMITED_TEST_ENV.VITEST_MAX_THREADS);
+    const expected = String(testThreadLimit(Number(process.env.AGENTHUB_WORKER_COUNT || 1)));
+    expect(r.output).toBe(expected);
   });
 
   it('kills grandchildren left behind after the main command exits', async () => {

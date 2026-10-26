@@ -105,17 +105,36 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
         });
       }
 
+      if (urlStr.endsWith('/createForumTopic')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: {
+            message_thread_id: 555,
+            name: bodyObj?.name || 'Topic',
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
       return new Response(JSON.stringify({ ok: true, result: { message_id: 101 } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }) as unknown as typeof fetch;
 
+    vi.stubGlobal('fetch', fakeFetch);
+    if (ctx.telegramService) {
+      (ctx.telegramService as unknown as { fetch: typeof fetch }).fetch = fakeFetch;
+    }
+
     server = await createServer(ctx.service, config);
     await server.ready();
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await server.close();
     closeContext(ctx);
     try {
@@ -135,6 +154,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       eventBus: ctx.scheduler.getEventBus(),
       taskRepo: ctx.taskRepo,
       projectRepo: ctx.projectRepo,
+      departmentRepo: ctx.departmentRepo,
       quotaMarkRepo: ctx.quotaMarkRepo,
       fetch: fakeFetch,
       now: () => currentTime,
@@ -1072,7 +1092,7 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(calls).toHaveLength(1);
     });
 
-    it('sends an identical notification text at most once per 30 minutes', async () => {
+    it('sends an all-quota notification once until the blockage clears', async () => {
       const emit = () => ctx.scheduler.getEventBus().emit('quota.exhausted', undefined, { profile: 'g9', family: 'gemini-pro', allExhausted: true, time: '18:30' });
       emit();
       await bot.flushQueue(CHAT_ID);
@@ -1081,6 +1101,11 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
       currentTime += 16 * 60_000;
+      emit();
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(1);
+
+      ctx.scheduler.getEventBus().emit('quota.cleared', undefined, { family: 'gemini-pro' });
       emit();
       await bot.flushQueue(CHAT_ID);
       expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(2);
@@ -1105,6 +1130,81 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
 
       calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[0].body?.text).toContain('Ổ đĩa thấp');
+    });
+
+    it('broadcasts task.waiting_quota only for no_department_profile with 30-minute dedupe', async () => {
+      // 1. no_department_profile sends broadcast
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+
+      let calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
+      expect(calls[0].body?.text).toContain('Phòng: <b>Chung</b>');
+      expect(calls[0].body?.text).toContain('Gán tài khoản cho phòng Chung hoặc bỏ gán');
+
+      // 2. other wait reasons (e.g. no_matching_profile) must not broadcast
+      recordedCalls = [];
+      currentTime += 15_000;
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-matching', {
+        reason: 'no_matching_profile',
+      });
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+      // 3. Deduplication: within 30 minutes, repeated no_department_profile event for same task does not broadcast
+      currentTime += 10 * 60_000; // 10 minutes later
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+      // 4. After 30 minutes (31 minutes later), broadcasts again
+      currentTime += 21 * 60_000; // 31 minutes total
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
+    });
+
+    it('broadcasts task.waiting_quota with no_department_profile even when brain.mode is auto', async () => {
+      config.brain.mode = 'auto';
+
+      // 1. Other wait reasons are suppressed in auto mode
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-match-auto', {
+        reason: 'no_matching_profile',
+      });
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+      // 2. no_department_profile configuration error bypasses auto mode suppression
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept-auto', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
+      expect(calls[0].body?.text).toContain('Phòng: <b>Chung</b>');
     });
   });
 
@@ -1493,6 +1593,216 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
 
       task = ctx.taskRepo.get('proj-shop/dang-xuat-tai-khoan');
       expect(['queued', 'waiting_quota']).toContain(task?.status);
+    });
+
+    it('stores a leading external reference from the short description format', async () => {
+      await bot.handleUpdate({
+        update_id: 22,
+        message: {
+          message_id: 22,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask OP#123 Đăng xuất tài khoản',
+        },
+      });
+
+      const task = ctx.taskRepo.get('proj-shop/dang-xuat-tai-khoan');
+      expect(task?.externalRef).toBe('OP#123');
+      expect(task?.title).toBe('Đăng xuất tài khoản');
+      expect(task?.body).toBe('Đăng xuất tài khoản');
+    });
+
+    it('accepts free-form leading external references', async () => {
+      await bot.handleUpdate({
+        update_id: 23,
+        message: {
+          message_id: 23,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask ABC-foo Sửa lỗi đăng nhập',
+        },
+      });
+
+      const task = ctx.taskRepo.get('proj-shop/sua-loi-dang-nhap');
+      expect(task?.externalRef).toBe('ABC-foo');
+      expect(task?.title).toBe('Sửa lỗi đăng nhập');
+    });
+
+    it('accepts structured and Unicode leading external references', async () => {
+      await bot.handleUpdate({
+        update_id: 24,
+        message: {
+          message_id: 24,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask ĐỀ-123 Cập nhật thanh toán',
+        },
+      });
+
+      const vietnameseTask = ctx.taskRepo.get('proj-shop/cap-nhat-thanh-toan');
+      expect(vietnameseTask?.externalRef).toBe('ĐỀ-123');
+      expect(vietnameseTask?.title).toBe('Cập nhật thanh toán');
+
+      await bot.handleUpdate({
+        update_id: 25,
+        message: {
+          message_id: 25,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask 営業-1 Sửa nội dung bán hàng',
+        },
+      });
+
+      const japaneseTask = ctx.taskRepo.get('proj-shop/sua-noi-dung-ban-hang');
+      expect(japaneseTask?.externalRef).toBe('営業-1');
+      expect(japaneseTask?.title).toBe('Sửa nội dung bán hàng');
+
+      await bot.handleUpdate({
+        update_id: 26,
+        message: {
+          message_id: 26,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask PROJ-45 Sửa giao diện thanh toán',
+        },
+      });
+
+      const projTask = ctx.taskRepo.get('proj-shop/sua-giao-dien-thanh-toan');
+      expect(projTask?.externalRef).toBe('PROJ-45');
+      expect(projTask?.title).toBe('Sửa giao diện thanh toán');
+
+      await bot.handleUpdate({
+        update_id: 27,
+        message: {
+          message_id: 27,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask #abc Tối ưu hóa truy vấn',
+        },
+      });
+
+      const markerTask = ctx.taskRepo.get('proj-shop/toi-uu-hoa-truy-van');
+      expect(markerTask?.externalRef).toBe('#abc');
+      expect(markerTask?.title).toBe('Tối ưu hóa truy vấn');
+    });
+
+    it('does not treat normal descriptions or trailing punctuation as external references', async () => {
+      // Direct parser checks ensuring externalRef is undefined and text is preserved
+      expect(bot['parseLeadingExternalRef']('Lỗi: không đăng nhập')).toEqual({ text: 'Lỗi: không đăng nhập' });
+      expect(bot['parseLeadingExternalRef']('Hello, world')).toEqual({ text: 'Hello, world' });
+      expect(bot['parseLeadingExternalRef']('1. Sửa login')).toEqual({ text: '1. Sửa login' });
+      expect(bot['parseLeadingExternalRef']('Fix Login bug')).toEqual({ text: 'Fix Login bug' });
+      expect(bot['parseLeadingExternalRef']('Add Dashboard page')).toEqual({ text: 'Add Dashboard page' });
+      expect(bot['parseLeadingExternalRef']('sửa Login bug')).toEqual({ text: 'sửa Login bug' });
+      expect(bot['parseLeadingExternalRef']('API timeout khi gọi')).toEqual({ text: 'API timeout khi gọi' });
+      expect(bot['parseLeadingExternalRef']('GitHub Actions bị lỗi')).toEqual({ text: 'GitHub Actions bị lỗi' });
+      expect(bot['parseLeadingExternalRef']('iPhone crash')).toEqual({ text: 'iPhone crash' });
+      expect(bot['parseLeadingExternalRef']('README cần cập nhật')).toEqual({ text: 'README cần cập nhật' });
+
+      // End-to-end task creation via bot
+      await bot.handleUpdate({
+        update_id: 281,
+        message: {
+          message_id: 281,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Lỗi: không đăng nhập',
+        },
+      });
+      const taskPunctuation = ctx.taskRepo.get('proj-shop/loi-khong-dang-nhap');
+      expect(taskPunctuation?.externalRef).toBeNull();
+      expect(taskPunctuation?.title).toBe('Lỗi: không đăng nhập');
+
+      await bot.handleUpdate({
+        update_id: 282,
+        message: {
+          message_id: 282,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Hello, world',
+        },
+      });
+      const taskComma = ctx.taskRepo.get('proj-shop/hello-world');
+      expect(taskComma?.externalRef).toBeNull();
+      expect(taskComma?.title).toBe('Hello, world');
+
+      await bot.handleUpdate({
+        update_id: 283,
+        message: {
+          message_id: 283,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask 1. Sửa login',
+        },
+      });
+      const taskOrdinal = ctx.taskRepo.get('proj-shop/1-sua-login');
+      expect(taskOrdinal?.externalRef).toBeNull();
+      expect(taskOrdinal?.title).toBe('1. Sửa login');
+
+      await bot.handleUpdate({
+        update_id: 284,
+        message: {
+          message_id: 284,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Fix Login bug',
+        },
+      });
+      const taskFix = ctx.taskRepo.get('proj-shop/fix-login-bug');
+      expect(taskFix?.externalRef).toBeNull();
+      expect(taskFix?.title).toBe('Fix Login bug');
+
+      await bot.handleUpdate({
+        update_id: 285,
+        message: {
+          message_id: 285,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask Add Dashboard page',
+        },
+      });
+      const taskAdd = ctx.taskRepo.get('proj-shop/add-dashboard-page');
+      expect(taskAdd?.externalRef).toBeNull();
+      expect(taskAdd?.title).toBe('Add Dashboard page');
+
+      await bot.handleUpdate({
+        update_id: 286,
+        message: {
+          message_id: 286,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask sửa Login bug',
+        },
+      });
+      const taskSua = ctx.taskRepo.get('proj-shop/sua-login-bug');
+      expect(taskSua?.externalRef).toBeNull();
+      expect(taskSua?.title).toBe('sửa Login bug');
+
+      await bot.handleUpdate({
+        update_id: 287,
+        message: {
+          message_id: 287,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask API timeout khi gọi',
+        },
+      });
+      const taskApi = ctx.taskRepo.get('proj-shop/api-timeout-khi-goi');
+      expect(taskApi?.externalRef).toBeNull();
+      expect(taskApi?.title).toBe('API timeout khi gọi');
+
+      await bot.handleUpdate({
+        update_id: 288,
+        message: {
+          message_id: 288,
+          date: 123456,
+          chat: { id: CHAT_ID, type: 'private' },
+          text: '/newtask GitHub Actions bị lỗi',
+        },
+      });
+      const taskGithub = ctx.taskRepo.get('proj-shop/github-actions-bi-loi');
+      expect(taskGithub?.externalRef).toBeNull();
+      expect(taskGithub?.title).toBe('GitHub Actions bị lỗi');
     });
 
     it('allows cancelling wizard via /cancel', async () => {
@@ -1981,6 +2291,7 @@ describe('Brain Notifications & Digest (b-brain-notify)', () => {
       eventBus: ctx.scheduler.getEventBus(),
       taskRepo: ctx.taskRepo,
       projectRepo: ctx.projectRepo,
+      departmentRepo: ctx.departmentRepo,
       profileRepo: ctx.profileRepo,
       quotaMarkRepo: ctx.quotaMarkRepo,
       fetch: fakeFetch,
@@ -2509,6 +2820,7 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
   let tmpDir: string;
   let ctx: ReturnType<typeof createContext>;
   let config: ReturnType<typeof loadConfig>;
+  let server: Awaited<ReturnType<typeof createServer>> | undefined;
   let recordedCalls: Array<{ url: string; body?: Record<string, unknown> }>;
   let fakeFetch: typeof fetch;
   const CHAT_ID = 88888;
@@ -2556,11 +2868,18 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
       if (urlStr.includes('/answerCallbackQuery')) {
         return new Response(JSON.stringify({ ok: true, result: true }));
       }
+      if (urlStr.includes('/createForumTopic')) {
+        return new Response(JSON.stringify({ ok: true, result: { message_thread_id: 555, name: bodyObj?.name || 'Topic' } }));
+      }
       return new Response(JSON.stringify({ ok: true, result: {} }));
     }) as unknown as typeof fetch;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (server) {
+      await server.close();
+      server = undefined;
+    }
     ctx.chatService.stop();
     closeContext(ctx);
     try {
@@ -2596,6 +2915,7 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
       eventBus: ctx.scheduler.getEventBus(),
       taskRepo: ctx.taskRepo,
       projectRepo: ctx.projectRepo,
+      departmentRepo: ctx.departmentRepo,
       profileRepo: ctx.profileRepo,
       quotaMarkRepo: ctx.quotaMarkRepo,
       fetch: fakeFetch,
@@ -2715,7 +3035,61 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(sysBrainSession?.kind).toBe('brain');
   });
 
-  it('2. /newtask dung du an dang chon lam mac dinh', async () => {
+  it('2. thong bao project vao topic, thong bao he thong vao General', async () => {
+    createProject('p-topic', 'Topic App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-topic': { chatId: CHAT_ID, threadId: 42 } };
+    const bot = createProjectBot('suggest');
+
+    bot.broadcastMessage('project notification', undefined, 'p-topic');
+    await bot.flushQueue(CHAT_ID);
+    const projectCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(projectCall?.body?.message_thread_id).toBe(42);
+
+    bot.broadcastMessage('system notification');
+    await bot.flushQueue(CHAT_ID);
+    const systemCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(systemCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('4. chat duoc gan project dinh tuyen ngay va event he thong luon vao General', async () => {
+    createProject('p-attached', 'Attached App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-attached': { chatId: CHAT_ID, threadId: 77 } };
+    const bot = createProjectBot('suggest');
+
+    bot.setProjectChat('p-attached', CHAT_ID);
+    expect(bot.getSelectedProject(CHAT_ID)).toBe('p-attached');
+
+    bot.handleEvent('task.failed', 'p-attached/task-1');
+    await bot.flushQueue(CHAT_ID);
+    bot.broadcastMessage('system after project event', undefined);
+    await bot.flushQueue(CHAT_ID);
+    const systemCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(systemCall?.body?.message_thread_id).toBeUndefined();
+
+    bot.handleEvent('quota.exhausted', undefined, { projectId: 'p-attached', profile: 'p1', family: 'gemini' });
+    await bot.flushQueue(CHAT_ID);
+    const quotaCall = recordedCalls.filter((call) => call.url.includes('/sendMessage')).at(-1);
+    expect(quotaCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('deploy event co projectId van duoc gui vao General', async () => {
+    createProject('p-deploy', 'Deploy App', 'suggest', 'full');
+    createProject('p-deploy-other', 'Other Deploy App', 'suggest', 'full');
+    config.telegram.projectTopics = { 'p-deploy': { chatId: CHAT_ID, threadId: 88 } };
+    const bot = createProjectBot('suggest');
+
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy', error: 'build failed' });
+    bot.handleEvent('deploy.failed', undefined, { projectId: 'p-deploy-other', error: 'build failed' });
+    await bot.flushQueue(CHAT_ID);
+
+    const deployCalls = recordedCalls.filter((call) => call.url.includes('/sendMessage'));
+    expect(deployCalls).toHaveLength(2);
+    const deployCall = deployCalls.at(-1);
+    expect(deployCall?.body?.text).toContain('Triển khai thất bại');
+    expect(deployCall?.body?.message_thread_id).toBeUndefined();
+  });
+
+  it('3. /newtask dung du an dang chon lam mac dinh', async () => {
     createProject('p-alpha', 'Project Alpha', 'suggest', 'full');
     createProject('p-beta', 'Project Beta', 'suggest', 'full');
 
@@ -3060,5 +3434,397 @@ describe('Telegram theo dự án (b3-telegram-per-project)', () => {
     expect(bot.getSelectedProject(CHAT_ID)).toBe('p-keep');
     const newBot = createProjectBot('suggest');
     expect(newBot.getSelectedProject(CHAT_ID)).toBe('p-keep');
+  });
+
+  it('7. /focus bat tat va kiem tra trang thai tap trung project', async () => {
+    createProject('p-focus', 'Project Focus', 'suggest', 'full');
+    const bot = createProjectBot('suggest');
+
+    // 1. /focus khi chưa bật
+    await bot.handleUpdate({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg1 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg1).toContain('Chưa bật chế độ tập trung');
+
+    // 2. /focus cho project không tồn tại
+    await bot.handleUpdate({
+      update_id: 2,
+      message: { message_id: 2, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus p-non-existent' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msgErr = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msgErr).toContain('không tồn tại');
+
+    // 3. /focus p-focus -> bật tập trung
+    await bot.handleUpdate({
+      update_id: 3,
+      message: { message_id: 3, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus p-focus' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg2 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg2).toContain('Đã tập trung cho <b>p-focus</b>');
+    expect(ctx.service.getFocus().projectId).toBe('p-focus');
+
+    // 4. /focus xem trạng thái khi đang bật
+    await bot.handleUpdate({
+      update_id: 4,
+      message: { message_id: 4, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg3 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg3).toContain('Đang tập trung cho <b>p-focus</b>');
+
+    // 5. /focus off -> tắt tập trung
+    await bot.handleUpdate({
+      update_id: 5,
+      message: { message_id: 5, chat: { id: CHAT_ID, type: 'private' }, date: Math.floor(currentTime / 1000), text: '/focus off' },
+    });
+    await bot.flushQueue(CHAT_ID);
+    const msg4 = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1)?.body?.text as string;
+    expect(msg4).toContain('Đã tắt tập trung');
+    expect(ctx.service.getFocus().projectId).toBeNull();
+  });
+
+  describe('13. Telegram Topics per Department & Group Pairing (d-telegram-topics)', () => {
+    const SUPERGROUP_ID = -100987654321;
+    const AUTHORIZED_USER_ID = 777111;
+    const UNAUTHORIZED_USER_ID = 999888;
+
+    function createDeptBot(opts?: { allowedChatIds?: number[]; topicMode?: 'project' | 'department'; directorEnabled?: boolean }) {
+      config.telegram.allowedChatIds = opts?.allowedChatIds ? [...opts.allowedChatIds] : [AUTHORIZED_USER_ID];
+      config.telegram.topicMode = opts?.topicMode ?? 'department';
+      if (opts?.directorEnabled !== undefined) {
+        config.brain.director = {
+          enabled: opts.directorEnabled,
+          engine: 'claude',
+          model: 'sonnet',
+          cron: '0 8 * * *',
+          timezone: 'Asia/Ho_Chi_Minh',
+        };
+      }
+      return new TelegramBotService({
+        config,
+        service: ctx.service,
+        eventBus: ctx.scheduler.getEventBus(),
+        taskRepo: ctx.taskRepo,
+        projectRepo: ctx.projectRepo,
+        departmentRepo: ctx.departmentRepo,
+        profileRepo: ctx.profileRepo,
+        quotaMarkRepo: ctx.quotaMarkRepo,
+        fetch: fakeFetch,
+        now: () => currentTime,
+        sleep: async () => {},
+        sleepFn: async () => {},
+        tokenOverride: 'test-token',
+        chatService: ctx.chatService,
+        brainSession: true,
+      });
+    }
+
+    it('1. Group pairing: rejects pairing from unauthorized sender in group chat', async () => {
+      const bot = createDeptBot({ allowedChatIds: [AUTHORIZED_USER_ID] });
+      const pairData = bot.getPairingCode(true);
+
+      // Unauthorized user in supergroup attempts pairing
+      await bot.handleUpdate({
+        update_id: 1,
+        message: {
+          message_id: 10,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Tech Team Supergroup' },
+          from: { id: UNAUTHORIZED_USER_ID, is_bot: false, first_name: 'Hacker' },
+          text: `/pair ${pairData.code}`,
+        },
+      });
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      // Group is NOT added to allowedChatIds
+      expect(config.telegram.allowedChatIds).not.toContain(SUPERGROUP_ID);
+    });
+
+    it('2. Group pairing: accepts pairing from authorized sender and registers supergroup', async () => {
+      const bot = createDeptBot({ allowedChatIds: [AUTHORIZED_USER_ID] });
+      const pairData = bot.getPairingCode(true);
+
+      // Authorized user in supergroup pairs the group
+      await bot.handleUpdate({
+        update_id: 2,
+        message: {
+          message_id: 20,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Tech Team Supergroup' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false, first_name: 'Admin' },
+          text: `/pair ${pairData.code}`,
+        },
+      });
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      // Group IS added to allowedChatIds and chats list with kind 'supergroup'
+      expect(config.telegram.allowedChatIds).toContain(SUPERGROUP_ID);
+      const chatEntry = config.telegram.chats?.find((c) => c.id === SUPERGROUP_ID);
+      expect(chatEntry).toBeDefined();
+      expect(chatEntry?.kind).toBe('supergroup');
+      const sentMsg = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(sentMsg?.body?.text).toContain('Ghép đôi nhóm thành công');
+    });
+
+    it('3. Department topic creation and setupDepartmentTopics', async () => {
+      const bot = createDeptBot({ allowedChatIds: [AUTHORIZED_USER_ID, SUPERGROUP_ID] });
+
+      ctx.departmentRepo.insert({
+        id: 'dept-mobile',
+        name: 'Phòng Di động',
+        priority: 2,
+        maxParallel: 3,
+        claudeDailyTokenBudget: 0,
+        telegramTopicId: null,
+      });
+
+      const topic = await bot.createDepartmentTopic('dept-mobile');
+      expect(topic.chatId).toBe(SUPERGROUP_ID);
+      expect(topic.threadId).toBe(555);
+
+      // Check config and DB
+      expect(config.telegram.departmentTopics?.['dept-mobile']?.threadId).toBe(555);
+      const row = ctx.departmentRepo.get('dept-mobile');
+      expect(row?.telegramTopicId).toBe(555);
+
+      // setupDepartmentTopics creates topics for 'chung' and missing departments
+      const created = await bot.setupDepartmentTopics();
+      expect(created['chung']).toBeDefined();
+      expect(config.telegram.departmentTopics?.['chung']?.threadId).toBeDefined();
+    });
+
+    it('4. Message routing in department topics to brain:department:<deptId> and brain:director', async () => {
+      ctx.departmentRepo.insert({
+        id: 'dept-ai',
+        name: 'Phòng AI',
+        priority: 3,
+        maxParallel: 2,
+        claudeDailyTokenBudget: 0,
+        telegramTopicId: null,
+        brainEngine: 'claude',
+        brainModel: 'sonnet',
+        brainMode: 'suggest',
+        brainPermissions: 'full',
+      });
+
+      config.telegram.departmentTopics = {
+        'dept-ai': { chatId: SUPERGROUP_ID, threadId: 101 },
+        'chung': { chatId: SUPERGROUP_ID, threadId: 102 },
+      };
+
+      const bot = createDeptBot({
+        allowedChatIds: [SUPERGROUP_ID],
+        topicMode: 'department',
+        directorEnabled: true,
+      });
+
+      // Message in AI department topic (threadId 101)
+      await bot.handleUpdate({
+        update_id: 30,
+        message: {
+          message_id: 301,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Company Supergroup' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false },
+          message_thread_id: 101,
+          text: 'Xin chào phòng AI',
+        },
+      });
+
+      const aiSession = ctx.chatService?.chatSessionRepo.get('brain:department:dept-ai');
+      expect(aiSession).toBeDefined();
+      expect(aiSession?.kind).toBe('brain');
+      expect(aiSession?.title).toBe('Bộ não · Phòng AI');
+
+      // Message in Chung topic (threadId 102) with director enabled -> routes to brain:director
+      await bot.handleUpdate({
+        update_id: 31,
+        message: {
+          message_id: 302,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Company Supergroup' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false },
+          message_thread_id: 102,
+          text: 'Báo cáo tổng quan hôm nay',
+        },
+      });
+
+      const dirSession = ctx.chatService?.chatSessionRepo.get('brain:director');
+      expect(dirSession).toBeDefined();
+      expect(dirSession?.kind).toBe('brain');
+      expect(dirSession?.title).toBe('Bộ não Giám đốc');
+    });
+
+    it('5. Notification routing in topicMode: department routes task events to department topic with prefix', async () => {
+      ctx.departmentRepo.insert({
+        id: 'dept-backend',
+        name: 'Phòng Backend',
+        priority: 1,
+        maxParallel: 2,
+        claudeDailyTokenBudget: 0,
+        telegramTopicId: 201,
+      });
+
+      ctx.projectRepo.insert({
+        id: 'p-be-api',
+        name: 'Backend API Service',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 1,
+        departmentId: 'dept-backend',
+      });
+
+      ctx.taskRepo.insert({
+        id: 'p-be-api/task-login',
+        projectId: 'p-be-api',
+        slug: 'task-login',
+        title: 'Thêm xác thực JWT',
+        status: 'review',
+      });
+
+      config.telegram.departmentTopics = {
+        'dept-backend': { chatId: SUPERGROUP_ID, threadId: 201 },
+        'chung': { chatId: SUPERGROUP_ID, threadId: 202 },
+      };
+
+      const bot = createDeptBot({
+        allowedChatIds: [SUPERGROUP_ID],
+        topicMode: 'department',
+      });
+
+      // Task notification routes to dept-backend topic (threadId 201) and includes project prefix
+      bot.handleEvent('task.review_ready', 'p-be-api/task-login');
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const taskCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(taskCall?.body?.message_thread_id).toBe(201);
+      expect(taskCall?.body?.text).toContain('[Backend API Service]');
+      expect(taskCall?.body?.text).toContain('Task chờ review');
+
+      currentTime += 15_000;
+
+      // Project without department routes to Chung topic (threadId 202)
+      ctx.projectRepo.insert({
+        id: 'p-orphan',
+        name: 'Orphan Project',
+        path: tmpDir,
+        defaultBranch: 'main',
+        maxParallel: 1,
+      });
+      ctx.taskRepo.insert({
+        id: 'p-orphan/task-doc',
+        projectId: 'p-orphan',
+        slug: 'task-doc',
+        title: 'Cập nhật tài liệu',
+        status: 'failed',
+      });
+
+      bot.handleEvent('task.failed', 'p-orphan/task-doc');
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const orphanCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(orphanCall?.body?.message_thread_id).toBe(202);
+      expect(orphanCall?.body?.text).toContain('[Orphan Project]');
+
+      currentTime += 15_000;
+
+      // System notification routes to Chung topic
+      bot.broadcastMessage('Hệ thống khởi động hoàn tất', undefined);
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const sysCall = recordedCalls.filter((c) => c.url.includes('/sendMessage')).at(-1);
+      expect(sysCall?.body?.message_thread_id).toBe(202);
+      expect(sysCall?.body?.text).toContain('Hệ thống khởi động hoàn tất');
+    });
+
+    it('6. /topics command supports setup in department mode', async () => {
+      config.telegram.departmentTopics = {
+        'chung': { chatId: SUPERGROUP_ID, threadId: 301 },
+      };
+
+      const bot = createDeptBot({
+        allowedChatIds: [SUPERGROUP_ID],
+        topicMode: 'project',
+      });
+
+      // /topics setup department
+      await bot.handleUpdate({
+        update_id: 41,
+        message: {
+          message_id: 402,
+          date: Math.floor(currentTime / 1000),
+          chat: { id: SUPERGROUP_ID, type: 'supergroup', title: 'Team Group' },
+          from: { id: AUTHORIZED_USER_ID, is_bot: false },
+          text: '/topics setup department',
+        },
+      });
+      await bot.flushQueue(SUPERGROUP_ID);
+
+      const setupCalls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      const lastSetupCall = setupCalls.at(-1);
+      expect(lastSetupCall?.body?.text).toContain('Đã đồng bộ');
+      expect(lastSetupCall?.body?.text).toContain('topic phòng ban');
+      expect(config.telegram.topicMode).toBe('department');
+    });
+
+    it('7. HTTP API endpoints for department topics and setup', async () => {
+      config.telegram.allowedChatIds = [SUPERGROUP_ID];
+      config.telegram.chats = [{ id: SUPERGROUP_ID, name: 'Supergroup', kind: 'supergroup' }];
+
+      if (ctx.telegramService) {
+        (ctx.telegramService as unknown as { token?: string; fetchFn?: typeof fetch }).token = 'test-token';
+        (ctx.telegramService as unknown as { token?: string; fetchFn?: typeof fetch }).fetchFn = fakeFetch;
+      }
+
+      server = await createServer(ctx.service, config);
+      await server.ready();
+      const token = getOrCreateToken(config.tokenPath);
+      const testHeaders = {
+        host: '127.0.0.1:4321',
+        authorization: `Bearer ${token}`,
+      };
+
+      // POST /api/telegram/departments/:id/topic
+      const deptRes = await server.inject({
+        method: 'POST',
+        url: '/api/telegram/departments/chung/topic',
+        headers: testHeaders,
+      });
+      expect(deptRes.statusCode).toBe(200);
+      const deptJson = JSON.parse(deptRes.body);
+      expect(deptJson.chatId).toBe(SUPERGROUP_ID);
+      expect(deptJson.threadId).toBe(555);
+
+      // POST /api/telegram/topics/setup with department mode
+      const setupRes = await server.inject({
+        method: 'POST',
+        url: '/api/telegram/topics/setup',
+        headers: {
+          ...testHeaders,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ mode: 'department' }),
+      });
+      expect(setupRes.statusCode).toBe(200);
+      const setupJson = JSON.parse(setupRes.body);
+      expect(setupJson['chung']).toBeDefined();
+      expect(setupJson['chung'].threadId).toBe(555);
+
+      // GET /api/telegram/status contains topicMode and departmentTopics
+      const statusRes = await server.inject({
+        method: 'GET',
+        url: '/api/telegram/status',
+        headers: testHeaders,
+      });
+      expect(statusRes.statusCode).toBe(200);
+      const statusJson = JSON.parse(statusRes.body);
+      expect(statusJson.topicMode).toBe('department');
+      expect(statusJson.departmentTopics).toBeDefined();
+    });
   });
 });

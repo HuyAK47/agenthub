@@ -16,5 +16,10 @@ describe('project review chain', () => {
   it('fails closed for malformed or unsupported reviewers', () => {
     expect(parseReviewChain('{"chain":[]}')).toEqual([]);
     expect(ReviewChainSchema.safeParse([{ reviewer: 'gemini', mode: 'gate' }]).success).toBe(false);
+    expect(ReviewChainSchema.safeParse([{ reviewer: 'codex:', mode: 'gate' }]).success).toBe(false);
+    expect(ReviewChainSchema.safeParse([{ reviewer: 'codex: ', mode: 'gate' }]).success).toBe(false);
+    expect(ReviewChainSchema.safeParse([{ reviewer: 'codex:x', mode: 'gate' }]).success).toBe(false);
+    expect(ReviewChainSchema.safeParse([{ reviewer: 'codex:gpt-5.6-luna', mode: 'gate' }]).success).toBe(true);
+    expect(ReviewChainSchema.safeParse([{ reviewer: 'codex:gpt-4o', mode: 'gate' }]).success).toBe(true);
   });
 });

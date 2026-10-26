@@ -16,7 +16,7 @@ LAUNCHCTL="${AGENTHUB_LAUNCHCTL:-launchctl}"
 
 # Release installs use one script-level trap.  This is deliberately POSIX sh:
 # the installer is commonly run as `curl ... | sh`, where the shell is dash.
-INSTALL_LOG=""
+INSTALL_LOG="${INSTALL_LOG:-}"
 _install_step=""
 _failure_reason=""
 _release_tmp=""
@@ -72,6 +72,13 @@ restore_release_state() {
     fi
   fi
   case "$(uname -s 2>/dev/null)" in
+    Darwin*)
+      _uid="$(id -u)"
+      "$LAUNCHCTL" bootout "gui/$_uid/dev.agenthub" 2>/dev/null || true
+      if [ -n "$_old_service_backup" ] && [ -f "$_old_service_backup" ] && [ -n "$_service_file" ]; then
+        "$LAUNCHCTL" bootstrap "gui/$_uid" "$_service_file" 2>/dev/null || true
+      fi
+      ;;
     Linux*)
       "$SYSTEMCTL" --user daemon-reload 2>/dev/null || true
       ;;
@@ -160,9 +167,16 @@ prompt_yes_no() {
   if [ -t 0 ]; then
     printf "%s %s: " "$_question" "$_prompt"
     read -r _ans
-  elif [ -e /dev/tty ]; then
-    printf "%s %s: " "$_question" "$_prompt" >/dev/tty
-    read -r _ans </dev/tty
+  elif ([ -t 1 ] || [ -t 2 ]) && [ -c /dev/tty ]; then
+    if printf "%s %s: " "$_question" "$_prompt" >/dev/tty 2>/dev/null && read -r _ans </dev/tty 2>/dev/null; then
+      :
+    else
+      if [ "$_default" = "y" ]; then
+        return 0
+      else
+        return 1
+      fi
+    fi
   else
     if [ "$_default" = "y" ]; then
       return 0
@@ -445,6 +459,117 @@ check_native_modules() {
   return 0
 }
 
+validate_release_version() {
+  printf '%s\n' "$1" | sed -n '/^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(-[0-9A-Za-z.][0-9A-Za-z.]*\)\{0,1\}$/p'
+}
+
+extract_release_tag_from_url() {
+  _url="$1"
+  _tag="$(printf '%s' "$_url" | sed -n 's#.*/releases/tag/\([^/?#]*\).*#\1#p')"
+  case "$_tag" in
+    [vV]*) _tag="${_tag#[vV]}" ;;
+  esac
+  printf '%s' "$_tag"
+}
+
+extract_release_tag_from_json() {
+  _json="$1"
+  _nl='
+'
+  _tag="$(printf '%s' "$_json" | sed "s/\"tag_name\"/\\$_nl&/g" | sed -n 's/^"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"[:space:]]*\)".*/\1/p' | head -n 1)"
+  case "$_tag" in
+    [vV]*) _tag="${_tag#[vV]}" ;;
+  esac
+  printf '%s' "$_tag"
+}
+
+resolve_latest_release_version() {
+  _base="$1"
+  _owner_repo=""
+  case "$_base" in
+    https://github.com/*|http://github.com/*)
+      _owner_repo="$(printf '%s' "$_base" | sed -n 's#^https\{0,1\}://github\.com/\([^/][^/]*/[^/][^/]*\).*#\1#p')"
+      _owner_repo="${_owner_repo%.git}"
+      ;;
+  esac
+
+  if [ -n "$_owner_repo" ]; then
+    _latest_url="$_base/releases/latest"
+    _api_latest="https://api.github.com/repos/$_owner_repo/releases/latest"
+    _api_all="https://api.github.com/repos/$_owner_repo/releases?per_page=1"
+
+    # 1. Primary: redirect URL from releases/latest
+    _redir_resp="$(curl -fsSLI -o /dev/null -w "HTTP_CODE:%{http_code}\nURL:%{url_effective}" "$_latest_url" 2>/dev/null || true)"
+    _redir_code="$(printf '%s\n' "$_redir_resp" | sed -n 's/^HTTP_CODE:\([0-9][0-9]*\)/\1/p')"
+    _eff_url="$(printf '%s\n' "$_redir_resp" | sed -n 's/^URL://p')"
+    if [ -n "$_eff_url" ] && case "$_eff_url" in */releases/tag/*) true ;; *) false ;; esac; then
+      _tag="$(extract_release_tag_from_url "$_eff_url")"
+      if [ -n "$_tag" ] && [ -n "$(validate_release_version "$_tag")" ]; then
+        RELEASE_VERSION="$_tag"
+        installer_log "release resolve: URL $_latest_url redirected to $_eff_url (HTTP ${_redir_code:-unknown}, version $RELEASE_VERSION)"
+        return 0
+      fi
+      installer_log "release resolve: URL $_latest_url redirected to $_eff_url (HTTP ${_redir_code:-unknown}) but tag '$_tag' is not valid semver"
+    else
+      installer_log "release resolve: URL $_latest_url redirect failed (HTTP ${_redir_code:-unknown}, effective URL: ${_eff_url:-none})"
+    fi
+
+    # 2. Fallback 1: GitHub API releases/latest
+    _api_resp="$(curl -sSL -w "\nHTTP_CODE:%{http_code}" "$_api_latest" 2>/dev/null || true)"
+    _http_code="$(printf '%s\n' "$_api_resp" | sed -n 's/^HTTP_CODE:\([0-9][0-9]*\)/\1/p')"
+    _api_body="$(printf '%s\n' "$_api_resp" | sed '/^HTTP_CODE:/d')"
+    installer_log "release resolve: URL $_api_latest (HTTP ${_http_code:-unknown})"
+
+    if [ "$_http_code" != "404" ]; then
+      _tag="$(extract_release_tag_from_json "$_api_body")"
+      if [ -n "$_tag" ] && [ -n "$(validate_release_version "$_tag")" ]; then
+        RELEASE_VERSION="$_tag"
+        installer_log "release resolve: URL $_api_latest returned version $RELEASE_VERSION"
+        return 0
+      fi
+    fi
+
+    # 3. Fallback 2: GitHub API releases?per_page=1 (includes pre-releases)
+    _api_resp="$(curl -sSL -w "\nHTTP_CODE:%{http_code}" "$_api_all" 2>/dev/null || true)"
+    _http_code="$(printf '%s\n' "$_api_resp" | sed -n 's/^HTTP_CODE:\([0-9][0-9]*\)/\1/p')"
+    _api_body="$(printf '%s\n' "$_api_resp" | sed '/^HTTP_CODE:/d')"
+    installer_log "release resolve: URL $_api_all (HTTP ${_http_code:-unknown})"
+
+    _tag="$(extract_release_tag_from_json "$_api_body")"
+    if [ -n "$_tag" ] && [ -n "$(validate_release_version "$_tag")" ]; then
+      RELEASE_VERSION="$_tag"
+      echo "! Cảnh báo: đang dùng phiên bản pre-release (v$RELEASE_VERSION)." >&2
+      installer_log "release resolve: URL $_api_all returned pre-release version $RELEASE_VERSION"
+      return 0
+    fi
+
+    _failure_reason="không xác định được phiên bản release mới nhất"
+    echo "Lỗi: không xác định được phiên bản release mới nhất." >&2
+    echo "Đã thử các URL:" >&2
+    echo "  - $_latest_url" >&2
+    echo "  - $_api_latest" >&2
+    echo "  - $_api_all" >&2
+    echo "Gợi ý: hãy chỉ định phiên bản bằng --from-release <version>." >&2
+    return 1
+  fi
+
+  # Non-GitHub base (fallback for file://, local directories, or fake servers returning JSON)
+  _latest_url="$_base/releases/latest"
+  _release_json="$(curl -fsSL "$_latest_url" 2>/dev/null || true)"
+  _tag="$(extract_release_tag_from_json "$_release_json")"
+  if [ -n "$_tag" ] && [ -n "$(validate_release_version "$_tag")" ]; then
+    RELEASE_VERSION="$_tag"
+    installer_log "release resolve: URL $_latest_url returned version $RELEASE_VERSION"
+    return 0
+  fi
+
+  _failure_reason="không xác định được phiên bản release mới nhất"
+  echo "Lỗi: không xác định được phiên bản release mới nhất." >&2
+  echo "Đã thử URL: $_latest_url" >&2
+  echo "Gợi ý: hãy chỉ định phiên bản bằng --from-release <version>." >&2
+  return 1
+}
+
 install_from_release() {
   _install_step="kiểm tra công cụ"
   if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
@@ -456,19 +581,21 @@ install_from_release() {
   _base="$(release_repo_path)"
   if [ "$RELEASE_VERSION_SET" = "1" ]; then
     case "$RELEASE_VERSION" in
-      v*) RELEASE_VERSION="${RELEASE_VERSION#v}" ;;
+      [vV]*) RELEASE_VERSION="${RELEASE_VERSION#[vV]}" ;;
     esac
     case "$RELEASE_VERSION" in
       ''|*[!0-9A-Za-z._-]*) echo "Lỗi: phiên bản release không hợp lệ." >&2; return 1 ;;
     esac
   fi
   if [ -z "$RELEASE_VERSION" ]; then
-    _release_json="$(curl -fsSL "$_base/releases/latest" 2>/dev/null || true)"
-    RELEASE_VERSION="$(printf '%s' "$_release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9A-Za-z.-]*\)".*/\1/p' | head -n 1)"
-    if [ -z "$RELEASE_VERSION" ]; then _failure_reason="không xác định được phiên bản release mới nhất"; echo "Lỗi: không xác định được phiên bản release mới nhất." >&2; return 1; fi
+    _install_step="xác định phiên bản release"
+    if ! resolve_latest_release_version "$_base"; then
+      _failure_reason="không xác định được phiên bản release mới nhất"
+      return 1
+    fi
   fi
   case "$RELEASE_VERSION" in
-    v*) RELEASE_VERSION="${RELEASE_VERSION#v}" ;;
+    [vV]*) RELEASE_VERSION="${RELEASE_VERSION#[vV]}" ;;
   esac
   case "$RELEASE_VERSION" in
     ''|*[!0-9A-Za-z._-]*) echo "Lỗi: phiên bản release không hợp lệ." >&2; return 1 ;;
@@ -516,6 +643,9 @@ install_from_release() {
   mkdir -p "$_release_stage"
   _install_step="giải nén release"
   tar -xzf "$_tmp/$_archive" -C "$_release_stage"
+  if [ "$_os" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "$_release_stage" 2>/dev/null || true
+  fi
   # Pin the Node major the bundled native modules were built for (see scripts/package.mjs).
   _node_major="$(cat "$_release_stage/node-runtime" 2>/dev/null || echo 22)"
   _install_step="tìm Node phù hợp"
@@ -561,7 +691,10 @@ install_from_release() {
   _link_file="$AGENTHUB_LINK_DIR/agenthub"
   _old_link=""
   [ -L "$_link_file" ] && _old_link="$(readlink "$_link_file")"
-  _service_file="$HOME/.config/systemd/user/agenthub.service"
+  case "$_os" in
+    Darwin*) _service_file="$HOME/Library/LaunchAgents/dev.agenthub.plist" ;;
+    *) _service_file="$HOME/.config/systemd/user/agenthub.service" ;;
+  esac
   _old_service_backup="$_tmp/service.before"
   [ -f "$_service_file" ] && cp "$_service_file" "$_old_service_backup"
 
@@ -600,7 +733,7 @@ install_from_release() {
 }
 
 if [ "$FROM_RELEASE" = "1" ]; then
-  INSTALL_LOG="${TMPDIR:-/tmp}/agenthub-install-$(date +%s).log"
+  INSTALL_LOG="${INSTALL_LOG:-${TMPDIR:-/tmp}/agenthub-install-$(date +%s).log}"
   : > "$INSTALL_LOG"
   installer_log "installer started"
   trap 'installer_cleanup "$?"' EXIT
