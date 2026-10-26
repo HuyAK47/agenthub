@@ -959,6 +959,7 @@ export class AppService {
     if (!id) throw new HttpError(400, 'bad_request', 'Tên phòng ban không hợp lệ');
     if (this.departmentRepo.get(id)) throw new HttpError(409, 'conflict', `Department ID "${id}" đã tồn tại`);
     this.departmentRepo.insert({ id, ...parsed });
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'created' });
     return this.getDepartment(id);
   }
 
@@ -966,12 +967,14 @@ export class AppService {
     if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
     const parsed = DepartmentInputSchema.partial().parse(raw);
     this.departmentRepo!.update(id, parsed);
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'updated' });
     return this.getDepartment(id);
   }
 
   deleteDepartment(id: string) {
     if (!this.departmentRepo?.get(id)) throw new HttpError(404, 'not_found', `Department "${id}" không tồn tại`);
     try { this.departmentRepo.delete(id); } catch (error) { throw new HttpError(400, 'bad_request', error instanceof Error ? error.message : 'Không thể xóa phòng ban'); }
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'deleted' });
     return { ok: true };
   }
 
@@ -982,6 +985,7 @@ export class AppService {
       if (!this.profileRepo.get(profile.profileName)) throw new HttpError(404, 'not_found', `Profile "${profile.profileName}" không tồn tại`);
     }
     this.departmentRepo.setProfiles(id, parsed.profiles);
+    this.scheduler.getEventBus().emit('department.changed', undefined, { departmentId: id, action: 'profiles' });
     return this.getDepartment(id);
   }
 
@@ -1784,6 +1788,15 @@ export class AppService {
       reviewChain: parsed.reviewChain === undefined ? undefined : parsed.reviewChain ? JSON.stringify(parsed.reviewChain) : null,
       review: parsed.review === undefined ? undefined : parsed.review ? JSON.stringify(parsed.review) : null,
     });
+
+    if (parsed.departmentId !== undefined && parsed.departmentId !== current.departmentId) {
+      this.scheduler.getEventBus().emit('department.changed', undefined, {
+        projectId: id,
+        fromDepartmentId: current.departmentId,
+        departmentId: parsed.departmentId,
+        action: 'project_moved',
+      });
+    }
 
     if (mergedSettings.integration.enabled) {
       const updatedProject = this.projectRepo.get(id)!;

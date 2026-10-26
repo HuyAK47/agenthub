@@ -1131,6 +1131,81 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
       expect(calls[0].body?.text).toContain('Ổ đĩa thấp');
     });
+
+    it('broadcasts task.waiting_quota only for no_department_profile with 30-minute dedupe', async () => {
+      // 1. no_department_profile sends broadcast
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+
+      let calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
+      expect(calls[0].body?.text).toContain('Phòng: <b>Chung</b>');
+      expect(calls[0].body?.text).toContain('Gán tài khoản cho phòng Chung hoặc bỏ gán');
+
+      // 2. other wait reasons (e.g. no_matching_profile) must not broadcast
+      recordedCalls = [];
+      currentTime += 15_000;
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-matching', {
+        reason: 'no_matching_profile',
+      });
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+      // 3. Deduplication: within 30 minutes, repeated no_department_profile event for same task does not broadcast
+      currentTime += 10 * 60_000; // 10 minutes later
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+      // 4. After 30 minutes (31 minutes later), broadcasts again
+      currentTime += 21 * 60_000; // 31 minutes total
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+      calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
+    });
+
+    it('broadcasts task.waiting_quota with no_department_profile even when brain.mode is auto', async () => {
+      config.brain.mode = 'auto';
+
+      // 1. Other wait reasons are suppressed in auto mode
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-match-auto', {
+        reason: 'no_matching_profile',
+      });
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+      // 2. no_department_profile configuration error bypasses auto mode suppression
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept-auto', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
+      expect(calls[0].body?.text).toContain('Phòng: <b>Chung</b>');
+    });
   });
 
   describe('6. Claude chat bridge', () => {

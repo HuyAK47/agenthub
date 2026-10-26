@@ -289,4 +289,233 @@ describe('Task waitReason (lý do chờ)', () => {
     expect(['queued', 'running']).toContain(t2After?.status);
     expect(t2After?.waitReason).toBeNull();
   });
+
+  it('sets waitReason to no_department_profile when no allowed profiles exist for the department, and runs when profile is assigned', async () => {
+    // Create department 'system' and assign p1 to it
+    ctx.departmentRepo.insert({
+      id: 'system',
+      name: 'Phòng SYSTEM',
+      priority: 0,
+      maxParallel: 0,
+      claudeDailyTokenBudget: 0,
+      telegramTopicId: null,
+    });
+    ctx.profileRepo.upsert({
+      name: 'p1',
+      engine: 'agy',
+      kind: 'isolated',
+      home: path.join(tmpDir, 'agy-homes', 'p1'),
+      email: 'p1@example.com',
+      enabled: 1,
+    });
+    ctx.departmentRepo.setProfiles('system', [{ profileName: 'p1', share: null }]);
+
+    // 'proj' is in department 'chung', which now has 0 allowed profiles because p1 is assigned to 'system'
+    const waitingEvents: Array<{ taskId: string; payload: unknown }> = [];
+    ctx.scheduler.getEventBus().on('task.waiting_quota', (taskId, payload) => {
+      waitingEvents.push({ taskId, payload });
+    });
+
+    ctx.taskRepo.insert({
+      id: 'proj/t-no-dept',
+      projectId: 'proj',
+      slug: 't-no-dept',
+      title: 'No Department Profile Task',
+      status: 'queued',
+      level: 'easy',
+    });
+
+    ctx.scheduler.tick();
+
+    const task = ctx.taskRepo.get('proj/t-no-dept');
+    expect(task?.status).toBe('waiting_quota');
+    expect(task?.waitReason).toBe('no_department_profile');
+
+    expect(waitingEvents).toHaveLength(1);
+    expect(waitingEvents[0]).toMatchObject({
+      taskId: 'proj/t-no-dept',
+      payload: {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      },
+    });
+
+    // Assign p1 to 'chung' via updateDepartmentProfiles (simulating PUT /api/departments/chung/profiles)
+    // When scheduler is running (!stopped), department.changed wakes and triggers tick automatically
+    (ctx.scheduler as unknown as { stopped: boolean }).stopped = false;
+    ctx.service.updateDepartmentProfiles('chung', {
+      profiles: [{ profileName: 'p1', share: null }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const recovered = ctx.taskRepo.get('proj/t-no-dept');
+    expect(recovered?.status).toBe('running');
+    expect(recovered?.waitReason).toBeNull();
+  });
+
+  it('distinguishes between quota exhaustion and no_matching_profile', () => {
+    ctx.profileRepo.upsert({
+      name: 'p-agy',
+      engine: 'agy',
+      kind: 'isolated',
+      home: path.join(tmpDir, 'agy-homes', 'p-agy'),
+      email: 'p-agy@example.com',
+      enabled: 1,
+    });
+
+    // 1. Quota exhaustion: profile matches engine but is quota marked
+    const quotaService = new QuotaService(ctx.quotaMarkRepo, ctx.profileRepo);
+    quotaService.mark('p-agy', 'gemini', 3600, 'quota limit');
+
+    ctx.taskRepo.insert({
+      id: 'proj/t-quota-exhausted',
+      projectId: 'proj',
+      slug: 't-quota-exhausted',
+      title: 'Quota Exhausted Task',
+      status: 'queued',
+      level: 'easy',
+    });
+
+    ctx.scheduler.tick();
+
+    const quotaTask = ctx.taskRepo.get('proj/t-quota-exhausted');
+    expect(quotaTask?.status).toBe('waiting_quota');
+    expect(quotaTask?.waitReason).toBe('quota');
+
+    // 2. No matching profile: department has allowed profile (p-agy), but task requests a codex engine model
+    ctx.taskRepo.insert({
+      id: 'proj/t-codex-engine',
+      projectId: 'proj',
+      slug: 't-codex-engine',
+      title: 'Codex Task on Agy Department',
+      status: 'queued',
+      level: 'easy',
+      modelChain: JSON.stringify(['codex:gpt-5.6-luna']),
+    });
+
+    ctx.scheduler.tick();
+
+    const noMatchingTask = ctx.taskRepo.get('proj/t-codex-engine');
+    expect(noMatchingTask?.status).toBe('waiting_quota');
+    expect(noMatchingTask?.waitReason).toBe('no_matching_profile');
+  });
+
+  it('wakes waiting task when project is moved to another department that has allowed profiles', async () => {
+    ctx.departmentRepo.insert({
+      id: 'dept-empty',
+      name: 'Phòng Trống',
+      priority: 0,
+      maxParallel: 0,
+      claudeDailyTokenBudget: 0,
+      telegramTopicId: null,
+    });
+    ctx.departmentRepo.insert({
+      id: 'dept-active',
+      name: 'Phòng Hoạt Động',
+      priority: 0,
+      maxParallel: 0,
+      claudeDailyTokenBudget: 0,
+      telegramTopicId: null,
+    });
+
+    ctx.profileRepo.upsert({
+      name: 'p-active',
+      engine: 'agy',
+      kind: 'isolated',
+      home: path.join(tmpDir, 'agy-homes', 'p-active'),
+      email: 'p-active@example.com',
+      enabled: 1,
+    });
+    ctx.departmentRepo.setProfiles('dept-active', [{ profileName: 'p-active', share: null }]);
+
+    // Create a new project in dept-empty
+    const projectPath = path.join(tmpDir, 'repo-moved');
+    fs.mkdirSync(projectPath, { recursive: true });
+    execFileSync('git', ['init', '--template='], { cwd: projectPath });
+    execFileSync('git', ['checkout', '-b', 'main'], { cwd: projectPath });
+    fs.writeFileSync(path.join(projectPath, 'README.md'), '# Moved Project');
+    execFileSync('git', ['add', '.'], { cwd: projectPath });
+    execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
+      cwd: projectPath,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@test.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@test.com',
+      },
+    });
+
+    ctx.projectRepo.insert({
+      id: 'proj-moved',
+      name: 'Project Moved',
+      path: projectPath,
+      defaultBranch: 'main',
+      maxParallel: 1,
+      departmentId: 'dept-empty',
+    });
+
+    ctx.taskRepo.insert({
+      id: 'proj-moved/t-wait',
+      projectId: 'proj-moved',
+      slug: 't-wait',
+      title: 'Task in Empty Department',
+      status: 'queued',
+      level: 'easy',
+    });
+
+    ctx.scheduler.tick();
+
+    const waitingTask = ctx.taskRepo.get('proj-moved/t-wait');
+    expect(waitingTask?.status).toBe('waiting_quota');
+    expect(waitingTask?.waitReason).toBe('no_department_profile');
+
+    // Move project to dept-active (simulating project moving department)
+    (ctx.scheduler as unknown as { stopped: boolean }).stopped = false;
+    ctx.service.updateProject('proj-moved', { departmentId: 'dept-active' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const runningTask = ctx.taskRepo.get('proj-moved/t-wait');
+    expect(runningTask?.status).toBe('running');
+    expect(runningTask?.waitReason).toBeNull();
+  });
+
+  it('wakes waiting tasks when a department is created or deleted', () => {
+    ctx.taskRepo.insert({
+      id: 'proj/t-dept-create-wake',
+      projectId: 'proj',
+      slug: 't-dept-create-wake',
+      title: 'Wait on Department Change',
+      status: 'waiting_quota',
+      level: 'easy',
+      waitReason: 'no_department_profile',
+    });
+
+    const queuedEvents: Array<{ taskId: string; payload: unknown }> = [];
+    ctx.scheduler.getEventBus().on('task.queued', (taskId, payload) => {
+      queuedEvents.push({ taskId, payload });
+    });
+
+    // Creating department emits department.changed and wakes waiting tasks
+    ctx.service.createDepartment({ name: 'New Dept' });
+    expect(queuedEvents).toHaveLength(1);
+    expect(queuedEvents[0]).toMatchObject({
+      taskId: 'proj/t-dept-create-wake',
+      payload: { reason: 'department_changed' },
+    });
+
+    // Put task back into waiting_quota
+    ctx.taskRepo.updateStatus('proj/t-dept-create-wake', 'waiting_quota', 'no_department_profile');
+    queuedEvents.length = 0;
+
+    // Deleting department also emits department.changed and wakes waiting tasks
+    ctx.service.deleteDepartment('new-dept');
+    expect(queuedEvents).toHaveLength(1);
+    expect(queuedEvents[0]).toMatchObject({
+      taskId: 'proj/t-dept-create-wake',
+      payload: { reason: 'department_changed' },
+    });
+  });
 });

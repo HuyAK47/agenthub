@@ -259,6 +259,17 @@
   --wait-quota-border: color-mix(in srgb, var(--t-purple) 30%, transparent);
   --wait-quota-dot: var(--t-purple);
 
+  --wait-no_department_profile-color: var(--t-crit);
+  --wait-no_department_profile-bg: color-mix(in srgb, var(--t-crit) 12%, transparent);
+  --wait-no_department_profile-text: var(--t-crit);
+  --wait-no_department_profile-border: color-mix(in srgb, var(--t-crit) 30%, transparent);
+  --wait-no_department_profile-dot: var(--t-crit);
+  --wait-no_matching_profile-color: var(--t-warn);
+  --wait-no_matching_profile-bg: color-mix(in srgb, var(--t-warn) 12%, transparent);
+  --wait-no_matching_profile-text: var(--t-warn);
+  --wait-no_matching_profile-border: color-mix(in srgb, var(--t-warn) 30%, transparent);
+  --wait-no_matching_profile-dot: var(--t-warn);
+
   --wait-parallel-color: var(--t-accent);
   --wait-parallel-bg: color-mix(in srgb, var(--t-accent) 12%, transparent);
   --wait-parallel-text: var(--t-accent);
@@ -423,6 +434,17 @@
   --wait-quota-text: hsl(277, 85%, 70%);
   --wait-quota-border: color-mix(in srgb, var(--t-purple) 35%, transparent);
   --wait-quota-dot: var(--t-purple);
+
+  --wait-no_department_profile-color: var(--t-crit);
+  --wait-no_department_profile-bg: color-mix(in srgb, var(--t-crit) 15%, transparent);
+  --wait-no_department_profile-text: var(--t-crit);
+  --wait-no_department_profile-border: color-mix(in srgb, var(--t-crit) 35%, transparent);
+  --wait-no_department_profile-dot: var(--t-crit);
+  --wait-no_matching_profile-color: var(--t-warn);
+  --wait-no_matching_profile-bg: color-mix(in srgb, var(--t-warn) 15%, transparent);
+  --wait-no_matching_profile-text: var(--t-warn);
+  --wait-no_matching_profile-border: color-mix(in srgb, var(--t-warn) 35%, transparent);
+  --wait-no_matching_profile-dot: var(--t-warn);
 
   --wait-parallel-color: var(--t-accent);
   --wait-parallel-bg: color-mix(in srgb, var(--t-accent) 15%, transparent);

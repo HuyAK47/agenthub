@@ -764,4 +764,94 @@ describe('NotificationService (Desktop Notifications)', () => {
 
     notifier.stop();
   });
+
+  it('notifies for no_department_profile wait reason with critical urgency, ignores other wait reasons, and deduplicates for 30 minutes', () => {
+    config.notifications.desktopLevel = 'critical';
+    let mockTime = 1_000_000_000;
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+      now: () => mockTime,
+    });
+    notifier.start();
+
+    // 1. no_department_profile should send critical notification
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args).toContain('-u');
+    expect(execCalls[0].args).toContain('critical');
+    expect(execCalls[0].args.at(-1)).toContain('task đang chờ vì phòng Phòng SYSTEM chưa có tài khoản được phép');
+    expect(execCalls[0].args.at(-1)).toContain('Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán');
+
+    // 2. other wait reasons (e.g. no_matching_profile, disk) must not send desktop notification
+    eventBus.emit('task.waiting_quota', 'proj/t-no-matching', {
+      reason: 'no_matching_profile',
+    });
+    eventBus.emit('task.waiting_quota', 'proj/t-disk', {
+      reason: 'disk',
+    });
+    expect(execCalls).toHaveLength(1);
+
+    // 3. Deduplication: same task with no_department_profile within 30 minutes is ignored
+    mockTime += 10 * 60 * 1000; // 10 minutes later
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+    expect(execCalls).toHaveLength(1);
+
+    // 4. After 30 minutes (31 minutes later), notification fires again
+    mockTime += 21 * 60 * 1000; // Total 31 minutes since first notification
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+    expect(execCalls).toHaveLength(2);
+
+    notifier.stop();
+  });
+
+  it('notifies for no_department_profile wait reason even in brain auto mode', () => {
+    config.brain.mode = 'auto';
+    config.notifications.desktopLevel = 'critical';
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+    });
+    notifier.start();
+
+    // Raw task events and other wait reasons are suppressed in auto mode
+    eventBus.emit('task.waiting_quota', 'proj/t-no-match', {
+      reason: 'no_matching_profile',
+    });
+    expect(execCalls).toHaveLength(0);
+
+    // no_department_profile is a configuration error that must bypass auto mode suppression
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toContain('task đang chờ vì phòng Phòng SYSTEM chưa có tài khoản được phép');
+
+    notifier.stop();
+  });
 });

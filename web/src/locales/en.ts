@@ -73,6 +73,8 @@ export const en: typeof vi = {
     diskNamed: 'Waiting for {label} ({free} GB free / {min} GB needed)',
     diskShort: 'Waiting for disk',
     quota: 'Waiting for model quota',
+    no_department_profile: 'Waiting for an account assigned to this department',
+    no_matching_profile: 'Waiting for a matching account/model',
     parallel: 'Waiting for parallel slot',
     profile_busy: 'Waiting for free account',
     department_parallel: 'Waiting for a slot in {department}',
@@ -913,7 +915,7 @@ export const en: typeof vi = {
   },
   departments: {
     title: 'Departments', subtitle: 'Group projects, accounts, and execution limits by department.',
-    create: 'Create department', name: 'Department name', department: 'Department', priority: 'Priority', maxParallel: 'Max parallel', maxParallelHint: 'Applies to every project in this department; 0 means unlimited.', budget: 'Claude tokens/day budget', topic: 'Telegram topic ID', projects: 'Projects', profiles: 'Accounts', save: 'Save', delete: 'Delete', chung: 'General', empty: 'No departments yet.', confirmDelete: 'Delete this department? Projects will move to General.', brainSettings: 'Brain settings', brainEngine: 'Brain engine', brainModel: 'Brain model', brainCodexProfile: 'Codex profile', brainMode: 'Brain mode', brainPermissions: 'Permissions', brainDailyTokenBudget: 'Daily token budget', brainMaxTurnsPerHour: 'Max turns/hour', inherit: 'Inherit global', off: 'Off', suggest: 'Suggest', auto: 'Auto',
+    create: 'Create department', name: 'Department name', department: 'Department', priority: 'Priority', maxParallel: 'Max parallel', maxParallelHint: 'Applies to every project in this department; 0 means unlimited.', budget: 'Claude tokens/day budget', topic: 'Telegram topic ID', projects: 'Projects', profiles: 'Accounts', noUsableProfiles: 'This department has projects but no assigned accounts.', save: 'Save', delete: 'Delete', chung: 'General', empty: 'No departments yet.', confirmDelete: 'Delete this department? Projects will move to General.', brainSettings: 'Brain settings', brainEngine: 'Brain engine', brainModel: 'Brain model', brainCodexProfile: 'Codex profile', brainMode: 'Brain mode', brainPermissions: 'Permissions', brainDailyTokenBudget: 'Daily token budget', brainMaxTurnsPerHour: 'Max turns/hour', inherit: 'Inherit global', off: 'Off', suggest: 'Suggest', auto: 'Auto',
   },
   projects: {
     title: 'Project Management',
@@ -1530,6 +1532,8 @@ export const en: typeof vi = {
     no_usable_model: "No usable model available",
     no_reviewer_profile: "No reviewer profile",
     only_worker_profile: "Only worker profile available",
+    no_department_profile: "Waiting for an account assigned to this department",
+    no_matching_profile: "Waiting for a matching account/model",
     claude_budget: "Claude budget exceeded",
     review_rounds_exhausted: "Review rounds exhausted",
     exit: "Process exited",

@@ -3546,7 +3546,8 @@ export class TelegramBotService {
         type === 'merge.conflict' ||
         type === 'merge.failed' ||
         type === 'review.fallback' ||
-        allExhausted;
+        allExhausted ||
+        (type === 'task.waiting_quota' && p.reason === 'no_department_profile');
 
         if (!isAllowedInAuto) {
           return;
@@ -3578,6 +3579,13 @@ export class TelegramBotService {
       }
 
       switch (type) {
+      case 'task.waiting_quota': {
+        if (p.reason !== 'no_department_profile') break;
+        const department = typeof p.departmentName === 'string' ? p.departmentName : 'phòng ban';
+        const message = typeof p.message === 'string' ? p.message : `Gán tài khoản cho ${department} hoặc bỏ gán`;
+        this.broadcastMessage(`⚠️ <b>Task đang chờ vì thiếu tài khoản</b>\nPhòng: <b>${this.escapeHtml(department)}</b>\n${this.escapeHtml(message)}`, undefined, projectId || undefined, typeof p.departmentId === 'string' ? p.departmentId : undefined);
+        break;
+      }
       case 'brain.notify': {
         const text = typeof p.text === 'string' ? p.text : '';
         if (!text) break;

@@ -815,6 +815,31 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
   PRAGMA foreign_keys = ON;
   `,
+  // Migration 57: distinguish department configuration waits from quota waits.
+  `
+  PRAGMA foreign_keys = OFF;
+  CREATE TABLE tasks_new (
+    id TEXT PRIMARY KEY, projectId TEXT NOT NULL, slug TEXT NOT NULL, title TEXT NOT NULL, body TEXT,
+    level TEXT NOT NULL DEFAULT 'easy' CHECK(level IN ('easy','hard')), modelChain TEXT, baseRef TEXT,
+    branch TEXT, worktreePath TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','queued','running','checking','review','done','blocked','failed','cancelled','waiting_quota','paused')),
+    dependsOn TEXT NOT NULL DEFAULT '[]', attempt INTEGER NOT NULL DEFAULT 0, resume INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now')), updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+    notBefore INTEGER, transientRetries INTEGER NOT NULL DEFAULT 0, slot INTEGER, checkFixAttempts INTEGER NOT NULL DEFAULT 0,
+    reviewerChangesRequested INTEGER NOT NULL DEFAULT 0, reviewerEscalated INTEGER NOT NULL DEFAULT 0,
+    reviewerEscalatedAt TEXT, reviewerEscalationReason TEXT,
+    waitReason TEXT CHECK(waitReason IS NULL OR waitReason IN ('disk','quota','no_department_profile','no_matching_profile','parallel','department_parallel','profile_busy','project_unavailable','focus')),
+    doneReport TEXT, diffStat TEXT, sourceRef TEXT, reviewStep INTEGER NOT NULL DEFAULT 0, batchId TEXT,
+    creationSessionId TEXT, creationGoal TEXT, externalRef TEXT, FOREIGN KEY (projectId) REFERENCES projects(id)
+  );
+  INSERT INTO tasks_new SELECT * FROM tasks;
+  DROP TABLE tasks;
+  ALTER TABLE tasks_new RENAME TO tasks;
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(projectId, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_tasks_project_status_created ON tasks(projectId, status, createdAt);
+  PRAGMA foreign_keys = ON;
+  `,
 ];
 
 export function openDatabase(dbPath: string): Database.Database {
@@ -983,7 +1008,7 @@ export interface QuotaUsageRow {
   fetchedAt: number;
 }
 
-export type WaitReason = 'disk' | 'quota' | 'parallel' | 'department_parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
+export type WaitReason = 'disk' | 'quota' | 'no_department_profile' | 'no_matching_profile' | 'parallel' | 'department_parallel' | 'profile_busy' | 'project_unavailable' | 'focus' | null;
 
 export interface TaskRow {
   id: string;

@@ -71,6 +71,8 @@ export const vi = {
     diskNamed: 'Chờ {label} (còn {free} GB / cần {min} GB)',
     diskShort: 'Chờ ổ đĩa',
     quota: 'Chờ quota model',
+    no_department_profile: 'Chờ tài khoản được gán cho phòng ban',
+    no_matching_profile: 'Chờ tài khoản/model phù hợp',
     parallel: 'Chờ slot song song',
     profile_busy: 'Chờ tài khoản rảnh',
     department_parallel: 'Chờ slot của phòng ban {department}',
@@ -912,7 +914,7 @@ export const vi = {
   },
   departments: {
     title: 'Phòng ban', subtitle: 'Gom project, tài khoản và giới hạn chạy theo phòng ban.',
-    create: 'Tạo phòng ban', name: 'Tên phòng ban', department: 'Phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', maxParallelHint: 'Áp dụng cho mọi project trong phòng; 0 nghĩa là không giới hạn.', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.', brainSettings: 'Cấu hình Brain', brainEngine: 'Engine Brain', brainModel: 'Model Brain', brainCodexProfile: 'Profile Codex', brainMode: 'Chế độ Brain', brainPermissions: 'Quyền', brainDailyTokenBudget: 'Ngân sách token/ngày', brainMaxTurnsPerHour: 'Lượt tối đa/giờ', inherit: 'Kế thừa toàn cục', off: 'Tắt', suggest: 'Gợi ý', auto: 'Tự động',
+    create: 'Tạo phòng ban', name: 'Tên phòng ban', department: 'Phòng ban', priority: 'Ưu tiên', maxParallel: 'Tối đa song song', maxParallelHint: 'Áp dụng cho mọi project trong phòng; 0 nghĩa là không giới hạn.', budget: 'Ngân sách token Claude/ngày', topic: 'Telegram topic ID', projects: 'Project', profiles: 'Tài khoản', noUsableProfiles: 'Phòng này có project nhưng chưa có tài khoản được gán.', save: 'Lưu', delete: 'Xóa', chung: 'Chung', empty: 'Chưa có phòng ban nào.', confirmDelete: 'Xóa phòng ban này? Project sẽ chuyển về Chung.', brainSettings: 'Cấu hình Brain', brainEngine: 'Engine Brain', brainModel: 'Model Brain', brainCodexProfile: 'Profile Codex', brainMode: 'Chế độ Brain', brainPermissions: 'Quyền', brainDailyTokenBudget: 'Ngân sách token/ngày', brainMaxTurnsPerHour: 'Lượt tối đa/giờ', inherit: 'Kế thừa toàn cục', off: 'Tắt', suggest: 'Gợi ý', auto: 'Tự động',
   },
   projects: {
     title: 'Quản lý Project',
@@ -1558,6 +1560,8 @@ export const vi = {
     no_usable_model: "Không có model khả dụng",
     no_reviewer_profile: "Không có profile reviewer",
     only_worker_profile: "Chỉ có profile worker",
+    no_department_profile: "Chờ tài khoản được gán cho phòng ban",
+    no_matching_profile: "Chờ tài khoản/model phù hợp",
     claude_budget: "Hết ngân sách Claude",
     review_rounds_exhausted: "Hết số lượt review tối đa",
     exit: "Tiến trình kết thúc",

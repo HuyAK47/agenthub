@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { StatusBadge } from '../components/StatusBadge';
+import { LocaleProvider } from '../context/LocaleContext';
 
 describe('StatusBadge Component', () => {
   it('hiển thị đúng nhãn tiếng Việt cho từng trạng thái', () => {
@@ -61,5 +62,33 @@ describe('StatusBadge Component', () => {
     rerender(<StatusBadge status="queued" waitReason="parallel" />);
     expect(screen.getByText('Chờ slot song song')).toBeInTheDocument();
     expect(screen.getByTestId('status-badge-queued').style.backgroundColor).toContain('var(--wait-parallel-bg)');
+
+    rerender(<StatusBadge status="waiting_quota" waitReason="no_department_profile" />);
+    expect(screen.getByText('Chờ tài khoản được gán cho phòng ban')).toBeInTheDocument();
+    const noDeptBadge = screen.getByTestId('status-badge-waiting_quota');
+    expect(noDeptBadge.getAttribute('data-wait-reason')).toBe('no_department_profile');
+    expect(noDeptBadge.style.backgroundColor).toContain('var(--wait-no_department_profile-bg)');
+
+    rerender(<StatusBadge status="waiting_quota" waitReason="no_matching_profile" />);
+    expect(screen.getByText('Chờ tài khoản/model phù hợp')).toBeInTheDocument();
+    const noMatchBadge = screen.getByTestId('status-badge-waiting_quota');
+    expect(noMatchBadge.getAttribute('data-wait-reason')).toBe('no_matching_profile');
+    expect(noMatchBadge.style.backgroundColor).toContain('var(--wait-no_matching_profile-bg)');
+  });
+
+  it('hiển thị đúng nhãn tiếng Anh (en) cho các waitReason mới', () => {
+    const { rerender } = render(
+      <LocaleProvider initialLocale="en">
+        <StatusBadge status="waiting_quota" waitReason="no_department_profile" />
+      </LocaleProvider>
+    );
+    expect(screen.getByText('Waiting for an account assigned to this department')).toBeInTheDocument();
+
+    rerender(
+      <LocaleProvider initialLocale="en">
+        <StatusBadge status="waiting_quota" waitReason="no_matching_profile" />
+      </LocaleProvider>
+    );
+    expect(screen.getByText('Waiting for a matching account/model')).toBeInTheDocument();
   });
 });

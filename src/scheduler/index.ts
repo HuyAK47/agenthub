@@ -293,6 +293,7 @@ export class Scheduler {
 
     this.eventBus.on('profile.created', () => this.wakeWaitingQuotaTasks('profile_created'));
     this.eventBus.on('profile.updated', () => this.wakeWaitingQuotaTasks('profile_updated'));
+    this.eventBus.on('department.changed', () => this.wakeWaitingQuotaTasks('department_changed'));
     this.eventBus.on('quota.cleared', () => this.wakeWaitingQuotaTasks('quota_cleared'));
     this.eventBus.on('task.done', (taskId) => this.onTaskDoneOrCancelled(taskId));
     this.eventBus.on('task.cancelled', (taskId) => this.onTaskDoneOrCancelled(taskId));
@@ -2088,9 +2089,17 @@ export class Scheduler {
         this.taskRepo.updateStatus(task.id, 'failed');
         this.eventBus.emit('task.failed', task.id, { reason: 'auth_expired', message: 'Tất cả hồ sơ phù hợp đều cần đăng nhập lại' });
       } else {
-        // Every matching profile is quota-exhausted, or no matching profile exists.
-        this.taskRepo.updateStatus(task.id, 'waiting_quota', 'quota');
-        this.eventBus.emit('task.waiting_quota', task.id, { reason: 'quota' });
+        const reason = this.getProfileWaitReason(task);
+        const department = this.departmentRepo?.get(this.departmentIdForTask(task));
+        this.taskRepo.updateStatus(task.id, 'waiting_quota', reason);
+        this.eventBus.emit('task.waiting_quota', task.id, {
+          reason,
+          ...(reason === 'no_department_profile' ? {
+            departmentId: department?.id || this.departmentIdForTask(task),
+            departmentName: department?.name || this.departmentIdForTask(task),
+            message: `Gán tài khoản cho phòng ${department?.name || this.departmentIdForTask(task)} hoặc bỏ gán`,
+          } : {}),
+        });
       }
     }
   }
@@ -2916,11 +2925,24 @@ export class Scheduler {
       const engineId = getModelEngine(model);
       for (const profile of this.profileRepo.getEnabled()) {
         if (profile.engine !== engineId) continue;
+        if (!this.profileAllowedForDepartment(profile.name, this.departmentIdForTask(task))) continue;
         matching += 1;
         if (profile.authState != null && profile.authState !== 'ok') unavailable += 1;
       }
     }
     return matching > 0 && matching === unavailable;
+  }
+
+  private getProfileWaitReason(task: TaskRow): 'no_department_profile' | 'no_matching_profile' | 'quota' {
+    const departmentId = this.departmentIdForTask(task);
+    const profiles = this.profileRepo.getEnabled();
+    const allowed = profiles.filter((profile) => this.profileAllowedForDepartment(profile.name, departmentId));
+    if (allowed.length === 0) return 'no_department_profile';
+    const hasMatchingEngine = this.getModelChain(task).some((model) => {
+      const engine = getModelEngine(model);
+      return allowed.some((profile) => profile.engine === engine);
+    });
+    return hasMatchingEngine ? 'quota' : 'no_matching_profile';
   }
 
   private markProfileAuthExpired(profileName: string): void {
