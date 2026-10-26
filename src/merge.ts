@@ -206,22 +206,24 @@ export function checkWorktreeDependencies(
   return { ok: true };
 }
 
+const ENV_ERROR_PATTERNS = [
+  /(?:sh|bash|zsh):\s*(?:\d+:\s*)?\S+:\s*(?:command\s+)?not found/i,
+  /\b(?:command not found|MODULE_NOT_FOUND|spawn\b.*?\bENOENT)\b/i,
+  /Cannot find module\s+['"][^'"]+['"]/i,
+  /\b(?:node|npm|pnpm|npx|yarn|eslint|tsc|vitest|jest|prettier):\s*(?:command\s+)?not found/i,
+];
+
 export function isEnvironmentFailure(
   result: { code: number | null; output: string; timedOut?: boolean },
 ): boolean {
   if (result.timedOut) return false;
   // Exit code 127 is standard POSIX exit code for command not found
   if (result.code === 127) return true;
-  // Spawn failure (e.g. ENOENT)
-  if (result.code === null) return true;
 
-  const output = result.output;
-  if (/(?:sh|bash|zsh):\s*(?:\d+:\s*)?\S+:\s*(?:command\s+)?not found/i.test(output)) return true;
-  if (/\b(?:command not found|MODULE_NOT_FOUND|spawn \S+ ENOENT)\b/i.test(output)) return true;
-  if (/Cannot find module\s+['"][^'"]+['"]/i.test(output)) return true;
-  if (/\b(?:eslint|tsc|vitest|jest|prettier):\s*(?:command\s+)?not found/i.test(output)) return true;
-
-  return false;
+  // When code is null, runInProcessGroup() may have received a spawn error (ENOENT)
+  // or the process was terminated by a signal (e.g. OOM/SIGKILL/SIGSEGV).
+  // Signal terminations without command-not-found or spawn/ENOENT output are kept as normal check failures.
+  return ENV_ERROR_PATTERNS.some((pattern) => pattern.test(result.output));
 }
 
 async function rollbackMerge(repo: string, before: string, mergeCommit: string, env: NodeJS.ProcessEnv): Promise<void> {

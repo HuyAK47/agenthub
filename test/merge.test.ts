@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import { mergeTaskIntoBase, MergeError } from '../src/merge.js';
+import { mergeTaskIntoBase, MergeError, isEnvironmentFailure } from '../src/merge.js';
 
 const tempDirs: string[] = [];
 
@@ -154,6 +154,20 @@ describe('mergeTaskIntoBase', () => {
     expect(git(f.integration, 'status', '--porcelain')).toBe('');
   });
 
+  it('treats check terminated by signal as normal check failure (422) and rolls back', async () => {
+    const f = fixture();
+    await expect(mergeTaskIntoBase(
+      { slug: 'task', branch: f.branch, baseRef: 'main' },
+      { defaultBranch: 'main', merge: JSON.stringify({ enabled: true, worktrees: { main: f.integration }, checks: ['sh -c "kill -9 $$"'], timeoutSec: 30 }) },
+    )).rejects.toMatchObject<Partial<MergeError>>({
+      statusCode: 422,
+      error: 'unprocessable_entity',
+      environment: false,
+    });
+    expect(git(f.integration, 'rev-parse', 'HEAD')).toBe(f.before);
+    expect(git(f.integration, 'status', '--porcelain')).toBe('');
+  });
+
   it('reinstalls dependencies when package-lock.json changes in merge commit', async () => {
     const f = fixture();
     const pkg = { name: 'test-app', version: '1.0.0', dependencies: { foo: '1.0.0' } };
@@ -190,5 +204,53 @@ describe('mergeTaskIntoBase', () => {
     );
     expect(ciCalled).toBe(true);
     expect(result.mergeCommit).not.toBe(beforeHead);
+  });
+});
+
+describe('isEnvironmentFailure', () => {
+  it('returns true for exit code 127 regardless of output', () => {
+    expect(isEnvironmentFailure({ code: 127, output: '' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 127, output: 'anything' })).toBe(true);
+  });
+
+  it('returns false when timedOut is true', () => {
+    expect(isEnvironmentFailure({ code: 127, output: 'sh: 1: cmd: not found', timedOut: true })).toBe(false);
+    expect(isEnvironmentFailure({ code: null, output: 'spawn cmd ENOENT', timedOut: true })).toBe(false);
+  });
+
+  it('returns true when output confirms spawn/ENOENT error', () => {
+    expect(isEnvironmentFailure({ code: null, output: 'Error: spawn eslint ENOENT' })).toBe(true);
+    expect(isEnvironmentFailure({ code: null, output: 'Error: spawn /custom/bin/tsc ENOENT' })).toBe(true);
+    expect(isEnvironmentFailure({ code: null, output: 'spawn ENOENT' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'Error: spawn eslint ENOENT' })).toBe(true);
+  });
+
+  it('returns false when code is null due to signal termination without spawn error', () => {
+    // Process terminated by SIGKILL / OOM
+    expect(isEnvironmentFailure({ code: null, output: 'Killed' })).toBe(false);
+    expect(isEnvironmentFailure({ code: null, output: '' })).toBe(false);
+    // Process crashed with SIGSEGV
+    expect(isEnvironmentFailure({ code: null, output: 'Segmentation fault (core dumped)' })).toBe(false);
+    // Vitest failure interrupted or killed
+    expect(isEnvironmentFailure({ code: null, output: 'FAIL test/example.test.ts\nExpected 1 to be 2' })).toBe(false);
+  });
+
+  it('returns true when output matches shell command not found patterns', () => {
+    expect(isEnvironmentFailure({ code: 1, output: 'sh: 1: eslint: not found' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'bash: line 1: tsc: command not found' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'zsh: command not found: vitest' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'eslint: not found' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: 'tsc: not found' })).toBe(true);
+  });
+
+  it('returns true when output indicates missing module', () => {
+    expect(isEnvironmentFailure({ code: 1, output: 'npm ERR! code MODULE_NOT_FOUND' })).toBe(true);
+    expect(isEnvironmentFailure({ code: 1, output: "Error: Cannot find module '@eslint/js'" })).toBe(true);
+  });
+
+  it('returns false for normal test or lint check failures', () => {
+    expect(isEnvironmentFailure({ code: 1, output: '1 error and 0 warnings found by eslint' })).toBe(false);
+    expect(isEnvironmentFailure({ code: 2, output: 'error TS2322: Type "string" is not assignable to type "number".' })).toBe(false);
+    expect(isEnvironmentFailure({ code: 1, output: 'FAIL test/merge.test.ts\nAssertionError: expected true to be false' })).toBe(false);
   });
 });
