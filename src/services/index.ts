@@ -587,6 +587,7 @@ export const UpdateConfigSchema = z.object({
     recoverAfterSec: z.number().int().positive().optional(),
     pausePolicy: z.enum(['recent', 'rss']).optional(),
     maxAutoPaused: z.number().int().positive().optional(),
+    autoPauseThresholdSec: z.number().int().positive().optional(),
   }).optional(),
   stall: z.object({
     noCommitMin: z.number().positive().optional(),
