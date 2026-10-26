@@ -3095,7 +3095,7 @@ export class Scheduler {
         try {
           ensureIntegrationWorktree(project, this.config.hubHome);
           if (settings.worktree.install !== 'skip') {
-            await ensureIntegrationNodeModules(project, this.config.hubHome, {
+            void ensureIntegrationNodeModules(project, this.config.hubHome, {
               cacheDir: this.config.cacheDir,
               cacheMaxEntries: this.config.cacheMaxEntries,
               cacheMaxGB: this.config.cacheMaxGB,
