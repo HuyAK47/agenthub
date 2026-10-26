@@ -57,27 +57,59 @@ export function getIntegrationPath(projectOrHubHome: ProjectLike | string, hubHo
   return path.join(projectWorktreeRoot({ id: projectOrHubHome.id, path: projectOrHubHome.path || hubHomeOrProjectId, settings: projectOrHubHome.settings }, hubHomeOrProjectId), '.integration');
 }
 
-function addExcludeRules(worktreePath: string): void {
+export function addExcludeRules(worktreePath: string): void {
   try {
-    const gitDir = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-dir'], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-    }).trim();
-    const resolvedGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(worktreePath, gitDir);
-    const excludePath = path.join(resolvedGitDir, 'info', 'exclude');
-    const infoDir = path.dirname(excludePath);
-    if (!fs.existsSync(infoDir)) {
-      fs.mkdirSync(infoDir, { recursive: true });
+    const excludePaths: string[] = [];
+
+    try {
+      const gitPath = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-path', 'info/exclude'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      if (gitPath) {
+        excludePaths.push(path.isAbsolute(gitPath) ? gitPath : path.join(worktreePath, gitPath));
+      }
+    } catch {
+      // ignore
     }
-    let content = '';
-    if (fs.existsSync(excludePath)) {
-      content = fs.readFileSync(excludePath, 'utf-8');
+
+    try {
+      const commonDir = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-common-dir'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      const resolvedCommonDir = path.isAbsolute(commonDir) ? commonDir : path.join(worktreePath, commonDir);
+      excludePaths.push(path.join(resolvedCommonDir, 'info', 'exclude'));
+    } catch {
+      // ignore
     }
-    const lines = content.split('\n').map((l) => l.trim());
-    let toAppend = '';
-    if (!lines.includes('.agenthub/')) toAppend += '\n.agenthub/\n';
-    if (!lines.includes('node_modules')) toAppend += 'node_modules\n';
-    if (toAppend) fs.appendFileSync(excludePath, toAppend);
+
+    try {
+      const gitDir = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--git-dir'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      const resolvedGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(worktreePath, gitDir);
+      excludePaths.push(path.join(resolvedGitDir, 'info', 'exclude'));
+    } catch {
+      // ignore
+    }
+
+    for (const excludePath of new Set(excludePaths)) {
+      const infoDir = path.dirname(excludePath);
+      if (!fs.existsSync(infoDir)) {
+        fs.mkdirSync(infoDir, { recursive: true });
+      }
+      let content = '';
+      if (fs.existsSync(excludePath)) {
+        content = fs.readFileSync(excludePath, 'utf-8');
+      }
+      const lines = content.split('\n').map((l) => l.trim());
+      let toAppend = '';
+      if (!lines.includes('.agenthub/')) toAppend += '\n.agenthub/\n';
+      if (!lines.includes('node_modules')) toAppend += 'node_modules\n';
+      if (toAppend) fs.appendFileSync(excludePath, toAppend);
+    }
   } catch {
     // non-critical
   }

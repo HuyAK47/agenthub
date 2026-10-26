@@ -558,6 +558,65 @@ describe('Integration branch and cross-project dependencies', () => {
     expect(ctx.taskRepo.getAll().filter((task) => task.slug.endsWith('-fix-merge'))).toHaveLength(1);
   });
 
+  it('rolls back on environment error during merge-time checks, returns 503, and does NOT create a fix-merge task', async () => {
+    const repo = path.join(tmpDir, 'env-checks-repo');
+    initGitRepo(repo, 'main');
+
+    ctx.service.createProject({
+      id: 'env-proj',
+      name: 'Env Project',
+      path: repo,
+      defaultBranch: 'main',
+      settings: {
+        integration: {
+          enabled: true,
+          branch: 'agenthub/integration',
+        },
+      },
+      merge: {
+        enabled: true,
+        checks: ['nonexistent-merge-checker-cmd-xyz'],
+        timeoutSec: 30,
+      },
+    });
+
+    const intPath = path.join(tmpDir, 'integration', 'env-proj');
+    const beforeHead = execFileSync('git', ['-C', intPath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+    ctx.service.createTask({
+      project: 'env-proj',
+      slug: 'env-check-task',
+      title: 'Task that triggers environment error check',
+      body: 'Body',
+      level: 'easy',
+      start: true,
+    });
+
+    ctx.scheduler.tick();
+
+    const t = ctx.taskRepo.get('env-proj/env-check-task')!;
+    fs.writeFileSync(path.join(t.worktreePath!, 'code.txt'), 'some code\n');
+    execFileSync('git', ['-C', t.worktreePath!, 'add', '.'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', t.worktreePath!, 'commit', '-m', 'feat: some code'], { encoding: 'utf8' });
+
+    persistPassedCheck('env-proj/env-check-task', '1');
+    ctx.taskRepo.updateStatus('env-proj/env-check-task', 'review');
+
+    await expect(ctx.service.reviewTask('env-proj/env-check-task', {
+      verdict: 'approved',
+      feedback: 'Approved but environment check will fail',
+      merge: true,
+    })).rejects.toMatchObject({ statusCode: 503, error: 'environment_error' });
+
+    // Integration worktree must be rolled back to beforeHead and clean
+    const afterHead = execFileSync('git', ['-C', intPath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    expect(afterHead).toBe(beforeHead);
+    const status = execFileSync('git', ['-C', intPath, 'status', '--porcelain'], { encoding: 'utf8' }).trim();
+    expect(status).toBe('');
+    // Must NOT create -fix-merge task because it is an environment failure
+    expect(ctx.taskRepo.getAll().filter((task) => task.slug.endsWith('-fix-merge'))).toHaveLength(0);
+  });
+
   it('rejects invalid branch names and main/master collisions', () => {
     const repo = path.join(tmpDir, 'validation-repo');
     initGitRepo(repo, 'main');

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { runInProcessGroup } from './priority.js';
 import { projectSettings } from './projects/settings.js';
 import { renderCommitTemplate, renderTaskBranch } from './commit-convention.js';
-import { ensureIntegrationWorktree } from './projects/integration.js';
+import { addExcludeRules, ensureIntegrationWorktree } from './projects/integration.js';
 import { workerEnvironment } from './worker-guard.js';
 import { ensureWorktreeNodeModules, type NodeModulesCachePolicy, type EnsureNodeModulesOptions } from './cache.js';
 
@@ -288,6 +288,8 @@ export async function mergeTaskIntoBase(
     checks = config.checks;
     timeoutSec = config.timeoutSec;
   }
+
+  addExcludeRules(repo);
 
   // Pre-prepare node_modules in repo if worktree.install !== 'skip' and node_modules is missing
   if (settings.worktree.install !== 'skip') {
