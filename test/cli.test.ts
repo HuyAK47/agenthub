@@ -27,6 +27,7 @@ describe('AgentHub CLI and Installation', () => {
     process.env.AGENTHUB_AGY_HOMES = path.join(tmpHome, '.agy-homes');
     process.env.AGENTHUB_DEFAULT_LOG_DIR = path.resolve(__dirname, 'fixtures', 'fake-gemini-log');
     process.env.AGENTHUB_AGY_BIN = path.resolve(__dirname, 'fixtures', 'fake-agy-login.mjs');
+    process.env.AGENTHUB_LAUNCHCTL = path.join(tmpHome, 'missing-launchctl');
     fs.mkdirSync(process.env.AGENTHUB_AGY_HOMES, { recursive: true });
   });
 
@@ -40,6 +41,7 @@ describe('AgentHub CLI and Installation', () => {
     delete process.env.AGENTHUB_AGY_HOMES;
     delete process.env.AGENTHUB_DEFAULT_LOG_DIR;
     delete process.env.AGENTHUB_AGY_BIN;
+    delete process.env.AGENTHUB_LAUNCHCTL;
   });
 
   it('findProjectRoot finds the root package directory', () => {
@@ -185,7 +187,8 @@ describe('AgentHub CLI and Installation', () => {
     }
   });
 
-  it('cmdStop calls /api/hub/shutdown and stops service via mock systemctl', async () => {
+  it.skipIf(process.platform === 'darwin')('cmdStop calls /api/hub/shutdown and stops service via mock systemctl', async () => {
+    // Skipped on Darwin: tests Linux systemctl stop semantics; macOS uses launchctl.
     const config = loadConfig(process.env.AGENTHUB_HOME);
     getOrCreateToken(config.tokenPath);
 
@@ -233,7 +236,8 @@ describe('AgentHub CLI and Installation', () => {
     }
   });
 
-  it('cmdStop with --disable stops and disables service via mock systemctl', async () => {
+  it.skipIf(process.platform === 'darwin')('cmdStop with --disable stops and disables service via mock systemctl', async () => {
+    // Skipped on Darwin: tests Linux systemctl disable semantics; macOS uses launchctl.
     const config = loadConfig(process.env.AGENTHUB_HOME);
     getOrCreateToken(config.tokenPath);
 
@@ -281,7 +285,8 @@ describe('AgentHub CLI and Installation', () => {
     }
   });
 
-  it('cmdStop refuses to stop an active service when API shutdown fails', async () => {
+  it.skipIf(process.platform === 'darwin')('cmdStop refuses to stop an active service when API shutdown fails', async () => {
+    // Skipped on Darwin: tests Linux systemctl is-active check; macOS uses launchctl print.
     const config = loadConfig(process.env.AGENTHUB_HOME);
     getOrCreateToken(config.tokenPath);
     const testServer = http.createServer((_req, res) => {
@@ -330,7 +335,8 @@ exit 0
     expect(() => process.kill(pid, 0)).toThrow();
   });
 
-  it('cmdStart invokes mock systemctl enable --now and waits for /health', async () => {
+  it.skipIf(process.platform === 'darwin')('cmdStart invokes mock systemctl enable --now and waits for /health', async () => {
+    // Skipped on Darwin: tests Linux systemctl enable --now semantics; macOS uses launchctl bootstrap.
     const config = loadConfig(process.env.AGENTHUB_HOME);
 
     const testServer = http.createServer((req, res) => {
@@ -369,7 +375,8 @@ exit 0
     }
   });
 
-  it('cmdStatus displays service status, enable status, and worker count', async () => {
+  it.skipIf(process.platform === 'darwin')('cmdStatus displays service status, enable status, and worker count', async () => {
+    // Skipped on Darwin: tests Linux systemctl is-active and is-enabled; macOS checks LaunchAgents plist.
     const config = loadConfig(process.env.AGENTHUB_HOME);
 
     const fakeSystemctl = path.join(tmpHome, 'mock-systemctl-status');
@@ -405,7 +412,8 @@ exit 0
     }
   });
 
-  it('cmdStatus reports clear message when service is not installed', async () => {
+  it.skipIf(process.platform === 'darwin')('cmdStatus reports clear message when service is not installed', async () => {
+    // Skipped on Darwin: tests Linux systemctl unit not-found behavior; macOS checks plist existence.
     const config = loadConfig(process.env.AGENTHUB_HOME);
 
     const fakeSystemctl = path.join(tmpHome, 'mock-systemctl-not-installed');
