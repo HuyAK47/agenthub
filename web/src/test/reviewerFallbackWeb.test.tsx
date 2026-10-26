@@ -312,7 +312,7 @@ describe('Reviewer Fallback Web Controls & Badges (b8-claude-review-fallback)', 
       expect(screen.getByTestId('task-timeline')).toBeInTheDocument();
       const fallbackEvent = screen.getByTestId('timeline-event-review.fallback');
       expect(fallbackEvent).toBeInTheDocument();
-      expect(fallbackEvent).toHaveTextContent('review.fallback');
+      expect(fallbackEvent).toHaveTextContent('Chuyển reviewer dự phòng');
       expect(fallbackEvent).toHaveTextContent('Codex hết quota, Claude đang duyệt (claude-primary)');
     });
   });

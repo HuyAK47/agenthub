@@ -33,6 +33,7 @@ import { ModelBadge } from '../components/ModelBadge';
 import { useLocale } from '../context/LocaleContext';
 import { UI_Z_INDEX } from '../components/ui/layers';
 import { CollapsibleList } from '../components/CollapsibleList';
+import { formatEventType, formatReason, formatReviewWaitingReason } from '../utils/events';
 import { Pagination } from '../components/ui/Pagination';
 import { getReviewerEngine } from '../utils/reviewer';
 import {
@@ -67,7 +68,7 @@ const VALID_MODELS = [
 ];
 
 export const TaskDetailPage: React.FC = () => {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -771,8 +772,8 @@ export const TaskDetailPage: React.FC = () => {
                 className="space-y-1"
               >
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono font-semibold px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] border border-[var(--t-border)]">
-                    {evt.type}
+                  <span title={evt.type} className="font-mono font-semibold px-1.5 py-0.5 rounded bg-[var(--t-surface-2)] text-[var(--t-text)] border border-[var(--t-border)]">
+                    {formatEventType(evt.type, locale)}
                   </span>
                   {evt.ts && (
                     <span className="text-[var(--t-text-3)] font-mono text-[11px]">
@@ -785,6 +786,16 @@ export const TaskDetailPage: React.FC = () => {
                 {evt.type === 'review.fallback' && (
                   <p className="text-xs text-[var(--t-warn)] font-medium">
                     {t('taskDetail.reviewFallbackLine', { profile: evt.payload?.profile || 'claude' })}
+                  </p>
+                )}
+                {evt.type === 'review.waiting' && evt.payload?.reason && (
+                  <p className="text-xs text-[var(--t-warn)] font-medium">
+                    {formatReviewWaitingReason(String(evt.payload.reason), locale)}
+                  </p>
+                )}
+                {evt.type === 'task.waiting_quota' && evt.payload?.reason && (
+                  <p className="text-xs text-[var(--t-warn)] font-medium">
+                    {formatReason(String(evt.payload.reason), locale)}
                   </p>
                 )}
               </li>
