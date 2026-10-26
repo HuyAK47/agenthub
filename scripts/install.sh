@@ -16,7 +16,7 @@ LAUNCHCTL="${AGENTHUB_LAUNCHCTL:-launchctl}"
 
 # Release installs use one script-level trap.  This is deliberately POSIX sh:
 # the installer is commonly run as `curl ... | sh`, where the shell is dash.
-INSTALL_LOG=""
+INSTALL_LOG="${INSTALL_LOG:-}"
 _install_step=""
 _failure_reason=""
 _release_tmp=""
@@ -499,17 +499,19 @@ resolve_latest_release_version() {
     _api_all="https://api.github.com/repos/$_owner_repo/releases?per_page=1"
 
     # 1. Primary: redirect URL from releases/latest
-    _eff_url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$_latest_url" 2>/dev/null || true)"
+    _redir_resp="$(curl -fsSLI -o /dev/null -w "HTTP_CODE:%{http_code}\nURL:%{url_effective}" "$_latest_url" 2>/dev/null || true)"
+    _redir_code="$(printf '%s\n' "$_redir_resp" | sed -n 's/^HTTP_CODE:\([0-9][0-9]*\)/\1/p')"
+    _eff_url="$(printf '%s\n' "$_redir_resp" | sed -n 's/^URL://p')"
     if [ -n "$_eff_url" ] && case "$_eff_url" in */releases/tag/*) true ;; *) false ;; esac; then
       _tag="$(extract_release_tag_from_url "$_eff_url")"
       if [ -n "$_tag" ] && [ -n "$(validate_release_version "$_tag")" ]; then
         RELEASE_VERSION="$_tag"
-        installer_log "release resolve: URL $_latest_url redirected to $_eff_url (HTTP 200, version $RELEASE_VERSION)"
+        installer_log "release resolve: URL $_latest_url redirected to $_eff_url (HTTP ${_redir_code:-unknown}, version $RELEASE_VERSION)"
         return 0
       fi
-      installer_log "release resolve: URL $_latest_url redirected to $_eff_url but tag '$_tag' is not valid semver"
+      installer_log "release resolve: URL $_latest_url redirected to $_eff_url (HTTP ${_redir_code:-unknown}) but tag '$_tag' is not valid semver"
     else
-      installer_log "release resolve: URL $_latest_url redirect failed (effective URL: ${_eff_url:-none})"
+      installer_log "release resolve: URL $_latest_url redirect failed (HTTP ${_redir_code:-unknown}, effective URL: ${_eff_url:-none})"
     fi
 
     # 2. Fallback 1: GitHub API releases/latest
@@ -731,7 +733,7 @@ install_from_release() {
 }
 
 if [ "$FROM_RELEASE" = "1" ]; then
-  INSTALL_LOG="${TMPDIR:-/tmp}/agenthub-install-$(date +%s).log"
+  INSTALL_LOG="${INSTALL_LOG:-${TMPDIR:-/tmp}/agenthub-install-$(date +%s).log}"
   : > "$INSTALL_LOG"
   installer_log "installer started"
   trap 'installer_cleanup "$?"' EXIT
