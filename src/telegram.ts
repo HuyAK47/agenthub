@@ -3546,7 +3546,8 @@ export class TelegramBotService {
         type === 'merge.conflict' ||
         type === 'merge.failed' ||
         type === 'review.fallback' ||
-        allExhausted;
+        allExhausted ||
+        (type === 'task.waiting_quota' && p.reason === 'no_department_profile');
 
         if (!isAllowedInAuto) {
           return;

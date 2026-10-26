@@ -177,7 +177,8 @@ export class NotificationService {
         type === 'system.error' ||
         type === 'ci.failed' ||
         type === 'ci.passed' ||
-        allExhausted;
+        allExhausted ||
+        (type === 'task.waiting_quota' && p.reason === 'no_department_profile');
 
       if (!isSystemEvent) {
         return;
