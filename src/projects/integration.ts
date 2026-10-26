@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { HttpError } from '../errors.js';
 import { projectSettings } from './settings.js';
 import { isProjectWorktreeRootAccessible, projectWorktreeRoot } from './paths.js';
+import { ensureWorktreeNodeModules, type NodeModulesCachePolicy, type EnsureNodeModulesOptions } from '../cache.js';
 
 export interface IntegrationStatus {
   path: string;
@@ -232,6 +233,46 @@ export function ensureIntegrationWorktree(project: ProjectLike, hubHome: string)
 
   addExcludeRules(integrationPath);
   return integrationPath;
+}
+
+/**
+ * Ensure node_modules are prepared in the integration worktree according to worktree.install policy.
+ */
+export async function ensureIntegrationNodeModules(
+  project: ProjectLike,
+  hubHome: string,
+  options?: {
+    cacheDir?: string;
+    cacheMaxEntries?: number;
+    cacheMaxGB?: number;
+    cachePolicy?: NodeModulesCachePolicy;
+    execFn?: EnsureNodeModulesOptions['execFn'];
+  },
+): Promise<void> {
+  const settings = projectSettings(project);
+  if (settings.worktree.install === 'skip') return;
+  const integrationPath = getIntegrationPath(project, hubHome);
+  if (!fs.existsSync(integrationPath)) return;
+  const hasDependencyLock = (dir: string): boolean =>
+    fs.existsSync(path.join(dir, 'package-lock.json')) || fs.existsSync(path.join(dir, 'pnpm-lock.yaml'));
+  if (
+    !hasDependencyLock(integrationPath) &&
+    !hasDependencyLock(path.join(integrationPath, 'web')) &&
+    !fs.existsSync(path.join(integrationPath, 'package.json'))
+  ) {
+    return;
+  }
+  const cachePolicy = options?.cachePolicy || {
+    maxEntries: options?.cacheMaxEntries,
+    maxBytes: options?.cacheMaxGB !== undefined ? options.cacheMaxGB * 1024 ** 3 : undefined,
+  };
+  await ensureWorktreeNodeModules(
+    integrationPath,
+    project.path || undefined,
+    options?.cacheDir,
+    options?.execFn,
+    cachePolicy,
+  );
 }
 
 function branchExistsInRepo(repoPath: string, branch: string): boolean {

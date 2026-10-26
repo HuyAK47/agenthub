@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { DEFAULT_PROJECT_SETTINGS, mergeProjectSettings, ProjectSettingsInputSchema, projectSettings } from '../projects/settings.js';
 import { projectWorktreeRoots, validateProjectWorktreeRoot } from '../projects/paths.js';
-import { ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
+import { ensureIntegrationNodeModules, ensureIntegrationWorktree, getIntegrationStatus, removeIntegrationWorktree, validateIntegrationBranch } from '../projects/integration.js';
 import { resolveProjectFile } from '../projects/paths.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -1684,10 +1684,17 @@ export class AppService {
     });
 
     if (effectiveSettings.integration.enabled) {
-      ensureIntegrationWorktree(
-        { id, path: resolvedPath, defaultBranch: parsed.defaultBranch, settings: JSON.stringify(effectiveSettings) },
-        this.config.hubHome,
-      );
+      const projLike = { id, path: resolvedPath, defaultBranch: parsed.defaultBranch, settings: JSON.stringify(effectiveSettings) };
+      ensureIntegrationWorktree(projLike, this.config.hubHome);
+      if (effectiveSettings.worktree.install !== 'skip') {
+        void ensureIntegrationNodeModules(projLike, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[projects] Failed to prepare integration node_modules: ${String(err)}`);
+        });
+      }
     }
 
     this.invalidateOutOfScopeClaudeScanStates();
@@ -1735,6 +1742,15 @@ export class AppService {
     if (mergedSettings.integration.enabled) {
       const updatedProject = this.projectRepo.get(id)!;
       ensureIntegrationWorktree(updatedProject, this.config.hubHome);
+      if (mergedSettings.worktree.install !== 'skip') {
+        void ensureIntegrationNodeModules(updatedProject, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[projects] Failed to prepare integration node_modules: ${String(err)}`);
+        });
+      }
     }
 
     this.invalidateOutOfScopeClaudeScanStates();

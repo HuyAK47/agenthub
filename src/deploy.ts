@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { AgentHubConfig, DeployProjectConfig } from './config.js';
 import { ProjectRepo, ProjectRow } from './db/index.js';
 import { EventBus } from './scheduler/index.js';
-import { ensureIntegrationWorktree } from './projects/integration.js';
+import { ensureIntegrationNodeModules, ensureIntegrationWorktree } from './projects/integration.js';
+import { ensureWorktreeNodeModules } from './cache.js';
 import { projectSettings } from './projects/settings.js';
 import { runInProcessGroup } from './priority.js';
 
@@ -268,7 +269,7 @@ export class DeployService {
     if (!definition?.push || !project) {
       return { projectId, status: 'skipped', error: 'Không có cấu hình deploy push' };
     }
-    const worktree = this.resolveWorktree(project);
+    const worktree = await this.resolveWorktree(project);
     if (!worktree) {
       return { projectId, status: 'skipped', error: 'Không có worktree đích tích hợp được cấu hình' };
     }
@@ -416,7 +417,7 @@ export class DeployService {
       this.latest.set(projectId, status);
       this.eventBus.emit('deploy.started', undefined, { projectId, commit, logPath });
       write(`deploy started project=${projectId} commit=${commit || 'unknown'}`);
-      const worktree = this.resolveWorktree(project);
+      const worktree = await this.resolveWorktree(project);
       if (!worktree) {
         status.status = 'skipped';
         status.finishedAt = new Date().toISOString();
@@ -502,15 +503,34 @@ export class DeployService {
     return isRunningHubCheckout([worktree, project.path], hubPackageRoot);
   }
 
-  private resolveWorktree(project: ProjectRow): string | null {
+  private async resolveWorktree(project: ProjectRow): Promise<string | null> {
     const settings = projectSettings(project);
-    if (settings.integration.enabled) return ensureIntegrationWorktree(project, this.config.hubHome);
+    if (settings.integration.enabled) {
+      const worktree = ensureIntegrationWorktree(project, this.config.hubHome);
+      if (settings.worktree.install !== 'skip') {
+        await ensureIntegrationNodeModules(project, this.config.hubHome, {
+          cacheDir: this.config.cacheDir,
+          cacheMaxEntries: this.config.cacheMaxEntries,
+          cacheMaxGB: this.config.cacheMaxGB,
+        }).catch((err) => {
+          console.warn(`[deploy] Failed to prepare integration worktree node_modules:`, err);
+        });
+      }
+      return worktree;
+    }
     if (!project.merge) return null;
     try {
       const merge = JSON.parse(project.merge) as { enabled?: boolean; worktrees?: Record<string, string> };
       if (merge.enabled !== true || !merge.worktrees) return null;
       const target = merge.worktrees[project.defaultBranch];
-      return target && path.isAbsolute(target) ? path.resolve(target) : null;
+      if (!target || !path.isAbsolute(target)) return null;
+      const worktree = path.resolve(target);
+      if (settings.worktree.install !== 'skip') {
+        await ensureWorktreeNodeModules(worktree, project.path || undefined, this.config.cacheDir).catch((err) => {
+          console.warn(`[deploy] Failed to prepare legacy worktree node_modules:`, err);
+        });
+      }
+      return worktree;
     } catch { return null; }
   }
 
