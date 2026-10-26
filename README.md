@@ -192,13 +192,13 @@ sh /tmp/agenthub-install.sh --from-release
 agenthub setup
 ```
 
-Dùng `--from-release 0.1.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, bỏ qua `npm ci` khi archive đã có dependencies production, rồi chỉ cập nhật symlink sau khi cài thành công. Hai bản cũ được giữ lại để rollback thủ công.
+Dùng `--from-release 1.0.0` để ghim một phiên bản. Bộ cài kiểm tra `SHA256SUMS`, giải nén vào `~/.agenthub-app/<version>`, bỏ qua `npm ci` khi archive đã có dependencies production, rồi chỉ cập nhật symlink sau khi cài thành công. Hai bản cũ được giữ lại để rollback thủ công.
 
 Nếu muốn tự quản lý Node qua nvm, truyền rõ `--use-nvm`. Các lỗi thường gặp: checksum sai (tải lại release), thiếu `curl`/`tar`, hoặc archive không đúng OS/kiến trúc. Nếu cài từ source và macOS báo thiếu Command Line Tools, chạy `xcode-select --install` rồi chạy lại lệnh cài; release installer không cần git để tải Node.
 
 ```bash
 agenthub rollback          # chọn bản cũ gần nhất
-agenthub rollback 0.1.0    # chọn rõ phiên bản
+agenthub rollback 1.0.0    # chọn rõ phiên bản
 ```
 
 ---
