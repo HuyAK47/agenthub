@@ -49,7 +49,7 @@ Cài đặt nhanh (nên đọc và kiểm tra script trước khi chạy):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ducanh19020217/agenthub/main/scripts/install.sh -o /tmp/agenthub-install.sh
 less /tmp/agenthub-install.sh
-sh /tmp/agenthub-install.sh
+sh /tmp/agenthub-install.sh --from-release
 ```
 
 Script có thể cập nhật/gỡ cài đặt an toàn; dùng `--dry-run` để xem lệnh trước. Dữ liệu `~/.agenthub/` chỉ bị xoá khi chạy `--uninstall --purge` và xác nhận.
