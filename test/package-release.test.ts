@@ -250,7 +250,9 @@ printf '%s\n' "$*" >> '${launchctlLog}'
     expect(failed.stderr).toContain('Đã hoàn tác về bản trước');
   });
 
-  it('rolls back current, cli link, and service when install-service fails', () => {
+  it.skipIf(process.platform === 'darwin')('rolls back current, cli link, and service when install-service fails', () => {
+    // Skipped on Darwin: install-service installs systemd on Linux and launchctl on Darwin;
+    // Darwin service rollback is tested in the previous test case.
     const home = makeTemp('agenthub-release-service-rollback-');
     const base = path.join(home, 'fake-release');
     const app = path.join(home, 'app');
@@ -290,12 +292,15 @@ printf '%s\n' "$*" >> '${systemctlLog}'
     const home = makeTemp('agenthub-release-same-version-');
     const base = path.join(home, 'fake-release');
     const app = path.join(home, 'app');
+    const fakeLaunchctl = path.join(home, 'fake-launchctl');
+    fs.writeFileSync(fakeLaunchctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const env = {
       HOME: home,
       AGENTHUB_DIR: app,
       AGENTHUB_HOME: path.join(home, 'data'),
       AGENTHUB_RELEASE_BASE: base,
       AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
     };
     makeRelease(base, '1.0.0');
     expect(run('/bin/sh', [installer, '--from-release', '1.0.0'], env).status).toBe(0);
@@ -316,12 +321,15 @@ printf '%s\n' "$*" >> '${systemctlLog}'
     const home = makeTemp('agenthub-release-native-');
     const base = path.join(home, 'fake-release');
     const app = path.join(home, 'app');
+    const fakeLaunchctl = path.join(home, 'fake-launchctl');
+    fs.writeFileSync(fakeLaunchctl, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const env = {
       HOME: home,
       AGENTHUB_DIR: app,
       AGENTHUB_HOME: path.join(home, 'data'),
       AGENTHUB_RELEASE_BASE: base,
       AGENTHUB_SYSTEMCTL: path.join(home, 'missing-systemctl'),
+      AGENTHUB_LAUNCHCTL: fakeLaunchctl,
     };
     makeRelease(base, '1.0.0');
     makeRelease(base, '2.0.0', { brokenNative: true });
