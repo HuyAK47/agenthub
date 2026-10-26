@@ -248,8 +248,9 @@ describe('AgentHub API Extra Endpoints', () => {
       expect(res2.statusCode).toBe(400);
     });
 
-    it('PUT /api/config validates notifications (desktop must be boolean)', async () => {
-      const res = await server.inject({
+    it('PUT /api/config validates notifications (desktop must be boolean, desktopLevel enum, quietHours format)', async () => {
+      // Invalid desktop type
+      const res1 = await server.inject({
         method: 'PUT',
         url: '/api/config',
         headers: authHeaders(),
@@ -257,8 +258,158 @@ describe('AgentHub API Extra Endpoints', () => {
           notifications: { desktop: 'enabled' },
         },
       });
-      expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).error).toBe('bad_request');
+      expect(res1.statusCode).toBe(400);
+      expect(JSON.parse(res1.body).error).toBe('bad_request');
+
+      // Invalid desktopLevel enum
+      const res2 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { desktopLevel: 'super_high' },
+        },
+      });
+      expect(res2.statusCode).toBe(400);
+
+      // Invalid quietHours start time (out of range hour)
+      const res3 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { quietHours: { start: '25:00' } },
+        },
+      });
+      expect(res3.statusCode).toBe(400);
+
+      // Invalid quietHours end time (invalid minute)
+      const res4 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { quietHours: { end: '07:60' } },
+        },
+      });
+      expect(res4.statusCode).toBe(400);
+
+      // Invalid quietHours format (non-HH:MM string)
+      const res5 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { quietHours: { start: 'not-a-time' } },
+        },
+      });
+      expect(res5.statusCode).toBe(400);
+    });
+
+    it('PUT /api/config saves desktopLevel and quietHours independently and persists to file', async () => {
+      // 1. Initial state check
+      const getRes1 = await server.inject({
+        method: 'GET',
+        url: '/api/config',
+        headers: authHeaders(),
+      });
+      expect(getRes1.statusCode).toBe(200);
+      const initialDesktop = JSON.parse(getRes1.body).notifications.desktop;
+
+      // 2. PUT with only desktopLevel
+      const putRes1 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { desktopLevel: 'critical' },
+        },
+      });
+      expect(putRes1.statusCode).toBe(200);
+      const body1 = JSON.parse(putRes1.body);
+      expect(body1.notifications.desktopLevel).toBe('critical');
+      expect(body1.notifications.desktop).toBe(initialDesktop);
+
+      // Read back via GET
+      const getRes2 = await server.inject({
+        method: 'GET',
+        url: '/api/config',
+        headers: authHeaders(),
+      });
+      const getBody2 = JSON.parse(getRes2.body);
+      expect(getBody2.notifications.desktopLevel).toBe('critical');
+      expect(getBody2.notifications.desktop).toBe(initialDesktop);
+
+      // Read back from config.json on disk
+      const onDisk1 = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk1.notifications.desktopLevel).toBe('critical');
+
+      // 3. PUT with desktop: false (preserves desktopLevel)
+      const putRes2 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: { desktop: false },
+        },
+      });
+      expect(putRes2.statusCode).toBe(200);
+      const body2 = JSON.parse(putRes2.body);
+      expect(body2.notifications.desktop).toBe(false);
+      expect(body2.notifications.desktopLevel).toBe('critical');
+
+      // Verify on disk that both desktop and desktopLevel are now present
+      const onDisk2 = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk2.notifications.desktop).toBe(false);
+      expect(onDisk2.notifications.desktopLevel).toBe('critical');
+
+      // 4. PUT with quietHours
+      const putRes3 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: {
+            quietHours: { enabled: true, start: '23:30', end: '06:30' },
+          },
+        },
+      });
+      expect(putRes3.statusCode).toBe(200);
+      const body3 = JSON.parse(putRes3.body);
+      expect(body3.notifications.desktopLevel).toBe('critical');
+      expect(body3.notifications.desktop).toBe(false);
+      expect(body3.notifications.quietHours).toEqual({
+        enabled: true,
+        start: '23:30',
+        end: '06:30',
+      });
+
+      // Partial patch to quietHours (only change end)
+      const putRes4 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          notifications: {
+            quietHours: { end: '08:00' },
+          },
+        },
+      });
+      expect(putRes4.statusCode).toBe(200);
+      const body4 = JSON.parse(putRes4.body);
+      expect(body4.notifications.quietHours.enabled).toBe(true);
+      expect(body4.notifications.quietHours.start).toBe('23:30');
+      expect(body4.notifications.quietHours.end).toBe('08:00');
+      expect(body4.notifications.desktopLevel).toBe('critical');
+      expect(body4.notifications.desktop).toBe(false);
+
+      // Verify on disk file
+      const onDisk3 = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk3.notifications.desktop).toBe(false);
+      expect(onDisk3.notifications.desktopLevel).toBe('critical');
+      expect(onDisk3.notifications.quietHours.enabled).toBe(true);
+      expect(onDisk3.notifications.quietHours.start).toBe('23:30');
+      expect(onDisk3.notifications.quietHours.end).toBe('08:00');
     });
 
     it('PUT /api/config validates chat.* properties', async () => {
@@ -294,6 +445,66 @@ describe('AgentHub API Extra Endpoints', () => {
         },
       });
       expect(res3.statusCode).toBe(400);
+    });
+
+    it('PUT /api/config validates and persists load.autoPauseThresholdSec', async () => {
+      // 1. Validation: non-positive or non-integer is rejected
+      const res1 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 0 },
+        },
+      });
+      expect(res1.statusCode).toBe(400);
+
+      const res2 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: -10 },
+        },
+      });
+      expect(res2.statusCode).toBe(400);
+
+      const res3 = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 45.5 },
+        },
+      });
+      expect(res3.statusCode).toBe(400);
+
+      // 2. PUT with valid autoPauseThresholdSec
+      const putRes = await server.inject({
+        method: 'PUT',
+        url: '/api/config',
+        headers: authHeaders(),
+        payload: {
+          load: { autoPauseThresholdSec: 90 },
+        },
+      });
+      expect(putRes.statusCode).toBe(200);
+      const putBody = JSON.parse(putRes.body);
+      expect(putBody.load.autoPauseThresholdSec).toBe(90);
+
+      // 3. GET /api/config reflects the saved value
+      const getRes = await server.inject({
+        method: 'GET',
+        url: '/api/config',
+        headers: authHeaders(),
+      });
+      expect(getRes.statusCode).toBe(200);
+      const getBody = JSON.parse(getRes.body);
+      expect(getBody.load.autoPauseThresholdSec).toBe(90);
+
+      // 4. Persisted on disk in config.json
+      const onDisk = JSON.parse(fs.readFileSync(config.configFilePath, 'utf-8'));
+      expect(onDisk.load.autoPauseThresholdSec).toBe(90);
     });
   });
 

@@ -719,4 +719,49 @@ describe('NotificationService (Desktop Notifications)', () => {
     expect(execCalls.length).toBeLessThanOrEqual(10);
     notifier.stop();
   });
+
+  it('applies updated notification config immediately without restarting notifier', () => {
+    config.notifications.desktop = true;
+    config.notifications.desktopLevel = 'critical';
+
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+      now: () => Date.now(),
+    });
+    notifier.start();
+
+    // At desktopLevel='critical', normal events like task.review_ready do not trigger critical alert
+    eventBus.emit('task.review_ready', 'proj/t1', {});
+    expect(execCalls.length).toBe(0);
+
+    // Update config to 'all' via config.updated eventBus event
+    eventBus.emit('config.updated', undefined, {
+      notifications: { desktopLevel: 'all' },
+    });
+
+    // Now task.review_ready triggers notification immediately
+    eventBus.emit('task.review_ready', 'proj/t2', {});
+    expect(execCalls.length).toBe(1);
+
+    // Update to desktop=false via notifier.updateConfig
+    notifier.updateConfig({
+      ...config,
+      notifications: {
+        ...config.notifications,
+        desktop: false,
+      },
+    });
+
+    // Should not notify when desktop is disabled
+    eventBus.emit('task.failed', 'proj/t3', { error: 'fail' });
+    expect(execCalls.length).toBe(1);
+
+    notifier.stop();
+  });
 });
