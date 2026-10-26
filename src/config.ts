@@ -360,7 +360,10 @@ export function saveConfig(
     port: number;
     autoFixOnFail?: boolean;
     chat: Partial<ChatConfig>;
-    brain?: Partial<BrainConfig>;
+    brain?: Partial<Omit<BrainConfig, 'digest' | 'director'>> & {
+      digest?: Partial<BrainDigestConfig>;
+      director?: Partial<BrainConfig['director']>;
+    };
     assistant?: Partial<AssistantConfig>;
     reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
@@ -432,6 +435,14 @@ export function saveConfig(
                   },
                 }
               : {}),
+            ...(patch.brain.director && typeof patch.brain.director === 'object'
+              ? {
+                  director: {
+                    ...((((current.brain as Record<string, unknown>) || {}).director as Record<string, unknown>) || {}),
+                    ...patch.brain.director,
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -446,6 +457,7 @@ export function saveConfig(
             ...(patch.notifications.quietHours && typeof patch.notifications.quietHours === 'object'
               ? {
                   quietHours: {
+                    ...DEFAULT_QUIET_HOURS_CONFIG,
                     ...((((current.notifications as Record<string, unknown>) || {}).quietHours as Record<string, unknown>) || {}),
                     ...patch.notifications.quietHours,
                   },
@@ -537,7 +549,10 @@ export function updateConfigInMemory(
     watchdog: { stallMinutes?: number; waitingMinutes?: number };
     autoFixOnFail: boolean;
     chat: Partial<ChatConfig>;
-    brain?: Partial<BrainConfig>;
+    brain?: Partial<Omit<BrainConfig, 'digest' | 'director'>> & {
+      digest?: Partial<BrainDigestConfig>;
+      director?: Partial<BrainConfig['director']>;
+    };
     assistant?: Partial<AssistantConfig>;
     reviewer: ReviewerConfigPatch;
     notifications?: Partial<{
@@ -630,7 +645,15 @@ export function updateConfigInMemory(
     if (patch.brain.dailyTokenBudget !== undefined) config.brain.dailyTokenBudget = patch.brain.dailyTokenBudget;
     if (patch.brain.turnTimeoutSec !== undefined) config.brain.turnTimeoutSec = patch.brain.turnTimeoutSec;
     if (patch.brain.maxConcurrent !== undefined) config.brain.maxConcurrent = patch.brain.maxConcurrent;
-    if (patch.brain.director) config.brain.director = { ...config.brain.director, ...patch.brain.director };
+    if (patch.brain.director) {
+      config.brain.director = {
+        enabled: patch.brain.director.enabled ?? config.brain.director?.enabled ?? false,
+        engine: patch.brain.director.engine ?? config.brain.director?.engine ?? 'claude',
+        model: patch.brain.director.model ?? config.brain.director?.model ?? 'opus',
+        codexProfile: patch.brain.director.codexProfile ?? config.brain.director?.codexProfile,
+        permissions: patch.brain.director.permissions ?? config.brain.director?.permissions ?? 'standard',
+      };
+    }
     if (patch.brain.digest) {
       config.brain.digest = {
         ...config.brain.digest,
@@ -650,6 +673,12 @@ export function updateConfigInMemory(
     };
   }
   if (patch.notifications) {
+    if (!config.notifications) {
+      config.notifications = {
+        desktop: true,
+        desktopLevel: 'important',
+      };
+    }
     if (patch.notifications.desktop !== undefined) {
       config.notifications.desktop = patch.notifications.desktop;
     }
