@@ -1181,6 +1181,31 @@ describe('Telegram Bot Remote Control (c-telegram-bot)', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
     });
+
+    it('broadcasts task.waiting_quota with no_department_profile even when brain.mode is auto', async () => {
+      config.brain.mode = 'auto';
+
+      // 1. Other wait reasons are suppressed in auto mode
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-match-auto', {
+        reason: 'no_matching_profile',
+      });
+      await bot.flushQueue(CHAT_ID);
+      expect(recordedCalls.filter((c) => c.url.includes('/sendMessage'))).toHaveLength(0);
+
+      // 2. no_department_profile configuration error bypasses auto mode suppression
+      ctx.scheduler.getEventBus().emit('task.waiting_quota', 'p1/task-no-dept-auto', {
+        reason: 'no_department_profile',
+        departmentId: 'chung',
+        departmentName: 'Chung',
+        message: 'Gán tài khoản cho phòng Chung hoặc bỏ gán',
+      });
+      await bot.flushQueue(CHAT_ID);
+
+      const calls = recordedCalls.filter((c) => c.url.includes('/sendMessage'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body?.text).toContain('Task đang chờ vì thiếu tài khoản');
+      expect(calls[0].body?.text).toContain('Phòng: <b>Chung</b>');
+    });
   });
 
   describe('6. Claude chat bridge', () => {

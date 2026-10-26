@@ -777,4 +777,36 @@ describe('NotificationService (Desktop Notifications)', () => {
 
     notifier.stop();
   });
+
+  it('notifies for no_department_profile wait reason even in brain auto mode', () => {
+    config.brain.mode = 'auto';
+    config.notifications.desktopLevel = 'critical';
+    const notifier = new NotificationService({
+      eventBus,
+      config,
+      taskRepo,
+      profileRepo,
+      quotaMarkRepo,
+      projectRepo,
+      exec: fakeExec,
+    });
+    notifier.start();
+
+    // Raw task events and other wait reasons are suppressed in auto mode
+    eventBus.emit('task.waiting_quota', 'proj/t-no-match', {
+      reason: 'no_matching_profile',
+    });
+    expect(execCalls).toHaveLength(0);
+
+    // no_department_profile is a configuration error that must bypass auto mode suppression
+    eventBus.emit('task.waiting_quota', 'proj/t-no-dept', {
+      reason: 'no_department_profile',
+      departmentName: 'Phòng SYSTEM',
+      message: 'Gán tài khoản cho phòng Phòng SYSTEM hoặc bỏ gán',
+    });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0].args.at(-1)).toContain('task đang chờ vì phòng Phòng SYSTEM chưa có tài khoản được phép');
+
+    notifier.stop();
+  });
 });
