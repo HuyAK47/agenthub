@@ -492,6 +492,17 @@ Các bước deploy chỉ được khai báo trong `~/.agenthub/config.json`, kh
 
 Mỗi bước chạy bằng argv trong worktree tích hợp, có log tại `~/.agenthub/logs/deploy/<project>/<time>.log`. `push` mặc định tắt; khi bật chỉ fast-forward.
 
+### Worktree tích hợp cho merge và deploy
+
+AgentHub hỗ trợ hai cách cấu hình worktree tích hợp:
+1. **Worktree tự quản lý (`settings.integration.enabled = true`)** (khuyến nghị):
+   - Nằm tại `<worktree.root>/.integration` (nếu dự án cấu hình `settings.worktree.root`) hoặc `~/.agenthub/integration/<projectId>`, checkout nhánh `settings.integration.branch` (mặc định `agenthub/integration`).
+   - Được dùng cho cả merge tự động (`mergeTaskIntoBase`), chạy merge-checks và tự động triển khai sau merge (self-deploy).
+   - AgentHub tự động quản lý vòng đời và áp dụng cùng chính sách cài đặt dependency như worktree của task (`worktree.install`: `auto` dùng cache/symlink hoặc `npm ci`). Nếu `package-lock.json` hoặc file lock thay đổi sau commit merge, hub tự động cài đặt lại dependency trước khi chạy merge-check.
+2. **Worktree khai báo thủ công (`project.merge.worktrees`)** (legacy):
+   - Khai báo đường dẫn tuyệt đối cho từng baseRef trong cấu hình merge của project.
+   - Chỉ áp dụng khi `settings.integration.enabled = false`. Khi bật `settings.integration.enabled = true`, hub ưu tiên worktree tự quản lý và bỏ qua cấu hình legacy này.
+
 Để tránh gây quá tải cho CI khi merge liên tục, hub hỗ trợ **gom lượt push** bằng tuỳ chọn `minIntervalMin` (mặc định 30 phút):
 - Sau mỗi lượt deploy thành công, hub chỉ push nếu khoảng cách từ lần push trước đó ≥ `minIntervalMin`.
 - Nếu chưa đủ thời gian, hub sẽ tự động lên lịch hẹn push hoãn lại (deferred push, không cần build lại) khi đủ thời gian, gom tất cả các lần merge ở giữa vào 1 lượt push duy nhất. Lịch hẹn và thời điểm push gần nhất được lưu bền vững qua các lần khởi động lại daemon.

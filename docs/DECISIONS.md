@@ -103,3 +103,29 @@
 - **Bối cảnh**: `macos-13` đã bị GitHub bắt đầu loại bỏ và không còn là runner hợp lệ; release cần tạo archive native cho cả Intel và Apple Silicon. Các lỗi cũ trên macOS (PTY, process stats, launchctl) cũng có thể làm archive được phát hành nhưng không cài/chạy được.
 - **Quyết định**: Dùng `macos-15-intel` cho archive/smoke Intel và `macos-latest` cho Apple Silicon. Các matrix entry macOS trong `package` và toàn bộ `smoke-macos` tạm thời có `continue-on-error`, để lỗi runner/native không chặn việc phát hành artifact Linux. Khi runner hoạt động, artifact macOS vẫn được gom vào release và được smoke test; nếu macOS fail hoặc runner không tồn tại thì release phải được coi là thiếu bản macOS.
 - **Rủi ro/giới hạn**: Worker chỉ kiểm chứng được Linux bằng shim; chưa có bằng chứng từ runner macOS thật trong phiên này. Claude phải chạy lại workflow sau khi push để xác nhận PTY, native `better-sqlite3`, `spawn-helper`, process stats và `launchctl`. Sau khi xác nhận thành công trên cả hai kiến trúc, bỏ `continue-on-error` và đổi quyết định này thành bắt buộc; nếu không, cần tiếp tục ghi rõ việc thiếu artifact macOS trong release notes.
+
+## DEC-011: Quản lý dependency và phân định hai loại worktree tích hợp (merge và deploy)
+
+- **Bối cảnh**:
+  - Hệ thống AgentHub hỗ trợ hai cơ chế worktree tích hợp:
+    1. **Worktree tích hợp tự quản lý (Hub-managed)**: Kích hoạt khi `settings.integration.enabled = true`. Đường dẫn mặc định là `~/.agenthub/integration/<projectId>` hoặc `<worktree.root>/.integration` (nếu dự án cấu hình `settings.worktree.root`), checkout nhánh tích hợp (mặc định `agenthub/integration`).
+    2. **Worktree khai báo thủ công (Legacy/External)**: Khai báo qua trường `worktrees` trong JSON merge (`project.merge.worktrees[baseRef]`), trỏ đến một đường dẫn tuyệt đối bất kỳ ngoài hub.
+  - Sự cố ngày 26/10: Dự án cấu hình cả `project.merge.worktrees` ngoài thư mục và `settings.integration.enabled = true`. AgentHub ưu tiên worktree tự quản lý tại `<worktree.root>/.integration` cho merge và deploy. Tuy nhiên, worktree này trước đó không tự động cài `node_modules` (trong khi task worktree có `worktree.install: auto`), dẫn tới việc các merge-check (`npm run lint`, `npm run typecheck`) thất bại với lỗi môi trường `sh: 1: eslint: not found / tsc: not found`, khiến reviewer hiểu nhầm là mã nguồn task bị lỗi.
+- **Quyết định**:
+  1. **Thống nhất vai trò hai loại worktree**:
+     - Worktree tự quản lý (`settings.integration.enabled = true`) là cơ chế tiêu chuẩn và được ưu tiên tuyệt đối cho cả thao tác merge (`mergeTaskIntoBase`), merge-check và post-merge self-deploy (`DeployService.resolveWorktree`).
+     - Worktree khai báo trong `project.merge.worktrees` chỉ là cơ chế tương thích ngược (legacy) dành cho các dự án chưa kích hoạt `settings.integration.enabled`. Khi `settings.integration.enabled = true`, cấu hình legacy này không được sử dụng.
+  2. **Đồng bộ chính sách cài đặt dependency (`worktree.install`)**:
+     - Áp dụng cùng chính sách cài đặt dependency cho worktree tích hợp như worktree của task (`worktree.install`: `auto` dùng cache/hardlink hoặc `npm ci`, `skip` để bỏ qua).
+     - Tự động chuẩn bị `node_modules` khi tạo hoặc sử dụng worktree tích hợp (khi bắt đầu task, khi merge, khi deploy).
+     - Tự động kiểm tra thay đổi file lock (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `web/package-lock.json`, `web/pnpm-lock.yaml`) sau khi merge commit; nếu có thay đổi thì tự động cài lại dependency trước khi chạy merge-check.
+  3. **Kiểm tra nhanh dependency trước merge-check và phân loại lỗi môi trường**:
+     - Trước khi chạy merge-check, thực hiện kiểm tra nhanh sự tồn tại của `node_modules` và `node_modules/.bin` đối với các công cụ cần thiết (ví dụ `eslint`, `tsc`). Nếu thiếu, tự động cài trước; nếu không cài được hoặc bị tắt cài đặt, báo lỗi rõ ràng "Worktree tích hợp thiếu dependency".
+     - Khi merge-check thất bại do nguyên nhân môi trường (mã thoát 127, tiến trình không tìm thấy, thiếu dependency):
+       - Tự động rollback merge commit (về `ORIG_HEAD`) để giữ worktree sạch.
+       - Trả về mã lỗi HTTP riêng: `statusCode: 503`, `error: 'environment_error'`.
+       - Phát sự kiện `merge.failed` kèm cờ `environment: true`, gửi thông báo Telegram rõ ràng "Lỗi môi trường khi tự động gộp" và ghi chú vào task.
+       - Reviewer không coi đây là lỗi của worker và hệ thống không tạo task sửa merge (`<slug>-fix-merge`) để tránh giao việc sai.
+- **Hệ quả**:
+  - Khắc phục hoàn toàn lỗi thiếu `node_modules` trên worktree tích hợp.
+  - Tách biệt rõ ràng trách nhiệm giữa lỗi code do worker và sự cố môi trường hệ thống.
