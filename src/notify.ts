@@ -134,7 +134,7 @@ export class NotificationService {
     if (level === 'off') return;
     if (level === 'important' && !new Set([
       'brain.notify', 'task.review_ready', 'task.failed', 'task.blocked', 'review.escalated',
-      'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed',
+      'disk.low', 'disk.docker_low', 'quota.exhausted', 'ci.failed', 'task.waiting_quota',
     ]).has(type)) return;
 
     const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
@@ -200,6 +200,13 @@ export class NotificationService {
     }
 
     switch (type) {
+      case 'task.waiting_quota': {
+        if (p.reason !== 'no_department_profile') break;
+        const department = typeof p.departmentName === 'string' ? p.departmentName : 'phòng ban';
+        const message = typeof p.message === 'string' ? p.message : `Gán tài khoản cho ${department} hoặc bỏ gán`;
+        this.notify(`${this.appName}: task đang chờ vì phòng ${department} chưa có tài khoản được phép. ${message}`, 'critical');
+        break;
+      }
       case 'brain.notify': {
         const text = typeof p.text === 'string' ? p.text : '';
         if (!text) break;
